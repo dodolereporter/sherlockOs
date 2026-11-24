@@ -1,0 +1,5 @@
+# Les tests ont le droit de paniquer : unwrap, expect et dbg y restent permis.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Installeur, profil</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+@keyframes flotte {
+0%, 100% { transform: translateY(0) }
+50% { transform: translateY(-8px) }
+}
+@keyframes avance {
+0% { transform: translateX(-100%) }
+100% { transform: translateX(260%) }
+}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #0A1424; color: #EEF2F7; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+<div aria-hidden="true" style="position: absolute; left: -320px; top: 420px; width: 1100px; height: 1100px; border-radius: 50%; background: #0F2038"></div>
+<div aria-hidden="true" style="position: absolute; left: 900px; top: -480px; width: 960px; height: 960px; border-radius: 50%; background: #11263E"></div>
+<nav aria-label="Étapes" style="position: absolute; left: 48px; top: 56px; width: 280px; display: flex; flex-direction: column; gap: 18px">
+<span style="font-family: 'Space Grotesk', Inter, sans-serif; font-size: 20px; font-weight: 600">Installer [NOM DE L'OS]</span>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px">
+<li style="display: flex; align-items: center; gap: 12px; height: 42px; color: #C5CEDB; font-weight: 400"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #85C595"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #0B1220; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>Langue et clavier</li>
+<li style="display: flex; align-items: center; gap: 12px; height: 42px; color: #C5CEDB; font-weight: 400"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #85C595"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #0B1220; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>Disque</li>
+<li style="display: flex; align-items: center; gap: 12px; height: 42px; color: #C5CEDB; font-weight: 400"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #85C595"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #0B1220; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>Compte</li>
+<li aria-current="step" style="display: flex; align-items: center; gap: 12px; height: 42px; color: #EEF2F7; font-weight: 600"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #F4EBE3; color: #14233B; font-weight: 600">4</span>Profil</li>
+<li style="display: flex; align-items: center; gap: 12px; height: 42px; color: #A9B4C6; font-weight: 400"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #8492A8; color: #A9B4C6">5</span>Résumé</li>
+<li style="display: flex; align-items: center; gap: 12px; height: 42px; color: #A9B4C6; font-weight: 400"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid #8492A8; color: #A9B4C6">6</span>Installation</li>
+</ol>
+</nav>
+<main style="position: absolute; left: 400px; top: 56px; width: 976px; display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 6px"><h1 style="margin: 0; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 34px; line-height: 1.1; font-weight: 600">Que veux-tu faire avec ?</h1><p style="margin: 0; font-size: 15px; color: #C5CEDB">Chaque profil installe ses outils. Tu pourras en changer plus tard dans les Réglages.</p></div>
+<div style="display: flex; align-items: flex-start; gap: 16px; padding: 18px 20px; border-radius: 16px; background: #101B2E; border: 1px solid rgba(255,255,255,0.14)"><span aria-hidden="true" style="flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 13px; background: #2F7A52"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 22px; height: 22px; fill: none; stroke: #F4EBE3; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M9 3h6M10 3v6.2L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.2V3M7.5 14.5h9"></path></svg></span><div style="flex: 1; display: flex; flex-direction: column; gap: 8px"><span style="font-size: 17px; font-weight: 600">Développement</span><span style="font-size: 14px; color: #C5CEDB">Un poste prêt à coder dès le premier démarrage.</span><span style="display: flex; flex-wrap: wrap; gap: 6px"><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Docker et Compose</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Bacs à sable</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Rust</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Java</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Node.js</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Python</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Git</span></span></div><button role="switch" aria-checked="true" aria-label="Développement" style="flex: none; position: relative; width: 48px; height: 28px; padding: 0; border: 0; border-radius: 14px; background: #85C595"><span aria-hidden="true" style="position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: #0B1220"></span></button></div>
+<div style="display: flex; align-items: flex-start; gap: 16px; padding: 18px 20px; border-radius: 16px; background: #101B2E; border: 1px solid rgba(255,255,255,0.14)"><span aria-hidden="true" style="flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 13px; background: #85C595"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 22px; height: 22px; fill: none; stroke: #0B1220; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M7.5 8h9a4.5 4.5 0 0 1 4.4 5.4l-.6 3a2.2 2.2 0 0 1-3.9.9L15 15.5H9l-1.4 1.8a2.2 2.2 0 0 1-3.9-.9l-.6-3A4.5 4.5 0 0 1 7.5 8zM8 10.5v3M6.5 12h3M15.5 11h.01M17.5 13h.01"></path></svg></span><div style="flex: 1; display: flex; flex-direction: column; gap: 8px"><span style="font-size: 17px; font-weight: 600">Jeu</span><span style="font-size: 14px; color: #C5CEDB">Steam, Proton et tout ce qu'il faut pour les jeux Windows.</span><span style="display: flex; flex-wrap: wrap; gap: 6px"><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Steam</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Proton</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Bibliothèques 32 bits</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Manettes</span></span></div><button role="switch" aria-checked="true" aria-label="Jeu" style="flex: none; position: relative; width: 48px; height: 28px; padding: 0; border: 0; border-radius: 14px; background: #85C595"><span aria-hidden="true" style="position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: #0B1220"></span></button></div>
+<div style="display: flex; align-items: flex-start; gap: 16px; padding: 18px 20px; border-radius: 16px; background: #101B2E; border: 1px solid rgba(255,255,255,0.14)"><span aria-hidden="true" style="flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 13px; background: #5BA3D0"><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 22px; height: 22px; fill: none; stroke: #0B1220; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M3 5h18v11H3zM9 20h6M12 16v4"></path></svg></span><div style="flex: 1; display: flex; flex-direction: column; gap: 8px"><span style="font-size: 17px; font-weight: 600">Pilote NVIDIA</span><span style="font-size: 14px; color: #C5CEDB">Carte détectée : [MODÈLE DE LA CARTE]. La version installée est celle validée pour cet OS.</span><span style="display: flex; flex-wrap: wrap; gap: 6px"><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Modules noyau ouverts</span><span style="padding: 3px 10px; border-radius: 9px; background: rgba(255,255,255,0.08); font-size: 12.5px">Version épinglée</span></span></div><button role="switch" aria-checked="true" aria-label="Pilote NVIDIA" style="flex: none; position: relative; width: 48px; height: 28px; padding: 0; border: 0; border-radius: 14px; background: #85C595"><span aria-hidden="true" style="position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: #0B1220"></span></button></div>
+</main>
+<div style="position: absolute; left: 48px; bottom: 44px; width: 300px; display: flex; align-items: flex-end; gap: 10px"><img src="/_blob/16a817327778fb99b1a30342b0a01682" alt="Sherlock" style="flex: none; width: 72px; height: 108px; object-fit: contain; transform-origin: 50% 100%; animation: flotte 4.5s ease-in-out infinite"><p style="margin: 0 0 30px; padding: 12px 14px; border-radius: 14px 14px 14px 4px; background: #F4EBE3; color: #14233B; font-size: 13.5px; line-height: 1.45">J'ai détecté une carte NVIDIA et une puce AMD. L'écran passera par l'AMD, les jeux par la NVIDIA.</p></div>
+<div style="position: absolute; right: 64px; bottom: 48px; display: flex; gap: 10px"><button style="height: 46px; padding: 0 22px; border: 1px solid rgba(255,255,255,0.22); border-radius: 13px; background: none; color: #EEF2F7; font-size: 15px">Retour</button><button style="height: 46px; padding: 0 26px; border: 0; border-radius: 13px; background: #85C595; color: #0B1220; font-size: 15px; font-weight: 600">Continuer</button></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
