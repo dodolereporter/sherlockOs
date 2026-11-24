@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "desktop/compositeur",
+    "desktop/sherlock-ui",
+    "sherlock/sherlockd",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.100.0"
+# La licence n'est pas encore choisie : rien ne se publie sur crates.io.
+publish = false
+
+[workspace.lints.rust]
+# Un bloc unsafe à l'intérieur d'une fonction unsafe doit rester explicite.
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+# Pas de unwrap ni de expect hors des tests (voir clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+# Tout unsafe porte un commentaire SAFETY qui le justifie.
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+# Le code livré journalise avec tracing, jamais sur la sortie standard.
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"

@@ -1,0 +1,17 @@
+# Build Rust
+/target/
+/essais/*/target/
+
+# Éditeurs
+.idea/
+*.iml
+.vscode/
+*.swp
+*~
+
+# Système
+.DS_Store
+
+# Secrets : jamais dans le dépôt
+.env
+.env.*

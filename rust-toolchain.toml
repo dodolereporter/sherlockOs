@@ -1,0 +1,5 @@
+# Version stable du 24 novembre 2026. Ne la change pas sans ADR.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
