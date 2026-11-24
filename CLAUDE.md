@@ -50,7 +50,7 @@ Le plan, les jalons et les lots sont dans `docs/plan.md`. Les décisions d'archi
 
 Avant d'ouvrir une demande de fusion, `just verifier` doit passer. La CI lance la même commande
 sur chaque demande de fusion et sur la branche principale (voir `docs/ci.md`). Le dépôt n'a pas de
-protection de branche : ne fusionne jamais une demande dont la CI est rouge.
+protection de branche : ne fusionne jamais une demande dont la CI n'est pas verte.
 
 | Commande | Ce qu'elle fait |
 | --- | --- |
