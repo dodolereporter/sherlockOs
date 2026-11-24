@@ -34,7 +34,7 @@ Le plan, les jalons et les lots sont dans `docs/plan.md`. Les décisions d'archi
 6. Toute nouvelle dépendance est justifiée dans la demande de fusion, avec une version épinglée.
 7. Toute décision d'architecture passe par un ADR dans `docs/adr/`.
 8. Un agent qui doute s'arrête et pose sa question dans la demande de fusion. Il n'invente pas.
-9. Rien qui touche au noyau, au pilote ou aux accords de Sherlock ne fusionne sans le test de l'auteur sur sa machine.
+9. Rien qui touche au noyau, au pilote ou aux accords de Sherlock ne fusionne sans ton test sur la machine.
 10. Trois agents en parallèle au maximum, sur des dossiers différents.
 11. Aucune signature d'IA. Pas de ligne `Co-Authored-By`, pas de mention « Generated with », pas de nom de
     modèle ou d'agent, ni dans les commits ni dans les demandes de fusion. L'auteur est le compte git du dépôt.
@@ -61,8 +61,10 @@ Avant d'ouvrir une demande de fusion, `just verifier` doit passer.
 
 Recettes à venir : `just builder` et `just dans-builder <commande>` (lot Q-03), `just test-boot` (lot Q-04).
 
-Prérequis du poste : `rustup` et `just`. La version de Rust est lue dans `rust-toolchain.toml` et
-s'installe toute seule au premier `cargo`. Ne la change pas.
+Prérequis du poste : `rustup`, `just` et un compilateur C qui sert d'éditeur de liens
+(`gcc` et `libc6-dev` sur Debian). La version de Rust est lue dans `rust-toolchain.toml` et
+s'installe toute seule au premier `cargo`. Ne la change pas : elle est aussi recopiée dans
+`rust-version` du `Cargo.toml` racine, les deux changent ensemble.
 
 ## Code Rust
 

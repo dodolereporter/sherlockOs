@@ -1,4 +1,5 @@
-# Version stable du 24 novembre 2026. Ne la change pas sans ADR.
+# Stable 1.100.0, publiée le 9 novembre 2026, épinglée le 24 novembre 2026.
+# Ne la change pas sans ADR. `rust-version` du Cargo.toml racine change avec elle.
 [toolchain]
 channel = "1.100.0"
 profile = "minimal"
