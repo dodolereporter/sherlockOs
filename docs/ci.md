@@ -1,6 +1,6 @@
 # CI Rust
 
-La CI refuse toute demande de fusion qui ne passe pas `just verifier`. Elle tourne sur GitHub Actions,
+La CI marque en échec toute demande de fusion qui ne passe pas `just verifier`. Elle tourne sur GitHub Actions,
 décrite dans `.github/workflows/ci-rust.yml`.
 
 ## Quand elle tourne

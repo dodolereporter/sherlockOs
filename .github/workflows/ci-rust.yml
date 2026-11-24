@@ -1,4 +1,4 @@
-# CI Rust : refuse toute demande de fusion qui ne passe pas `just verifier`.
+# CI Rust : marque en échec toute demande de fusion qui ne passe pas `just verifier`.
 # Ce qui est vérifié et comment le lancer en local : docs/ci.md.
 name: CI Rust
 
