@@ -6,5 +6,23 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+# Seules les fonctions utiles au lot : backend fenêtré (winit, avec le rendu GLES),
+# serveur Wayland et outils de bureau (Space, Window). Le reste (DRM, libinput,
+# XWayland…) viendra avec ses lots.
+smithay = { version = "=0.7.0", default-features = false, features = [
+    "backend_winit",
+    "desktop",
+    "wayland_frontend",
+] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+
+[dev-dependencies]
+# Client Wayland du test d'intégration : les mêmes crates que celles que smithay
+# tire déjà pour son backend winit.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client"] }
+
 [lints]
 workspace = true
