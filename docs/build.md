@@ -24,6 +24,8 @@ conteneur et QEMU s'en sert. Sinon QEMU émule le processeur, beaucoup plus lent
 | `just builder` | Construit l'image `sherlockos-builder:local` |
 | `just dans-builder <commande>` | Lance la commande dans le conteneur, puis le supprime |
 | `just dans-builder` | Ouvre un bash dans le conteneur |
+| `just tester-builder` | Teste le conteneur, en quelques secondes une fois l'image construite (voir « Tests ») |
+| `just tester-builder-repro` | Vérifie que deux constructions installent les mêmes versions. Lent (voir « Tests ») |
 
 Exemples :
 
@@ -77,20 +79,39 @@ Deux constructions de l'image installent exactement les mêmes paquets, aux mêm
 - apt lit `snapshot.debian.org` à un instant figé (`ARG SNAPSHOT` du `Dockerfile`), pas le miroir
   courant de Debian. Cet instant est celui à partir duquel l'image de base a été construite.
 
-Pour vérifier, compare la liste des paquets de deux constructions sans cache :
-
-```sh
-docker build --no-cache -t sherlockos-builder:essai distro/builder
-docker run --rm sherlockos-builder:essai dpkg-query -W > /tmp/paquets-1.txt
-docker build --no-cache -t sherlockos-builder:essai distro/builder
-docker run --rm sherlockos-builder:essai dpkg-query -W > /tmp/paquets-2.txt
-diff /tmp/paquets-1.txt /tmp/paquets-2.txt && docker rmi sherlockos-builder:essai
-```
+`just tester-builder-repro` le vérifie (voir « Tests »).
 
 Pour monter de version, relève la nouvelle empreinte de `debian:trixie-slim`, lis l'instant de
 snapshot dans son `/etc/apt/sources.list.d/debian.sources`, change les deux dans le `Dockerfile`,
-reconstruis, puis relance `just dans-builder gcc --version`. Un instantané plus ancien que l'image
+reconstruis, puis relance `just tester-builder` et `just tester-builder-repro`. Un instantané plus ancien que l'image
 de base fait échouer apt : il faudrait rétrograder des paquets.
+
+## Tests
+
+Les deux recettes appellent `distro/builder/tester.sh`. Elles affichent une ligne `ok` ou `ÉCHEC`
+par vérification et sortent en erreur dès qu'une vérification échoue.
+
+`just tester-builder` construit l'image si elle manque, puis vérifie que :
+
+- `gcc --version` et `qemu-system-x86_64 --version` répondent dans le conteneur ;
+- l'uid dans le conteneur n'est pas 0 ;
+- `/bin/sh` pointe vers bash ;
+- un `CACHE_SOURCES` placé dans le dépôt est refusé sans que rien soit créé, que le chemin soit
+  absolu, relatif, la racine du dépôt ou un détour par `..` ;
+- le code de sortie de la commande est rendu, par `builder.sh` comme par `just dans-builder` :
+  `false` donne 1 et `bash -c 'exit 7'` donne 7 ;
+- les arguments passent intacts, espaces et apostrophes compris.
+
+`just tester-builder-repro` construit deux fois l'image sans cache, sous l'étiquette temporaire
+`sherlockos-builder:repro-<pid>`, et compare la liste `dpkg-query -W` des deux constructions.
+Compte environ 4 min 30, mesuré sur le poste de l'auteur, et deux téléchargements complets des paquets. L'image d'essai est
+supprimée à la fin, même en cas d'échec, et l'image de base aussi si le test a dû la télécharger.
+`sherlockos-builder:local` n'est pas touchée.
+
+Ce test passe par le builder historique de Docker (`DOCKER_BUILDKIT=0`), qui affiche un
+avertissement d'obsolescence. Contrairement à BuildKit, il ne garde pas de cache de construction :
+supprimer l'image d'essai libère tout ce qu'elle occupait. Les versions installées ne dépendent
+que du `Dockerfile`, pas du builder.
 
 ## Variables
 

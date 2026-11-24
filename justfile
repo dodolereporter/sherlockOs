@@ -35,3 +35,11 @@ builder:
 [positional-arguments]
 dans-builder *commande:
     @distro/builder/builder.sh lancer "$@"
+
+# Teste le conteneur de build : outils, utilisateur, cache des sources, codes de sortie
+tester-builder:
+    JUST='{{ just_executable() }}' distro/builder/tester.sh rapide
+
+# Construit deux fois l'image sans cache et compare les versions des paquets (lent)
+tester-builder-repro:
+    distro/builder/tester.sh repro
