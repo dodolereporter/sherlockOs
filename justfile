@@ -26,3 +26,20 @@ tester:
 # Compile tout le workspace
 construire:
     cargo build --workspace
+
+# Construit l'image du conteneur de build de la distribution
+builder:
+    distro/builder/builder.sh construire
+
+# Lance une commande dans le conteneur de build, dépôt monté dans /depot (bash sans commande)
+[positional-arguments]
+dans-builder *commande:
+    @distro/builder/builder.sh lancer "$@"
+
+# Teste le conteneur de build : outils, utilisateur, cache des sources, codes de sortie
+tester-builder:
+    JUST='{{ just_executable() }}' distro/builder/tester.sh rapide
+
+# Construit deux fois l'image sans cache et compare les versions des paquets (lent)
+tester-builder-repro:
+    distro/builder/tester.sh repro
