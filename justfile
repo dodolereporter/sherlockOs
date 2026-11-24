@@ -26,3 +26,12 @@ tester:
 # Compile tout le workspace
 construire:
     cargo build --workspace
+
+# Construit l'image du conteneur de build de la distribution
+builder:
+    distro/builder/builder.sh construire
+
+# Lance une commande dans le conteneur de build, dépôt monté dans /depot (bash sans commande)
+[positional-arguments]
+dans-builder *commande:
+    @distro/builder/builder.sh lancer "$@"
