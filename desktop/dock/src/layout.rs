@@ -101,27 +101,88 @@ impl Geometry {
     /// Size of the dock surface for `count` icons: as long as the longest magnified bar plus
     /// room for the label at its ends, as deep as the label (beside the icons on the sides).
     pub fn surface_size(&self, count: usize, separator: bool) -> Size {
-        let longest = (0..=1000)
-            .map(|step| {
-                self.bar_length(&self.targets(Some(step as f32 / 1000.0), count), separator)
-            })
-            .fold(
-                self.bar_length(&self.targets(None, count), separator),
-                f32::max,
-            );
-        let along = (longest + 2.0 * dock::SURFACE_SLACK).ceil();
-        let room = if self.position.is_vertical() {
-            dock::LABEL_SIDE_ROOM
-        } else {
-            Self::label_height()
-        };
-        let depth = (self.label_depth() + room).ceil();
+        let along = (self.longest(count, separator) + 2.0 * dock::SURFACE_SLACK).ceil();
+        let depth = self.reach().ceil();
         if self.position.is_vertical() {
             Size::new(depth, along)
         } else {
             Size::new(along, depth)
         }
     }
+
+    /// The longest the bar gets, over every pointer position.
+    fn longest(&self, count: usize, separator: bool) -> f32 {
+        (0..=1000)
+            .map(|step| {
+                self.bar_length(&self.targets(Some(step as f32 / 1000.0), count), separator)
+            })
+            .fold(
+                self.bar_length(&self.targets(None, count), separator),
+                f32::max,
+            )
+    }
+
+    /// How far from the edge the dock may draw: the label past the magnified icons, or beside
+    /// them on the left and right edges.
+    fn reach(&self) -> f32 {
+        let room = if self.position.is_vertical() {
+            dock::LABEL_SIDE_ROOM
+        } else {
+            Self::label_height()
+        };
+        self.label_depth() + room
+    }
+
+    /// Where the surface takes the pointer (`wl_surface.set_input_region`). At rest, the bar
+    /// only: a click in the empty room past it (56 px above a bottom dock) goes to the window
+    /// below. While hovered, the area the dock may draw in: the longest magnified bar, up to
+    /// the label, so that a grown icon stays reachable and the dock sees the pointer leave.
+    /// The room at both ends of the surface, kept for the label of an edge icon, never takes
+    /// the pointer.
+    pub fn input_region(
+        &self,
+        surface: Size,
+        count: usize,
+        separator: Option<usize>,
+        hovering: bool,
+    ) -> Rectangle {
+        let rest = Layout::new(*self, surface, &self.targets(None, count), separator).bar;
+        if !hovering {
+            return rest;
+        }
+        let span = if self.position.is_vertical() {
+            surface.height
+        } else {
+            surface.width
+        };
+        let length = self.longest(count, separator.is_some());
+        let depth = self.reach().min(if self.position.is_vertical() {
+            surface.width
+        } else {
+            surface.height
+        });
+        to_surface(
+            self.position,
+            surface,
+            (span - length) / 2.0,
+            0.0,
+            length,
+            depth,
+        )
+    }
+}
+
+/// `rectangle` in whole pixels, as `x, y, width, height`, covering all of it.
+pub fn pixels(rectangle: Rectangle) -> (i32, i32, i32, i32) {
+    let (left, top) = (rectangle.x.floor(), rectangle.y.floor());
+    let right = (rectangle.x + rectangle.width).ceil();
+    let bottom = (rectangle.y + rectangle.height).ceil();
+    (
+        left as i32,
+        top as i32,
+        (right - left) as i32,
+        (bottom - top) as i32,
+    )
 }
 
 /// Room the separator takes along the bar: its thickness and its margins.
@@ -489,6 +550,55 @@ mod tests {
         // The dot between the icon and the edge.
         let dot = grown.dot(3).expect("dot");
         assert_eq!((dot.x, dot.width), (4.0, 5.0));
+    }
+
+    #[test]
+    fn the_input_region_lets_clicks_through_around_the_dock() {
+        let geometry = Geometry::default();
+        let surface = geometry.surface_size(5, false);
+        // At rest: the bar only, 318 by 76 at the bottom; the 56 px above it let clicks go
+        // through to the windows, and so do the ends of the surface.
+        let rest = geometry.input_region(surface, 5, None, false);
+        assert_eq!(
+            rest,
+            Rectangle::new(Point::new(105.5, 56.0), Size::new(318.0, 76.0))
+        );
+        // Whole pixels for the protocol, never smaller than the bar.
+        assert_eq!(pixels(rest), (105, 56, 319, 76));
+        assert!(!rest.contains(Point::new(264.0, 40.0)), "above the bar");
+        // Hovered: the longest magnified bar, up to the top of the label.
+        let hovered = geometry.input_region(surface, 5, None, true);
+        let (_, top, _, height) = pixels(hovered);
+        assert_eq!((top, height), (0, 132), "up to the top of the label");
+        assert_eq!(hovered.width, 425.0);
+        assert_eq!(hovered.center_x(), surface.width / 2.0);
+        assert!(
+            hovered.x >= dock::SURFACE_SLACK,
+            "the label room at the ends stays out"
+        );
+        for step in 0..=20 {
+            let sizes = geometry.targets(Some(step as f32 / 20.0), 5);
+            let layout = Layout::new(geometry, surface, &sizes, None);
+            for icon in &layout.icons {
+                assert!(
+                    hovered.contains(icon.position()),
+                    "magnified icon reachable"
+                );
+            }
+            assert!(hovered.contains(layout.label_anchor(2).expect("label")));
+        }
+        // On the right edge: the bar against the edge at rest, the side room while hovered.
+        let right = Geometry {
+            position: Position::Right,
+            ..geometry
+        };
+        let surface = right.surface_size(5, false);
+        let rest = right.input_region(surface, 5, None, false);
+        assert_eq!((rest.x + rest.width, rest.width), (surface.width, 76.0));
+        let hovered = right.input_region(surface, 5, None, true);
+        let (left, _, width, _) = pixels(hovered);
+        assert_eq!((left as f32, width as f32), (0.0, surface.width));
+        assert_eq!(hovered.height, 425.0);
     }
 
     #[test]

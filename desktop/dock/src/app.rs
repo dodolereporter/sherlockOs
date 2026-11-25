@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use dock_config::{DockConfig, Position as Edge};
 use iced::window::Id;
-use iced::{Point, Rectangle, Size, Subscription, Task};
+use iced::{Point, Size, Subscription, Task};
 use iced::{keyboard, mouse, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
@@ -381,25 +381,20 @@ impl Dock {
         Task::none()
     }
 
-    /// Where the dock takes the pointer: the bar at rest, the whole surface while hovered, so
-    /// that a magnified icon past the bar stays reachable. Elsewhere, clicks go through.
+    /// Tells the compositor where the dock takes the pointer (`Geometry::input_region`).
     fn input_region(&self) -> Task<Message> {
         let Some(id) = self.surface else {
             return Task::none();
         };
-        let area = if self.hovering {
-            Rectangle::with_size(self.surface_size)
-        } else {
-            let rest = self.geometry.targets(None, self.items.len());
-            Layout::new(self.geometry, self.surface_size, &rest, self.separator).bar
-        };
+        let area = self.geometry.input_region(
+            self.surface_size,
+            self.items.len(),
+            self.separator,
+            self.hovering,
+        );
         let callback = RegionActionCB::new(move |region| {
-            let added = region.add(
-                area.x.floor() as i32,
-                area.y.floor() as i32,
-                area.width.ceil() as i32,
-                area.height.ceil() as i32,
-            );
+            let (x, y, width, height) = layout::pixels(area);
+            let added = region.add(x, y, width, height);
             if let Err(error) = added {
                 tracing::warn!(%error, "cannot set the input region");
             }

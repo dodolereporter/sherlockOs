@@ -78,9 +78,17 @@ room on the sides. `layout::surface_size` computes it from the number of icons: 
 over every pointer position, plus `dock::SURFACE_SLACK` (52) on each side for the label, by
 the label's top in height (132). With five icons: 529 by 132.
 
-**Input region.** At rest, only the bar takes the pointer: clicks above it and on its sides go
-to the windows below. While the pointer is over the dock, the whole surface takes it, so that a
-magnified icon above the bar can be reached and the dock knows when the pointer leaves.
+**Input region.** The surface only takes the pointer where the dock is
+(`Geometry::input_region`, sent with `wl_surface.set_input_region`, rounded out to whole
+pixels). At rest, the bar alone: a click in the 56 px above a bottom dock, or at the ends of the
+surface, goes to the window below. While the pointer is over the dock, the region grows to the
+longest magnified bar, up to the top of the label, so that a magnified icon past the bar stays
+reachable and the dock sees the pointer leave; the room kept at both ends for the label of an
+edge icon never takes the pointer. Checked in the nested KWin with a maximized KWrite: a click
+in the black band above the dock puts KWrite's cursor on the line under it, and the dock gets
+no pointer event.
+
+![A click above the dock reaches the window below](../desktop/dock/screenshots/dock-click-through.png)
 
 **Opaque surface.** tiny-skia draws through softbuffer, whose Wayland buffers are `XRGB8888`:
 the transparent pixels of the surface come out black (see `docs/compositeur.md`). The dock's
@@ -96,9 +104,11 @@ zwlr_layer_surface_v1#29.set_size(529, 132)
 zwlr_layer_surface_v1#29.set_exclusive_zone(76)
 zwlr_layer_surface_v1#29.set_margin(0, 0, 8, 0)
 zwlr_layer_surface_v1#29.configure(94, 529, 132)
-wl_region#39.add(105, 56, 318, 76)                 # at rest: the bar only
+wl_region#39.add(105, 56, 319, 76)                 # at rest: the bar only
 wl_surface#28.set_input_region(wl_region#39)
-wl_region#41.add(0, 0, 529, 132)                   # the pointer comes over the dock
+wl_region#40.add(52, 0, 425, 132)                  # the pointer comes over the dock
+wl_surface#28.set_input_region(wl_region#40)
+wl_region#41.add(105, 56, 319, 76)                 # it leaves: the bar again
 wl_surface#28.set_input_region(wl_region#41)
 ```
 
@@ -140,7 +150,8 @@ it is not what limits the rate. The limit is the frame loop through the nested h
 `iced_exwlshell` the next draw waits for the next frame callback of the compositor. Through
 Xephyr, a software X server, those callbacks are slow and irregular. The D-00 measures, with
 the same frame subscription in a KWin nested on the real X server, gave 63 frames per second.
-**The 60 frames per second of the plan remain to be checked in a real session** (D-14); a
+**The 60 frames per second of the plan remain to be checked in a real session**: accepted as
+is for D-21, to be measured again in the real session of batch D-14; a
 widget publishing the frame from inside the draw was tried to shorten the loop, but its
 messages wait for the next event under `iced_exwlshell` and the animation stalled.
 
@@ -375,6 +386,8 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
 1. **Anchoring**: the dock floats 8 above the bottom edge, centered, Sherlock in the middle.
 2. **Exclusive zone**: click KWrite in the dock. Its window opens maximized and stops just above
    the bar (y = 816 on 900), without covering it.
+   Then click in the black band just above the dock (outside the bar): the click reaches the
+   window (the text cursor moves there), not the dock.
 3. **Magnification**: move the pointer slowly along the dock. The icon under the pointer grows
    to 88, its neighbours less, the others are pushed outwards; the label follows the closest
    icon. Leave the dock: everything comes back to 52 with a slight overshoot, the label fades.
@@ -435,6 +448,9 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Open applications**: after the separator, with their entry or their `app_id`, glyphs looked
   up once; « Garder dans le dock » and « Retirer du dock » move an open application across the
   separator; a new configuration moves and resizes the dock.
+- **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
+  the longest magnified bar up to the label while hovered, on the bottom and right edges;
+  rounding to whole pixels never shrinks it.
 - **Pushed neighbours**: a grown icon widens the bar by its growth on both sides, the middle
   icon keeps its center, the gap stays 8, the outer icons move out, bottoms stay aligned; hit
   testing above the bar and in the gaps; the surface holds the widest dock and the label.
