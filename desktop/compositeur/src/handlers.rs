@@ -177,6 +177,10 @@ impl State {
                 (false, zone) => zone.map(|zone| zone.geometry(area)),
             }
         });
+        if target.is_some() || data.restore.get().is_some() {
+            // Calage, agrandissement, plein écran ou retour : la fenêtre glisse à sa place.
+            data.motion.borrow_mut().animate_next_change();
+        }
         if let Some(rect) = target {
             if data.restore.get().is_none() {
                 data.restore.set(self.space.element_geometry(window));

@@ -155,6 +155,9 @@ impl State {
             tracing::debug!(?source, "geste refusé : la fenêtre est en plein écran");
             return;
         }
+        // La fenêtre suit le pointeur sans délai : une animation en cours s'arrête, et le
+        // retour à la taille d'avant d'une fenêtre calée qu'on détache n'est pas animé.
+        window_data(&window).motion.borrow_mut().follow();
         if let (Some(edges), Some(toplevel)) = (edges, window.toplevel()) {
             // Redimensionnée, elle quitte son agrandissement ou sa zone et part de sa taille
             // actuelle, qui part au client avec le premier mouvement.

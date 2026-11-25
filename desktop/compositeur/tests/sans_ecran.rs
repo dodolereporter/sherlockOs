@@ -217,7 +217,8 @@ mod tests {
     struct Shown {
         seat: WlSeat,
         toplevel: XdgToplevel,
-        _surface: WlSurface,
+        surface: WlSurface,
+        shm: WlShm,
         _file: File,
     }
 
@@ -324,9 +325,45 @@ mod tests {
             Shown {
                 seat,
                 toplevel,
-                _surface: surface,
+                surface,
+                shm,
                 _file: file,
             }
+        }
+
+        /// Le client redessine sa fenêtre à `w` × `h` et l'envoie. Le fichier du tampon doit
+        /// vivre aussi longtemps que lui.
+        fn redraw(&mut self, shown: &Shown, w: i32, h: i32) -> File {
+            let qh = self.queue.handle();
+            let file = shm_file((w * h * 4) as u64);
+            let pool = shown.shm.create_pool(file.as_fd(), w * h * 4, &qh, ());
+            let buffer = pool.create_buffer(0, w, h, w * 4, Format::Argb8888, &qh, ());
+            shown.surface.attach(Some(&buffer), 0, 0);
+            shown.surface.commit();
+            self.run_until("le nouveau contenu", |_, s| {
+                s.space
+                    .elements()
+                    .next()
+                    .is_some_and(|w_| w_.geometry().size == (w, h).into())
+            });
+            file
+        }
+
+        /// Ce qui est dessiné de la fenêtre à `t` ms, et sa géométrie réelle.
+        fn drawn(&self, t: u64) -> (Rectangle<f64, Logical>, Rectangle<f64, Logical>) {
+            let window = self.state.space.elements().next().unwrap();
+            let visual = self
+                .state
+                .window_visual(window, Duration::from_millis(t))
+                .unwrap();
+            let real = self.state.space.element_geometry(window).unwrap();
+            (visual.rect, real.to_f64())
+        }
+
+        /// Dessine la fenêtre à `t` ms et vérifie qu'elle l'est exactement à sa place.
+        fn assert_follows(&self, t: u64, what: &str) {
+            let (drawn, real) = self.drawn(t);
+            assert_eq!(drawn, real, "{what} : dessinée ailleurs que sa géométrie");
         }
 
         /// Appui du bouton gauche en (`x`, `y`), sur une surface du client : rend son serial.
@@ -661,5 +698,81 @@ mod tests {
         h.shortcut(KEY_DOWN);
         let states = h.wait_size("la taille du client", 0, 0);
         assert!(!states.contains(&XdgState::Maximized));
+    }
+
+    #[test]
+    fn un_calage_interrompu_ne_rend_pas_le_glisser_suivant_anime() {
+        let mut h = Harness::start();
+        let Shown { seat, toplevel, .. } = h.show_window();
+        h.drawn(0);
+        h.assert_follows(1000, "ouverte");
+
+        // Agrandie, puis rendue avant la fin de l'animation.
+        h.shortcut(KEY_UP);
+        let (moving, real) = h.drawn(1010);
+        assert_ne!(moving, real, "le calage est animé");
+        h.shortcut(KEY_DOWN);
+        h.drawn(1050);
+        h.assert_follows(3000, "rendue");
+
+        // Le glisser suivant suit le pointeur, à chaque image.
+        let serial = h.press(360.0, 270.0);
+        toplevel._move(&seat, serial);
+        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.state.pointer_motion((330.0, 280.0).into(), 3);
+        h.assert_follows(3010, "glissée");
+        h.state.pointer_motion((300.0, 290.0).into(), 3);
+        h.assert_follows(3020, "glissée plus loin");
+        h.release();
+    }
+
+    #[test]
+    fn un_calage_sans_effet_ne_rend_pas_le_redimensionnement_suivant_anime() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        h.drawn(0);
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, 600);
+        h.drawn(1000);
+        h.assert_follows(3000, "calée");
+
+        // Déjà à gauche : le calage ne change rien.
+        h.shortcut(KEY_LEFT);
+        h.assert_follows(3010, "calée de nouveau");
+
+        // Redimensionnée par la bande de droite, elle est dessinée à sa nouvelle taille.
+        h.state.pointer_motion((104.0, 40.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        assert!(h.state.gesture_active());
+        h.state.pointer_motion((134.0, 40.0).into(), 3);
+        h.wait_size("le redimensionnement", 130, 80);
+        let _file = h.redraw(&shown, 130, 80);
+        h.assert_follows(3020, "redimensionnée");
+        assert_eq!(
+            h.drawn(3030).0,
+            Rectangle::new((0.0, 0.0).into(), (130.0, 80.0).into())
+        );
+        h.release();
+    }
+
+    #[test]
+    fn une_fenetre_calee_detachee_suit_le_pointeur() {
+        let mut h = Harness::start();
+        let Shown { seat, toplevel, .. } = h.show_window();
+        h.drawn(0);
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, 600);
+        h.drawn(1000);
+        h.assert_follows(3000, "calée");
+
+        // Détachée en la glissant, puis glissée vite : elle reste sous le pointeur.
+        let serial = h.press(10.0, 10.0);
+        toplevel._move(&seat, serial);
+        h.run_until("le début du geste", |_, s| s.gesture_active());
+        for (i, x) in [100.0, 200.0, 300.0, 400.0].into_iter().enumerate() {
+            h.state.pointer_motion((x, 300.0).into(), 3);
+            h.assert_follows(3001 + i as u64, "détachée");
+        }
+        h.release();
     }
 }

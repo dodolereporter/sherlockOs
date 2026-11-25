@@ -3,21 +3,28 @@
 Le compositeur affiche les fenêtres des applications Wayland et reçoit le clavier et la souris.
 Il est écrit en Rust avec Smithay 0.7, dans `desktop/compositeur`. Le lot D-10 en pose la base :
 il tourne en fenêtre dans une session existante, sans effet visuel. Le lot D-17 rend les fenêtres
-faciles à prendre en main : bande de saisie, curseurs, calage contre les bords de l'écran.
+faciles à prendre en main : bande de saisie, curseurs, calage contre les bords de l'écran. Le lot
+D-11 lui donne l'apparence des planches : fond du bureau, coins arrondis, bordure, ombre, et
+animations à ressorts.
 
 ## Architecture
 
 | Fichier | Rôle |
 | --- | --- |
-| `src/main.rs` | Lit les options, crée la boucle d'événements, lance la commande donnée |
+| `src/main.rs` | Lit les options (`--imbrique`, `--mesurer`), crée la boucle d'événements, lance la commande donnée |
 | `src/lib.rs` | `State` : affichage Wayland, protocoles, siège, `Space` des fenêtres. Socket, écran, focus |
 | `src/handlers.rs` | Réponses aux protocoles : `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, formes de curseur. Pose d'une fenêtre selon son état (`rearrange`) |
 | `src/input.rs` | Clavier et souris : focus au clic, gestes, calage, raccourcis, forme du curseur |
 | `src/layout.rs` | Disposition : placer, déplacer, redimensionner, bande de saisie, zones de calage, retour à la taille d'avant. Du calcul pur, sans Wayland ni rendu |
-| `src/winit.rs` | Backend fenêtré : la fenêtre hôte, son écran virtuel, son curseur, le rendu GLES et l'aperçu du calage |
+| `src/winit.rs` | Backend fenêtré : la fenêtre hôte, son écran virtuel, son curseur. Lance le rendu de chaque image et sa mesure |
+| `src/render.rs` | Rendu : fond et disques, ombres, contenu découpé en rectangle arrondi, bordures, aperçu du calage |
+| `src/shaders/` | Les trois programmes GLSL du rendu : `shape.frag`, `shadow.frag`, `clip.frag` |
+| `src/anim.rs` | Mouvements des fenêtres et de l'aperçu : ressorts appliqués aux rectangles. Du calcul pur |
+| `src/stats.rs` | Statistiques des images pour `--mesurer` |
+| `examples/scene.rs` | Client de test : la scène de mesure, et une fenêtre pour comparer à la planche |
 
-Les tailles de la bande et du calage, et les couleurs de l'aperçu, viennent de
-`sherlock-ui` (modules `color` et `window`).
+Les couleurs, les tailles, les durées et les ressorts viennent de `sherlock-ui` (modules `color`,
+`metrics`, `motion` et `window`), sans sa fonction `iced`.
 
 Tout tourne dans un seul fil, sur une boucle `calloop`. Les sources de la boucle sont l'affichage
 Wayland (requêtes des clients), la socket d'écoute et, en mode imbriqué, la fenêtre winit
@@ -93,6 +100,119 @@ Curseurs :
 - En mode imbriqué, c'est le curseur de la fenêtre hôte qui change de forme, avec le thème de la
   session hôte. La session réelle (lot D-14) devra dessiner le curseur elle-même.
 
+## Rendu
+
+Chaque image est redessinée en entier avec le moteur GLES de Smithay (`GlesRenderer`), dans le
+seul fil du compositeur. `render::Scene` compile trois programmes au démarrage et pose les
+éléments de l'avant vers l'arrière, comme Smithay les attend :
+
+1. l'aperçu du calage : rectangle arrondi vert translucide, bordure verte de 2 px ;
+2. pour chaque fenêtre, de la plus haute à la plus basse : ses menus (`xdg_popup`, ni découpés
+   ni mis à l'échelle), sa bordure, son contenu découpé, son ombre ;
+3. les trois disques du fond ;
+4. la couleur du bureau, qui remplit le reste.
+
+| Programme | Sorte | Ce qu'il dessine |
+| --- | --- | --- |
+| `shape.frag` | Pixels | Rectangle arrondi rempli et bordé, lissé sur un pixel : bordure des fenêtres (sans remplissage), disques du fond (rayon de la moitié du côté), aperçu du calage |
+| `shadow.frag` | Pixels | Ombre portée d'un rectangle arrondi flouté par une gaussienne, effacée sous la fenêtre |
+| `clip.frag` | Texture | Contenu du client multiplié par la couverture du rectangle arrondi de sa fenêtre |
+
+Les valeurs, toutes tirées de `sherlock-ui` :
+
+| Élément | Valeur | Jeton |
+| --- | --- | --- |
+| Fond | `#0E1A2E` | `color::DESKTOP` |
+| Disques | `#132A49`, `#16314F`, `#1B3F63`, places et diamètres de la planche Main | `color::DESKTOP_DISCS`, `metrics::DESKTOP_DISC_GEOMETRY` |
+| Coins | Rayon 16, réduit pour une fenêtre plus petite que deux coins | `metrics::WINDOW_RADIUS` |
+| Bordure | 1 px `rgba(255,255,255,0.10)`, à l'intérieur de la fenêtre comme en CSS | `metrics::BORDER_WIDTH`, `color::BORDER` |
+| Ombre | `0 28px 70px rgba(3,8,18,0.55)` | `metrics::SHADOW_OFFSET`, `metrics::SHADOW_BLUR`, `color::SHADOW` |
+
+**Fond.** Sur un écran de 1440 par 900, les disques sont exactement à leur place de la planche :
+(-260, 340) diamètre 1100, (860, -420) diamètre 900, (980, 520) diamètre 520, le dernier devant.
+Sur un autre écran, leurs centres suivent l'écran sur chaque axe et leur diamètre suit le plus
+grand des deux rapports, pour qu'ils restent ronds.
+
+**Coins.** Le contenu du client est vraiment découpé : `RoundedSurface` enveloppe chaque surface
+de la fenêtre et remplace, le temps de la dessiner, le programme de texture de Smithay par
+`clip.frag`. La découpe se calcule sur `gl_FragCoord`, en pixels de l'image : elle vaut pour les
+sous-surfaces comme pour la surface principale, à n'importe quelle échelle. Le backend fenêtré
+retourne l'image (`Flipped180`) ; `clip_in_frame` applique la même transformation au rectangle de
+découpe. Ce que le client dessine hors de sa géométrie (ombres côté client de GTK) est coupé :
+c'est le compositeur qui dessine l'ombre. Une fenêtre en plein écran n'a ni coins, ni bordure,
+ni ombre : elle les garde pendant qu'elle glisse vers l'écran entier et les perd à l'arrivée,
+quand elle couvre déjà l'écran. Une fenêtre agrandie ou calée les garde.
+
+**Ombre.** Comme `box-shadow` : le rectangle de la fenêtre, décalé de 28 vers le bas, flouté par
+une gaussienne d'écart type 35 (la moitié du flou, comme le font les navigateurs). L'élément
+s'étend de 70 autour de ce rectangle. Le calcul suit Evan Wallace (« Fast Rounded Rectangle
+Shadows ») : intégrale exacte en x, quatre échantillons en y. L'ombre n'est pas dessinée sous la
+fenêtre, ce qui compte pour un client translucide et pendant les fondus.
+
+**Coût.** Les surfaces découpées n'ont pas de région opaque : les fenêtres du dessous sont
+toujours dessinées. L'image est redessinée en entier à chaque fois (âge 0), comme avant ce lot.
+Le backend DRM (D-14) pourra rendre aux surfaces leur partie opaque, hors des coins.
+
+### Animations
+
+Le module `sherlock_ui::motion` porte la physique, en calcul pur et sans iced, pour que le
+compositeur et le shell partagent les mêmes ressorts :
+
+- `Spring` : ressort amorti de masse 1, défini par sa raideur et son amortissement. `solve` donne
+  l'écart et la vitesse à n'importe quel instant par la solution exacte de l'équation (amorti
+  sous-critique, critique ou sur-critique), sans pas de temps : une image en retard ne change
+  pas la trajectoire.
+- `Animation` : une valeur menée par un ressort. `retarget` change de cible en gardant valeur et
+  vitesse : rien ne saute quand la cible bouge en route.
+- `Fade` : un fondu sur une durée fixe, départ vif et arrivée douce (cubique). Interrompu, il
+  repart de sa valeur.
+
+| Jeton | Valeur | Taux d'amortissement | Usage |
+| --- | --- | --- | --- |
+| `SNAP_SPRING` | raideur 500, amortissement 33,5 | 0,75, dépassement de 3 % | Calage, agrandissement, retour |
+| `OPEN_SPRING` | raideur 450, amortissement 34 | 0,80, dépassement de 2 % | Échelle à l'ouverture, de `OPEN_SCALE` (0,92) à 1 |
+| `PREVIEW_SPRING` | raideur 700, amortissement 42 | 0,79 | Aperçu du calage |
+| `FADE` | 150 ms | | Opacité à l'ouverture, apparition et effacement de l'aperçu |
+
+`docs/contexte.md` ne donne que « ressorts », « léger dépassement » et des survols de 110 à
+150 ms : ces valeurs sont des choix du lot. Chaque ressort fait 90 % du trajet en moins de
+150 ms et se pose à 1 % près en moins de 300 ms (tests de `motion`). Le fondu dure un survol.
+
+`anim.rs` les applique aux fenêtres :
+
+- **Ouverture.** À sa première image, la fenêtre grandit de 0,92 à 1 autour de son centre et
+  passe de transparente à opaque. Son ombre et sa bordure suivent.
+- **Calage et retour.** `rearrange` (calage, agrandissement, plein écran, retour) appelle
+  `animate_next_change`. Le drapeau ne vaut que pour l'image suivante, où il est consommé dans
+  tous les cas : si la géométrie y a changé, elle part de la dernière géométrie dessinée sur
+  quatre ressorts, position et taille ; sinon rien ne s'anime. Une animation déjà en cours
+  change simplement de cible. La cible suit ensuite la géométrie réelle : la position change
+  tout de suite, la taille quand le client répond, et le ressort reprend sa course sans
+  à-coup. Pendant l'animation, le tampon du client est étiré dans le rectangle animé
+  (`RescaleRenderElement`). Une fois posé, il est dessiné à l'échelle 1. Limite : un calage qui
+  ne change que la taille, la position restant la même, n'est pas animé.
+- **Glisser et redimensionner.** Ils ne sont jamais animés : le début d'un geste arrête toute
+  animation de géométrie (`WindowMotion::follow`), et la fenêtre suit le pointeur sans délai.
+  Une fenêtre calée ou agrandie qu'on détache en la glissant reprend sa taille d'avant d'un
+  coup, sous le pointeur, comme avant ce lot.
+- **Aperçu du calage.** Il apparaît en grandissant de 0,92 à 1 et en fondu, glisse d'une zone à
+  l'autre, et s'efface à sa dernière place.
+
+Rien ne clignote : une fenêtre apparaît depuis une opacité nulle, et chaque animation part de ce
+qui était dessiné à l'image d'avant.
+
+### Ce que le rendu ne fait pas encore
+
+- **Flou** derrière les surfaces vitrées (dual Kawase, rayons de 24, 28 et 30 px) : reporté,
+  le lot dépassait déjà sa taille. Il demande un rendu hors écran de ce qui est derrière la
+  surface, à résolution réduite, puis des passes de flou ; l'aperçu du calage en serait le
+  premier client.
+- **Fermeture animée.** Quand le client détruit sa fenêtre, son tampon disparaît avec elle.
+  L'animer demande de garder une copie de sa dernière image (texture) au moment de la
+  destruction.
+- Les **survols** : le compositeur n'a encore rien à survoler. Le jeton `motion::FADE` est déjà
+  à la durée d'un survol.
+
 ## Lancer
 
 ```sh
@@ -116,6 +236,79 @@ refusée l'est aussi.
 et s'ouvrirait hors du compositeur. `--separate` évite que la commande rejoigne une Konsole déjà
 ouverte.
 
+## Mesurer
+
+`--mesurer`, juste après `--imbrique`, écrit chaque seconde dans le journal le nombre d'images,
+la cadence, le temps de rendu moyen et maximal, le plus long intervalle entre deux images et le
+nombre d'images en retard, c'est-à-dire arrivées plus de 16,67 ms après la précédente (cadence
+de 60 images par seconde, `motion::FRAME_RATE`). Le temps de rendu va de la construction des
+éléments à la fin du travail de la puce graphique : en mesure, le compositeur attend la fin du
+rendu avant de présenter l'image. Quand la commande lancée se termine, la session s'arrête et
+écrit deux bilans : toutes les images, et celles dessinées pendant une animation.
+
+La scène de mesure, `examples/scene.rs`, ouvre dix fenêtres centrées l'une sur l'autre, puis
+agrandit et rend sa taille à la plus haute toutes les 700 ms, douze fois : chaque changement est
+un calage animé, avec ses dix ombres et ses dix découpes. Elle dure une dizaine de secondes.
+
+```sh
+cargo build --release -p compositeur --bin compositeur --example scene
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  target/release/compositeur --imbrique --mesurer target/release/examples/scene
+```
+
+Sur le portable de référence, le compositeur doit tourner sur la puce AMD :
+
+- le journal de Smithay nomme le moteur au démarrage, `GL Renderer: "AMD Radeon Graphics
+  (radeonsi, …)"` ;
+- `__EGL_VENDOR_LIBRARY_FILENAMES` ne laisse charger à libglvnd que l'EGL de Mesa : celui de
+  NVIDIA, prioritaire sur Debian (`10_nvidia.json`), n'est même pas ouvert ;
+- `cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status` doit rester `suspended` avant,
+  pendant et après (adresse de la carte NVIDIA donnée par `lspci -D | grep -i nvidia`).
+
+Sans `DRI_PRIME`, Mesa rend sur la puce par défaut, celle de l'écran : l'AMD. `DRI_PRIME=0` est
+refusé par Mesa (`Invalid value (0) for DRI_PRIME`) : ne pas le mettre. Le journal du moteur
+fait foi.
+
+Sous Plasma X11, Mesa cale la présentation de la fenêtre hôte sur l'écran du portable : la
+cadence plafonne à sa fréquence, et le temps de rendu compte aussi l'attente de l'image
+précédente, si bien qu'il approche l'intervalle entre deux images. Pour voir le coût réel du
+rendu, `vblank_mode=0` (variable de Mesa) lève cette attente. Au niveau `debug`
+(`RUST_LOG=info,compositeur=debug`), chaque image en retard est journalisée avec son instant,
+son intervalle et son temps de rendu : un retard dont le rendu est court vient d'ailleurs que du
+rendu.
+
+Le critère est « 60 images par seconde tenues » : aucune image en retard dans le bilan des
+images animées. La cadence elle-même suit l'écran hôte : la fenêtre winit est présentée au
+rythme de l'écran du portable. Les chiffres mesurés sont dans la demande de fusion du lot D-11.
+
+## Comparer à la planche Main
+
+1. Ouvrir `docs/design/planches/Main.dc.html` dans Chromium, fenêtre de 1440 par 900, ou en
+   tirer une capture :
+   `chromium --headless --disable-gpu --hide-scrollbars --window-size=1440,900 --screenshot=planche.png docs/design/planches/Main.dc.html`.
+2. Lancer le compositeur sans commande, mettre sa fenêtre hôte à 1440 par 900, puis seulement
+   ouvrir la fenêtre de la taille de l'éditeur de la planche (836 × 652). Le compositeur centre
+   une fenêtre à son premier contenu, sur l'écran qu'il a à ce moment : l'ordre compte. Le nom
+   de la socket est dans le journal (`compositeur prêt socket="wayland-1"`).
+
+   ```sh
+   cargo build -p compositeur --bin compositeur --example scene
+   target/debug/compositeur --imbrique &
+   wmctrl -r Smithay -e 0,-1,-1,1440,900
+   WAYLAND_DISPLAY=wayland-1 target/debug/examples/scene planche &
+   import -window "$(xwininfo -name Smithay | awk '/Window id/ {print $4}')" compositeur.png
+   ```
+
+   Vérifier que la capture fait 1440 par 900. Pour un hôte de L par H, la fenêtre est en
+   ((L - 836) / 2, (H - 652) / 2) : son coin bas gauche est en ((L - 836) / 2, (H + 652) / 2).
+
+3. Comparer :
+   - le fond et les disques, au pixel près : mêmes places, mêmes couleurs ;
+   - le coin bas gauche de la fenêtre : (36, 716) sur la planche, (302, 776) dans le compositeur
+     à 1440 par 900. Les deux coins sont sur le disque `#132A49`. Recadrer autour de chacun et
+     poser les deux côte à côte : rayon, bordure claire de 1 px (`(39, 47, 61)` sur le corps de
+     la fenêtre dans les deux), ombre décalée vers le bas qui s'éteint en 70 px.
+
 ## Tester
 
 ```sh
@@ -126,6 +319,10 @@ just verifier
 | --- | --- |
 | `src/layout.rs` | Centrage, déplacement, redimensionnement par chaque bord, coin opposé fixe pendant tout le geste, tailles minimale et maximale du client. Bande de saisie : chaque côté, chaque coin, plus large aux coins, rien à l'intérieur, fenêtre étroite. Calage : bords haut, gauche et droit, quatre coins, géométrie de chaque zone, retour à la taille d'avant sous le pointeur |
 | `sherlock-ui/src/color.rs` | Couleurs prémultipliées par leur opacité |
+| `sherlock-ui/src/motion.rs` | Ressorts : convergence vers la cible, dépassement léger et borné (entre 0,5 et 4 %), temps de réponse (90 % en moins de 150 ms, posé en moins de 300 ms), changement de cible sans saut de valeur ni de vitesse, pas de dépassement pour un ressort critique ou sur-amorti. Fondu : durée d'un survol, reprise sans saut |
+| `src/anim.rs` | Ouverture centrée qui part d'une opacité nulle. Calage animé de la position puis de la taille, glisser suivi sans délai avant et après. Drapeau consommé même sans changement ou pendant une animation, arrêt par un geste. Aperçu qui apparaît, glisse et s'efface |
+| `src/render.rs` | Disques à leur place de la planche sur 1440 par 900, ronds sur un autre écran. Dimensions de l'ombre de la fenêtre de la planche. Rayon des coins, réduit pour une petite fenêtre. Découpe retournée avec l'image |
+| `src/stats.rs` | Cadence, images en retard, bilan des images animées |
 | `tests/sans_ecran.rs` | Sans écran ni backend, voir ci-dessous |
 
 Les tests de `tests/sans_ecran.rs` :
@@ -151,13 +348,19 @@ Les tests de `tests/sans_ecran.rs` :
 - **Raccourcis.** Super + flèches cale à gauche, agrandit, rend la taille d'avant. Le client,
   qui a un clavier, reçoit Super mais jamais l'appui ni le relâchement des flèches
   interceptées. Super + Maj + gauche lui arrive et ne cale rien.
+- **Ce qui est dessiné suit les gestes.** `State::window_visual` donne la géométrie dessinée à
+  un instant choisi, sans rendu. Agrandie puis rendue pendant l'animation, la fenêtre glissée
+  ensuite est dessinée sous le pointeur à chaque image. Calée à gauche deux fois de suite, puis
+  redimensionnée par sa bande, elle est dessinée à sa nouvelle taille. Calée puis détachée en
+  la glissant vite, elle reste sous le pointeur.
 
 Le test d'intégration fait tourner le compositeur et le client dans le même fil, sur une paire de
 sockets Unix : il ne dépend ni d'un écran, ni de `XDG_RUNTIME_DIR`. Il charge `libwayland-client`
 à l'exécution, comme le backend winit.
 
-Ce que les tests ne voient pas : le rendu de l'aperçu et la forme réelle du curseur de la
-fenêtre hôte. Pour ça, il faut la procédure à la main ci-dessous.
+Ce que les tests ne voient pas : les programmes GLSL et l'image qu'ils produisent (la CI n'a pas
+de puce graphique), et la forme réelle du curseur de la fenêtre hôte. Pour ça, il faut la
+procédure à la main ci-dessous, la mesure et la comparaison à la planche.
 
 ## Essai à la main
 

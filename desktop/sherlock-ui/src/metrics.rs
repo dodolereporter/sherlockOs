@@ -4,6 +4,14 @@
 /// Écran de référence des planches.
 pub const REFERENCE_SCREEN: (f32, f32) = (1440.0, 900.0);
 
+/// Les trois disques du fond d'écran, sur l'écran de référence : gauche, haut et diamètre de
+/// chacun, dans l'ordre de `color::DESKTOP_DISCS` (planche Main). Le dernier passe devant.
+pub const DESKTOP_DISC_GEOMETRY: [(f32, f32, f32); 3] = [
+    (-260.0, 340.0, 1100.0),
+    (860.0, -420.0, 900.0),
+    (980.0, 520.0, 520.0),
+];
+
 // Barre du haut.
 
 /// Hauteur de la barre du haut.
