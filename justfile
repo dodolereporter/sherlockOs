@@ -4,8 +4,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Format, clippy and tests: what the CI requires
-verify: fmt-check lint test
+# Format, language, clippy and tests: what the CI requires
+verify: fmt-check check-language lint test
 
 # Checks the format without changing anything
 fmt-check:
