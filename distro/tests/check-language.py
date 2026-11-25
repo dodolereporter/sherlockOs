@@ -22,11 +22,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Kept in French on purpose, see ADR 0017: the author's design reference, the historical ADRs,
-# the plan and the context document (whose translation is still an open question).
+# Kept in French on purpose, see ADR 0017: the author's design reference, the historical ADRs
+# (0000 to 0016), the plan and the context document (whose translation is still an open question).
+HISTORICAL_ADR = re.compile(r"docs/adr/00(0[0-9]|1[0-6])-")
 EXCLUDED = (
     "docs/design/",
-    "docs/adr/",
     "docs/plan.md",
     "docs/contexte.md",
     "distro/tests/check-language.py",
@@ -235,7 +235,7 @@ def main():
 
     skip = EXCLUDED + tuple(args.exclude)
     for path in sorted(files):
-        if path.startswith(skip) or (args.paths and not path.startswith(tuple(args.paths))):
+        if path.startswith(skip) or HISTORICAL_ADR.match(path) or (args.paths and not path.startswith(tuple(args.paths))):
             continue
         if not Path(path).exists():
             continue

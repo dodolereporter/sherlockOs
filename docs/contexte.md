@@ -311,6 +311,7 @@ Chaque outil déclare son niveau dans le code de son serveur. Un outil sans nive
 
 ### Langue
 
+- **Remplacée par l'ADR 0017 (`docs/adr/0017-development-language-english.md`) le 25/11/2026** : tout le développement est en anglais (identifiants, noms de dossiers, de crates, de recettes et d'options, commentaires, doc technique, commits), l'interface reste en français au tutoiement. Les trois points ci-dessous ne valent plus. Les noms cités dans ce document peuvent dater d'avant : ceux de `CLAUDE.md` font foi.
 - Interface, documentation, messages de commit, noms de dossiers et de recettes : en français. Pas d'accents dans les noms de fichiers et de dossiers.
 - Identifiants du code (types, fonctions, variables) : en anglais, comme le reste de l'écosystème Rust.
 - Commentaires du code : en français. Ils expliquent pourquoi, pas quoi.
