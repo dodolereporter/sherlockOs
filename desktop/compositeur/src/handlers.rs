@@ -1,5 +1,6 @@
 //! Réponses aux protocoles : wl_compositor, wl_shm, wl_seat, wl_output, xdg-shell, et le
-//! presse-papiers (wl_data_device et sélection primaire).
+//! presse-papiers (wl_data_device et sélection primaire). Layer-shell is in `layer.rs`, the
+//! screens and their scale in `output.rs`.
 
 use std::{cell::Cell, os::fd::OwnedFd, sync::OnceLock};
 
@@ -7,11 +8,12 @@ use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_output,
     delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
-    desktop::{PopupKind, Window},
+    desktop::{PopupKind, PopupManager, Window, find_popup_root_surface},
     input::{
         Seat, SeatHandler, SeatState,
         pointer::{CursorImageStatus, GrabStartData},
     },
+    output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{
@@ -48,6 +50,7 @@ use crate::{
     ClientState, State,
     focus::KeyboardFocus,
     input::GestureSource,
+    layer::PopupGrab,
     layout::{self, Edges, Zone},
     window_data,
 };
@@ -82,6 +85,8 @@ impl CompositorHandler for State {
                 if &root == surface {
                     self.toplevel_commit(window);
                 }
+            } else if &root == surface {
+                self.layer_commit(surface);
             }
         }
         self.popups.commit(surface);
@@ -233,14 +238,31 @@ impl State {
     }
 
     /// Change l'état d'une fenêtre (agrandie, plein écran, calée dans une zone) puis la pose :
-    /// sur tout l'écran, dans sa zone, ou à sa place d'avant. Cette place est gardée quand la
+    /// sur tout son écran, dans sa zone, ou à sa place d'avant. Cette place est gardée quand la
     /// fenêtre quitte l'état flottant, et rendue quand elle y revient.
     pub(crate) fn rearrange(
         &mut self,
         window: &Window,
         change: impl FnOnce(&mut Arrangement, &Cell<Option<Zone>>),
     ) {
-        let Some(area) = self.output_area() else {
+        self.rearrange_on(window, None, change);
+    }
+
+    /// Same as `rearrange`, on `output` rather than the window's screen. A fullscreen window
+    /// covers the whole screen; a maximized or snapped one stays in its work area, out of the
+    /// exclusive zones of anchored surfaces.
+    pub(crate) fn rearrange_on(
+        &mut self,
+        window: &Window,
+        output: Option<Output>,
+        change: impl FnOnce(&mut Arrangement, &Cell<Option<Zone>>),
+    ) {
+        let Some(output) = output.or_else(|| self.window_output(window)) else {
+            return;
+        };
+        let (Some(screen), Some(work)) =
+            (self.space.output_geometry(&output), self.work_area(&output))
+        else {
             return;
         };
         let data = window_data(window);
@@ -248,11 +270,13 @@ impl State {
         change(&mut arrangement, &data.zone);
         arrangement.apply(window);
         let target = match (
-            arrangement.maximized || arrangement.fullscreen,
+            arrangement.fullscreen,
+            arrangement.maximized,
             data.zone.get(),
         ) {
-            (true, _) => Some(area),
-            (false, zone) => zone.map(|zone| zone.geometry(area)),
+            (true, ..) => Some(screen),
+            (false, true, _) => Some(work),
+            (false, false, zone) => zone.map(|zone| zone.geometry(work)),
         };
         if target.is_some() || data.restore.get().is_some() {
             // Calage, agrandissement, plein écran ou retour : la fenêtre glisse à sa place.
@@ -277,15 +301,23 @@ impl State {
         }
     }
 
-    /// Cale la fenêtre dans `zone`, ou lui rend sa place d'avant. Sans effet en plein écran.
-    pub(crate) fn snap(&mut self, window: &Window, zone: Option<Zone>) {
+    /// Cale la fenêtre dans `zone` de `output` (son écran sinon), ou lui rend sa place
+    /// d'avant. Sans effet en plein écran.
+    pub(crate) fn snap(&mut self, window: &Window, zone: Option<Zone>, output: Option<Output>) {
         if is_fullscreen(window) {
             return;
         }
-        self.rearrange(window, |a, current| {
+        self.rearrange_on(window, output, |a, current| {
             a.maximized = zone == Some(Zone::Maximized);
             current.set(zone.filter(|z| *z != Zone::Maximized));
         });
+    }
+
+    /// Closes the menu chain that waits for an outside click.
+    pub(crate) fn dismiss_popups(&mut self) {
+        if let Some(grab) = self.popup_grab.take() {
+            PopupManager::dismiss_popup(&grab.root, &grab.popup).ok();
+        }
     }
 
     fn surface_window(&self, surface: &ToplevelSurface) -> Option<Window> {
@@ -346,8 +378,8 @@ impl Arrangement {
     }
 }
 
-/// Place et taille d'une fenêtre X11, dans les coordonnées de l'écran, qui sont celles de
-/// l'espace : l'écran est posé en (0, 0).
+/// Place et taille d'une fenêtre X11, dans les coordonnées de l'espace : XWayland lit la place
+/// de chaque écran dans xdg-output.
 pub(crate) fn configure_x11(surface: &X11Surface, rect: Rectangle<i32, Logical>) {
     if surface.is_override_redirect() || surface.geometry() == rect {
         return;
@@ -405,8 +437,27 @@ impl XdgShellHandler for State {
         surface.send_repositioned(token);
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        // Pas de saisie exclusive pour les menus : ils se ferment quand le client le décide.
+    /// A menu asks to close on an outside click (the menus of the bar). A click on a surface of
+    /// another client closes the whole chain; the client handles clicks on its own surfaces.
+    /// The serial is not checked: iced opens its menus on release, after the press it names.
+    fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, _serial: Serial) {
+        let popup = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&popup) else {
+            return;
+        };
+        if Seat::<State>::from_resource(&seat).as_ref() != Some(&self.seat) {
+            PopupManager::dismiss_popup(&root, &popup).ok();
+            return;
+        }
+        // A submenu keeps the first menu of the chain: closing that one closes them all.
+        if self
+            .popup_grab
+            .as_ref()
+            .is_none_or(|grab| grab.root != root)
+        {
+            self.dismiss_popups();
+            self.popup_grab = Some(PopupGrab { root, popup });
+        }
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
@@ -443,8 +494,9 @@ impl XdgShellHandler for State {
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
         if let Some(window) = self.surface_window(&surface) {
+            let screen = output.as_ref().and_then(Output::from_resource);
             surface.with_pending_state(|s| s.fullscreen_output = output);
-            self.rearrange(&window, |a, _| a.fullscreen = true);
+            self.rearrange_on(&window, screen, |a, _| a.fullscreen = true);
         }
     }
 

@@ -7,13 +7,16 @@ pub mod anim;
 pub mod focus;
 mod handlers;
 mod input;
+mod layer;
 pub mod layout;
+pub mod output;
 pub mod render;
 pub mod stats;
 pub mod winit;
 mod xwayland;
 
 use std::{
+    borrow::Cow,
     cell::{Cell, RefCell},
     ffi::{OsStr, OsString},
     fmt,
@@ -24,13 +27,12 @@ use std::{
 };
 
 use smithay::{
-    desktop::{PopupManager, Space, Window},
+    desktop::{PopupManager, Space, Window, layer_map_for_output},
     input::{
         Seat, SeatState,
         keyboard::{Keycode, XkbConfig},
         pointer::CursorImageStatus,
     },
-    output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, LoopSignal, Mode as LoopMode, PostAction,
@@ -42,14 +44,20 @@ use smithay::{
             protocol::wl_surface::WlSurface,
         },
     },
-    utils::{Logical, Physical, Rectangle, SERIAL_COUNTER, Size, Transform},
+    utils::{IsAlive, Logical, Rectangle, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         cursor_shape::CursorShapeManagerState,
+        fractional_scale::FractionalScaleManagerState,
+        output::OutputManagerState,
         seat::WaylandFocus,
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
-        shell::xdg::{XdgShellState, XdgToplevelSurfaceData},
+        shell::{
+            wlr_layer::WlrLayerShellState,
+            xdg::{XdgShellState, XdgToplevelSurfaceData},
+        },
         shm::ShmState,
+        viewporter::ViewporterState,
         xwayland_shell::XWaylandShellState,
     },
     xwayland::{X11Surface, X11Wm},
@@ -63,7 +71,9 @@ use crate::{
 /// Ce qui empêche le compositeur de démarrer.
 #[derive(thiserror::Error)]
 pub enum Error {
-    #[error("usage : compositeur --imbrique [--mesurer] [commande [arguments…]]")]
+    #[error(
+        "usage : compositeur --imbrique [--mesurer] [--ecrans N] [--echelle E]… [commande [arguments…]]"
+    )]
     Usage,
     #[error("impossible de créer l'affichage Wayland : {0}")]
     Display(#[from] smithay::reexports::wayland_server::backend::InitError),
@@ -103,10 +113,18 @@ pub struct State {
     shm_state: ShmState,
     _cursor_shape_state: CursorShapeManagerState,
     xwayland_shell_state: XWaylandShellState,
+    layer_shell_state: WlrLayerShellState,
+    _output_manager_state: OutputManagerState,
+    _fractional_scale_state: FractionalScaleManagerState,
+    _viewporter_state: ViewporterState,
     data_device_state: DataDeviceState,
     primary_selection_state: PrimarySelectionState,
     seat_state: SeatState<State>,
     popups: PopupManager,
+    /// Menu that a click elsewhere closes.
+    popup_grab: Option<layer::PopupGrab>,
+    /// Screens and where they draw in the host frame.
+    screens: Vec<output::Screen>,
     gesture: Option<input::Gesture>,
     /// Curseur demandé par le client qui a le pointeur.
     cursor_status: CursorImageStatus,
@@ -194,6 +212,14 @@ impl State {
             _cursor_shape_state: CursorShapeManagerState::new::<Self>(&dh),
             // Seul XWayland voit ce protocole : il associe ses fenêtres X11 à ses surfaces.
             xwayland_shell_state: XWaylandShellState::new::<Self>(&dh),
+            // Anchored surfaces of the shell (ADR 0005).
+            layer_shell_state: WlrLayerShellState::new::<Self>(&dh),
+            // Logical place and size of each screen, which toolkits read to size their surfaces.
+            _output_manager_state: OutputManagerState::new_with_xdg_output::<Self>(&dh),
+            // Fractional scale of each surface's screen, and buffers cropped and scaled by the
+            // client (viewporter), with which it draws at that scale.
+            _fractional_scale_state: FractionalScaleManagerState::new::<Self>(&dh),
+            _viewporter_state: ViewporterState::new::<Self>(&dh),
             // Presse-papiers (CLIPBOARD) et sélection primaire, que XWayland relaie aussi.
             data_device_state: DataDeviceState::new::<Self>(&dh),
             primary_selection_state: PrimarySelectionState::new::<Self>(&dh),
@@ -201,6 +227,8 @@ impl State {
             seat,
             space: Space::default(),
             popups: PopupManager::default(),
+            popup_grab: None,
+            screens: Vec::new(),
             gesture: None,
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
@@ -281,32 +309,6 @@ impl State {
         }
     }
 
-    /// Ajoute un écran de la taille donnée, posé en (0, 0).
-    pub fn add_output(&mut self, size: Size<i32, Physical>, transform: Transform) -> Output {
-        let properties = PhysicalProperties {
-            size: (0, 0).into(),
-            subpixel: Subpixel::Unknown,
-            make: "compositeur".into(),
-            model: "virtuel".into(),
-        };
-        let output = Output::new("virtuel-1".into(), properties);
-        output.create_global::<State>(&self.display_handle);
-        let mode = Mode {
-            size,
-            refresh: 60_000,
-        };
-        output.change_current_state(Some(mode), Some(transform), None, Some((0, 0).into()));
-        output.set_preferred(mode);
-        self.space.map_output(&output, (0, 0));
-        output
-    }
-
-    /// Zone du premier écran, où l'on pose et agrandit les fenêtres.
-    pub fn output_area(&self) -> Option<Rectangle<i32, Logical>> {
-        let output = self.space.outputs().next()?;
-        self.space.output_geometry(output)
-    }
-
     /// Fenêtre dont la surface principale est `surface`, Wayland ou X11.
     pub fn window_for(&self, surface: &WlSurface) -> Option<Window> {
         self.space
@@ -332,7 +334,7 @@ impl State {
     }
 
     /// Fenêtre la plus haute, hors menus X11 : celle qui reprend le clavier.
-    fn top_window(&self) -> Option<Window> {
+    pub(crate) fn top_window(&self) -> Option<Window> {
         self.space
             .elements()
             .rev()
@@ -359,10 +361,6 @@ impl State {
 
     /// Passe le clavier à une fenêtre et la met au premier plan, ou retire le clavier à tout le monde.
     pub fn focus(&mut self, window: Option<Window>) {
-        let Some(keyboard) = self.seat.get_keyboard() else {
-            return;
-        };
-        let serial = SERIAL_COUNTER.next_serial();
         match &window {
             Some(window) => self.space.raise_element(window, true),
             None => self.space.elements().for_each(|w| {
@@ -379,12 +377,31 @@ impl State {
             }
             (None, toplevel) => toplevel.map(|t| KeyboardFocus::Wayland(t.wl_surface().clone())),
         });
-        keyboard.set_focus(self, target, serial);
+        self.set_keyboard_focus(target);
         for window in self.space.elements() {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.send_pending_configure();
             }
         }
+    }
+
+    /// Gives the keyboard to `target`, unless an anchored surface with an exclusive keyboard
+    /// keeps it.
+    pub(crate) fn set_keyboard_focus(&mut self, target: Option<KeyboardFocus>) {
+        let Some(keyboard) = self.seat.get_keyboard() else {
+            return;
+        };
+        let target = self
+            .exclusive_layer()
+            .map(KeyboardFocus::Wayland)
+            .or(target);
+        keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+    }
+
+    /// Surface that has the keyboard.
+    pub fn keyboard_focus(&self) -> Option<WlSurface> {
+        let focus = self.seat.get_keyboard()?.current_focus()?;
+        focus.wl_surface().map(Cow::into_owned)
     }
 
     /// Géométrie et opacité à dessiner pour `window` à l'instant `now`, compté depuis le
@@ -412,7 +429,14 @@ impl State {
     /// Ménage après chaque tour de boucle : fenêtres mortes, popups, envoi aux clients.
     pub fn refresh(&mut self) {
         self.space.refresh();
+        for output in self.space.outputs() {
+            layer_map_for_output(output).cleanup();
+        }
         self.popups.cleanup();
+        if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
+            self.popup_grab = None;
+        }
+        self.update_scales();
         if let Err(err) = self.display_handle.flush_clients() {
             tracing::warn!("envoi aux clients Wayland : {err}");
         }

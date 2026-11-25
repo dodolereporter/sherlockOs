@@ -1,9 +1,11 @@
 //! Rendu du bureau avec le moteur GLES de Smithay et trois programmes maison (`src/shaders`).
 //!
-//! Les éléments vont de l'avant vers l'arrière, comme Smithay les attend : l'aperçu du calage,
-//! puis chaque fenêtre, de la plus haute à la plus basse, avec ses menus, sa bordure, son
-//! contenu découpé en rectangle arrondi et son ombre, enfin les disques du fond. La couleur du
-//! bureau remplit le reste. Voir « Rendu » dans `docs/compositeur.md`.
+//! Les éléments vont de l'avant vers l'arrière, comme Smithay les attend : les surfaces ancrées
+//! des couches de surimpression et du haut, l'aperçu du calage, puis chaque fenêtre, de la plus
+//! haute à la plus basse, avec ses menus, sa bordure, son contenu découpé en rectangle arrondi
+//! et son ombre, les surfaces ancrées du bas et du fond, enfin les disques du fond. La couleur
+//! du bureau remplit le reste. Chaque écran a ses éléments, en pixels de l'image, à son
+//! échelle. Voir « Rendu » dans `docs/compositeur.md`.
 
 use std::time::Duration;
 
@@ -25,16 +27,15 @@ use smithay::{
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    desktop::{PopupManager, Window},
+    desktop::{PopupManager, Window, layer_map_for_output},
+    output::Output,
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
-    wayland::seat::WaylandFocus,
+    wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 
 use crate::{
-    State,
-    anim::{RectF, Visual},
-    handlers::is_fullscreen,
-    is_override_redirect, window_data,
+    State, anim::Visual, handlers::is_fullscreen, is_override_redirect, output::View, window_data,
 };
 
 /// Pas de remplissage : seule la bordure d'une forme est dessinée.
@@ -45,7 +46,7 @@ render_elements! {
     pub SceneElement<=GlesRenderer>;
     Shape=PixelShaderElement,
     Window=RoundedSurface,
-    Popup=WaylandSurfaceRenderElement<GlesRenderer>,
+    Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
 /// Programmes compilés une fois pour toutes au démarrage du rendu.
@@ -91,40 +92,50 @@ impl Scene {
         })
     }
 
-    /// Éléments d'une image de l'écran `output` à l'instant `now`, et s'il y a une animation
-    /// en cours. Les coordonnées sont celles de l'écran, à l'échelle 1.
+    /// Éléments de l'écran `output`, vu par `view`, à l'instant `now`, et s'il y a une
+    /// animation en cours. Les éléments sont en pixels de l'image, à l'échelle de l'écran :
+    /// coins, bordures et ombres suivent cette échelle. `preview` est dans l'espace.
     pub fn elements(
         &self,
         renderer: &mut GlesRenderer,
         state: &State,
-        output: Rectangle<i32, Logical>,
+        output: &Output,
+        view: &View,
         preview: Option<Visual>,
         now: Duration,
     ) -> (Vec<SceneElement>, bool) {
         let mut elements = Vec::new();
         let mut animating = preview.is_some();
+        let scale = view.scale as f32;
+        self.push_layers(
+            renderer,
+            &mut elements,
+            output,
+            view,
+            &[Layer::Overlay, Layer::Top],
+        );
         if let Some(preview) = preview {
-            let rect = snap(preview.rect);
             elements.push(SceneElement::Shape(self.shape(
-                rect,
+                view.rect(preview.rect),
                 ui::SNAP_PREVIEW_FILL.premultiplied(),
                 ui::SNAP_PREVIEW_BORDER,
-                ui::SNAP_PREVIEW_BORDER_WIDTH as f32,
-                corner_radius(rect.size),
+                ui::SNAP_PREVIEW_BORDER_WIDTH as f32 * scale,
+                corner_radius(preview.rect.size.to_i32_round()) * scale,
                 preview.opacity,
             )));
         }
-        let output_size = output.size.to_physical(1);
         for window in state.space.elements().rev() {
-            let Some(mut visual) = state.window_visual(window, now) else {
+            let Some(visual) = state.window_visual(window, now) else {
                 continue;
             };
-            visual.rect.loc -= output.loc.to_f64();
             animating |= window_data(window).motion.borrow().is_animating();
-            self.push_window(renderer, &mut elements, window, visual, output_size);
+            self.push_window(renderer, &mut elements, window, visual, view);
         }
-        let discs = desktop_discs(output.size);
+        let below = [Layer::Bottom, Layer::Background];
+        self.push_layers(renderer, &mut elements, output, view, &below);
+        let discs = desktop_discs(view.area.size);
         for (rect, color) in discs.into_iter().rev() {
+            let rect = view.rect(Rectangle::new(rect.loc + view.area.loc, rect.size).to_f64());
             let radius = rect.size.w as f32 / 2.0;
             elements.push(SceneElement::Shape(self.shape(
                 rect,
@@ -138,59 +149,136 @@ impl Scene {
         (elements, animating)
     }
 
+    /// Anchored surfaces of `layers`, the front one first, each with its menus in front.
+    fn push_layers(
+        &self,
+        renderer: &mut GlesRenderer,
+        elements: &mut Vec<SceneElement>,
+        output: &Output,
+        view: &View,
+        layers: &[Layer],
+    ) {
+        let map = layer_map_for_output(output);
+        for layer in layers {
+            for surface in map.layers_on(*layer).rev() {
+                let Some(geometry) = map.layer_geometry(surface) else {
+                    continue;
+                };
+                let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
+                self.push_surface(
+                    renderer,
+                    elements,
+                    surface.wl_surface(),
+                    loc,
+                    view,
+                    1.0,
+                    true,
+                );
+                self.push_backdrop(elements, view.rect(geometry.to_f64()));
+            }
+        }
+    }
+
+    /// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn
+    /// behind `rect` gets blurred here, just behind the surface. Nothing yet: the surface is
+    /// drawn as is, translucent over a sharp background.
+    fn push_backdrop(&self, _elements: &mut [SceneElement], _rect: Rectangle<i32, Physical>) {}
+
+    /// A surface tree, untouched (no clip, border or shadow), with its origin at `loc` in the
+    /// space. `popups`: its menus too, in front of it.
+    #[allow(clippy::too_many_arguments)]
+    fn push_surface(
+        &self,
+        renderer: &mut GlesRenderer,
+        elements: &mut Vec<SceneElement>,
+        surface: &WlSurface,
+        loc: Point<f64, Logical>,
+        view: &View,
+        alpha: f32,
+        popups: bool,
+    ) {
+        if popups {
+            for (popup, offset) in PopupManager::popups_for_surface(surface) {
+                let loc = loc + (offset - popup.geometry().loc).to_f64();
+                self.push_surface(
+                    renderer,
+                    elements,
+                    popup.wl_surface(),
+                    loc,
+                    view,
+                    alpha,
+                    true,
+                );
+            }
+        }
+        // Built at scale 1 from the origin, then scaled around it: subsurfaces keep their
+        // logical offsets, multiplied by the screen's scale.
+        let origin = view.point(loc).to_i32_round();
+        let tree: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            render_elements_from_surface_tree(
+                renderer,
+                surface,
+                origin,
+                1.0,
+                alpha,
+                Kind::Unspecified,
+            );
+        elements.extend(tree.into_iter().map(|element| {
+            SceneElement::Surface(RescaleRenderElement::from_element(
+                element, origin, view.scale,
+            ))
+        }));
+    }
+
     fn push_window(
         &self,
         renderer: &mut GlesRenderer,
         elements: &mut Vec<SceneElement>,
         window: &Window,
         visual: Visual,
-        output_size: Size<i32, Physical>,
+        view: &View,
     ) {
-        let (Some(surface), rect) = (window.wl_surface(), snap(visual.rect)) else {
+        let Some(surface) = window.wl_surface() else {
             return;
         };
-        let geometry = window.geometry();
+        let surface = surface.as_ref();
+        let (rect, geometry) = (view.rect(visual.rect), window.geometry());
         if rect.size.is_empty() || geometry.size.is_empty() {
             return;
         }
-        let surface = surface.as_ref();
         // Menu ou bulle X11 : ni découpe, ni bordure, ni ombre, comme un menu Wayland.
         if is_override_redirect(window) {
-            elements.extend(
-                render_elements_from_surface_tree(
-                    renderer,
-                    surface,
-                    rect.loc.to_physical(1),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                )
-                .into_iter()
-                .map(SceneElement::Popup),
+            self.push_surface(
+                renderer,
+                elements,
+                surface,
+                visual.rect.loc,
+                view,
+                1.0,
+                false,
             );
             return;
         }
         // Les menus passent devant, sans découpe ni mise à l'échelle.
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
-            let loc = rect.loc + offset - popup.geometry().loc;
-            elements.extend(
-                render_elements_from_surface_tree(
-                    renderer,
-                    popup.wl_surface(),
-                    loc.to_physical(1),
-                    1.0,
-                    visual.opacity,
-                    Kind::Unspecified,
-                )
-                .into_iter()
-                .map(SceneElement::Popup),
+            let loc = visual.rect.loc + (offset - popup.geometry().loc).to_f64();
+            let alpha = visual.opacity;
+            self.push_surface(
+                renderer,
+                elements,
+                popup.wl_surface(),
+                loc,
+                view,
+                alpha,
+                true,
             );
         }
         // Une fenêtre en plein écran n'a ni coins, ni bordure, ni ombre. Elle les garde tant
         // qu'elle glisse vers l'écran entier, pour qu'ils ne disparaissent pas avant.
         let decorated = !is_fullscreen(window) || visual.moving;
+        let scale = view.scale as f32;
         let radius = if decorated {
-            corner_radius(rect.size)
+            corner_radius(visual.rect.size.to_i32_round()) * scale
         } else {
             0.0
         };
@@ -199,41 +287,41 @@ impl Scene {
                 rect,
                 NO_FILL,
                 color::BORDER,
-                metrics::BORDER_WIDTH,
+                metrics::BORDER_WIDTH * scale,
                 radius,
                 visual.opacity,
             )));
         }
-        // Le contenu est dessiné dans `rect`, la géométrie dessinée : en dehors d'une animation,
-        // c'est sa vraie place à l'échelle 1.
-        let scale = Scale {
-            x: visual.rect.size.w / f64::from(geometry.size.w),
-            y: visual.rect.size.h / f64::from(geometry.size.h),
+        // Le contenu est dessiné dans `rect`, la géométrie dessinée, en pixels de l'image :
+        // l'échelle de l'écran, et celle de l'animation s'il y en a une.
+        let stretch = Scale {
+            x: f64::from(rect.size.w) / f64::from(geometry.size.w),
+            y: f64::from(rect.size.h) / f64::from(geometry.size.h),
         };
-        let origin = rect.loc.to_physical(1);
+        let origin = rect.loc;
         let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             render_elements_from_surface_tree(
                 renderer,
                 surface,
-                (rect.loc - geometry.loc).to_physical(1),
+                origin - geometry.loc.to_physical(1),
                 1.0,
                 visual.opacity,
                 Kind::Unspecified,
             );
         elements.extend(surfaces.into_iter().map(|surface| {
             SceneElement::Window(RoundedSurface {
-                inner: RescaleRenderElement::from_element(surface, origin, scale),
+                inner: RescaleRenderElement::from_element(surface, origin, stretch),
                 program: self.clip.clone(),
-                clip: rect.to_f64().to_physical(1.0),
+                clip: rect.to_f64(),
                 radius,
-                output_size,
+                frame_size: view.frame_size,
             })
         }));
         if decorated {
-            let shadow = Shadow::of(rect);
+            let shadow = Shadow::of(rect, view.scale);
             elements.push(SceneElement::Shape(PixelShaderElement::new(
                 self.shadow.clone(),
-                shadow.area,
+                frame_area(shadow.area),
                 None,
                 visual.opacity,
                 vec![
@@ -252,7 +340,7 @@ impl Scene {
     /// pixels le long du bord, à l'intérieur du rectangle comme une bordure CSS.
     fn shape(
         &self,
-        rect: Rectangle<i32, Logical>,
+        rect: Rectangle<i32, Physical>,
         fill: [f32; 4],
         border: Color,
         border_width: f32,
@@ -261,7 +349,7 @@ impl Scene {
     ) -> PixelShaderElement {
         PixelShaderElement::new(
             self.shape.clone(),
-            rect,
+            frame_area(rect),
             None,
             alpha,
             vec![
@@ -275,9 +363,13 @@ impl Scene {
     }
 }
 
-/// Rectangle animé arrondi au pixel près.
-fn snap(rect: RectF) -> Rectangle<i32, Logical> {
-    Rectangle::new(rect.loc.to_i32_round(), rect.size.to_i32_round())
+/// Area of a pixel shader element. The frame is drawn at scale 1: its "logical" coordinates
+/// are its pixels, and every element is already placed and sized in them.
+fn frame_area(rect: Rectangle<i32, Physical>) -> Rectangle<i32, Logical> {
+    Rectangle::new(
+        (rect.loc.x, rect.loc.y).into(),
+        (rect.size.w, rect.size.h).into(),
+    )
 }
 
 /// Rayon des coins d'une fenêtre, réduit pour une fenêtre plus petite que ses deux coins.
@@ -314,16 +406,18 @@ pub fn desktop_discs(size: Size<i32, Logical>) -> [(Rectangle<i32, Logical>, Col
 /// la portée du flou autour d'elle. `caster` et `window` sont donnés dans l'élément.
 #[derive(Debug, PartialEq)]
 pub struct Shadow {
-    pub area: Rectangle<i32, Logical>,
+    pub area: Rectangle<i32, Physical>,
     pub caster: [f32; 4],
     pub window: [f32; 4],
     pub sigma: f32,
 }
 
 impl Shadow {
-    pub fn of(window: Rectangle<i32, Logical>) -> Self {
-        let blur = metrics::SHADOW_BLUR.round() as i32;
-        let offset = metrics::SHADOW_OFFSET.round() as i32;
+    /// Shadow of a window drawn at `rect` in the frame, on a screen at `scale`: offset and blur
+    /// follow the scale.
+    pub fn of(window: Rectangle<i32, Physical>, scale: f64) -> Self {
+        let blur = (f64::from(metrics::SHADOW_BLUR) * scale).round() as i32;
+        let offset = (f64::from(metrics::SHADOW_OFFSET) * scale).round() as i32;
         let area = Rectangle::new(
             window.loc + Point::from((-blur, offset - blur)),
             window.size + Size::from((2 * blur, 2 * blur)),
@@ -334,20 +428,20 @@ impl Shadow {
             area,
             caster: [blur, blur, w, h],
             window: [blur, blur - offset as f32, w, h],
-            sigma: metrics::SHADOW_BLUR / 2.0,
+            sigma: metrics::SHADOW_BLUR * scale as f32 / 2.0,
         }
     }
 }
 
-/// Rectangle `clip` de l'écran dans l'image où l'on dessine, là où `gl_FragCoord` compte ses
-/// pixels : après la transformation de l'écran. Le backend fenêtré retourne l'image
-/// (`Flipped180`) : le haut de l'écran est en bas de l'image.
+/// Rectangle `clip` de l'image dans le tampon où l'on dessine, là où `gl_FragCoord` compte ses
+/// pixels : après la transformation de l'image. Le backend fenêtré retourne l'image
+/// (`Flipped180`) : le haut de l'image est en bas du tampon.
 fn clip_in_frame(
     clip: Rectangle<f64, Physical>,
     transform: Transform,
-    output_size: Size<i32, Physical>,
+    frame_size: Size<i32, Physical>,
 ) -> [f32; 4] {
-    let clip = transform.transform_rect_in(clip, &output_size.to_f64());
+    let clip = transform.transform_rect_in(clip, &frame_size.to_f64());
     [clip.loc.x, clip.loc.y, clip.size.w, clip.size.h].map(|v| v as f32)
 }
 
@@ -356,10 +450,10 @@ fn clip_in_frame(
 pub struct RoundedSurface {
     inner: RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     program: GlesTexProgram,
-    /// Rectangle de découpe, dans l'écran, avant sa transformation.
+    /// Rectangle de découpe, dans l'image, avant sa transformation.
     clip: Rectangle<f64, Physical>,
     radius: f32,
-    output_size: Size<i32, Physical>,
+    frame_size: Size<i32, Physical>,
 }
 
 impl Element for RoundedSurface {
@@ -419,7 +513,7 @@ impl RenderElement<GlesRenderer> for RoundedSurface {
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
-        let clip = clip_in_frame(self.clip, frame.transformation(), self.output_size);
+        let clip = clip_in_frame(self.clip, frame.transformation(), self.frame_size);
         frame.override_default_tex_program(
             self.program.clone(),
             vec![
@@ -443,6 +537,10 @@ mod tests {
     use super::*;
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    fn frame_rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Physical> {
         Rectangle::new((x, y).into(), (w, h).into())
     }
 
@@ -472,16 +570,47 @@ mod tests {
     #[test]
     fn l_ombre_suit_box_shadow() {
         // Fenêtre de la planche Main : 836 × 652 en (36, 64).
-        let shadow = Shadow::of(rect(36, 64, 836, 652));
+        let shadow = Shadow::of(frame_rect(36, 64, 836, 652), 1.0);
         // Décalée de 28 vers le bas, étendue de 70 de chaque côté.
         assert_eq!(
             shadow.area,
-            rect(36 - 70, 64 + 28 - 70, 836 + 140, 652 + 140)
+            frame_rect(36 - 70, 64 + 28 - 70, 836 + 140, 652 + 140)
         );
         assert_eq!(shadow.caster, [70.0, 70.0, 836.0, 652.0]);
         // Dans l'élément, la fenêtre est 28 pixels au-dessus de son ombre.
         assert_eq!(shadow.window, [70.0, 42.0, 836.0, 652.0]);
         assert_eq!(shadow.sigma, 35.0);
+        // At scale 1.5, the same window takes 1.5 times the pixels, and so does its shadow.
+        let shadow = Shadow::of(frame_rect(54, 96, 1254, 978), 1.5);
+        assert_eq!(
+            shadow.area,
+            frame_rect(54 - 105, 96 + 42 - 105, 1254 + 210, 978 + 210)
+        );
+        assert_eq!(shadow.window, [105.0, 63.0, 1254.0, 978.0]);
+        assert_eq!(shadow.sigma, 52.5);
+    }
+
+    #[test]
+    fn la_vue_met_l_espace_a_l_echelle_de_l_ecran() {
+        // Second screen of the frame, from 1440 pixels on, at scale 2: 720 points wide.
+        let view = View {
+            area: rect(720, 0, 720, 450),
+            frame: frame_rect(1440, 0, 1440, 900),
+            scale: 2.0,
+            frame_size: (2880, 900).into(),
+        };
+        assert_eq!(
+            view.rect(rect(730, 10, 100, 50).to_f64()),
+            frame_rect(1460, 20, 200, 100)
+        );
+        // Two rectangles that touch in the space touch in the frame, even at 1.25.
+        let view = View {
+            scale: 1.25,
+            ..view
+        };
+        let left = view.rect(Rectangle::new((720.0, 0.0).into(), (100.3, 10.0).into()));
+        let right = view.rect(Rectangle::new((820.3, 0.0).into(), (50.0, 10.0).into()));
+        assert_eq!(left.loc.x + left.size.w, right.loc.x);
     }
 
     #[test]

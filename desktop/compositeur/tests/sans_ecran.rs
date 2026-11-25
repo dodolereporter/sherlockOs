@@ -17,7 +17,7 @@ mod tests {
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
-        utils::{Logical, Point, Rectangle, Transform},
+        utils::{Logical, Point, Rectangle},
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop,
@@ -234,7 +234,7 @@ mod tests {
         fn start() -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output((800, 600).into(), Transform::Normal);
+            state.add_output((800, 600).into(), 1.0);
             let (server_side, client_side) = UnixStream::pair().unwrap();
             state.insert_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
