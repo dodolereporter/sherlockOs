@@ -12,6 +12,8 @@ pub enum Entry {
     Open,
     /// Runs its « new window » action. Only there when the desktop entry declares one.
     NewWindow,
+    /// Adds an open application to the pinned list.
+    Keep,
     /// Removes it from the pinned list.
     Unpin,
     /// Closes its windows. Needs a source of windows that can close them.
@@ -23,6 +25,7 @@ impl Entry {
         match self {
             Self::Open => text::OPEN,
             Self::NewWindow => text::NEW_WINDOW,
+            Self::Keep => text::KEEP,
             Self::Unpin => text::UNPIN,
             Self::Quit => text::QUIT,
         }
@@ -39,18 +42,26 @@ impl Entry {
 pub struct Abilities {
     pub launch: bool,
     pub new_window: bool,
+    /// Open but not pinned, with a desktop entry: « Garder dans le dock ».
+    pub keep: bool,
+    /// Pinned, and not Sherlock: « Retirer du dock ».
     pub unpin: bool,
     pub quit: bool,
 }
 
 /// The entries of an icon's menu, each with whether it is enabled. An action that does not
-/// exist is disabled, never pretended.
+/// exist is disabled, never pretended. An open application that is not pinned gets « Garder
+/// dans le dock » where a pinned one gets « Retirer du dock ».
 pub fn entries(can: Abilities) -> Vec<(Entry, bool)> {
     let mut entries = vec![(Entry::Open, can.launch)];
     if can.new_window {
         entries.push((Entry::NewWindow, true));
     }
-    entries.push((Entry::Unpin, can.unpin));
+    if can.keep {
+        entries.push((Entry::Keep, true));
+    } else {
+        entries.push((Entry::Unpin, can.unpin));
+    }
     entries.push((Entry::Quit, can.quit));
     entries
 }
@@ -126,6 +137,7 @@ mod tests {
     const APP: Abilities = Abilities {
         launch: true,
         new_window: true,
+        keep: false,
         unpin: true,
         quit: false,
     };
@@ -151,6 +163,7 @@ mod tests {
         let sherlock = Abilities {
             launch: false,
             new_window: false,
+            keep: false,
             unpin: false,
             quit: false,
         };
@@ -183,6 +196,7 @@ mod tests {
         let none = entries(Abilities {
             launch: false,
             new_window: false,
+            keep: false,
             unpin: false,
             quit: false,
         });

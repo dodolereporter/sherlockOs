@@ -3,11 +3,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use dock::app::Sources;
 use dock::app::{Dock, Message, Pointer};
-use dock::config::Config;
 use dock::entry::Catalog;
 use dock::icons::IconLookup;
 use dock::windows::Placeholder;
+use dock_config::{DockConfig, Position};
 use iced::widget::container;
 use iced::window::Id;
 use iced::{Element, Event, Length, Point, mouse};
@@ -18,12 +19,11 @@ fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
 }
 
-/// Four applications of the fixtures, Sherlock in the middle; the terminal open and active,
-/// the browser open.
-fn sample() -> Dock {
+/// What the dock reads, from the fixtures: four pinned applications, no configuration file.
+fn sources(config: DockConfig) -> Sources {
     let data = fixtures().join("data");
     let catalog = Catalog::load(std::slice::from_ref(&data));
-    let lookup = IconLookup::new(&[data], None, Some("Exemple"));
+    let lookup = IconLookup::new(std::slice::from_ref(&data), None, Some("Exemple"));
     let pinned: Vec<String> = [
         "org.example.Files",
         "org.example.Terminal",
@@ -32,8 +32,26 @@ fn sample() -> Dock {
     ]
     .map(String::from)
     .to_vec();
-    let items = dock::app::items(&catalog, &pinned, &lookup);
-    let mut dock = Dock::new(items, pinned, Config::default(), None);
+    Sources {
+        catalog,
+        lookup,
+        config,
+        config_path: None,
+        pinned,
+        data_dirs: vec![data],
+        home: None,
+        gtk_theme: None,
+    }
+}
+
+/// Four applications of the fixtures, Sherlock in the middle; the terminal open and active,
+/// the browser open.
+fn sample() -> Dock {
+    with_config(DockConfig::default())
+}
+
+fn with_config(config: DockConfig) -> Dock {
+    let mut dock = Dock::new(sources(config));
     let Placeholder(windows) = Placeholder::new("terminal,ExampleBrowser", Some("terminal"));
     let _ = dock.update(Message::Windows(windows));
     dock
@@ -126,7 +144,7 @@ fn the_menu_of_an_icon_renders_its_entries() {
     let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
     let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
     assert!(dock.menu_open());
-    let entries = dock::menu::entries(menu_abilities());
+    let entries = dock::menu::entries(dock.abilities(1));
     let (width, height) = dock::menu::surface_size(&entries);
     let mut ui = Simulator::with_size(
         dock::settings(),
@@ -159,16 +177,6 @@ fn the_menu_of_an_icon_renders_its_entries() {
     assert!(bytes > 2_000, "empty screenshot");
 }
 
-/// What the terminal fixture can do: start, new window, unpin; not quit.
-fn menu_abilities() -> dock::menu::Abilities {
-    dock::menu::Abilities {
-        launch: true,
-        new_window: true,
-        unpin: true,
-        quit: false,
-    }
-}
-
 #[test]
 fn unpinning_keeps_sherlock_in_the_middle() {
     let mut dock = sample();
@@ -190,4 +198,94 @@ fn unpinning_keeps_sherlock_in_the_middle() {
     // Sherlock cannot be unpinned.
     let _ = dock.unpin(2);
     assert_eq!(dock.items.len(), 4);
+}
+
+#[test]
+fn an_open_application_can_be_kept_and_unpinned_again() {
+    let mut dock = sample();
+    // The terminal is open: unpinned, it moves after the separator with its dot.
+    let _ = dock.unpin(1);
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Fichiers",
+            "Éditeur",
+            "Sherlock",
+            "Example Browser",
+            "Terminal d'exemple"
+        ]
+    );
+    assert_eq!(dock.separator, Some(4));
+    assert_eq!(dock.open_windows(4), Some((1, true)));
+    let abilities = dock.abilities(4);
+    assert!(abilities.keep && !abilities.unpin);
+    // « Garder dans le dock »: back among the pinned ones, at their end.
+    let _ = dock.keep(4);
+    assert_eq!(dock.separator, None);
+    assert_eq!(
+        dock.pinned.last().map(String::as_str),
+        Some("org.example.Terminal")
+    );
+    assert_eq!(dock.items[2].name, "Sherlock");
+}
+
+#[test]
+fn the_dock_renders_with_an_open_application_after_the_separator() {
+    let mut dock = sample();
+    let _ = dock.unpin(1);
+    let layout = dock.layout(Duration::ZERO);
+    assert!(layout.separator.is_some());
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    let bytes = capture(ui, "dock-open").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn a_new_configuration_moves_and_resizes_the_dock() {
+    let mut dock = sample();
+    let bottom = dock.surface_size;
+    let mut config = DockConfig::default();
+    config.position = Position::Left;
+    config.icon_size = 40.0;
+    config.magnification_factor = 2.0;
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert_eq!(dock.geometry.position, Position::Left);
+    assert!(
+        dock.surface_size.height > dock.surface_size.width,
+        "a tall surface"
+    );
+    assert_ne!(dock.surface_size, bottom);
+    let layout = dock.layout(Duration::ZERO);
+    assert_eq!(layout.icons[0].width, 40.0);
+    assert_eq!(layout.bar.x, 0.0, "against the left edge");
+    // Without magnification nothing grows under the pointer.
+    let mut config = DockConfig::default();
+    config.magnification = false;
+    let _ = dock.update(Message::Config(Box::new(config)));
+    let point = dock.layout(Duration::ZERO).icons[2].center();
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    assert_eq!(dock.layout(Duration::from_secs(2)).icons[2].width, 52.0);
+}
+
+#[test]
+fn the_dock_renders_on_the_left_edge() {
+    let mut config = DockConfig::default();
+    config.position = Position::Left;
+    let rest = with_config(config.clone());
+    let point = rest.layout(Duration::ZERO).icons[2].center();
+    let mut dock = with_config(config);
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    let layout = dock.layout(Duration::from_secs(2));
+    assert_eq!(
+        layout.icons[2].height.round(),
+        88.0,
+        "magnified along the vertical axis"
+    );
+    let mut ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(ui.find("Sherlock").is_ok(), "label beside the icon");
+    let bytes = capture(ui, "dock-left").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
 }

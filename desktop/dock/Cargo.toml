@@ -18,6 +18,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "wayland",
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+dock-config = { path = "../dock-config" }
+# inotify, to reload the configuration without polling: the version the bar already pins.
+libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"

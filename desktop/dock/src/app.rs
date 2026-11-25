@@ -1,132 +1,35 @@
-//! Dock state, messages, and its two views: the dock and the menu of an icon.
+//! Dock state, messages and update. The views are in `view.rs`.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use iced::widget::{container, mouse_area, pin, row, space, stack, svg, text};
+use dock_config::{DockConfig, Position as Edge};
 use iced::window::Id;
-use iced::{Alignment, Element, Length, Point, Rectangle, Size, Subscription, Task};
+use iced::{Point, Rectangle, Size, Subscription, Task};
 use iced::{keyboard, mouse, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{Anchor, LayerSize, PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::to_layer_message;
-use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
-use sherlock_ui::logo::Logo;
 use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION};
-use sherlock_ui::{color, dock, metrics, typography};
 
-use crate::config::Config;
-use crate::entry::{Catalog, DesktopEntry};
+use crate::entry::Catalog;
 use crate::icons::IconLookup;
+use crate::items::{Builder, Glyph, Item};
 use crate::launch::{self, What};
-use crate::layout::{self, Layout};
+use crate::layout::{self, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key};
 use crate::windows::{self, Windows};
 
-/// What an icon stands for.
-#[derive(Debug, Clone)]
-pub enum Kind {
-    /// Sherlock, in the middle of the dock. It has no window to open yet.
-    Sherlock,
-    App(Box<DesktopEntry>),
-}
-
-/// How an icon is drawn.
-#[derive(Debug, Clone)]
-pub enum Glyph {
-    /// An icon file. A PNG goes through an SVG that embeds it: tiny-skia's SVG renderer draws
-    /// both, without iced's `image` feature and the decoders it would add.
-    File(svg::Handle),
-    /// The color logo of `sherlock-ui` on its night blue tile, until Sherlock has its icon.
-    Sherlock,
-    /// No icon found: the initial of the name on a tile.
-    Letter(char),
-}
-
-/// An icon of the dock.
-#[derive(Debug, Clone)]
-pub struct Item {
-    pub kind: Kind,
-    pub name: String,
-    pub glyph: Glyph,
-}
-
-impl Item {
-    pub fn sherlock() -> Self {
-        Self {
-            kind: Kind::Sherlock,
-            name: String::from(dock::text::SHERLOCK),
-            glyph: Glyph::Sherlock,
-        }
-    }
-
-    /// An application, its icon found by `lookup` at the size of a magnified icon.
-    pub fn app(entry: DesktopEntry, lookup: &IconLookup) -> Self {
-        let size = (metrics::DOCK_ICON * metrics::DOCK_MAGNIFICATION).round() as u32;
-        let file = entry
-            .icon
-            .as_deref()
-            .and_then(|name| lookup.find(name, size));
-        let glyph = match file {
-            Some(path) => Glyph::File(icon_handle(&path)),
-            None => Glyph::Letter(entry.name.chars().next().unwrap_or('?')),
-        };
-        Self {
-            name: entry.name.clone(),
-            kind: Kind::App(Box::new(entry)),
-            glyph,
-        }
-    }
-
-    fn entry(&self) -> Option<&DesktopEntry> {
-        match &self.kind {
-            Kind::App(entry) => Some(entry),
-            Kind::Sherlock => None,
-        }
-    }
-}
-
-/// An SVG file as it is; any other image inside an SVG.
-fn icon_handle(path: &Path) -> svg::Handle {
-    if path.extension().is_some_and(|e| e == "svg") {
-        return svg::Handle::from_path(path);
-    }
-    let href = path
-        .to_string_lossy()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
-    let document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    );
-    svg::Handle::from_memory(document.into_bytes())
-}
-
-/// The icons of the dock: the pinned applications that are installed, Sherlock in the middle.
-pub fn items(catalog: &Catalog, pinned: &[String], lookup: &IconLookup) -> Vec<Item> {
-    let mut items: Vec<Item> = pinned
-        .iter()
-        .filter_map(|id| match catalog.get(id) {
-            Some(entry) => Some(Item::app(entry.clone(), lookup)),
-            None => {
-                tracing::warn!(id, "pinned application not installed");
-                None
-            }
-        })
-        .collect();
-    items.insert(items.len().div_ceil(2), Item::sherlock());
-    items
-}
-
 /// The menu of an icon, while it is open.
 #[derive(Debug, Clone)]
-struct OpenMenu {
-    id: Id,
-    item: usize,
-    entries: Vec<(Entry, bool)>,
-    cursor: Option<usize>,
+pub(crate) struct OpenMenu {
+    pub(crate) id: Id,
+    pub(crate) item: usize,
+    pub(crate) entries: Vec<(Entry, bool)>,
+    pub(crate) cursor: Option<usize>,
 }
 
 /// A pointer event on the dock surface, in its coordinates.
@@ -144,6 +47,8 @@ pub enum Message {
     Pointer(Pointer),
     Frame(Instant),
     Windows(Windows),
+    /// The configuration file changed.
+    Config(Box<DockConfig>),
     Key(Key),
     Focus(Direction),
     MenuHover(usize),
@@ -151,52 +56,66 @@ pub enum Message {
     Closed(Id),
 }
 
+/// What the dock reads at startup.
+pub struct Sources {
+    pub catalog: Catalog,
+    pub lookup: IconLookup,
+    pub config: DockConfig,
+    pub config_path: Option<PathBuf>,
+    /// The pinned applications: from the configuration, or chosen among the installed ones.
+    pub pinned: Vec<String>,
+    /// Data directories and home, to look icons up again when the theme changes.
+    pub data_dirs: Vec<PathBuf>,
+    pub home: Option<PathBuf>,
+    pub gtk_theme: Option<String>,
+}
+
 pub struct Dock {
     pub items: Vec<Item>,
+    /// Index of the first open application that is not pinned: the separator goes before it.
+    pub separator: Option<usize>,
     /// Desktop file ids of the pinned applications, from the configuration or the defaults.
     pub pinned: Vec<String>,
-    config: Config,
-    config_path: Option<PathBuf>,
+    pub(crate) sources: Sources,
+    glyphs: HashMap<String, Glyph>,
+    pub geometry: Geometry,
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
     /// Side of each icon, led by a spring towards the size the pointer gives it.
     sizes: Vec<Animation>,
     /// Opacity of the label, and the icon it names.
-    label: Fade,
-    label_item: Option<usize>,
+    pub(crate) label: Fade,
+    pub(crate) label_item: Option<usize>,
     /// The pointer is over the dock.
     hovering: bool,
     pointer: Option<Point>,
     origin: Instant,
     /// Time of the last event, from `origin`: the moment the view draws.
-    now: Duration,
+    pub(crate) now: Duration,
     pub windows: Option<Windows>,
     /// Icon with the keyboard focus, kept in our state like the bar does.
-    focus: Option<usize>,
-    menu: Option<OpenMenu>,
+    pub(crate) focus: Option<usize>,
+    pub(crate) menu: Option<OpenMenu>,
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
 }
 
 impl Dock {
-    pub fn new(
-        items: Vec<Item>,
-        pinned: Vec<String>,
-        config: Config,
-        config_path: Option<PathBuf>,
-    ) -> Self {
-        let surface_size = layout::surface_size(items.len());
+    pub fn new(sources: Sources) -> Self {
+        let geometry = Geometry::from_config(&sources.config);
         let fade = Duration::from_millis(dock::LABEL_FADE_MS);
-        Self {
-            sizes: rest(items.len()),
-            items,
-            pinned,
-            config,
-            config_path,
-            surface_size,
+        let mut dock = Self {
+            items: Vec::new(),
+            separator: None,
+            pinned: sources.pinned.clone(),
+            sources,
+            glyphs: HashMap::new(),
+            geometry,
+            surface_size: Size::ZERO,
             surface: None,
+            sizes: Vec::new(),
             label: Fade::new(0.0, 0.0, Duration::ZERO, fade),
             label_item: None,
             hovering: false,
@@ -208,7 +127,32 @@ impl Dock {
             menu: None,
             frames: 0,
             frames_since: Duration::ZERO,
+        };
+        dock.rebuild();
+        dock
+    }
+
+    /// Builds the icons again from the pinned list and the open windows. Springs are kept when
+    /// the number of icons stays, reset to rest otherwise.
+    fn rebuild(&mut self) {
+        let icon_size = (self.geometry.icon * self.geometry.factor).round() as u32;
+        let mut builder = Builder {
+            catalog: &self.sources.catalog,
+            lookup: &self.sources.lookup,
+            icon_size,
+            glyphs: &mut self.glyphs,
+        };
+        let (items, separator) = builder.build(&self.pinned, self.windows.as_ref());
+        if items.len() != self.sizes.len() {
+            self.sizes = rest(items.len(), self.geometry.icon);
+            self.label_item = None;
+            self.focus = None;
         }
+        self.items = items;
+        self.separator = separator;
+        self.surface_size = self
+            .geometry
+            .surface_size(self.items.len(), self.separator.is_some());
     }
 
     pub fn menu_open(&self) -> bool {
@@ -230,10 +174,18 @@ impl Dock {
         } else {
             Subscription::none()
         };
+        let config = match &self.sources.config_path {
+            Some(path) => {
+                Subscription::run_with(path.clone(), |path| crate::watch::watch(path.clone()))
+                    .map(Message::Config)
+            }
+            None => Subscription::none(),
+        };
         Subscription::batch([
             Subscription::run(|| windows::watch(windows::source)).map(Message::Windows),
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
+            config,
             frames,
         ])
     }
@@ -241,7 +193,7 @@ impl Dock {
     /// Layout of the dock at `now`.
     pub fn layout(&self, now: Duration) -> Layout {
         let sizes: Vec<f32> = self.sizes.iter().map(|s| s.value(now) as f32).collect();
-        Layout::new(self.surface_size, &sizes)
+        Layout::new(self.geometry, self.surface_size, &sizes, self.separator)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -255,7 +207,11 @@ impl Dock {
                 return self.pointer(event, now);
             }
             Message::Frame(instant) => self.frame(instant.saturating_duration_since(self.origin)),
-            Message::Windows(windows) => self.windows = Some(windows),
+            Message::Windows(windows) => {
+                self.windows = Some(windows);
+                return self.refresh(self.geometry);
+            }
+            Message::Config(config) => return self.configure(*config),
             Message::Key(key) => return self.key(key),
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
@@ -281,6 +237,63 @@ impl Dock {
         Task::none()
     }
 
+    /// Applies a configuration read from the file: settings, icon theme, pinned list.
+    pub fn configure(&mut self, config: DockConfig) -> Task<Message> {
+        let previous = self.geometry;
+        if config.icon_theme != self.sources.config.icon_theme {
+            let theme = config
+                .icon_theme
+                .clone()
+                .or_else(|| self.sources.gtk_theme.clone());
+            self.sources.lookup = IconLookup::new(
+                &self.sources.data_dirs,
+                self.sources.home.as_deref(),
+                theme.as_deref(),
+            );
+            self.glyphs.clear();
+        }
+        if let Some(pinned) = &config.pinned {
+            self.pinned.clone_from(pinned);
+        }
+        self.geometry = Geometry::from_config(&config);
+        if self.geometry.icon != previous.icon {
+            self.sizes = rest(self.sizes.len(), self.geometry.icon);
+        }
+        self.sources.config = config;
+        self.refresh(previous)
+    }
+
+    /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
+    /// its anchor, margin and exclusive zone when the edge changed.
+    fn refresh(&mut self, previous: Geometry) -> Task<Message> {
+        let size = self.surface_size;
+        self.rebuild();
+        let Some(id) = self.surface else {
+            return Task::none();
+        };
+        let mut tasks = Vec::new();
+        if self.geometry.position != previous.position || self.surface_size != size {
+            let settings = crate::surface(self.geometry, self.surface_size);
+            tasks.push(Task::done(Message::LayoutChange {
+                id,
+                anchor: settings.anchor,
+                size: settings.size,
+            }));
+            tasks.push(Task::done(Message::MarginChange {
+                id,
+                margin: settings.margin,
+            }));
+            tasks.push(Task::done(Message::ExclusiveZoneChange {
+                id,
+                zone_size: settings.exclusive_zone,
+            }));
+            tasks.push(self.close_menu());
+            self.hovering = false;
+            tasks.push(self.input_region());
+        }
+        Task::batch(tasks)
+    }
+
     /// The pointer moved to `point`, or left the surface (`None`), at `now`: the icons head for
     /// the sizes of the board's curve, the label follows the closest icon. Returns whether the
     /// pointer entered or left the dock.
@@ -291,8 +304,12 @@ impl Dock {
         let layout = self.layout(now);
         let inside = point.filter(|p| layout.contains(*p));
         let count = self.items.len();
-        let ratio = inside.map(|p| layout.ratio(p.x));
-        for (size, target) in self.sizes.iter_mut().zip(layout::targets(ratio, count)) {
+        let ratio = inside.map(|p| layout.ratio(p));
+        for (size, target) in self
+            .sizes
+            .iter_mut()
+            .zip(self.geometry.targets(ratio, count))
+        {
             if (size.target() - f64::from(target)).abs() > f64::EPSILON {
                 size.retarget(now, f64::from(target));
             }
@@ -362,7 +379,7 @@ impl Dock {
     }
 
     /// Where the dock takes the pointer: the bar at rest, the whole surface while hovered, so
-    /// that a magnified icon above the bar stays reachable. Elsewhere, clicks go through.
+    /// that a magnified icon past the bar stays reachable. Elsewhere, clicks go through.
     fn input_region(&self) -> Task<Message> {
         let Some(id) = self.surface else {
             return Task::none();
@@ -370,7 +387,8 @@ impl Dock {
         let area = if self.hovering {
             Rectangle::with_size(self.surface_size)
         } else {
-            Layout::new(self.surface_size, &layout::targets(None, self.items.len())).bar
+            let rest = self.geometry.targets(None, self.items.len());
+            Layout::new(self.geometry, self.surface_size, &rest, self.separator).bar
         };
         let callback = RegionActionCB::new(move |region| {
             let added = region.add(
@@ -432,21 +450,23 @@ impl Dock {
     /// are unknown.
     pub fn open_windows(&self, index: usize) -> Option<(usize, bool)> {
         let windows = self.windows.as_ref()?;
-        Some(match self.items.get(index)?.entry() {
-            Some(entry) => windows.of(|app_id| entry.owns(app_id)),
-            None => (0, false),
-        })
+        let item = self.items.get(index)?;
+        Some(windows.of(|app_id| item.owns(app_id)))
     }
 
-    fn abilities(&self, index: usize) -> Abilities {
-        let entry = self.items.get(index).and_then(Item::entry);
+    pub fn abilities(&self, index: usize) -> Abilities {
+        let item = self.items.get(index);
+        let entry = item.and_then(Item::entry);
+        let pinned = item.is_some_and(|i| i.pinned);
         let closable = self.windows.as_ref().is_some_and(|w| w.closable);
         let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        let sherlock = item.is_some_and(|i| i.kind == crate::items::Kind::Sherlock);
         Abilities {
             launch: entry.is_some_and(|e| e.exec.is_some()),
             new_window: entry.is_some_and(|e| e.new_window.is_some()),
-            unpin: entry.is_some(),
-            quit: entry.is_some() && closable && open,
+            keep: !pinned && entry.is_some(),
+            unpin: pinned && entry.is_some(),
+            quit: !sherlock && closable && open,
         }
     }
 
@@ -456,7 +476,7 @@ impl Dock {
             return;
         };
         let Some(entry) = item.entry() else {
-            tracing::info!("Sherlock has no window to open yet");
+            tracing::info!(name = item.name, "nothing to start for this icon yet");
             return;
         };
         match launch::launch(entry, what) {
@@ -477,20 +497,37 @@ impl Dock {
         let Some(icon) = layout.icons.get(index) else {
             return close;
         };
-        // Centered above the icon, 12 above the bar. The gap is not part of the menu surface:
-        // it would be drawn black over the magnified icons (opaque software rendering).
-        let anchor = Position::new(
-            (icon.x + icon.width / 2.0) as i32,
-            (layout.bar.y - dock::MENU_GAP) as i32,
-        );
+        // Off the bar, 12 away from it, centered on the icon. The gap is not part of the menu
+        // surface: it would be drawn black over the magnified icons (opaque software
+        // rendering).
+        let bar = layout.bar;
+        let gap = dock::MENU_GAP;
+        let (point, toward) = match self.geometry.position {
+            Edge::Bottom => (Point::new(icon.center_x(), bar.y - gap), PopupAnchor::Top),
+            Edge::Top => (
+                Point::new(icon.center_x(), bar.y + bar.height + gap),
+                PopupAnchor::Bottom,
+            ),
+            Edge::Left => (
+                Point::new(bar.x + bar.width + gap, icon.center_y()),
+                PopupAnchor::Right,
+            ),
+            Edge::Right => (Point::new(bar.x - gap, icon.center_y()), PopupAnchor::Left),
+        };
+        let gravity = match toward {
+            PopupAnchor::Top => PopupGravity::Top,
+            PopupAnchor::Bottom => PopupGravity::Bottom,
+            PopupAnchor::Right => PopupGravity::Right,
+            _ => PopupGravity::Left,
+        };
         let settings = IcedNewPopupSettings::new(
             surface,
             PixelSize::px(width, height),
-            anchor,
+            Position::new(point.x as i32, point.y as i32),
             PixelSize::px(1, 1),
         )
-        .anchor(PopupAnchor::Top)
-        .gravity(PopupGravity::Top);
+        .anchor(toward)
+        .gravity(gravity);
         let id = Id::unique();
         self.menu = Some(OpenMenu {
             id,
@@ -513,18 +550,28 @@ impl Dock {
             return Task::none();
         };
         let close = self.close_menu();
-        match entry {
-            Entry::Open => self.activate(index, What::App),
-            Entry::NewWindow => self.activate(index, What::NewWindow),
-            Entry::Unpin => return Task::batch([close, self.unpin(index)]),
-            Entry::Quit => self.quit(index),
-        }
-        close
+        let task = match entry {
+            Entry::Open => {
+                self.activate(index, What::App);
+                Task::none()
+            }
+            Entry::NewWindow => {
+                self.activate(index, What::NewWindow);
+                Task::none()
+            }
+            Entry::Keep => self.keep(index),
+            Entry::Unpin => self.unpin(index),
+            Entry::Quit => {
+                self.quit(index);
+                Task::none()
+            }
+        };
+        Task::batch([close, task])
     }
 
     /// Closes the windows of icon `index`, on a thread: the compositor may take its time.
     fn quit(&self, index: usize) {
-        let Some(entry) = self.items.get(index).and_then(Item::entry).cloned() else {
+        let Some(item) = self.items.get(index).cloned() else {
             return;
         };
         let spawned = std::thread::Builder::new()
@@ -532,10 +579,10 @@ impl Dock {
             .spawn(move || {
                 let closed = wayland_client::Connection::connect_to_env()
                     .map_err(windows::SourceError::from)
-                    .and_then(|c| windows::close(c, &|app_id| entry.owns(app_id)));
+                    .and_then(|c| windows::close(c, &|app_id| item.owns(app_id)));
                 match closed {
-                    Ok(count) => tracing::info!(app = entry.id, count, "windows asked to close"),
-                    Err(error) => tracing::warn!(app = entry.id, %error, "cannot close"),
+                    Ok(count) => tracing::info!(app = item.name, count, "windows asked to close"),
+                    Err(error) => tracing::warn!(app = item.name, %error, "cannot close"),
                 }
             });
         if let Err(error) = spawned {
@@ -543,213 +590,57 @@ impl Dock {
         }
     }
 
-    /// Removes icon `index` from the dock and from the configuration. Sherlock stays in the
-    /// middle, the surface takes its new size.
-    pub fn unpin(&mut self, index: usize) -> Task<Message> {
-        let Some(removed) = self
+    /// Adds the open application of icon `index` to the pinned list, at its end.
+    pub fn keep(&mut self, index: usize) -> Task<Message> {
+        let Some(id) = self
             .items
             .get(index)
+            .filter(|i| !i.pinned)
             .and_then(Item::entry)
             .map(|e| e.id.clone())
         else {
             return Task::none();
         };
-        self.pinned.retain(|id| *id != removed);
-        if let Some(path) = &self.config_path
-            && let Err(error) = self.config.save(path, &self.pinned)
+        tracing::info!(app = id, "pinned");
+        self.pinned.push(id);
+        self.save_pinned()
+    }
+
+    /// Removes icon `index` from the pinned list. Sherlock stays in the middle; an application
+    /// still open moves after the separator.
+    pub fn unpin(&mut self, index: usize) -> Task<Message> {
+        let Some(id) = self
+            .items
+            .get(index)
+            .filter(|i| i.pinned)
+            .and_then(Item::entry)
+            .map(|e| e.id.clone())
+        else {
+            return Task::none();
+        };
+        tracing::info!(app = id, "unpinned");
+        self.pinned.retain(|p| *p != id);
+        self.save_pinned()
+    }
+
+    /// Writes the pinned list to the configuration and rebuilds the dock.
+    fn save_pinned(&mut self) -> Task<Message> {
+        self.sources.config.pinned = Some(self.pinned.clone());
+        if let Some(path) = &self.sources.config_path
+            && let Err(error) = self.sources.config.save(path)
         {
             tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
         }
-        let mut items: Vec<Item> = std::mem::take(&mut self.items)
-            .into_iter()
-            .filter(|i| i.entry().is_some_and(|e| e.id != removed))
-            .collect();
-        items.insert(items.len().div_ceil(2), Item::sherlock());
-        self.sizes = rest(items.len());
-        self.surface_size = layout::surface_size(items.len());
-        self.items = items;
-        self.label_item = None;
-        self.focus = None;
-        self.hovering = false;
-        tracing::info!(app = removed, "unpinned");
-        let Some(id) = self.surface else {
-            return Task::none();
-        };
-        let size = LayerSize::px(
-            self.surface_size.width as u32,
-            self.surface_size.height as u32,
-        );
-        let resize = Task::done(Message::LayoutChange {
-            id,
-            anchor: Anchor::Bottom,
-            size,
-        });
-        Task::batch([resize, self.input_region()])
-    }
-
-    pub fn view(&self, id: Id) -> Element<'_, Message> {
-        if self.menu.as_ref().is_some_and(|m| m.id == id) {
-            self.view_menu()
-        } else {
-            self.view_dock()
-        }
-    }
-
-    pub fn view_dock(&self) -> Element<'_, Message> {
-        let layout = self.layout(self.now);
-        let bar = layout.bar;
-        let glass = container(space())
-            .width(bar.width)
-            .height(bar.height)
-            .style(dock::bar);
-        let mut layers = vec![place(glass, bar.x, bar.y)];
-        for (index, (item, icon)) in self.items.iter().zip(&layout.icons).enumerate() {
-            layers.push(place(glyph(&item.glyph, icon.width), icon.x, icon.y));
-            if self.focus == Some(index) {
-                let pad = metrics::FOCUS_RING_GAP + metrics::FOCUS_RING_WIDTH;
-                let ring = container(space())
-                    .width(icon.width + 2.0 * pad)
-                    .height(icon.height + 2.0 * pad)
-                    .style(dock::ring(icon.width));
-                layers.push(place(ring, icon.x - pad, icon.y - pad));
-            }
-            if let Some((count, active)) = self.open_windows(index)
-                && count > 0
-            {
-                let dot = container(space())
-                    .width(dock::DOT)
-                    .height(dock::DOT)
-                    .style(dock::dot(active));
-                let x = icon.x + (icon.width - dock::DOT) / 2.0;
-                let y = icon.y + icon.height + dock::DOT_OFFSET - dock::DOT;
-                layers.push(place(dot, x, y));
-            }
-        }
-        if let Some(label) = self.view_label(&layout) {
-            layers.push(label);
-        }
-        // The pointer is tracked over the whole surface: `mouse_area` also reports where the
-        // pointer enters, which the bare enter event does not carry.
-        let layers = stack(layers).width(Length::Fill).height(Length::Fill);
-        mouse_area(layers)
-            .on_move(|point| Message::Pointer(Pointer::Moved(point)))
-            .on_exit(Message::Pointer(Pointer::Left))
-            .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
-            .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
-            .into()
-    }
-
-    /// The name of the icon closest to the pointer, centered above it (board: 108 above the
-    /// bottom of the bar), kept inside the surface.
-    fn view_label(&self, layout: &Layout) -> Option<Element<'_, Message>> {
-        let opacity = self.label.value(self.now);
-        let index = self.label_item?;
-        if opacity <= 0.0 {
-            return None;
-        }
-        let icon = layout.icons.get(index)?;
-        let name = self.items.get(index)?.name.as_str();
-        let (vertical, horizontal) = dock::LABEL_PADDING;
-        let line = dock::LABEL_SIZE * typography::LINE_HEIGHT;
-        let pill = container(
-            text(name)
-                .size(dock::LABEL_SIZE)
-                .line_height(text::LineHeight::Relative(typography::LINE_HEIGHT))
-                .font(typography::UI_SEMIBOLD),
-        )
-        .padding([vertical, horizontal])
-        .style(dock::label(opacity));
-        let center = icon.x + icon.width / 2.0;
-        let span = 2.0 * center.min(self.surface_size.width - center).max(0.0);
-        let bottom = self.surface_size.height - metrics::BORDER_WIDTH - dock::LABEL_BOTTOM;
-        let top = bottom - line - 2.0 * vertical;
-        let centered = container(pill).width(span).align_x(Alignment::Center);
-        Some(place(centered, center - span / 2.0, top))
-    }
-
-    pub fn view_menu(&self) -> Element<'_, Message> {
-        let Some(menu) = &self.menu else {
-            return space().into();
-        };
-        let name = self.items.get(menu.item).map_or("", |i| i.name.as_str());
-        let mut header = row![
-            ui::body(name).font(typography::UI_SEMIBOLD),
-            space::horizontal()
-        ]
-        .align_y(Alignment::Center)
-        .height(dock::MENU_HEADER_HEIGHT)
-        .padding([0.0, metrics::MENU_ITEM_PADDING]);
-        if let Some((count, _)) = self.open_windows(menu.item)
-            && count > 0
-        {
-            let count = text(dock::text::windows(count))
-                .size(typography::SMALL_SIZE)
-                .color(color::TEXT_SECONDARY);
-            header = header.push(count);
-        }
-        let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
-        for (index, (entry, enabled)) in menu.entries.iter().copied().enumerate() {
-            if entry.starts_group() {
-                entries.push(ui::menu_separator());
-            }
-            let on_press = enabled.then_some(Message::MenuPick(entry));
-            let mut item = ui::menu_item(entry.label(), Trailing::None, on_press);
-            if menu.cursor == Some(index) {
-                item = ui::open(item);
-            }
-            entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
-        }
-        ui::menu(entries, dock::MENU_WIDTH)
-            .height(Length::Fill)
-            .into()
+        self.refresh(self.geometry)
     }
 }
 
 /// Every icon at rest.
-fn rest(count: usize) -> Vec<Animation> {
+fn rest(count: usize, side: f32) -> Vec<Animation> {
+    let side = f64::from(side);
     (0..count)
-        .map(|_| {
-            let side = f64::from(metrics::DOCK_ICON);
-            Animation::new(dock::SPRING, side, side, Duration::ZERO)
-        })
+        .map(|_| Animation::new(dock::SPRING, side, side, Duration::ZERO))
         .collect()
-}
-
-fn place<'a>(content: impl Into<Element<'a, Message>>, x: f32, y: f32) -> Element<'a, Message> {
-    pin(content).x(x).y(y).into()
-}
-
-/// An icon of side `side`.
-fn glyph(glyph: &Glyph, side: f32) -> Element<'static, Message> {
-    match glyph {
-        Glyph::File(handle) => svg(handle.clone()).width(side).height(side).into(),
-        Glyph::Sherlock => tile(
-            ui::logo(Logo::Color, side * dock::SHERLOCK_GLYPH_RATIO),
-            dock::SHERLOCK_TILE,
-            side,
-        ),
-        Glyph::Letter(letter) => {
-            let letter = text(letter.to_string())
-                .size(side * dock::LETTER_RATIO)
-                .font(typography::TITLE)
-                .color(dock::FALLBACK_LETTER);
-            tile(letter, dock::FALLBACK_TILE, side)
-        }
-    }
-}
-
-fn tile<'a>(
-    content: impl Into<Element<'a, Message>>,
-    tint: color::Color,
-    side: f32,
-) -> Element<'a, Message> {
-    container(content)
-        .width(side)
-        .height(side)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(dock::tile(tint, side))
-        .into()
 }
 
 /// Tab moves the focus; the other keys go to the menu when it is open, to the dock otherwise.

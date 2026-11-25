@@ -11,7 +11,7 @@ fn main() -> ExitCode {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-    match dock::run(dock::Setup::load()) {
+    match dock::run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "the dock stopped");

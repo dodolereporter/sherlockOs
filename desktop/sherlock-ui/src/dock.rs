@@ -17,12 +17,19 @@ pub const MARGIN_BOTTOM: f32 = 8.0;
 /// bottom (`bottom: -9px` on the board).
 pub const DOT: f32 = 5.0;
 pub const DOT_OFFSET: f32 = 9.0;
-/// Label above the hovered icon: distance from the bar bottom to the label bottom, vertical and
+/// Label next to the hovered icon: gap past the tallest magnified icon (the board puts it 108
+/// above the bar bottom, 7 past an icon of 52 × 1.7 on the padding of 13), vertical and
 /// horizontal padding, radius, text size.
-pub const LABEL_BOTTOM: f32 = 108.0;
+pub const LABEL_GAP: f32 = 7.0;
 pub const LABEL_PADDING: (f32, f32) = (3.0, 10.0);
 pub const LABEL_RADIUS: f32 = 8.0;
 pub const LABEL_SIZE: f32 = 12.0;
+/// Room for the label beside the icons of a dock on the left or right edge.
+pub const LABEL_SIDE_ROOM: f32 = 200.0;
+/// Separator before the open applications that are not pinned (board, before Réglages): its
+/// thickness, its length across the bar, its margin on each side.
+pub const SEPARATOR: (f32, f32) = (1.0, 40.0);
+pub const SEPARATOR_MARGIN: f32 = 2.0;
 /// Room left on each side of the widest magnified dock, so that the label of an icon at the
 /// edge still fits in the surface.
 pub const SURFACE_SLACK: f32 = 52.0;
@@ -36,6 +43,24 @@ pub const LETTER_RATIO: f32 = 0.42;
 pub const MENU_WIDTH: f32 = 240.0;
 pub const MENU_GAP: f32 = 12.0;
 pub const MENU_HEADER_HEIGHT: f32 = 28.0;
+
+// Settings (`docs/dock.md`): bounds of what the configuration may ask, defaults in `metrics`.
+
+/// Side of an icon at rest. A choice of D-21: from a small 32 to a large 96 on the 1440 × 900
+/// reference screen.
+pub const ICON_SIZE_MIN: f32 = 32.0;
+pub const ICON_SIZE_MAX: f32 = 96.0;
+/// Magnification factor, 1 for none.
+pub const MAGNIFICATION_MIN: f32 = 1.0;
+pub const MAGNIFICATION_MAX: f32 = 2.0;
+
+const _: () = {
+    assert!(
+        ICON_SIZE_MIN <= crate::metrics::DOCK_ICON && crate::metrics::DOCK_ICON <= ICON_SIZE_MAX
+    );
+    assert!(MAGNIFICATION_MIN <= crate::metrics::DOCK_MAGNIFICATION);
+    assert!(crate::metrics::DOCK_MAGNIFICATION <= MAGNIFICATION_MAX);
+};
 
 // Motion.
 
@@ -60,6 +85,8 @@ pub const SHERLOCK_TILE: Color = color::DESKTOP;
 /// Tile of an application whose icon is not found, and its initial (Fichiers tile of the board).
 pub const FALLBACK_TILE: Color = color::BLUE_DARK;
 pub const FALLBACK_LETTER: Color = color::CREAM;
+/// Separator before the open applications that are not pinned (board).
+pub const SEPARATOR_COLOR: Color = Color::rgba(255, 255, 255, 0.28);
 
 /// Dock texts, in French.
 pub mod text {
@@ -67,6 +94,7 @@ pub mod text {
     pub const SHERLOCK: &str = "Sherlock";
     pub const OPEN: &str = "Ouvrir";
     pub const NEW_WINDOW: &str = "Nouvelle fenêtre";
+    pub const KEEP: &str = "Garder dans le dock";
     pub const UNPIN: &str = "Retirer du dock";
     pub const QUIT: &str = "Quitter";
 
@@ -134,6 +162,11 @@ mod styles {
                 ..fill(tint, border::rounded(LABEL_RADIUS))
             }
         }
+    }
+
+    /// Separator before the open applications that are not pinned.
+    pub fn separator(_: &Theme) -> container::Style {
+        fill(SEPARATOR_COLOR, Border::default())
     }
 
     /// Dot below an open application.

@@ -784,9 +784,11 @@ dependencies = [
 name = "dock"
 version = "0.0.0"
 dependencies = [
+ "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "libc",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -794,6 +796,13 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wayland-server",
+]
+
+[[package]]
+name = "dock-config"
+version = "0.0.0"
+dependencies = [
+ "sherlock-ui",
 ]
 
 [[package]]
