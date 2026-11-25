@@ -202,7 +202,7 @@ impl App {
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center);
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
-            line = line.push(ui::chip(t::branch(branch)));
+            line = line.push(ui::branch_chip(t::branch(branch)));
         }
         let search = ui::search_field(
             &t::search_placeholder(&self.location_name()),
@@ -669,7 +669,7 @@ impl App {
         });
         // The menu appears at once: no scale animation (a transformed menu and the software
         // renderer's partial redraws did not agree), and iced has no group opacity to fade it.
-        let main = ui::menu(entries, metrics::CONTEXT_MENU_WIDTH);
+        let main = ui::floating_menu(entries, metrics::CONTEXT_MENU_WIDTH);
         let mut layers: Vec<Element<'_, Message>> =
             vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
         if menu.submenu {
@@ -686,7 +686,7 @@ impl App {
                 .map(|(i, item)| self.menu_entry(*item, menu.highlight == Some(i), false, false));
             let x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
             // Wider than the planche's 216: application names and the "always" switch.
-            let sub = ui::menu(entries, metrics::OPEN_WITH_WIDTH);
+            let sub = ui::floating_menu(entries, metrics::OPEN_WITH_WIDTH);
             layers.push(pin(sub).x(x).y(menu.at.y + offset).into());
         }
         stack(layers)

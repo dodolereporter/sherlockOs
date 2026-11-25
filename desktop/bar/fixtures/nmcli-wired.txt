@@ -1,0 +1,3 @@
+ethernet:connected:Connexion filaire 1
+wifi:disconnected:
+loopback:connected (externally):lo

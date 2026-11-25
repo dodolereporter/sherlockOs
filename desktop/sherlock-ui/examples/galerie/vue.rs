@@ -267,7 +267,7 @@ fn states<'a>() -> Element<'a, Message> {
         ("Entrée de menu", |look| {
             // Une entrée de menu ne vit que dans un menu : elle s'y montre.
             let item = ui::menu_item("Réglages", Trailing::Shortcut("Super+,"), enabled(look));
-            ui::menu([control(item, look)], CELL - 2.0 * metrics::GAP_INLINE)
+            ui::menu([control(item, look)], CELL - 2.0 * metrics::GAP_INLINE).into()
         }),
         ("Entrée destructive", |look| {
             let item = ui::menu_item(
@@ -279,6 +279,7 @@ fn states<'a>() -> Element<'a, Message> {
                 [control(ui::danger(item), look)],
                 CELL - 2.0 * metrics::GAP_INLINE,
             )
+            .into()
         }),
         ("Navigation", |look| {
             control(

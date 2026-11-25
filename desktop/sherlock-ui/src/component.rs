@@ -12,6 +12,7 @@ use iced::{Alignment, Element, Length, Padding, Theme};
 use crate::color::{self, Color};
 use crate::focus::Focusable;
 use crate::icon::Icon;
+use crate::logo::Logo;
 use crate::{metrics, theme, typography};
 
 type StyleFn<'a> = Box<dyn Fn(&Theme, button::Status) -> button::Style + 'a>;
@@ -52,6 +53,8 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
     }
 
     /// Dessine l'anneau de focus sans focus. Pour la galerie.
+    ///
+    /// Also used by programs that keep the focus in their own state, such as the bar.
     pub fn focus_ring(mut self) -> Self {
         self.ring = true;
         self
@@ -444,12 +447,25 @@ pub fn menu_separator<'a, Message: 'a>() -> Element<'a, Message> {
 pub fn menu<'a, Message: 'a>(
     entries: impl IntoIterator<Item = Element<'a, Message>>,
     width: f32,
-) -> Element<'a, Message> {
-    let body = container(iced::widget::Column::with_children(entries))
+) -> Container<'a, Message> {
+    container(iced::widget::Column::with_children(entries))
         .width(width)
         .padding(metrics::MENU_PADDING)
-        .style(theme::menu);
-    crate::surface::shadowed(body, metrics::MENU_RADIUS, &metrics::MENU_SHADOW_LAYERS).into()
+        .style(theme::menu)
+}
+
+/// A menu floating over a window, over its crisp shadow (`surface::Shadowed`): context menus.
+/// A menu that fills its own surface (the bar's) uses `menu`.
+pub fn floating_menu<'a, Message: 'a>(
+    entries: impl IntoIterator<Item = Element<'a, Message>>,
+    width: f32,
+) -> Element<'a, Message> {
+    crate::surface::shadowed(
+        menu(entries, width),
+        metrics::MENU_RADIUS,
+        &metrics::MENU_SHADOW_LAYERS,
+    )
+    .into()
 }
 
 /// Champ de texte de 32 de haut. Sans `on_input`, il est désactivé.
@@ -621,15 +637,15 @@ pub fn badge<'a, Message: 'a>(
 }
 
 /// Green badge in the code font, like the git branch.
-pub fn chip<'a, Message: 'a>(label: String) -> Element<'a, Message> {
-    let (vertical, horizontal) = metrics::CHIP_PADDING;
+pub fn branch_chip<'a, Message: 'a>(label: String) -> Element<'a, Message> {
+    let (vertical, horizontal) = metrics::BRANCH_CHIP_PADDING;
     container(
         text(label)
             .font(typography::CODE)
             .size(typography::CODE_SMALL_SIZE),
     )
     .padding([vertical, horizontal])
-    .style(theme::chip)
+    .style(theme::branch_chip)
     .into()
 }
 
@@ -755,6 +771,99 @@ pub fn code_block<'a, Message: 'a>(lines: &'a [Vec<(String, CodeRole)>]) -> Cont
         .padding([vertical, horizontal])
         .width(Length::Fill)
         .style(theme::code_block)
+}
+
+/// Workspace chip in the top bar, green when the workspace is active.
+pub fn chip<'a, Message: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    active: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let font = if active {
+        typography::UI_SEMIBOLD
+    } else {
+        typography::UI
+    };
+    let content = container(body(label).font(font)).center_y(Length::Fill);
+    let mut control = Control::new(content, theme::chip(active), on_press, metrics::CHIP_RADIUS);
+    control.button = control
+        .button
+        .height(metrics::CHIP_HEIGHT)
+        .padding([0.0, metrics::CHIP_PADDING]);
+    control
+}
+
+/// Logo symbol, without its square, at the given size. The bare symbol has no optical
+/// version: it fills its frame and reads at 16 px.
+pub fn logo<'a>(version: Logo, size: f32) -> Svg<'a> {
+    svg(svg::Handle::from_memory(version.bare().as_bytes()))
+        .width(size)
+        .height(size)
+}
+
+/// Logo in its square, at the given size: the optical version at 32 px and below.
+pub fn logo_square<'a>(version: Logo, size: f32) -> Svg<'a> {
+    svg(svg::Handle::from_memory(version.square(size).as_bytes()))
+        .width(size)
+        .height(size)
+}
+
+/// Sherlock button of the top bar: the color logo symbol, green ring and cream dot.
+pub fn sherlock_button<'a, Message: Clone + 'a>(
+    open: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let (width, height) = metrics::SHERLOCK_BUTTON;
+    let content = container(logo(Logo::Color, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
+    let mut control = Control::new(
+        content,
+        theme::sherlock_button(open),
+        on_press,
+        metrics::SHERLOCK_BUTTON_RADIUS,
+    );
+    control.button = control.button.width(width).height(height).padding(0);
+    control
+}
+
+/// Top bar indicator: an icon, followed by its value if there is one.
+pub fn status<'a, Message: 'a>(
+    glyph: Icon,
+    value: Option<String>,
+    tint: Color,
+) -> Element<'a, Message> {
+    let mut line = row![icon(glyph, metrics::ICON_SIZE, tint)]
+        .spacing(metrics::STATUS_ICON_GAP)
+        .align_y(Alignment::Center);
+    if let Some(value) = value {
+        line = line.push(body(value).color(tint));
+    }
+    line.into()
+}
+
+/// Menu header: the color logo in its night blue square, title and subtitle.
+pub fn menu_header<'a, Message: 'a>(
+    title: impl text::IntoFragment<'a>,
+    subtitle: &'a str,
+) -> Element<'a, Message> {
+    let avatar = logo_square(Logo::Color, metrics::MENU_AVATAR);
+    let subtitle = text(subtitle)
+        .font(typography::UI)
+        .size(typography::SMALL_SIZE)
+        .color(color::TEXT_SECONDARY);
+    let (top, side, bottom) = metrics::MENU_HEADER_PADDING;
+    row![
+        avatar,
+        column![body(title).font(typography::UI_SEMIBOLD), subtitle]
+    ]
+    .spacing(metrics::GAP_ICON)
+    .align_y(Alignment::Center)
+    .padding(Padding {
+        top,
+        right: side,
+        bottom,
+        left: side,
+    })
+    .into()
 }
 
 #[cfg(test)]

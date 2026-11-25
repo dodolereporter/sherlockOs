@@ -1,0 +1,5 @@
+wifi:disconnected:
+wifi-p2p:disconnected:
+loopback:connected (externally):lo
+bridge:connected (externally):docker0
+ethernet:unavailable:

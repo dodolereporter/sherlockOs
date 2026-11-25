@@ -49,11 +49,19 @@ pub enum Icon {
     Optical,
     Eject,
     Lock,
+    /// Network disconnected.
+    NetworkOff,
+    /// Sound muted.
+    SoundMuted,
+    /// Battery.
+    Battery,
+    /// Battery charging.
+    BatteryCharging,
 }
 
 impl Icon {
     /// Toutes les icônes, pour les tests et la galerie.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 31] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -81,11 +89,16 @@ impl Icon {
         Self::Optical,
         Self::Eject,
         Self::Lock,
+        Self::NetworkOff,
+        Self::SoundMuted,
+        Self::Battery,
+        Self::BatteryCharging,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
     /// arrows. The device icons are drawn for Evidence, on the same grid and stroke, except
-    /// the system disk, which is the mock-up's.
+    /// the system disk, which is the mock-up's. The boards draw neither the battery, nor the
+    /// network off, nor the muted sound: those follow the stroke of the others.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -135,6 +148,16 @@ impl Icon {
             }
             Self::Eject => "M12 5l7 8H5zM5 18h14",
             Self::Lock => "M7 11h10v9H7zM9 11V8a3 3 0 0 1 6 0v3",
+            Self::NetworkOff => {
+                "M3 9.5a13 13 0 0 1 18 0M9.4 16.4a4 4 0 0 1 5.2 0M12 19.5h.01M4 4l16 16"
+            }
+            Self::SoundMuted => "M4 10v4h3.5L12 18V6L7.5 10zM16 9.5l5 5M21 9.5l-5 5",
+            Self::Battery => {
+                "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3"
+            }
+            Self::BatteryCharging => {
+                "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3M12 9l-2.5 3.5h3L10 16"
+            }
         }
     }
 

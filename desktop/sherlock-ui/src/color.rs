@@ -126,6 +126,8 @@ pub const GLASS: Color = Color::rgba(16, 26, 44, 0.82);
 pub const MENU_GLASS: Color = Color::rgba(22, 34, 56, 0.96);
 /// Dock (flou de 30 px).
 pub const DOCK_GLASS: Color = Color::rgba(244, 235, 227, 0.17);
+/// Top bar (24 px blur). The Main design board makes it slightly lighter than `GLASS`.
+pub const TOP_BAR_GLASS: Color = Color::rgba(16, 26, 44, 0.78);
 
 // Traits et voiles.
 
@@ -135,6 +137,14 @@ pub const BORDER: Color = Color::rgba(255, 255, 255, 0.10);
 pub const MENU_BORDER: Color = Color::rgba(255, 255, 255, 0.14);
 /// Bordure d'une carte (planche Réglages).
 pub const CARD_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
+/// Border of the top bar (Main design board).
+pub const TOP_BAR_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
+/// Chip of an inactive workspace in the top bar, at rest then hovered.
+pub const CHIP: Color = Color::rgba(255, 255, 255, 0.07);
+pub const CHIP_HOVER: Color = Color::rgba(255, 255, 255, 0.12);
+/// Veil of a top bar button whose menu is open (the open « Fenêtre » button of the Menus
+/// board).
+pub const TOP_BAR_BUTTON_OPEN: Color = Color::rgba(255, 255, 255, 0.14);
 /// Bordure du dock.
 pub const DOCK_BORDER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Bordure d'un bouton secondaire.
@@ -212,6 +222,9 @@ pub const CREAM: Color = Color::rgb(0xF4, 0xEB, 0xE3);
 pub const AMBER: Color = Color::rgb(0xF0, 0xC4, 0x8A);
 /// Erreur, action destructive.
 pub const SALMON: Color = Color::rgb(0xF6, 0xB5, 0xA6);
+
+/// Fully transparent: the background of a shell surface that draws its own shapes.
+pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0.0);
 
 /// Ligne sélectionnée d'une liste ou d'un menu, entrée de menu survolée.
 pub const SELECTED_ROW: Color = Color::rgba(91, 163, 208, 0.26);
