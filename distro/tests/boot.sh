@@ -120,5 +120,6 @@ fi
 
 printf 'boot : ÉCHEC, %s\n' "$resultat"
 printf 'boot : 50 dernières lignes du port série (%s) :\n' "$journal"
-tail -n 50 "$journal" | tr -d '\r'
+# Sans le \r du port série ni les séquences d'échappement du micrologiciel, qui brouillent le terminal.
+tail -n 50 "$journal" | tr -d '\r' | sed -E $'s/\x1b\[[0-9;=?]*[A-Za-z]//g'
 exit 1
