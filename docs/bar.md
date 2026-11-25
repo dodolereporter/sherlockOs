@@ -17,7 +17,7 @@ hand »).
 ### Logo
 
 The Sherlock button shows the color logo, without its square: green ring `#85C595` and cream
-dot `#F4EBE3` (`logo-sans-fond.svg`), 22 px high, straight on the bar glass. The button has no
+dot `#F4EBE3` (`logo-transparent.svg`), 22 px high, straight on the bar glass. The button has no
 fill at rest, the hover and press veils of the other ghost buttons, and while its menu is open
 the 0.14 white veil of the open « Fenêtre » button of the Menus board (`TOP_BAR_BUTTON_OPEN`). A
 cream pill would hide the cream dot, so the button has none.

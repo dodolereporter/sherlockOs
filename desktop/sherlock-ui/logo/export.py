@@ -17,8 +17,8 @@ NUIT, VERT, CREME = "#0E1A2E", "#85C595", "#F4EBE3"
 # Nom : (fond du carré, anneau et queue, point)
 VARIANTES = {
     "logo": (NUIT, VERT, CREME),
-    "logo-creme": (NUIT, CREME, CREME),
-    "logo-nuit": (CREME, NUIT, NUIT),
+    "logo-cream": (NUIT, CREME, CREME),
+    "logo-night": (CREME, NUIT, NUIT),
 }
 # Géométries, en unités de la grille de 512 : rayon et épaisseur de l'anneau, départ de la
 # queue sur l'anneau (triangle 3-4-5 : à 53° sous l'horizontale), point d'arrivée, rayon et
@@ -65,10 +65,10 @@ avant, apres = [], []
 for nom, couleurs in VARIANTES.items():
     # Sans carré, le symbole remplit son cadre et se lit à toutes les tailles.
     source = svg(*couleurs, False, GEOMETRIES[""])
-    with open(f"{nom}-sans-fond.svg", "w") as f:
+    with open(f"{nom}-transparent.svg", "w") as f:
         f.write(source)
     for taille in TAILLES:
-        image(source, taille).savev(f"png/{nom}-sans-fond-{taille}.png", "png", [], [])
+        image(source, taille).savev(f"png/{nom}-transparent-{taille}.png", "png", [], [])
     # Avec carré, 16 et 32 px prennent leur version optique.
     for suffixe, g in GEOMETRIES.items():
         with open(f"{nom}{suffixe}.svg", "w") as f:
@@ -79,4 +79,4 @@ for nom, couleurs in VARIANTES.items():
         image(source, taille).savev(f"png/{nom}-{taille}.png", "png", [], [])
     avant.append(image(svg(*couleurs, True, GEOMETRIES[""]), 16))
     apres.append(image(svg(*couleurs, True, GEOMETRIES["-16"]), 16))
-agrandi(avant + apres).savev("png/lisibilite-16.png", "png", [], [])
+agrandi(avant + apres).savev("png/legibility-16.png", "png", [], [])

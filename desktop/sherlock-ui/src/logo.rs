@@ -31,9 +31,9 @@ impl Logo {
     /// Le symbole seul, sans carré. Il remplit son cadre et se lit à toutes les tailles.
     pub const fn bare(self) -> &'static str {
         match self {
-            Self::Color => include_str!("../logo/logo-sans-fond.svg"),
-            Self::Cream => include_str!("../logo/logo-creme-sans-fond.svg"),
-            Self::Night => include_str!("../logo/logo-nuit-sans-fond.svg"),
+            Self::Color => include_str!("../logo/logo-transparent.svg"),
+            Self::Cream => include_str!("../logo/logo-cream-transparent.svg"),
+            Self::Night => include_str!("../logo/logo-night-transparent.svg"),
         }
     }
 
@@ -46,14 +46,14 @@ impl Logo {
                 include_str!("../logo/logo-16.svg"),
             ],
             Self::Cream => [
-                include_str!("../logo/logo-creme.svg"),
-                include_str!("../logo/logo-creme-32.svg"),
-                include_str!("../logo/logo-creme-16.svg"),
+                include_str!("../logo/logo-cream.svg"),
+                include_str!("../logo/logo-cream-32.svg"),
+                include_str!("../logo/logo-cream-16.svg"),
             ],
             Self::Night => [
-                include_str!("../logo/logo-nuit.svg"),
-                include_str!("../logo/logo-nuit-32.svg"),
-                include_str!("../logo/logo-nuit-16.svg"),
+                include_str!("../logo/logo-night.svg"),
+                include_str!("../logo/logo-night-32.svg"),
+                include_str!("../logo/logo-night-16.svg"),
             ],
         }
     }

@@ -10,9 +10,9 @@ pub const CODE_FAMILY: &str = "JetBrains Mono";
 
 /// Fichiers des polices, à charger au démarrage de chaque programme.
 pub const FONTS: [&[u8]; 3] = [
-    include_bytes!("../polices/InterVariable.ttf"),
-    include_bytes!("../polices/SpaceGrotesk-Variable.ttf"),
-    include_bytes!("../polices/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../fonts/InterVariable.ttf"),
+    include_bytes!("../fonts/SpaceGrotesk-Variable.ttf"),
+    include_bytes!("../fonts/JetBrainsMono-Regular.ttf"),
 ];
 
 /// Texte de l'interface.

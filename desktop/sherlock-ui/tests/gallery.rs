@@ -1,7 +1,7 @@
 //! Tests de la galerie sans écran : capture du rendu, souris, clavier.
 
-#[path = "../examples/galerie/vue.rs"]
-mod vue;
+#[path = "../examples/gallery/view.rs"]
+mod view;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use iced_runtime::user_interface::{Cache, UserInterface};
 use iced_test::simulator;
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::{metrics, theme, typography};
-use vue::{Gallery, Message};
+use view::{Gallery, Message};
 
 /// Hauteur qui montre toute la galerie d'un coup, logos compris.
 const FULL_HEIGHT: f32 = 2400.0;

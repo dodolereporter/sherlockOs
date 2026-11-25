@@ -38,11 +38,11 @@ iced_test = "=0.14.0"
 iced_runtime = "=0.14.0"
 
 [[example]]
-name = "galerie"
+name = "gallery"
 required-features = ["iced"]
 
 [[test]]
-name = "galerie"
+name = "gallery"
 required-features = ["iced"]
 
 [lints]
