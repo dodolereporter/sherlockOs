@@ -15,23 +15,8 @@ source_dir=${1:?usage: import.sh <folder of a collection> [ring image]}
 ring=${2:-}
 here=$(dirname "$0")
 
-# Source file, relative to the collection, then id in the repository.
-pairs=(
-    "00-Par-defaut/Le-premier-indice first-clue"
-    "01-Embleme/Relief-de-jade jade-relief"
-    "01-Embleme/Aurore-polaire aurora"
-    "01-Embleme/Eclipse-de-papier paper-eclipse"
-    "02-Les-enquetes-de-Sherlock/La-piste-sous-la-pluie rain-trail"
-    "02-Les-enquetes-de-Sherlock/La-page-disparue missing-page"
-    "02-Les-enquetes-de-Sherlock/Le-dernier-train last-train"
-    "00-Par-defaut/Premier-indice first-clue-light"
-    "01-Emblemes/Porcelaine porcelain"
-    "01-Emblemes/Lagon lagoon"
-    "01-Emblemes/Papier-plie folded-paper"
-    "02-Enquetes/La-serre greenhouse"
-    "02-Enquetes/L-observatoire observatory"
-    "02-Enquetes/La-barque rowboat"
-)
+# Source file of each id, relative to its collection: the author's names, kept as data.
+sources=$here/sources.json
 
 store() {
     local source=$1 id=$2
@@ -43,14 +28,15 @@ store() {
 }
 
 imported=0
-for pair in "${pairs[@]}"; do
-    read -r name id <<<"$pair"
+while read -r name id; do
     found=$(compgen -G "$source_dir/$name.*" | head -n 1 || true)
     if [[ -n $found ]]; then
         store "$found" "$id"
         imported=$((imported + 1))
     fi
-done
+done < <(python3 -c 'import json, sys
+for name, id in json.load(open(sys.argv[1])).items():
+    print(name, id)' "$sources")
 if ((imported == 0)); then
     echo "no known wallpaper in $source_dir" >&2
     exit 1

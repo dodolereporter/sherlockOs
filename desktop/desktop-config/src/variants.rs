@@ -1,6 +1,7 @@
 //! Variants of a wallpaper at the usual definitions, made from its original when the image is
-//! built (`wallpaper-variants`): cut to the screen ratio, resized with Lanczos, then brought
-//! back to 8 bits with a light dither, so that dark gradients do not show bands.
+//! built (`wallpaper-variants`): cut to the screen ratio, reduced with Lanczos, then brought
+//! back to 8 bits with a light dither, so that dark gradients do not show bands. A variant at
+//! the size of the original (3840 × 2160 from a 4K original) is the original itself, untouched.
 
 use image::{
     DynamicImage, Rgb32FImage, RgbImage,
@@ -16,14 +17,19 @@ pub const SIZES: [(u32, u32); 3] = [(1920, 1080), (2560, 1440), (3840, 2160)];
 const SEED: u64 = 0x5EED_0D04;
 
 /// The variant of `original` at `size`: the middle of the original cut to the ratio of `size`
-/// (as `cover` would show it), resized, then dithered to 8 bits.
+/// (as `cover` would show it), resized, then dithered to 8 bits. When the cut is already at
+/// `size`, it is returned as is: nothing to resample, nothing to dither. An original smaller
+/// than `size` is enlarged the same way, which only happens with an image of the user's.
 pub fn render(original: &DynamicImage, size: (u32, u32)) -> RgbImage {
     let src = fit(Mode::Cover, (original.width(), original.height()), size).src;
     let (x, y) = (src.x.round() as u32, src.y.round() as u32);
     let (w, h) = (src.w.round().max(1.0) as u32, src.h.round().max(1.0) as u32);
-    let cropped = original.crop_imm(x, y, w, h).to_rgb32f();
+    let cropped = original.crop_imm(x, y, w, h);
+    if (w, h) == size {
+        return cropped.to_rgb8();
+    }
     dither(&imageops::resize(
-        &cropped,
+        &cropped.to_rgb32f(),
         size.0,
         size.1,
         FilterType::Lanczos3,
@@ -98,5 +104,9 @@ mod tests {
         assert_eq!(variant.dimensions(), (192, 108));
         // A flat color stays flat, apart from the grain.
         assert!(variant.pixels().all(|p| p[2].abs_diff(46) <= 1));
+        // At the size of the original: the original, pixel for pixel.
+        let original = RgbImage::from_fn(192, 108, |x, y| Rgb([x as u8, y as u8, 7]));
+        let same = render(&DynamicImage::ImageRgb8(original.clone()), (192, 108));
+        assert_eq!(same, original);
     }
 }
