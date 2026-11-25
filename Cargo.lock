@@ -792,6 +792,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dock"
+version = "0.0.0"
+dependencies = [
+ "dock-config",
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "libc",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
+ "wayland-server",
+]
+
+[[package]]
+name = "dock-config"
+version = "0.0.0"
+dependencies = [
+ "sherlock-ui",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -601,7 +601,9 @@ mode = cover
   already in it: a screen at 1 and a screen at 2 of the same size in pixels show exactly the
   same part of the image.
 - **Loading.** The image is decoded on a thread of its own (a 4K PNG takes a while): the
-  frames go on, with the board's background until it is ready. It is then uploaded once as a
+  frames go on, with the board's background until it is ready. The decoder refuses an image
+  larger than 8192 pixels on a side or needing more than 256 MiB (a PNG "decompression bomb"),
+  and a thread that the system refuses is logged: both give the board's background. It is then uploaded once as a
   texture, shared by the screens that use the same variant, and drawn every frame as one
   textured rectangle. A texture that no screen uses any more is freed; a new setting drops
   them all.
@@ -629,6 +631,34 @@ main before this lot 15.10, 12.76 ms; this lot with the default wallpaper 14.15,
 larger than the difference: no regression seen. Software rendering does not hold 60 frames per
 second in any of the three, so the late frame criterion has to be checked on the AMD chip of
 the reference laptop (see "Measuring").
+
+Notes:
+
+- In `center` mode, a wallpaper of the collection always loads its largest variant (the factor
+  is 1 for all of them) and shows its middle, one image pixel per screen pixel.
+- The settings file is read as it is found: a program that writes it (Control Room) must write
+  a temporary file and `rename` it, or a half-written file may be refused for 2 seconds.
+- Variants installed after the start are seen at the next change of the settings file.
+- The windowed backend redraws continuously. When the DRM output (lot D-14) draws on damage,
+  a new setting (`reload`) and a decoded image (`receive`) will have to request a frame.
+
+Left for lot D-04b, from the review of D-04:
+
+1. **No flash when the source changes.** Every reload (file rewritten identically, `mode`
+   alone changed, `set_theme` on a wallpaper without a pendant) and every scale change of a
+   screen drop the textures: the board's background shows while decoding. Change the
+   generation only when the source changes, and keep the last ready texture until the new one
+   is uploaded. To do before or with D-05c.
+2. **Development fallback on the original.** In a debug build, when the wallpaper is not
+   installed, show `assets/wallpapers/<id>.jpg`; and reduce on the decoding thread an image
+   more than twice the screen (`thumbnail`), against the aliasing of the GPU's bilinear
+   reduction without mipmaps (also for a large `path =` image).
+3. **The 3840 variant as JPEG.** It is the original decoded and written as PNG: 99 MB in the
+   system image instead of 25 MB of JPEG, and slower to decode. Copy the original as
+   `3840x2160.jpg` and let `variants()` accept `.jpg`; to see with the image factory.
+4. **Alpha.** The texture is imported as `Xbgr8888`: a transparent PNG of the user's shows the
+   color stored under its transparent pixels. Compose it over `color::DESKTOP` when decoding,
+   or import as premultiplied `Abgr8888`.
 
 To try it, with the variants in a test folder:
 

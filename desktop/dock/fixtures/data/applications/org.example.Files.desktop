@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Name[fr]=Fichiers
+Exec=example-files %U
+Icon=example-files
+Categories=System;FileManager;

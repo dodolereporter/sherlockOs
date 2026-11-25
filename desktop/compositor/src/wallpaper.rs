@@ -38,6 +38,14 @@ use crate::{State, output::View};
 /// How often the settings file is checked for changes: one `stat` every two seconds.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
 
+/// Largest image decoded, on each side: twice the 4K variants, enough for a 8K screen.
+const MAX_SIDE: u32 = 8192;
+
+/// Most memory the decoder may hold: a 8192 × 8192 RGBA image, instead of the 512 MiB of
+/// `image` by default. A PNG that claims more (a "decompression bomb") is refused before it is
+/// decoded.
+const MAX_ALLOC: u64 = 256 << 20;
+
 /// Where the images come from.
 #[derive(Debug, Clone, PartialEq, Default)]
 enum Source {
@@ -169,19 +177,31 @@ impl Wallpaper {
         let Some(sender) = &self.sender else {
             return;
         };
-        if !self.loading.insert(path.to_path_buf()) {
+        if self.loading.contains(path) {
             return;
         }
-        let (sender, generation, path) = (sender.clone(), self.generation, path.to_path_buf());
-        std::thread::spawn(move || {
-            let image = decode(&path);
-            // The loop may be gone: the session is closing, nothing to do.
-            let _ = sender.send(Decoded {
-                generation,
-                path,
-                image,
+        self.loading.insert(path.to_path_buf());
+        let (sender, generation, owned) = (sender.clone(), self.generation, path.to_path_buf());
+        let spawned = std::thread::Builder::new()
+            .name("wallpaper".into())
+            .spawn(move || {
+                let image = decode(&owned);
+                // The loop may be gone: the session is closing, nothing to do.
+                let _ = sender.send(Decoded {
+                    generation,
+                    path: owned,
+                    image,
+                });
             });
-        });
+        // The system refuses a thread (out of memory or of processes): the board's background
+        // stays, the session goes on.
+        if let Err(err) = spawned {
+            tracing::warn!(
+                "wallpaper: {}: cannot start decoding: {err}",
+                path.display()
+            );
+            self.failed.insert(path.to_path_buf());
+        }
     }
 
     fn receive(&mut self, decoded: Decoded) {
@@ -237,13 +257,18 @@ fn resolve(choice: Choice, data_dirs: &[PathBuf]) -> Source {
     }
 }
 
+/// Decodes an image within `MAX_SIDE` and `MAX_ALLOC`.
 fn decode(path: &Path) -> Result<image::RgbaImage, String> {
-    let image = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .map_err(|err| err.to_string())?
         .with_guessed_format()
-        .map_err(|err| err.to_string())?
-        .decode()
         .map_err(|err| err.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(MAX_ALLOC);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|err| err.to_string())?;
     Ok(image.into_rgba8())
 }
 
@@ -439,6 +464,23 @@ mod tests {
         w.reload();
         assert_eq!(w.mode, Mode::Contain);
         assert_eq!(w.image_for((1440, 900).into()), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_decoder_refuses_images_beyond_its_limits() {
+        let dir = temp_dir("limits");
+        let save = |name: &str, w, h| {
+            let path = dir.join(name);
+            image::RgbImage::new(w, h).save(&path).unwrap();
+            path
+        };
+        let edge = decode(&save("edge.png", MAX_SIDE, 1)).unwrap();
+        assert_eq!(edge.dimensions(), (MAX_SIDE, 1));
+        assert!(decode(&save("wide.png", MAX_SIDE + 1, 1)).is_err());
+        assert!(decode(&save("tall.png", 1, MAX_SIDE + 1)).is_err());
+        // The memory limit is that of the largest image allowed, in RGBA.
+        assert_eq!(MAX_ALLOC, u64::from(MAX_SIDE) * u64::from(MAX_SIDE) * 4);
         fs::remove_dir_all(&dir).unwrap();
     }
 
