@@ -104,6 +104,32 @@ pub mod evidence {
     pub const DOWNLOADS: &str = "Téléchargements";
     pub const PICTURES: &str = "Images";
     pub const TRASH: &str = "Corbeille";
+    /// Devices: disks, keys, cards.
+    pub const DEVICES: &str = "Appareils";
+    pub const SYSTEM_DISK: &str = "Disque système";
+    pub const MOUNT: &str = "Monter";
+    pub const UNMOUNT: &str = "Démonter";
+    pub const EJECT: &str = "Éjecter";
+    pub const LOCKED: &str = "Verrouillé";
+    pub const EJECTED: &str = "Tu peux le retirer.";
+    pub const UNMOUNTED: &str = "Démonté.";
+    pub fn free_space(size: &str) -> String {
+        format!("{size} libres")
+    }
+    /// Name of a volume without a label: « SanDisk Cruzer de 16 Go ».
+    pub fn model_of(model: &str, size: &str) -> String {
+        format!("{model} de {size}")
+    }
+    /// Name of a volume without label nor model: « Volume de 64 Go ».
+    pub fn volume_of(size: &str) -> String {
+        format!("Volume de {size}")
+    }
+    pub const DEVICE_BUSY: &str = "Ce support est occupé : ferme ce qui l'utilise, puis réessaie.";
+    pub const DEVICE_NOT_ALLOWED: &str = "Tu n'as pas eu l'autorisation.";
+    pub const DEVICE_LOCKED: &str =
+        "Ce volume est chiffré. Le déverrouiller ici n'est pas encore possible.";
+    pub const DEVICE_UNAVAILABLE: &str = "Les appareils ne répondent pas pour l'instant.";
+    pub const DEVICE_FAILED: &str = "Ça n'a pas marché avec ce support.";
     /// Nom du dossier racine dans le fil d'Ariane.
     pub const ROOT: &str = "Disque";
     /// Segments repliés du fil d'Ariane.

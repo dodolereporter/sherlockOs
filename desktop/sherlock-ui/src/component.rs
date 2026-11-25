@@ -498,7 +498,7 @@ pub fn danger<'a, Message: Clone + 'a>(mut item: Control<'a, Message>) -> Contro
 /// Entrée d'une navigation latérale : icône, libellé, compteur éventuel à droite.
 pub fn nav_item<'a, Message: Clone + 'a>(
     glyph: Icon,
-    label: &'a str,
+    label: impl text::IntoFragment<'a>,
     count: Option<String>,
     active: bool,
     on_press: Option<Message>,
@@ -537,6 +537,17 @@ pub fn nav_item<'a, Message: Clone + 'a>(
         .height(metrics::NAV_ITEM_HEIGHT)
         .padding([0.0, metrics::NAV_ITEM_PADDING]);
     control
+}
+
+/// Same as `nav_item`, with a label computed by the caller (a volume name cut to fit).
+pub fn nav_item_owned<'a, Message: Clone + 'a>(
+    glyph: Icon,
+    label: String,
+    count: Option<String>,
+    active: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    nav_item(glyph, label, count, active, on_press)
 }
 
 /// Étiquette de section d'une navigation latérale, avec ses marges.

@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod clock;
+pub mod devices;
 pub mod git;
 pub mod listing;
 pub mod ops;
@@ -13,6 +14,7 @@ pub mod places;
 pub mod preview;
 pub mod probe;
 pub mod trash;
+pub mod udisks;
 mod view;
 
 #[cfg(test)]

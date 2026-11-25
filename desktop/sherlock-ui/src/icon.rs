@@ -39,11 +39,21 @@ pub enum Icon {
     Trash,
     /// Conteneur : Dockerfile, fichier compose.
     Cube,
+    /// Devices: system disk (from the planche), internal disk, USB key, external disk,
+    /// memory card, optical disc; eject and lock.
+    SystemDisk,
+    Drive,
+    UsbKey,
+    ExternalDrive,
+    Card,
+    Optical,
+    Eject,
+    Lock,
 }
 
 impl Icon {
     /// Toutes les icônes, pour les tests et la galerie.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 27] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -63,10 +73,19 @@ impl Icon {
         Self::Image,
         Self::Trash,
         Self::Cube,
+        Self::SystemDisk,
+        Self::Drive,
+        Self::UsbKey,
+        Self::ExternalDrive,
+        Self::Card,
+        Self::Optical,
+        Self::Eject,
+        Self::Lock,
     ];
 
     /// Tracé sur la grille de 24. Tous sont ceux des planches, sauf la croix et les deux
-    /// flèches de tri.
+    /// flèches de tri. The device icons are drawn for Evidence, on the same grid and stroke,
+    /// except the system disk, which is the planche's.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -96,6 +115,26 @@ impl Icon {
             Self::Image => "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4",
             Self::Trash => "M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13",
             Self::Cube => "M12 3l8 4.2v9.6L12 21l-8-4.2V7.2zM4 7.2l8 4.2 8-4.2M12 11.4V21",
+            Self::SystemDisk => {
+                "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4"
+            }
+            Self::Drive => {
+                "M4 6h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM7 14h.01M11 14h6"
+            }
+            Self::UsbKey => {
+                "M9 3h6v5H9zM8 8h8v11a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2zM11 5.5h.01M13 5.5h.01"
+            }
+            Self::ExternalDrive => {
+                "M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM12 17h.01M9.5 7h5"
+            }
+            Self::Card => {
+                "M9 3h8a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM10 7v3M13 7v3M16 7v3"
+            }
+            Self::Optical => {
+                "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 9.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z"
+            }
+            Self::Eject => "M12 5l7 8H5zM5 18h14",
+            Self::Lock => "M7 11h10v9H7zM9 11V8a3 3 0 0 1 6 0v3",
         }
     }
 

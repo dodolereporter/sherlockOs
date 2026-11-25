@@ -17,6 +17,7 @@ use sherlock_ui::{color, metrics, typography};
 
 use crate::app::{App, Command, Location, Menu, MenuItem, Message, RENAME, SEARCH, WindowAction};
 use crate::clock;
+use crate::devices::Volume;
 use crate::git::GitStatus;
 use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::preview::Preview;
@@ -244,9 +245,23 @@ impl App {
                 go,
             ));
         }
+        if !self.volumes.is_empty() {
+            nav = nav.push(ui::nav_section(t::DEVICES));
+            for volume in &self.volumes {
+                nav = nav.push(self.device_item(volume));
+            }
+        }
+        let root = std::path::PathBuf::from("/");
+        nav = nav.push(ui::nav_section(t::SYSTEM)).push(ui::nav_item(
+            Icon::SystemDisk,
+            t::SYSTEM_DISK,
+            None,
+            self.location == Location::Folder(root.clone()),
+            Some(Message::Go(Location::Folder(root))),
+        ));
         if self.config.trash.is_some() {
             let active = self.location == Location::Trash;
-            nav = nav.push(ui::nav_section(t::SYSTEM)).push(ui::nav_item(
+            nav = nav.push(ui::nav_item(
                 Icon::Trash,
                 t::TRASH,
                 None,
@@ -265,6 +280,58 @@ impl App {
                 left: side,
             })
             .style(theme::sidebar)
+            .into()
+    }
+
+    /// A volume of the sidebar: its icon, its name, its free space, and an eject button for
+    /// a removable medium. A right click opens its menu.
+    fn device_item<'a>(&'a self, volume: &'a Volume) -> Element<'a, Message> {
+        let active = match (&volume.mount_point, &self.location) {
+            (Some(point), Location::Folder(dir)) => dir.starts_with(point),
+            _ => false,
+        };
+        let detail = volume.detail();
+        let eject = volume.ejectable.then(|| {
+            ui::icon_button(
+                Icon::Eject,
+                t::EJECT,
+                Some(Message::EjectDevice(volume.id.clone())),
+            )
+        });
+        // Room for the name: the item minus its icon, the detail and the eject button.
+        let (_, side, _) = metrics::SIDEBAR_PADDING;
+        let mut room = metrics::SIDEBAR_WIDTH
+            - 2.0 * side
+            - 2.0 * metrics::NAV_ITEM_PADDING
+            - metrics::ICON_SIZE
+            - metrics::GAP_ICON;
+        if let Some(detail) = &detail {
+            room -= detail.chars().count() as f32 * typography::UI_CHAR_WIDTH + metrics::GAP_ICON;
+        }
+        if eject.is_some() {
+            room -= metrics::ICON_BUTTON;
+        }
+        let chars = (room / typography::UI_CHAR_WIDTH).max(3.0) as usize;
+        let glyph = if volume.locked {
+            Icon::Lock
+        } else {
+            volume.kind.icon()
+        };
+        let item = ui::nav_item_owned(
+            glyph,
+            elide(&volume.name, chars).into_owned(),
+            detail,
+            active,
+            Some(Message::OpenDevice(volume.id.clone())),
+        );
+        let line: Element<'a, Message> = match eject {
+            Some(eject) => row![container(item).width(Length::Fill), eject]
+                .align_y(Alignment::Center)
+                .into(),
+            None => item.into(),
+        };
+        mouse_area(line)
+            .on_right_press(Message::DeviceMenu(volume.id.clone()))
             .into()
     }
 

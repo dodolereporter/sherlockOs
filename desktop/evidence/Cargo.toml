@@ -21,6 +21,10 @@ image = { version = "=0.25.10", default-features = false, features = ["jpeg", "p
 # iced et winit : seule la déclaration est nouvelle.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }
+# UDisks2 on the system D-Bus: disks, USB keys, cards, mount, unmount, eject. Pure Rust, no
+# libdbus. Only its default pair of features is kept, named explicitly: the blocking API (the
+# watcher runs on its own thread) and its own small async-io executor (no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",
@@ -34,6 +38,9 @@ iced_test = "=0.14.0"
 # par iced : seules les déclarations sont nouvelles.
 iced_runtime = "=0.14.0"
 futures = "=0.3.34"
+# Reads the UDisks2 objects recorded with `busctl --json` for the device tests. Same version
+# as sherlockd.
+serde_json = "=1.0.154"
 
 [lints]
 workspace = true

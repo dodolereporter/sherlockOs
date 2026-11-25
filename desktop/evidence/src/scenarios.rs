@@ -38,6 +38,8 @@ impl Bench {
             trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
             measure: None,
             maximized: false,
+            devices: None,
+            watch_devices: false,
         };
         let (mut app, task) = App::new(config);
         drain(&mut app, task);
@@ -368,6 +370,8 @@ fn la_fenetre_se_rend_sans_ecran() {
         trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
         measure: None,
         maximized: false,
+        devices: None,
+        watch_devices: false,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -443,6 +447,8 @@ fn frame_cost() {
         trash: None,
         measure: None,
         maximized: false,
+        devices: None,
+        watch_devices: false,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -483,4 +489,87 @@ fn frame_cost() {
     fs::create_dir_all(&dir).expect("dossier");
     fs::write(dir.join("frame_cost.txt"), report).expect("écriture");
     if false {}
+}
+
+#[test]
+fn devices_mount_open_unmount_and_eject_through_their_source() {
+    use crate::devices::tests::FakeSource;
+    use crate::devices::{DeviceKind, Volume};
+    use std::sync::{Arc, Mutex};
+    let tmp = TempDir::new("devices");
+    let volume = |id: &str, name: &str, ejectable| Volume {
+        id: id.into(),
+        name: name.into(),
+        kind: if ejectable {
+            DeviceKind::UsbKey
+        } else {
+            DeviceKind::Internal
+        },
+        mount_point: None,
+        size: 16_000_000_000,
+        free: None,
+        locked: false,
+        ejectable,
+    };
+    let source = Arc::new(FakeSource {
+        volumes: Mutex::new(vec![
+            volume("/sda1", "CLE", true),
+            volume("/sdb1", "disque occupé", false),
+            Volume {
+                locked: true,
+                ..volume("/sdc1", "Coffre", true)
+            },
+        ]),
+        root: tmp.path().join("media"),
+    });
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: tmp.path().to_path_buf(),
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: Some(source.clone()),
+        watch_devices: false,
+    };
+    let (app, task) = App::new(config);
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    assert_eq!(bench.app.volumes.len(), 3);
+
+    // A click on an unmounted key mounts it, then opens it.
+    bench.send(Message::OpenDevice("/sda1".into()));
+    let point = bench.path("media/CLE");
+    assert_eq!(bench.app.location, Location::Folder(point.clone()));
+    assert!(bench.app.volumes[0].mount_point.is_some());
+
+    // Its menu offers to open, unmount and eject it.
+    bench.send(Message::DeviceMenu("/sda1".into()));
+    let labels: Vec<_> = bench
+        .app
+        .menu_items(false)
+        .into_iter()
+        .filter_map(|item| match item {
+            crate::app::MenuItem::Action { label, .. } => Some(label),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["Ouvrir", "Démonter", "Éjecter"]);
+    bench.press(Named::Escape);
+
+    // Ejecting leaves the volume first, then it disappears.
+    bench.send(Message::EjectDevice("/sda1".into()));
+    assert_eq!(bench.app.location, Location::Folder(bench.path("")));
+    assert!(bench.app.volumes.iter().all(|v| v.id != "/sda1"));
+    assert_eq!(bench.app.notice.as_ref().map(|n| n.error), Some(false));
+
+    // A locked volume and a busy one each give a short message.
+    bench.send(Message::OpenDevice("/sdc1".into()));
+    assert!(bench.app.notice.as_ref().is_some_and(|n| n.error));
+    bench.send(Message::OpenDevice("/sdb1".into()));
+    bench.send(Message::DeviceMenu("/sdb1".into()));
+    bench.send(Message::Run(crate::app::Command::DeviceUnmount));
+    let notice = bench.app.notice.clone().expect("message");
+    assert!(notice.error);
+    assert_eq!(notice.text, sherlock_ui::texts::evidence::DEVICE_BUSY);
 }

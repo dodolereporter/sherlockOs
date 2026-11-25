@@ -12,6 +12,7 @@ use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::metrics;
 use sherlock_ui::texts::evidence as texts;
 
+use crate::devices::{DeviceError, DeviceSource, Volume};
 use crate::git::{self, Repo};
 use crate::listing::{self, Column, Entry, Kind, Sort};
 use crate::ops;
@@ -19,7 +20,9 @@ use crate::places::{self, Place};
 use crate::preview::{self, Preview};
 use crate::probe::{Probe, Step};
 use crate::trash::Trash;
+use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Identifiants des widgets que l'application pilote.
@@ -38,6 +41,10 @@ pub struct Config {
     pub measure: Option<PathBuf>,
     /// The measure runs in a maximized window.
     pub maximized: bool,
+    /// Disks, keys and cards, and what can be done to them.
+    pub devices: Option<Arc<dyn DeviceSource>>,
+    /// Follow UDisks2 signals so that devices appear and disappear by themselves.
+    pub watch_devices: bool,
 }
 
 impl Config {
@@ -68,6 +75,10 @@ impl Config {
             trash: Trash::user(),
             measure,
             maximized,
+            devices: UDisks::connect()
+                .ok()
+                .map(|u| Arc::new(u) as Arc<dyn DeviceSource>),
+            watch_devices: true,
         }
     }
 }
@@ -98,6 +109,10 @@ pub enum Command {
     Refresh,
     TogglePreview,
     SelectAll,
+    /// On the device whose menu is open: open (mounting first), unmount, eject.
+    DeviceOpen,
+    DeviceUnmount,
+    DeviceEject,
 }
 
 /// Une entrée du menu du clic droit.
@@ -199,6 +214,24 @@ pub enum Message {
     Loaded(u64, Result<Vec<Entry>, ()>),
     /// Aperçu préparé hors du fil de l'interface.
     Preview(PathBuf, Preview),
+    /// The volumes of the sidebar, as UDisks2 sees them now.
+    Devices(Vec<Volume>),
+    /// A click on a volume: open it, mounting it first if needed.
+    OpenDevice(String),
+    /// A right click on a volume.
+    DeviceMenu(String),
+    /// The eject button beside a volume.
+    EjectDevice(String),
+    /// An action on a device is over.
+    DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
+}
+
+/// What was asked of a device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceAction {
+    Open,
+    Unmount,
+    Eject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +288,9 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Échelle du menu qui s'ouvre.
     pub(crate) menu_scale: Option<Animation>,
+    /// Volumes of the sidebar, and the one whose menu is open.
+    pub(crate) volumes: Vec<Volume>,
+    device_menu: Option<String>,
 }
 
 impl App {
@@ -297,10 +333,13 @@ impl App {
             content_fade: None,
             preview_fade: None,
             menu_scale: None,
+            volumes: Vec::new(),
+            device_menu: None,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
-        (app, task)
+        let devices = app.refresh_devices();
+        (app, Task::batch([task, devices]))
     }
 
     /// Clavier, pointeur et taille de la fenêtre.
@@ -321,7 +360,12 @@ impl App {
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             _ => None,
         });
-        Subscription::batch([events, frames])
+        let devices = if self.config.watch_devices && self.config.devices.is_some() {
+            Subscription::run(crate::udisks::stream).map(Message::Devices)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([events, frames, devices])
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -395,6 +439,9 @@ impl App {
             (Some(y), None) => {
                 self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, y, y, now))
             }
+        }
+        if self.menu.is_none() {
+            self.device_menu = None;
         }
         // Le menu s'ouvre à l'échelle.
         match (&self.menu, &self.menu_scale) {
@@ -546,6 +593,15 @@ impl App {
                 }
             }
             Message::Frame(now) => return self.frame(now),
+            Message::Devices(volumes) => self.volumes = volumes,
+            Message::OpenDevice(id) => return self.device(DeviceAction::Open, id),
+            Message::EjectDevice(id) => return self.device(DeviceAction::Eject, id),
+            Message::DeviceMenu(id) => {
+                self.renaming = None;
+                self.device_menu = Some(id);
+                self.open_menu(self.pointer);
+            }
+            Message::DeviceDone(action, result) => return self.device_done(action, result),
             Message::Loaded(generation, result) => {
                 if generation == self.generation {
                     return self.loaded(result);
@@ -602,6 +658,98 @@ impl App {
             }
             Step::Wait | Step::Idle => Task::none(),
             Step::Exit => iced::exit(),
+        }
+    }
+
+    // Devices.
+
+    /// The volume whose menu is open.
+    fn menu_volume(&self) -> Option<&Volume> {
+        let id = self.device_menu.as_ref()?;
+        self.volumes.iter().find(|v| &v.id == id)
+    }
+
+    /// Asks the source for the volumes, off the interface thread.
+    fn refresh_devices(&self) -> Task<Message> {
+        match self.config.devices.clone() {
+            Some(source) => Task::perform(async move { source.volumes() }, |result| {
+                Message::Devices(result.unwrap_or_default())
+            }),
+            None => Task::none(),
+        }
+    }
+
+    /// Opens, unmounts or ejects a volume. Opening a mounted volume only navigates.
+    fn device(&mut self, action: DeviceAction, id: String) -> Task<Message> {
+        let Some(volume) = self.volumes.iter().find(|v| v.id == id).cloned() else {
+            return Task::none();
+        };
+        let Some(source) = self.config.devices.clone() else {
+            return Task::none();
+        };
+        match action {
+            DeviceAction::Open if volume.locked => {
+                return self.device_done(action, Err(DeviceError::Locked));
+            }
+            DeviceAction::Open => {
+                if let Some(point) = volume.mount_point {
+                    return self.go(Location::Folder(point));
+                }
+            }
+            DeviceAction::Unmount | DeviceAction::Eject => {
+                // Leave the volume before it goes away.
+                if let (Some(point), Location::Folder(dir)) = (&volume.mount_point, &self.location)
+                    && dir.starts_with(point)
+                {
+                    let home = self.config.home.clone();
+                    let _ = self.go(Location::Folder(home));
+                }
+            }
+        }
+        self.busy += 1;
+        Task::perform(
+            async move {
+                match action {
+                    DeviceAction::Open => source.mount(&id).map(Some),
+                    DeviceAction::Unmount => source.unmount(&id).map(|()| None),
+                    DeviceAction::Eject => source.eject(&id).map(|()| None),
+                }
+            },
+            move |result| Message::DeviceDone(action, result),
+        )
+    }
+
+    fn device_done(
+        &mut self,
+        action: DeviceAction,
+        result: Result<Option<PathBuf>, DeviceError>,
+    ) -> Task<Message> {
+        self.busy = self.busy.saturating_sub(1);
+        let refresh = self.refresh_devices();
+        match result {
+            Ok(Some(point)) => {
+                let go = self.go(Location::Folder(point));
+                Task::batch([go, refresh])
+            }
+            Ok(None) => {
+                let text = match action {
+                    DeviceAction::Eject => texts::EJECTED,
+                    _ => texts::UNMOUNTED,
+                };
+                self.notice = Some(Notice {
+                    text: text.into(),
+                    error: false,
+                });
+                refresh
+            }
+            Err(error) => {
+                tracing::warn!(?error, "device action refused");
+                self.notice = Some(Notice {
+                    text: error.to_string(),
+                    error: true,
+                });
+                refresh
+            }
         }
     }
 
@@ -776,6 +924,28 @@ impl App {
     /// Entrées du menu : sur la sélection ou sur le fond, dans un dossier ou la corbeille.
     pub fn menu_items(&self, on_selection: bool) -> Vec<MenuItem> {
         use MenuItem::{Action, OpenWith, Separator};
+        if let Some(volume) = self.menu_volume() {
+            let open = if volume.mount_point.is_some() {
+                texts::OPEN
+            } else {
+                texts::MOUNT
+            };
+            let mut items = vec![MenuItem::action(open, None, Command::DeviceOpen)];
+            if volume.mount_point.is_some() || volume.ejectable {
+                items.push(Separator);
+            }
+            if volume.mount_point.is_some() {
+                items.push(MenuItem::action(
+                    texts::UNMOUNT,
+                    None,
+                    Command::DeviceUnmount,
+                ));
+            }
+            if volume.ejectable {
+                items.push(MenuItem::action(texts::EJECT, None, Command::DeviceEject));
+            }
+            return items;
+        }
         let paste = MenuItem::action(texts::PASTE, Some(texts::KEY_PASTE), Command::Paste);
         let empty = Action {
             label: texts::EMPTY_TRASH,
@@ -866,7 +1036,7 @@ impl App {
     }
 
     fn open_menu(&mut self, at: Point) {
-        let on_selection = !self.selection.is_empty();
+        let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
         let width = metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
         let width = width + metrics::CONTEXT_SUBMENU_WIDTH;
@@ -1098,6 +1268,17 @@ impl App {
             Command::EmptyTrash if in_trash => self.confirm_empty = !self.all.is_empty(),
             Command::Refresh => return self.load(&[]),
             Command::TogglePreview => self.show_preview = !self.show_preview,
+            Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
+                let Some(id) = self.device_menu.clone() else {
+                    return Task::none();
+                };
+                let action = match command {
+                    Command::DeviceUnmount => DeviceAction::Unmount,
+                    Command::DeviceEject => DeviceAction::Eject,
+                    _ => DeviceAction::Open,
+                };
+                return self.device(action, id);
+            }
             Command::SelectAll => {
                 self.selection = (0..self.entries.len()).collect();
                 self.cursor = self.selection.iter().next().copied();
