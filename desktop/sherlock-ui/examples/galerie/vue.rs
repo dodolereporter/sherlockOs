@@ -1,21 +1,32 @@
-//! Galerie des composants, pour les comparer aux planches : `cargo run -p sherlock-ui
-//! --example galerie`. Chaque composant y paraît dans ses cinq états, sur le bureau puis sur
-//! le verre, avec le menu Fenêtre de la planche Menus, des cartes de la planche Réglages et le
-//! logo. Les textes sont ceux des planches.
+//! Vue de la galerie, partagée par l'exemple et par ses tests. Elle vit hors de la
+//! bibliothèque : les programmes du shell ne compilent ni elle ni ses textes d'exemple.
+//!
+//! Chaque composant y paraît dans ses cinq états, sur le bureau puis sur le verre, avec le
+//! menu Fenêtre de la planche Menus, des cartes de la planche Réglages et le logo. Les textes
+//! sont ceux des planches.
 
 use iced::widget::{Column, button, column, container, row, scrollable, space, svg};
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 
-use crate::component::{self as ui, Trailing};
-use crate::focus::{self, Direction};
-use crate::icon::Icon;
-use crate::{color, logo, metrics, theme};
+use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::focus::{self, Direction};
+use sherlock_ui::icon::Icon;
+use sherlock_ui::logo::Logo;
+use sherlock_ui::{color, metrics, theme, typography};
 
-/// Largeur d'une case du tableau des états, et de la colonne des noms.
-const CELL: f32 = 180.0;
-const NAME: f32 = 150.0;
-/// Tailles d'affichage du logo.
-const LOGO_SIZES: [f32; 4] = [96.0, 64.0, 32.0, 16.0];
+/// Mise en page propre à la galerie. Ces tailles ne viennent pas du design : elles rangent le
+/// tableau des états et les logos, et ne servent nulle part ailleurs.
+pub mod layout {
+    /// Largeur d'une case du tableau des états, et de la colonne des noms.
+    pub const CELL: f32 = 180.0;
+    pub const NAME: f32 = 150.0;
+    /// Écart entre la colonne des menus et celle des réglages.
+    pub const COLUMN_GAP: f32 = 28.0;
+    /// Tailles d'affichage du logo.
+    pub const LOGO_SIZES: [f32; 4] = [96.0, 64.0, 32.0, 16.0];
+}
+
+use layout::{CELL, NAME};
 
 /// État de la galerie : ce que les composants vivants modifient.
 #[derive(Debug, Clone, Default)]
@@ -95,7 +106,7 @@ impl Gallery {
             ui::section_label("Sur un panneau de verre"),
             ui::glass_panel(states()),
             ui::section_label("Planches Menus et Réglages, composants vivants"),
-            row![self.menus(), self.settings()].spacing(metrics::PAGE_PADDING.1),
+            row![self.menus(), self.settings()].spacing(layout::COLUMN_GAP),
             ui::section_label("Logo"),
             logos(),
         ]
@@ -159,38 +170,19 @@ impl Gallery {
         } else {
             space().into()
         };
-        row![window, sub]
-            .spacing(metrics::BORDER_WIDTH * 4.0)
-            .into()
+        row![window, sub].spacing(metrics::SUBMENU_GAP).into()
     }
 
     /// Deux cartes de la planche Réglages.
     fn settings(&self) -> Element<'_, Message> {
-        let line = |label, help, control: ui::Control<'static, Message>| {
-            row![
-                column![
-                    ui::body(label).font(crate::typography::UI_MEDIUM),
-                    ui::description(help)
-                ],
-                space::horizontal(),
-                Element::from(control),
-            ]
-            .align_y(Alignment::Center)
-            .spacing(metrics::GAP_ROW)
-            .height(metrics::SETTING_ROW_HEIGHT)
-        };
-        let divider = container(space())
-            .width(Length::Fill)
-            .height(metrics::BORDER_WIDTH)
-            .style(theme::divider);
         let toggles = ui::card(column![
-            line(
+            ui::setting_row(
                 "Fréquence variable",
                 "L'écran suit le rythme du jeu.",
                 ui::toggle(self.variable_rate, Some(Message::VariableRate)),
             ),
-            divider,
-            line(
+            ui::divider(),
+            ui::setting_row(
                 "Couper les notifications",
                 "Sherlock garde tout pour après.",
                 ui::toggle(self.quiet, Some(Message::Quiet)),
@@ -200,8 +192,8 @@ impl Gallery {
             row![
                 column![
                     ui::body("Pilote NVIDIA")
-                        .font(crate::typography::UI_SEMIBOLD)
-                        .size(crate::typography::CARD_TITLE_SIZE),
+                        .font(typography::UI_SEMIBOLD)
+                        .size(typography::CARD_TITLE_SIZE),
                     ui::description("Version [VERSION ÉPINGLÉE], validée sur cette machine."),
                 ],
                 space::horizontal(),
@@ -247,7 +239,7 @@ fn states<'a>() -> Element<'a, Message> {
         .fold(row![space().width(NAME)], |r, (name, _)| {
             r.push(container(ui::section_label(name)).width(CELL))
         });
-    let lines: [(&str, Cell<'a>); 6] = [
+    let lines: [(&str, Cell<'a>); 8] = [
         ("Bouton principal", |look| {
             control(ui::primary_button("Relancer", enabled(look)), look)
         }),
@@ -257,21 +249,19 @@ fn states<'a>() -> Element<'a, Message> {
         ("Icône seule", |look| {
             control(ui::icon_button(Icon::Close, "Fermer", enabled(look)), look)
         }),
-        ("Interrupteur", |look| {
-            control(
-                ui::toggle(
-                    true,
-                    enabled(look).map(|_| Message::Quiet as fn(bool) -> Message),
-                ),
-                look,
-            )
+        ("Interrupteur allumé", |look| {
+            control(ui::toggle(true, toggled(look)), look)
+        }),
+        ("Interrupteur éteint", |look| {
+            control(ui::toggle(false, toggled(look)), look)
         }),
         ("Entrée de menu", |look| {
             // Une entrée de menu ne vit que dans un menu : elle s'y montre.
             let item = ui::menu_item("Réglages", Trailing::Shortcut("Super+,"), enabled(look));
             ui::menu([control(item, look)], CELL - 2.0 * metrics::GAP_INLINE).into()
         }),
-        ("Champ de texte", field),
+        ("Champ vide", |look| field(look, "")),
+        ("Champ rempli", |look| field(look, "Wi-Fi")),
     ];
     let body = lines.iter().map(|(name, make)| {
         LOOKS
@@ -300,6 +290,10 @@ fn enabled(look: Look) -> Option<Message> {
     }
 }
 
+fn toggled(look: Look) -> Option<fn(bool) -> Message> {
+    enabled(look).map(|_| Message::Quiet as fn(bool) -> Message)
+}
+
 fn control<'a>(control: ui::Control<'a, Message>, look: Look) -> Element<'a, Message> {
     match look {
         Look::Status(status) => control.status(status).into(),
@@ -307,8 +301,8 @@ fn control<'a>(control: ui::Control<'a, Message>, look: Look) -> Element<'a, Mes
     }
 }
 
-/// Le champ de texte n'a ni survol appuyé ni anneau à part : son focus est son état propre.
-fn field<'a>(look: Look) -> Element<'a, Message> {
+/// Le champ de texte n'a ni appui ni anneau à part : son focus est son état propre.
+fn field<'a>(look: Look, value: &str) -> Element<'a, Message> {
     use iced::widget::text_input::Status;
     let status = match look {
         Look::Status(button::Status::Hovered) => Status::Hovered,
@@ -319,46 +313,50 @@ fn field<'a>(look: Look) -> Element<'a, Message> {
         Look::Status(_) => Status::Active,
     };
     let on_input = enabled(look).map(|_| Message::Search as fn(String) -> Message);
-    ui::text_field("Rechercher", "", on_input)
+    ui::text_field("Rechercher", value, on_input)
         .style(move |t, _| theme::text_field(t, status))
         .into()
 }
 
-/// Les trois versions du logo, avec et sans carré, à plusieurs tailles.
+/// Les trois versions du logo, avec carré puis sans carré, à plusieurs tailles. À 32 et 16 px,
+/// le carré prend sa version optique.
 fn logos<'a>() -> Element<'a, Message> {
-    let versions = [
-        (logo::COLOR, color::CARD),
-        (logo::COLOR_BARE, color::DESKTOP),
-        (logo::CREAM, color::CARD),
-        (logo::CREAM_BARE, color::DESKTOP),
-        (logo::NIGHT, color::CREAM),
-        (logo::NIGHT_BARE, color::CREAM),
-    ];
-    let tiles: [Element<'a, Message>; 6] = versions.map(|(source, behind)| {
-        let sizes: [Element<'a, Message>; 4] = LOGO_SIZES.map(|size| {
-            svg(svg::Handle::from_memory(source.as_bytes()))
-                .width(size)
-                .height(size)
-                .into()
-        });
+    let tile = |sources: [&'static str; 4], behind: color::Color| -> Element<'a, Message> {
+        let images = sources
+            .into_iter()
+            .zip(layout::LOGO_SIZES)
+            .map(|(source, size)| {
+                svg(svg::Handle::from_memory(source.as_bytes()))
+                    .width(size)
+                    .height(size)
+                    .into()
+            });
         container(
-            row(sizes)
+            row(images)
                 .spacing(metrics::GAP_INLINE)
                 .align_y(Alignment::End),
         )
         .padding(metrics::GAP_INLINE)
-        .style(move |_| iced::widget::container::Style {
+        .style(move |_| container::Style {
             background: Some(iced::Background::Color(behind.into())),
             border: iced::border::rounded(metrics::CARD_RADIUS),
-            ..Default::default()
+            ..container::Style::default()
         })
         .into()
+    };
+    let lines = Logo::ALL.map(|logo| {
+        let squares = layout::LOGO_SIZES.map(|size| logo.square(size));
+        let bare = [logo.bare(); 4];
+        let behind = if logo == Logo::Night {
+            color::CREAM
+        } else {
+            color::DESKTOP
+        };
+        row![tile(squares, color::CARD), tile(bare, behind)]
+            .spacing(metrics::GAP_ROW)
+            .into()
     });
-    let [a, b, c, d, e, f] = tiles;
-    column![
-        row![a, b, c].spacing(metrics::GAP_ROW),
-        row![d, e, f].spacing(metrics::GAP_ROW)
-    ]
-    .spacing(metrics::GAP_ROW)
-    .into()
+    Column::with_children(lines)
+        .spacing(metrics::GAP_ROW)
+        .into()
 }

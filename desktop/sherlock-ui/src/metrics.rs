@@ -42,6 +42,8 @@ pub const MENU_PADDING: f32 = 6.0;
 /// Largeur d'un menu et d'un sous-menu.
 pub const MENU_WIDTH: f32 = 256.0;
 pub const SUBMENU_WIDTH: f32 = 190.0;
+/// Écart entre un menu et son sous-menu ouvert à droite (planche Menus : 674 puis 678).
+pub const SUBMENU_GAP: f32 = 4.0;
 /// Ombre d'un menu : décalage vertical et flou.
 pub const MENU_SHADOW_OFFSET: f32 = 22.0;
 pub const MENU_SHADOW_BLUR: f32 = 54.0;

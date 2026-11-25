@@ -10,7 +10,10 @@ l'apparence. Le toolkit est iced 0.14 en rendu logiciel (ADR 0014).
 | Étage | Modules | Dépend de |
 | --- | --- | --- |
 | Jetons | `color`, `metrics`, `typography`, `icon`, `logo`, `window` | Rien |
-| iced | `theme`, `component`, `focus`, `gallery` | iced 0.14, derrière la fonction `iced` |
+| iced | `theme`, `component`, `focus` | iced 0.14, derrière la fonction `iced` |
+
+La galerie n'est pas dans la bibliothèque : elle vit dans `examples/galerie/` et ses tests
+l'incluent. Les programmes du shell ne compilent ni elle ni ses textes d'exemple.
 
 La fonction `iced` est active par défaut, parce que tous les programmes du shell la veulent. Le
 compositeur, qui ne lit que des jetons, la coupe avec `default-features = false` et ne compile
@@ -60,6 +63,7 @@ style par état dans `theme`, et son constructeur dans `component` :
 | Champ de texte | `text_field` | Recherche de Réglages |
 | Entrée de menu, raccourci, sous-menu, coche | `menu_item(libellé, Trailing, message)`, `open` | Menus |
 | Menu, séparateur | `menu`, `menu_separator` | Menus |
+| Ligne de réglage, trait entre deux lignes | `setting_row(libellé, aide, contrôle)`, `divider` | Réglages |
 | Étiquette de section | `section_label` | Panneaux, Main |
 | Carte, panneau de verre | `card`, `glass_panel` | Réglages, Panneaux |
 | Textes | `body`, `description`, `title`, `icon` | Toutes |
@@ -71,8 +75,9 @@ devient un `Element` et accepte `status(..)` et `focus_ring()` pour imposer un �
 
 iced 0.14 ne sait focaliser que ses champs de texte. `focus::Focusable` enveloppe les autres
 composants : il se déclare aux opérations de focus d'iced, déclenche l'action à Entrée ou
-Espace, et dessine un anneau bleu clair de 2 px à 2 px du bord. Un clic efface l'anneau, comme
-`:focus-visible` dans un navigateur. Le programme fait circuler le focus :
+Espace, et dessine un anneau bleu clair de 2 px à 2 px du bord. Une touche gardée enfoncée
+n'active qu'une fois. Un composant qui devient désactivé perd le focus. Un clic efface
+l'anneau, comme `:focus-visible` dans un navigateur. Le programme fait circuler le focus :
 
 ```rust
 fn subscription(&self) -> Subscription<Message> {
@@ -96,7 +101,7 @@ passe par `icon_button`, dont le libellé est obligatoire.
 3. Son constructeur va dans `component`. S'il est cliquable, il rend un `Control` pour avoir le
    focus clavier et l'anneau.
 4. Chaque texte qu'il pose sur un fond entre dans le test de contraste de `theme`.
-5. Il prend une ligne dans le tableau des états de la galerie (`gallery.rs`).
+5. Il prend une ligne dans le tableau des états de la galerie (`examples/galerie/vue.rs`).
 
 ## Logo
 
@@ -113,7 +118,8 @@ planche générée par IA que l'auteur a fournie, sans tracé automatique :
 
 Les fichiers sont dans `desktop/sherlock-ui/logo/` : `logo.svg` (anneau vert, point crème, carré
 bleu nuit), `logo-creme.svg` (crème sur bleu nuit), `logo-nuit.svg` (bleu nuit sur crème),
-chacun aussi en `-sans-fond`, et leurs PNG en 16, 32, 64, 256 et 512 dans `logo/png/`. Le bleu
+chacun aussi en `-sans-fond` et, avec carré, en version optique `-32` et `-16`, et leurs PNG en
+16, 32, 64, 256 et 512 dans `logo/png/`. Le bleu
 nuit est `DESKTOP`, le vert `ACCENT`, le crème `CREAM` ; un test le vérifie. Les SVG et les PNG
 s'écrivent avec `python3 exporter.py` depuis ce dossier (librsvg, déjà sur le poste).
 
@@ -121,9 +127,29 @@ s'écrivent avec `python3 exporter.py` depuis ce dossier (librsvg, déjà sur le
 garde une épaisseur constante, plus lisible petit. Le point a la même place dans les trois
 versions.
 
-À 16 px, l'anneau de la version avec carré fait un peu plus d'un pixel : on reconnaît l'anneau
-et le point, la queue se devine à peine. La version sans carré, plus grande dans le même
-cadre, se lit bien à 16 px : c'est elle qu'il faut prendre pour les très petites tailles.
+### Versions optiques pour 32 et 16 px
+
+Dessiné tel quel à 16 px, l'anneau de la version avec carré ne fait qu'un pixel et la queue
+devient une tache. Le logo avec carré a donc deux versions optiques, écrites par le même
+`exporter.py` (`logo-32.svg`, `logo-16.svg` et leurs équivalents crème et nuit) : même
+construction, symbole agrandi dans le carré, anneau épaissi, queue plus courte et plus épaisse.
+
+| Forme | 32 px (1 px = 16 unités) | 16 px (1 px = 32 unités) |
+| --- | --- | --- |
+| Anneau | Rayon 175, épaisseur 50 (3 px) | Rayon 180, épaisseur 56 (1,75 px) |
+| Queue | De (361, 396), arc de rayon 100, épaisseur 36 | De (364, 400), arc de rayon 110, épaisseur 40 |
+| Point | Centre (300, 248), rayon 36 | Centre (300, 252), rayon 38 |
+| Marge entre l'anneau et le bord du carré | 31 unités, 2 px | 20 unités, 0,6 px |
+
+Le départ de la queue reste sur l'anneau, à 53° sous l'horizontale (triangle 3-4-5) ; un test
+le vérifie dans chaque version. Les PNG de 16 et 32 px avec carré sont tirés des versions
+optiques. Dans le code, `logo::Logo::square(taille)` choisit la bonne version. La version sans
+carré remplit déjà son cadre et se lit à 16 px : elle n'a pas de version optique.
+
+Planche de lisibilité à 16 px, agrandie huit fois sans lissage : les trois versions dessinées
+telles quelles, puis les trois versions optiques.
+
+![Lisibilité du logo à 16 px](../desktop/sherlock-ui/logo/png/lisibilite-16.png)
 
 La planche source n'est pas dans le dépôt : elle est générée par IA, irrégulière, pèse 760 Kio
 et n'a plus d'usage une fois le symbole redessiné. Ses mesures sont dans le tableau ci-dessus.
@@ -135,9 +161,15 @@ cargo run -p sherlock-ui --example galerie
 ```
 
 Elle montre chaque composant dans ses cinq états (normal, survol, appui, focus, désactivé), sur
-le fond du bureau puis sur un panneau de verre, puis le menu Fenêtre de la planche Menus et son
-sous-menu, deux cartes de la planche Réglages, des boutons vivants, et les six versions du logo à
-96, 64, 32 et 16 px. Tab et Maj+Tab déplacent le focus, Entrée ou Espace active.
+le fond du bureau puis sur un panneau de verre : boutons, icône seule, interrupteur allumé et
+éteint, entrée de menu dans son menu, champ vide et rempli. Suivent le menu Fenêtre de la
+planche Menus et son sous-menu, deux cartes de la planche Réglages, des boutons vivants, et le
+logo dans ses trois versions, avec carré puis sans, à 96, 64, 32 et 16 px (versions optiques à
+32 et 16). Tab et Maj+Tab déplacent le focus, Entrée ou Espace active.
+
+Les seules tailles écrites dans la galerie sont celles de sa propre mise en page, regroupées
+dans le module `layout` de `examples/galerie/vue.rs` : largeur des cases du tableau, colonne des
+noms, écart entre colonnes, tailles d'affichage du logo. Ce ne sont pas des valeurs du design.
 
 Procédure de comparaison aux planches, sur le poste de l'auteur (Plasma X11) :
 
@@ -145,10 +177,13 @@ Procédure de comparaison aux planches, sur le poste de l'auteur (Plasma X11) :
 2. Ouvrir `docs/design/planches/Menus.dc.html` dans un éditeur : le menu « Menu Fenêtre » se lit
    dans les styles en ligne. Dans la galerie, cliquer « Déplacer vers le bureau ». Comparer :
    menu de 256 de large, marge 6, entrées de 30 et rayon 7, raccourcis en `#A9B4C6` à 12 px,
-   séparateurs, sous-menu de 190 aligné sur son entrée, coche verte sur « 1 · Code ».
+   séparateurs, sous-menu de 190 aligné sur son entrée et posé à 4 du menu (`SUBMENU_GAP`),
+   coche verte sur « 1 · Code ».
 3. Ouvrir `Reglages.dc.html` de même. Comparer les cartes (`#152238`, rayon 14, marges 16 et 18),
-   les interrupteurs (44 par 26, vert, rond sombre de 20), le bouton secondaire de 34 de haut,
-   et le champ de recherche (`rgba(255,255,255,0.07)`, rayon 9).
+   les lignes de réglage (libellé 13 px graisse 500, aide 12 px en `#C5CEDB`, 48 de haut, trait
+   `rgba(255,255,255,0.07)` entre deux lignes), les interrupteurs (44 par 26, vert, rond sombre
+   de 20), le bouton secondaire de 34 de haut, et le champ de recherche
+   (`rgba(255,255,255,0.07)`, rayon 9).
 4. Une mesure au pixel se fait sur la capture du test (ci-dessous), à l'échelle 2.
 
 ## Tests
@@ -157,13 +192,20 @@ Procédure de comparaison aux planches, sur le poste de l'auteur (Plasma X11) :
 
 - **Contraste** (`theme`) : chaque texte de chaque composant, dans chacun de ses états, posé sur
   chaque fond où il peut paraître (bureau et ses trois disques, verre et menu posés sur chacun,
-  fenêtre, barre de titre, panneau latéral, carte, écran système), doit atteindre 4,5 pour 1. Le
-  calcul lit les styles réels, pose les fonds translucides et compare.
+  fenêtre, barre de titre, panneau latéral, carte, écran système, zone de code, bloc du
+  terminal), doit atteindre 4,5 pour 1. Le calcul lit les styles réels, pose les fonds
+  translucides et compare. Les entrées de menu sont vérifiées dans les menus. S'y ajoutent les
+  textes du code (numéros de ligne, mots-clés bleus, vert, ambre, saumon) sur les fonds de code
+  et la fenêtre, les textes sur une ligne sélectionnée (`SELECTED_ROW`) dans une fenêtre, un
+  panneau latéral et une carte, et sur l'entrée active d'une navigation (`ACTIVE_ENTRY`) sur le
+  panneau latéral. Tous passent sans changer de jeton.
 - **Cohérence des jetons** : gammes du design vérifiées à la compilation, nuances du vert, logo
   limité aux couleurs du thème, icônes dans leur grille.
 - **Galerie** (`tests/galerie.rs`) : capture du rendu de la galerie, sous-menu ouvert, dans
-  `target/tmp/galerie-tiny-skia.png` ; un clic déclenche son action ; Tab parcourt les
-  composants en sautant les désactivés, et Entrée ou Espace les active.
+  `target/tmp/galerie-tiny-skia.png`, sur 2 000 de haut pour tout contenir ; un clic déclenche
+  son action ; Tab parcourt les composants en sautant les désactivés, Entrée ou Espace les
+  active, une touche gardée enfoncée n'active qu'une fois, un composant désactivé perd le
+  focus.
 
 La capture n'est pas comparée à une image de référence : elle s'écrit à chaque test pour être
 regardée. Une comparaison au pixel près ferait échouer la CI au moindre changement de rendu.
@@ -184,6 +226,12 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
   12 % sur les éléments sans fond ; anneau de focus bleu clair `#8FC1E8` ; désactivé sans fond,
   texte tertiaire, bordure `DIVIDER`. L'interrupteur éteint n'a pas de planche : piste blanche à
   18 %, rond gris clair.
+- **Bordure du bouton secondaire** : 0,20 dans la planche Réglages, 0,18 dans `contexte.md` et
+  dans les planches Panneaux et Fichiers. Le jeton garde 0,18 : c'est la valeur du texte de
+  référence et de la majorité des planches.
+- **Trait des icônes de menu** : la planche Menus dessine le chevron à 2 et la coche à 2,4. Le
+  jeton garde 1,7 pour toutes les icônes : `contexte.md` fixe une seule gamme, de 1,6 à 1,7, et
+  un trait commun garde les icônes homogènes. À 14 px, la différence tient en un tiers de pixel.
 - **Animations** : iced change d'état d'un coup. Les survols de 110 à 150 ms et les ressorts ne
   sont pas faits (voir ci-dessous).
 - **Accessibilité** : iced 0.14 n'expose rien aux lecteurs d'écran. Le libellé d'une icône seule
@@ -193,8 +241,9 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
 
 ## Ce que le lot ne fait pas
 
-- Les ressorts et le fondu d'opacité réutilisables que l'ADR 0014 attend de `sherlock-ui` : le
-  brief du lot ne les demande pas. À planifier.
+- Les ressorts et le fondu d'opacité réutilisables que l'ADR 0014 attend de `sherlock-ui` : ils
+  viennent avec le lot D-11. Le module de ressort, du calcul pur sans iced, ira dans
+  `sherlock-ui` pour que le compositeur et le shell partagent la même physique.
 - layer-shell : c'est le lot D-20. `iced_exwlshell` 0.21 n'a pas été essayé.
 - Le menu qui s'ouvre en `xdg_popup` : la galerie pose le sous-menu à côté du menu, comme la
   planche. Le placement réel est celui de la barre (D-20).

@@ -1,8 +1,10 @@
 //! Galerie des composants de sherlock-ui : `cargo run -p sherlock-ui --example galerie`.
 //! La procédure de comparaison aux planches est dans `docs/sherlock-ui.md`.
 
-use sherlock_ui::gallery::Gallery;
+mod vue;
+
 use sherlock_ui::{metrics, theme, typography};
+use vue::Gallery;
 
 fn main() -> iced::Result {
     let (width, height) = metrics::REFERENCE_SCREEN;

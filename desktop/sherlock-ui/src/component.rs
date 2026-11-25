@@ -4,8 +4,8 @@
 //! focus clavier. Sans message, un composant est désactivé et sort du parcours au clavier.
 
 use iced::widget::{
-    Button, Container, Svg, Text, TextInput, button, container, row, space, svg, text, text_input,
-    tooltip,
+    Button, Container, Svg, Text, TextInput, button, column, container, row, space, svg, text,
+    text_input, tooltip,
 };
 use iced::{Alignment, Element, Length, Padding, Theme};
 
@@ -271,7 +271,7 @@ pub fn menu_separator<'a, Message: 'a>() -> Element<'a, Message> {
     let line = container(space())
         .width(Length::Fill)
         .height(metrics::BORDER_WIDTH)
-        .style(theme::divider);
+        .style(theme::separator);
     container(line).padding(Padding::from([top, side])).into()
 }
 
@@ -301,6 +301,36 @@ pub fn text_field<'a, Message: Clone + 'a>(
         .line_height(text::LineHeight::Relative(typography::LINE_HEIGHT))
         .padding([vertical, metrics::FIELD_PADDING])
         .style(theme::text_field)
+}
+
+/// Trait entre deux lignes d'une carte.
+pub fn divider<'a, Message: 'a>() -> Element<'a, Message> {
+    container(space())
+        .width(Length::Fill)
+        .height(metrics::BORDER_WIDTH)
+        .style(theme::divider)
+        .into()
+}
+
+/// Ligne de réglage de la planche Réglages : libellé, aide en dessous, contrôle à droite.
+pub fn setting_row<'a, Message: Clone + 'a>(
+    label: &'a str,
+    help: &'a str,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let help = text(help)
+        .font(typography::UI)
+        .size(typography::SMALL_SIZE)
+        .color(color::TEXT_SECONDARY);
+    row![
+        column![body(label).font(typography::UI_MEDIUM), help],
+        space::horizontal(),
+        control.into(),
+    ]
+    .align_y(Alignment::Center)
+    .spacing(metrics::GAP_ROW)
+    .height(metrics::SETTING_ROW_HEIGHT)
+    .into()
 }
 
 /// Carte posée dans une fenêtre.
