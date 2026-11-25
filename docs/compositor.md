@@ -7,7 +7,8 @@ handle: grab band, cursors, snapping against the screen edges. Lot D-11 gives it
 boards: desktop background, rounded corners, border, shadow, and spring animations. Lot D-13
 runs X11 applications in it, through XWayland, with the clipboard both ways. Lot D-12 adds
 anchored surfaces (layer-shell) for the bar, the dock and the panels, several screens, and
-fractional scaling. Lot D-04 draws the wallpaper.
+fractional scaling. Lot D-04 draws the wallpaper. Lot D-14 runs it as a real session, on the
+screens of the machine, from a text console or the login screen (see "Real session").
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -17,7 +18,13 @@ Without it, the compositor still starts, and only Wayland applications show up.
 
 | File | Role |
 | --- | --- |
-| `src/main.rs` | Reads the options (`--nested`, `--measure`, `--outputs`, `--scale`), creates the event loop, starts XWayland, launches the given command |
+| `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, the command |
+| `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches |
+| `src/card.rs` | Choice of the card the real session drives, from `/sys` |
+| `src/cursor.rs` | Cursor images of the real session, from the cursor theme |
+| `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
+| `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
 | `src/lib.rs` | `State`: Wayland display, protocols, seat, `Space` of the windows. Socket, screen, focus |
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
@@ -45,8 +52,8 @@ and redraw requests). After each iteration, `State::refresh` cleans up dead wind
 the replies to the clients.
 
 The layout logic lives in `layout.rs` and only knows rectangles: rendering (`winit.rs`) and input
-(`input.rs`) call it. The future DRM backend (lot D-14) will reuse `State` as is and only replace
-`winit.rs`.
+(`input.rs`) call it. The real session (`udev.rs`, lot D-14) reuses `State`, the scene and the
+input handling as they are, in place of `winit.rs`.
 
 Behavior:
 
@@ -57,7 +64,10 @@ Behavior:
   host session keeps Super for itself (under Plasma, the KWin window actions and the launcher).
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
 - Windows draw their title bar themselves: xdg-decoration is out of the lot.
-- The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set.
+- The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
+  `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
+  `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
+  `/etc/default/keyboard` (Debian).
 
 Moving and resizing:
 
@@ -115,7 +125,7 @@ Cursors:
   (`wl_pointer.set_cursor` with a surface) gets the arrow: the image is not shown. Elsewhere,
   it is the arrow.
 - In nested mode, the cursor of the host window changes shape, with the host session's theme.
-  The real session (lot D-14) will have to draw the cursor itself.
+  The real session draws the cursor itself, from the cursor theme (see "Real session").
 
 ## Anchored surfaces (layer-shell)
 
@@ -259,8 +269,8 @@ tiny-skia through softbuffer 0.4.8, whose Wayland backend only uses `XRGB8888` b
 surface is opaque and its transparent pixels come out black (see the layer-shell toolkit
 limits above).
 
-The session on the real machine (lot D-14) will have one output per connector: `State` already
-knows several screens, only `winit.rs` lays them out in one window.
+The real session (lot D-14) has one output per connector with a screen, side by side in the
+order they are found, each with a frame of its own (see "Real session").
 
 ## XWayland
 
@@ -639,8 +649,9 @@ Notes:
 - The settings file is read as it is found: a program that writes it (Control Room) must write
   a temporary file and `rename` it, or a half-written file may be refused for 2 seconds.
 - Variants installed after the start are seen at the next change of the settings file.
-- The windowed backend redraws continuously. When the DRM output (lot D-14) draws on damage,
-  a new setting (`reload`) and a decoded image (`receive`) will have to request a frame.
+- Both backends redraw continuously (the real session at the pace of each screen). When they
+  draw on damage, a new setting (`reload`) and a decoded image (`receive`) will have to request
+  a frame.
 
 Left for lot D-04b, from the review of D-04:
 
@@ -759,6 +770,123 @@ echo -n "from X11" | DISPLAY=:1 xclip -i -selection clipboard; WAYLAND_DISPLAY=w
 With `--primary` for `wl-copy` and `wl-paste`, and `-selection primary` for `xclip`, it is the
 primary selection.
 
+## Real session
+
+Without `--nested`, the compositor takes the screens, the keyboard, the mouse and the touchpad of
+the machine (lot D-14). It is started from a text console (TTY) or by the login screen (SDDM on
+the author's Debian), never from inside another graphical session.
+
+How it works (`src/udev.rs`):
+
+- **Session.** Smithay's `LibSeatSession` (libseat, with logind or seatd behind it) opens the
+  devices without root and says when the console is left or entered again.
+- **Card.** `card::choose` reads `/sys/class/drm` like `sherlock_ui::gpu` (vendor, driver,
+  `boot_vga`, connector `status`), which never wakes a card. It takes the `boot_vga` card with a
+  screen plugged in, or else the `boot_vga` card, or else any card with a screen. **An NVIDIA
+  card is never chosen nor opened**: on the reference laptop, the AMD chip drives the internal
+  screen and the RTX stays asleep. Only the chosen card is opened: screens wired to another card
+  (some laptops wire their HDMI port to the NVIDIA card) stay dark.
+- **EGL.** Before anything else, the compositor sets `__EGL_VENDOR_LIBRARY_FILENAMES` to Mesa's
+  vendor file (`50_mesa.json`, looked for in `/etc/glvnd/egl_vendor.d` and
+  `/usr/share/glvnd/egl_vendor.d`), unless the user set it: libglvnd never loads NVIDIA's EGL
+  library, which comes first on Debian. The launched command gets the variable back as it was.
+- **Screens.** Every connector with a screen gets a CRTC, its preferred mode and a
+  `DrmCompositor` (GBM buffers, `XRGB8888`). They sit side by side in the space, in the order
+  the card lists them; `--scale S` sets their scale, one per screen in order, the last one
+  repeated (1 by default). udev reports screens plugged in or out; the connectors are read again
+  then. A screen unplugged takes its anchored surfaces with it (their program gets `closed`),
+  the screens on its right close ranks, the pointer comes back on a screen, and the windows no
+  screen shows any more come to the screen under the pointer: snapped and maximized ones take
+  its work area, the others are centered in it. Its `wl_output` global is hidden at once and
+  destroyed five seconds later, so that a client binding it right then gets no error.
+- **Rendering.** The same scene as the windowed backend (`Scene::screens`), built for each
+  screen in its own frame, at scale 1 in the `DrmCompositor` (the scene already applies the
+  screen's scale). Everything is composited: no plane is given to a client buffer, since the
+  rounded clip would be lost. A screen draws its next frame after the vertical blank of the
+  previous one; a frame that changes nothing is tried again 16 ms later. The cursor is drawn in
+  front of the scene, from the cursor theme (`XCURSOR_THEME`, or the system's `default`;
+  `XCURSOR_SIZE`, 24 by default, times the screen's scale), in the shape `cursor_icon` asks for;
+  a client that draws its own cursor image gets the arrow, as in nested mode.
+- **Input.** libinput, on the session's seat: keyboard (see "Behavior" for the layout), mouse,
+  touchpad with tap to click. The pointer moves by steps and stays on the screens. The gesture
+  key is Super.
+- **Console switch.** Ctrl + Alt + F1 to F12 switch console. When the session is left, input
+  and drawing stop, and the keys still held are released for the clients; when it comes back,
+  the screens are reset, read again (a screen may have been plugged in meanwhile) and redrawn.
+- **Way out.** **Ctrl + Alt + Backspace stops the compositor**, whatever has the keyboard: the
+  emergency exit when nothing answers any more. These keys never reach a client. In nested mode
+  they do nothing (the host session keeps its consoles, and closing the window stops it).
+
+The compositor links to libseat, libinput, udev and GBM: on Debian, `libseat-dev`,
+`libinput-dev`, `libudev-dev`, `libgbm-dev` and `libdrm-dev` to build it, and `libseat1` to run
+it.
+
+### From a text console
+
+1. Build: `cargo build --release -p compositor -p bar -p dock`.
+2. Switch to a free console: Ctrl + Alt + F3, and log in.
+3. Launch, with the log in a file:
+
+   ```sh
+   cd ~/IdeaProjects/sherlockOs
+   RUST_LOG=info,compositor=debug target/release/compositor \
+     sh -c 'target/release/bar & target/release/dock & exec konsole' 2> /tmp/compositor.log
+   ```
+
+   Or the whole session, as the login screen starts it:
+   `NOM_OS_BIN=$PWD/target/release desktop/compositor/session/sherlockos-session`.
+
+4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
+   Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
+   compositor waits on its console, Ctrl + Alt + F3 comes back to it.
+
+### From the login screen (SDDM)
+
+`just install-session` builds the compositor, the bar and the dock in release, then **prints**
+the commands that install the session, without running them:
+
+- the three programs and the start script `sherlockos-session` go to `/usr/local/libexec/nom-os/`;
+- the entry `sherlockos.desktop` (`Name=NOM_OS`) goes to `/usr/share/wayland-sessions/`, where
+  SDDM lists the Wayland sessions;
+- `sudo apt install libseat1` is added when libseat is missing.
+
+At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
+sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
+then launches the compositor, which launches the bar and the dock once XWayland is ready. The bar
+and the dock start again a second after they stop (ADR 0005), as long as the compositor is there.
+To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop`.
+
+Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
+shell built from this workspace, and are tried on the author's Debian before the base exists.
+The package recipes of `distro/` will install them from here.
+
+### When something goes wrong
+
+- **Nothing answers.** Ctrl + Alt + Backspace stops the compositor, and the session with it: SDDM
+  comes back, or the console.
+- **The keyboard does not answer either.** In a graphical session the kernel leaves the
+  console keys to the compositor: if it no longer reads the keyboard, Ctrl + Alt + Fn does
+  nothing either. Then, in order: from another machine, `ssh` and `pkill compositor`; or the
+  kernel's SysRq keys, which Debian allows (`kernel.sysrq = 438`): Alt + SysRq (Print Screen)
+  + K kills every program of the current console, the compositor included, and Alt + SysRq + R
+  gives the keyboard back to the kernel, after which Ctrl + Alt + F2 switches console. Last
+  resort, a long press on the power button.
+- **The session does not start.** SDDM comes back at once: the reason is at the end of the log.
+- **Back to Plasma.** Pick Plasma in SDDM's session menu: it stays the default as long as it was
+  the last one used. To remove our entry from the menu, the `sudo rm` above.
+
+### Logs
+
+| Started from | Log |
+| --- | --- |
+| A console, `compositor` | Its standard error: `2> /tmp/compositor.log` as above |
+| `sherlockos-session` (SDDM or a console) | `~/.local/state/nom-os/session.log`, the previous session in `session.log.old` |
+| SDDM, before the script runs | `~/.local/share/sddm/wayland-session.log`, and `journalctl -b -u sddm` |
+
+The level follows `RUST_LOG`; the start-up lines name the card (`real session card=/dev/dri/…`),
+each screen with its mode and scale (`screen plugged in`), the input devices and the cursor
+theme. Each console switch logs `session paused` and `session active again`.
+
 ## Measuring
 
 `--measure`, right after `--nested`, writes to the log every second the number of frames, the
@@ -852,6 +980,11 @@ just verify
 | `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders and its pendant after `set_theme`, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
 | `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, choice per theme (default pair, fixed wallpaper, wallpaper without a pendant, user's path), variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible), 4K variant identical to its original |
 | `sherlock-ui/src/wallpapers.rs` | Every wallpaper of the index has its original, unique ids, pairs that point back to each other across themes, `for_theme` |
+| `src/card.rs` | Card choice on a fake `/sys/class/drm`: AMD alone, AMD and NVIDIA (the NVIDIA card never chosen, even alone or `boot_vga`), Intel and a dedicated AMD card, no screen plugged in, no `boot_vga` |
+| `src/keyboard.rs` | AZERTY without a setting, Debian's `/etc/default/keyboard` and `vconsole.conf` read, `XKB_DEFAULT_LAYOUT` left to xkbcommon |
+| `src/options.rs` | Real session without `--nested`, scales repeated, the command and its own options, wrong options refused |
+| `src/input.rs` | Ctrl + Alt + Fn and Ctrl + Alt + Backspace in a real session, nothing in nested mode |
+| `src/udev.rs` | The pointer kept on screens of different heights, Mesa's EGL vendor file found and NVIDIA's left out |
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 
@@ -908,6 +1041,10 @@ The tests in `tests/headless.rs`:
   area is the one for new windows. The window, dragged with the gesture key to the right edge
   of the second screen, is shown the right half of that screen in the preview and takes it
   (400 × 600 in (1200, 0)); maximized by the shortcut, it fills the second screen.
+- **A screen unplugged.** A window dragged onto a second screen comes back centered on the
+  first when the second is removed, with the pointer. Plugged in again, the second screen is
+  back on the right; the window, maximized on it, is maximized on the first when it goes away
+  again.
 - **Fractional scale.** A screen of 800 × 600 pixels at 1.5 is 533 × 400 in the space.
   `wp_fractional_scale_manager_v1`, `wp_viewporter` and `zxdg_output_manager_v1` are announced,
   and a new window's surface receives a preferred scale of 180 (1.5 in 120ths). With a screen
@@ -944,7 +1081,9 @@ at what the X server knows about the window:
 - clean shutdown: XWayland removes its socket, and the compositor's Wayland socket (opened in
   the temporary directory, since the CI has no `XDG_RUNTIME_DIR`) and its lock go away.
 
-What the tests do not see: the GLSL programs and the image they produce (the CI has no GPU),
+What the tests do not see: the real session on the hardware (libseat, DRM, libinput, console
+switches, screens plugged in for real), tried by hand on the reference laptop (see "Real
+session"); the GLSL programs and the image they produce (the CI has no GPU),
 the real shape of the host window's cursor, and the transfer of clipboard data between Wayland
 and X11, checked by hand and from the command line (see "Running"). For those, the manual
 procedure below, the measurement and the comparison with the board are needed.
