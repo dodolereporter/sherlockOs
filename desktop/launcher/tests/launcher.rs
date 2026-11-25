@@ -367,3 +367,14 @@ fn the_panel_renders_its_results() {
     assert_eq!(surface.margin.top, look::TOP as i32);
     assert_eq!(surface.exclusive_zone, -1);
 }
+
+#[test]
+fn the_surface_is_resized_when_the_rows_change() {
+    let (mut launcher, _) = recorded();
+    let _ = launcher.update(Message::Surface(Id::unique()));
+    // From nothing to « Aucun résultat »: one row more, a resize.
+    assert!(launcher.update(Message::Query("zzz".into())).units() > 0);
+    // Still nothing: the same height, no resize.
+    assert_eq!(launcher.update(Message::Query("zzzz".into())).units(), 0);
+    assert!(launcher.update(Message::Query("k".into())).units() > 0);
+}

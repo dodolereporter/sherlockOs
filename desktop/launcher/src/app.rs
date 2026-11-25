@@ -139,12 +139,13 @@ impl Launcher {
                 return operation::focus(QUERY);
             }
             Message::Query(query) => {
+                let before = self.height();
                 self.query = query;
                 self.selected = 0;
-                return self.search();
+                return self.search(before);
             }
             Message::Refresh => {
-                let task = self.search();
+                let task = self.search(self.height());
                 self.selected = self.selected.min(self.hits().count().saturating_sub(1));
                 return task;
             }
@@ -165,9 +166,9 @@ impl Launcher {
         Task::none()
     }
 
-    /// Asks the sources again for the query; the panel follows the number of rows.
-    fn search(&mut self) -> Task<Message> {
-        let before = self.height();
+    /// Asks the sources again for the query; the panel follows the number of rows, `before`
+    /// being its height as drawn.
+    fn search(&mut self, before: f32) -> Task<Message> {
         self.sections = source::search(
             &self.sources,
             &self.query,
