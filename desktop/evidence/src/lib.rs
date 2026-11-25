@@ -1,8 +1,8 @@
-//! Fichiers, l'explorateur de fichiers du desktop : navigation, liste avec état git, copier,
-//! couper, coller, renommer, corbeille et aperçu. Voir `docs/fichiers.md`.
+//! Evidence, the desktop file manager: navigation, listing with git status, copy, cut, paste,
+//! rename, trash and preview. See `docs/evidence.md`.
 //!
-//! Les modules `listing`, `ops`, `trash`, `git` et `preview` ne dépendent pas d'iced : ils se
-//! testent sur des dossiers temporaires. `app` et `view` forment l'application iced.
+//! The `listing`, `ops`, `trash`, `git` and `preview` modules do not depend on iced, so they
+//! are tested on temporary folders. `app` and `view` make up the iced application.
 
 pub mod app;
 pub mod clock;

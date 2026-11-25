@@ -1,4 +1,4 @@
-//! Contenu d'un dossier : lecture, type de chaque élément, tri par colonne.
+//! Content of a folder: reading, kind of each item, sorting by column.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -13,8 +13,7 @@ use crate::clock;
 
 use crate::git::GitStatus;
 
-/// Nature d'un élément. Un lien vers un dossier compte comme un dossier ; un lien cassé reste
-/// un lien.
+/// Nature of an item. A link to a folder counts as a folder; a broken link stays a link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Folder,
@@ -22,39 +21,39 @@ pub enum Kind {
     Link,
 }
 
-/// Un élément d'un dossier, ou de la corbeille.
+/// An item of a folder, or of the trash.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
-    /// Nom affiché. Dans la corbeille, le nom d'origine.
+    /// Displayed name. In the trash, the original name.
     pub name: String,
-    /// Chemin réel. Dans la corbeille, celui du fichier rangé dans `Trash/files`.
+    /// Real path. In the trash, the one of the file stored in `Trash/files`.
     pub path: PathBuf,
     pub kind: Kind,
-    /// Taille en octets d'un fichier.
+    /// Size of a file, in bytes.
     pub size: u64,
-    /// Nombre d'éléments d'un dossier, s'il se lit.
+    /// Number of items of a folder, if it can be read.
     pub children: Option<usize>,
-    /// Date de modification. Dans la corbeille, date de suppression.
+    /// Modification date. In the trash, deletion date.
     pub modified: Option<SystemTime>,
     pub git: Option<GitStatus>,
-    /// Dans la corbeille : chemin d'origine.
+    /// In the trash: original path.
     pub origin: Option<PathBuf>,
-    /// Textes de la ligne, préparés à la lecture : la vue ne fait ni `stat` ni calcul.
+    /// Texts of the row, prepared on read: the view does no `stat` and no computation.
     pub labels: Labels,
 }
 
-/// Textes d'une ligne de la liste.
+/// Texts of a row of the listing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Labels {
     pub date: String,
     pub size: String,
     pub kind: String,
-    /// Nom en minuscules, pour la recherche.
+    /// Lowercase name, for searching.
     pub lower: String,
 }
 
 impl Entry {
-    /// Lit un élément sur le disque.
+    /// Reads an item from disk.
     pub fn read(path: &Path, show_hidden: bool) -> io::Result<Self> {
         let link = fs::symlink_metadata(path)?;
         let (kind, meta) = match fs::metadata(path) {
@@ -89,7 +88,7 @@ impl Entry {
         Ok(entry)
     }
 
-    /// Prépare les textes de la ligne. `now` sert aux dates relatives (« hier »).
+    /// Prepares the texts of the row. `now` is used for relative dates ("yesterday").
     pub fn relabel(&mut self, now: Option<LocalTime>) {
         self.labels = Labels {
             date: self
@@ -108,7 +107,7 @@ impl Entry {
         };
     }
 
-    /// Type affiché dans la colonne Type : « Dossier », « Markdown », « Verrou Cargo »…
+    /// Kind shown in the Type column: "Dossier", "Markdown", "Verrou Cargo"…
     pub fn kind_label(&self) -> String {
         match self.kind {
             Kind::Folder => return texts::KIND_FOLDER.into(),
@@ -127,20 +126,20 @@ impl Entry {
         }
     }
 
-    /// Extension en minuscules, sans le point. Un fichier caché sans point de plus n'en a pas.
+    /// Lowercase extension, without the dot. A hidden file with no further dot has none.
     pub fn extension(&self) -> Option<String> {
         Path::new(&self.name)
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
     }
 
-    /// Une image que l'aperçu sait montrer.
+    /// An image the preview can show.
     pub fn is_image(&self) -> bool {
         self.kind == Kind::File
             && matches!(self.extension().as_deref(), Some("png" | "jpg" | "jpeg"))
     }
 
-    /// Icône de la ligne.
+    /// Icon of the row.
     pub fn icon(&self) -> Icon {
         match self.kind {
             Kind::Folder => Icon::Folder,
@@ -151,13 +150,13 @@ impl Entry {
     }
 }
 
-/// Un nom caché commence par un point.
+/// A hidden name starts with a dot.
 pub fn is_hidden(name: &str) -> bool {
     name.starts_with('.')
 }
 
-/// Lit un dossier, sans les éléments cachés si `show_hidden` est faux. Les éléments qui
-/// disparaissent pendant la lecture sont ignorés.
+/// Reads a folder, without hidden items if `show_hidden` is false. Items that disappear
+/// during the read are skipped.
 pub fn read_dir(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for item in fs::read_dir(dir)? {
@@ -172,7 +171,7 @@ pub fn read_dir(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
     Ok(entries)
 }
 
-/// Colonne de tri.
+/// Sort column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
     Name,
@@ -182,7 +181,7 @@ pub enum Column {
     Git,
 }
 
-/// Tri courant : une colonne et un sens.
+/// Current sort: a column and a direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sort {
     pub column: Column,
@@ -199,7 +198,7 @@ impl Default for Sort {
 }
 
 impl Sort {
-    /// Un clic sur une colonne : la même inverse le sens, une autre trie en croissant.
+    /// A click on a column: the same one reverses the direction, another sorts ascending.
     pub fn toggle(self, column: Column) -> Self {
         Self {
             column,
@@ -208,8 +207,7 @@ impl Sort {
     }
 }
 
-/// Trie les éléments. Les dossiers restent devant, quel que soit le sens ; à égalité, le nom
-/// départage.
+/// Sorts the items. Folders stay first, whatever the direction; on a tie, the name decides.
 pub fn sort(entries: &mut [Entry], sort: Sort) {
     entries.sort_by(|a, b| {
         let folders = (b.kind == Kind::Folder).cmp(&(a.kind == Kind::Folder));
@@ -218,7 +216,7 @@ pub fn sort(entries: &mut [Entry], sort: Sort) {
             Column::Modified => a.modified.cmp(&b.modified),
             Column::Size => size_key(a).cmp(&size_key(b)),
             Column::Kind => a.labels.kind.cmp(&b.labels.kind),
-            // Sans état git en dernier : `None` passe après les états, dans le sens croissant.
+            // No git status last: `None` comes after the statuses, in ascending order.
             Column::Git => match (a.git, b.git) {
                 (Some(x), Some(y)) => x.cmp(&y),
                 (x, y) => y.is_some().cmp(&x.is_some()),
@@ -240,7 +238,7 @@ fn size_key(entry: &Entry) -> u64 {
     }
 }
 
-/// Ordre naturel, sans tenir compte de la casse : « image2 » passe avant « image10 ».
+/// Natural, case-insensitive order: "image2" comes before "image10".
 pub fn natural(a: &str, b: &str) -> Ordering {
     let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
     loop {
@@ -311,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn le_nom_trie_dans_l_ordre_naturel_dossiers_devant() {
+    fn name_sorts_in_natural_order_folders_first() {
         let mut entries = sample();
         sort(&mut entries, Sort::default());
         assert_eq!(
@@ -340,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn la_taille_la_date_le_type_et_git_trient_aussi() {
+    fn size_date_kind_and_git_sort_too() {
         let mut entries = sample();
         let by = |column| Sort::default().toggle(column);
         sort(&mut entries, by(Column::Size));
@@ -394,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn le_type_vient_du_nom_puis_de_l_extension() {
+    fn kind_comes_from_the_name_then_the_extension() {
         let file = |name| entry(name, Kind::File, 0, 0, None);
         assert_eq!(file("Cargo.lock").kind_label(), "Verrou Cargo");
         assert_eq!(file("notes.MD").kind_label(), "Markdown");

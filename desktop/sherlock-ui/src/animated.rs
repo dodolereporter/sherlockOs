@@ -1,8 +1,8 @@
-//! Widgets animés, sur la physique de `motion` : le voile de survol qui apparaît en fondu, et
-//! l'échelle d'un panneau qui s'ouvre.
+//! Animated widgets, on the physics of `motion`: the hover veil that fades in, and the scale
+//! of a panel that opens.
 //!
-//! Un widget animé demande lui-même l'image suivante (`Shell::request_redraw`) tant que son
-//! animation court, et plus rien ensuite : rien ne redessine au repos.
+//! An animated widget requests the next frame itself (`Shell::request_redraw`) while its
+//! animation runs, and nothing afterwards: nothing redraws at rest.
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -19,20 +19,20 @@ use iced::{
 use crate::color::Color;
 use crate::motion::{self, Fade};
 
-/// Temps écoulé depuis le premier appel : l'origine commune des animations des widgets.
+/// Time elapsed since the first call: the common origin of the widgets' animations.
 pub fn clock() -> Duration {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
     ORIGIN.get_or_init(Instant::now).elapsed()
 }
 
-/// Un contenu qui pose un voile sous lui au survol, en fondu de `motion::FADE` (150 ms).
+/// Content that lays a veil under itself on hover, fading over `motion::FADE` (150 ms).
 pub struct Hoverable<'a, Message> {
     content: Element<'a, Message>,
     fill: Color,
     radius: f32,
 }
 
-/// Enveloppe `content` d'un voile de survol `fill`, aux coins de rayon `radius`.
+/// Wraps `content` in a hover veil `fill`, with corners of radius `radius`.
 pub fn hoverable<'a, Message>(
     content: impl Into<Element<'a, Message>>,
     fill: Color,
@@ -228,14 +228,14 @@ impl<'a, Message: 'a> From<Hoverable<'a, Message>> for Element<'a, Message> {
     }
 }
 
-/// Un contenu dessiné à l'échelle `factor` depuis son coin haut gauche : un menu qui s'ouvre.
-/// Seul le dessin change ; la souris voit le contenu à sa taille finale.
+/// Content drawn at scale `factor` from its top left corner: a menu that opens. Only the
+/// drawing changes; the mouse sees the content at its final size.
 pub struct Scaled<'a, Message> {
     content: Element<'a, Message>,
     factor: f32,
 }
 
-/// Dessine `content` à l'échelle `factor`, ancré en haut à gauche.
+/// Draws `content` at scale `factor`, anchored at the top left.
 pub fn scaled<'a, Message>(
     content: impl Into<Element<'a, Message>>,
     factor: f32,

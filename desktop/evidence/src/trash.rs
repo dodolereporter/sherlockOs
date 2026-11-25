@@ -1,10 +1,10 @@
-//! Corbeille de l'utilisateur, selon la spécification freedesktop « Trash » 1.0 : chaque
-//! élément jeté va dans `$XDG_DATA_HOME/Trash/files`, accompagné d'une fiche
-//! `Trash/info/<nom>.trashinfo` qui garde son chemin d'origine et sa date de suppression.
-//! Plasma, GNOME et `gio trash` lisent la même corbeille.
+//! The user's trash, following the freedesktop "Trash" 1.0 specification: each discarded
+//! item goes to `$XDG_DATA_HOME/Trash/files`, along with a
+//! `Trash/info/<name>.trashinfo` record that keeps its original path and deletion date.
+//! Plasma, GNOME and `gio trash` read the same trash.
 //!
-//! Seule la corbeille du dossier personnel est gérée : un fichier sur un autre disque est
-//! refusé (`Error::OtherDisk`), sans copie silencieuse.
+//! Only the home folder's trash is handled: a file on another disk is refused
+//! (`Error::OtherDisk`), with no silent copy.
 
 use std::ffi::OsString;
 use std::fs;
@@ -19,20 +19,20 @@ use crate::ops::{Error, Result};
 
 const INFO_EXTENSION: &str = ".trashinfo";
 
-/// Un élément de la corbeille.
+/// An item of the trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
-    /// Nom de l'élément dans `Trash/files`, unique dans la corbeille.
+    /// Name of the item in `Trash/files`, unique within the trash.
     pub id: String,
-    /// Chemin rangé dans `Trash/files`.
+    /// Path where it is stored in `Trash/files`.
     pub path: PathBuf,
-    /// Chemin d'origine, où le restaurer.
+    /// Original path, where to restore it.
     pub original: PathBuf,
-    /// Date de suppression : celle de la fiche.
+    /// Deletion date: the record's.
     pub deleted: Option<SystemTime>,
 }
 
-/// La corbeille, posée dans un dossier `Trash`.
+/// The trash, located in a `Trash` folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trash {
     files: PathBuf,
@@ -40,8 +40,7 @@ pub struct Trash {
 }
 
 impl Trash {
-    /// Corbeille dans `root` (le dossier `Trash` lui-même). Les tests en posent une dans un
-    /// dossier temporaire.
+    /// Trash in `root` (the `Trash` folder itself). Tests put one in a temporary folder.
     pub fn at(root: &Path) -> Self {
         Self {
             files: root.join("files"),
@@ -49,7 +48,7 @@ impl Trash {
         }
     }
 
-    /// Corbeille de l'utilisateur : `$XDG_DATA_HOME/Trash`, ou `~/.local/share/Trash`.
+    /// The user's trash: `$XDG_DATA_HOME/Trash`, or `~/.local/share/Trash`.
     pub fn user() -> Option<Self> {
         let data = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -58,13 +57,13 @@ impl Trash {
         Some(Self::at(&data.join("Trash")))
     }
 
-    /// Dossier `files`, où vivent les éléments jetés.
+    /// The `files` folder, where discarded items live.
     pub fn files_dir(&self) -> &Path {
         &self.files
     }
 
     fn ensure(&self) -> io::Result<()> {
-        // La spécification demande des dossiers que seul l'utilisateur peut lire.
+        // The specification requires folders only the user can read.
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true).mode(0o700);
         builder.create(&self.files)?;
@@ -75,7 +74,7 @@ impl Trash {
         self.info.join(format!("{id}{INFO_EXTENSION}"))
     }
 
-    /// Met un élément à la corbeille. Rend son identifiant.
+    /// Moves an item to the trash. Returns its identifier.
     pub fn put(&self, path: &Path) -> Result<String> {
         self.ensure()?;
         let path = std::path::absolute(path)?;
@@ -93,7 +92,7 @@ impl Trash {
             "[Trash Info]\nPath={}\nDeletionDate={deleted}\n",
             encode(&path)
         );
-        // La fiche est créée d'abord, en exclusivité : c'est elle qui réserve le nom.
+        // The record is created first, exclusively: it is what reserves the name.
         for n in 1usize.. {
             let id = match n {
                 1 => name.clone(),
@@ -107,8 +106,8 @@ impl Trash {
             };
             let target = self.files.join(&id);
             if fs::symlink_metadata(&target).is_ok() {
-                // Un élément sans fiche occupe ce nom : on garde la fiche réservée pour ne
-                // pas le reprendre, comme le fait gio.
+                // An item without a record holds this name: keep the reserved record so the
+                // name is not reused, as gio does.
                 continue;
             }
             let moved = file
@@ -126,7 +125,7 @@ impl Trash {
         Err(Error::InvalidName)
     }
 
-    /// Les éléments de la corbeille. Une fiche sans élément, ou l'inverse, est ignorée.
+    /// The items of the trash. A record without an item, or the reverse, is skipped.
     pub fn list(&self) -> io::Result<Vec<Item>> {
         let entries = match fs::read_dir(&self.info) {
             Ok(entries) => entries,
@@ -159,8 +158,8 @@ impl Trash {
         Ok(items)
     }
 
-    /// Remet un élément à sa place d'origine, en recréant ses dossiers parents s'il le faut.
-    /// Refuse si un autre élément y a pris sa place.
+    /// Puts an item back at its original place, recreating its parent folders if needed.
+    /// Refuses if another item has taken its place.
     pub fn restore(&self, id: &str) -> Result<PathBuf> {
         let info = self.info_path(id);
         let original = fs::read_to_string(&info)
@@ -179,7 +178,7 @@ impl Trash {
         Ok(original)
     }
 
-    /// Vide la corbeille pour de bon. Rend le nombre d'éléments effacés.
+    /// Empties the trash for good. Returns the number of items deleted.
     pub fn empty(&self) -> Result<usize> {
         let mut count = 0;
         if let Ok(entries) = fs::read_dir(&self.files) {
@@ -202,8 +201,8 @@ impl Trash {
     }
 }
 
-/// Encode un chemin comme la spécification le demande (RFC 2396) : tout octet hors des
-/// caractères sûrs devient `%XX`.
+/// Encodes a path as the specification requires (RFC 2396): every byte outside the safe
+/// characters becomes `%XX`.
 pub fn encode(path: &Path) -> String {
     let mut out = String::new();
     for &byte in path.as_os_str().as_bytes() {
@@ -216,7 +215,7 @@ pub fn encode(path: &Path) -> String {
     out
 }
 
-/// Décode un chemin encodé par `encode`.
+/// Decodes a path encoded by `encode`.
 pub fn decode(text: &str) -> Option<PathBuf> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -234,7 +233,7 @@ pub fn decode(text: &str) -> Option<PathBuf> {
     Some(PathBuf::from(OsString::from_vec(out)))
 }
 
-/// Lit le chemin d'origine d'une fiche `.trashinfo`.
+/// Reads the original path from a `.trashinfo` record.
 fn parse(record: &str) -> Option<PathBuf> {
     let mut in_group = false;
     for line in record.lines() {
@@ -260,15 +259,15 @@ mod tests {
     }
 
     #[test]
-    fn jeter_puis_restaurer_rend_le_fichier_a_sa_place() {
-        let (tmp, trash) = setup("corbeille");
+    fn trashing_then_restoring_puts_the_file_back() {
+        let (tmp, trash) = setup("trash");
         let file = tmp.path().join("dossier/été 2026.txt");
-        fs::create_dir_all(file.parent().expect("parent")).expect("dossier");
-        fs::write(&file, "souvenirs").expect("écriture");
+        fs::create_dir_all(file.parent().expect("parent")).expect("folder");
+        fs::write(&file, "souvenirs").expect("write");
 
-        let id = trash.put(&file).expect("mis à la corbeille");
+        let id = trash.put(&file).expect("moved to trash");
         assert!(!file.exists());
-        let info = fs::read_to_string(trash.info_path(&id)).expect("fiche");
+        let info = fs::read_to_string(trash.info_path(&id)).expect("record");
         assert!(info.starts_with("[Trash Info]\nPath="));
         assert!(
             info.contains("/dossier/%C3%A9t%C3%A9%202026.txt\n"),
@@ -276,54 +275,54 @@ mod tests {
         );
         assert!(info.contains("\nDeletionDate=2"));
 
-        let items = trash.list().expect("liste");
+        let items = trash.list().expect("list");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].original, file);
         assert!(items[0].deleted.is_some());
 
-        // Le dossier d'origine a disparu entre-temps : il est recréé.
-        fs::remove_dir(file.parent().expect("parent")).expect("dossier vide");
-        assert_eq!(trash.restore(&id).expect("restauré"), file);
-        assert_eq!(fs::read_to_string(&file).expect("lecture"), "souvenirs");
-        assert!(trash.list().expect("liste").is_empty());
+        // The original folder vanished in the meantime: it is recreated.
+        fs::remove_dir(file.parent().expect("parent")).expect("empty folder");
+        assert_eq!(trash.restore(&id).expect("restored"), file);
+        assert_eq!(fs::read_to_string(&file).expect("read"), "souvenirs");
+        assert!(trash.list().expect("list").is_empty());
         assert!(matches!(trash.restore(&id), Err(Error::NotInTrash)));
     }
 
     #[test]
-    fn deux_elements_du_meme_nom_cohabitent() {
-        let (tmp, trash) = setup("homonymes");
+    fn two_items_with_the_same_name_coexist() {
+        let (tmp, trash) = setup("namesakes");
         let file = tmp.path().join("a.txt");
-        fs::write(&file, "un").expect("écriture");
-        let first = trash.put(&file).expect("premier");
-        fs::write(&file, "deux").expect("écriture");
+        fs::write(&file, "un").expect("write");
+        let first = trash.put(&file).expect("first");
+        fs::write(&file, "deux").expect("write");
         let second = trash.put(&file).expect("second");
         assert_ne!(first, second);
-        assert_eq!(trash.list().expect("liste").len(), 2);
+        assert_eq!(trash.list().expect("list").len(), 2);
 
-        // La place est reprise : la restauration refuse d'écraser.
-        fs::write(&file, "trois").expect("écriture");
+        // The place is taken again: restoring refuses to overwrite.
+        fs::write(&file, "trois").expect("write");
         assert!(matches!(trash.restore(&first), Err(Error::Exists(_))));
-        assert_eq!(fs::read_to_string(&file).expect("lecture"), "trois");
+        assert_eq!(fs::read_to_string(&file).expect("read"), "trois");
     }
 
     #[test]
-    fn vider_efface_tout_et_seulement_la_corbeille() {
-        let (tmp, trash) = setup("vider");
+    fn emptying_deletes_everything_and_only_the_trash() {
+        let (tmp, trash) = setup("empty");
         let dir = tmp.path().join("projet");
-        fs::create_dir_all(dir.join("src")).expect("dossier");
-        fs::write(dir.join("src/main.rs"), "").expect("écriture");
+        fs::create_dir_all(dir.join("src")).expect("folder");
+        fs::write(dir.join("src/main.rs"), "").expect("write");
         let keep = tmp.path().join("garde.txt");
-        fs::write(&keep, "").expect("écriture");
-        trash.put(&dir).expect("dossier jeté");
+        fs::write(&keep, "").expect("write");
+        trash.put(&dir).expect("folder trashed");
 
-        assert_eq!(trash.empty().expect("vidée"), 1);
-        assert!(trash.list().expect("liste").is_empty());
+        assert_eq!(trash.empty().expect("emptied"), 1);
+        assert!(trash.list().expect("list").is_empty());
         assert!(keep.exists());
         assert_eq!(fs::read_dir(trash.files_dir()).expect("files").count(), 0);
     }
 
     #[test]
-    fn l_encodage_fait_l_aller_retour() {
+    fn encoding_round_trips() {
         let path = Path::new("/home/dodo/Téléchargements/a b%c#.txt");
         let encoded = encode(path);
         assert!(!encoded.contains(' ') && !encoded.contains('#'));

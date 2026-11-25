@@ -1,11 +1,11 @@
-//! Outils des tests : un dossier temporaire effacé à la fin.
+//! Test helpers: a temporary folder removed at the end.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// Dossier temporaire propre à un test, effacé quand il sort de portée.
+/// Temporary folder owned by one test, removed when it goes out of scope.
 pub struct TempDir(PathBuf);
 
 impl TempDir {
@@ -13,7 +13,7 @@ impl TempDir {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("evidence-{name}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("dossier temporaire");
+        std::fs::create_dir_all(&path).expect("temporary folder");
         Self(path)
     }
 

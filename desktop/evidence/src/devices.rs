@@ -337,11 +337,11 @@ pub mod tests {
 
     impl DeviceSource for FakeSource {
         fn volumes(&self) -> Result<Vec<Volume>, DeviceError> {
-            Ok(self.volumes.lock().expect("verrou").clone())
+            Ok(self.volumes.lock().expect("lock").clone())
         }
 
         fn mount(&self, id: &str) -> Result<PathBuf, DeviceError> {
-            let mut volumes = self.volumes.lock().expect("verrou");
+            let mut volumes = self.volumes.lock().expect("lock");
             let volume = volumes
                 .iter_mut()
                 .find(|v| v.id == id)
@@ -350,13 +350,13 @@ pub mod tests {
                 return Err(DeviceError::Locked);
             }
             let point = self.root.join(&volume.name);
-            std::fs::create_dir_all(&point).expect("point de montage");
+            std::fs::create_dir_all(&point).expect("mount point");
             volume.mount_point = Some(point.clone());
             Ok(point)
         }
 
         fn unmount(&self, id: &str) -> Result<(), DeviceError> {
-            let mut volumes = self.volumes.lock().expect("verrou");
+            let mut volumes = self.volumes.lock().expect("lock");
             let volume = volumes
                 .iter_mut()
                 .find(|v| v.id == id)
@@ -370,7 +370,7 @@ pub mod tests {
 
         fn eject(&self, id: &str) -> Result<(), DeviceError> {
             self.unmount(id)?;
-            self.volumes.lock().expect("verrou").retain(|v| v.id != id);
+            self.volumes.lock().expect("lock").retain(|v| v.id != id);
             Ok(())
         }
     }
@@ -387,27 +387,27 @@ pub mod tests {
         let root: serde_json::Value = serde_json::from_str(json).expect("JSON");
         let data = &root["data"][0];
         let mut objects = Objects::new();
-        for (path, ifaces) in data.as_object().expect("objets") {
+        for (path, ifaces) in data.as_object().expect("objects") {
             let mut interfaces = Interfaces::new();
             for (iface, props) in ifaces.as_object().expect("interfaces") {
                 let mut properties = Properties::new();
-                for (key, typed) in props.as_object().expect("propriétés") {
+                for (key, typed) in props.as_object().expect("properties") {
                     let data = &typed["data"];
                     let value = match typed["type"].as_str().expect("type") {
-                        "b" => Value::Bool(data.as_bool().expect("booléen")),
-                        "s" | "o" => Value::Str(data.as_str().expect("chaîne").to_owned()),
+                        "b" => Value::Bool(data.as_bool().expect("boolean")),
+                        "s" | "o" => Value::Str(data.as_str().expect("string").to_owned()),
                         "t" | "u" | "i" | "x" | "q" | "n" => {
-                            Value::Int(data.as_i64().expect("nombre"))
+                            Value::Int(data.as_i64().expect("number"))
                         }
                         "ay" => Value::Bytes(bytes(data)),
                         "aay" => Value::BytesList(
-                            data.as_array().expect("liste").iter().map(bytes).collect(),
+                            data.as_array().expect("list").iter().map(bytes).collect(),
                         ),
                         "as" => Value::StrList(
                             data.as_array()
-                                .expect("liste")
+                                .expect("list")
                                 .iter()
-                                .map(|s| s.as_str().expect("chaîne").to_owned())
+                                .map(|s| s.as_str().expect("string").to_owned())
                                 .collect(),
                         ),
                         _ => continue,
@@ -424,9 +424,9 @@ pub mod tests {
     fn bytes(data: &serde_json::Value) -> Vec<u8> {
         let mut out: Vec<u8> = data
             .as_array()
-            .expect("octets")
+            .expect("bytes")
             .iter()
-            .map(|b| u8::try_from(b.as_u64().expect("octet")).expect("octet"))
+            .map(|b| u8::try_from(b.as_u64().expect("byte")).expect("byte"))
             .collect();
         while out.last() == Some(&0) {
             out.pop();

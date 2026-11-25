@@ -41,94 +41,94 @@ pub const PANEL_RADIUS: f32 = 20.0;
 /// Marge intérieure d'un panneau flottant.
 pub const PANEL_PADDING: f32 = 14.0;
 
-// Fenêtres d'application (planche Fichiers).
+// Application windows (Evidence mock-up).
 
-/// Fenêtre d'application de la planche Fichiers, sur l'écran de référence.
+/// Application window of the Evidence mock-up, on the reference screen.
 pub const REFERENCE_WINDOW: (f32, f32) = (1300.0, 676.0);
 
-/// Barre de titre : marges gauche et droite, pastille de l'application et son rayon.
+/// Title bar: left and right padding, application badge and its radius.
 pub const TITLE_BAR_PADDING: (f32, f32) = (14.0, 8.0);
 pub const APP_BADGE: f32 = 18.0;
 pub const APP_BADGE_RADIUS: f32 = 5.0;
-/// Pastille des boutons de fenêtre : marge, rayon, écart ; rayon d'un bouton.
+/// Pill behind the window buttons: padding, radius; radius of a button.
 pub const WINDOW_CONTROLS_PADDING: f32 = 2.0;
 pub const WINDOW_CONTROLS_RADIUS: f32 = 9.0;
 pub const WINDOW_BUTTON_RADIUS: f32 = 7.0;
-/// Barre d'outils sous la barre de titre : hauteur, marge sur les côtés.
+/// Toolbar under the title bar: height, side padding.
 pub const TOOLBAR_HEIGHT: f32 = 48.0;
 pub const TOOLBAR_PADDING: f32 = 12.0;
-/// Fil d'Ariane : hauteur, rayon, marge ; segment : marges et rayon.
+/// Breadcrumb: height, radius, padding, gap; segment: padding and radius.
 pub const BREADCRUMB_HEIGHT: f32 = 32.0;
 pub const BREADCRUMB_RADIUS: f32 = 8.0;
 pub const BREADCRUMB_PADDING: f32 = 6.0;
 pub const BREADCRUMB_GAP: f32 = 4.0;
-/// Segments du fil d'Ariane montrés au plus : au-delà, le début se replie.
+/// Maximum breadcrumb segments shown: beyond that, the start folds up.
 pub const BREADCRUMB_MAX: usize = 5;
 pub const CRUMB_PADDING: (f32, f32) = (4.0, 8.0);
 pub const CRUMB_RADIUS: f32 = 6.0;
-/// Étiquette de la branche git : marges et rayon.
+/// Git branch badge: padding and radius.
 pub const CHIP_PADDING: (f32, f32) = (3.0, 10.0);
 pub const CHIP_RADIUS: f32 = 10.0;
-/// Champ de recherche d'une barre d'outils.
+/// Search field of a toolbar.
 pub const SEARCH_WIDTH: f32 = 210.0;
-/// Écart entre la loupe et le texte du champ de recherche.
+/// Gap between the magnifier and the text of the search field.
 pub const SEARCH_ICON_GAP: f32 = 8.0;
-/// Barre d'état en bas d'une fenêtre : hauteur, marge sur les côtés.
+/// Status bar at the bottom of a window: height, side padding.
 pub const STATUS_BAR_HEIGHT: f32 = 30.0;
 pub const STATUS_BAR_PADDING: f32 = 14.0;
-/// Barre latérale de navigation : largeur, marges en haut, sur les côtés et en bas.
+/// Navigation sidebar: width, top, side and bottom padding.
 pub const SIDEBAR_WIDTH: f32 = 210.0;
 pub const SIDEBAR_PADDING: (f32, f32, f32) = (4.0, 8.0, 12.0);
-/// Étiquette de section d'une navigation : marges en haut, sur les côtés et en bas.
+/// Section label of a navigation: top, side and bottom padding.
 pub const NAV_SECTION_PADDING: (f32, f32, f32) = (12.0, 10.0, 6.0);
-/// Entrée de navigation : hauteur, rayon, marge sur les côtés.
+/// Navigation entry: height, radius, side padding.
 pub const NAV_ITEM_HEIGHT: f32 = 32.0;
 pub const NAV_ITEM_RADIUS: f32 = 8.0;
 pub const NAV_ITEM_PADDING: f32 = 10.0;
-/// Panneau d'aperçu : largeur, marge, écart entre ses blocs ; vignette du fichier et son icône.
+/// Preview panel: width, padding, gap between its blocks; file tile and its icon.
 pub const PREVIEW_WIDTH: f32 = 300.0;
 pub const PREVIEW_PADDING: f32 = 16.0;
 pub const PREVIEW_GAP: f32 = 12.0;
 pub const PREVIEW_TILE: f32 = 44.0;
 pub const PREVIEW_TILE_RADIUS: f32 = 11.0;
 pub const PREVIEW_TILE_ICON: f32 = 22.0;
-/// Aperçu d'un texte : lignes et colonnes montrées au plus. Au-delà, le panneau coupe.
+/// Text preview: maximum lines and columns shown. Beyond that, the panel cuts.
 pub const PREVIEW_LINES: usize = 18;
 /// The preview panel holds 33 characters of JetBrains Mono at 12 px (0.6 em each) inside
 /// its padding and the code block's.
 pub const PREVIEW_COLUMNS: usize = 33;
-/// Écart entre deux boutons empilés.
+/// Gap between two stacked buttons.
 pub const BUTTON_STACK_GAP: f32 = 8.0;
-/// Extrait de code : marges verticale et horizontale, rayon.
+/// Code snippet: vertical and horizontal padding, radius.
 pub const CODE_BLOCK_PADDING: (f32, f32) = (10.0, 12.0);
 pub const CODE_BLOCK_RADIUS: f32 = 10.0;
 
-// Listes.
+// Lists.
 
-/// Marge de la liste sur les côtés, et au-dessus de la première ligne.
+/// Side padding of the list, and gap above the first row.
 pub const LIST_PADDING: f32 = 8.0;
 pub const LIST_TOP_GAP: f32 = 4.0;
-/// En-tête des colonnes et ligne : hauteurs, rayon d'une ligne, marge sur les côtés.
+/// Column header and row: heights, radius of a row, side padding.
 pub const LIST_HEADER_HEIGHT: f32 = 34.0;
 pub const LIST_ROW_HEIGHT: f32 = 40.0;
 pub const LIST_ROW_RADIUS: f32 = 9.0;
 pub const LIST_ROW_PADDING: f32 = 12.0;
-/// Écart entre deux colonnes, largeur des colonnes après le nom (date, taille, type, état).
+/// Gap between two columns, width of the columns after the name (date, size, kind, status).
 pub const LIST_COLUMN_GAP: f32 = 12.0;
 pub const LIST_COLUMNS: [f32; 4] = [150.0, 96.0, 120.0, 84.0];
-/// Icône du type de fichier dans une ligne.
+/// File kind icon in a row.
 pub const LIST_ICON: f32 = 18.0;
-/// Lignes dessinées en plus au-dessus et au-dessous de la partie visible d'une longue liste.
+/// Extra rows drawn above and below the visible part of a long list.
 pub const LIST_OVERSCAN: usize = 4;
-/// Glissement du contenu d'un dossier qui s'ouvre : il monte de cette distance en fondu.
+/// Slide of the content of a folder that opens: it rises by this distance while fading in.
 pub const LIST_SLIDE: f32 = 8.0;
-/// Étiquette d'état : marges verticale et horizontale, rayon.
+/// Status badge: vertical and horizontal padding, radius.
 pub const BADGE_PADDING: (f32, f32) = (1.0, 8.0);
 pub const BADGE_RADIUS: f32 = 8.0;
-/// Menu du clic droit d'une liste et son sous-menu (planche Fichiers).
+/// Right-click menu of a list and its submenu (Evidence mock-up).
 pub const CONTEXT_MENU_WIDTH: f32 = 236.0;
 pub const CONTEXT_SUBMENU_WIDTH: f32 = 216.0;
-/// Question posée dans une fenêtre : largeur.
+/// Question asked inside a window: width.
 pub const DIALOG_WIDTH: f32 = 380.0;
 
 // Menus.
@@ -190,7 +190,7 @@ pub const ICON_STROKE: f32 = 1.7;
 /// Taille d'affichage courante d'une icône, et celle des chevrons de menu.
 pub const ICON_SIZE: f32 = 16.0;
 pub const ICON_SIZE_SMALL: f32 = 14.0;
-/// Chevrons du fil d'Ariane et flèches de tri.
+/// Breadcrumb chevrons and sort arrows.
 pub const ICON_SIZE_TINY: f32 = 12.0;
 
 // Dock.
@@ -243,7 +243,7 @@ const _: () = {
     assert!(SUBMENU_WIDTH < MENU_WIDTH);
     assert!(ICON_SIZE_SMALL < ICON_SIZE && ICON_SIZE < ICON_GRID);
     assert!(ICON_SIZE_TINY < ICON_SIZE_SMALL && LIST_ICON < ICON_GRID);
-    // Une entrée de navigation tient dans la barre latérale, une ligne sous son rayon.
+    // A navigation entry and a list row are taller than twice their radius.
     assert!(NAV_ITEM_RADIUS < NAV_ITEM_HEIGHT / 2.0 && LIST_ROW_RADIUS < LIST_ROW_HEIGHT / 2.0);
     assert!(BREADCRUMB_HEIGHT < TOOLBAR_HEIGHT && WINDOW_BUTTON.1 < TITLE_BAR_HEIGHT);
 };

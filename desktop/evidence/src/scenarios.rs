@@ -1,6 +1,6 @@
-//! Scénarios de bout en bout, sans écran : chaque test pilote l'application au clavier sur un
-//! dossier temporaire, exécute les tâches qu'elle lance comme le ferait iced, et regarde le
-//! disque. La corbeille est posée dans le dossier temporaire, jamais dans celle de l'auteur.
+//! Headless end-to-end scenarios: each test drives the application with the keyboard on a
+//! temporary folder, runs the tasks it starts as iced would, and checks the disk. The trash
+//! lives in the temporary folder, never in the author's own.
 
 use std::borrow::Cow;
 use std::fs;
@@ -18,7 +18,7 @@ use crate::places;
 use crate::testing::TempDir;
 use crate::trash::Trash;
 
-/// Un dossier personnel temporaire : `projet/` avec `src/`, `a.txt` et `.cache`.
+/// A temporary home folder: `projet/` with `src/`, `a.txt` and `.cache`.
 struct Bench {
     tmp: TempDir,
     app: App,
@@ -28,9 +28,9 @@ impl Bench {
     fn new(name: &str) -> Self {
         let tmp = TempDir::new(name);
         let project = tmp.path().join("projet");
-        fs::create_dir_all(project.join("src")).expect("dossiers");
-        fs::write(project.join("a.txt"), "contenu de a").expect("écriture");
-        fs::write(project.join(".cache"), "").expect("écriture");
+        fs::create_dir_all(project.join("src")).expect("folders");
+        fs::write(project.join("a.txt"), "contenu de a").expect("write");
+        fs::write(project.join(".cache"), "").expect("write");
         let config = Config {
             home: tmp.path().to_path_buf(),
             start: project,
@@ -61,7 +61,7 @@ impl Bench {
             ..
         }) = simulator::press_key(key, None)
         else {
-            unreachable!("press_key rend un appui");
+            unreachable!("press_key returns a key press");
         };
         let event = keyboard::Event::KeyPressed {
             key,
@@ -100,19 +100,19 @@ impl Bench {
             .collect()
     }
 
-    /// Place le curseur sur l'élément nommé, au clavier.
+    /// Puts the cursor on the named item, with the keyboard.
     fn select(&mut self, name: &str) {
         self.press(Named::Home);
         while self.selected() != [name] {
             let before = self.app.cursor;
             self.press(Named::ArrowDown);
-            assert_ne!(before, self.app.cursor, "{name} introuvable");
+            assert_ne!(before, self.app.cursor, "{name} not found");
         }
     }
 }
 
-/// Exécute les tâches comme le ferait iced, jusqu'à ce qu'il n'en reste plus. Les opérations
-/// de widgets (focus, défilement), le presse-papiers et la fenêtre n'ont pas d'écran ici.
+/// Runs the tasks as iced would, until none is left. Widget operations (focus, scrolling),
+/// the clipboard and the window have no screen here.
 fn drain(app: &mut App, task: Task<Message>) {
     let mut queue = vec![task];
     while let Some(task) = queue.pop() {
@@ -129,11 +129,11 @@ fn drain(app: &mut App, task: Task<Message>) {
 }
 
 fn read(path: &Path) -> String {
-    fs::read_to_string(path).expect("lecture")
+    fs::read_to_string(path).expect("read")
 }
 
 #[test]
-fn le_clavier_navigue_dans_les_dossiers() {
+fn keyboard_navigates_folders() {
     let mut bench = Bench::new("navigation");
     assert_eq!(bench.names(), ["src", "a.txt"]);
     bench.press(Named::ArrowDown);
@@ -143,11 +143,11 @@ fn le_clavier_navigue_dans_les_dossiers() {
         bench.app.location,
         Location::Folder(bench.path("projet/src"))
     );
-    // Retour arrière remonte et garde le dossier d'où l'on vient sélectionné.
+    // Backspace goes up and keeps the folder we came from selected.
     bench.press(Named::Backspace);
     assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
     assert_eq!(bench.selected(), ["src"]);
-    // Alt+Gauche revient en arrière dans l'historique, Alt+Droite repart.
+    // Alt+Left goes back in history, Alt+Right goes forward again.
     bench.key(Key::Named(Named::ArrowLeft), Modifiers::ALT);
     assert_eq!(
         bench.app.location,
@@ -155,12 +155,12 @@ fn le_clavier_navigue_dans_les_dossiers() {
     );
     bench.key(Key::Named(Named::ArrowRight), Modifiers::ALT);
     assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
-    // Ctrl+H montre les fichiers cachés, puis les cache.
+    // Ctrl+H shows hidden files, then hides them.
     bench.ctrl("h");
     assert_eq!(bench.names(), ["src", ".cache", "a.txt"]);
     bench.ctrl("h");
     assert_eq!(bench.names(), ["src", "a.txt"]);
-    // La recherche filtre, Échap l'efface.
+    // Search filters, Escape clears it.
     bench.send(Message::Search("A.T".into()));
     assert_eq!(bench.names(), ["a.txt"]);
     bench.press(Named::Escape);
@@ -168,8 +168,8 @@ fn le_clavier_navigue_dans_les_dossiers() {
 }
 
 #[test]
-fn copier_coller_puis_couper_coller_au_clavier() {
-    let mut bench = Bench::new("presse-papiers");
+fn copy_paste_then_cut_paste_with_the_keyboard() {
+    let mut bench = Bench::new("clipboard");
     bench.select("a.txt");
     bench.ctrl("c");
     bench.select("src");
@@ -177,24 +177,24 @@ fn copier_coller_puis_couper_coller_au_clavier() {
     bench.ctrl("v");
     assert_eq!(read(&bench.path("projet/src/a.txt")), "contenu de a");
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
-    // La copie collée est sélectionnée.
+    // The pasted copy is selected.
     assert_eq!(bench.selected(), ["a.txt"]);
-    // Coller une seconde fois au même endroit ne touche pas au premier fichier.
+    // Pasting a second time in the same place does not touch the first file.
     bench.ctrl("v");
     assert_eq!(bench.names(), ["a (copie).txt", "a.txt"]);
 
-    // Couper vers un dossier qui a déjà ce nom : refusé, rien n'est écrasé.
+    // Cutting into a folder that already has this name: refused, nothing is overwritten.
     bench.select("a.txt");
-    fs::write(bench.path("projet/src/a.txt"), "modifié").expect("écriture");
+    fs::write(bench.path("projet/src/a.txt"), "modifié").expect("write");
     bench.ctrl("x");
     bench.press(Named::Backspace);
     bench.ctrl("v");
-    let notice = bench.app.notice.clone().expect("message d'erreur");
+    let notice = bench.app.notice.clone().expect("error message");
     assert!(notice.error, "{notice:?}");
     assert_eq!(read(&bench.path("projet/src/a.txt")), "modifié");
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
 
-    // Couper puis coller ailleurs déplace.
+    // Cutting then pasting elsewhere moves.
     bench.select("src");
     bench.press(Named::Enter);
     bench.select("a (copie).txt");
@@ -203,19 +203,19 @@ fn copier_coller_puis_couper_coller_au_clavier() {
     bench.ctrl("v");
     assert!(!bench.path("projet/src/a (copie).txt").exists());
     assert!(bench.path("projet/a (copie).txt").exists());
-    // Un élément coupé ne se colle qu'une fois.
+    // A cut item is pasted only once.
     bench.ctrl("v");
     assert_eq!(bench.names(), ["src", "a (copie).txt", "a.txt"]);
 
-    // Ctrl+D duplique à côté.
+    // Ctrl+D duplicates alongside.
     bench.select("a.txt");
     bench.ctrl("d");
     assert!(bench.path("projet/a (copie 2).txt").exists());
 }
 
 #[test]
-fn renommer_et_creer_un_dossier_au_clavier() {
-    let mut bench = Bench::new("renommage");
+fn rename_and_create_a_folder_with_the_keyboard() {
+    let mut bench = Bench::new("rename");
     bench.select("a.txt");
     bench.press(Named::F2);
     assert_eq!(
@@ -228,14 +228,14 @@ fn renommer_et_creer_un_dossier_au_clavier() {
     assert_eq!(read(&bench.path("projet/notes.txt")), "contenu de a");
     assert_eq!(bench.selected(), ["notes.txt"]);
 
-    // Un nom pris est refusé avec un message.
+    // A taken name is refused with a message.
     bench.press(Named::F2);
     bench.send(Message::RenameInput("src".into()));
     bench.send(Message::RenameSubmit);
     assert!(bench.app.notice.as_ref().is_some_and(|n| n.error));
     assert!(bench.path("projet/notes.txt").exists());
 
-    // Ctrl+Maj+N crée un dossier et propose aussitôt de le nommer.
+    // Ctrl+Shift+N creates a folder and immediately offers to name it.
     bench.key(
         Key::Character("N".into()),
         Modifiers::CTRL | Modifiers::SHIFT,
@@ -248,16 +248,16 @@ fn renommer_et_creer_un_dossier_au_clavier() {
 }
 
 #[test]
-fn la_corbeille_jette_restaure_et_se_vide_avec_confirmation() {
-    let mut bench = Bench::new("corbeille");
+fn trash_discards_restores_and_empties_with_confirmation() {
+    let mut bench = Bench::new("trash");
     let trash = Trash::at(&bench.path("donnees/Trash"));
     bench.select("a.txt");
     bench.press(Named::Delete);
     assert!(!bench.path("projet/a.txt").exists());
-    assert_eq!(trash.list().expect("corbeille").len(), 1);
+    assert_eq!(trash.list().expect("trash").len(), 1);
     assert_eq!(bench.names(), ["src"]);
 
-    // Dans la corbeille, le menu du clic droit restaure, au clavier.
+    // In the trash, the right-click menu restores, with the keyboard.
     bench.send(Message::Go(Location::Trash));
     assert_eq!(bench.names(), ["a.txt"]);
     bench.select("a.txt");
@@ -269,7 +269,7 @@ fn la_corbeille_jette_restaure_et_se_vide_avec_confirmation() {
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
     assert!(bench.names().is_empty());
 
-    // Vider demande une confirmation : Échap annule, rien n'est effacé.
+    // Emptying asks for confirmation: Escape cancels, nothing is deleted.
     bench.send(Message::Go(Location::Folder(bench.path("projet"))));
     bench.select("a.txt");
     bench.press(Named::Delete);
@@ -278,21 +278,21 @@ fn la_corbeille_jette_restaure_et_se_vide_avec_confirmation() {
     assert!(bench.app.confirm_empty);
     bench.press(Named::Escape);
     assert!(!bench.app.confirm_empty);
-    assert_eq!(trash.list().expect("corbeille").len(), 1);
+    assert_eq!(trash.list().expect("trash").len(), 1);
     bench.send(Message::Run(crate::app::Command::EmptyTrash));
     bench.send(Message::ConfirmEmpty);
-    assert!(trash.list().expect("corbeille").is_empty());
+    assert!(trash.list().expect("trash").is_empty());
     assert!(bench.names().is_empty());
 }
 
 #[test]
-fn le_menu_du_clic_droit_se_pilote_au_clavier() {
+fn right_click_menu_is_driven_by_the_keyboard() {
     let mut bench = Bench::new("menu");
     bench.select("a.txt");
     bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
-    let menu = bench.app.menu.clone().expect("menu ouvert");
+    let menu = bench.app.menu.clone().expect("menu open");
     assert!(menu.on_selection);
-    // Ouvrir, puis Ouvrir avec : la flèche droite ouvre le sous-menu.
+    // Open, then Open with: the right arrow opens the submenu.
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowRight);
@@ -301,18 +301,18 @@ fn le_menu_du_clic_droit_se_pilote_au_clavier() {
     assert!(bench.app.menu.as_ref().is_some_and(|m| !m.submenu));
     bench.press(Named::Escape);
     assert!(bench.app.menu.is_none());
-    // Le menu ne sort pas de la fenêtre.
+    // The menu stays inside the window.
     bench.send(Message::Cursor(iced::Point::new(10_000.0, 10_000.0)));
     bench.send(Message::RightClick(None));
-    let menu = bench.app.menu.clone().expect("menu ouvert");
+    let menu = bench.app.menu.clone().expect("menu open");
     assert!(!menu.on_selection);
     assert!(menu.at.x + metrics::CONTEXT_MENU_WIDTH <= bench.app.size.width);
 }
 
-/// Un dossier comme celui de la planche : un dépôt git avec un fichier modifié, un nouveau et
-/// un dossier ignoré.
-fn planche() -> (TempDir, PathBuf) {
-    let tmp = TempDir::new("planche");
+/// A folder like the mock-up's: a git repository with a modified file, a new one and an
+/// ignored folder.
+fn mockup_folder() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new("mockup");
     let dir = tmp.path().join("Projets/compositeur");
     let git = |args: &[&str]| {
         let ok = std::process::Command::new("git")
@@ -326,13 +326,13 @@ fn planche() -> (TempDir, PathBuf) {
             ])
             .args(args)
             .output()
-            .expect("git est installé")
+            .expect("git is installed")
             .status
             .success();
         assert!(ok, "git {args:?}");
     };
     for sub in ["src", "docs", "essais", "target"] {
-        fs::create_dir_all(dir.join(sub)).expect("dossier");
+        fs::create_dir_all(dir.join(sub)).expect("folder");
     }
     for (name, content) in [
         (".gitignore", "target/\n"),
@@ -345,24 +345,24 @@ fn planche() -> (TempDir, PathBuf) {
         ("docs/index.md", "# Docs\n"),
         ("essais/a.rs", "\n"),
     ] {
-        fs::write(dir.join(name), content).expect("écriture");
+        fs::write(dir.join(name), content).expect("write");
     }
     git(&["init", "-q", "-b", "main"]);
     git(&["add", "."]);
-    git(&["commit", "-q", "-m", "départ"]);
-    fs::write(dir.join("src/main.rs"), "fn main() { todo!() }\n").expect("écriture");
-    fs::write(dir.join("target/sortie"), "").expect("écriture");
+    git(&["commit", "-q", "-m", "initial"]);
+    fs::write(dir.join("src/main.rs"), "fn main() { todo!() }\n").expect("write");
+    fs::write(dir.join("target/sortie"), "").expect("write");
     let docker = "FROM rust:1 AS build\nWORKDIR /src\nCOPY . .\nRUN cargo build --release\n";
-    fs::write(dir.join("Dockerfile"), docker).expect("écriture");
+    fs::write(dir.join("Dockerfile"), docker).expect("write");
     (tmp, dir)
 }
 
-/// Capture de la fenêtre, état git lu, Dockerfile sélectionné, menu et sous-menu ouverts, dans
-/// `target/tmp/fichiers-tiny-skia.png`. Elle se compare à l'œil à la planche : voir
-/// docs/fichiers.md.
+/// Capture of the window, git status read, Dockerfile selected, menu and submenu open, in
+/// `target/tmp/evidence-tiny-skia.png`. Compare it by eye with the mock-up: see
+/// docs/evidence.md.
 #[test]
-fn la_fenetre_se_rend_sans_ecran() {
-    let (tmp, dir) = planche();
+fn window_renders_headless() {
+    let (tmp, dir) = mockup_folder();
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: dir.clone(),
@@ -379,7 +379,7 @@ fn la_fenetre_se_rend_sans_ecran() {
         .entries
         .iter()
         .position(|e| e.name == "Dockerfile")
-        .expect("Dockerfile listé");
+        .expect("Dockerfile listed");
     let (width, height) = metrics::REFERENCE_WINDOW;
     for message in [
         Message::Click(docker),
@@ -400,23 +400,19 @@ fn la_fenetre_se_rend_sans_ecran() {
     };
     let mut ui = simulator::Simulator::with_size(settings.clone(), (width, height), app.view());
     let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
-    // Comme `CARGO_TARGET_TMPDIR`, que Cargo ne donne qu'aux tests d'intégration.
+    // Like `CARGO_TARGET_TMPDIR`, which Cargo only gives to integration tests.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
-    fs::create_dir_all(&dir).expect("dossier des captures");
+    fs::create_dir_all(&dir).expect("captures folder");
     let path = dir.join("evidence.png");
     let written = path.with_file_name("evidence-tiny-skia.png");
     let _ = fs::remove_file(&written);
-    assert!(
-        snapshot
-            .matches_image(&path)
-            .expect("écriture de la capture")
-    );
-    println!("capture : {}", written.display());
+    assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    println!("capture: {}", written.display());
 
-    // Un clic sur une entrée du menu lance sa commande.
+    // A click on a menu entry runs its command.
     let messages: Vec<_> = {
         let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());
-        ui.click("Dupliquer").expect("entrée trouvée");
+        ui.click("Dupliquer").expect("entry found");
         ui.into_messages().collect()
     };
     assert!(
@@ -431,14 +427,14 @@ fn la_fenetre_se_rend_sans_ecran() {
 /// Cost of one frame with 5,000 entries: view, layout, then software rendering. Run with
 /// `cargo test --release -p evidence frame_cost -- --ignored --nocapture`.
 #[test]
-#[ignore = "mesure, pas un test"]
+#[ignore = "measurement, not a test"]
 fn frame_cost() {
     use std::time::Instant;
-    let tmp = TempDir::new("cout");
+    let tmp = TempDir::new("cost");
     let dir = tmp.path().join("grand");
-    fs::create_dir_all(&dir).expect("dossier");
+    fs::create_dir_all(&dir).expect("folder");
     for i in 0..5000 {
-        fs::write(dir.join(format!("fichier-{i:05}.txt")), "x").expect("écriture");
+        fs::write(dir.join(format!("fichier-{i:05}.txt")), "x").expect("write");
     }
     let config = Config {
         home: tmp.path().to_path_buf(),
@@ -486,8 +482,8 @@ fn frame_cost() {
         report.push_str(&line);
     }
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
-    fs::create_dir_all(&dir).expect("dossier");
-    fs::write(dir.join("frame_cost.txt"), report).expect("écriture");
+    fs::create_dir_all(&dir).expect("folder");
+    fs::write(dir.join("frame_cost.txt"), report).expect("write");
     if false {}
 }
 

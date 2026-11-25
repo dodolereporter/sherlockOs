@@ -21,15 +21,15 @@ pub enum Icon {
     Network,
     /// Son activé.
     Sound,
-    /// Revenir en arrière : dossier précédent.
+    /// Go back: previous folder.
     Back,
-    /// Tri croissant et décroissant.
+    /// Ascending and descending sort.
     SortUp,
     SortDown,
-    /// Réduire et agrandir une fenêtre.
+    /// Minimize and maximize a window.
     Minimize,
     Maximize,
-    /// Emplacements et types de fichiers (planche Fichiers).
+    /// Places and file kinds (Evidence mock-up).
     Home,
     Desktop,
     Document,
@@ -37,9 +37,9 @@ pub enum Icon {
     Folder,
     Image,
     Trash,
-    /// Conteneur : Dockerfile, fichier compose.
+    /// Container: Dockerfile, compose file.
     Cube,
-    /// Devices: system disk (from the planche), internal disk, USB key, external disk,
+    /// Devices: system disk (from the mock-up), internal disk, USB key, external disk,
     /// memory card, optical disc; eject and lock.
     SystemDisk,
     Drive,
@@ -83,9 +83,9 @@ impl Icon {
         Self::Lock,
     ];
 
-    /// Tracé sur la grille de 24. Tous sont ceux des planches, sauf la croix et les deux
-    /// flèches de tri. The device icons are drawn for Evidence, on the same grid and stroke,
-    /// except the system disk, which is the planche's.
+    /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
+    /// arrows. The device icons are drawn for Evidence, on the same grid and stroke, except
+    /// the system disk, which is the mock-up's.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",

@@ -1,5 +1,5 @@
-//! État de l'application et réponse à chaque message : navigation, sélection, opérations,
-//! clavier. La vue est dans `view`.
+//! Application state and the response to each message: navigation, selection, operations,
+//! keyboard. The view lives in `view`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -25,12 +25,12 @@ use sherlock_ui::motion::{self, Animation, Fade};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Identifiants des widgets que l'application pilote.
-pub const LIST: &str = "liste";
-pub const SEARCH: &str = "recherche";
-pub const RENAME: &str = "renommer";
+/// Identifiers of the widgets the application drives.
+pub const LIST: &str = "list";
+pub const SEARCH: &str = "search";
+pub const RENAME: &str = "rename";
 
-/// Ce que l'application reçoit au démarrage.
+/// What the application receives at startup.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub home: PathBuf,
@@ -48,7 +48,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Dossier personnel, dossier donné en argument, corbeille de l'utilisateur.
+    /// Home folder, folder given as argument, the user's trash.
     pub fn from_env() -> Self {
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let mut args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -83,14 +83,14 @@ impl Config {
     }
 }
 
-/// Où l'on se trouve.
+/// Where we are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Location {
     Folder(PathBuf),
     Trash,
 }
 
-/// Les commandes du menu et des raccourcis.
+/// The commands of the menu and of the shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Open,
@@ -115,7 +115,7 @@ pub enum Command {
     DeviceEject,
 }
 
-/// Une entrée du menu du clic droit.
+/// An entry of the right-click menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
     Action {
@@ -125,9 +125,9 @@ pub enum MenuItem {
         danger: bool,
         checked: bool,
     },
-    /// Ouvre le sous-menu « Ouvrir avec ».
+    /// Opens the "Ouvrir avec" submenu.
     OpenWith,
-    /// Prévu, pas encore disponible.
+    /// Planned, not available yet.
     Disabled(&'static str),
     Separator,
 }
@@ -148,27 +148,27 @@ impl MenuItem {
     }
 }
 
-/// Le menu du clic droit ouvert.
+/// The open right-click menu.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu {
-    /// Coin haut gauche, dans la fenêtre.
+    /// Top left corner, in the window.
     pub at: Point,
-    /// Ouvert sur la sélection, ou sur le fond de la liste.
+    /// Opened on the selection, or on the background of the listing.
     pub on_selection: bool,
     pub submenu: bool,
-    /// Entrée surlignée au clavier, dans le menu ou dans le sous-menu.
+    /// Entry highlighted from the keyboard, in the menu or in the submenu.
     pub highlight: Option<usize>,
 }
 
-/// Message de la barre d'état.
+/// Status bar message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
     pub text: String,
     pub error: bool,
 }
 
-/// Fin d'une opération lancée hors du fil de l'interface : texte à montrer et éléments à
-/// sélectionner, ou l'erreur.
+/// End of an operation run off the interface thread: text to show and items to select, or
+/// the error.
 pub type Outcome = Result<(String, Vec<PathBuf>), String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +193,7 @@ pub enum Message {
     Run(Command),
     Submenu(bool),
     CloseMenu,
-    /// Clic sur le fond de la liste.
+    /// Click on the background of the listing.
     Blank,
     Key(keyboard::Event),
     Modifiers(Modifiers),
@@ -207,12 +207,12 @@ pub enum Message {
     Done(Outcome),
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
-    /// Une image de la fenêtre, pendant une animation ou une mesure.
+    /// A frame of the window, during an animation or a measurement.
     Frame(Instant),
-    /// Contenu d'un emplacement, lu hors du fil de l'interface. Le numéro écarte une lecture
-    /// dépassée par une navigation plus récente.
+    /// Content of a location, read off the interface thread. The number discards a read
+    /// overtaken by a more recent navigation.
     Loaded(u64, Result<Vec<Entry>, ()>),
-    /// Aperçu préparé hors du fil de l'interface.
+    /// Preview prepared off the interface thread.
     Preview(PathBuf, Preview),
     /// The volumes of the sidebar, as UDisks2 sees them now.
     Devices(Vec<Volume>),
@@ -240,13 +240,13 @@ enum Clip {
     Cut,
 }
 
-/// L'application Fichiers.
+/// The Evidence application.
 pub struct App {
     pub(crate) config: Config,
     pub(crate) location: Location,
     history: Vec<Location>,
     future: Vec<Location>,
-    /// Tout le dossier, puis ce que montre la liste (recherche appliquée, trié).
+    /// The whole folder, then what the listing shows (search applied, sorted).
     all: Vec<Entry>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) selection: BTreeSet<usize>,
@@ -258,7 +258,7 @@ pub struct App {
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
     clipboard: Option<(Clip, Vec<PathBuf>)>,
-    /// Élément en cours de renommage et son nouveau nom.
+    /// Item being renamed and its new name.
     pub(crate) renaming: Option<(usize, String)>,
     pub(crate) menu: Option<Menu>,
     pub(crate) confirm_empty: bool,
@@ -267,26 +267,26 @@ pub struct App {
     pointer: Point,
     modifiers: Modifiers,
     pub(crate) size: Size,
-    /// Défilement de la liste et hauteur visible, pour garder le curseur en vue.
+    /// Scroll of the listing and visible height, to keep the cursor in view.
     pub(crate) scroll: (f32, f32),
     probe: Option<Probe>,
-    /// Numéro de la dernière lecture demandée, éléments à sélectionner quand elle arrive, et
-    /// renommage à ouvrir alors (nouveau dossier).
+    /// Number of the last requested read, items to select when it arrives, and rename to
+    /// open then (new folder).
     generation: u64,
     pending: Vec<PathBuf>,
     pending_rename: bool,
-    /// L'emplacement vient de changer : son contenu arrivera en fondu.
+    /// The location just changed: its content will fade in.
     fresh: bool,
-    /// Élément dont l'aperçu est montré ou attendu.
+    /// Item whose preview is shown or awaited.
     preview_path: Option<PathBuf>,
-    /// Origine du temps des animations.
+    /// Time origin of the animations.
     origin: Instant,
-    /// Position verticale du surlignage de la sélection, qui glisse d'une ligne à l'autre.
+    /// Vertical position of the selection highlight, which glides from one row to another.
     pub(crate) highlight: Option<Animation>,
-    /// Fondu du contenu d'un dossier qui s'ouvre, et de l'aperçu.
+    /// Fade of the content of a folder that opens, and of the preview.
     pub(crate) content_fade: Option<Fade>,
     pub(crate) preview_fade: Option<Fade>,
-    /// Échelle du menu qui s'ouvre.
+    /// Scale of the opening menu.
     pub(crate) menu_scale: Option<Animation>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
@@ -342,9 +342,9 @@ impl App {
         (app, Task::batch([task, devices]))
     }
 
-    /// Clavier, pointeur et taille de la fenêtre.
+    /// Keyboard, pointer and window size.
     pub fn subscription(&self) -> Subscription<Message> {
-        // Les images ne battent que pendant une animation ou une mesure, jamais au repos.
+        // Frames tick only during an animation or a measurement, never at rest.
         let measuring = self.probe.as_ref().is_some_and(Probe::active);
         let frames = if measuring || self.animating(self.now()) {
             window::frames().map(Message::Frame)
@@ -373,7 +373,7 @@ impl App {
         texts::APP_NAME.to_owned()
     }
 
-    /// Nom du dossier courant, pour la barre de titre et la recherche.
+    /// Name of the current folder, for the title bar and the search.
     pub fn location_name(&self) -> String {
         match &self.location {
             Location::Trash => texts::TRASH.into(),
@@ -392,12 +392,12 @@ impl App {
         !self.future.is_empty()
     }
 
-    /// Temps des animations.
+    /// Animation time.
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
     }
 
-    /// Une animation de l'application court encore.
+    /// An animation of the application is still running.
     pub fn animating(&self, now: Duration) -> bool {
         let spring = |a: &Option<Animation>, precision| {
             a.as_ref().is_some_and(|a| !a.is_done(now, precision))
@@ -409,7 +409,7 @@ impl App {
             || fade(&self.preview_fade)
     }
 
-    /// Pose toutes les animations à leur fin. Pour les captures.
+    /// Sets every animation to its end. For captures.
     pub fn settle(&mut self) {
         let now = self.now();
         self.content_fade = None;
@@ -423,7 +423,7 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         let now = self.now();
-        // Le surlignage suit le curseur quand un seul élément est sélectionné.
+        // The highlight follows the cursor when a single item is selected.
         let target = match (self.selection.len(), self.cursor) {
             (1, Some(i)) => Some(
                 f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT),
@@ -443,7 +443,7 @@ impl App {
         if self.menu.is_none() {
             self.device_menu = None;
         }
-        // Le menu s'ouvre à l'échelle.
+        // The menu opens by scaling.
         match (&self.menu, &self.menu_scale) {
             (Some(_), None) => {
                 self.menu_scale = Some(Animation::new(
@@ -459,7 +459,7 @@ impl App {
         Task::batch([task, self.preview_task()])
     }
 
-    /// Demande l'aperçu de l'élément sélectionné, s'il a changé.
+    /// Requests the preview of the selected item, if it changed.
     fn preview_task(&mut self) -> Task<Message> {
         let wanted = self.single().cloned();
         let path = wanted.as_ref().map(|e| e.path.clone());
@@ -626,7 +626,7 @@ impl App {
     }
 
     fn frame(&mut self, now: Instant) -> Task<Message> {
-        // Une animation finie est oubliée : l'abonnement aux images s'arrête.
+        // A finished animation is dropped: the frame subscription stops.
         let t = self.now();
         if self.content_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.content_fade = None;
@@ -783,8 +783,8 @@ impl App {
         ])
     }
 
-    /// Relit l'emplacement, garde la sélection (ou sélectionne `select`), et demande l'état
-    /// git hors du fil de l'interface.
+    /// Rereads the location, keeps the selection (or selects `select`), and requests the git
+    /// status off the interface thread.
     fn load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.menu = None;
         self.renaming = None;
@@ -814,7 +814,7 @@ impl App {
         Task::batch([listing, git])
     }
 
-    /// Le contenu de l'emplacement est arrivé.
+    /// The content of the location has arrived.
     fn loaded(&mut self, result: Result<Vec<Entry>, ()>) -> Task<Message> {
         match result {
             Ok(entries) => self.all = entries,
@@ -846,7 +846,7 @@ impl App {
         }
     }
 
-    /// Applique la recherche et le tri, en gardant la sélection.
+    /// Applies the search and the sort, keeping the selection.
     fn refilter(&mut self) {
         let keep = self.selected_paths();
         let needle = self.search.to_lowercase();
@@ -860,7 +860,7 @@ impl App {
         self.select_paths(&keep);
     }
 
-    // Sélection.
+    // Selection.
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         self.selection
@@ -891,7 +891,7 @@ impl App {
         self.cursor = None;
     }
 
-    /// L'élément sélectionné, s'il est seul.
+    /// The selected item, if it is alone.
     pub fn single(&self) -> Option<&Entry> {
         match self.selection.len() {
             1 => self.cursor.and_then(|i| self.entries.get(i)),
@@ -899,7 +899,7 @@ impl App {
         }
     }
 
-    /// Déplace le curseur au clavier et garde la ligne visible.
+    /// Moves the cursor from the keyboard and keeps the row visible.
     fn move_cursor(&mut self, to: usize) -> Task<Message> {
         if self.entries.is_empty() {
             return Task::none();
@@ -919,9 +919,9 @@ impl App {
         operation::scroll_to(LIST, scrollable::AbsoluteOffset { x: 0.0, y })
     }
 
-    // Menu du clic droit.
+    // Right-click menu.
 
-    /// Entrées du menu : sur la sélection ou sur le fond, dans un dossier ou la corbeille.
+    /// Menu entries: on the selection or on the background, in a folder or the trash.
     pub fn menu_items(&self, on_selection: bool) -> Vec<MenuItem> {
         use MenuItem::{Action, OpenWith, Separator};
         if let Some(volume) = self.menu_volume() {
@@ -1006,7 +1006,7 @@ impl App {
         }
     }
 
-    /// Entrées du sous-menu « Ouvrir avec ».
+    /// Entries of the "Ouvrir avec" submenu.
     pub fn submenu_items() -> Vec<MenuItem> {
         vec![
             MenuItem::Action {
@@ -1022,7 +1022,7 @@ impl App {
         ]
     }
 
-    /// Hauteur d'un menu, pour qu'il tienne dans la fenêtre.
+    /// Height of a menu, so that it fits in the window.
     pub fn menu_height(items: &[MenuItem]) -> f32 {
         let (top, _) = metrics::MENU_SEPARATOR_MARGIN;
         let rows: f32 = items
@@ -1052,7 +1052,7 @@ impl App {
         });
     }
 
-    /// Ouvre le menu au clavier, sous la ligne du curseur.
+    /// Opens the menu from the keyboard, under the cursor row.
     fn open_menu_at_cursor(&mut self) {
         let row = self.cursor.map_or(0.0, |i| (i + 1) as f32) * metrics::LIST_ROW_HEIGHT;
         let top = metrics::TITLE_BAR_HEIGHT
@@ -1064,7 +1064,7 @@ impl App {
         self.open_menu(Point::new(left, top + row - self.scroll.0));
     }
 
-    /// Flèches, Entrée et Échap dans le menu ouvert.
+    /// Arrows, Enter and Escape in the open menu.
     fn menu_key(&mut self, key: &Key) -> Task<Message> {
         let Some(menu) = &self.menu else {
             return Task::none();
@@ -1122,7 +1122,7 @@ impl App {
         Task::none()
     }
 
-    // Clavier.
+    // Keyboard.
 
     fn key(&mut self, event: keyboard::Event) -> Task<Message> {
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
@@ -1142,7 +1142,7 @@ impl App {
             return self.menu_key(&key);
         }
         if self.renaming.is_some() && key == Key::Named(Named::Escape) {
-            // Le champ a déjà rendu le clavier au premier Échap : celui-ci annule.
+            // The field already gave the keyboard back on the first Escape: this one cancels.
             self.renaming = None;
             return Task::none();
         }
@@ -1202,7 +1202,7 @@ impl App {
         }
     }
 
-    // Commandes.
+    // Commands.
 
     fn current_dir(&self) -> Option<PathBuf> {
         match &self.location {
@@ -1288,7 +1288,7 @@ impl App {
         Task::none()
     }
 
-    /// Lance une opération hors du fil de l'interface : les grosses copies ne la bloquent pas.
+    /// Runs an operation off the interface thread: big copies do not block it.
     fn spawn(
         &mut self,
         text: String,
@@ -1316,14 +1316,14 @@ impl App {
         Task::none()
     }
 
-    /// Lance un programme sans l'attendre ; un fil le récupère quand il se termine.
+    /// Starts a program without waiting for it; a thread reaps it when it ends.
     fn launch(&mut self, mut command: Process) {
         match command.spawn() {
             Ok(mut child) => {
                 std::thread::spawn(move || child.wait());
             }
             Err(error) => {
-                tracing::warn!(%error, "lancement impossible");
+                tracing::warn!(%error, "launch failed");
                 self.notice = Some(Notice {
                     text: texts::CANNOT_OPEN.into(),
                     error: true,
@@ -1343,7 +1343,7 @@ impl App {
                 Ok((texts::DONE.into(), created))
             }),
             Clip::Cut => {
-                // Un élément coupé ne se colle qu'une fois.
+                // A cut item is pasted only once.
                 self.clipboard = None;
                 self.spawn(texts::moving(sources.len()), move || {
                     let moved = ops::move_into(&sources, &dest)?;
@@ -1359,8 +1359,8 @@ impl App {
         };
         match ops::new_folder(&dir) {
             Ok(path) => {
-                // Le dossier se crée vide, la recherche le cacherait. Le renommage s'ouvre
-                // quand la liste relue l'a sélectionné.
+                // The folder is created empty, the search would hide it. The rename opens
+                // when the reread listing has selected it.
                 self.search.clear();
                 self.pending_rename = true;
                 self.load(&[path])
@@ -1376,7 +1376,7 @@ impl App {
         let Some((index, entry)) = self.cursor.zip(self.single().cloned()) else {
             return Task::none();
         };
-        // Le nom est sélectionné sans son extension, comme partout ailleurs.
+        // The name is selected without its extension, as everywhere else.
         let stem = match (entry.kind, entry.name.rfind('.')) {
             (Kind::File, Some(dot)) if dot > 0 => entry.name[..dot].chars().count(),
             _ => entry.name.chars().count(),
@@ -1443,15 +1443,15 @@ impl App {
     }
 
     fn fail(&mut self, error: &ops::Error) {
-        tracing::warn!(%error, "opération refusée");
+        tracing::warn!(%error, "operation refused");
         self.notice = Some(Notice {
             text: error.to_string(),
             error: true,
         });
     }
 
-    /// Le chemin affiché par le fil d'Ariane : segments et dossier de chacun. Sous le dossier
-    /// personnel, le chemin part d'« Accueil ».
+    /// The path shown by the breadcrumb: segments and the folder of each. Under the home
+    /// folder, the path starts from "Accueil".
     pub fn breadcrumb(&self) -> Vec<(String, Location)> {
         let dir = match &self.location {
             Location::Trash => return vec![(texts::TRASH.into(), Location::Trash)],
@@ -1480,7 +1480,7 @@ impl App {
         crumbs
     }
 
-    /// Le dossier d'origine d'un élément de la corbeille, pour la liste.
+    /// The original folder of a trash item, for the listing.
     pub fn origin_label(&self, origin: &Path) -> String {
         let parent = origin.parent().unwrap_or(origin);
         match parent.strip_prefix(&self.config.home) {
@@ -1499,8 +1499,8 @@ fn direction(modifiers: Modifiers) -> Direction {
     }
 }
 
-/// Lit un emplacement : un dossier, ou la corbeille avec le nom et la place d'origine de
-/// chaque élément. Hors du fil de l'interface.
+/// Reads a location: a folder, or the trash with the original name and place of each item.
+/// Off the interface thread.
 fn read_location(
     location: &Location,
     hidden: bool,

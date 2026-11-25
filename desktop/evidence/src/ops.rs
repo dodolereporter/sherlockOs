@@ -1,7 +1,7 @@
-//! Opérations sur les fichiers : copier, déplacer, renommer, dupliquer, nouveau dossier.
+//! File operations: copy, move, rename, duplicate, new folder.
 //!
-//! Rien n'écrase jamais un fichier existant. Une copie dont le nom est pris devient
-//! « nom (copie) » ; un déplacement ou un renommage vers un nom pris est refusé.
+//! Nothing ever overwrites an existing file. A copy whose name is taken becomes
+//! "name (copie)"; a move or a rename to a taken name is refused.
 
 use std::fmt;
 use std::fs;
@@ -10,18 +10,18 @@ use std::path::{Path, PathBuf};
 
 use sherlock_ui::texts::evidence as texts;
 
-/// Ce qui peut empêcher une opération. Le message s'adresse à l'utilisateur.
+/// What can prevent an operation. The message is meant for the user.
 #[derive(Debug)]
 pub enum Error {
-    /// Un élément de ce nom existe déjà à la destination.
+    /// An item with this name already exists at the destination.
     Exists(String),
-    /// Nom vide, « . », « .. » ou contenant « / ».
+    /// Empty name, ".", ".." or containing "/".
     InvalidName,
-    /// Copier ou déplacer un dossier dans lui-même.
+    /// Copying or moving a folder into itself.
     IntoItself,
-    /// La corbeille de l'utilisateur n'est pas sur le même disque.
+    /// The user's trash is not on the same disk.
     OtherDisk,
-    /// L'élément n'est plus dans la corbeille.
+    /// The item is no longer in the trash.
     NotInTrash,
     Io(io::Error),
 }
@@ -65,7 +65,7 @@ impl From<io::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Refuse les noms qu'un système de fichiers ne peut pas porter.
+/// Refuses names a file system cannot hold.
 pub fn validate_name(name: &str) -> Result<()> {
     let invalid =
         name.trim().is_empty() || name == "." || name == ".." || name.contains(['/', '\0']);
@@ -77,7 +77,7 @@ pub fn validate_name(name: &str) -> Result<()> {
 }
 
 fn exists(path: &Path) -> bool {
-    // Un lien cassé occupe aussi son nom.
+    // A broken link also takes up its name.
     fs::symlink_metadata(path).is_ok()
 }
 
@@ -87,8 +87,8 @@ fn file_name(path: &Path) -> Result<String> {
         .ok_or(Error::InvalidName)
 }
 
-/// Premier nom libre dans `dir` : `name` s'il l'est, sinon « name (copie) », « name (copie 2) »…
-/// L'extension d'un fichier reste à la fin ; celle d'un dossier n'est pas séparée.
+/// First free name in `dir`: `name` if it is, otherwise "name (copie)", "name (copie 2)"…
+/// A file's extension stays at the end; a folder's is not split off.
 pub fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
     if !exists(&dir.join(name)) {
         return name.to_owned();
@@ -107,7 +107,7 @@ pub fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
         .unwrap_or_else(|| name.to_owned())
 }
 
-/// Refuse de mettre un dossier dans lui-même ou dans l'un de ses sous-dossiers.
+/// Refuses to put a folder into itself or into one of its subfolders.
 fn check_not_inside(source: &Path, dest: &Path) -> Result<()> {
     let source = fs::canonicalize(source)?;
     let dest = fs::canonicalize(dest)?;
@@ -118,7 +118,7 @@ fn check_not_inside(source: &Path, dest: &Path) -> Result<()> {
     }
 }
 
-/// Copie récursive. Les liens symboliques sont recopiés comme liens, pas suivis.
+/// Recursive copy. Symbolic links are copied as links, not followed.
 fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
     let meta = fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
@@ -135,7 +135,7 @@ fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-/// Copie chaque source dans `dest`. Rend les chemins créés.
+/// Copies each source into `dest`. Returns the created paths.
 pub fn copy_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
     let mut created = Vec::with_capacity(sources.len());
     for source in sources {
@@ -150,7 +150,7 @@ pub fn copy_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
     Ok(created)
 }
 
-/// Copie chaque élément à côté de lui-même : « nom (copie) ».
+/// Copies each item next to itself: "name (copie)".
 pub fn duplicate(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut created = Vec::with_capacity(sources.len());
     for source in sources {
@@ -160,7 +160,7 @@ pub fn duplicate(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(created)
 }
 
-/// Déplace un élément vers `target`, même d'un disque à l'autre (copie puis effacement).
+/// Moves an item to `target`, even across disks (copy then delete).
 pub fn move_path(source: &Path, target: &Path) -> Result<()> {
     if exists(target) {
         return Err(Error::Exists(file_name(target)?));
@@ -180,8 +180,8 @@ pub fn move_path(source: &Path, target: &Path) -> Result<()> {
     }
 }
 
-/// Déplace chaque source dans `dest`. Une source déjà dans `dest` ne bouge pas. Rend les
-/// nouveaux chemins.
+/// Moves each source into `dest`. A source already in `dest` does not move. Returns the new
+/// paths.
 pub fn move_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
     let mut moved = Vec::with_capacity(sources.len());
     for source in sources {
@@ -199,7 +199,7 @@ pub fn move_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
     Ok(moved)
 }
 
-/// Renomme un élément dans son dossier. Rend son nouveau chemin.
+/// Renames an item within its folder. Returns its new path.
 pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf> {
     validate_name(new_name)?;
     let parent = path.parent().ok_or(Error::InvalidName)?;
@@ -214,7 +214,7 @@ pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Crée « Nouveau dossier », ou « Nouveau dossier 2 »… si le nom est pris.
+/// Creates "Nouveau dossier", or "Nouveau dossier 2"… if the name is taken.
 pub fn new_folder(dir: &Path) -> Result<PathBuf> {
     for n in 1.. {
         let path = dir.join(texts::new_folder_name(n));
@@ -234,60 +234,60 @@ mod tests {
 
     fn write(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("dossier parent");
+            fs::create_dir_all(parent).expect("parent folder");
         }
-        fs::write(path, content).expect("écriture");
+        fs::write(path, content).expect("write");
     }
 
     fn read(path: &Path) -> String {
-        fs::read_to_string(path).expect("lecture")
+        fs::read_to_string(path).expect("read")
     }
 
     #[test]
-    fn copier_un_dossier_copie_tout_son_contenu() {
-        let tmp = TempDir::new("copie");
+    fn copying_a_folder_copies_all_its_content() {
+        let tmp = TempDir::new("copy");
         let (src, dest) = (tmp.path().join("projet"), tmp.path().join("dest"));
         write(&src.join("a.txt"), "a");
         write(&src.join("sous/b.txt"), "b");
-        std::os::unix::fs::symlink("a.txt", src.join("lien")).expect("lien");
-        fs::create_dir(&dest).expect("dossier");
+        std::os::unix::fs::symlink("a.txt", src.join("lien")).expect("link");
+        fs::create_dir(&dest).expect("folder");
 
-        let created = copy_into(std::slice::from_ref(&src), &dest).expect("copie");
+        let created = copy_into(std::slice::from_ref(&src), &dest).expect("copy");
         assert_eq!(created, [dest.join("projet")]);
         assert_eq!(read(&dest.join("projet/sous/b.txt")), "b");
         assert_eq!(
-            fs::read_link(dest.join("projet/lien")).expect("lien copié"),
+            fs::read_link(dest.join("projet/lien")).expect("copied link"),
             Path::new("a.txt")
         );
-        // La source est intacte.
+        // The source is intact.
         assert_eq!(read(&src.join("a.txt")), "a");
     }
 
     #[test]
-    fn une_copie_au_nom_pris_devient_copie_sans_rien_ecraser() {
-        let tmp = TempDir::new("conflit");
+    fn a_copy_with_a_taken_name_becomes_copie_without_overwriting() {
+        let tmp = TempDir::new("conflict");
         let file = tmp.path().join("notes.txt");
         write(&file, "original");
-        let first = duplicate(std::slice::from_ref(&file)).expect("copie");
-        let second = duplicate(std::slice::from_ref(&file)).expect("copie");
+        let first = duplicate(std::slice::from_ref(&file)).expect("copy");
+        let second = duplicate(std::slice::from_ref(&file)).expect("copy");
         assert_eq!(first, [tmp.path().join("notes (copie).txt")]);
         assert_eq!(second, [tmp.path().join("notes (copie 2).txt")]);
         assert_eq!(read(&file), "original");
         assert_eq!(read(&second[0]), "original");
 
         let dir = tmp.path().join("v1.2");
-        fs::create_dir(&dir).expect("dossier");
+        fs::create_dir(&dir).expect("folder");
         assert_eq!(
-            duplicate(&[dir]).expect("copie"),
+            duplicate(&[dir]).expect("copy"),
             [tmp.path().join("v1.2 (copie)")]
         );
     }
 
     #[test]
-    fn un_dossier_ne_va_pas_dans_lui_meme() {
-        let tmp = TempDir::new("soi");
+    fn a_folder_does_not_go_into_itself() {
+        let tmp = TempDir::new("itself");
         let dir = tmp.path().join("a");
-        fs::create_dir_all(dir.join("b")).expect("dossiers");
+        fs::create_dir_all(dir.join("b")).expect("folders");
         assert!(matches!(
             copy_into(std::slice::from_ref(&dir), &dir.join("b")),
             Err(Error::IntoItself)
@@ -299,14 +299,14 @@ mod tests {
     }
 
     #[test]
-    fn deplacer_vide_la_source_et_refuse_un_nom_pris() {
-        let tmp = TempDir::new("deplacement");
+    fn moving_empties_the_source_and_refuses_a_taken_name() {
+        let tmp = TempDir::new("move");
         let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
         write(&a.join("x.txt"), "x");
         write(&a.join("y.txt"), "y");
         write(&b.join("y.txt"), "autre");
 
-        let moved = move_into(&[a.join("x.txt")], &b).expect("déplacement");
+        let moved = move_into(&[a.join("x.txt")], &b).expect("move");
         assert_eq!(moved, [b.join("x.txt")]);
         assert!(!a.join("x.txt").exists());
         assert_eq!(read(&b.join("x.txt")), "x");
@@ -315,21 +315,21 @@ mod tests {
         assert!(matches!(refused, Err(Error::Exists(ref name)) if name == "y.txt"));
         assert_eq!(read(&a.join("y.txt")), "y");
         assert_eq!(read(&b.join("y.txt")), "autre");
-        // Déplacer là où l'élément est déjà ne fait rien.
+        // Moving to where the item already is does nothing.
         assert_eq!(
-            move_into(&[b.join("x.txt")], &b).expect("sur place"),
+            move_into(&[b.join("x.txt")], &b).expect("in place"),
             [b.join("x.txt")]
         );
     }
 
     #[test]
-    fn renommer_verifie_le_nom() {
-        let tmp = TempDir::new("renommage");
+    fn renaming_checks_the_name() {
+        let tmp = TempDir::new("rename");
         let file = tmp.path().join("avant.txt");
         write(&file, "contenu");
         write(&tmp.path().join("pris.txt"), "");
 
-        let renamed = rename(&file, "après.txt").expect("renommage");
+        let renamed = rename(&file, "après.txt").expect("rename");
         assert_eq!(read(&renamed), "contenu");
         assert!(!file.exists());
         assert!(matches!(
@@ -342,24 +342,24 @@ mod tests {
                 "{bad:?}"
             );
         }
-        assert_eq!(rename(&renamed, "après.txt").expect("même nom"), renamed);
+        assert_eq!(rename(&renamed, "après.txt").expect("same name"), renamed);
     }
 
     #[test]
-    fn un_nouveau_dossier_prend_un_nom_libre() {
-        let tmp = TempDir::new("nouveau");
+    fn a_new_folder_takes_a_free_name() {
+        let tmp = TempDir::new("new");
         assert_eq!(
-            new_folder(tmp.path()).expect("création"),
+            new_folder(tmp.path()).expect("create"),
             tmp.path().join("Nouveau dossier")
         );
         assert_eq!(
-            new_folder(tmp.path()).expect("création"),
+            new_folder(tmp.path()).expect("create"),
             tmp.path().join("Nouveau dossier 2")
         );
     }
 
     #[test]
-    fn les_erreurs_se_disent_en_francais() {
+    fn errors_are_worded_in_french() {
         let missing = io::Error::from(io::ErrorKind::NotFound);
         assert_eq!(Error::from(missing).to_string(), texts::NOT_FOUND);
         assert_eq!(

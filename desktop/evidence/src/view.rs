@@ -1,5 +1,5 @@
-//! Vue de l'application, conforme à la planche Fichiers : barre de titre, barre d'outils avec
-//! fil d'Ariane, barre latérale, liste, aperçu, barre d'état, menu du clic droit.
+//! Application view, matching the Evidence mock-up: title bar, toolbar with breadcrumb,
+//! sidebar, listing, preview, status bar, right-click menu.
 
 use iced::widget::{
     Column, Row, button, column, container, image, mouse_area, opaque, pin, row, scrollable, space,
@@ -22,7 +22,7 @@ use crate::git::GitStatus;
 use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::preview::Preview;
 
-/// Trait vertical entre deux panneaux.
+/// Vertical rule between two panels.
 fn vline<'a>() -> Element<'a, Message> {
     container(space())
         .width(metrics::BORDER_WIDTH)
@@ -31,7 +31,7 @@ fn vline<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// Texte secondaire d'une cellule, à largeur fixe.
+/// Secondary text of a cell, with a fixed width.
 fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
     ui::body(content)
         .color(color::TEXT_SECONDARY)
@@ -40,7 +40,7 @@ fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
         .into()
 }
 
-/// Texte secondaire d'une cellule, sans copie.
+/// Secondary text of a cell, without a copy.
 fn cell_ref(content: &str, width: f32) -> Element<'_, Message> {
     ui::body(content)
         .color(color::TEXT_SECONDARY)
@@ -59,7 +59,7 @@ fn elide(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Voile d'une couleur de fond, pour les fondus.
+/// Veil of a background colour, for fades.
 fn veil<'a>(fill: color::Color, alpha: f32) -> Element<'a, Message> {
     let fill = color::Color { a: alpha, ..fill };
     container(space())
@@ -69,7 +69,7 @@ fn veil<'a>(fill: color::Color, alpha: f32) -> Element<'a, Message> {
         .into()
 }
 
-/// Libellé et ton de l'état git.
+/// Label and tone of the git status.
 fn git_badge(status: GitStatus) -> (&'static str, Tone) {
     match status {
         GitStatus::Modified => (t::GIT_MODIFIED, Tone::Warning),
@@ -216,8 +216,8 @@ impl App {
             .into()
     }
 
-    /// Le favori qui contient l'emplacement courant, le plus profond : sous Documents, c'est
-    /// Documents qui est actif. Accueil ne l'est que pour le dossier personnel lui-même.
+    /// The deepest favourite that contains the current location: under Documents, Documents
+    /// is active. Home is active only for the home folder itself.
     fn active_place(&self) -> Option<usize> {
         let Location::Folder(dir) = &self.location else {
             return None;
@@ -361,9 +361,9 @@ impl App {
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center);
 
-        // Le contenu d'un dossier qui s'ouvre monte de quelques pixels en fondu. Faute
-        // d'opacité de groupe dans iced, le fondu est un voile du fond de la fenêtre posé
-        // dessus, qui s'efface.
+        // The content of a folder that opens rises a few pixels while fading in. With no
+        // group opacity in iced, the fade is a veil of the window background laid on top,
+        // which fades away.
         let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
         let content: Element<'_, Message> = if self.entries.is_empty() {
             let empty = match (in_trash, self.search.is_empty()) {
@@ -395,8 +395,8 @@ impl App {
             .into()
     }
 
-    /// Les lignes visibles seulement, entre deux espaces qui tiennent la place des autres : une
-    /// liste de 5 000 fichiers ne pose que quelques dizaines de widgets.
+    /// Only the visible rows, between two spacers that hold the place of the others: a
+    /// listing of 5,000 files lays out only a few dozen widgets.
     fn rows(&self, now: Duration, slide: f32) -> Element<'_, Message> {
         let row_height = metrics::LIST_ROW_HEIGHT;
         let total = self.entries.len();
@@ -460,7 +460,7 @@ impl App {
 
     fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
         let selected = self.selection.contains(&i);
-        // Une sélection seule est dessinée par le surlignage qui glisse.
+        // A single selection is drawn by the gliding highlight.
         let painted = selected && self.selection.len() > 1;
         let tint = match entry.kind {
             Kind::Folder => color::BLUE_LIGHT,
@@ -556,7 +556,7 @@ impl App {
                     Preview::Image(path) => image(path.as_path()).width(Length::Fill).into(),
                     Preview::Info => self.info(entry),
                 };
-                // L'aperçu arrive en fondu : un voile du fond du panneau qui s'efface.
+                // The preview fades in: a veil of the panel background that fades away.
                 let reveal = self.preview_fade.as_ref().map_or(1.0, |f| f.value(now));
                 let body: Element<'_, Message> = if reveal < 1.0 {
                     stack![body, veil(color::SIDEBAR, 1.0 - reveal)].into()
@@ -583,7 +583,7 @@ impl App {
             .into()
     }
 
-    /// Informations d'un élément sans aperçu : date, type, emplacement.
+    /// Information of an item without a preview: date, kind, location.
     fn info<'a>(&self, entry: &'a Entry) -> Element<'a, Message> {
         let date = entry.modified.and_then(clock::local).map(texts::full_date);
         let date_label = match entry.origin {
@@ -651,7 +651,7 @@ impl App {
             let lit = !menu.submenu && menu.highlight == Some(i);
             menu_entry(*item, lit, menu.submenu, true)
         });
-        // Le menu s'ouvre à l'échelle, depuis son coin haut gauche, sur un ressort.
+        // The menu opens by scaling from its top left corner, on a spring.
         let factor = self
             .menu_scale
             .as_ref()
@@ -701,8 +701,8 @@ impl App {
     }
 }
 
-/// Une entrée du menu ou du sous-menu. `lit` : surlignée au clavier. Survoler une entrée du
-/// menu principal ouvre ou ferme le sous-menu, comme dans tout menu.
+/// An entry of the menu or submenu. `lit`: highlighted from the keyboard. Hovering an entry of
+/// the main menu opens or closes the submenu, as in any menu.
 fn menu_entry<'a>(
     item: MenuItem,
     lit: bool,

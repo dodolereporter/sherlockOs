@@ -272,6 +272,38 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
 - **Rendu du texte** : cosmic-text lisse en niveaux de gris, sans lissage sous-pixel ; la graisse
   600 sort un peu plus épaisse que dans un navigateur (annexe de l'ADR 0014).
 
+## Additions of D-27 (Evidence)
+
+Written in English, like all code and technical documentation from now on.
+
+- **Tokens.** `metrics`: application window (`REFERENCE_WINDOW`, title bar paddings, app badge,
+  window controls), toolbar, breadcrumb, branch chip, search field, status bar, sidebar and
+  navigation entries, preview panel, code block, lists (`LIST_*`, column widths, overscan,
+  slide), badges, dialog, context menu and submenu widths (236 and 216, planche Fichiers).
+  `color`: `TEXT_CODE`, `INSET`, `CONTROLS`, `SCRIM`, `AMBER_SOFT`, `ACCENT_SOFT`,
+  `NEUTRAL_SOFT`, `ACCENT_BORDER`. `typography`: `CODE_SMALL_SIZE`, `COLUMN_HEADER_SIZE`,
+  `BADGE_SIZE`, `UI_CHAR_WIDTH` (to cut names without shaping them).
+- **Icons.** Back, sort arrows, minimise, maximise, home, desktop, document, download, folder,
+  image, trash, cube (from the planche); system disk (planche); internal disk, USB key, external
+  disk, card, optical disc, eject, lock (drawn for Evidence on the same grid and stroke).
+  `component::icon` now builds each SVG handle once.
+- **Texts.** New module `texts`: French interface texts and their formatting (`short_date`,
+  `full_date`, `size`, `items`), and `texts::evidence` for the file manager.
+- **Components.** `danger` (salmon menu entry), `danger_button`, `primary_block` and
+  `secondary_block` (full width, centred label), `toolbar_button`, `search_field` (magnifier
+  inside), `nav_item` and `nav_section`, `badge` (with `theme::Tone`), `chip`,
+  `window_controls`, `crumb`, `column_header`, `code_block` with `CodeRole` colouring.
+  `theme::window_theme()` gives an application window whose body is the renderer's clear colour.
+- **Animations.** `animated::Hoverable` fades a hover veil in and out over `motion::FADE` and
+  requests its own frames while it runs. Every control without a resting background (menu
+  entries, icon, secondary, window and navigation buttons) now uses it: its hover is animated.
+  `animated::Scaled` draws a widget at a scale from its top-left corner (menus opening).
+- **Tests.** The contrast test covers the new components, badges on a selected row, the code
+  text, the destructive button (its pressed state keeps the hover veil: the lighter veil would
+  drop the salmon to 4.39:1 on the lightest desktop disc). The gallery shows the destructive
+  button, the toolbar button, the destructive menu entry and the navigation entries, and its
+  capture is now 2,400 pixels high.
+
 ## Ce que le lot ne fait pas
 
 - Les composants animés : les ressorts et le fondu sont dans `motion` depuis D-11, à brancher

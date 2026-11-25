@@ -1,21 +1,21 @@
-//! Mesure de fluidité, lancée par `evidence --measure <dossier>` : ouverture du dossier, puis
-//! trois secondes de défilement continu, puis trois secondes de sélection qui descend d'une
-//! ligne toutes les quelques images. Chaque phase écrit son bilan dans le journal (`tracing`),
-//! puis l'application se ferme. Le dossier n'est jamais modifié.
+//! Smoothness measurement, started by `evidence --measure <folder>`: open the folder, then
+//! three seconds of continuous scrolling, then three seconds of a selection moving down one
+//! row every few frames. Each phase logs its summary (`tracing`), then the application quits.
+//! The folder is never modified.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-/// Durée de chaque phase mesurée.
+/// Duration of each measured phase.
 const PHASE: Duration = Duration::from_secs(3);
-/// Défilement à chaque image, en pixels.
+/// Scroll distance per frame, in pixels.
 pub const SCROLL_STEP: f32 = 24.0;
-/// Images entre deux pas de la sélection.
+/// Frames between two selection steps.
 pub const SELECT_EVERY: usize = 9;
-/// Une image au-delà de cet intervalle manque les 60 images par seconde.
+/// A frame beyond this interval misses 60 frames per second.
 const LATE: Duration = Duration::from_micros(16_667);
 
-/// Ce que l'application doit faire à cette image.
+/// What the application must do on this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Open,
@@ -30,14 +30,14 @@ pub enum Step {
 enum Phase {
     Start,
     Opening,
-    /// Le dossier est chargé : l'image suivante prouve qu'il a été dessiné.
+    /// The folder is loaded: the next frame proves it has been drawn.
     Drawn,
     Scrolling,
     Selecting,
     Done,
 }
 
-/// État de la mesure.
+/// Measurement state.
 #[derive(Debug, Clone)]
 pub struct Probe {
     pub target: PathBuf,
@@ -62,7 +62,7 @@ impl Probe {
         self.phase != Phase::Done
     }
 
-    /// Une image vient d'être demandée. `loaded` : le dossier mesuré est affiché.
+    /// A frame was just requested. `loaded`: the measured folder is displayed.
     pub fn frame(&mut self, now: Instant, loaded: bool) -> Step {
         if let Some(last) = self.last.replace(now) {
             self.intervals.push(now - last);
@@ -81,20 +81,20 @@ impl Probe {
             Phase::Opening => Step::Wait,
             Phase::Drawn => {
                 tracing::info!(
-                    "mesure : ouverture du dossier en {:.1} ms",
+                    "measure: folder opened in {:.1} ms",
                     (now - since).as_secs_f64() * 1000.0
                 );
                 self.next(Phase::Scrolling, now);
                 Step::Scroll
             }
             Phase::Scrolling if now - since >= PHASE => {
-                self.report("défilement", now - since);
+                self.report("scroll", now - since);
                 self.next(Phase::Selecting, now);
                 Step::Idle
             }
             Phase::Scrolling => Step::Scroll,
             Phase::Selecting if now - since >= PHASE => {
-                self.report("sélection animée", now - since);
+                self.report("animated selection", now - since);
                 self.phase = Phase::Done;
                 Step::Exit
             }
@@ -119,7 +119,7 @@ impl Probe {
         let max = sorted.last().copied().unwrap_or_default();
         let late = sorted.iter().filter(|d| **d > LATE).count();
         tracing::info!(
-            "mesure : {what} : {count} images en {:.2} s, {:.1} images/s, intervalle p95 {:.1} ms, max {:.1} ms, {late} au-delà de 16,7 ms",
+            "measure: {what}: {count} frames in {:.2} s, {:.1} frames/s, p95 interval {:.1} ms, max {:.1} ms, {late} over 16.7 ms",
             elapsed.as_secs_f64(),
             count as f64 / elapsed.as_secs_f64(),
             ms(p95),

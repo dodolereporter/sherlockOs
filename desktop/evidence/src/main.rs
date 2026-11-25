@@ -1,4 +1,4 @@
-//! Fichiers : `cargo run -p evidence [dossier]`.
+//! Evidence: `cargo run -p evidence [folder]`.
 
 use evidence::app::{App, Config};
 use sherlock_ui::{metrics, theme, typography};

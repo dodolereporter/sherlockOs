@@ -75,9 +75,9 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
             ring,
             label,
         } = control;
-        // Un composant sans fond au repos (entrée de menu, bouton d'icône, bouton secondaire…)
-        // prend son voile de survol en fondu : le bouton ne le dessine plus, `Hoverable` le
-        // pose dessous. Un état imposé (galerie) reste dessiné tel quel.
+        // A component without a background at rest (menu entry, icon button, secondary
+        // button…) fades its hover veil in: the button no longer draws it, `Hoverable` lays it
+        // underneath. A forced state (gallery) is still drawn as is.
         let rest = style(&Theme::Dark, button::Status::Active).background;
         let hover = match style(&Theme::Dark, button::Status::Hovered).background {
             Some(iced::Background::Color(c)) if rest.is_none() && forced.is_none() => Some(c),
@@ -140,8 +140,8 @@ pub fn section_label<'a>(content: &str) -> Text<'a> {
         .color(color::TEXT_TERTIARY)
 }
 
-/// Le document SVG d'une icône, construit une fois pour toutes : une vue qui en dessine des
-/// centaines ne refait ni la chaîne ni son empreinte.
+/// The SVG document of an icon, built once and for all: a view that draws hundreds of them
+/// rebuilds neither the string nor its hash.
 fn handle(glyph: Icon) -> svg::Handle {
     static HANDLES: std::sync::OnceLock<Vec<svg::Handle>> = std::sync::OnceLock::new();
     let all = HANDLES.get_or_init(|| {
@@ -199,7 +199,7 @@ fn block_button<'a, Message: Clone + 'a>(
     control
 }
 
-/// Bouton principal sur toute la largeur, libellé centré (panneau d'aperçu).
+/// Full-width primary button, centred label (preview panel).
 pub fn primary_block<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
@@ -207,7 +207,7 @@ pub fn primary_block<'a, Message: Clone + 'a>(
     block_button(label, typography::UI_SEMIBOLD, theme::primary, on_press)
 }
 
-/// Bouton secondaire sur toute la largeur, libellé centré.
+/// Full-width secondary button, centred label.
 pub fn secondary_block<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
@@ -215,8 +215,8 @@ pub fn secondary_block<'a, Message: Clone + 'a>(
     block_button(label, typography::UI, theme::secondary, on_press)
 }
 
-/// Bouton d'icône d'une barre d'outils (précédent, suivant) : fond voilé quand il agit,
-/// effacé quand il ne peut rien faire. `label` est obligatoire.
+/// Icon button of a toolbar (back, forward): veiled background when it acts, faded when it
+/// can do nothing. `label` is mandatory.
 pub fn toolbar_button<'a, Message: Clone + 'a>(
     glyph: Icon,
     label: &'a str,
@@ -243,7 +243,7 @@ pub fn toolbar_button<'a, Message: Clone + 'a>(
     control
 }
 
-/// Champ de recherche : la loupe à gauche, dans le champ. `id` permet d'y donner le focus.
+/// Search field: the magnifier on the left, inside the field. `id` lets the caller focus it.
 pub fn search_field<'a, Message: Clone + 'a>(
     placeholder: &str,
     value: &str,
@@ -293,7 +293,7 @@ pub fn secondary_button<'a, Message: Clone + 'a>(
     label_button(label, typography::UI, theme::secondary, on_press)
 }
 
-/// Bouton destructif : secondaire, texte saumon. Pour vider, effacer, jeter.
+/// Destructive button: secondary, salmon text. To empty, delete, discard.
 pub fn danger_button<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
@@ -489,13 +489,13 @@ pub fn glass_panel<'a, Message: 'a>(
         .style(theme::glass)
 }
 
-/// Marque une entrée de menu comme destructive : texte saumon (planche Fichiers).
+/// Marks a menu entry as destructive: salmon text (Evidence mock-up).
 pub fn danger<'a, Message: Clone + 'a>(mut item: Control<'a, Message>) -> Control<'a, Message> {
     item.style = Box::new(theme::menu_item_danger);
     item
 }
 
-/// Entrée d'une navigation latérale : icône, libellé, compteur éventuel à droite.
+/// Entry of a side navigation: icon, label, optional counter on the right.
 pub fn nav_item<'a, Message: Clone + 'a>(
     glyph: Icon,
     label: impl text::IntoFragment<'a>,
@@ -550,7 +550,7 @@ pub fn nav_item_owned<'a, Message: Clone + 'a>(
     nav_item(glyph, label, count, active, on_press)
 }
 
-/// Étiquette de section d'une navigation latérale, avec ses marges.
+/// Section label of a side navigation, with its padding.
 pub fn nav_section<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
     let (top, side, bottom) = metrics::NAV_SECTION_PADDING;
     container(section_label(label))
@@ -563,8 +563,7 @@ pub fn nav_section<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
         .into()
 }
 
-/// Étiquette d'état, comme l'état git d'un fichier. `selected` : posée sur une ligne
-/// sélectionnée.
+/// Status badge, like the git status of a file. `selected`: placed on a selected row.
 pub fn badge<'a, Message: 'a>(
     label: &'a str,
     tone: theme::Tone,
@@ -581,7 +580,7 @@ pub fn badge<'a, Message: 'a>(
     .into()
 }
 
-/// Étiquette verte en police de code, comme la branche git.
+/// Green badge in the code font, like the git branch.
 pub fn chip<'a, Message: 'a>(label: String) -> Element<'a, Message> {
     let (vertical, horizontal) = metrics::CHIP_PADDING;
     container(
@@ -594,7 +593,7 @@ pub fn chip<'a, Message: 'a>(label: String) -> Element<'a, Message> {
     .into()
 }
 
-/// Les trois boutons d'une fenêtre dans leur pastille : réduire, agrandir, fermer.
+/// The three window buttons in their pill: minimize, maximize, close.
 pub fn window_controls<'a, Message: Clone + 'a>(
     labels: [&'a str; 3],
     on_press: [Message; 3],
@@ -624,7 +623,7 @@ pub fn window_controls<'a, Message: Clone + 'a>(
         .into()
 }
 
-/// Segment cliquable du fil d'Ariane. Le dossier courant est en demi-gras.
+/// Clickable breadcrumb segment. The current folder is semibold.
 pub fn crumb<'a, Message: Clone + 'a>(
     label: String,
     current: bool,
@@ -646,8 +645,8 @@ pub fn crumb<'a, Message: Clone + 'a>(
     control
 }
 
-/// En-tête de colonne d'une liste, cliquable pour trier. `sorted` donne le sens du tri quand
-/// la liste est triée sur cette colonne : vrai pour croissant.
+/// Column header of a list, clickable to sort. `sorted` gives the sort direction when the
+/// list is sorted on this column: true for ascending.
 pub fn column_header<'a, Message: Clone + 'a>(
     label: &str,
     sorted: Option<bool>,
@@ -672,13 +671,13 @@ pub fn column_header<'a, Message: Clone + 'a>(
     control
 }
 
-/// Rôle d'un morceau de code : sa couleur dans un extrait.
+/// Role of a piece of code: its colour in a snippet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeRole {
     Plain,
-    /// Mot-clé, en bleu clair comme sur les planches.
+    /// Keyword, in light blue as in the mock-ups.
     Keyword,
-    /// Commentaire, dans le gris des numéros de ligne.
+    /// Comment, in the grey of line numbers.
     Comment,
 }
 
@@ -692,8 +691,8 @@ impl CodeRole {
     }
 }
 
-/// Extrait de code ou début d'un fichier texte, en JetBrains Mono : une ligne par entrée,
-/// chacune faite de morceaux colorés selon leur rôle.
+/// Code snippet or start of a text file, in JetBrains Mono: one line per entry, each made of
+/// pieces coloured by their role.
 pub fn code_block<'a, Message: 'a>(lines: &'a [Vec<(String, CodeRole)>]) -> Container<'a, Message> {
     let lines = lines.iter().map(|line| {
         let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> = line

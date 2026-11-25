@@ -1,4 +1,4 @@
-//! Aperçu de l'élément sélectionné : début d'un texte, image, ou simples informations.
+//! Preview of the selected item: the start of a text, an image, or plain information.
 
 use std::fs::File;
 use std::io::Read;
@@ -9,24 +9,24 @@ use sherlock_ui::metrics;
 
 use crate::listing::{Entry, Kind};
 
-/// Octets lus au plus pour l'aperçu d'un texte : de quoi remplir le panneau.
+/// Maximum bytes read for a text preview: enough to fill the panel.
 const READ_LIMIT: u64 = 16 * 1024;
-/// Largeur d'une tabulation dans l'aperçu.
+/// Width of a tab in the preview.
 const TAB: &str = "    ";
 
-/// Ce que montre le panneau d'aperçu.
+/// What the preview panel shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Preview {
-    /// Premières lignes d'un fichier texte, découpées en morceaux colorés.
+    /// First lines of a text file, split into coloured pieces.
     Text(Vec<Vec<(String, CodeRole)>>),
-    /// Image à afficher.
+    /// Image to display.
     Image(PathBuf),
-    /// Rien à montrer de plus que les informations du fichier.
+    /// Nothing to show beyond the file information.
     Info,
 }
 
-/// Prépare l'aperçu d'un élément. Un fichier illisible, binaire ou vide n'a que ses
-/// informations.
+/// Prepares the preview of an item. An unreadable, binary or empty file only gets its
+/// information.
 pub fn load(entry: &Entry) -> Preview {
     if entry.kind != Kind::File {
         return Preview::Info;
@@ -39,7 +39,7 @@ pub fn load(entry: &Entry) -> Preview {
     if read.is_err() || bytes.is_empty() || bytes.contains(&0) {
         return Preview::Info;
     }
-    // La lecture a pu couper un caractère en deux : seule la fin peut être invalide.
+    // The read may have split a character in two: only the end can be invalid.
     let text = match std::str::from_utf8(&bytes) {
         Ok(text) => text,
         Err(error) if bytes.len() - error.valid_up_to() < 4 => {
@@ -63,7 +63,7 @@ pub fn load(entry: &Entry) -> Preview {
     Preview::Text(lines)
 }
 
-/// Coloration légère de l'aperçu : mots-clés et commentaires de quelques langages.
+/// Light highlighting of the preview: keywords and comments of a few languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Language {
     Docker,
@@ -138,7 +138,7 @@ impl Language {
         }
     }
 
-    /// Découpe une ligne en morceaux colorés.
+    /// Splits a line into coloured pieces.
     fn highlight(self, line: &str) -> Vec<(String, CodeRole)> {
         let trimmed = line.trim_start();
         if self.comment().is_some_and(|c| trimmed.starts_with(c)) {
@@ -190,17 +190,17 @@ mod tests {
     use crate::testing::TempDir;
 
     fn entry(path: PathBuf) -> Entry {
-        Entry::read(&path, false).expect("élément")
+        Entry::read(&path, false).expect("item")
     }
 
     #[test]
-    fn un_texte_montre_ses_premieres_lignes() {
-        let tmp = TempDir::new("apercu");
+    fn a_text_shows_its_first_lines() {
+        let tmp = TempDir::new("preview");
         let path = tmp.path().join("Dockerfile");
         let content: String = (0..100).map(|i| format!("RUN\tétape {i}\n")).collect();
-        std::fs::write(&path, content).expect("écriture");
+        std::fs::write(&path, content).expect("write");
         let Preview::Text(lines) = load(&entry(path)) else {
-            panic!("aperçu texte attendu");
+            panic!("text preview expected");
         };
         assert_eq!(lines.len(), metrics::PREVIEW_LINES);
         assert_eq!(
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn la_coloration_trouve_mots_cles_et_commentaires() {
+    fn highlighting_finds_keywords_and_comments() {
         let rust = Language::Rust.highlight("pub fn main() // fin");
         assert_eq!(rust[0], ("pub".to_owned(), CodeRole::Keyword));
         assert_eq!(rust[2], ("fn".to_owned(), CodeRole::Keyword));
@@ -228,20 +228,20 @@ mod tests {
     }
 
     #[test]
-    fn un_binaire_une_image_et_un_dossier_ont_leur_apercu() {
-        let tmp = TempDir::new("apercu-autres");
+    fn a_binary_an_image_and_a_folder_get_their_preview() {
+        let tmp = TempDir::new("preview-others");
         let binary = tmp.path().join("programme");
-        std::fs::write(&binary, [0x7f, b'E', b'L', b'F', 0, 1]).expect("écriture");
+        std::fs::write(&binary, [0x7f, b'E', b'L', b'F', 0, 1]).expect("write");
         assert_eq!(load(&entry(binary)), Preview::Info);
         let image = tmp.path().join("photo.png");
-        std::fs::write(&image, []).expect("écriture");
+        std::fs::write(&image, []).expect("write");
         assert_eq!(load(&entry(image.clone())), Preview::Image(image));
         assert_eq!(load(&entry(tmp.path().to_path_buf())), Preview::Info);
-        // Un caractère coupé par la limite de lecture ne gâche pas l'aperçu.
+        // A character cut by the read limit does not spoil the preview.
         let cut = tmp.path().join("long.txt");
         let mut text = "a".repeat(READ_LIMIT as usize - 1).into_bytes();
         text.extend("é".as_bytes());
-        std::fs::write(&cut, text).expect("écriture");
+        std::fs::write(&cut, text).expect("write");
         assert!(matches!(load(&entry(cut)), Preview::Text(_)));
     }
 }

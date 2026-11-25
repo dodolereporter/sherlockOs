@@ -32,9 +32,9 @@ pub const TITLE_LARGE_SIZE: f32 = 44.0;
 /// Code et terminal, de 12 à 12,5, sur un interligne de 20.
 pub const CODE_SIZE: f32 = 12.5;
 pub const CODE_LINE_HEIGHT: f32 = 20.0;
-/// Code dans un panneau étroit : aperçu de fichier, étiquette de branche.
+/// Code in a narrow panel: file preview, branch badge.
 pub const CODE_SMALL_SIZE: f32 = 12.0;
-/// En-têtes de colonnes d'une liste et étiquettes d'état, en majuscules pour les premiers.
+/// Column headers of a listing and status badges, uppercase for the former.
 pub const COLUMN_HEADER_SIZE: f32 = 11.5;
 pub const BADGE_SIZE: f32 = 11.5;
 /// Étiquette de section, de 11 à 11,5, en majuscules.

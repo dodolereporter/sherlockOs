@@ -98,9 +98,9 @@ pub fn secondary(_: &Theme, status: button::Status) -> button::Style {
     button_style(fill, text, edge)
 }
 
-/// Bouton destructif : un bouton secondaire au texte saumon. Appuyé, il garde le voile du
-/// survol : le voile plus clair ferait tomber le saumon sous 4,5 de contraste sur le disque le
-/// plus clair du bureau.
+/// Destructive button: a secondary button with salmon text. Pressed, it keeps the hover veil:
+/// the lighter veil would drop the salmon below a 4.5 contrast on the lightest disc of the
+/// desktop.
 pub fn danger(theme: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Disabled => secondary(theme, status),
@@ -132,7 +132,7 @@ pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
     )
 }
 
-/// Bouton d'une barre d'outils : fond voilé au repos, plus clair au survol, effacé désactivé.
+/// Toolbar button: veiled background at rest, lighter on hover, faded when disabled.
 pub fn toolbar_button(_: &Theme, status: button::Status) -> button::Style {
     let (fill, text) = match status {
         button::Status::Active => (Some(color::FIELD), color::TEXT_PRIMARY),
@@ -310,7 +310,7 @@ pub fn desktop(_: &Theme) -> container::Style {
     }
 }
 
-/// Entrée de menu qui détruit ou jette : texte saumon.
+/// Menu entry that destroys or discards: salmon text.
 pub fn menu_item_danger(theme: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Disabled => menu_item(theme, status),
@@ -321,7 +321,7 @@ pub fn menu_item_danger(theme: &Theme, status: button::Status) -> button::Style 
     }
 }
 
-/// Entrée d'une navigation : verte quand elle est active, voilée au survol sinon.
+/// Navigation entry: green when active, otherwise veiled on hover.
 pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| match (active, status) {
         (true, button::Status::Disabled) | (false, _) => ghost(
@@ -338,7 +338,7 @@ pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
     }
 }
 
-/// Bouton de fenêtre (réduire, agrandir, fermer), dans sa pastille.
+/// Window button (minimize, maximize, close), inside its pill.
 pub fn window_button(_: &Theme, status: button::Status) -> button::Style {
     ghost(
         status,
@@ -348,7 +348,7 @@ pub fn window_button(_: &Theme, status: button::Status) -> button::Style {
     )
 }
 
-/// Segment du fil d'Ariane. Le dossier courant est en texte principal.
+/// Breadcrumb segment. The current folder uses the primary text colour.
 pub fn crumb(current: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     let rest = if current {
         color::TEXT_PRIMARY
@@ -358,7 +358,7 @@ pub fn crumb(current: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
     move |_, status| ghost(status, rest, metrics::CRUMB_RADIUS, color::HOVER)
 }
 
-/// En-tête de colonne cliquable : gris tertiaire, plus clair au survol.
+/// Clickable column header: tertiary grey, lighter on hover.
 pub fn column_header(_: &Theme, status: button::Status) -> button::Style {
     let text = match status {
         button::Status::Active | button::Status::Disabled => color::TEXT_TERTIARY,
@@ -367,20 +367,20 @@ pub fn column_header(_: &Theme, status: button::Status) -> button::Style {
     button_style(None, text, border::rounded(0.0))
 }
 
-/// Ton d'une étiquette d'état.
+/// Tone of a status badge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
-    /// Ambre : à surveiller, comme un fichier modifié.
+    /// Amber: worth watching, like a modified file.
     Warning,
-    /// Vert : nouveau, réussi.
+    /// Green: new, successful.
     Success,
-    /// Gris : sans conséquence, comme un fichier ignoré.
+    /// Grey: of no consequence, like an ignored file.
     Neutral,
 }
 
 impl Tone {
-    /// Texte et fond de l'étiquette. Sur une ligne sélectionnée, le voile du ton tomberait
-    /// sous 4,5 de contraste : l'étiquette se pose alors sur le fond le plus sombre.
+    /// Text and background of the badge. On a selected row, the tone's veil would drop below
+    /// a 4.5 contrast: the badge then sits on the darkest background.
     pub fn colors(self, selected: bool) -> (Color, Color) {
         let (text, soft) = match self {
             Self::Warning => (color::AMBER, color::AMBER_SOFT),
@@ -396,7 +396,7 @@ impl Tone {
     }
 }
 
-/// Étiquette d'état, comme l'état git d'un fichier, sur une ligne sélectionnée ou non.
+/// Status badge, like the git status of a file, on a selected row or not.
 pub fn badge(tone: Tone, selected: bool) -> impl Fn(&Theme) -> container::Style {
     move |_| {
         let (text, fill) = tone.colors(selected);
@@ -409,7 +409,7 @@ pub fn badge(tone: Tone, selected: bool) -> impl Fn(&Theme) -> container::Style 
     }
 }
 
-/// Étiquette verte sans fond, comme la branche git.
+/// Green badge without background, like the git branch.
 pub fn chip(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(color::ACCENT.into()),
@@ -422,7 +422,7 @@ pub fn chip(_: &Theme) -> container::Style {
     }
 }
 
-/// Ligne d'une liste, bleue quand elle est sélectionnée.
+/// Row of a list, blue when selected.
 pub fn list_row(selected: bool) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         text_color: Some(color::TEXT_PRIMARY.into()),
@@ -441,42 +441,42 @@ fn plain(fill: Color, radius: f32) -> container::Style {
     }
 }
 
-/// Corps d'une fenêtre opaque.
+/// Body of an opaque window.
 pub fn window(_: &Theme) -> container::Style {
     plain(color::WINDOW, 0.0)
 }
 
-/// Barre de titre d'une fenêtre.
+/// Title bar of a window.
 pub fn title_bar(_: &Theme) -> container::Style {
     plain(color::TITLE_BAR, 0.0)
 }
 
-/// Panneau latéral : navigation à gauche, aperçu à droite.
+/// Side panel: navigation on the left, preview on the right.
 pub fn sidebar(_: &Theme) -> container::Style {
     plain(color::SIDEBAR, 0.0)
 }
 
-/// Pastille de l'application, dans sa barre de titre.
+/// Application badge, in its title bar.
 pub fn app_badge(_: &Theme) -> container::Style {
     plain(color::BLUE_DARK, metrics::APP_BADGE_RADIUS)
 }
 
-/// Pastille des boutons de fenêtre.
+/// Pill behind the window buttons.
 pub fn window_controls(_: &Theme) -> container::Style {
     plain(color::CONTROLS, metrics::WINDOW_CONTROLS_RADIUS)
 }
 
-/// Zone en retrait d'une barre d'outils, comme le fil d'Ariane.
+/// Inset area of a toolbar, like the breadcrumb.
 pub fn inset(_: &Theme) -> container::Style {
     plain(color::INSET, metrics::BREADCRUMB_RADIUS)
 }
 
-/// Vignette d'un fichier dans l'aperçu : bleu vif, icône sombre.
+/// File tile in the preview: bright blue, dark icon.
 pub fn preview_tile(_: &Theme) -> container::Style {
     plain(color::BLUE_BRIGHT, metrics::PREVIEW_TILE_RADIUS)
 }
 
-/// Extrait de code : fond le plus sombre.
+/// Code snippet: darkest background.
 pub fn code_block(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(color::TEXT_CODE.into()),
@@ -484,7 +484,7 @@ pub fn code_block(_: &Theme) -> container::Style {
     }
 }
 
-/// Voile d'une couleur quelconque, pour un fondu fait d'un aplat qui s'efface.
+/// Veil of any colour, for a fade made of a flat fill that fades away.
 pub fn veil(fill: Color) -> container::Style {
     container::Style {
         background: background(fill),
@@ -492,7 +492,7 @@ pub fn veil(fill: Color) -> container::Style {
     }
 }
 
-/// Voile derrière une question qui attend une réponse.
+/// Veil behind a question awaiting an answer.
 pub fn scrim(_: &Theme) -> container::Style {
     plain(color::SCRIM, 0.0)
 }
@@ -658,8 +658,8 @@ mod tests {
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
             }
         }
-        // Planche Fichiers : navigation, boutons de fenêtre, fil d'Ariane, en-têtes, étiquettes
-        // d'état posées sur une ligne sélectionnée ou non, extrait de code.
+        // Evidence mock-up: navigation, window buttons, breadcrumb, headers, status badges on
+        // a selected row or not, code snippet.
         for on in surfaces_where(|n| ["fenêtre", "barre de titre", "panneau latéral"].contains(&n))
         {
             type Boxed = Box<dyn Fn(&Theme, button::Status) -> button::Style>;

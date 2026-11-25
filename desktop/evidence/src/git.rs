@@ -1,12 +1,12 @@
-//! État git des éléments d'un dossier, lu par la commande `git` du poste
-//! (`git status --porcelain=v2`), sans lier libgit2.
+//! Git status of a folder's items, read through the machine's `git` command
+//! (`git status --porcelain=v2`), without linking libgit2.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-/// État git d'un élément, du plus important au moins important : un dossier qui contient un
-/// fichier modifié et un fichier nouveau est « modifié ».
+/// Git status of an item, from most to least important: a folder that holds a modified file
+/// and a new file is "modified".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GitStatus {
     Modified,
@@ -14,25 +14,25 @@ pub enum GitStatus {
     Ignored,
 }
 
-/// Ce que git dit d'un dossier.
+/// What git says about a folder.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Repo {
-    /// Branche courante, absente en tête détachée.
+    /// Current branch, absent on a detached head.
     pub branch: Option<String>,
-    /// État de chaque élément du dossier, par nom.
+    /// Status of each item of the folder, by name.
     pub statuses: HashMap<String, GitStatus>,
-    /// État du dossier entier, quand git le donne d'un bloc (dossier nouveau ou ignoré).
+    /// Status of the whole folder, when git reports it as a block (new or ignored folder).
     pub whole: Option<GitStatus>,
 }
 
 impl Repo {
-    /// État d'un élément du dossier.
+    /// Status of an item of the folder.
     pub fn status(&self, name: &str) -> Option<GitStatus> {
         self.statuses.get(name).copied().or(self.whole)
     }
 }
 
-/// Lance git dans `dir`. `None` si le dossier n'est pas dans un dépôt ou si git manque.
+/// Runs git in `dir`. `None` if the folder is not in a repository or git is missing.
 pub fn status(dir: &Path) -> Option<Repo> {
     let git = |args: &[&str]| {
         let output = Command::new("git")
@@ -59,9 +59,9 @@ pub fn status(dir: &Path) -> Option<Repo> {
     Some(parse(&output, &prefix))
 }
 
-/// Analyse la sortie de `git status --porcelain=v2 -z --branch`. Les chemins y sont relatifs à
-/// la racine du dépôt ; `prefix` est celui du dossier listé (`git rev-parse --show-prefix`),
-/// vide à la racine, terminé par « / » sinon.
+/// Parses the output of `git status --porcelain=v2 -z --branch`. Paths there are relative to
+/// the repository root; `prefix` is the listed folder's (`git rev-parse --show-prefix`), empty
+/// at the root, ending with "/" otherwise.
 pub fn parse(output: &[u8], prefix: &str) -> Repo {
     let mut repo = Repo::default();
     let text = String::from_utf8_lossy(output);
@@ -74,8 +74,8 @@ pub fn parse(output: &[u8], prefix: &str) -> Repo {
                 }
                 continue;
             }
-            // Modifié : `1 XY sub mH mI mW hH hI chemin`. Un fichier ajouté à l'index (X = A)
-            // est encore nouveau pour l'utilisateur.
+            // Modified: `1 XY sub mH mI mW hH hI path`. A file added to the index (X = A) is
+            // still new to the user.
             Some(b'1') => {
                 let added = record.get(2..3) == Some("A");
                 let status = if added {
@@ -85,12 +85,12 @@ pub fn parse(output: &[u8], prefix: &str) -> Repo {
                 };
                 (status, record.splitn(9, ' ').nth(8))
             }
-            // Renommé ou copié : le chemin d'origine suit, dans son propre champ.
+            // Renamed or copied: the original path follows, in its own field.
             Some(b'2') => {
                 records.next();
                 (GitStatus::Modified, record.splitn(10, ' ').nth(9))
             }
-            // En conflit de fusion.
+            // Merge conflict.
             Some(b'u') => (GitStatus::Modified, record.splitn(11, ' ').nth(10)),
             Some(b'?') => (GitStatus::New, record.get(2..)),
             Some(b'!') => (GitStatus::Ignored, record.get(2..)),
@@ -130,31 +130,31 @@ mod tests {
     );
 
     #[test]
-    fn chaque_element_du_dossier_prend_son_etat() {
+    fn each_item_of_the_folder_gets_its_status() {
         let repo = parse(OUTPUT.as_bytes(), "desktop/");
         assert_eq!(repo.branch.as_deref(), Some("main"));
-        // Un dossier qui contient un modifié et un nouveau est modifié.
+        // A folder that holds a modified and a new item is modified.
         assert_eq!(repo.status("src"), Some(GitStatus::Modified));
         assert_eq!(repo.status("Dockerfile"), Some(GitStatus::New));
-        // Le nom renommé garde ses espaces ; l'ancien nom n'apparaît pas.
+        // The renamed name keeps its spaces; the old name does not appear.
         assert_eq!(repo.status("nouveau nom.md"), Some(GitStatus::Modified));
         assert_eq!(repo.status("ancien.md"), None);
         assert_eq!(repo.status("essais"), Some(GitStatus::New));
         assert_eq!(repo.status("target"), Some(GitStatus::Ignored));
-        // Hors du dossier listé.
+        // Outside the listed folder.
         assert_eq!(repo.status("README.md"), None);
         assert_eq!(repo.statuses.len(), 5);
     }
 
     #[test]
-    fn a_la_racine_le_prefixe_est_vide() {
+    fn at_the_root_the_prefix_is_empty() {
         let repo = parse(OUTPUT.as_bytes(), "");
         assert_eq!(repo.status("desktop"), Some(GitStatus::Modified));
         assert_eq!(repo.status("README.md"), Some(GitStatus::Modified));
     }
 
     #[test]
-    fn un_dossier_ignore_d_un_bloc_marque_tout_son_contenu() {
+    fn a_folder_ignored_as_a_block_marks_all_its_content() {
         let repo = parse(
             b"# branch.head (detached)\0! desktop/target/\0",
             "desktop/target/",
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn git_lit_un_vrai_depot() {
+    fn git_reads_a_real_repository() {
         let dir = crate::testing::TempDir::new("git");
         let run = |args: &[&str]| {
             let ok = Command::new("git")
@@ -178,22 +178,22 @@ mod tests {
                 ])
                 .args(args)
                 .output()
-                .expect("git est installé")
+                .expect("git is installed")
                 .status
                 .success();
             assert!(ok, "git {args:?}");
         };
         run(&["init", "-q", "-b", "essai"]);
-        std::fs::write(dir.path().join(".gitignore"), "cible/\n").expect("écriture");
-        std::fs::write(dir.path().join("suivi.txt"), "un").expect("écriture");
+        std::fs::write(dir.path().join(".gitignore"), "cible/\n").expect("write");
+        std::fs::write(dir.path().join("suivi.txt"), "un").expect("write");
         run(&["add", "."]);
-        run(&["commit", "-q", "-m", "départ"]);
-        std::fs::write(dir.path().join("suivi.txt"), "deux").expect("écriture");
-        std::fs::write(dir.path().join("neuf.txt"), "").expect("écriture");
-        std::fs::create_dir(dir.path().join("cible")).expect("dossier");
-        std::fs::write(dir.path().join("cible/sortie"), "").expect("écriture");
+        run(&["commit", "-q", "-m", "initial"]);
+        std::fs::write(dir.path().join("suivi.txt"), "deux").expect("write");
+        std::fs::write(dir.path().join("neuf.txt"), "").expect("write");
+        std::fs::create_dir(dir.path().join("cible")).expect("folder");
+        std::fs::write(dir.path().join("cible/sortie"), "").expect("write");
 
-        let repo = status(dir.path()).expect("dépôt reconnu");
+        let repo = status(dir.path()).expect("repository recognised");
         assert_eq!(repo.branch.as_deref(), Some("essai"));
         assert_eq!(repo.status("suivi.txt"), Some(GitStatus::Modified));
         assert_eq!(repo.status("neuf.txt"), Some(GitStatus::New));
