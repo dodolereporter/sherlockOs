@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dock_config::{DockConfig, Position as Edge};
@@ -21,7 +22,7 @@ use crate::items::{Builder, Glyph, Item};
 use crate::launch::{self, What};
 use crate::layout::{self, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key};
-use crate::windows::{self, Windows};
+use crate::windows::{self, Click, Control, Request, Windows};
 
 /// The menu of an icon, while it is open.
 #[derive(Debug, Clone)]
@@ -68,6 +69,8 @@ pub struct Sources {
     pub data_dirs: Vec<PathBuf>,
     pub home: Option<PathBuf>,
     pub gtk_theme: Option<String>,
+    /// What acts on the windows: the compositor's protocol, or a fake in tests.
+    pub control: Arc<dyn Control>,
 }
 
 pub struct Dock {
@@ -369,7 +372,7 @@ impl Dock {
                 self.focus = None;
                 let target = self.pointer.and_then(|p| self.layout(now).icon_at(p));
                 match (button, target) {
-                    (mouse::Button::Left, Some(index)) => self.activate(index, What::App),
+                    (mouse::Button::Left, Some(index)) => self.click(index),
                     (mouse::Button::Right, Some(index)) => return self.open_menu(index),
                     _ => {}
                 }
@@ -420,7 +423,7 @@ impl Dock {
             return Task::none();
         }
         match (key, self.focus) {
-            (Key::Activate, Some(index)) => self.activate(index, What::App),
+            (Key::Activate, Some(index)) => self.click(index),
             (Key::Menu, Some(index)) => return self.open_menu(index),
             (Key::Close, _) => self.focus = None,
             (Key::Next, Some(_)) => self.move_focus(Direction::Next),
@@ -458,7 +461,7 @@ impl Dock {
         let item = self.items.get(index);
         let entry = item.and_then(Item::entry);
         let pinned = item.is_some_and(|i| i.pinned);
-        let closable = self.windows.as_ref().is_some_and(|w| w.closable);
+        let controllable = self.controllable();
         let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
         let sherlock = item.is_some_and(|i| i.kind == crate::items::Kind::Sherlock);
         Abilities {
@@ -466,8 +469,32 @@ impl Dock {
             new_window: entry.is_some_and(|e| e.new_window.is_some()),
             keep: !pinned && entry.is_some(),
             unpin: pinned && entry.is_some(),
-            quit: !sherlock && closable && open,
+            quit: !sherlock && controllable && open,
         }
+    }
+
+    fn controllable(&self) -> bool {
+        self.windows.as_ref().is_some_and(|w| w.controllable)
+    }
+
+    /// A click on icon `index`: brings its windows forward, minimizes them when they already
+    /// are, or starts the application.
+    pub fn click(&self, index: usize) {
+        match windows::click(self.open_windows(index), self.controllable()) {
+            Click::Launch => self.activate(index, What::App),
+            Click::Activate => self.request(index, Request::Activate),
+            Click::Minimize => self.request(index, Request::Minimize),
+        }
+    }
+
+    /// Sends `request` to the windows of icon `index`.
+    fn request(&self, index: usize, request: Request) {
+        let Some(item) = self.items.get(index).cloned() else {
+            return;
+        };
+        self.sources
+            .control
+            .send(request, Box::new(move |app_id| item.owns(app_id)));
     }
 
     /// Starts `what` for icon `index`.
@@ -562,32 +589,11 @@ impl Dock {
             Entry::Keep => self.keep(index),
             Entry::Unpin => self.unpin(index),
             Entry::Quit => {
-                self.quit(index);
+                self.request(index, Request::Close);
                 Task::none()
             }
         };
         Task::batch([close, task])
-    }
-
-    /// Closes the windows of icon `index`, on a thread: the compositor may take its time.
-    fn quit(&self, index: usize) {
-        let Some(item) = self.items.get(index).cloned() else {
-            return;
-        };
-        let spawned = std::thread::Builder::new()
-            .name(String::from("quit"))
-            .spawn(move || {
-                let closed = wayland_client::Connection::connect_to_env()
-                    .map_err(windows::SourceError::from)
-                    .and_then(|c| windows::close(c, &|app_id| item.owns(app_id)));
-                match closed {
-                    Ok(count) => tracing::info!(app = item.name, count, "windows asked to close"),
-                    Err(error) => tracing::warn!(app = item.name, %error, "cannot close"),
-                }
-            });
-        if let Err(error) = spawned {
-            tracing::warn!(%error, "cannot start the closing thread");
-        }
     }
 
     /// Adds the open application of icon `index` to the pinned list, at its end.

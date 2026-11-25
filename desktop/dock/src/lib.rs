@@ -103,6 +103,7 @@ impl Sources {
             data_dirs,
             home,
             gtk_theme,
+            control: std::sync::Arc::new(windows::WlrControl),
         }
     }
 }

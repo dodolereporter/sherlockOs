@@ -1,4 +1,5 @@
-//! Open windows, for the dot under open applications, the active one, and « Quitter ».
+//! Open windows, for the dot under open applications, the active one, a click on an open
+//! application (brought forward, or minimized when it already is), and « Quitter ».
 //!
 //! A source implements `Source`, like the bar's sources. Two exist:
 //!
@@ -8,11 +9,17 @@
 //!
 //! Without either, the dock does not know the windows: no dot, « Quitter » disabled. What our
 //! compositor will have to provide is in `docs/dock.md`.
+//!
+//! Acting on windows goes through `Control`: `WlrControl` sends `activate`, `set_minimized` or
+//! `close` on a connection of its own, `Recorder` is the fake one.
+
+use std::sync::{Arc, Mutex, PoisonError};
 
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
 use wayland_client::globals::{BindError, GlobalError, GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
+use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::{
     ConnectError, Connection, Dispatch, DispatchError, EventQueue, QueueHandle, event_created_child,
 };
@@ -41,8 +48,9 @@ pub struct Window {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Windows {
     pub list: Vec<Window>,
-    /// Whether the source can close windows. The placeholder cannot: « Quitter » stays off.
-    pub closable: bool,
+    /// Whether the windows can be acted on (brought forward, minimized, closed). Not those of
+    /// the placeholder: a click starts the application, « Quitter » stays off.
+    pub controllable: bool,
 }
 
 impl Windows {
@@ -104,7 +112,7 @@ impl Placeholder {
             .collect();
         Self(Windows {
             list,
-            closable: false,
+            controllable: false,
         })
     }
 
@@ -174,19 +182,117 @@ impl Source for Wlr {
     }
 }
 
-/// Closes the windows that `owns` claims, on a connection of its own: the handles of the
-/// watching connection stay on its thread. Returns how many were asked to close.
-pub fn close(connection: Connection, owns: &dyn Fn(&str) -> bool) -> Result<usize, SourceError> {
-    let mut source = Wlr::with_connection(connection)?;
-    let mut count = 0;
-    for toplevel in source.toplevels.list.iter().filter(|t| t.done) {
-        if owns(&toplevel.app_id) {
-            toplevel.handle.close();
-            count += 1;
+/// What the dock asks of the windows of an application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Request {
+    /// Bring them forward, the last one with the keyboard.
+    Activate,
+    Minimize,
+    Close,
+}
+
+/// What a left click on an icon does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Click {
+    /// Start the application: it has no window, or its windows cannot be acted on.
+    Launch,
+    /// Bring its windows forward: open, but not in front.
+    Activate,
+    /// Minimize them: already in front, as on Windows and Plasma.
+    Minimize,
+}
+
+/// The click on an icon whose application has `open` windows (count, one active), when the
+/// windows can be acted on (`controllable`).
+pub fn click(open: Option<(usize, bool)>, controllable: bool) -> Click {
+    match open {
+        Some((count, active)) if count > 0 && controllable => {
+            if active {
+                Click::Minimize
+            } else {
+                Click::Activate
+            }
+        }
+        _ => Click::Launch,
+    }
+}
+
+/// Acts on the windows of an application. `owns` says which windows are its own.
+pub trait Control: Send + Sync {
+    fn send(&self, request: Request, owns: Box<dyn Fn(&str) -> bool + Send>);
+}
+
+/// Acts through `zwlr_foreign_toplevel_manager_v1`, on a thread and a connection of its own:
+/// the compositor may take its time, and the handles of the watching connection stay on its
+/// thread.
+#[derive(Debug, Default)]
+pub struct WlrControl;
+
+impl Control for WlrControl {
+    fn send(&self, request: Request, owns: Box<dyn Fn(&str) -> bool + Send>) {
+        let spawned = std::thread::Builder::new()
+            .name(String::from("windows-request"))
+            .spawn(move || {
+                let sent = Connection::connect_to_env()
+                    .map_err(SourceError::from)
+                    .and_then(|connection| act(connection, request, &*owns));
+                match sent {
+                    Ok(count) => tracing::info!(?request, count, "windows asked"),
+                    Err(error) => tracing::warn!(?request, %error, "cannot act on the windows"),
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "cannot start the windows request");
         }
     }
+}
+
+/// Fake control: records what is asked, acts on nothing.
+#[derive(Debug, Default, Clone)]
+pub struct Recorder(pub Arc<Mutex<Vec<Request>>>);
+
+impl Recorder {
+    pub fn requests(&self) -> Vec<Request> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Control for Recorder {
+    fn send(&self, request: Request, _: Box<dyn Fn(&str) -> bool + Send>) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+    }
+}
+
+/// Sends `request` to the windows that `owns` claims, on `connection`. Returns how many were
+/// asked. Activation needs a seat; without one, nothing is activated.
+pub fn act(
+    connection: Connection,
+    request: Request,
+    owns: &dyn Fn(&str) -> bool,
+) -> Result<usize, SourceError> {
+    let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
+    let _manager: ZwlrForeignToplevelManagerV1 = globals.bind(&queue.handle(), 1..=3, ())?;
+    let seat: Option<WlSeat> = globals.bind(&queue.handle(), 1..=1, ()).ok();
+    let mut toplevels = Toplevels::default();
+    queue.roundtrip(&mut toplevels)?;
+    let mut count = 0;
+    for toplevel in toplevels.list.iter().filter(|t| t.done && owns(&t.app_id)) {
+        match (request, &seat) {
+            (Request::Activate, Some(seat)) => toplevel.handle.activate(seat),
+            (Request::Activate, None) => continue,
+            (Request::Minimize, _) => toplevel.handle.set_minimized(),
+            (Request::Close, _) => toplevel.handle.close(),
+        }
+        count += 1;
+    }
     // The compositor has the requests before the connection goes.
-    source.queue.roundtrip(&mut source.toplevels)?;
+    queue.roundtrip(&mut toplevels)?;
     Ok(count)
 }
 
@@ -273,7 +379,7 @@ impl Toplevels {
                     activated: t.activated,
                 })
                 .collect(),
-            closable: true,
+            controllable: true,
         }
     }
 }
@@ -293,6 +399,18 @@ impl Dispatch<WlRegistry, GlobalListContents> for Toplevels {
         _: &WlRegistry,
         _: <WlRegistry as wayland_client::Proxy>::Event,
         _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WlSeat, ()> for Toplevels {
+    fn event(
+        _: &mut Self,
+        _: &WlSeat,
+        _: <WlSeat as wayland_client::Proxy>::Event,
+        _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -375,7 +493,18 @@ mod tests {
         assert_eq!(windows.of(|id| id == "firefox"), (1, true));
         assert_eq!(windows.of(|id| id == "org.kde.konsole"), (1, false));
         assert_eq!(windows.of(|id| id == "kate"), (0, false));
-        assert!(!windows.closable, "a placeholder closes nothing");
+        assert!(!windows.controllable, "a placeholder acts on nothing");
+    }
+
+    #[test]
+    fn a_click_brings_forward_minimizes_or_starts() {
+        // Open, not in front: brought forward. In front: minimized. Closed: started.
+        assert_eq!(click(Some((2, false)), true), Click::Activate);
+        assert_eq!(click(Some((1, true)), true), Click::Minimize);
+        assert_eq!(click(Some((0, false)), true), Click::Launch);
+        // Windows unknown, or a source that cannot act on them: started, never pretended.
+        assert_eq!(click(None, true), Click::Launch);
+        assert_eq!(click(Some((1, true)), false), Click::Launch);
     }
 
     #[test]

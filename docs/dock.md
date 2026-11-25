@@ -240,7 +240,22 @@ the left on the right edge.
 
 ### Launching
 
-A click starts the application: its `Exec` split as the Desktop Entry specification says
+A click on an icon depends on its windows (`windows::click`, the author's choice, as on
+Windows and Plasma):
+
+| The application | A click |
+| --- | --- |
+| Has no window, or its windows cannot be acted on (unknown, placeholder) | Starts it |
+| Is open, but not in front | Brings its windows forward (`activate`) |
+| Is in front (one of its windows is active) | Minimizes its windows (`set_minimized`) |
+
+Acting on windows goes through the `windows::Control` trait: `WlrControl` sends `activate`
+(with the seat), `set_minimized` or `close` through `zwlr_foreign_toplevel_manager_v1` on a
+connection of its own, on a thread; `Recorder` is the fake one for tests. Our compositor will
+give this through a protocol of its own (batch D-18): another implementation of the same
+traits. Enter on the ringed icon does the same as a click.
+
+Starting the application: its `Exec` split as the Desktop Entry specification says
 (quotes, escapes, field codes dropped, `%c` and `%i` replaced), without a shell, in its `Path`
 if it has one. Unlike the bar's monitoring commands, an application must outlive the dock: it
 gets its own process group (a Ctrl+C on the dock's group spares it), no death signal, and a
@@ -268,8 +283,8 @@ own thread, connection included:
 
 | Source | When | Closes windows |
 | --- | --- | --- |
-| `Placeholder` | `DOCK_OPEN` is set: comma separated `app_id`s, `DOCK_ACTIVE` the active one | No: « Quitter » stays disabled |
-| `Wlr` | The compositor offers `zwlr_foreign_toplevel_manager_v1` (wlroots compositors) | Yes, `close` on each window, on a connection of its own |
+| `Placeholder` | `DOCK_OPEN` is set: comma separated `app_id`s, `DOCK_ACTIVE` the active one | No: a click starts the application, « Quitter » stays disabled |
+| `Wlr` | The compositor offers `zwlr_foreign_toplevel_manager_v1` (wlroots compositors) | Yes: `activate`, `set_minimized`, `close`, through `WlrControl` |
 | None | Neither | Windows unknown: no dot, « Quitter » disabled |
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
@@ -278,15 +293,17 @@ id, its last part (`konsole` for `org.kde.konsole`), or its `StartupWMClass`, ig
 Neither our compositor nor KWin offers a window list to an ordinary client (KWin keeps
 `org_kde_plasma_window_management` for Plasma). `tests/windows.rs` runs the `Wlr` source
 against a fake compositor written with `wayland-server`: two windows, one active, then
-« Quitter » on one of them, which the compositor receives and the watching connection sees go.
+the clicks of the dock on them (the one behind brought forward, the active one minimized), then
+« Quitter », which the compositor receives and the watching connection sees go.
 
 **What our compositor will have to provide**, to replace the placeholder:
 
 1. **The windows**: `zwlr_foreign_toplevel_manager_v1` (version 3), the protocol the dock
    already speaks: for each window its `app_id` (the X11 class for XWayland windows), its
    states (`activated` for the active one, and `fullscreen`), `done` after each change,
-   `closed` when it goes; and the `close` request for « Quitter ». `activate` would let a click
-   on an open application bring it forward. `ext-foreign-toplevel-list-v1` alone is not
+   `closed` when it goes; and the `activate`, `set_minimized` and `close` requests for the
+   clicks and « Quitter ». Batch D-18 plans a protocol of ours instead: it only needs another
+   implementation of `windows::Source` and `windows::Control`. `ext-foreign-toplevel-list-v1` alone is not
    enough: it carries neither the active state nor `close`.
 2. **Restricted to the shell**: like layer-shell (see the security notes of
    `docs/compositeur.md`), the global must not be open to every client, Flatpak ones
@@ -428,6 +445,9 @@ X focus): the keyboard steps were checked in the nested KWin.
   splitting, escapes, the configuration read and written back, the default roles with and
   without `mimeapps.list`, icon lookup in a theme, `hicolor` and `pixmaps`, GTK theme.
 - **Launching**: no shell between the dock and the application; a missing program is an error.
+- **Click**: an open application behind is brought forward, the one in front minimized, one
+  without window started, and nothing is asked of windows a source cannot act on
+  (`windows.rs`, `tests/render.rs` with the `Recorder`).
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.

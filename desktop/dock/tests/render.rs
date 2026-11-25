@@ -7,13 +7,14 @@ use dock::app::Sources;
 use dock::app::{Dock, Message, Pointer};
 use dock::entry::Catalog;
 use dock::icons::IconLookup;
-use dock::windows::Placeholder;
+use dock::windows::{Placeholder, Recorder, Request};
 use dock_config::{DockConfig, Position};
 use iced::widget::container;
 use iced::window::Id;
 use iced::{Element, Event, Length, Point, mouse};
 use iced_test::simulator::Simulator;
 use sherlock_ui::theme;
+use std::sync::Arc;
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -41,6 +42,7 @@ fn sources(config: DockConfig) -> Sources {
         data_dirs: vec![data],
         home: None,
         gtk_theme: None,
+        control: Arc::new(Recorder::default()),
     }
 }
 
@@ -288,4 +290,25 @@ fn the_dock_renders_on_the_left_edge() {
     assert!(ui.find("Sherlock").is_ok(), "label beside the icon");
     let bytes = capture(ui, "dock-left").expect("screenshot written");
     assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn a_click_brings_forward_or_minimizes_an_open_application() {
+    let recorder = Recorder::default();
+    let mut sources = sources(DockConfig::default());
+    sources.control = Arc::new(recorder.clone());
+    let mut dock = Dock::new(sources);
+    let Placeholder(mut windows) = Placeholder::new("terminal,ExampleBrowser", Some("terminal"));
+    // A source that can act on its windows, unlike the placeholder.
+    windows.controllable = true;
+    let _ = dock.update(Message::Windows(windows));
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names[1], "Terminal d'exemple");
+    assert_eq!(names[4], "Example Browser");
+    dock.click(1);
+    dock.click(4);
+    assert_eq!(recorder.requests(), [Request::Minimize, Request::Activate]);
+    // An application without window is started, not asked anything.
+    dock.click(0);
+    assert_eq!(recorder.requests().len(), 2);
 }
