@@ -1,6 +1,6 @@
 //! Bar state, messages, and its two views: the bar and the Sherlock menu.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Instant;
 
 use iced::futures::channel::mpsc::UnboundedReceiver;
@@ -97,7 +97,7 @@ impl Bar {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let appearance = match appearance_config::path() {
-            Some(path) => Subscription::run_with(path, appearance).map(Message::Theme),
+            Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
         let frames = if self.theme.running() {
@@ -399,9 +399,9 @@ impl Bar {
 }
 
 /// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
-pub fn appearance(path: &PathBuf) -> UnboundedReceiver<Theme> {
+pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
     let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
-    let follow = appearance_config::follow_themes(path.clone(), move |theme| {
+    let follow = appearance_config::follow_themes(path.to_path_buf(), move |theme| {
         sender.unbounded_send(theme).is_ok()
     });
     if let Err(error) = follow {

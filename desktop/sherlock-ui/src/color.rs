@@ -890,11 +890,13 @@ mod tests {
 
     /// Rows of the table read token by token: the role, then the dark and light tokens.
     type Exact = (&'static str, Vec<Color>, Vec<Color>);
+    /// The dark then the light colors of a row.
+    type Pair = (Vec<Color>, Vec<Color>);
 
     fn exact() -> [Exact; 23] {
         let (d, l) = (&Palette::DARK, &Palette::LIGHT);
         let one = |dark: Color, light: Color| (vec![dark], vec![light]);
-        let rows: [(&str, (Vec<Color>, Vec<Color>)); 23] = [
+        let rows: [(&str, Pair); 23] = [
             ("Fond du bureau", one(d.desktop, l.desktop)),
             (
                 "Disques du fond d'écran",

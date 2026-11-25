@@ -316,7 +316,8 @@ user's; no test calls the real UDisks.
 Evidence follows the appearance file live and fades from one theme to the other (D-05b, see
 "Following the theme" in `docs/sherlock-ui.md`): its iced theme is `window_theme()`, read again
 at every redraw, and its view reads `color::palette()`. The capture test also writes
-`target/tmp/evidence-light-tiny-skia.png`, to compare with `FichiersClair.dc.html`.
+`target/tmp/evidence-light-tiny-skia.png`, to compare with the light Files board,
+`docs/design/planches-clair/FichiersClair.dc.html`.
 
 ![Evidence in the light theme](evidence/evidence-light.png)
 
