@@ -37,6 +37,7 @@ impl Bench {
             favorites: places::favorites(tmp.path(), None),
             trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
             measure: None,
+            maximized: false,
         };
         let (mut app, task) = App::new(config);
         drain(&mut app, task);
@@ -366,6 +367,7 @@ fn la_fenetre_se_rend_sans_ecran() {
         favorites: places::favorites(tmp.path(), None),
         trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
         measure: None,
+        maximized: false,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -397,8 +399,8 @@ fn la_fenetre_se_rend_sans_ecran() {
     // Comme `CARGO_TARGET_TMPDIR`, que Cargo ne donne qu'aux tests d'intégration.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
     fs::create_dir_all(&dir).expect("dossier des captures");
-    let path = dir.join("fichiers.png");
-    let written = path.with_file_name("fichiers-tiny-skia.png");
+    let path = dir.join("evidence.png");
+    let written = path.with_file_name("evidence-tiny-skia.png");
     let _ = fs::remove_file(&written);
     assert!(
         snapshot
@@ -423,7 +425,7 @@ fn la_fenetre_se_rend_sans_ecran() {
 }
 
 /// Cost of one frame with 5,000 entries: view, layout, then software rendering. Run with
-/// `cargo test --release -p fichiers frame_cost -- --ignored --nocapture`.
+/// `cargo test --release -p evidence frame_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "mesure, pas un test"]
 fn frame_cost() {
@@ -440,6 +442,7 @@ fn frame_cost() {
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,
+        maximized: false,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);

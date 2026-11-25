@@ -1,7 +1,7 @@
 //! Textes d'interface, en français et au tutoiement, et leur mise en forme : dates, tailles,
 //! nombres d'éléments. Les programmes n'écrivent aucun texte d'interface en dur : ils le
-//! prennent ici. Le module `files` porte ceux de l'application Fichiers, que le lanceur et
-//! Sherlock reprendront pour parler des fichiers.
+//! prennent ici. The `evidence` module holds the texts of Evidence, the file manager; the
+//! launcher and Sherlock will reuse them to talk about files.
 
 /// Une date et une heure locales, déjà converties par le programme (fuseau compris).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,10 +90,10 @@ pub fn items(count: usize) -> String {
     }
 }
 
-/// Textes de l'application Fichiers.
-pub mod files {
+/// Texts of Evidence, the file manager.
+pub mod evidence {
     /// Nom de l'application, dans sa barre de titre.
-    pub const APP_NAME: &str = "Fichiers";
+    pub const APP_NAME: &str = "Evidence";
 
     // Emplacements de la barre latérale.
     pub const FAVORITES: &str = "Favoris";
@@ -384,11 +384,11 @@ mod tests {
     #[test]
     fn les_noms_de_copie_gardent_l_extension() {
         assert_eq!(
-            files::copy_name("notes", 1, Some("txt")),
+            evidence::copy_name("notes", 1, Some("txt")),
             "notes (copie).txt"
         );
-        assert_eq!(files::copy_name("src", 3, None), "src (copie 3)");
-        assert_eq!(files::new_folder_name(2), "Nouveau dossier 2");
-        assert_eq!(files::status(10, 1), "10 éléments, 1 sélectionné");
+        assert_eq!(evidence::copy_name("src", 3, None), "src (copie 3)");
+        assert_eq!(evidence::new_folder_name(2), "Nouveau dossier 2");
+        assert_eq!(evidence::status(10, 1), "10 éléments, 1 sélectionné");
     }
 }

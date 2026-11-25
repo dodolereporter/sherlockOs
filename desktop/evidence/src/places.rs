@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use sherlock_ui::icon::Icon;
-use sherlock_ui::texts::files as texts;
+use sherlock_ui::texts::evidence as texts;
 
 /// Un emplacement de la barre latérale.
 #[derive(Debug, Clone, PartialEq, Eq)]

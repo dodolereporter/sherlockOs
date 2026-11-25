@@ -1,6 +1,6 @@
 [package]
-name = "fichiers"
-description = "Fichiers, l'explorateur de fichiers du desktop"
+name = "evidence"
+description = "Evidence, the file manager of the desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

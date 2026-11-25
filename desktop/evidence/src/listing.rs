@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use sherlock_ui::icon::Icon;
-use sherlock_ui::texts::{self as all_texts, LocalTime, files as texts};
+use sherlock_ui::texts::{self as all_texts, LocalTime, evidence as texts};
 
 use crate::clock;
 

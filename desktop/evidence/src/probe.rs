@@ -1,4 +1,4 @@
-//! Mesure de fluidité, lancée par `fichiers --mesurer <dossier>` : ouverture du dossier, puis
+//! Mesure de fluidité, lancée par `evidence --measure <dossier>` : ouverture du dossier, puis
 //! trois secondes de défilement continu, puis trois secondes de sélection qui descend d'une
 //! ligne toutes les quelques images. Chaque phase écrit son bilan dans le journal (`tracing`),
 //! puis l'application se ferme. Le dossier n'est jamais modifié.

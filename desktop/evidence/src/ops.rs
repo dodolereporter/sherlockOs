@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use sherlock_ui::texts::files as texts;
+use sherlock_ui::texts::evidence as texts;
 
 /// Ce qui peut empêcher une opération. Le message s'adresse à l'utilisateur.
 #[derive(Debug)]

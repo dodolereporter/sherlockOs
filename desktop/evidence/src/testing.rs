@@ -11,7 +11,7 @@ pub struct TempDir(PathBuf);
 impl TempDir {
     pub fn new(name: &str) -> Self {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("fichiers-{name}-{}-{n}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("evidence-{name}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("dossier temporaire");
         Self(path)

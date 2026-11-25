@@ -10,7 +10,7 @@ use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::metrics;
-use sherlock_ui::texts::files as texts;
+use sherlock_ui::texts::evidence as texts;
 
 use crate::git::{self, Repo};
 use crate::listing::{self, Column, Entry, Kind, Sort};
@@ -34,8 +34,10 @@ pub struct Config {
     pub start: PathBuf,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
-    /// `--mesurer <dossier>` : mesure la fluidité sur ce dossier, puis quitte.
+    /// `--measure <folder> [--maximized]`: measures smoothness on this folder, then quits.
     pub measure: Option<PathBuf>,
+    /// The measure runs in a maximized window.
+    pub maximized: bool,
 }
 
 impl Config {
@@ -44,12 +46,13 @@ impl Config {
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let mut args: Vec<_> = std::env::args_os().skip(1).collect();
         let measure = match args.first() {
-            Some(flag) if flag == "--mesurer" => {
+            Some(flag) if flag == "--measure" => {
                 args.remove(0);
                 args.first().and_then(|p| std::path::absolute(p).ok())
             }
             _ => None,
         };
+        let maximized = measure.is_some() && args.iter().any(|a| a == "--maximized");
         let start = match measure {
             Some(_) => home.clone(),
             None => args
@@ -64,6 +67,7 @@ impl Config {
             favorites,
             trash: Trash::user(),
             measure,
+            maximized,
         }
     }
 }
@@ -320,8 +324,9 @@ impl App {
         Subscription::batch([events, frames])
     }
 
+    /// Window title: the application name only. The folder is shown in the drawn title bar.
     pub fn title(&self) -> String {
-        format!("{} · {}", self.location_name(), texts::APP_NAME)
+        texts::APP_NAME.to_owned()
     }
 
     /// Nom du dossier courant, pour la barre de titre et la recherche.
@@ -579,6 +584,10 @@ impl App {
         let target = Location::Folder(probe.target.clone());
         let loaded = self.location == target && !self.entries.is_empty();
         match probe.frame(now, loaded) {
+            Step::Open if self.config.maximized => Task::batch([
+                self.go(target),
+                window::latest().and_then(|id| window::maximize(id, true)),
+            ]),
             Step::Open => self.go(target),
             Step::Scroll => operation::scroll_by(
                 LIST,

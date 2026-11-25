@@ -11,7 +11,7 @@ use std::time::Duration;
 use sherlock_ui::animated::{hoverable, scaled};
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::icon::Icon;
-use sherlock_ui::texts::{self, files as t};
+use sherlock_ui::texts::{self, evidence as t};
 use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 

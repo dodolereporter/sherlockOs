@@ -199,6 +199,6 @@ mod tests {
         assert_eq!(repo.status("neuf.txt"), Some(GitStatus::New));
         assert_eq!(repo.status("cible"), Some(GitStatus::Ignored));
         assert_eq!(repo.status(".gitignore"), None);
-        assert!(status(&std::env::temp_dir().join("pas-un-depot-fichiers")).is_none());
+        assert!(status(&std::env::temp_dir().join("not-a-repository-evidence")).is_none());
     }
 }
