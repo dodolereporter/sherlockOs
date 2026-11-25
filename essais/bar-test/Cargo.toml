@@ -1,0 +1,19 @@
+[package]
+name = "bar-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Throwaway test program for the compositor's layer-shell (lot D-12): its own workspace, out of
+# the main one. Same iced and layer-shell crates, at the same versions, as the bar of lot D-20.
+[workspace]
+
+[dependencies]
+iced = { version = "=0.14.0", default-features = false, features = [
+    "tiny-skia",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }

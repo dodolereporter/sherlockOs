@@ -13,6 +13,7 @@ mod tests {
     };
 
     use compositeur::State;
+    use smithay::reexports::wayland_server::Resource as _;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
@@ -20,7 +21,7 @@ mod tests {
         utils::{Logical, Point, Rectangle},
     };
     use wayland_client::{
-        Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop,
+        Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, delegate_noop,
         protocol::{
             wl_buffer::WlBuffer,
             wl_callback::{self, WlCallback},
@@ -34,10 +35,18 @@ mod tests {
             wl_surface::WlSurface,
         },
     };
+    use wayland_protocols::wp::fractional_scale::v1::client::{
+        wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+        wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+    };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
+    };
+    use wayland_protocols_wlr::layer_shell::v1::client::{
+        zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
+        zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
     };
 
     /// Ce que le client a reçu.
@@ -52,6 +61,46 @@ mod tests {
         keys: Vec<(u32, bool)>,
         /// Le compositeur a répondu au dernier `wl_display.sync`.
         synced: bool,
+        /// Each configure of the anchored surface: width, height.
+        layer_configures: Vec<(u32, u32)>,
+        /// Last scale announced by `wp_fractional_scale_v1`, in 120ths.
+        preferred_scale: Option<u32>,
+    }
+
+    impl Dispatch<ZwlrLayerSurfaceV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            surface: &ZwlrLayerSurfaceV1,
+            event: zwlr_layer_surface_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } = event
+            {
+                surface.ack_configure(serial);
+                client.layer_configures.push((width, height));
+            }
+        }
+    }
+
+    impl Dispatch<WpFractionalScaleV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WpFractionalScaleV1,
+            event: wp_fractional_scale_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+                client.preferred_scale = Some(scale);
+            }
+        }
     }
 
     impl Dispatch<WlPointer, ()> for Client {
@@ -182,6 +231,8 @@ mod tests {
     delegate_noop!(Client: ignore WlShm);
     delegate_noop!(Client: WlShmPool);
     delegate_noop!(Client: ignore WlBuffer);
+    delegate_noop!(Client: ZwlrLayerShellV1);
+    delegate_noop!(Client: WpFractionalScaleManagerV1);
 
     /// Mémoire partagée pour un tampon de `size` octets, sans fichier qui reste sur le disque.
     /// Les tests tournent en parallèle : chacun a son nom de fichier.
@@ -232,9 +283,14 @@ mod tests {
 
     impl Harness {
         fn start() -> Self {
+            Self::start_scaled(1.0)
+        }
+
+        /// One screen of 800 × 600 pixels at `scale`.
+        fn start_scaled(scale: f64) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output((800, 600).into(), 1.0);
+            state.add_output((800, 600).into(), scale);
             let (server_side, client_side) = UnixStream::pair().unwrap();
             state.insert_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
@@ -774,5 +830,133 @@ mod tests {
             h.assert_follows(3001 + i as u64, "détachée");
         }
         h.release();
+    }
+
+    /// The client creates a bar: anchored at the top and both sides, 36 high with margins
+    /// of 10 at the top and 12 on the sides, an exclusive zone of 36, the keyboard on demand.
+    /// It draws it once configured. Returns its surface.
+    fn show_bar(h: &mut Harness) -> WlSurface {
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "zwlr_layer_shell_v1")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let layer_shell: ZwlrLayerShellV1 = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let bar =
+            layer_shell.get_layer_surface(&surface, None, Layer::Top, "barre".into(), &qh, ());
+        bar.set_size(0, 36);
+        bar.set_anchor(Anchor::Top | Anchor::Left | Anchor::Right);
+        bar.set_exclusive_zone(36);
+        bar.set_margin(10, 12, 0, 12);
+        bar.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        surface.commit();
+        h.run_until("la configuration de la barre", |c, _| {
+            !c.layer_configures.is_empty()
+        });
+        assert_eq!(
+            h.client.layer_configures,
+            vec![(776, 36)],
+            "toute la largeur, moins les marges"
+        );
+        let file = shm_file(776 * 36 * 4);
+        let pool = shm.create_pool(file.as_fd(), 776 * 36 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 776, 36, 776 * 4, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        h.run_until("la zone exclusive", |_, s| {
+            s.output_area() != Some(rect(0, 0, 800, 600))
+        });
+        surface
+    }
+
+    #[test]
+    fn une_barre_ancree_en_haut_reduit_la_zone_d_agrandissement() {
+        let mut h = Harness::start();
+        h.show_window();
+        h.shortcut(KEY_UP);
+        let states = h.wait_size("l'agrandissement", 800, 600);
+        assert!(states.contains(&XdgState::Maximized));
+
+        let bar = show_bar(&mut h);
+        // 10 of margin and 36 of bar at the top.
+        assert_eq!(h.state.output_area(), Some(rect(0, 46, 800, 554)));
+        let states = h.wait_size("l'agrandissement sous la barre", 800, 554);
+        assert!(states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((0, 46).into()));
+
+        // Back to its size, then snapped to the left: the bar stays uncovered.
+        h.shortcut(KEY_DOWN);
+        h.wait_size("la taille d'avant", 100, 80);
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, 554);
+        assert_eq!(location(&h.state), Some((0, 46).into()));
+
+        // A click on the bar gives it the keyboard: it asked for it on demand.
+        h.press(100.0, 20.0);
+        h.release();
+        let focus = h.state.keyboard_focus().expect("le clavier à la barre");
+        assert_eq!(focus.id().protocol_id(), bar.id().protocol_id());
+    }
+
+    #[test]
+    fn avec_deux_ecrans_une_fenetre_se_cale_sur_le_second() {
+        let mut h = Harness::start();
+        h.state.add_output((800, 600).into(), 1.0);
+        h.show_window();
+        // The pointer on the second screen: its work area receives new windows.
+        h.state.pointer_motion((1200.0, 300.0).into(), 1);
+        assert_eq!(h.state.output_area(), Some(rect(800, 0, 800, 600)));
+
+        // Gesture key + drag the window to the right edge of the second screen.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 2);
+        h.state.pointer_motion((400.0, 300.0).into(), 3);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+        h.state.pointer_motion((1597.0, 300.0).into(), 5);
+        assert_eq!(h.state.snap_preview(), Some(rect(1200, 0, 400, 600)));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 7);
+        h.wait_size("la moitié droite du second écran", 400, 600);
+        assert_eq!(location(&h.state), Some((1200, 0).into()));
+
+        // Maximized by the shortcut, it stays on the second screen.
+        h.shortcut(KEY_UP);
+        h.wait_size("l'agrandissement", 800, 600);
+        assert_eq!(location(&h.state), Some((800, 0).into()));
+    }
+
+    #[test]
+    fn l_echelle_fractionnaire_est_annoncee() {
+        // 800 × 600 pixels at 1.5: 533 × 400 points.
+        let mut h = Harness::start_scaled(1.5);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals
+                .iter()
+                .any(|g| g.1 == "wp_fractional_scale_manager_v1")
+        });
+        for global in ["wp_viewporter", "zxdg_output_manager_v1"] {
+            assert!(
+                h.client.globals.iter().any(|g| g.1 == global),
+                "{global} annoncé"
+            );
+        }
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 533, 400)));
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let manager: WpFractionalScaleManagerV1 = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let _scale = manager.get_fractional_scale(&surface, &qh, ());
+        let _toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("l'échelle de l'écran", |c, _| c.preferred_scale.is_some());
+        assert_eq!(h.client.preferred_scale, Some(180), "1,5 en 120es");
     }
 }

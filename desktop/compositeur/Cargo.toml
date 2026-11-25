@@ -9,7 +9,8 @@ publish.workspace = true
 [dependencies]
 # Seules les fonctions utiles : backend fenêtré (winit, avec le rendu GLES), serveur
 # Wayland, outils de bureau (Space, Window) et XWayland avec son gestionnaire de fenêtres
-# X11 (X11Wm, lot D-13). Le reste (DRM, libinput…) viendra avec ses lots.
+# X11 (X11Wm, lot D-13). Le reste (DRM, libinput…) viendra avec ses lots. Layer-shell,
+# fractional scale, viewporter and xdg-output (lot D-12) come with `wayland_frontend`.
 smithay = { version = "=0.7.0", default-features = false, features = [
     "backend_winit",
     "desktop",
@@ -31,7 +32,10 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # Client Wayland du test d'intégration : les mêmes crates que celles que smithay
 # tire déjà pour son backend winit.
 wayland-client = "=0.31.15"
-wayland-protocols = { version = "=0.32.13", features = ["client"] }
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+# Client side of layer-shell, for the anchored surface of the integration test: the version
+# that smithay already pulls for the server side.
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 # Client X11 du test d'intégration de XWayland : la version que smithay tire déjà pour son
 # gestionnaire de fenêtres X11.
 x11rb = "=0.13.2"
