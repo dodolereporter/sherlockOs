@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Other Browser
+Exec=other-browser %U
+Icon=example-browser
+Categories=Network;WebBrowser;

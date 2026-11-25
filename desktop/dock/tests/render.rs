@@ -1,0 +1,372 @@
+//! Rendering the dock and an icon's menu without a screen, from the neutral fixtures.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use dock::app::Sources;
+use dock::app::{Dock, Message, Pointer};
+use dock::entry::Catalog;
+use dock::icons::IconLookup;
+use dock::windows::{Placeholder, Recorder, Request};
+use dock_config::{DockConfig, Position};
+use iced::widget::container;
+use iced::window::Id;
+use iced::{Element, Event, Length, Point, mouse};
+use iced_test::simulator::Simulator;
+use sherlock_ui::theme;
+use std::sync::Arc;
+
+fn fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+}
+
+/// What the dock reads, from the fixtures: four pinned applications, no configuration file.
+fn sources(config: DockConfig) -> Sources {
+    let data = fixtures().join("data");
+    let catalog = Catalog::load(std::slice::from_ref(&data));
+    let lookup = IconLookup::new(std::slice::from_ref(&data), None, Some("Exemple"));
+    let pinned: Vec<String> = [
+        "org.example.Files",
+        "org.example.Terminal",
+        "example-editor",
+        "example-browser",
+    ]
+    .map(String::from)
+    .to_vec();
+    Sources {
+        catalog,
+        lookup,
+        config,
+        config_path: None,
+        pinned,
+        data_dirs: vec![data],
+        home: None,
+        gtk_theme: None,
+        control: Arc::new(Recorder::default()),
+    }
+}
+
+/// Four applications of the fixtures, Sherlock in the middle; the terminal open and active,
+/// the browser open.
+fn sample() -> Dock {
+    with_config(DockConfig::default())
+}
+
+fn with_config(config: DockConfig) -> Dock {
+    let mut dock = Dock::new(sources(config));
+    let Placeholder(windows) = Placeholder::new("terminal,ExampleBrowser", Some("terminal"));
+    let _ = dock.update(Message::Windows(windows));
+    dock
+}
+
+/// The dock with the pointer at `point`, once the springs have settled.
+fn hovered(point: Point) -> Dock {
+    let mut dock = sample();
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    assert!(!dock.animating(), "settled");
+    dock
+}
+
+/// The center of icon `index` at rest.
+fn icon_center(dock: &Dock, index: usize) -> Point {
+    dock.layout(Duration::ZERO).icons[index].center()
+}
+
+/// The dock on the desktop background, as on the Dock design board.
+fn on_desktop(element: Element<'_, Message>) -> Element<'_, Message> {
+    container(element)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(theme::desktop)
+        .into()
+}
+
+fn size(dock: &Dock) -> (f32, f32) {
+    (dock.surface_size.width, dock.surface_size.height)
+}
+
+/// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its size in bytes.
+fn capture(mut ui: Simulator<'_, Message>, name: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let snapshot = ui.snapshot(&theme::theme())?;
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
+    let written = path.with_file_name(format!("{name}-tiny-skia.png"));
+    let _ = std::fs::remove_file(&written);
+    snapshot.matches_image(&path)?;
+    Ok(std::fs::metadata(&written)?.len())
+}
+
+#[test]
+fn the_dock_renders_at_rest() {
+    let dock = sample();
+    assert_eq!(dock.items.len(), 5);
+    assert_eq!(dock.items[2].name, "Sherlock", "Sherlock in the middle");
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    let bytes = capture(ui, "dock-rest").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn the_dock_renders_magnified_with_its_label() {
+    let rest = sample();
+    let dock = hovered(icon_center(&rest, 2));
+    let layout = dock.layout(Duration::from_secs(2));
+    // The pointer over Sherlock: Sherlock at 52 × 1.7, its neighbours pushed away.
+    assert_eq!(layout.icons[2].width.round(), 88.0);
+    assert!(layout.bar.width > rest.layout(Duration::ZERO).bar.width);
+    let mut ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(ui.find("Sherlock").is_ok(), "label of the hovered icon");
+    let bytes = capture(ui, "dock-hover").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn the_pointer_is_tracked_over_the_surface() {
+    let dock = sample();
+    let point = icon_center(&dock, 1);
+    let mut ui = Simulator::with_size(dock::settings(), size(&dock), dock.view_dock());
+    ui.point_at(point);
+    let _ = ui.simulate([Event::Mouse(mouse::Event::CursorMoved { position: point })]);
+    let _ = ui.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Right,
+    ))]);
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(matches!(messages[0], Message::Pointer(Pointer::Moved(p)) if p == point));
+    assert!(matches!(
+        messages[1],
+        Message::Pointer(Pointer::Pressed(mouse::Button::Right))
+    ));
+}
+
+#[test]
+fn the_menu_of_an_icon_renders_its_entries() {
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let point = icon_center(&dock, 1);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    assert!(dock.menu_open());
+    let entries = dock::menu::entries(dock.abilities(1));
+    let (width, height) = dock::menu::surface_size(&entries);
+    let mut ui = Simulator::with_size(
+        dock::settings(),
+        (width as f32, height as f32),
+        dock.view_menu(),
+    );
+    for text in [
+        "Terminal d'exemple",
+        "1 fenêtre",
+        "Ouvrir",
+        "Nouvelle fenêtre",
+        "Retirer du dock",
+        "Quitter",
+    ] {
+        assert!(ui.find(text).is_ok(), "{text} missing from the menu");
+    }
+    // « Quitter » is disabled: a placeholder cannot close windows. Clicking it does nothing.
+    ui.click("Quitter").expect("entry found");
+    assert!(
+        !ui.into_messages()
+            .any(|m| matches!(m, Message::MenuPick(_))),
+        "a disabled entry picks nothing"
+    );
+    let ui = Simulator::with_size(
+        dock::settings(),
+        (width as f32, height as f32),
+        dock.view_menu(),
+    );
+    let bytes = capture(ui, "dock-menu").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn unpinning_keeps_sherlock_in_the_middle() {
+    let mut dock = sample();
+    let _ = dock.unpin(0);
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Terminal d'exemple",
+            "Éditeur",
+            "Sherlock",
+            "Example Browser"
+        ]
+    );
+    assert_eq!(
+        dock.pinned,
+        ["org.example.Terminal", "example-editor", "example-browser"]
+    );
+    // Sherlock cannot be unpinned.
+    let _ = dock.unpin(2);
+    assert_eq!(dock.items.len(), 4);
+}
+
+#[test]
+fn an_open_application_can_be_kept_and_unpinned_again() {
+    let mut dock = sample();
+    // The terminal is open: unpinned, it moves after the separator with its dot.
+    let _ = dock.unpin(1);
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Fichiers",
+            "Éditeur",
+            "Sherlock",
+            "Example Browser",
+            "Terminal d'exemple"
+        ]
+    );
+    assert_eq!(dock.separator, Some(4));
+    assert_eq!(dock.open_windows(4), Some((1, true)));
+    let abilities = dock.abilities(4);
+    assert!(abilities.keep && !abilities.unpin);
+    // « Garder dans le dock »: back among the pinned ones, at their end.
+    let _ = dock.keep(4);
+    assert_eq!(dock.separator, None);
+    assert_eq!(
+        dock.pinned.last().map(String::as_str),
+        Some("org.example.Terminal")
+    );
+    assert_eq!(dock.items[2].name, "Sherlock");
+}
+
+#[test]
+fn the_dock_renders_with_an_open_application_after_the_separator() {
+    let mut dock = sample();
+    let _ = dock.unpin(1);
+    let layout = dock.layout(Duration::ZERO);
+    assert!(layout.separator.is_some());
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    let bytes = capture(ui, "dock-open").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn a_new_configuration_moves_and_resizes_the_dock() {
+    let mut dock = sample();
+    let bottom = dock.surface_size;
+    let mut config = DockConfig::default();
+    config.position = Position::Left;
+    config.icon_size = 40.0;
+    config.magnification_factor = 2.0;
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert_eq!(dock.geometry.position, Position::Left);
+    assert!(
+        dock.surface_size.height > dock.surface_size.width,
+        "a tall surface"
+    );
+    assert_ne!(dock.surface_size, bottom);
+    let layout = dock.layout(Duration::ZERO);
+    assert_eq!(layout.icons[0].width, 40.0);
+    assert_eq!(layout.bar.x, 0.0, "against the left edge");
+    // Without magnification nothing grows under the pointer.
+    let mut config = DockConfig::default();
+    config.magnification = false;
+    let _ = dock.update(Message::Config(Box::new(config)));
+    let point = dock.layout(Duration::ZERO).icons[2].center();
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    assert_eq!(dock.layout(Duration::from_secs(2)).icons[2].width, 52.0);
+}
+
+#[test]
+fn the_dock_renders_on_the_left_edge() {
+    let mut config = DockConfig::default();
+    config.position = Position::Left;
+    let rest = with_config(config.clone());
+    let point = rest.layout(Duration::ZERO).icons[2].center();
+    let mut dock = with_config(config);
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    let layout = dock.layout(Duration::from_secs(2));
+    assert_eq!(
+        layout.icons[2].height.round(),
+        88.0,
+        "magnified along the vertical axis"
+    );
+    let mut ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(ui.find("Sherlock").is_ok(), "label beside the icon");
+    let bytes = capture(ui, "dock-left").expect("screenshot written");
+    assert!(bytes > 2_000, "empty screenshot");
+}
+
+#[test]
+fn a_click_brings_forward_or_minimizes_an_open_application() {
+    let recorder = Recorder::default();
+    let mut sources = sources(DockConfig::default());
+    sources.control = Arc::new(recorder.clone());
+    let mut dock = Dock::new(sources);
+    let Placeholder(mut windows) = Placeholder::new("terminal,ExampleBrowser", Some("terminal"));
+    // A source that can act on its windows, unlike the placeholder.
+    windows.controllable = true;
+    let _ = dock.update(Message::Windows(windows));
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names[1], "Terminal d'exemple");
+    assert_eq!(names[4], "Example Browser");
+    dock.click(1);
+    dock.click(4);
+    assert_eq!(recorder.requests(), [Request::Minimize, Request::Activate]);
+    // An application without window is started, not asked anything.
+    dock.click(0);
+    assert_eq!(recorder.requests().len(), 2);
+}
+
+#[test]
+fn crossing_the_gap_between_grown_icons_keeps_the_magnification() {
+    let recorder = Recorder::default();
+    let mut sources = sources(DockConfig::default());
+    sources.control = Arc::new(recorder.clone());
+    let mut dock = Dock::new(sources);
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let at = |dock: &Dock, s: u64| dock.layout(Duration::from_secs(s));
+    let _ = dock.hover(Some(at(&dock, 0).icons[2].center()), Duration::ZERO);
+    dock.frame(Duration::from_secs(1));
+    // Along the top of the grown icons, into the gap between Sherlock and the terminal.
+    let layout = at(&dock, 1);
+    let (left, middle) = (layout.icons[1], layout.icons[2]);
+    let gap = Point::new(left.x + left.width + 4.0, middle.y + 20.0);
+    assert!(gap.y < layout.bar.y && layout.icon_at(gap).is_none());
+    let _ = dock.hover(Some(gap), Duration::from_secs(1));
+    dock.frame(Duration::from_secs(3));
+    assert!(at(&dock, 3).icons[2].width > 70.0, "still magnified");
+    // A click in the gap starts nothing and asks nothing.
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Left)));
+    assert!(recorder.requests().is_empty());
+    // Leaving the band lets everything come back to rest.
+    let _ = dock.hover(Some(Point::new(gap.x, 1.0)), Duration::from_secs(3));
+    dock.frame(Duration::from_secs(5));
+    assert_eq!(at(&dock, 5).icons[2].width, 52.0);
+}
+
+#[test]
+fn the_menu_follows_its_application_when_the_icons_move() {
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let point = dock.layout(Duration::ZERO).icons[1].center();
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    assert!(dock.menu_open());
+    // The pinned order changes while the menu is open: the terminal moves to the first place,
+    // the files take its old one.
+    let mut config = DockConfig::default();
+    config.pinned = Some(
+        [
+            "org.example.Terminal",
+            "org.example.Files",
+            "example-editor",
+            "example-browser",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert!(dock.menu_open(), "same size: the menu stays");
+    let _ = dock.update(Message::MenuPick(dock::menu::Entry::Unpin));
+    // The terminal went, not the application now at its old place.
+    assert_eq!(
+        dock.pinned,
+        ["org.example.Files", "example-editor", "example-browser"]
+    );
+}
