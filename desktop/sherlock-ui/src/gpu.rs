@@ -261,7 +261,9 @@ pub fn chips(drm: &Path) -> Vec<Chip> {
     chips
 }
 
-fn chip(device: &Path) -> Option<Chip> {
+/// The chip of one card, from its `device` folder (`/sys/class/drm/card0/device`). Also read by
+/// the compositor to choose the card it drives.
+pub fn chip(device: &Path) -> Option<Chip> {
     let vendor = std::fs::read_to_string(device.join("vendor")).ok()?;
     let vendor = u16::from_str_radix(vendor.trim().trim_start_matches("0x"), 16).ok()?;
     let driver = std::fs::read_link(device.join("driver")).ok()?;

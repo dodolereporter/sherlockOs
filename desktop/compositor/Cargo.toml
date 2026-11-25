@@ -9,14 +9,25 @@ publish.workspace = true
 [dependencies]
 # Only the features in use: windowed backend (winit, with GLES rendering), Wayland server,
 # desktop tools (Space, Window) and XWayland with its X11 window manager (X11Wm, lot D-13).
-# The rest (DRM, libinput…) will come with their lots. Layer-shell, fractional scale,
-# viewporter and xdg-output (lot D-12) come with `wayland_frontend`.
+# Layer-shell, fractional scale, viewporter and xdg-output (lot D-12) come with
+# `wayland_frontend`. The real session (lot D-14): `backend_session_libseat` opens the session
+# and the devices (seatd or logind), `backend_udev` finds the cards and sees screens plugged
+# in, `backend_drm` drives them (KMS, `DrmCompositor`), `backend_gbm` allocates their buffers
+# for the same GLES renderer, `backend_libinput` reads the keyboard, mouse and touchpad.
 smithay = { version = "=0.7.0", default-features = false, features = [
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_session_libseat",
+    "backend_udev",
     "backend_winit",
     "desktop",
     "wayland_frontend",
     "xwayland",
 ] }
+# Cursor images of the real session, read from the user's cursor theme: the version that
+# smithay's winit backend already pulls (through wayland-cursor).
+xcursor = "=0.3.11"
 # Colors and sizes of the snap preview and of the grab band. Only the tokens: without the
 # `iced` feature, the compositor does not build the shell toolkit.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }

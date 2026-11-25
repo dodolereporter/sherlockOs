@@ -4,14 +4,19 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod card;
+mod cursor;
 pub mod focus;
 mod handlers;
 mod input;
+pub mod keyboard;
 mod layer;
 pub mod layout;
+pub mod options;
 pub mod output;
 pub mod render;
 pub mod stats;
+pub mod udev;
 pub mod wallpaper;
 pub mod winit;
 mod xwayland;
@@ -29,11 +34,7 @@ use std::{
 
 use smithay::{
     desktop::{PopupManager, Space, Window, layer_map_for_output},
-    input::{
-        Seat, SeatState,
-        keyboard::{Keycode, XkbConfig},
-        pointer::CursorImageStatus,
-    },
+    input::{Seat, SeatState, keyboard::Keycode, pointer::CursorImageStatus},
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, LoopSignal, Mode as LoopMode, PostAction,
@@ -73,9 +74,11 @@ use crate::{
 #[derive(thiserror::Error)]
 pub enum Error {
     #[error(
-        "usage: compositor --nested [--measure] [--outputs N] [--scale S]… [command [arguments…]]"
+        "usage: compositor [--nested [--outputs N]] [--measure] [--scale S]… [command [arguments…]]"
     )]
     Usage,
+    #[error("real session: {0}")]
+    Session(String),
     #[error("cannot create the Wayland display: {0}")]
     Display(#[from] smithay::reexports::wayland_server::backend::InitError),
     #[error("cannot open the Wayland socket: {0}")]
@@ -136,6 +139,8 @@ pub struct State {
     intercepted_keys: Vec<Keycode>,
     /// The compositor runs in a window of another session (`--nested`).
     nested: bool,
+    /// Switches to another console (Ctrl + Alt + Fn), in a real session.
+    switch_vt: Option<Box<dyn FnMut(i32)>>,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -179,20 +184,8 @@ impl State {
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
-        // AZERTY by default, unless the environment sets a layout (XKB_DEFAULT_LAYOUT).
-        let layout = if std::env::var_os("XKB_DEFAULT_LAYOUT").is_some() {
-            ""
-        } else {
-            "fr"
-        };
-        seat.add_keyboard(
-            XkbConfig {
-                layout,
-                ..XkbConfig::default()
-            },
-            200,
-            25,
-        )?;
+        // AZERTY by default, unless the environment or the system sets a layout.
+        seat.add_keyboard(keyboard::Layout::system().xkb(), 200, 25)?;
         seat.add_pointer();
 
         event_loop
@@ -240,6 +233,7 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
+            switch_vt: None,
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
