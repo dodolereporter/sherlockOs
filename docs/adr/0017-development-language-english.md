@@ -10,11 +10,11 @@ Until now, the repository mixed two languages. Code identifiers were in English,
 the Rust ecosystem, but comments, documentation, commit messages, folder names, `just` recipes,
 command-line options and test names were in French (section "Langue" of `docs/contexte.md`).
 The result was names like « desktop/compositeur », « just verifier » or
-« compositeur --imbrique » next to English types and functions, and comments that switched language from one crate to the
-next once new lots started writing in English.
+« compositeur --imbrique » next to English types and functions, and comments that switched
+language from one crate to the next once new lots started writing in English.
 
-On 25 November 2026, the author decided, and insisted (« même dans le code »), that all development
-is done in English.
+On 25 November 2026, the author decided, and insisted (« même dans le code »), that all
+development is done in English.
 
 ## Decision
 
