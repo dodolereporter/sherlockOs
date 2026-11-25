@@ -6,5 +6,44 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Les programmes du shell veulent les composants : iced est là par défaut. Le compositeur,
+# qui ne lit que les jetons, s'en passe avec `default-features = false`.
+default = ["iced"]
+iced = ["dep:iced"]
+
+[dependencies]
+# Toolkit du shell (ADR 0014). Rendu logiciel seul : sans la fonction `wgpu`, tiny-skia est le
+# seul moteur compilé, aucune variable d'environnement ne peut réveiller la carte NVIDIA.
+# `svg` dessine les icônes et le logo, `web-colors` mélange les transparences comme les
+# planches, `crisp` cale les bordures sur les pixels, `thread-pool` exécute les tâches,
+# `advanced` ouvre l'API des widgets pour le focus clavier que les boutons d'iced n'ont pas.
+# `x11` et `wayland` : fenêtres sur le poste de l'auteur (Plasma X11) et sous notre compositeur.
+iced = { version = "=0.14.0", optional = true, default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "x11",
+    "wayland",
+] }
+
+[dev-dependencies]
+# Rendu de la galerie sans écran, pour le test de capture et le test de la souris.
+iced_test = "=0.14.0"
+# Interface sans fenêtre où lancer les opérations de focus, pour le test du clavier. Déjà
+# tirée par iced : seule la déclaration est nouvelle.
+iced_runtime = "=0.14.0"
+
+[[example]]
+name = "galerie"
+required-features = ["iced"]
+
+[[test]]
+name = "galerie"
+required-features = ["iced"]
+
 [lints]
 workspace = true
