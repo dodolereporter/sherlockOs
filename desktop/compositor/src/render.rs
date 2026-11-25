@@ -95,6 +95,40 @@ impl Scene {
         })
     }
 
+    /// Elements of each screen of `views`, in its own frame pixels, at time `now`, and whether
+    /// an animation is running. The wallpaper of each screen is uploaded once as a texture per
+    /// variant; the textures no screen of `state` uses any more are freed. Shared by the
+    /// windowed backend and the real session.
+    pub fn screens(
+        &self,
+        renderer: &mut GlesRenderer,
+        state: &mut State,
+        textures: &mut wallpaper::Textures,
+        views: &[(Output, View)],
+        preview: Option<Visual>,
+        now: Duration,
+    ) -> (Vec<Vec<SceneElement>>, bool) {
+        textures.update(renderer, &mut state.wallpaper);
+        let mut animating = false;
+        let mut screens = Vec::new();
+        for (output, view) in views {
+            let image = state.wallpaper.image_for(view.frame.size);
+            let wallpaper = image.as_deref().and_then(|path| textures.get(path));
+            let screen = (output, view);
+            let (elements, moving) =
+                self.elements(renderer, state, screen, preview, wallpaper, now);
+            animating |= moving;
+            screens.push(elements);
+        }
+        let used: Vec<_> = state
+            .views()
+            .iter()
+            .filter_map(|(_, view)| state.wallpaper.image_for(view.frame.size))
+            .collect();
+        textures.retain(&used);
+        (screens, animating)
+    }
+
     /// Elements of the screen `output`, seen through `view`, at time `now`, and whether an
     /// animation is running. Elements are in frame pixels, at the screen's scale: corners,
     /// borders and shadows follow that scale. `preview` is in the space. `wallpaper`: the

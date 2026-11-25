@@ -5,11 +5,16 @@
 //! whole window, each screen draws into its own rectangle of it. In the space, screens sit side
 //! by side too, each with its logical size (physical size divided by its scale).
 
+use std::time::Duration;
+
 use smithay::{
     delegate_fractional_scale, delegate_viewporter,
     desktop::{Window, layer_map_for_output},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::{
+        calloop::timer::{TimeoutAction, Timer},
+        wayland_server::{backend::GlobalId, protocol::wl_surface::WlSurface},
+    },
     utils::{Logical, Physical, Point, Rectangle, Size, Transform},
     wayland::{
         compositor::{SurfaceData, send_surface_state},
@@ -26,6 +31,8 @@ use crate::{State, layout};
 pub struct Screen {
     pub output: Output,
     pub frame: Rectangle<i32, Physical>,
+    /// The `wl_output` global, removed with the screen.
+    global: GlobalId,
 }
 
 /// Where a screen draws: its area of the space, its rectangle of the frame, its scale, and the
@@ -66,7 +73,14 @@ impl State {
             model: "virtual".into(),
         };
         let output = Output::new(name, properties);
-        output.create_global::<State>(&self.display_handle);
+        self.add_screen(output.clone(), size, scale);
+        output
+    }
+
+    /// Adds `output`, a screen of `size` pixels at `scale`, to the right of the existing ones.
+    /// Its refresh rate is its current mode's, if it has one.
+    pub fn add_screen(&mut self, output: Output, size: Size<i32, Physical>, scale: f64) {
+        let global = output.create_global::<State>(&self.display_handle);
         output.change_current_state(
             None,
             Some(Transform::Normal),
@@ -74,11 +88,74 @@ impl State {
             None,
         );
         self.screens.push(Screen {
-            output: output.clone(),
+            output,
             frame: Rectangle::from_size(size),
+            global,
         });
         self.place_screens();
-        output
+    }
+
+    /// Removes a screen that was unplugged. Its anchored surfaces are closed (their program
+    /// opens new ones on the screens left), the others close ranks from the left, and the
+    /// windows no screen shows any more come to the screen under the pointer: snapped and
+    /// maximized ones in its work area, the others centered in it.
+    pub fn remove_screen(&mut self, output: &Output) {
+        let Some(i) = self.screens.iter().position(|s| &s.output == output) else {
+            return;
+        };
+        let screen = self.screens.remove(i);
+        for layer in layer_map_for_output(output).layers() {
+            layer.layer_surface().send_close();
+        }
+        self.unmapped_layers.retain(|(_, o)| o != output);
+        self.space.unmap_output(output);
+        // Clients that bind the global right now must not get a protocol error: it is hidden
+        // first, and destroyed a little later.
+        let display = self.display_handle.clone();
+        display.disable_global::<State>(screen.global.clone());
+        let timer = Timer::from_duration(Duration::from_secs(5));
+        let removed = self.loop_handle.insert_source(timer, move |_, _, _| {
+            display.remove_global::<State>(screen.global.clone());
+            TimeoutAction::Drop
+        });
+        if let Err(err) = removed {
+            tracing::warn!("removing the screen's global later: {err}");
+        }
+        self.place_screens();
+        // The pointer comes back on a screen before windows go to the one under it.
+        let pointer = self.seat.get_pointer().map(|p| p.current_location());
+        let first = self.space.outputs().next().cloned();
+        if pointer.is_some_and(|p| self.space.output_under(p).next().is_none())
+            && let Some(area) = first.and_then(|o| self.space.output_geometry(&o))
+        {
+            self.pointer_motion(center(area), 0);
+        }
+        let Some(output) = self.pointer_output() else {
+            return;
+        };
+        // Snapped and maximized windows without a screen: `window_output` gives them the
+        // pointer's.
+        self.reflow(&output);
+        let orphans: Vec<Window> = self
+            .space
+            .elements()
+            .filter(|w| {
+                let center = self.space.element_geometry(w).map(center);
+                center.is_some_and(|c| self.space.output_under(c).next().is_none())
+            })
+            .cloned()
+            .collect();
+        let Some(area) = self.work_area(&output) else {
+            return;
+        };
+        for window in orphans {
+            let size = self
+                .space
+                .element_geometry(&window)
+                .unwrap_or_default()
+                .size;
+            self.move_window(&window, layout::centered(area, size), false);
+        }
     }
 
     /// The host frame is now `size`: it is shared equally between the screens.
@@ -99,9 +176,10 @@ impl State {
         for screen in &mut self.screens {
             screen.frame.loc = (frame_x, 0).into();
             frame_x += screen.frame.size.w;
+            let refresh = screen.output.current_mode().map_or(60_000, |m| m.refresh);
             let mode = Mode {
                 size: screen.frame.size,
-                refresh: 60_000,
+                refresh,
             };
             let output = &screen.output;
             output.change_current_state(Some(mode), None, None, Some((space_x, 0).into()));
@@ -170,9 +248,8 @@ impl State {
     /// Screen of a window: the one under its center, or the pointer's.
     pub fn window_output(&self, window: &Window) -> Option<Output> {
         let geometry = self.space.element_geometry(window)?;
-        let center = geometry.loc.to_f64() + geometry.size.to_f64().downscale(2.0).to_point();
         self.space
-            .output_under(center)
+            .output_under(center(geometry))
             .next()
             .cloned()
             .or_else(|| self.pointer_output())
@@ -216,6 +293,11 @@ impl State {
             }
         }
     }
+}
+
+/// Center of a rectangle of the space.
+fn center(r: Rectangle<i32, Logical>) -> Point<f64, Logical> {
+    r.loc.to_f64() + r.size.to_f64().downscale(2.0).to_point()
 }
 
 impl FractionalScaleHandler for State {}

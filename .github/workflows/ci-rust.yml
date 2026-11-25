@@ -42,7 +42,8 @@ jobs:
           cargo fmt --version
 
       # The compositor (smithay) links to libxkbcommon, and its integration test loads
-      # libwayland-client. The ubuntu-24.04 image lacks their development packages.
+      # libwayland-client. Its real session (lot D-14) links to udev, libinput, libseat and GBM
+      # (libdrm for its headers). The ubuntu-24.04 image lacks their development packages.
       # xwayland provides the Xwayland binary that the XWayland integration test starts, and
       # libegl1 the libEGL.so.1 without which it stops at startup: libepoxy loads it at run
       # time, and the xwayland package does not pull it in.
@@ -50,7 +51,8 @@ jobs:
       - name: Install the system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev xwayland libegl1
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev \
+            libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1
 
       # `just verify` runs check-language, a Python script that only uses the standard library.
       - name: Show the Python of check-language

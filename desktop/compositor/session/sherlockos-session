@@ -1,0 +1,74 @@
+#!/bin/sh
+# Starts a NOM_OS session, from the login screen (sherlockos.desktop) or from a text console:
+# the compositor on the screens of the machine, then the bar and the dock inside it.
+#
+# The programs are looked for next to this script (`just install-session` puts them in
+# /usr/local/libexec/nom-os), or in NOM_OS_BIN. NOM_OS_XWAYLAND=1 starts XWayland too (off by
+# default: see "Real session" in docs/compositor.md). The log of the session goes to
+# $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
+# to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
+# session with it.
+set -eu
+
+bin="${NOM_OS_BIN:-$(dirname "$(readlink -f "$0")")}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/nom-os"
+log="$state/session.log"
+mkdir -p "$state"
+if [ -f "$log" ]; then
+	mv -f "$log" "$log.old"
+fi
+
+export XDG_CURRENT_DESKTOP=NOM_OS
+export XDG_SESSION_DESKTOP=NOM_OS
+export XDG_SESSION_TYPE=wayland
+
+# Copies its input to the log, which moves to .old beyond 5 MiB (checked every 100 lines).
+keep_log() {
+	lines=0
+	while IFS= read -r line; do
+		printf '%s\n' "$line" >>"$log"
+		lines=$((lines + 1))
+		if [ $((lines % 100)) -eq 0 ] && [ "$(wc -c <"$log")" -gt 5242880 ]; then
+			mv -f "$log" "$log.old"
+		fi
+	done
+}
+
+# The compositor launches this command once it is ready, with WAYLAND_DISPLAY (and DISPLAY
+# with XWayland). The bar and the dock start again when they stop (ADR 0005), as long as the
+# compositor, their parent's parent, is there: after 1, 2, 4, 8 then 16 seconds. A program that
+# stopped 5 times within 60 seconds is given up, with a line in the log.
+shell='
+compositor=$PPID
+keep() {
+	stops=""
+	delay=1
+	while kill -0 "$compositor" 2>/dev/null; do
+		"$@" && status=0 || status=$?
+		now=$(date +%s)
+		recent=""
+		for t in $stops $now; do
+			[ $((now - t)) -lt 60 ] && recent="$recent $t"
+		done
+		stops=$recent
+		if [ "$(echo $stops | wc -w)" -ge 5 ]; then
+			echo "session: $1 stopped 5 times within 60 s (last status $status): given up" >&2
+			return
+		fi
+		# After a quiet minute, the delay starts again from 1 second.
+		[ "$(echo $stops | wc -w)" -eq 1 ] && delay=1
+		echo "session: $1 stopped (status $status), started again in $delay s" >&2
+		sleep "$delay"
+		[ "$delay" -lt 16 ] && delay=$((delay * 2))
+	done
+}
+keep "$0/bar" &
+keep "$0/dock" &
+wait
+'
+xwayland=""
+if [ "${NOM_OS_XWAYLAND:-0}" = 1 ]; then
+	xwayland=--xwayland
+fi
+# shellcheck disable=SC2086 # $xwayland is empty or one word.
+"$bin/compositor" $xwayland sh -c "$shell" "$bin" 2>&1 | keep_log

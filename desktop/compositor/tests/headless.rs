@@ -998,6 +998,49 @@ mod tests {
     }
 
     #[test]
+    fn a_screen_unplugged_hands_its_windows_to_the_others() {
+        let mut h = Harness::start();
+        let second = h.state.add_output((1024, 768).into(), 1.0);
+        h.show_window();
+        // Gesture key + drag the window onto the second screen, away from its edges.
+        let drag = |h: &mut Harness, to: (f64, f64)| {
+            h.state
+                .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 2);
+            h.state.pointer_motion((400.0, 300.0).into(), 3);
+            h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+            h.state.pointer_motion(to.into(), 5);
+            h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+            h.state
+                .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 7);
+        };
+        drag(&mut h, (1200.0, 300.0));
+        assert_eq!(location(&h.state), Some((1150, 260).into()));
+
+        // The second screen is unplugged: the pointer comes back to the first screen, and the
+        // window is centered there.
+        h.state.remove_screen(&second);
+        assert_eq!(h.state.outputs().len(), 1);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+        assert_eq!(location(&h.state), Some((350, 260).into()));
+
+        // Plugged in again, it comes back to the right of the first one. The window, dropped
+        // against its top edge, is maximized on it.
+        let again = h.state.add_output((1024, 768).into(), 1.0);
+        assert_eq!(
+            h.state.space.output_geometry(&again),
+            Some(rect(800, 0, 1024, 768))
+        );
+        drag(&mut h, (1200.0, 2.0));
+        h.wait_size("maximizing on the second screen", 1024, 768);
+        assert_eq!(location(&h.state), Some((800, 0).into()));
+
+        // Unplugged again: maximized on the first screen.
+        h.state.remove_screen(&again);
+        h.wait_size("maximizing on the first screen", 800, 600);
+        assert_eq!(location(&h.state), Some((0, 0).into()));
+    }
+
+    #[test]
     fn the_fractional_scale_is_advertised() {
         // 800 × 600 pixels at 1.5: 533 × 400 points.
         let mut h = Harness::start_scaled(1.5);
