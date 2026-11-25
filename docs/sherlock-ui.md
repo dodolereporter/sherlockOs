@@ -44,7 +44,9 @@ Tous les jetons sont nommés par leur rôle, en anglais comme le reste du code.
 - **Top bar** (D-20): `color::TOP_BAR_GLASS` and `TOP_BAR_BORDER` (Main board, slightly
   lighter than `GLASS` and `BORDER`), `CHIP` and `CHIP_HOVER` for the workspace chips;
   `metrics::TOP_BAR_*`, `SHERLOCK_*`, `CHIP_*`, `STATUS_*`, `MENU_AVATAR*`,
-  `MENU_HEADER_PADDING`; icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`.
+  `MENU_HEADER_PADDING`; icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`;
+  `color::TRANSPARENT` for the background of a shell surface, `metrics::EVENT_COALESCE_MS`
+  (150 ms) for merging bursts of system events.
 - **`window`** : bande de saisie et calage des fenêtres, posés par D-17 pour le compositeur.
 - **`metrics::DESKTOP_DISC_GEOMETRY`** : place et diamètre des trois disques du fond sur l'écran
   de référence (planche Main), ajoutés par D-11.

@@ -1,6 +1,6 @@
-wifi:connected:CESI_HotSpot
-bridge:connected (externally):br-1f2990721d08
-bridge:connected (externally):br-c7c900c28409
+wifi:connected:MonWifi
+bridge:connected (externally):br-0000000000a1
+bridge:connected (externally):br-0000000000a2
 bridge:connected (externally):lxcbr0
 loopback:connected (externally):lo
 bridge:connected (externally):docker0

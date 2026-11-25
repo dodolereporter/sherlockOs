@@ -10,6 +10,10 @@ texts it shows stay in French, from `sherlock-ui`.
 
 ![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
 
+The menu screenshot was taken before the unwired shortcuts were removed from the menu, and the
+login name in its header is masked. The headless render of `tests/render.rs` shows the current
+menu.
+
 ## What it shows
 
 | Place | Content | Source |
@@ -111,9 +115,24 @@ subscription. It only sends a state when it changed: the bar does not redraw for
 | `Placeholder` | Variables `BAR_WORKSPACES` and `BAR_APP` | None | Module tests |
 
 Commands run with `LC_ALL=C`, for an output that does not depend on the language. A watch
-command that stops is restarted 30 s later. The `upower-full.txt`, `nmcli-wifi.txt` and
-`pactl-55.txt` outputs were recorded on the reference laptop; the others are rewritten from
-them by hand (battery at 12 % discharging, sound muted, Ethernet, network off).
+command that stops is restarted 30 s later. A burst of watch lines (a volume slider being
+dragged, a network reconnecting) gives a single refresh: the lines that follow within
+`metrics::EVENT_COALESCE_MS` (150 ms) of each other are drained before reading again. A read
+error, such as an `upower` output without a battery section, is logged as a warning once, until
+the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs
+were recorded on the reference laptop, with the Wi-Fi name and the Docker bridge ids replaced by
+neutral values; the others are rewritten from them by hand (battery at 12 % discharging, sound
+muted, Ethernet, network off).
+
+**The commands die with the bar.** Each command is started with `PR_SET_PDEATHSIG` set to
+SIGTERM in `pre_exec`: the kernel kills it as soon as the thread that started it ends, and so
+whatever way the bar ends (normal exit, `Error during dispatch` when the compositor goes away,
+SIGTERM, SIGINT, SIGKILL, panic). The child checks `getppid` right after `prctl`, for the case
+where the bar died in between. On top of that, `source::shutdown` stops the monitors still
+registered when `run` returns. `tests/children.rs` runs the real sources in a helper process
+with fake `upower`, `nmcli` and `pactl` in the `PATH`, kills it with SIGTERM then SIGKILL, and
+checks that no fake monitor survives; it fails when `prctl` is removed. This needs `libc`
+(`=0.2.191`, already in the lock through iced).
 
 **Why commands and not D-Bus.** The brief allowed `zbus`. The machine's commands are enough,
 add no dependency, and can be tested on recorded outputs. Their watch mode reports changes:
@@ -165,14 +184,23 @@ Keyboard:
 
 | Where | Key | Effect |
 | --- | --- | --- |
-| Bar | Tab, Shift+Tab | Moves between the buttons (Sherlock, workspaces), light blue ring |
-| Bar | Enter, Space | Activates the focused button: opens the Sherlock menu |
+| Bar | Tab, Shift+Tab | Moves between the buttons (Sherlock, workspaces), light blue ring, wrapping around |
+| Bar | Enter, Space | Activates the ringed button: the Sherlock menu, or a workspace (logged) |
+| Bar | Escape | Removes the ring |
 | Menu | Down, Up, Tab, Shift+Tab | Highlights the next or previous entry, wrapping around |
 | Menu | Home, End | First, last entry |
 | Menu | Enter, Space | Activates the highlighted entry |
 | Menu | Escape | Closes the menu |
 
 Hovering with the pointer highlights an entry too: keyboard and pointer share the same cursor.
+
+The bar keeps its keyboard focus in its own state (`Bar::focused`), like the menu cursor. The
+ring is drawn from that value and Enter activates that value, in the same update. iced's focus
+operations were tried first: under `iced_exwlshell` they are applied after the redraw, so the
+ring stayed one Tab behind the real focus and Enter activated the next button.
+
+The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
+them yet, so the menu does not show them.
 
 ## Running and checking by hand
 
@@ -199,8 +227,14 @@ error; `RUST_LOG=bar=debug` shows more.
 4. **Menu**: click the Sherlock button. The menu opens below it, the button gets its green
    ring. Down, Up, Enter, Escape. An activated entry is logged:
    `Sherlock menu entry not available yet action=Lock`. A click elsewhere closes the menu.
-5. **Keyboard in the bar**: click into the bar, then Tab: the ring moves from the Sherlock
-   button to the workspaces.
+5. **Keyboard in the bar**: click into the bar (on its background, between the buttons), then
+   Tab. The first Tab rings the Sherlock button; each Tab moves the ring to the next workspace,
+   then back to Sherlock. Enter activates exactly the ringed button: the menu opens on
+   Sherlock, a workspace logs `index=<n>` matching the ringed chip (`index=0` for « 1 · Code »).
+   Escape removes the ring.
+6. **No orphans**: stop the bar (Ctrl+C, `kill`, or stop the nested KWin), then
+   `ps -eo pid,args | grep -E 'upower --monitor|nmcli monitor|pactl subscribe'` lists nothing
+   started by the bar.
 
 Comparing with the design boards, by eye or on the screenshots:
 
@@ -230,6 +264,11 @@ front (`wmctrl -l` gives the id), then `import -window <id> screenshot.png`.
 - **Placeholder workspaces** and **user name**.
 - **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the
   board.
+- **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
+  activates, Tab after Tab; Escape clears the ring.
+- **Children** (`tests/children.rs`): no monitoring command survives the bar, after SIGTERM or
+  SIGKILL.
+- **Bursts**: a burst of monitor lines gives a single refresh.
 - **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, expected
   texts, a click on a workspace and on a menu entry yields the right message.
 - **Contrast** (`sherlock-ui`): bar texts and workspace chips, on the bar over the desktop and
@@ -248,6 +287,8 @@ front (`wmctrl -l` gives the id), then `import -window <id> screenshot.png`.
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
 - **User name**: the board says « Dodo ». The bar reads the user's GECOS, otherwise the login.
+- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
+  yet, so they are not shown.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
 - **Éteindre**: the board announces a submenu that it does not draw. The chevron is there; the
   entry is logged like the others.

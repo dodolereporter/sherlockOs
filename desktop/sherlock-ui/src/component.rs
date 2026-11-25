@@ -53,6 +53,8 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
     }
 
     /// Dessine l'anneau de focus sans focus. Pour la galerie.
+    ///
+    /// Also used by programs that keep the focus in their own state, such as the bar.
     pub fn focus_ring(mut self) -> Self {
         self.ring = true;
         self

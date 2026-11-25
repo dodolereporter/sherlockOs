@@ -1,6 +1,10 @@
 //! Sources of system state. Each one implements `Source`; `Fixed` is the fake implementation
 //! used by tests. `watch` runs a source on its own thread and turns it into a stream of states
 //! that only carries changes.
+//!
+//! Every command started here dies with the bar: the kernel sends it SIGTERM when its parent
+//! goes away (`PR_SET_PDEATHSIG`), whatever the way out (normal exit, signal, panic), and
+//! `shutdown` stops the monitors that are still running when `run` returns.
 
 pub mod battery;
 pub mod clock;
@@ -9,15 +13,25 @@ pub mod sound;
 pub mod workspaces;
 
 use std::fmt::Debug;
-use std::io::{BufRead, BufReader, Lines};
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::io::{self, BufRead, BufReader};
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use iced::futures::Stream;
-use iced::futures::channel::mpsc;
+use iced::futures::channel::mpsc as stream;
+use sherlock_ui::metrics;
 
 /// Delay before restarting a monitoring command that stopped.
 const MONITOR_RETRY: Duration = Duration::from_secs(30);
+
+/// Window in which a burst of monitor lines becomes a single refresh.
+const COALESCE: Duration = Duration::from_millis(metrics::EVENT_COALESCE_MS);
+
+/// Process ids of the monitors still running, stopped by `shutdown`.
+static CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// Error from a source.
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +39,7 @@ pub enum SourceError {
     #[error("could not start {command}: {source}")]
     Spawn {
         command: &'static str,
-        source: std::io::Error,
+        source: io::Error,
     },
     #[error("{command} failed: {stderr}")]
     Failed {
@@ -67,23 +81,33 @@ impl<S: Clone + PartialEq + Send + Debug + 'static> Source for Fixed<S> {
 }
 
 /// Runs `source` on a thread: read, send the state if it changed, wait, repeat. The thread
-/// stops when the stream is dropped or when the source will never change again.
+/// stops when the stream is dropped or when the source will never change again. A read error
+/// is logged once, until the source reads fine again or fails differently.
 pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item = S::State> {
-    let (sender, receiver) = mpsc::unbounded();
+    let (sender, receiver) = stream::unbounded();
     let spawned = std::thread::Builder::new()
         .name(format!("source-{name}"))
         .spawn(move || {
             let mut last = None;
+            let mut last_error = None;
             loop {
                 match source.read() {
-                    Ok(state) if last.as_ref() != Some(&state) => {
-                        if sender.unbounded_send(state.clone()).is_err() {
-                            return;
+                    Ok(state) => {
+                        last_error = None;
+                        if last.as_ref() != Some(&state) {
+                            if sender.unbounded_send(state.clone()).is_err() {
+                                return;
+                            }
+                            last = Some(state);
                         }
-                        last = Some(state);
                     }
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(source = name, %error, "cannot read"),
+                    Err(error) => {
+                        let text = error.to_string();
+                        if last_error.as_ref() != Some(&text) {
+                            tracing::warn!(source = name, %error, "cannot read");
+                            last_error = Some(text);
+                        }
+                    }
                 }
                 if !source.wait() {
                     return;
@@ -96,12 +120,34 @@ pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item =
     receiver
 }
 
-/// Runs `program` with `args` in the C locale, for a stable output, and returns its output.
+/// A command in the C locale, for a stable output, that the kernel kills with SIGTERM when the
+/// thread that started it ends, and so when the bar ends.
+fn command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env("LC_ALL", "C").stdin(Stdio::null());
+    let parent = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+    // SAFETY: the closure runs in the child between fork and exec. It only calls prctl(2) and
+    // getppid(2), which are async-signal-safe, and builds its error from a raw errno without
+    // allocating.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            // The parent may have died between fork and prctl: the signal would never come.
+            if libc::getppid() != parent {
+                return Err(io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
+/// Runs `program` with `args` and returns its output.
 pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> {
-    let output = Command::new(program)
+    let output = command(program)
         .args(args)
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
         .output()
         .map_err(|source| SourceError::Spawn {
             command: program,
@@ -116,13 +162,31 @@ pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Stops the monitors still running. Called when the bar leaves `run`.
+pub fn shutdown() {
+    let children = std::mem::take(&mut *lock_children());
+    for pid in children {
+        if let Ok(pid) = libc::pid_t::try_from(pid) {
+            // SAFETY: kill(2) touches no memory of ours. The pid is one of our children that
+            // has not been waited for yet, so no other process can have reused it.
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+    }
+}
+
+fn lock_children() -> MutexGuard<'static, Vec<u32>> {
+    CHILDREN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// A command that prints a line on every change, such as `upower --monitor`.
 pub struct Monitor {
     program: &'static str,
     args: &'static [&'static str],
     /// Lines that announce a relevant change.
     relevant: fn(&str) -> bool,
-    running: Option<(Child, Lines<BufReader<ChildStdout>>)>,
+    running: Option<(Child, Receiver<String>)>,
 }
 
 impl Monitor {
@@ -139,10 +203,11 @@ impl Monitor {
         }
     }
 
-    /// Waits for the next relevant line. If the command stops, restarts it after a delay.
+    /// Waits for the next relevant line, then lets the burst it belongs to pass. If the command
+    /// stops, restarts it after a delay.
     pub fn wait(&mut self) -> bool {
         loop {
-            let Some((_, lines)) = &mut self.running else {
+            let Some((_, lines)) = &self.running else {
                 match self.start() {
                     Ok(running) => self.running = Some(running),
                     Err(error) => {
@@ -153,38 +218,48 @@ impl Monitor {
                 }
                 continue;
             };
-            match lines.next() {
-                Some(Ok(line)) if (self.relevant)(&line) => return true,
-                Some(Ok(_)) => {}
-                Some(Err(_)) | None => {
-                    self.stop();
-                    tracing::warn!(command = self.program, "monitor stopped, restarting");
-                    std::thread::sleep(MONITOR_RETRY);
-                    return true;
-                }
+            if coalesce(lines, self.relevant, COALESCE) {
+                return true;
             }
+            self.stop();
+            tracing::warn!(command = self.program, "monitor stopped, restarting");
+            std::thread::sleep(MONITOR_RETRY);
+            return true;
         }
     }
 
-    fn start(&self) -> std::io::Result<(Child, Lines<BufReader<ChildStdout>>)> {
-        let mut child = Command::new(self.program)
+    fn start(&self) -> io::Result<(Child, Receiver<String>)> {
+        let mut child = command(self.program)
             .args(self.args)
-            .env("LC_ALL", "C")
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
+        lock_children().push(child.id());
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| std::io::Error::other("no standard output"))?;
-        Ok((child, BufReader::new(stdout).lines()))
+            .ok_or_else(|| io::Error::other("no standard output"))?;
+        // Lines are read on their own thread, so that a burst can be drained with a timeout.
+        // That thread ends with the command's output.
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name(format!("lines-{}", self.program))
+            .spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if sender.send(line).is_err() {
+                        return;
+                    }
+                }
+            })?;
+        Ok((child, receiver))
     }
 
     fn stop(&mut self) {
         if let Some((mut child, _)) = self.running.take() {
+            let id = child.id();
             let _ = child.kill();
             let _ = child.wait();
+            lock_children().retain(|pid| *pid != id);
         }
     }
 }
@@ -193,6 +268,21 @@ impl Drop for Monitor {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Blocks until a relevant line arrives, then drains the lines that follow it within `window`
+/// of each other. Returns `false` when the lines end before any relevant one.
+fn coalesce(lines: &Receiver<String>, relevant: fn(&str) -> bool, window: Duration) -> bool {
+    loop {
+        match lines.recv() {
+            Ok(line) if relevant(&line) => break,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    // A timeout ends the burst; so does the end of the command, whose restart comes next.
+    while lines.recv_timeout(window).is_ok() {}
+    true
 }
 
 /// Value of a `key: value` line in an output, trimmed.
@@ -238,6 +328,20 @@ mod tests {
     fn only_changes_are_sent() {
         let states: Vec<_> = block_on(watch(Sequence(vec![1, 1, 2, 2, 1]), "test").collect());
         assert_eq!(states, [1, 2, 1]);
+    }
+
+    #[test]
+    fn a_burst_of_lines_is_one_refresh() {
+        let (sender, lines) = mpsc::channel();
+        for line in ["noise", "change", "change", "change"] {
+            sender.send(String::from(line)).unwrap();
+        }
+        let window = Duration::from_millis(20);
+        assert!(coalesce(&lines, |l| l == "change", window));
+        // The whole burst is gone: nothing is left to trigger a second refresh.
+        assert!(lines.try_recv().is_err());
+        drop(sender);
+        assert!(!coalesce(&lines, |l| l == "change", window));
     }
 
     #[test]

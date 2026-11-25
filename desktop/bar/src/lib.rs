@@ -7,7 +7,7 @@ pub mod menu;
 pub mod source;
 pub mod user;
 
-use iced::{Color, Settings};
+use iced::Settings;
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, Margin};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
@@ -53,10 +53,10 @@ pub fn settings() -> Settings {
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     // The bar has no text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
-    iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
+    let result = iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
         .theme(|_: &Bar, _| Some(theme::theme()))
         .style(|_, _| iced::theme::Style {
-            background_color: Color::TRANSPARENT,
+            background_color: color::TRANSPARENT.into(),
             text_color: color::TEXT_PRIMARY.into(),
         })
         .subscription(Bar::subscription)
@@ -68,7 +68,11 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
             layer_settings: layer_settings(),
             ..ExWlSettings::default()
         })
-        .run()
+        .run();
+    // The monitoring commands would also die with the process (PR_SET_PDEATHSIG); stopping
+    // them here makes a normal exit or a dispatch error clean right away.
+    source::shutdown();
+    result
 }
 
 fn namespace() -> String {

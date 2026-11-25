@@ -40,11 +40,10 @@ impl Action {
         }
     }
 
+    /// The board also shows the shortcuts Super+, Super+G and Super+L. No compositor binds
+    /// them yet, so they are not shown: a shortcut that does nothing would mislead.
     pub fn trailing(self) -> Trailing<'static> {
         match self {
-            Self::Settings => Trailing::Shortcut(text::SETTINGS_SHORTCUT),
-            Self::GameMode => Trailing::Shortcut(text::GAME_MODE_SHORTCUT),
-            Self::Lock => Trailing::Shortcut(text::LOCK_SHORTCUT),
             // The design board announces a submenu that it does not draw.
             Self::PowerOff => Trailing::Submenu,
             _ => Trailing::None,

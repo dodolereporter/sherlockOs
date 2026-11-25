@@ -163,6 +163,9 @@ pub const PAGE_PADDING: (f32, f32) = (22.0, 28.0);
 pub const HOVER_MS: (u64, u64) = (110, 150);
 /// Grossissement du dock.
 pub const DOCK_TRANSITION_MS: u64 = 150;
+/// Window in which a burst of system events (volume slider, network changes) is merged into
+/// a single refresh of the shell.
+pub const EVENT_COALESCE_MS: u64 = 150;
 
 // Cohérence des jetons, vérifiée à la compilation : un jeton hors de sa gamme ne compile pas.
 const _: () = {

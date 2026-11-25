@@ -88,7 +88,7 @@ mod tests {
             network,
             Network::Connected {
                 link: Link::Wifi,
-                name: String::from("CESI_HotSpot")
+                name: String::from("MonWifi")
             }
         );
     }

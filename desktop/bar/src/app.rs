@@ -35,6 +35,18 @@ pub struct Bar {
     menu: Option<Id>,
     /// Menu entry highlighted by the keyboard or the pointer.
     pub cursor: Option<usize>,
+    /// Bar button that has the keyboard focus, as an index in `targets()`. The bar keeps it in
+    /// its own state, like the menu cursor: the ring is drawn from the same value that Enter
+    /// activates, in the same update. (iced's focus operations are applied after the redraw
+    /// under `iced_exwlshell`, which left the ring one Tab behind.)
+    focus: Option<usize>,
+}
+
+/// A bar button that Tab can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Sherlock,
+    Workspace(usize),
 }
 
 #[to_layer_message(multi)]
@@ -98,6 +110,12 @@ impl Bar {
                 }
                 key => self.cursor = menu::move_cursor(self.cursor, key),
             },
+            Message::MenuKey(menu::Key::Activate) => {
+                if let Some(message) = self.activation() {
+                    return self.update(message);
+                }
+            }
+            Message::MenuKey(menu::Key::Close) => self.focus = None,
             Message::MenuKey(_) => {}
             Message::Hover(index) => self.cursor = Some(index),
             Message::Activate(action) => {
@@ -118,7 +136,16 @@ impl Bar {
                 };
                 self.cursor = menu::move_cursor(self.cursor, key);
             }
-            Message::Focus(direction) => return focus::advance(direction),
+            Message::Focus(direction) => {
+                let count = self.targets().len();
+                self.focus = match (direction, self.focus) {
+                    _ if count == 0 => None,
+                    (Direction::Next, Some(i)) if i + 1 < count => Some(i + 1),
+                    (Direction::Next, _) => Some(0),
+                    (Direction::Previous, Some(i)) if i > 0 && i <= count => Some(i - 1),
+                    (Direction::Previous, _) => Some(count - 1),
+                };
+            }
             Message::Closed(id) => {
                 // The compositor closes the menu on a click elsewhere (popup_done).
                 if self.menu == Some(id) {
@@ -129,6 +156,27 @@ impl Bar {
             _ => {}
         }
         Task::none()
+    }
+
+    /// The bar buttons, in Tab order: Sherlock, then the workspaces.
+    pub fn targets(&self) -> Vec<Target> {
+        let workspaces = self.workspaces.as_ref().map_or(0, |w| w.names.len());
+        std::iter::once(Target::Sherlock)
+            .chain((0..workspaces).map(Target::Workspace))
+            .collect()
+    }
+
+    /// The bar button that has the keyboard focus: the one drawn with the ring.
+    pub fn focused(&self) -> Option<Target> {
+        self.focus.and_then(|i| self.targets().get(i).copied())
+    }
+
+    /// What Enter or Space does: activate the focused button.
+    pub fn activation(&self) -> Option<Message> {
+        self.focused().map(|target| match target {
+            Target::Sherlock => Message::ToggleMenu,
+            Target::Workspace(i) => Message::SelectWorkspace(i),
+        })
     }
 
     fn toggle_menu(&mut self) -> Task<Message> {
@@ -170,7 +218,17 @@ impl Bar {
     }
 
     pub fn view_bar(&self) -> Element<'_, Message> {
-        let sherlock = ui::sherlock_button(self.menu_open(), Some(Message::ToggleMenu));
+        let ring = |control: ui::Control<'static, Message>, target| {
+            if self.focused() == Some(target) {
+                control.focus_ring()
+            } else {
+                control
+            }
+        };
+        let sherlock = ring(
+            ui::sherlock_button(self.menu_open(), Some(Message::ToggleMenu)),
+            Target::Sherlock,
+        );
         let mut left = row![sherlock]
             .spacing(metrics::TOP_BAR_LEFT_GAP)
             .align_y(Alignment::Center);
@@ -187,7 +245,8 @@ impl Bar {
         let chips = self.workspaces.iter().flat_map(|w| {
             w.names.iter().enumerate().map(move |(i, name)| {
                 let label = strings::top_bar::workspace(i + 1, name.as_deref());
-                ui::chip(label, i == w.active, Some(Message::SelectWorkspace(i))).into()
+                let chip = ui::chip(label, i == w.active, Some(Message::SelectWorkspace(i)));
+                ring(chip, Target::Workspace(i)).into()
             })
         });
         let center = row(chips)
@@ -283,7 +342,8 @@ impl Bar {
     }
 }
 
-/// Tab moves the focus; the other useful keys go to the menu.
+/// Tab moves the focus; Enter, Space and Escape go to the menu when it is open, to the focused
+/// bar button otherwise.
 fn on_key(event: keyboard::Event) -> Option<Message> {
     focus::tab(event.clone())
         .map(Message::Focus)
@@ -335,7 +395,9 @@ mod tests {
     fn menu_keys_do_nothing_while_the_menu_is_closed() {
         let mut bar = Bar::default();
         let _ = bar.update(Message::MenuKey(menu::Key::Next));
+        let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert_eq!(bar.cursor, None);
+        assert!(!bar.menu_open());
     }
 
     #[test]
@@ -347,6 +409,65 @@ mod tests {
         let _ = bar.update(Message::Closed(id));
         assert!(!bar.menu_open());
         assert_eq!(bar.cursor, None);
+    }
+
+    fn with_workspaces() -> Bar {
+        let mut bar = Bar::default();
+        let workspaces = Workspaces::placeholder(Some("Code,Web,Jeu"), None);
+        let _ = bar.update(Message::Workspaces(workspaces));
+        bar
+    }
+
+    #[test]
+    fn the_first_tab_already_shows_the_ring() {
+        let mut bar = with_workspaces();
+        assert_eq!(bar.focused(), None);
+        let _ = bar.update(Message::Focus(Direction::Next));
+        assert_eq!(bar.focused(), Some(Target::Sherlock));
+    }
+
+    #[test]
+    fn the_ringed_button_is_the_one_enter_activates() {
+        let mut bar = with_workspaces();
+        let expected = [
+            Target::Sherlock,
+            Target::Workspace(0),
+            Target::Workspace(1),
+            Target::Workspace(2),
+            Target::Sherlock,
+        ];
+        for target in expected {
+            let _ = bar.update(Message::Focus(Direction::Next));
+            // The view rings `focused()`; Enter activates `activation()`: they must agree.
+            assert_eq!(bar.focused(), Some(target));
+            let activated = bar.activation();
+            match target {
+                Target::Sherlock => assert!(matches!(activated, Some(Message::ToggleMenu))),
+                Target::Workspace(i) => {
+                    assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
+                }
+            }
+        }
+        let _ = bar.update(Message::Focus(Direction::Previous));
+        assert_eq!(bar.focused(), Some(Target::Workspace(2)));
+    }
+
+    #[test]
+    fn enter_on_the_ringed_sherlock_button_opens_the_menu() {
+        let mut bar = with_workspaces();
+        let _ = bar.update(Message::Surface(Id::unique()));
+        let _ = bar.update(Message::Focus(Direction::Next));
+        let _ = bar.update(Message::MenuKey(menu::Key::Activate));
+        assert!(bar.menu_open());
+    }
+
+    #[test]
+    fn escape_clears_the_bar_focus() {
+        let mut bar = with_workspaces();
+        let _ = bar.update(Message::Focus(Direction::Previous));
+        assert_eq!(bar.focused(), Some(Target::Workspace(2)));
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        assert_eq!(bar.focused(), None);
     }
 
     #[test]

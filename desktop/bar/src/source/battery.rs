@@ -37,7 +37,13 @@ pub fn parse(output: &str) -> Result<Option<Battery>, SourceError> {
         command: "upower",
         detail: detail.to_owned(),
     };
-    if field(output, "present") != Some("yes") || field(output, "power supply") == Some("no") {
+    match field(output, "present") {
+        Some("yes") => {}
+        Some(_) => return Ok(None),
+        // Not even a battery section: an output we do not understand, logged by `watch`.
+        None => return Err(error("no \"present\" field")),
+    }
+    if field(output, "power supply") == Some("no") {
         return Ok(None);
     }
     let percent = field(output, "percentage")
@@ -118,6 +124,12 @@ mod tests {
         let output = "  power supply:         no\n  unknown\n    present:             no\n";
         assert_eq!(parse(output).unwrap(), None);
         assert!(parse("  battery\n    present:  yes\n").is_err());
+    }
+
+    #[test]
+    fn unexpected_output_is_an_error_not_a_missing_battery() {
+        assert!(parse("").is_err());
+        assert!(parse("failed to get device\n").is_err());
     }
 
     #[test]

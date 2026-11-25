@@ -203,6 +203,9 @@ pub const AMBER: Color = Color::rgb(0xF0, 0xC4, 0x8A);
 /// Erreur, action destructive.
 pub const SALMON: Color = Color::rgb(0xF6, 0xB5, 0xA6);
 
+/// Fully transparent: the background of a shell surface that draws its own shapes.
+pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0.0);
+
 /// Ligne sélectionnée d'une liste ou d'un menu, entrée de menu survolée.
 pub const SELECTED_ROW: Color = Color::rgba(91, 163, 208, 0.26);
 /// Fond de l'entrée active d'une navigation.
