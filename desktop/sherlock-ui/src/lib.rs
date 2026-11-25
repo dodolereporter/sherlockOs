@@ -14,6 +14,7 @@ pub mod motion;
 pub mod strings;
 pub mod texts;
 pub mod typography;
+pub mod wallpapers;
 pub mod window;
 
 #[cfg(feature = "iced")]

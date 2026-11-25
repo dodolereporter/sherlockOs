@@ -3,8 +3,8 @@
 //! Elements go from front to back, as Smithay expects them: the anchored surfaces of the
 //! overlay and top layers, the snap preview, then each window, from the topmost to the lowest,
 //! with its menus, its border, its content clipped to a rounded rectangle and its shadow, the
-//! anchored surfaces of the bottom and background layers, and last the background discs. The
-//! desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
+//! anchored surfaces of the bottom and background layers, and last the wallpaper, or the
+//! background discs without one. The desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
 //! scale. See "Rendering" in `docs/compositor.md`.
 
 use std::time::Duration;
@@ -19,11 +19,12 @@ use smithay::{
         element::{
             Element, Id, Kind, RenderElement, UnderlyingStorage, render_elements,
             surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
+            texture::TextureRenderElement,
             utils::RescaleRenderElement,
         },
         gles::{
-            GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, Uniform,
-            UniformName, UniformType, element::PixelShaderElement,
+            GlesError, GlesFrame, GlesPixelProgram, GlesRenderer, GlesTexProgram, GlesTexture,
+            Uniform, UniformName, UniformType, element::PixelShaderElement,
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
@@ -35,7 +36,8 @@ use smithay::{
 };
 
 use crate::{
-    State, anim::Visual, handlers::is_fullscreen, is_override_redirect, output::View, window_data,
+    State, anim::Visual, handlers::is_fullscreen, is_override_redirect, output::View, wallpaper,
+    window_data,
 };
 
 /// No fill: only the border of a shape is drawn.
@@ -47,6 +49,7 @@ render_elements! {
     Shape=PixelShaderElement,
     Window=RoundedSurface,
     Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Wallpaper=TextureRenderElement<GlesTexture>,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -94,14 +97,15 @@ impl Scene {
 
     /// Elements of the screen `output`, seen through `view`, at time `now`, and whether an
     /// animation is running. Elements are in frame pixels, at the screen's scale: corners,
-    /// borders and shadows follow that scale. `preview` is in the space.
+    /// borders and shadows follow that scale. `preview` is in the space. `wallpaper`: the
+    /// texture of this screen, once loaded; the discs of the board otherwise.
     pub fn elements(
         &self,
         renderer: &mut GlesRenderer,
         state: &State,
-        output: &Output,
-        view: &View,
+        (output, view): (&Output, &View),
         preview: Option<Visual>,
+        wallpaper: Option<&wallpaper::Texture>,
         now: Duration,
     ) -> (Vec<SceneElement>, bool) {
         let mut elements = Vec::new();
@@ -136,6 +140,15 @@ impl Scene {
         }
         let below = [Layer::Bottom, Layer::Background];
         self.push_layers(renderer, &mut elements, output, view, &below);
+        // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
+        // the frame, like the rest of the desktop.
+        if let Some(texture) = wallpaper {
+            let mode = state.wallpaper.mode;
+            elements.push(SceneElement::Wallpaper(wallpaper::element(
+                texture, mode, view,
+            )));
+            return (elements, animating);
+        }
         let discs = desktop_discs(view.area.size);
         for (rect, color) in discs.into_iter().rev() {
             let rect = view.rect(Rectangle::new(rect.loc + view.area.loc, rect.size).to_f64());

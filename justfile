@@ -27,6 +27,10 @@ test:
 build:
     cargo build --workspace
 
+# Generates the wallpaper variants (PNG at 1080p, 1440p and 2160p, dithered) from their originals
+wallpapers output="target/wallpapers":
+    cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
+
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
     python3 distro/tests/check-language.py --self-test

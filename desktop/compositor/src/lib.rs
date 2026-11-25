@@ -12,6 +12,7 @@ pub mod layout;
 pub mod output;
 pub mod render;
 pub mod stats;
+pub mod wallpaper;
 pub mod winit;
 mod xwayland;
 
@@ -137,6 +138,8 @@ pub struct State {
     nested: bool,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
+    /// Wallpaper setting and the images decoded for it.
+    pub wallpaper: wallpaper::Wallpaper,
     /// X11 window manager, once XWayland is ready.
     xwm: Option<X11Wm>,
     /// Number of the X11 display (`DISPLAY=:N`), once XWayland is ready.
@@ -238,6 +241,7 @@ impl State {
             intercepted_keys: Vec::new(),
             nested: false,
             frame_stats: None,
+            wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
             xwayland: None,
