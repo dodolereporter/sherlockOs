@@ -53,6 +53,8 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* \
 #   Noyau Linux : configuration, compilation, BTF (dwarves), modules, initramfs.
 #   Sources : téléchargement et vérification des signatures.
 #   QEMU : qemu-system-x86_64, qemu-img, et le micrologiciel UEFI (la cible est UEFI, ADR 0001).
+#   Images disque : table GPT (sfdisk, paquet fdisk) et partition EFI en FAT écrite sans droits
+#   root ni montage (mtools). Ajoutés au lot Q-04 pour l'image témoin du banc de boot.
 RUN apt-get update \
  && apt-get install -y \
       bash binutils bison bzip2 coreutils diffutils file findutils gawk g++ gcc grep gzip \
@@ -60,6 +62,7 @@ RUN apt-get update \
       bc cpio dwarves flex kmod libelf-dev libncurses-dev libssl-dev lz4 openssl rsync zstd \
       ca-certificates curl git gnupg wget \
       ovmf qemu-system-x86 qemu-utils \
+      fdisk mtools \
  && rm -rf /var/lib/apt/lists/*
 
 # Linux From Scratch exige que /bin/sh soit bash. Debian y met dash par défaut.
