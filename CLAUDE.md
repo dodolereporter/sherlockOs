@@ -61,10 +61,12 @@ protection de branche : ne fusionne jamais une demande dont la CI n'est pas vert
 | `just tester` | `cargo test --workspace --all-features` |
 | `just construire` | `cargo build --workspace` |
 
-Recettes à venir : `just builder` et `just dans-builder <commande>` (lot Q-03), `just test-boot` (lot Q-04).
+Conteneur de build : `just builder`, `just dans-builder <commande>`, `just tester-builder`
+(voir `docs/build.md`). Recette à venir : `just test-boot` (lot Q-04).
 
-Prérequis du poste : `rustup`, `just` et un compilateur C qui sert d'éditeur de liens
-(`gcc` et `libc6-dev` sur Debian). La version de Rust est lue dans `rust-toolchain.toml` et
+Prérequis du poste : `rustup`, `just`, un compilateur C qui sert d'éditeur de liens
+(`gcc` et `libc6-dev` sur Debian) et les bibliothèques du compositeur (`libxkbcommon-dev` et
+`libwayland-dev` sur Debian). La version de Rust est lue dans `rust-toolchain.toml` et
 s'installe toute seule au premier `cargo`. Ne la change pas : elle est aussi recopiée dans
 `rust-version` du `Cargo.toml` racine, les deux changent ensemble.
 
