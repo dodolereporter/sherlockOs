@@ -59,7 +59,7 @@ Chaque brique a un dossier dans le dépôt et une ou plusieurs planches dans `do
 - GRUB avec un thème maison, puis un écran de démarrage animé avec Sherlock.
 - Le service réseau n'est pas encore choisi. Il se décide par ADR au lot S-13.
 
-### Le compositeur, dans `desktop/compositeur`
+### Le compositeur, dans `desktop/compositor`
 
 - Écrit en Rust avec la bibliothèque Smithay. C'est un compositeur Wayland, avec XWayland pour les applications X11.
 - Fenêtres flottantes, que l'on peut caler sur une moitié d'écran. Bureaux virtuels nommés et numérotés.
@@ -303,14 +303,15 @@ Chaque outil déclare son niveau dans le code de son serveur. Un outil sans nive
 | Dossier | Contenu |
 | --- | --- |
 | `distro/` | Conteneur de build, recettes de paquets, fabrique d'images, tests de boot |
-| `desktop/` | Un crate par programme : `compositeur`, `sherlock-ui`, puis barre, dock, lanceur, notifications, connexion, fichiers, terminal, réglages, labo, jeux |
+| `desktop/` | Un crate par programme : `compositor`, `sherlock-ui`, puis barre, dock, lanceur, notifications, connexion, fichiers, terminal, réglages, labo, jeux |
 | `sherlock/` | `sherlockd`, le courtier d'accords et un crate par serveur MCP |
 | `docs/` | `plan.md`, `contexte.md`, `adr/`, `design/`, une page par brique |
-| `essais/` | Prototypes jetables, hors du workspace principal |
+| `prototypes/` | Prototypes jetables, hors du workspace principal |
 | Racine | `CLAUDE.md`, `justfile`, `Cargo.toml` du workspace, `rust-toolchain.toml` |
 
 ### Langue
 
+- **Remplacée par l'ADR 0017 (`docs/adr/0017-development-language-english.md`) le 25/11/2026** : tout le développement est en anglais (identifiants, noms de dossiers, de crates, de recettes et d'options, commentaires, doc technique, commits), l'interface reste en français au tutoiement. Les trois points ci-dessous ne valent plus. Les noms cités dans ce document peuvent dater d'avant : ceux de `CLAUDE.md` font foi.
 - Interface, documentation, messages de commit, noms de dossiers et de recettes : en français. Pas d'accents dans les noms de fichiers et de dossiers.
 - Identifiants du code (types, fonctions, variables) : en anglais, comme le reste de l'écosystème Rust.
 - Commentaires du code : en français. Ils expliquent pourquoi, pas quoi.
@@ -327,16 +328,16 @@ Chaque outil déclare son niveau dans le code de son serveur. Un outil sans nive
 ### Git
 
 - Une branche par lot, nommée `lot/<ID>`. Une seule demande de fusion par lot. Personne ne pousse sur la branche principale.
-- Message de commit : `<ID> : <ce qui change>`, au présent, en français. Exemple : `D-10 : ajoute le déplacement des fenêtres`.
+- Message de commit : `<ID>: <what changes>`, au présent, en anglais (ADR 0017). Exemple : `D-10: add window moving`.
 - Aucune signature d'IA. Pas de ligne `Co-Authored-By`, pas de mention « Generated with », pas de nom de modèle ou d'agent, ni dans les commits ni dans les demandes de fusion.
 
 ### Vérification
 
 | Commande | Ce qu'elle vérifie |
 | --- | --- |
-| `just verifier` | Format, clippy, tests |
+| `just verify` | Format, clippy, tests |
 | `just builder` | Construit l'image du conteneur de build |
-| `just dans-builder <commande>` | Lance une commande dans le conteneur de build |
+| `just in-builder <commande>` | Lance une commande dans le conteneur de build |
 | `just test-boot` | Boote l'image dans QEMU et attend la ligne BOOT-OK |
 
 ### Décisions

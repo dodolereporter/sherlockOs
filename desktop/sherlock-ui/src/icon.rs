@@ -1,25 +1,25 @@
-//! Icônes au trait : grille de 24, trait de 1,7, bouts et angles arrondis.
+//! Line icons: 24 grid, 1.7 stroke, round caps and joins.
 //!
-//! Une icône n'est qu'un tracé SVG. Le cadre (grille, trait, arrondis) est commun et vient des
-//! jetons ; la couleur se donne à l'affichage. Pour en ajouter une : une variante, son tracé
-//! dessiné sur la grille de 24, et une entrée dans `Icon::ALL`.
+//! An icon is only an SVG path. The frame (grid, stroke, rounding) is shared and comes from
+//! the tokens; the color is given at display time. To add one: a variant, its path drawn on
+//! the 24 grid, and an entry in `Icon::ALL`.
 
 use crate::metrics;
 
-/// Les icônes de la bibliothèque.
+/// The icons of the library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
-    /// Ouvre un sous-menu.
+    /// Opens a submenu.
     Chevron,
-    /// Choix coché dans un menu.
+    /// Checked choice in a menu.
     Check,
-    /// Recherche.
+    /// Search.
     Search,
-    /// Fermer.
+    /// Close.
     Close,
-    /// Réseau connecté.
+    /// Network connected.
     Network,
-    /// Son activé.
+    /// Sound on.
     Sound,
     /// Go back: previous folder.
     Back,
@@ -60,7 +60,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    /// Toutes les icônes, pour les tests et la galerie.
+    /// All the icons, for the tests and the gallery.
     pub const ALL: [Self; 31] = [
         Self::Chevron,
         Self::Check,
@@ -161,7 +161,7 @@ impl Icon {
         }
     }
 
-    /// Document SVG complet, tracé en noir : l'affichage le recolore.
+    /// Full SVG document, stroked in black: the display recolors it.
     pub fn svg(self) -> String {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {grid} {grid}\" fill=\"none\" \
@@ -179,7 +179,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chaque_icone_reste_dans_la_grille() {
+    fn every_icon_stays_in_the_grid() {
         for icon in Icon::ALL {
             let numbers = icon
                 .path()
@@ -189,14 +189,14 @@ mod tests {
             for n in numbers {
                 assert!(
                     n.abs() <= metrics::ICON_GRID,
-                    "{icon:?} sort de la grille : {n}"
+                    "{icon:?} leaves the grid: {n}"
                 );
             }
         }
     }
 
     #[test]
-    fn le_cadre_porte_le_trait_et_les_arrondis() {
+    fn the_frame_carries_the_stroke_and_the_rounding() {
         let svg = Icon::Check.svg();
         assert!(svg.contains("stroke-width=\"1.7\""));
         assert!(svg.contains("stroke-linecap=\"round\""));

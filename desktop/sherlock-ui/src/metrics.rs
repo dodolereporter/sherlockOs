@@ -1,26 +1,26 @@
-//! Rayons, espacements et tailles, en pixels logiques. Valeurs de `docs/contexte.md` et des
-//! planches Menus et Réglages.
+//! Radii, spacings and sizes, in logical pixels. Values from `docs/contexte.md` and from the
+//! Menus and « Réglages » design boards.
 
-/// Écran de référence des planches.
+/// Reference screen of the design boards.
 pub const REFERENCE_SCREEN: (f32, f32) = (1440.0, 900.0);
 
-/// Les trois disques du fond d'écran, sur l'écran de référence : gauche, haut et diamètre de
-/// chacun, dans l'ordre de `color::DESKTOP_DISCS` (planche Main). Le dernier passe devant.
+/// The three discs of the wallpaper, on the reference screen: left, top and diameter of each,
+/// in the order of `color::DESKTOP_DISCS` (Main design board). The last one is in front.
 pub const DESKTOP_DISC_GEOMETRY: [(f32, f32, f32); 3] = [
     (-260.0, 340.0, 1100.0),
     (860.0, -420.0, 900.0),
     (980.0, 520.0, 520.0),
 ];
 
-// Barre du haut.
+// Top bar.
 
-/// Hauteur de la barre du haut.
+/// Height of the top bar.
 pub const TOP_BAR_HEIGHT: f32 = 36.0;
-/// Marges de la barre du haut sur les côtés.
+/// Side margins of the top bar.
 pub const TOP_BAR_MARGIN_SIDE: f32 = 12.0;
-/// Marge de la barre du haut au-dessus.
+/// Top margin of the top bar.
 pub const TOP_BAR_MARGIN_TOP: f32 = 10.0;
-/// Rayon de la barre du haut.
+/// Radius of the top bar.
 pub const TOP_BAR_RADIUS: f32 = 12.0;
 /// Inner padding of the top bar: left, right.
 pub const TOP_BAR_PADDING: (f32, f32) = (6.0, 10.0);
@@ -47,22 +47,22 @@ pub const TOP_BAR_MENU_GAP: f32 = 6.0;
 pub const MENU_AVATAR: f32 = 40.0;
 pub const MENU_HEADER_PADDING: (f32, f32, f32) = (6.0, 8.0, 8.0);
 
-// Fenêtres et panneaux.
+// Windows and panels.
 
-/// Rayon d'une fenêtre.
+/// Radius of a window.
 pub const WINDOW_RADIUS: f32 = 16.0;
-/// Hauteur de la barre de titre.
+/// Height of the title bar.
 pub const TITLE_BAR_HEIGHT: f32 = 40.0;
-/// Bouton de fenêtre (réduire, agrandir, fermer) : largeur et hauteur.
+/// Window button (minimize, maximize, close): width and height.
 pub const WINDOW_BUTTON: (f32, f32) = (28.0, 24.0);
-/// Épaisseur des bordures de fenêtre, de panneau, de menu et de carte.
+/// Width of the borders of windows, panels, menus and cards.
 pub const BORDER_WIDTH: f32 = 1.0;
-/// Ombre d'une fenêtre ou d'un panneau : décalage vertical et flou.
+/// Shadow of a window or a panel: vertical offset and blur.
 pub const SHADOW_OFFSET: f32 = 28.0;
 pub const SHADOW_BLUR: f32 = 70.0;
-/// Rayon d'un panneau flottant.
+/// Radius of a floating panel.
 pub const PANEL_RADIUS: f32 = 20.0;
-/// Marge intérieure d'un panneau flottant.
+/// Inner padding of a floating panel.
 pub const PANEL_PADDING: f32 = 14.0;
 
 // Application windows (Evidence mock-up).
@@ -155,7 +155,7 @@ pub const BADGE_RADIUS: f32 = 8.0;
 /// Right-click menu of a list and its submenu (Evidence mock-up).
 pub const CONTEXT_MENU_WIDTH: f32 = 236.0;
 pub const CONTEXT_SUBMENU_WIDTH: f32 = 216.0;
-/// "Ouvrir avec" submenu: wider than the planche's, for long application names and the
+/// « Ouvrir avec » submenu: wider than the design board's, for long application names and the
 /// "always" switch; at most this many applications.
 pub const OPEN_WITH_WIDTH: f32 = 280.0;
 pub const OPEN_WITH_MAX: usize = 8;
@@ -166,69 +166,69 @@ pub const DIALOG_WIDTH: f32 = 380.0;
 
 // Menus.
 
-/// Rayon d'un menu.
+/// Radius of a menu.
 pub const MENU_RADIUS: f32 = 12.0;
-/// Marge intérieure d'un menu.
+/// Inner padding of a menu.
 pub const MENU_PADDING: f32 = 6.0;
-/// Largeur d'un menu et d'un sous-menu.
+/// Width of a menu and of a submenu.
 pub const MENU_WIDTH: f32 = 256.0;
 pub const SUBMENU_WIDTH: f32 = 190.0;
-/// Écart entre un menu et son sous-menu ouvert à droite (planche Menus : 674 puis 678).
+/// Gap between a menu and its submenu opened on the right (Menus board: 674 then 678).
 pub const SUBMENU_GAP: f32 = 4.0;
-/// Ombre d'un menu : décalage vertical et flou.
+/// Shadow of a menu: vertical offset and blur.
 pub const MENU_SHADOW_OFFSET: f32 = 22.0;
 pub const MENU_SHADOW_BLUR: f32 = 54.0;
 /// Crisp shadow of a menu: steps of (vertical offset, spread, opacity), drawn as plain
-/// rounded rectangles (see `surface`). They suggest the planche's `0 22px 54px
+/// rounded rectangles (see `surface`). They suggest the design board's `0 22px 54px
 /// rgba(3,8,18,0.6)` without a blur, which the software renderer draws wrongly.
 pub const MENU_SHADOW_LAYERS: [(f32, f32, f32); 3] =
     [(2.0, 1.0, 0.30), (8.0, 3.0, 0.16), (16.0, 6.0, 0.08)];
 /// Crisp shadow of a floating panel or dialog, after `0 28px 70px rgba(3,8,18,0.55)`.
 pub const PANEL_SHADOW_LAYERS: [(f32, f32, f32); 3] =
     [(3.0, 1.0, 0.28), (10.0, 4.0, 0.15), (20.0, 8.0, 0.07)];
-/// Entrée de menu : hauteur, rayon, marge sur les côtés.
+/// Menu entry: height, radius, side padding.
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 pub const MENU_ITEM_RADIUS: f32 = 7.0;
 pub const MENU_ITEM_PADDING: f32 = 10.0;
-/// Séparateur de menu : marges au-dessus et sur les côtés.
+/// Menu separator: top and side margins.
 pub const MENU_SEPARATOR_MARGIN: (f32, f32) = (4.0, 8.0);
 
-// Contrôles.
+// Controls.
 
-/// Bouton : hauteur, rayon, marge sur les côtés. La gamme va de 28 à 36 de haut.
+/// Button: height, radius, side padding. The range goes from 28 to 36 high.
 pub const BUTTON_HEIGHT: f32 = 34.0;
 pub const BUTTON_RADIUS: f32 = 9.0;
 pub const BUTTON_PADDING: f32 = 14.0;
-/// Bouton compact, dans un panneau ou une notification.
+/// Compact button, in a panel or a notification.
 pub const BUTTON_COMPACT_HEIGHT: f32 = 28.0;
 pub const BUTTON_COMPACT_RADIUS: f32 = 8.0;
-/// Bouton d'icône seule : côté et rayon.
+/// Icon-only button: side and radius.
 pub const ICON_BUTTON: f32 = 32.0;
 pub const ICON_BUTTON_RADIUS: f32 = 8.0;
-/// Interrupteur : largeur, hauteur, retrait du bouton rond.
+/// Toggle: width, height, inset of the round knob.
 pub const TOGGLE_WIDTH: f32 = 44.0;
 pub const TOGGLE_HEIGHT: f32 = 26.0;
 pub const TOGGLE_INSET: f32 = 3.0;
-/// Champ de texte : hauteur, rayon, marge sur les côtés.
+/// Text field: height, radius, side padding.
 pub const FIELD_HEIGHT: f32 = 32.0;
 pub const FIELD_RADIUS: f32 = 9.0;
 pub const FIELD_PADDING: f32 = 10.0;
-/// Carte : rayon, marges verticale et horizontale.
+/// Card: radius, vertical and horizontal padding.
 pub const CARD_RADIUS: f32 = 14.0;
 pub const CARD_PADDING: (f32, f32) = (16.0, 18.0);
-/// Hauteur minimale d'une ligne de réglage dans une carte.
+/// Minimum height of a setting row in a card.
 pub const SETTING_ROW_HEIGHT: f32 = 48.0;
-/// Anneau du focus : épaisseur et écart avec l'élément.
+/// Focus ring: width and gap to the element.
 pub const FOCUS_RING_WIDTH: f32 = 2.0;
 pub const FOCUS_RING_GAP: f32 = 2.0;
 
-// Icônes.
+// Icons.
 
-/// Grille de dessin des icônes.
+/// Drawing grid of the icons.
 pub const ICON_GRID: f32 = 24.0;
-/// Épaisseur du trait des icônes, prise dans la gamme 1,6 à 1,7.
+/// Stroke width of the icons, taken in the 1.6 to 1.7 range.
 pub const ICON_STROKE: f32 = 1.7;
-/// Taille d'affichage courante d'une icône, et celle des chevrons de menu.
+/// Usual display size of an icon, and that of the menu chevrons.
 pub const ICON_SIZE: f32 = 16.0;
 pub const ICON_SIZE_SMALL: f32 = 14.0;
 /// Breadcrumb chevrons and sort arrows.
@@ -236,37 +236,37 @@ pub const ICON_SIZE_TINY: f32 = 12.0;
 
 // Dock.
 
-/// Hauteur et rayon de la barre du dock.
+/// Height and radius of the dock bar.
 pub const DOCK_HEIGHT: f32 = 76.0;
 pub const DOCK_RADIUS: f32 = 22.0;
-/// Icône du dock : côté, rayon en part du côté, écart entre deux icônes.
+/// Dock icon: side, radius as a share of the side, gap between two icons.
 pub const DOCK_ICON: f32 = 52.0;
 pub const DOCK_ICON_RADIUS_RATIO: f32 = 0.27;
 pub const DOCK_ICON_GAP: f32 = 8.0;
-/// Grossissement : facteur maximal et portée de la cloche, en icônes.
+/// Magnification: maximum factor and reach of the bell curve, in icons.
 pub const DOCK_MAGNIFICATION: f32 = 1.7;
 pub const DOCK_MAGNIFICATION_REACH: f32 = 1.2;
 
-// Espacements, par rôle.
+// Spacings, by role.
 
-/// Entre deux entrées d'une navigation.
+/// Between two entries of a navigation.
 pub const GAP_TIGHT: f32 = 2.0;
-/// Entre une icône et son texte.
+/// Between an icon and its text.
 pub const GAP_ICON: f32 = 10.0;
-/// Entre le texte d'une entrée et son raccourci.
+/// Between the text of an entry and its shortcut.
 pub const GAP_INLINE: f32 = 12.0;
-/// Entre deux blocs d'une page, entre les cartes.
+/// Between two blocks of a page, between cards.
 pub const GAP_SECTION: f32 = 14.0;
-/// Entre un libellé et son contrôle dans une ligne de réglage.
+/// Between a label and its control in a setting row.
 pub const GAP_ROW: f32 = 16.0;
-/// Marges d'une page de fenêtre : verticale et horizontale.
+/// Padding of a window page: vertical and horizontal.
 pub const PAGE_PADDING: (f32, f32) = (22.0, 28.0);
 
-// Durées, en millisecondes.
+// Durations, in milliseconds.
 
-/// Survol : de 110 à 150 ms.
+/// Hover: from 110 to 150 ms.
 pub const HOVER_MS: (u64, u64) = (110, 150);
-/// Grossissement du dock.
+/// Dock magnification.
 pub const DOCK_TRANSITION_MS: u64 = 150;
 /// Window in which a burst of system events (volume slider, network changes) is merged into
 /// a single refresh of the shell.
@@ -274,7 +274,7 @@ pub const EVENT_COALESCE_MS: u64 = 150;
 /// Longest such burst: a volume slider dragged for seconds still refreshes this often.
 pub const EVENT_COALESCE_MAX_MS: u64 = 500;
 
-// Cohérence des jetons, vérifiée à la compilation : un jeton hors de sa gamme ne compile pas.
+// Token consistency, checked at compile time: a token out of its range does not compile.
 const _: () = {
     assert!(BUTTON_COMPACT_HEIGHT >= 28.0 && BUTTON_HEIGHT <= 36.0);
     assert!(BUTTON_COMPACT_HEIGHT < BUTTON_HEIGHT);
@@ -282,10 +282,10 @@ const _: () = {
     assert!(ICON_STROKE >= 1.6 && ICON_STROKE <= 1.7);
     assert!(HOVER_MS.0 <= HOVER_MS.1 && DOCK_TRANSITION_MS <= HOVER_MS.1);
     assert!(EVENT_COALESCE_MS < EVENT_COALESCE_MAX_MS);
-    // Le bouton rond de l'interrupteur fait 20 et tient deux fois dans sa piste.
+    // The round knob of the toggle is 20 and fits twice in its track.
     assert!(TOGGLE_HEIGHT - 2.0 * TOGGLE_INSET == 20.0);
     assert!(2.0 * (TOGGLE_HEIGHT - 2.0 * TOGGLE_INSET) < TOGGLE_WIDTH);
-    // Une entrée de menu tient dans le menu, un sous-menu est plus étroit.
+    // A menu entry fits in the menu, a submenu is narrower.
     assert!(MENU_ITEM_RADIUS < MENU_RADIUS && MENU_ITEM_HEIGHT < BUTTON_HEIGHT);
     assert!(SUBMENU_WIDTH < MENU_WIDTH);
     assert!(ICON_SIZE_SMALL < ICON_SIZE && ICON_SIZE < ICON_GRID);

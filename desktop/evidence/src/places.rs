@@ -49,7 +49,7 @@ pub fn favorites(home: &Path, user_dirs: Option<&str>) -> Vec<Place> {
             path: lookup("XDG_DOWNLOAD_DIR", texts::DOWNLOADS),
             optional: false,
         },
-        // The planche's "Projets": a plain folder of the home, shown only when it exists.
+        // The design board's « Projets »: a plain folder of the home, shown only when it exists.
         Place {
             label: texts::PROJECTS,
             icon: Icon::Folder,

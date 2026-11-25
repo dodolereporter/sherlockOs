@@ -1,4 +1,4 @@
-//! Application icons for the "Ouvrir avec" submenu and the chooser: found in the hicolor
+//! Application icons for the « Ouvrir avec » submenu and the chooser: found in the hicolor
 //! theme, the pixmaps folder or at an absolute path, and decoded off the interface thread.
 //! Other icon themes (Breeze…) are not searched: most applications also install a hicolor
 //! icon.

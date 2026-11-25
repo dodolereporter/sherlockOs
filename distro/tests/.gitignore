@@ -1,2 +1,5 @@
-# Sorties du banc de boot : sources du noyau, constructions, images, journaux, captures
+# Outputs of the boot bench: kernel sources, builds, images, logs, screenshots
+/output/
+# Former name of output/, on machines that ran the bench before lot Q-07
+# (check-language: allow-next-line)
 /sortie/

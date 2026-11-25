@@ -1,7 +1,7 @@
-//! Composants de base, conformes aux planches Menus et Réglages.
+//! Base components, true to the Menus and « Réglages » design boards.
 //!
-//! Les composants cliquables rendent un `Control` : un bouton iced, son style par état, et le
-//! focus clavier. Sans message, un composant est désactivé et sort du parcours au clavier.
+//! Clickable components return a `Control`: an iced button, its style by state, and the
+//! keyboard focus. Without a message, a component is disabled and leaves the keyboard order.
 
 use iced::widget::{
     Button, Container, Svg, Text, TextInput, button, column, container, row, space, svg, text,
@@ -17,7 +17,7 @@ use crate::{metrics, theme, typography};
 
 type StyleFn<'a> = Box<dyn Fn(&Theme, button::Status) -> button::Style + 'a>;
 
-/// Un composant cliquable, prêt à devenir un `Element`.
+/// A clickable component, ready to become an `Element`.
 pub struct Control<'a, Message> {
     button: Button<'a, Message>,
     style: StyleFn<'a>,
@@ -46,13 +46,13 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
         }
     }
 
-    /// Impose un état, au lieu de celui que donnent la souris et le clavier. Pour la galerie.
+    /// Forces a state, instead of the one the mouse and the keyboard give. For the gallery.
     pub fn status(mut self, status: button::Status) -> Self {
         self.forced = Some(status);
         self
     }
 
-    /// Dessine l'anneau de focus sans focus. Pour la galerie.
+    /// Draws the focus ring without focus. For the gallery.
     ///
     /// Also used by programs that keep the focus in their own state, such as the bar.
     pub fn focus_ring(mut self) -> Self {
@@ -60,7 +60,7 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
         self
     }
 
-    /// Largeur du composant, `Shrink` par défaut.
+    /// Width of the component, `Shrink` by default.
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.button = self.button.width(width);
         self
@@ -95,8 +95,8 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
         };
         let focusable = Focusable::new(content, on_press, radius).ring(ring);
         match label {
-            // iced 0.14 n'expose rien aux lecteurs d'écran : le libellé d'une icône seule
-            // s'affiche en bulle au survol, en attendant AccessKit (voir docs/sherlock-ui.md).
+            // iced 0.14 exposes nothing to screen readers: the label of an icon-only button
+            // shows as a tooltip on hover, until AccessKit (see docs/sherlock-ui.md).
             Some(label) => tooltip(
                 focusable,
                 container(body(label))
@@ -123,12 +123,12 @@ fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::
     }
 }
 
-/// Texte courant de l'interface.
+/// Body text of the interface.
 pub fn body<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content).font(typography::UI).size(typography::UI_SIZE)
 }
 
-/// Texte secondaire : description, valeur.
+/// Secondary text: description, value.
 pub fn description<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content)
         .font(typography::UI)
@@ -136,14 +136,14 @@ pub fn description<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
         .color(color::TEXT_SECONDARY)
 }
 
-/// Titre de page, en Space Grotesk.
+/// Page title, in Space Grotesk.
 pub fn title<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content)
         .font(typography::TITLE)
         .size(typography::TITLE_SIZE)
 }
 
-/// Étiquette de section : petites capitales grises.
+/// Section label: small grey capitals.
 pub fn section_label<'a>(content: &str) -> Text<'a> {
     text(content.to_uppercase())
         .font(typography::UI_SEMIBOLD)
@@ -170,7 +170,7 @@ fn handle(glyph: Icon) -> svg::Handle {
         .unwrap_or_else(|| svg::Handle::from_memory(glyph.svg().into_bytes()))
 }
 
-/// Icône au trait, à la couleur donnée.
+/// Line icon, in the given color.
 pub fn icon<'a>(icon: Icon, size: f32, tint: Color) -> Svg<'a> {
     svg(handle(icon))
         .width(size)
@@ -289,7 +289,7 @@ pub fn search_field<'a, Message: Clone + 'a>(
     iced::widget::stack![field, glass].into()
 }
 
-/// Bouton principal, vert.
+/// Primary button, green.
 pub fn primary_button<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
@@ -297,7 +297,7 @@ pub fn primary_button<'a, Message: Clone + 'a>(
     label_button(label, typography::UI_SEMIBOLD, theme::primary, on_press)
 }
 
-/// Bouton secondaire, bordé.
+/// Secondary button, outlined.
 pub fn secondary_button<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
@@ -313,7 +313,7 @@ pub fn danger_button<'a, Message: Clone + 'a>(
     label_button(label, typography::UI, theme::danger, on_press)
 }
 
-/// Bouton d'icône seule. `label` est obligatoire : c'est son nom pour qui ne voit pas l'icône.
+/// Icon-only button. `label` is mandatory: it is its name for whoever cannot see the icon.
 pub fn icon_button<'a, Message: Clone + 'a>(
     glyph: Icon,
     label: &'a str,
@@ -340,7 +340,7 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     control
 }
 
-/// Interrupteur de 44 par 26. `on_toggle` reçoit la nouvelle valeur.
+/// Toggle of 44 by 26. `on_toggle` receives the new value.
 pub fn toggle<'a, Message: Clone + 'a>(
     on: bool,
     on_toggle: Option<fn(bool) -> Message>,
@@ -364,19 +364,19 @@ pub fn toggle<'a, Message: Clone + 'a>(
     control
 }
 
-/// Ce qui suit le libellé d'une entrée de menu, à droite.
+/// What follows the label of a menu entry, on the right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trailing<'a> {
     None,
-    /// Raccourci clavier, comme « Super+M ».
+    /// Keyboard shortcut, such as « Super+M ».
     Shortcut(&'a str),
-    /// Ouvre un sous-menu, à droite.
+    /// Opens a submenu, on the right.
     Submenu,
-    /// Choix actif.
+    /// Active choice.
     Checked,
 }
 
-/// Entrée de menu de 30 de haut, sur toute la largeur du menu.
+/// Menu entry 30 high, across the full width of the menu.
 pub fn menu_item<'a, Message: Clone + 'a>(
     label: &'a str,
     trailing: Trailing<'a>,
@@ -427,13 +427,13 @@ pub fn menu_item_with<'a, Message: Clone + 'a>(
     control
 }
 
-/// Marque une entrée de menu comme ouverte : son sous-menu est affiché.
+/// Marks a menu entry as open: its submenu is shown.
 pub fn open<'a, Message: Clone + 'a>(mut item: Control<'a, Message>) -> Control<'a, Message> {
     item.style = Box::new(theme::menu_item_open);
     item
 }
 
-/// Trait entre deux groupes d'entrées de menu.
+/// Line between two groups of menu entries.
 pub fn menu_separator<'a, Message: 'a>() -> Element<'a, Message> {
     let (top, side) = metrics::MENU_SEPARATOR_MARGIN;
     let line = container(space())
@@ -443,7 +443,7 @@ pub fn menu_separator<'a, Message: 'a>() -> Element<'a, Message> {
     container(line).padding(Padding::from([top, side])).into()
 }
 
-/// Menu ou sous-menu : verre des menus, entrées en colonne.
+/// Menu or submenu: menu glass, entries in a column.
 pub fn menu<'a, Message: 'a>(
     entries: impl IntoIterator<Item = Element<'a, Message>>,
     width: f32,
@@ -468,7 +468,7 @@ pub fn floating_menu<'a, Message: 'a>(
     .into()
 }
 
-/// Champ de texte de 32 de haut. Sans `on_input`, il est désactivé.
+/// Text field 32 high. Without `on_input`, it is disabled.
 pub fn text_field<'a, Message: Clone + 'a>(
     placeholder: &str,
     value: &str,
@@ -485,7 +485,7 @@ pub fn text_field<'a, Message: Clone + 'a>(
         .style(theme::text_field)
 }
 
-/// Trait entre deux lignes d'une carte.
+/// Line between two rows of a card.
 pub fn divider<'a, Message: 'a>() -> Element<'a, Message> {
     container(space())
         .width(Length::Fill)
@@ -494,7 +494,7 @@ pub fn divider<'a, Message: 'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// Ligne de réglage de la planche Réglages : libellé, aide en dessous, contrôle à droite.
+/// Setting row of the « Réglages » design board: label, help below, control on the right.
 pub fn setting_row<'a, Message: Clone + 'a>(
     label: &'a str,
     help: &'a str,
@@ -515,7 +515,7 @@ pub fn setting_row<'a, Message: Clone + 'a>(
     .into()
 }
 
-/// Carte posée dans une fenêtre.
+/// Card laid in a window.
 pub fn card<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Container<'a, Message> {
     let (vertical, horizontal) = metrics::CARD_PADDING;
     container(content)
@@ -523,7 +523,7 @@ pub fn card<'a, Message: 'a>(content: impl Into<Element<'a, Message>>) -> Contai
         .style(theme::card)
 }
 
-/// Panneau de verre flottant.
+/// Floating glass panel.
 pub fn glass_panel<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
 ) -> Container<'a, Message> {

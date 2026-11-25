@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Construit l'image du conteneur de build et lance des commandes dedans.
-# Appelé par `just builder` et `just dans-builder`. Mode d'emploi : docs/build.md.
+# Builds the image of the build container and runs commands in it.
+# Called by `just builder` and `just in-builder`. How to use it: docs/build.md.
 #
-#   builder.sh construire          construit l'image
-#   builder.sh lancer [commande]   lance la commande dans le conteneur, bash par défaut
+#   builder.sh build           builds the image
+#   builder.sh run [command]   runs the command in the container, bash by default
 #
-# Variables reconnues :
-#   CACHE_SOURCES   dossier du cache des sources sur le poste,
-#                   par défaut ${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources
-#   BUILDER_IMAGE   nom de l'image, par défaut sherlockos-builder:local
+# Environment variables:
+#   SOURCE_CACHE    folder of the source cache on the host,
+#                   ${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources by default
+#   BUILDER_IMAGE   name of the image, sherlockos-builder:local by default
 set -euo pipefail
 
-ici="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-depot="$(cd "$ici/../.." && pwd)"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo="$(cd "$here/../.." && pwd)"
 image="${BUILDER_IMAGE:-sherlockos-builder:local}"
-cache="${CACHE_SOURCES:-${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources}"
+cache="${SOURCE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources}"
 
-# L'utilisateur du conteneur reprend l'uid et le gid du poste, pour que les fichiers écrits
-# dans le dépôt lui appartiennent. Un poste qui tourne en root (certaines CI) prend 1000 :
-# le conteneur ne tourne jamais en root.
+# The container user takes the uid and gid of the host, so that the files it writes in the
+# repository belong to the host user. A host running as root (some CI) gets 1000: the container
+# never runs as root.
 uid="$(id -u)"
 gid="$(id -g)"
 if [[ "$uid" == 0 ]]; then
@@ -26,51 +26,51 @@ if [[ "$uid" == 0 ]]; then
     gid=1000
 fi
 
-# Empreinte de ce qui définit l'image. Elle est posée en étiquette sur l'image, et `lancer`
-# reconstruit l'image quand elle ne correspond plus (Dockerfile modifié, autre utilisateur).
-empreinte="$(cat "$ici/Dockerfile" <(printf 'uid=%s gid=%s\n' "$uid" "$gid") | sha256sum | cut -d' ' -f1)"
+# Fingerprint of what defines the image. It is set as a label on the image, and `run` rebuilds
+# the image when it no longer matches (Dockerfile changed, other user).
+fingerprint="$(cat "$here/Dockerfile" <(printf 'uid=%s gid=%s\n' "$uid" "$gid") | sha256sum | cut -d' ' -f1)"
 
-erreur() {
-    printf 'builder : %s\n' "$*" >&2
+fail() {
+    printf 'builder: %s\n' "$*" >&2
     exit 1
 }
 
-construire() {
+build() {
     docker build \
         --build-arg "BUILDER_UID=$uid" \
         --build-arg "BUILDER_GID=$gid" \
-        --label "sherlockos.builder.empreinte=$empreinte" \
+        --label "sherlockos.builder.fingerprint=$fingerprint" \
         --tag "$image" \
-        "$ici"
+        "$here"
 }
 
-lancer() {
-    local actuelle
-    actuelle="$(docker image inspect --format '{{ index .Config.Labels "sherlockos.builder.empreinte" }}' "$image" 2>/dev/null || true)"
-    if [[ "$actuelle" != "$empreinte" ]]; then
-        printf 'builder : image absente ou périmée, construction de %s\n' "$image" >&2
-        construire >&2
+run() {
+    local current
+    current="$(docker image inspect --format '{{ index .Config.Labels "sherlockos.builder.fingerprint" }}' "$image" 2>/dev/null || true)"
+    if [[ "$current" != "$fingerprint" ]]; then
+        printf 'builder: image missing or outdated, building %s\n' "$image" >&2
+        build >&2
     fi
 
-    # Vérifié avant de créer le dossier, pour ne rien laisser dans le dépôt.
+    # Checked before creating the folder, so that nothing is left in the repository.
     cache="$(realpath -m "$cache")"
     case "$cache/" in
-        "$(realpath "$depot")/"*) erreur "le cache des sources ($cache) doit être hors du dépôt" ;;
+        "$(realpath "$repo")/"*) fail "the source cache ($cache) must be outside the repository" ;;
     esac
     mkdir -p "$cache"
 
     local options=(
         --rm --init --interactive
         --name "sherlockos-builder-$$"
-        --volume "$depot:/depot"
+        --volume "$repo:/repo"
         --volume "$cache:/cache/sources"
-        --workdir /depot
+        --workdir /repo
     )
-    # Un terminal seulement quand il y en a un, pour que les appels depuis un script marchent.
+    # A terminal only when there is one, so that calls from a script work.
     if [[ -t 0 && -t 1 ]]; then
         options+=(--tty)
     fi
-    # KVM accélère QEMU quand le poste le permet. Sans lui, QEMU émule, plus lentement.
+    # KVM speeds QEMU up when the host allows it. Without it, QEMU emulates, more slowly.
     if [[ -r /dev/kvm && -w /dev/kvm ]]; then
         options+=(--device /dev/kvm --group-add "$(stat -c %g /dev/kvm)")
     fi
@@ -81,10 +81,10 @@ lancer() {
     exec docker run "${options[@]}" "$image" "$@"
 }
 
-command -v docker >/dev/null || erreur "docker est introuvable, voir docs/build.md"
+command -v docker >/dev/null || fail "docker not found, see docs/build.md"
 
 case "${1:-}" in
-    construire) construire ;;
-    lancer) shift; lancer "$@" ;;
-    *) erreur "usage : builder.sh construire | lancer [commande]" ;;
+    build) build ;;
+    run) shift; run "$@" ;;
+    *) fail "usage: builder.sh build | run [command]" ;;
 esac

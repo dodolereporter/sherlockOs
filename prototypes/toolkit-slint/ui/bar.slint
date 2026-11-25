@@ -1,0 +1,338 @@
+// Throwaway prototype of lot D-00: the top bar in Slint.
+//
+// The design values are grouped in `Theme`. In lasting code, they will come from
+// `desktop/sherlock-ui` (lot D-01). They are copied from `docs/design/planches/Main.dc.html`
+// and `Menus.dc.html`, as in `prototypes/toolkit-iced/src/theme.rs`.
+
+export global Theme {
+    // Colors
+    out property <color> text: #EEF2F7;
+    out property <color> text-2: #C5CEDB;
+    out property <color> text-3: #A9B4C6;
+    out property <color> text-on-accent: #0B1220;
+    out property <color> accent: #85C595;
+    out property <color> cream: #F4EBE3;
+    out property <color> bar-glass: rgba(16, 26, 44, 0.78);
+    out property <color> bar-border: rgba(255, 255, 255, 0.09);
+    out property <color> menu-glass: rgba(22, 34, 56, 0.96);
+    out property <color> menu-border: rgba(255, 255, 255, 0.14);
+    out property <color> menu-button-open: rgba(255, 255, 255, 0.14);
+    out property <color> desktop-idle: rgba(255, 255, 255, 0.07);
+    out property <color> desktop-hover: rgba(255, 255, 255, 0.12);
+    out property <color> selection: rgba(91, 163, 208, 0.26);
+    out property <color> separator: rgba(255, 255, 255, 0.10);
+
+    // Typography: Inter is not installed on the machine, both prototypes use Noto Sans.
+    out property <string> font-family: "Noto Sans";
+    out property <length> font-size: 13px;
+    out property <length> shortcut-size: 12px;
+
+    // Bar
+    out property <length> bar-height: 36px;
+    out property <length> bar-margin-top: 10px;
+    out property <length> bar-margin-side: 12px;
+    out property <length> bar-radius: 12px;
+    out property <length> bar-pad-left: 6px;
+    out property <length> bar-pad-right: 10px;
+    out property <length> left-gap: 4px;
+    out property <length> right-gap: 14px;
+    out property <length> sherlock-w: 30px;
+    out property <length> sherlock-h: 28px;
+    out property <length> sherlock-radius: 8px;
+    out property <length> app-name-w: 70px;
+    out property <length> menu-button-w: 70px;
+    out property <length> menu-button-h: 26px;
+    out property <length> menu-button-radius: 6px;
+    out property <length> desktop-h: 24px;
+    out property <length> desktop-pad-x: 12px;
+    out property <length> desktop-radius: 12px;
+
+    // Menus
+    out property <length> menu-w: 256px;
+    out property <length> submenu-w: 190px;
+    out property <length> menu-gap: 6px;
+    out property <length> submenu-gap: 4px;
+    out property <length> menu-radius: 12px;
+    out property <length> menu-padding: 6px;
+    out property <length> menu-item-h: 30px;
+    out property <length> menu-item-radius: 7px;
+    out property <length> menu-item-pad-x: 10px;
+    out property <length> separator-margin-y: 4px;
+    out property <length> separator-margin-x: 8px;
+    // Opening animation: fade and 6 px slide, 180 ms.
+    out property <duration> menu-anim: 180ms;
+    out property <length> menu-slide: 6px;
+
+    // Interface texts
+    out property <string> app-name: "Éditeur";
+    out property <string> menu-label: "Fenêtre";
+    out property <[string]> desktops: ["1 · Code", "2 · Web", "3 · Jeu"];
+}
+
+component DesktopButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    height: Theme.desktop-h;
+    width: label-text.preferred-width + 2 * Theme.desktop-pad-x;
+    border-radius: Theme.desktop-radius;
+    background: active ? Theme.accent : touch.has-hover ? Theme.desktop-hover : Theme.desktop-idle;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-checked: active;
+    accessible-action-default => { root.clicked(); }
+
+    label-text := Text {
+        text: root.label;
+        color: root.active ? Theme.text-on-accent : Theme.text-2;
+        font-weight: root.active ? 600 : 400;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Bar inherits Window {
+    in property <string> clock;
+    in property <string> date;
+    in property <int> active-desktop;
+    in property <bool> menu-open;
+    callback toggle-menu();
+    callback select-desktop(int);
+
+    background: transparent;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+
+    Rectangle {
+        background: Theme.bar-glass;
+        border-radius: Theme.bar-radius;
+        border-width: 1px;
+        border-color: Theme.bar-border;
+
+        // The Sherlock button is only a dot here: the mascot is not what this prototype tests.
+        Rectangle {
+            x: Theme.bar-pad-left;
+            width: Theme.sherlock-w;
+            height: Theme.sherlock-h;
+            border-radius: Theme.sherlock-radius;
+            background: Theme.cream;
+            accessible-role: button;
+            accessible-label: "Ouvrir ou fermer Sherlock";
+        }
+
+        Text {
+            x: Theme.bar-pad-left + Theme.sherlock-w + Theme.left-gap + 8px;
+            text: Theme.app-name;
+            color: Theme.text;
+            font-weight: 600;
+        }
+
+        Rectangle {
+            x: Theme.bar-pad-left + Theme.sherlock-w + Theme.left-gap + Theme.app-name-w + Theme.left-gap;
+            width: Theme.menu-button-w;
+            height: Theme.menu-button-h;
+            border-radius: Theme.menu-button-radius;
+            background: root.menu-open || window-touch.has-hover ? Theme.menu-button-open : transparent;
+            accessible-role: button;
+            accessible-label: Theme.menu-label;
+            accessible-expanded: root.menu-open;
+            accessible-action-default => { root.toggle-menu(); }
+
+            Text {
+                text: Theme.menu-label;
+                color: root.menu-open || window-touch.has-hover ? Theme.text : Theme.text-2;
+            }
+
+            window-touch := TouchArea {
+                clicked => { root.toggle-menu(); }
+            }
+        }
+
+        // The workspaces are centered on the bar, regardless of the sides.
+        desktops := HorizontalLayout {
+            x: (parent.width - self.width) / 2;
+            width: self.preferred-width;
+            height: Theme.desktop-h;
+            spacing: Theme.left-gap;
+            accessible-role: list;
+            accessible-label: "Bureaux";
+
+            for label[i] in Theme.desktops: DesktopButton {
+                label: label;
+                active: i == root.active-desktop;
+                clicked => { root.select-desktop(i); }
+            }
+        }
+
+        right := HorizontalLayout {
+            x: parent.width - self.width - Theme.bar-pad-right;
+            width: self.preferred-width;
+            spacing: Theme.right-gap;
+
+            Text {
+                text: root.date;
+                color: Theme.text-2;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.clock;
+                color: Theme.text;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component MenuEntry inherits Rectangle {
+    in property <string> label;
+    in property <string> trailing;
+    in property <color> trailing-color: Theme.text-3;
+    in property <length> trailing-size: Theme.shortcut-size;
+    in property <bool> highlighted;
+    callback activated();
+    callback hovered();
+
+    height: Theme.menu-item-h;
+    border-radius: Theme.menu-item-radius;
+    background: highlighted || touch.has-hover ? Theme.selection : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.activated(); }
+
+    Text {
+        x: Theme.menu-item-pad-x;
+        text: root.label;
+        color: Theme.text;
+    }
+
+    Text {
+        x: parent.width - self.width - Theme.menu-item-pad-x;
+        text: root.trailing;
+        color: root.trailing-color;
+        font-size: root.trailing-size;
+    }
+
+    touch := TouchArea {
+        clicked => { root.activated(); }
+        changed has-hover => {
+            if self.has-hover {
+                root.hovered();
+            }
+        }
+    }
+}
+
+export component Menu inherits Window {
+    // Turns true on opening: triggers the fade and the slide.
+    in property <bool> shown;
+    in property <bool> submenu-open;
+    callback activated(int);
+    callback hover-submenu();
+    callback hover-other();
+
+    background: transparent;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+
+    Rectangle {
+        y: root.shown ? Theme.menu-gap : Theme.menu-gap - Theme.menu-slide;
+        height: parent.height - Theme.menu-gap;
+        opacity: root.shown ? 1 : 0;
+        animate y, opacity {
+            duration: Theme.menu-anim;
+            // Equivalent of the « ease out cubic » curve of the iced prototype.
+            easing: cubic-bezier(0.33, 1, 0.68, 1);
+        }
+        background: Theme.menu-glass;
+        border-radius: Theme.menu-radius;
+        border-width: 1px;
+        border-color: Theme.menu-border;
+        accessible-role: list;
+        accessible-label: "Menu Fenêtre";
+
+        VerticalLayout {
+            padding: Theme.menu-padding + 1px;
+
+            MenuEntry {
+                label: "Réduire";
+                trailing: "Super+M";
+                activated => { root.activated(0); }
+                hovered => { root.hover-other(); }
+            }
+            MenuEntry {
+                label: "Agrandir";
+                trailing: "Super+Haut";
+                activated => { root.activated(1); }
+                hovered => { root.hover-other(); }
+            }
+            MenuEntry {
+                label: "Moitié gauche";
+                trailing: "Super+Gauche";
+                activated => { root.activated(2); }
+                hovered => { root.hover-other(); }
+            }
+            MenuEntry {
+                label: "Déplacer vers le bureau";
+                trailing: "›";
+                trailing-color: Theme.text-2;
+                trailing-size: Theme.font-size;
+                highlighted: root.submenu-open;
+                activated => { root.hover-submenu(); }
+                hovered => { root.hover-submenu(); }
+            }
+            Rectangle {
+                height: 1px + 2 * Theme.separator-margin-y;
+                Rectangle {
+                    x: Theme.separator-margin-x;
+                    width: parent.width - 2 * Theme.separator-margin-x;
+                    height: 1px;
+                    background: Theme.separator;
+                }
+            }
+            MenuEntry {
+                label: "Fermer la fenêtre";
+                trailing: "Super+Q";
+                activated => { root.activated(4); }
+                hovered => { root.hover-other(); }
+            }
+        }
+    }
+}
+
+export component SubMenu inherits Window {
+    in property <int> active-desktop;
+    callback activated(int);
+
+    background: transparent;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+
+    Rectangle {
+        x: Theme.submenu-gap;
+        width: parent.width - Theme.submenu-gap;
+        background: Theme.menu-glass;
+        border-radius: Theme.menu-radius;
+        border-width: 1px;
+        border-color: Theme.menu-border;
+        accessible-role: list;
+        accessible-label: "Déplacer vers le bureau";
+
+        VerticalLayout {
+            padding: Theme.menu-padding + 1px;
+
+            for label[i] in Theme.desktops: MenuEntry {
+                label: label;
+                trailing: i == root.active-desktop ? "✓" : "";
+                trailing-color: Theme.accent;
+                trailing-size: Theme.font-size;
+                activated => { root.activated(i); }
+            }
+        }
+    }
+}
