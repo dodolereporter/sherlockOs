@@ -1,24 +1,24 @@
-//! Mesure des images (`--mesurer`) : cadence, temps de rendu, images en retard. Les temps
-//! sont des `Duration` comptées depuis le démarrage, pour que le calcul se teste sans horloge.
+//! Frame measurement (`--measure`): frame rate, render time, late frames. Times are `Duration`s
+//! counted from startup, so that the computation can be tested without a clock.
 
 use std::{fmt, time::Duration};
 
 use sherlock_ui::motion;
 
-/// Durée entre deux bilans du journal.
+/// Time between two log summaries.
 const PERIOD: Duration = Duration::from_secs(1);
 
-/// Bilan d'une suite d'images.
+/// Summary of a run of frames.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Tally {
     pub frames: u32,
-    /// Temps passé de la première à la dernière image.
+    /// Time from the first to the last frame.
     pub span: Duration,
     pub render_total: Duration,
     pub render_max: Duration,
-    /// Plus long intervalle entre deux images.
+    /// Longest interval between two frames.
     pub interval_max: Duration,
-    /// Images arrivées plus d'une période de la cadence visée après la précédente.
+    /// Frames that came more than one period of the target frame rate after the previous one.
     pub late: u32,
 }
 
@@ -34,7 +34,7 @@ impl Tally {
         }
     }
 
-    /// Images par seconde sur la période.
+    /// Frames per second over the period.
     pub fn fps(&self) -> f64 {
         let intervals = self.frames.saturating_sub(1);
         if self.span.is_zero() {
@@ -44,7 +44,7 @@ impl Tally {
     }
 }
 
-/// Intervalle le plus long entre deux images pour tenir la cadence visée.
+/// Longest interval between two frames that keeps the target frame rate.
 pub fn frame_budget() -> Duration {
     Duration::from_secs(1) / motion::FRAME_RATE
 }
@@ -61,8 +61,8 @@ impl fmt::Display for Tally {
             .unwrap_or_default();
         write!(
             f,
-            "{} images, {:.1} images/s, rendu moyen {:.2} ms, rendu max {:.2} ms, \
-             intervalle max {:.2} ms, {} en retard (> {:.2} ms)",
+            "{} frames, {:.1} frames/s, average render {:.2} ms, max render {:.2} ms, \
+             max interval {:.2} ms, {} late (> {:.2} ms)",
             self.frames,
             self.fps(),
             ms(average),
@@ -74,26 +74,26 @@ impl fmt::Display for Tally {
     }
 }
 
-/// Statistiques tenues pendant toute la session.
+/// Statistics kept over the whole session.
 #[derive(Debug, Default)]
 pub struct FrameStats {
     last: Option<Duration>,
     period_start: Option<Duration>,
     period: Tally,
-    /// Images dessinées pendant une animation, sur toute la session.
+    /// Frames drawn during an animation, over the whole session.
     pub animated: Tally,
-    /// Toutes les images de la session.
+    /// All the frames of the session.
     pub all: Tally,
 }
 
 impl FrameStats {
-    /// Note une image finie à l'instant `now`, dessinée en `render`. Rend le bilan de la
-    /// période écoulée, une fois par période.
+    /// Records a frame finished at time `now`, drawn in `render`. Returns the summary of the
+    /// elapsed period, once per period.
     pub fn record(&mut self, now: Duration, render: Duration, animating: bool) -> Option<Tally> {
         let interval = self.last.map(|last| now.saturating_sub(last));
         self.last = Some(now);
         if let Some(interval) = interval.filter(|i| *i > frame_budget()) {
-            tracing::debug!(?now, ?interval, ?render, animating, "image en retard");
+            tracing::debug!(?now, ?interval, ?render, animating, "late frame");
         }
         self.all.add(interval, render);
         if animating {
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn soixante_images_regulieres_tiennent_la_cadence() {
+    fn sixty_regular_frames_keep_the_frame_rate() {
         let mut stats = FrameStats::default();
         let step = Duration::from_micros(16_000);
         let mut report = None;
@@ -135,14 +135,14 @@ mod tests {
     }
 
     #[test]
-    fn une_image_manquee_est_comptee_en_retard() {
+    fn a_missed_frame_is_counted_late() {
         let mut stats = FrameStats::default();
         for t in [0, 16, 32, 66, 82] {
             stats.record(ms(t), ms(1), t < 70);
         }
         assert_eq!(stats.all.late, 1);
         assert_eq!(stats.all.interval_max, ms(34));
-        // La dernière image, sans animation, ne compte pas parmi les images animées.
+        // The last frame, without animation, does not count among the animated frames.
         assert_eq!(stats.animated.frames, 4);
         assert_eq!(stats.animated.late, 1);
     }

@@ -1,4 +1,4 @@
-//! Backend fenêtré : le compositeur s'affiche dans une fenêtre d'une session Wayland ou X11.
+//! Windowed backend: the compositor shows up in a window of a Wayland or X11 session.
 
 use std::time::{Duration, Instant};
 
@@ -19,8 +19,8 @@ use smithay::{
 
 use crate::{Error, State, anim::PreviewMotion, render::Scene};
 
-/// Ouvre la fenêtre, crée un écran par échelle de `scales`, côte à côte dans la fenêtre, et
-/// branche le rendu sur la boucle.
+/// Opens the window, creates one screen per scale in `scales`, side by side in the window, and
+/// plugs rendering into the loop.
 pub fn init(
     event_loop: &EventLoop<'static, State>,
     state: &mut State,
@@ -45,10 +45,10 @@ pub fn init(
                 update_cursor(&backend, &mut cursor, state.cursor_icon());
             }
             WinitEvent::Redraw => {
-                // Un client peut changer de curseur sans que le pointeur bouge.
+                // A client may change its cursor without the pointer moving.
                 update_cursor(&backend, &mut cursor, state.cursor_icon());
                 if let Err(err) = render(&mut backend, &scene, &mut preview, state) {
-                    tracing::warn!("rendu : {err}");
+                    tracing::warn!("render: {err}");
                 }
                 send_frames(state);
                 backend.window().request_redraw();
@@ -61,7 +61,7 @@ pub fn init(
     Ok(())
 }
 
-/// Une image par image de la fenêtre hôte, pour chaque surface : fenêtres et surfaces ancrées.
+/// One frame per frame of the host window, for each surface: windows and anchored surfaces.
 fn send_frames(state: &State) {
     let time = state.start_time.elapsed();
     let outputs = state.outputs();
@@ -78,7 +78,7 @@ fn send_frames(state: &State) {
     }
 }
 
-/// Donne au curseur de la fenêtre hôte la forme voulue, s'il en change.
+/// Gives the host window's cursor the wanted shape, if it changes.
 fn update_cursor(
     backend: &WinitGraphicsBackend<GlesRenderer>,
     current: &mut Option<CursorIcon>,
@@ -111,7 +111,7 @@ fn render(
     let size = backend.window_size();
     let (animating, render_time) = {
         let (renderer, mut framebuffer) = backend.bind()?;
-        // Compté après `bind`, qui peut attendre qu'un tampon de la fenêtre hôte se libère.
+        // Counted after `bind`, which may wait for a buffer of the host window to be released.
         let started = Instant::now();
         let mut animating = false;
         let mut screens = Vec::new();
@@ -120,8 +120,8 @@ fn render(
             animating |= moving;
             screens.push((view.frame, elements));
         }
-        // GLES dessine la tête en bas : l'image est retournée pour compenser. Redessinée en
-        // entier à chaque fois.
+        // GLES draws upside down: the frame is flipped to make up for it. Redrawn in full every
+        // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
         frame.clear(
             color::DESKTOP.premultiplied().into(),
@@ -138,8 +138,8 @@ fn render(
             }
         }
         let sync = frame.finish()?;
-        // En mesure, on attend que la puce graphique ait fini : le temps compté est celui du
-        // rendu entier, pas seulement celui de l'envoi des commandes.
+        // When measuring, wait for the GPU to finish: the time counted is that of the whole
+        // render, not only of sending the commands.
         if state.frame_stats.is_some() {
             sync.wait()?;
         }
@@ -149,7 +149,7 @@ fn render(
     if let Some(stats) = state.frame_stats.as_mut()
         && let Some(period) = stats.record(state.start_time.elapsed(), render_time, animating)
     {
-        tracing::info!(animation = animating, "mesure : {period}");
+        tracing::info!(animation = animating, "measure: {period}");
     }
 
     Ok(())

@@ -1,5 +1,5 @@
-//! Mouvements des fenêtres et de l'aperçu du calage : les ressorts et les fondus de
-//! `sherlock_ui::motion` appliqués à des rectangles. Du calcul pur, sans rendu ni Wayland.
+//! Motion of the windows and of the snap preview: the springs and fades of
+//! `sherlock_ui::motion` applied to rectangles. Pure computation, without rendering or Wayland.
 
 use std::time::Duration;
 
@@ -8,16 +8,16 @@ use smithay::utils::{Logical, Rectangle};
 
 pub type RectF = Rectangle<f64, Logical>;
 
-/// Ce qu'il faut dessiner d'une fenêtre ou de l'aperçu à un instant donné.
+/// What to draw of a window or of the preview at a given time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Visual {
     pub rect: RectF,
     pub opacity: f32,
-    /// La géométrie glisse encore vers sa place réelle.
+    /// The geometry is still sliding towards its real place.
     pub moving: bool,
 }
 
-/// `rect` mis à l'échelle `scale` autour de son centre.
+/// `rect` scaled by `scale` around its center.
 pub fn scaled(rect: RectF, scale: f64) -> RectF {
     let size = rect.size.upscale(scale);
     let loc = rect.loc + (rect.size.to_point() - size.to_point()).downscale(2.0);
@@ -28,7 +28,7 @@ fn parts(rect: RectF) -> [f64; 4] {
     [rect.loc.x, rect.loc.y, rect.size.w, rect.size.h]
 }
 
-/// Rectangle mené par quatre ressorts : position et taille.
+/// Rectangle driven by four springs: position and size.
 #[derive(Debug, Clone, Copy)]
 pub struct AnimatedRect([Animation; 4]);
 
@@ -40,7 +40,8 @@ impl AnimatedRect {
         }))
     }
 
-    /// Rectangle à l'instant `now`. Un côté posé est à sa cible exacte, sans reste de flottant.
+    /// Rectangle at time `now`. A settled side is at its exact target, with no floating-point
+    /// leftover.
     pub fn value(&self, now: Duration) -> RectF {
         let [x, y, w, h] = self.0.map(|a| {
             if a.is_done(now, motion::GEOMETRY_PRECISION) {
@@ -52,7 +53,7 @@ impl AnimatedRect {
         Rectangle::new((x, y).into(), (w, h).into())
     }
 
-    /// Change de cible sans à-coup.
+    /// Changes target without a jolt.
     pub fn retarget(&mut self, now: Duration, to: RectF) {
         for (animation, to) in self.0.iter_mut().zip(parts(to)) {
             if animation.target() != to {
@@ -68,37 +69,36 @@ impl AnimatedRect {
     }
 }
 
-/// Mouvement d'une fenêtre : ouverture (échelle et opacité), puis changements de géométrie
-/// annoncés par `animate_next_change`. Les autres changements, comme ceux d'un glisser ou
-/// d'un redimensionnement, sont suivis sans délai.
+/// Motion of a window: opening (scale and opacity), then geometry changes announced by
+/// `animate_next_change`. Other changes, like those of a drag or a resize, are followed without
+/// delay.
 #[derive(Debug, Default)]
 pub struct WindowMotion {
-    /// Ouverture : échelle et opacité. `None` une fois finie.
+    /// Opening: scale and opacity. `None` once finished.
     open: Option<(Animation, Fade)>,
     opened: bool,
-    /// Géométrie animée. `None` au repos : la fenêtre est dessinée à sa place réelle.
+    /// Animated geometry. `None` at rest: the window is drawn at its real place.
     geometry: Option<AnimatedRect>,
-    /// Dernière géométrie dessinée, avant l'échelle de l'ouverture.
+    /// Last geometry drawn, before the opening scale.
     last: Option<RectF>,
     animate_next: bool,
 }
 
 impl WindowMotion {
-    /// Le prochain changement de géométrie sera animé : calage, agrandissement, retour. Le
-    /// drapeau ne vaut que pour l'image suivante : la géométrie y a déjà changé, ou ne
-    /// changera pas.
+    /// The next geometry change will be animated: snap, maximize, restore. The flag only holds
+    /// for the next frame: the geometry has already changed there, or will not change.
     pub fn animate_next_change(&mut self) {
         self.animate_next = true;
     }
 
-    /// Arrête l'animation de géométrie : un geste commence, la fenêtre suit le pointeur.
+    /// Stops the geometry animation: a gesture starts, the window follows the pointer.
     pub fn follow(&mut self) {
         self.geometry = None;
         self.animate_next = false;
     }
 
-    /// Ce qu'il faut dessiner à l'instant `now` pour une fenêtre dont la géométrie réelle est
-    /// `target`. Le premier appel lance l'ouverture.
+    /// What to draw at time `now` for a window whose real geometry is `target`. The first call
+    /// starts the opening.
     pub fn frame(&mut self, now: Duration, target: Rectangle<i32, Logical>) -> Visual {
         let target = target.to_f64();
         if !self.opened {
@@ -108,15 +108,15 @@ impl WindowMotion {
                 Fade::new(0.0, 1.0, now, motion::FADE),
             ));
         }
-        // Le drapeau est consommé à chaque image, qu'une animation parte ou non : sinon le
-        // glisser ou le redimensionnement suivant serait animé.
+        // The flag is consumed on every frame, whether an animation starts or not: otherwise the
+        // next drag or resize would be animated.
         let animate = std::mem::take(&mut self.animate_next);
         match (&mut self.geometry, self.last) {
             (Some(geometry), _) => geometry.retarget(now, target),
             (None, Some(last)) if animate && last != target => {
                 self.geometry = Some(AnimatedRect::new(motion::SNAP_SPRING, last, target, now));
             }
-            // Jamais dessinée : rien d'où partir, elle apparaîtra à sa place.
+            // Never drawn: nothing to start from, it will appear at its place.
             _ => {}
         }
         let rect = match self.geometry {
@@ -146,21 +146,21 @@ impl WindowMotion {
         }
     }
 
-    /// Une animation est en cours : la géométrie dessinée n'est pas la géométrie réelle.
+    /// An animation is running: the drawn geometry is not the real geometry.
     pub fn is_animating(&self) -> bool {
         self.open.is_some() || self.geometry.is_some()
     }
 }
 
-/// Mouvement de l'aperçu du calage : il grandit en apparaissant, glisse d'une zone à l'autre
-/// et s'efface à sa dernière place.
+/// Motion of the snap preview: it grows as it appears, slides from one zone to another and
+/// fades out at its last place.
 #[derive(Debug, Default)]
 pub struct PreviewMotion {
     shown: Option<(AnimatedRect, Fade)>,
 }
 
 impl PreviewMotion {
-    /// Ce qu'il faut dessiner à l'instant `now`, `zone` étant la zone visée s'il y en a une.
+    /// What to draw at time `now`, `zone` being the targeted zone if there is one.
     pub fn frame(
         &mut self,
         now: Duration,
@@ -212,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn une_fenetre_s_ouvre_en_grandissant_et_en_apparaissant() {
+    fn a_window_opens_by_growing_and_appearing() {
         let mut motion = WindowMotion::default();
         let place = rect(100, 100, 400, 300);
         let first = motion.frame(ms(0), place);
@@ -220,7 +220,7 @@ mod tests {
         let expected = scaled(place.to_f64(), motion::OPEN_SCALE);
         assert!((first.rect.size.w - expected.size.w).abs() < 1e-9);
         assert!((first.rect.loc.y - expected.loc.y).abs() < 1e-9);
-        // Centrée sur sa place pendant toute l'ouverture.
+        // Centered on its place during the whole opening.
         let midway = motion.frame(ms(60), place);
         assert!(midway.opacity > 0.0 && midway.opacity < 1.0);
         let center = |r: RectF| r.loc + r.size.to_point().downscale(2.0);
@@ -233,16 +233,16 @@ mod tests {
     }
 
     #[test]
-    fn un_calage_s_anime_et_un_glisser_suit_sans_delai() {
+    fn a_snap_is_animated_and_a_drag_follows_without_delay() {
         let mut motion = WindowMotion::default();
         let (floating, left) = (rect(300, 200, 400, 300), rect(0, 0, 720, 900));
         motion.frame(ms(0), floating);
         motion.frame(ms(1000), floating);
-        // Glisser : la fenêtre suit le pointeur.
+        // Drag: the window follows the pointer.
         let dragged = rect(310, 205, 400, 300);
         assert_eq!(motion.frame(ms(1010), dragged).rect, dragged.to_f64());
-        // Calage : elle part de sa place et rejoint la zone, d'abord la position, puis la
-        // taille quand le client répond.
+        // Snap: it leaves its place and reaches the zone, first the position, then the size
+        // when the client answers.
         motion.animate_next_change();
         let start = motion.frame(ms(1020), rect(0, 0, 400, 300)).rect;
         assert_eq!(start, dragged.to_f64());
@@ -252,21 +252,21 @@ mod tests {
         assert!(moving.size.w > 400.0 && moving.size.w < 720.0);
         assert_eq!(motion.frame(ms(2000), left).rect, left.to_f64());
         assert!(!motion.is_animating());
-        // Le calage fini, le glisser suivant n'est plus animé.
+        // Once the snap is over, the next drag is no longer animated.
         assert_eq!(motion.frame(ms(2010), floating).rect, floating.to_f64());
     }
 
     #[test]
-    fn le_drapeau_ne_vaut_que_pour_l_image_suivante() {
+    fn the_flag_only_holds_for_the_next_frame() {
         let (left, right) = (rect(0, 0, 400, 600), rect(400, 0, 400, 600));
-        // Calage sans changement : la fenêtre est déjà à gauche.
+        // Snap without change: the window is already on the left.
         let mut motion = WindowMotion::default();
         motion.frame(ms(0), left);
         motion.frame(ms(1000), left);
         motion.animate_next_change();
         motion.frame(ms(1010), left);
         assert_eq!(motion.frame(ms(1020), right).rect, right.to_f64());
-        // Calage pendant un calage : la cible change, le drapeau tombe aussi.
+        // Snap during a snap: the target changes, the flag drops too.
         let mut motion = WindowMotion::default();
         motion.frame(ms(0), left);
         motion.frame(ms(1000), left);
@@ -276,7 +276,7 @@ mod tests {
         motion.frame(ms(1050), left);
         motion.frame(ms(2000), left);
         assert_eq!(motion.frame(ms(2010), right).rect, right.to_f64());
-        // Un geste arrête l'animation en cours.
+        // A gesture stops the running animation.
         motion.animate_next_change();
         motion.frame(ms(2020), left);
         assert!(motion.frame(ms(2030), left).moving);
@@ -285,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn l_apercu_apparait_glisse_et_s_efface() {
+    fn the_preview_appears_slides_and_fades_out() {
         let mut preview = PreviewMotion::default();
         let (left, top) = (rect(0, 0, 720, 900), rect(0, 0, 1440, 900));
         assert_eq!(preview.frame(ms(0), None), None);

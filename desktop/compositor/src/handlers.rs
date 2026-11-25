@@ -1,5 +1,5 @@
-//! Réponses aux protocoles : wl_compositor, wl_shm, wl_seat, wl_output, xdg-shell, et le
-//! presse-papiers (wl_data_device et sélection primaire). Layer-shell is in `layer.rs`, the
+//! Protocol handlers: wl_compositor, wl_shm, wl_seat, wl_output, xdg-shell, and the clipboard
+//! (wl_data_device and primary selection). Layer-shell is in `layer.rs`, the
 //! screens and their scale in `output.rs`.
 
 use std::{cell::Cell, os::fd::OwnedFd, sync::OnceLock};
@@ -61,8 +61,8 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        // Nos clients passent par `insert_client`, sauf XWayland, que Smithay branche lui-même.
-        // L'état vide évite seulement de paniquer.
+        // Our clients go through `insert_client`, except XWayland, which Smithay plugs in
+        // itself. The empty state only avoids panicking.
         static EMPTY: OnceLock<CompositorClientState> = OnceLock::new();
         if let Some(data) = client.get_data::<XWaylandClientData>() {
             return &data.compositor_state;
@@ -94,7 +94,7 @@ impl CompositorHandler for State {
             && !popup.is_initial_configure_sent()
             && let Err(err) = popup.send_configure()
         {
-            tracing::warn!("configuration du popup : {err}");
+            tracing::warn!("popup configure: {err}");
         }
     }
 }
@@ -114,8 +114,8 @@ impl State {
             s.states.contains(XdgState::Maximized) || s.states.contains(XdgState::Fullscreen)
         });
 
-        // Premier contenu : on centre la fenêtre (sauf si elle prend tout l'écran) et on lui
-        // donne le clavier.
+        // First content: center the window (unless it takes the whole screen) and give it the
+        // keyboard.
         if !data.shown.get() && size.w > 0 && size.h > 0 {
             data.shown.set(true);
             if let (false, Some(area)) = (filled, self.output_area()) {
@@ -126,7 +126,7 @@ impl State {
             return;
         }
 
-        // Redimensionnement en cours : le bord opposé à celui qu'on tire reste en place.
+        // Resize in progress: the edge opposite the pulled one stays in place.
         if let Some(resize) = data.resize.get() {
             let (loc, next) = resize.on_commit(size);
             data.resize.set(next);
@@ -134,8 +134,8 @@ impl State {
         }
     }
 
-    /// Pose la fenêtre en `loc` et la passe au premier plan. Une fenêtre X11 apprend sa place :
-    /// XWayland en a besoin pour placer ses menus et traduire le pointeur.
+    /// Places the window at `loc` and raises it. An X11 window learns its place: XWayland needs
+    /// it to place its menus and translate the pointer.
     pub(crate) fn move_window(
         &mut self,
         window: &Window,
@@ -148,9 +148,8 @@ impl State {
         }
     }
 
-    /// Demande au client la taille `size`. `None` le laisse choisir : une fenêtre X11 garde
-    /// alors la sienne. Une fenêtre Wayland l'apprend au prochain envoi de sa configuration,
-    /// une fenêtre X11 tout de suite.
+    /// Asks the client for the size `size`. `None` lets it choose: an X11 window then keeps its
+    /// own. A Wayland window learns it with its next configure, an X11 window right away.
     pub(crate) fn request_size(&self, window: &Window, size: Option<Size<i32, Logical>>) {
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|s| s.size = size);
@@ -160,9 +159,9 @@ impl State {
         }
     }
 
-    /// Geste demandé par une fenêtre xdg-shell, qui dessine elle-même sa barre de titre et ses
-    /// bords. Comme le veut xdg-shell, il n'est accordé que sur notre siège, et avec le serial
-    /// de l'appui en cours.
+    /// Gesture requested by an xdg-shell window, which draws its title bar and its edges itself.
+    /// As xdg-shell requires, it is only granted on our seat, and with the serial of the press
+    /// in progress.
     fn xdg_gesture(
         &mut self,
         surface: &ToplevelSurface,
@@ -175,12 +174,12 @@ impl State {
             .and_then(|seat| seat.get_pointer())
             .filter(|pointer| pointer.has_grab(serial))
             .and_then(|pointer| pointer.grab_start_data());
-        tracing::debug!(?serial, "geste demandé par un client Wayland");
+        tracing::debug!(?serial, "gesture requested by a Wayland client");
         self.client_gesture(self.window_for(surface.wl_surface()), start, edges);
     }
 
-    /// Geste demandé par une fenêtre X11 (`_NET_WM_MOVERESIZE`). Le serveur X ne donne pas de
-    /// serial : il faut qu'un bouton soit tenu sur la surface de cette fenêtre. All X11 clients
+    /// Gesture requested by an X11 window (`_NET_WM_MOVERESIZE`). The X server gives no serial:
+    /// a button must be held on the surface of this window. All X11 clients
     /// share one Wayland client (XWayland), so "same client" would let an X11 window move
     /// itself during a click in another one.
     pub(crate) fn x11_gesture(&mut self, surface: &X11Surface, edges: Option<Edges>) {
@@ -193,12 +192,12 @@ impl State {
             .filter(|start| {
                 own.is_some() && start.focus.as_ref().map(|(focus, _)| focus) == own.as_ref()
             });
-        tracing::debug!("geste demandé par un client X11");
+        tracing::debug!("gesture requested by an X11 client");
         self.client_gesture(self.x11_window(surface), start, edges);
     }
 
-    /// Geste demandé par le client. Il n'est accordé que pendant l'appui d'un bouton sur une
-    /// surface de ce client (`start`), et jamais en plein écran : le client garde son appui.
+    /// Gesture requested by the client. It is only granted while a button is pressed on a
+    /// surface of this client (`start`), and never in fullscreen: the client keeps its press.
     fn client_gesture(
         &mut self,
         window: Option<Window>,
@@ -221,10 +220,10 @@ impl State {
             same_client,
             self.gesture_active(),
         ) else {
-            tracing::debug!(?edges, "demande de geste du client refusée");
+            tracing::debug!(?edges, "client gesture request refused");
             return;
         };
-        // On reprend le pointeur au client : il ne reçoit plus rien jusqu'au relâchement.
+        // Take the pointer back from the client: it receives nothing more until the release.
         let time = self.start_time.elapsed().as_millis() as u32;
         pointer.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         self.start_gesture(
@@ -237,9 +236,9 @@ impl State {
         self.pointer_motion(pointer.current_location(), time);
     }
 
-    /// Change l'état d'une fenêtre (agrandie, plein écran, calée dans une zone) puis la pose :
-    /// sur tout son écran, dans sa zone, ou à sa place d'avant. Cette place est gardée quand la
-    /// fenêtre quitte l'état flottant, et rendue quand elle y revient.
+    /// Changes the state of a window (maximized, fullscreen, snapped into a zone) then places
+    /// it: over its whole screen, in its zone, or at its previous place. That place is kept when
+    /// the window leaves the floating state, and given back when it returns to it.
     pub(crate) fn rearrange(
         &mut self,
         window: &Window,
@@ -279,7 +278,7 @@ impl State {
             (false, false, zone) => zone.map(|zone| zone.geometry(work)),
         };
         if target.is_some() || data.restore.get().is_some() {
-            // Calage, agrandissement, plein écran ou retour : la fenêtre glisse à sa place.
+            // Snap, maximize, fullscreen or restore: the window slides to its place.
             data.motion.borrow_mut().animate_next_change();
         }
         if let Some(rect) = target {
@@ -289,7 +288,7 @@ impl State {
             self.request_size(window, Some(rect.size));
             self.move_window(window, rect.loc, true);
         } else if let Some(restore) = data.restore.take() {
-            // Taille nulle : la fenêtre n'avait pas encore de contenu, le client choisit.
+            // Zero size: the window had no content yet, the client chooses.
             let size = (restore.size.w > 0 && restore.size.h > 0).then_some(restore.size);
             self.request_size(window, size);
             self.move_window(window, restore.loc, true);
@@ -301,8 +300,8 @@ impl State {
         }
     }
 
-    /// Cale la fenêtre dans `zone` de `output` (son écran sinon), ou lui rend sa place
-    /// d'avant. Sans effet en plein écran.
+    /// Snaps the window into `zone` of `output` (its own screen otherwise), or gives it back its
+    /// previous place. No effect in fullscreen.
     pub(crate) fn snap(&mut self, window: &Window, zone: Option<Zone>, output: Option<Output>) {
         if is_fullscreen(window) {
             return;
@@ -325,7 +324,7 @@ impl State {
     }
 }
 
-/// États qu'une fenêtre connaît : ceux de xdg-shell, ou `_NET_WM_STATE` pour une fenêtre X11.
+/// States a window knows about: those of xdg-shell, or `_NET_WM_STATE` for an X11 window.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Arrangement {
     pub maximized: bool,
@@ -333,7 +332,7 @@ pub(crate) struct Arrangement {
 }
 
 impl Arrangement {
-    /// États de la fenêtre, y compris ceux qu'elle n'a pas encore reçus.
+    /// States of the window, including those it has not received yet.
     pub fn of(window: &Window) -> Self {
         match (window.toplevel(), window.x11_surface()) {
             (Some(toplevel), _) => toplevel.with_pending_state(|s| Self {
@@ -351,8 +350,8 @@ impl Arrangement {
         }
     }
 
-    /// Donne ces états à la fenêtre. Une fenêtre Wayland les reçoit avec sa prochaine
-    /// configuration, une fenêtre X11 tout de suite.
+    /// Gives these states to the window. A Wayland window receives them with its next
+    /// configure, an X11 window right away.
     pub fn apply(self, window: &Window) {
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|s| {
@@ -372,29 +371,29 @@ impl Arrangement {
                 .set_maximized(self.maximized)
                 .and_then(|()| surface.set_fullscreen(self.fullscreen));
             if let Err(err) = done {
-                tracing::warn!("états de la fenêtre X11 : {err}");
+                tracing::warn!("X11 window states: {err}");
             }
         }
     }
 }
 
-/// Place et taille d'une fenêtre X11, dans les coordonnées de l'espace : XWayland lit la place
-/// de chaque écran dans xdg-output.
+/// Place and size of an X11 window, in space coordinates: XWayland reads the place of each
+/// screen from xdg-output.
 pub(crate) fn configure_x11(surface: &X11Surface, rect: Rectangle<i32, Logical>) {
     if surface.is_override_redirect() || surface.geometry() == rect {
         return;
     }
     if let Err(err) = surface.configure(rect) {
-        tracing::warn!("configuration de la fenêtre X11 : {err}");
+        tracing::warn!("X11 window configure: {err}");
     }
 }
 
-/// La fenêtre est en plein écran, ou va l'être.
+/// The window is fullscreen, or about to be.
 pub(crate) fn is_fullscreen(window: &Window) -> bool {
     Arrangement::of(window).fullscreen
 }
 
-/// La fenêtre est agrandie, ou va l'être.
+/// The window is maximized, or about to be.
 pub(crate) fn is_maximized(window: &Window) -> bool {
     Arrangement::of(window).maximized
 }
@@ -405,7 +404,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        // Posée pour de bon à son premier contenu, quand sa taille est connue.
+        // Placed for good at its first content, when its size is known.
         let loc = self.output_area().map(|a| a.loc).unwrap_or_default();
         self.space
             .map_element(Window::new_wayland_window(surface), loc, false);
@@ -420,7 +419,7 @@ impl XdgShellHandler for State {
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface)) {
-            tracing::warn!("popup refusé : {err}");
+            tracing::warn!("popup refused: {err}");
         }
     }
 
@@ -517,13 +516,14 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
 
-    /// Seul le client qui a le clavier lit et pose le presse-papiers et la sélection primaire.
+    /// Only the client that has the keyboard reads and sets the clipboard and the primary
+    /// selection.
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&KeyboardFocus>) {
         let dh = &self.display_handle;
         let client = focused
             .and_then(WaylandFocus::wl_surface)
             .and_then(|surface| dh.get_client(surface.id()).ok());
-        tracing::debug!(?focused, "clavier");
+        tracing::debug!(?focused, "keyboard");
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
     }
@@ -533,8 +533,8 @@ impl SeatHandler for State {
     }
 }
 
-// Exigé par le protocole des formes de curseur, qui accepte aussi les stylets. Sans tablette
-// annoncée, aucun client n'en a.
+// Required by the cursor shape protocol, which also accepts styluses. With no tablet
+// advertised, no client has one.
 impl TabletSeatHandler for State {}
 
 impl BufferHandler for State {
@@ -549,8 +549,9 @@ impl ShmHandler for State {
 
 impl OutputHandler for State {}
 
-/// Le presse-papiers d'un client Wayland est relayé à XWayland, et l'inverse : quand un client
-/// X11 le pose, le compositeur le pose côté Wayland pour son compte (voir `xwayland.rs`).
+/// The clipboard of a Wayland client is relayed to XWayland, and the other way round: when an
+/// X11 client sets it, the compositor sets it on the Wayland side on its behalf (see
+/// `xwayland.rs`).
 impl SelectionHandler for State {
     type SelectionUserData = ();
 
@@ -563,7 +564,7 @@ impl SelectionHandler for State {
         if let Some(xwm) = self.xwm.as_mut()
             && let Err(err) = xwm.new_selection(target, source.map(|s| s.mime_types()))
         {
-            tracing::warn!(?target, "sélection passée à XWayland : {err}");
+            tracing::warn!(?target, "selection passed to XWayland: {err}");
         }
     }
 
@@ -578,7 +579,7 @@ impl SelectionHandler for State {
         if let Some(xwm) = self.xwm.as_mut()
             && let Err(err) = xwm.send_selection(target, mime_type, fd, self.loop_handle.clone())
         {
-            tracing::warn!(?target, "sélection lue chez XWayland : {err}");
+            tracing::warn!(?target, "selection read from XWayland: {err}");
         }
     }
 }
@@ -589,8 +590,8 @@ impl DataDeviceHandler for State {
     }
 }
 
-// Le glisser-déposer entre clients Wayland suit le comportement par défaut de Smithay. Entre
-// Wayland et X11, il vient au lot D-29.
+// Drag and drop between Wayland clients follows Smithay's default behavior. Between Wayland
+// and X11, it comes with lot D-29.
 impl ClientDndGrabHandler for State {}
 impl ServerDndGrabHandler for State {}
 

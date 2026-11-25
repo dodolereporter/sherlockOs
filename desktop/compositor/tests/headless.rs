@@ -1,8 +1,8 @@
-//! Le compositeur démarre sans écran ni backend, un client de test se connecte, crée une fenêtre
-//! et reçoit ses configurations. Tout tourne dans un seul fil : on alterne la boucle du
-//! compositeur et la lecture du client, ce qui permet de regarder l'état des deux côtés.
+//! The compositor starts without a screen or backend, a test client connects, creates a window
+//! and receives its configures. Everything runs in a single thread: the compositor loop and the
+//! client reads alternate, which lets the tests look at the state on both sides.
 
-// Module de test : clippy y autorise unwrap et expect, comme dans les tests unitaires.
+// Test module: clippy allows unwrap and expect there, as in unit tests.
 #[cfg(test)]
 mod tests {
     use std::{
@@ -49,17 +49,17 @@ mod tests {
         zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
     };
 
-    /// Ce que le client a reçu.
+    /// What the client has received.
     #[derive(Default)]
     struct Client {
         globals: Vec<(u32, String, u32)>,
-        /// Chaque configuration de la fenêtre : largeur, hauteur, états.
+        /// Each configure of the window: width, height, states.
         configures: Vec<(i32, i32, Vec<XdgState>)>,
-        /// Serial du dernier appui de bouton reçu.
+        /// Serial of the last button press received.
         button_serial: Option<u32>,
-        /// Touches reçues : code evdev, appuyée ou relâchée.
+        /// Keys received: evdev code, pressed or released.
         keys: Vec<(u32, bool)>,
-        /// Le compositeur a répondu au dernier `wl_display.sync`.
+        /// The compositor has answered the last `wl_display.sync`.
         synced: bool,
         /// Each configure of the anchored surface: width, height.
         layer_configures: Vec<(u32, u32)>,
@@ -239,12 +239,12 @@ mod tests {
     delegate_noop!(Client: ZwlrLayerShellV1);
     delegate_noop!(Client: WpFractionalScaleManagerV1);
 
-    /// Mémoire partagée pour un tampon de `size` octets, sans fichier qui reste sur le disque.
-    /// Les tests tournent en parallèle : chacun a son nom de fichier.
+    /// Shared memory for a buffer of `size` bytes, without a file left on disk.
+    /// Tests run in parallel: each one has its own file name.
     fn shm_file(size: u64) -> File {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let name = format!("compositeur-test-{}-{n}", std::process::id());
+        let name = format!("compositor-test-{}-{n}", std::process::id());
         let path = std::env::temp_dir().join(name);
         let file = OpenOptions::new()
             .read(true)
@@ -260,16 +260,16 @@ mod tests {
 
     const BTN_LEFT: u32 = 0x110;
     const BTN_RIGHT: u32 = 0x111;
-    // Codes xkb (evdev + 8) de Super gauche et des flèches. Sans `--imbrique`, la touche des
-    // gestes est Super.
+    // xkb codes (evdev + 8) of left Super and of the arrows. Without `--nested`, the gesture
+    // key is Super.
     const KEY_SUPER: u32 = 133;
     const KEY_UP: u32 = 111;
     const KEY_LEFT: u32 = 113;
     const KEY_DOWN: u32 = 116;
     const KEY_SHIFT: u32 = 50;
 
-    /// Fenêtre affichée par `Harness::show_window` : 100 × 80, centrée en (350, 260) dans l'écran
-    /// de 800 × 600. Le fichier du tampon vit aussi longtemps qu'elle.
+    /// Window shown by `Harness::show_window`: 100 × 80, centered at (350, 260) in the 800 × 600
+    /// screen. The buffer file lives as long as it does.
     struct Shown {
         seat: WlSeat,
         toplevel: XdgToplevel,
@@ -309,7 +309,7 @@ mod tests {
             }
         }
 
-        /// Fait tourner compositeur et client jusqu'à ce que `done` soit vrai.
+        /// Runs compositor and client until `done` is true.
         fn run_until(&mut self, what: &str, done: impl Fn(&Client, &State) -> bool) {
             for _ in 0..200 {
                 self.conn.flush().unwrap();
@@ -318,7 +318,7 @@ mod tests {
                     .unwrap();
                 self.state.refresh();
                 if let Some(guard) = self.queue.prepare_read() {
-                    // Rien à lire n'est pas une erreur : on retente au tour suivant.
+                    // Nothing to read is not an error: try again on the next turn.
                     let _ = guard.read();
                 }
                 self.queue.dispatch_pending(&mut self.client).unwrap();
@@ -326,7 +326,7 @@ mod tests {
                     return;
                 }
             }
-            panic!("délai dépassé en attendant : {what}");
+            panic!("timed out waiting for: {what}");
         }
 
         fn bind<I: wayland_client::Proxy + 'static>(&self, registry: &wl_registry::WlRegistry) -> I
@@ -351,12 +351,12 @@ mod tests {
             self.show_window_with(false)
         }
 
-        /// Un client crée une fenêtre, l'affiche avec un tampon de 100 × 80 et écoute le pointeur
-        /// et le clavier. `maximized` : il demande l'agrandissement avant son premier contenu.
+        /// A client creates a window, shows it with a 100 × 80 buffer and listens to the pointer
+        /// and the keyboard. `maximized`: it asks to be maximized before its first content.
         fn show_window_with(&mut self, maximized: bool) -> Shown {
             let qh = self.queue.handle();
             let registry = self.conn.display().get_registry(&qh, ());
-            self.run_until("les globales", |c, _| {
+            self.run_until("the globals", |c, _| {
                 c.globals.iter().any(|g| g.1 == "wl_shm")
             });
             let compositor: WlCompositor = self.bind(&registry);
@@ -373,16 +373,14 @@ mod tests {
                 toplevel.set_maximized();
             }
             surface.commit();
-            self.run_until("la première configuration", |c, _| {
-                !c.configures.is_empty()
-            });
+            self.run_until("the first configure", |c, _| !c.configures.is_empty());
             let file = shm_file(100 * 80 * 4);
             let pool = shm.create_pool(file.as_fd(), 100 * 80 * 4, &qh, ());
             let buffer = pool.create_buffer(0, 100, 80, 400, Format::Argb8888, &qh, ());
             surface.attach(Some(&buffer), 0, 0);
             surface.commit();
             let placed = if maximized { (0, 0) } else { (350, 260) };
-            self.run_until("le placement", |_, s| location(s) == Some(placed.into()));
+            self.run_until("the placement", |_, s| location(s) == Some(placed.into()));
             Shown {
                 seat,
                 toplevel,
@@ -392,8 +390,8 @@ mod tests {
             }
         }
 
-        /// Le client redessine sa fenêtre à `w` × `h` et l'envoie. Le fichier du tampon doit
-        /// vivre aussi longtemps que lui.
+        /// The client redraws its window at `w` × `h` and commits it. The buffer file must live
+        /// as long as the buffer.
         fn redraw(&mut self, shown: &Shown, w: i32, h: i32) -> File {
             let qh = self.queue.handle();
             let file = shm_file((w * h * 4) as u64);
@@ -401,7 +399,7 @@ mod tests {
             let buffer = pool.create_buffer(0, w, h, w * 4, Format::Argb8888, &qh, ());
             shown.surface.attach(Some(&buffer), 0, 0);
             shown.surface.commit();
-            self.run_until("le nouveau contenu", |_, s| {
+            self.run_until("the new content", |_, s| {
                 s.space
                     .elements()
                     .next()
@@ -410,7 +408,7 @@ mod tests {
             file
         }
 
-        /// Ce qui est dessiné de la fenêtre à `t` ms, et sa géométrie réelle.
+        /// What is drawn of the window at `t` ms, and its real geometry.
         fn drawn(&self, t: u64) -> (Rectangle<f64, Logical>, Rectangle<f64, Logical>) {
             let window = self.state.space.elements().next().unwrap();
             let visual = self
@@ -421,18 +419,18 @@ mod tests {
             (visual.rect, real.to_f64())
         }
 
-        /// Dessine la fenêtre à `t` ms et vérifie qu'elle l'est exactement à sa place.
+        /// Draws the window at `t` ms and checks that it is drawn exactly at its place.
         fn assert_follows(&self, t: u64, what: &str) {
             let (drawn, real) = self.drawn(t);
-            assert_eq!(drawn, real, "{what} : dessinée ailleurs que sa géométrie");
+            assert_eq!(drawn, real, "{what}: drawn away from its geometry");
         }
 
-        /// Appui du bouton gauche en (`x`, `y`), sur une surface du client : rend son serial.
+        /// Left button press at (`x`, `y`), on a surface of the client: returns its serial.
         fn press(&mut self, x: f64, y: f64) -> u32 {
             self.client.button_serial = None;
             self.state.pointer_motion((x, y).into(), 1);
             self.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
-            self.run_until("l'appui", |c, _| c.button_serial.is_some());
+            self.run_until("the press", |c, _| c.button_serial.is_some());
             self.client.button_serial.unwrap()
         }
 
@@ -441,7 +439,7 @@ mod tests {
                 .pointer_button(BTN_LEFT, ButtonState::Released, 3);
         }
 
-        /// Attend une configuration de taille `w` × `h` et rend ses états.
+        /// Waits for a configure of size `w` × `h` and returns its states.
         fn wait_size(&mut self, what: &str, w: i32, h: i32) -> Vec<XdgState> {
             self.run_until(what, |c, _| {
                 c.configures.last().is_some_and(|c| (c.0, c.1) == (w, h))
@@ -449,12 +447,12 @@ mod tests {
             self.last_configure().2.clone()
         }
 
-        /// Touche des gestes et une touche, appuyées puis relâchées.
+        /// Gesture key and one key, pressed then released.
         fn shortcut(&mut self, key: u32) {
             self.chord(&[KEY_SUPER], key);
         }
 
-        /// Les touches `mods` tenues pendant l'appui et le relâchement de `key`.
+        /// The `mods` keys held during the press and release of `key`.
         fn chord(&mut self, mods: &[u32], key: u32) {
             let press = mods.iter().chain([&key]).map(|k| (*k, KeyState::Pressed));
             let release = [&key]
@@ -477,11 +475,11 @@ mod tests {
     }
 
     #[test]
-    fn un_client_cree_une_fenetre_et_recoit_sa_configuration() {
+    fn a_client_creates_a_window_and_receives_its_configure() {
         let mut h = Harness::start();
         let qh = h.queue.handle();
         let registry = h.conn.display().get_registry(&qh, ());
-        h.run_until("les globales", |c, _| {
+        h.run_until("the globals", |c, _| {
             c.globals.iter().any(|g| g.1 == "xdg_wm_base")
         });
 
@@ -490,153 +488,153 @@ mod tests {
         let surface = compositor.create_surface(&qh, ());
         let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
         let toplevel = xdg_surface.get_toplevel(&qh, ());
-        toplevel.set_title("essai".into());
+        toplevel.set_title("test".into());
         surface.commit();
 
-        h.run_until("la première configuration", |c, _| {
-            !c.configures.is_empty()
-        });
+        h.run_until("the first configure", |c, _| !c.configures.is_empty());
         assert_eq!(
             h.last_configure(),
             &(0, 0, vec![]),
-            "le client choisit sa taille"
+            "the client chooses its size"
         );
         let windows: Vec<_> = h.state.space.elements().collect();
         assert_eq!(windows.len(), 1);
-        assert_eq!(State::title(windows[0]).as_deref(), Some("essai"));
+        assert_eq!(State::title(windows[0]).as_deref(), Some("test"));
 
         toplevel.set_maximized();
-        h.run_until("l'agrandissement", |c, _| c.configures.len() >= 2);
+        h.run_until("maximizing", |c, _| c.configures.len() >= 2);
         let (w, h_, states) = h.last_configure().clone();
         assert_eq!(
             (w, h_),
             (800, 600),
-            "agrandie, la fenêtre prend tout l'écran"
+            "maximized, the window takes the whole screen"
         );
         assert!(states.contains(&XdgState::Maximized));
 
         toplevel.set_fullscreen(None);
-        h.run_until("le plein écran", |c, _| c.configures.len() >= 3);
+        h.run_until("fullscreen", |c, _| c.configures.len() >= 3);
         assert!(h.last_configure().2.contains(&XdgState::Fullscreen));
 
         toplevel.unset_fullscreen();
         toplevel.unset_maximized();
-        h.run_until("le retour à la normale", |c, _| {
+        h.run_until("back to normal", |c, _| {
             c.configures.last().is_some_and(|(_, _, s)| {
                 !s.contains(&XdgState::Maximized) && !s.contains(&XdgState::Fullscreen)
             })
         });
 
         toplevel.destroy();
-        h.run_until("la fermeture de la fenêtre", |_, s| {
-            s.space.elements().count() == 0
-        });
+        h.run_until("the window closing", |_, s| s.space.elements().count() == 0);
     }
 
     #[test]
-    fn un_client_deplace_sa_fenetre_depuis_sa_barre_de_titre() {
+    fn a_client_moves_its_window_from_its_title_bar() {
         let mut h = Harness::start();
         let qh = h.queue.handle();
         let Shown { seat, toplevel, .. } = h.show_window();
 
-        // Appui sur la barre de titre, que le client dessine lui-même.
+        // Press on the title bar, which the client draws itself.
         let serial = h.press(360.0, 270.0);
 
-        // Un serial qui ne vient pas de cet appui est refusé.
+        // A serial that does not come from this press is refused.
         toplevel._move(&seat, serial + 1000);
         h.conn.display().sync(&qh, ());
-        h.run_until("la réponse au sync", |c, _| c.synced);
+        h.run_until("the sync answer", |c, _| c.synced);
         assert!(!h.state.gesture_active());
 
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Move));
         h.state.pointer_motion((410.0, 300.0).into(), 3);
         assert_eq!(
             location(&h.state),
             Some((400, 290).into()),
-            "la fenêtre suit le pointeur"
+            "the window follows the pointer"
         );
-        assert_eq!(h.state.snap_preview(), None, "loin des bords, rien à caler");
+        assert_eq!(
+            h.state.snap_preview(),
+            None,
+            "far from the edges, nothing to snap"
+        );
         h.release();
         assert!(!h.state.gesture_active());
         h.state.pointer_motion((500.0, 400.0).into(), 5);
         assert_eq!(
             location(&h.state),
             Some((400, 290).into()),
-            "le geste est fini"
+            "the gesture is over"
         );
     }
 
     #[test]
-    fn une_fenetre_lachee_en_haut_est_agrandie_puis_rendue_en_la_deplacant() {
+    fn a_window_dropped_at_the_top_is_maximized_then_restored_by_moving_it() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window();
 
         let serial = h.press(360.0, 270.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((400.0, 2.0).into(), 3);
         assert_eq!(
             h.state.snap_preview(),
             Some(rect(0, 0, 800, 600)),
-            "l'aperçu montre tout l'écran"
+            "the preview shows the whole screen"
         );
         h.release();
-        let states = h.wait_size("l'agrandissement", 800, 600);
+        let states = h.wait_size("maximizing", 800, 600);
         assert!(states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((0, 0).into()));
 
-        // Déplacée, elle quitte l'agrandissement et reprend sa taille d'avant.
+        // When moved, it leaves maximized and gets its previous size back.
         let serial = h.press(50.0, 10.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
-        // Sans mouvement, rien ne change : un simple clic ne détache pas la fenêtre.
+        h.run_until("the gesture start", |_, s| s.gesture_active());
+        // Without motion, nothing changes: a mere click does not pull the window out.
         h.state.pointer_motion((51.0, 11.0).into(), 3);
         assert_eq!(h.last_configure().0, 800);
         h.state.pointer_motion((300.0, 300.0).into(), 3);
-        let states = h.wait_size("la taille d'avant", 100, 80);
+        let states = h.wait_size("the previous size", 100, 80);
         assert!(!states.contains(&XdgState::Maximized));
         h.release();
         assert!(!h.state.gesture_active());
     }
 
     #[test]
-    fn une_fenetre_lachee_dans_un_coin_ou_sur_un_cote_se_cale() {
+    fn a_window_dropped_in_a_corner_or_on_a_side_snaps() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window();
 
         let serial = h.press(360.0, 270.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((795.0, 590.0).into(), 3);
         assert_eq!(h.state.snap_preview(), Some(rect(400, 300, 400, 300)));
         h.release();
-        let states = h.wait_size("le quart bas droit", 400, 300);
+        let states = h.wait_size("the bottom right quarter", 400, 300);
         assert!(!states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((400, 300).into()));
 
-        // Le contenu reste de 100 × 80 tant que le client ne l'a pas redessiné.
+        // The content stays 100 × 80 as long as the client has not redrawn it.
         let serial = h.press(410.0, 310.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((1.0, 300.0).into(), 3);
         assert_eq!(h.state.snap_preview(), Some(rect(0, 0, 400, 600)));
         h.release();
-        h.wait_size("la moitié gauche", 400, 600);
+        h.wait_size("the left half", 400, 600);
 
-        // Rendue, elle retrouve sa place d'avant le glisser, pas celle du lâcher.
+        // Restored, it returns to its place from before the drag, not the one where it was dropped.
         h.shortcut(KEY_DOWN);
-        h.wait_size("la taille d'avant", 100, 80);
+        h.wait_size("the previous size", 100, 80);
         assert_eq!(location(&h.state), Some((400, 300).into()));
     }
 
     #[test]
-    fn la_bande_autour_de_la_fenetre_la_redimensionne() {
+    fn the_band_around_the_window_resizes_it() {
         let mut h = Harness::start();
         let _shown = h.show_window();
 
-        // 5 pixels à droite de la fenêtre, qui va de x = 350 à x = 450.
+        // 5 pixels to the right of the window, which spans x = 350 to x = 450.
         h.state.pointer_motion((455.0, 300.0).into(), 1);
         assert_eq!(h.state.cursor_icon(), Some(CursorIcon::EResize));
         h.state.pointer_motion((455.0, 345.0).into(), 1);
@@ -644,15 +642,15 @@ mod tests {
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
         assert!(h.state.gesture_active());
         h.state.pointer_motion((485.0, 365.0).into(), 3);
-        let states = h.wait_size("le redimensionnement", 130, 100);
+        let states = h.wait_size("the resize", 130, 100);
         assert!(states.contains(&XdgState::Resizing));
-        // Un autre bouton ne termine pas le geste : seul le relâchement du gauche le fait.
+        // Another button does not end the gesture: only the release of the left one does.
         h.state.pointer_button(BTN_RIGHT, ButtonState::Pressed, 3);
         h.state.pointer_button(BTN_RIGHT, ButtonState::Released, 3);
         assert!(h.state.gesture_active());
         h.release();
         assert!(!h.state.gesture_active());
-        h.run_until("la fin du redimensionnement", |c, _| {
+        h.run_until("the resize end", |c, _| {
             c.configures
                 .last()
                 .is_some_and(|c| !c.2.contains(&XdgState::Resizing))
@@ -660,39 +658,39 @@ mod tests {
     }
 
     #[test]
-    fn un_client_redimensionne_sa_fenetre_par_un_bord() {
+    fn a_client_resizes_its_window_by_an_edge() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window();
 
-        // Dans le coin bas droit, à l'intérieur : là où le client dessine son bord.
+        // In the bottom right corner, inside: where the client draws its edge.
         let serial = h.press(448.0, 338.0);
         toplevel.resize(&seat, serial, ResizeEdge::BottomRight);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         assert_eq!(h.state.cursor_icon(), Some(CursorIcon::SeResize));
         h.state.pointer_motion((478.0, 358.0).into(), 3);
-        let states = h.wait_size("le redimensionnement", 130, 100);
+        let states = h.wait_size("the resize", 130, 100);
         assert!(states.contains(&XdgState::Resizing));
         h.release();
         assert!(!h.state.gesture_active());
     }
 
     #[test]
-    fn une_fenetre_en_plein_ecran_ne_bouge_pas() {
+    fn a_fullscreen_window_does_not_move() {
         let mut h = Harness::start();
         let qh = h.queue.handle();
         let Shown { seat, toplevel, .. } = h.show_window();
         toplevel.set_fullscreen(None);
-        let states = h.wait_size("le plein écran", 800, 600);
+        let states = h.wait_size("fullscreen", 800, 600);
         assert!(states.contains(&XdgState::Fullscreen));
 
-        // Le contenu reste de 100 × 80, posé en (0, 0).
+        // The content stays 100 × 80, placed at (0, 0).
         let serial = h.press(50.0, 40.0);
         toplevel._move(&seat, serial);
         toplevel.resize(&seat, serial, ResizeEdge::BottomRight);
         h.conn.display().sync(&qh, ());
-        h.run_until("la réponse au sync", |c, _| c.synced);
+        h.run_until("the sync answer", |c, _| c.synced);
         assert!(!h.state.gesture_active());
-        // Pas de bande de saisie non plus.
+        // No grab band either.
         h.release();
         h.state.pointer_motion((103.0, 40.0).into(), 3);
         assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Default));
@@ -701,114 +699,115 @@ mod tests {
     }
 
     #[test]
-    fn la_touche_des_gestes_et_les_fleches_calent_la_fenetre() {
+    fn the_gesture_key_and_the_arrows_snap_the_window() {
         let mut h = Harness::start();
         let _shown = h.show_window();
 
         h.shortcut(KEY_LEFT);
-        let states = h.wait_size("la moitié gauche", 400, 600);
+        let states = h.wait_size("the left half", 400, 600);
         assert!(!states.contains(&XdgState::Maximized));
         h.shortcut(KEY_UP);
-        let states = h.wait_size("l'agrandissement", 800, 600);
+        let states = h.wait_size("maximizing", 800, 600);
         assert!(states.contains(&XdgState::Maximized));
         h.shortcut(KEY_DOWN);
-        let states = h.wait_size("la taille d'avant", 100, 80);
+        let states = h.wait_size("the previous size", 100, 80);
         assert!(!states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((350, 260).into()));
         h.shortcut(KEY_UP);
-        h.wait_size("l'agrandissement", 800, 600);
+        h.wait_size("maximizing", 800, 600);
         h.shortcut(KEY_UP);
-        h.wait_size("le retour", 100, 80);
+        h.wait_size("the restore", 100, 80);
 
-        // Le client voit Super, jamais les flèches interceptées, ni leur appui ni leur relâchement.
+        // The client sees Super, never the intercepted arrows, neither their press nor their
+        // release.
         h.conn.display().sync(&h.queue.handle(), ());
-        h.run_until("la réponse au sync", |c, _| c.synced);
+        h.run_until("the sync answer", |c, _| c.synced);
         let evdev = |xkb: u32| xkb - 8;
         assert!(h.client.keys.contains(&(evdev(KEY_SUPER), true)));
         let arrows = [KEY_UP, KEY_LEFT, KEY_DOWN].map(evdev);
         assert!(!h.client.keys.iter().any(|(k, _)| arrows.contains(k)));
 
-        // Avec une autre touche en plus de celle des gestes, la flèche va au client.
+        // With another key on top of the gesture key, the arrow goes to the client.
         h.chord(&[KEY_SUPER, KEY_SHIFT], KEY_LEFT);
-        h.run_until("la flèche", |c, _| {
+        h.run_until("the arrow", |c, _| {
             c.keys.contains(&(evdev(KEY_LEFT), false))
         });
         assert!(h.client.keys.contains(&(evdev(KEY_LEFT), true)));
-        assert_eq!(h.last_configure().0, 100, "la fenêtre n'est pas calée");
+        assert_eq!(h.last_configure().0, 100, "the window is not snapped");
     }
 
     #[test]
-    fn une_fenetre_agrandie_avant_son_contenu_se_deplace_a_la_taille_du_client() {
+    fn a_window_maximized_before_its_content_moves_at_the_client_size() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window_with(true);
-        let states = h.wait_size("l'agrandissement", 800, 600);
+        let states = h.wait_size("maximizing", 800, 600);
         assert!(states.contains(&XdgState::Maximized));
 
-        // Sa place d'avant est vide : le client choisit sa taille, 0 × 0.
+        // Its previous place is empty: the client chooses its size, 0 × 0.
         let serial = h.press(50.0, 10.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((300.0, 300.0).into(), 3);
-        let states = h.wait_size("la taille du client", 0, 0);
+        let states = h.wait_size("the client size", 0, 0);
         assert!(!states.contains(&XdgState::Maximized));
 
-        // Calée puis rendue, elle ne garde pas la taille de l'écran comme taille d'avant.
+        // Snapped then restored, it does not keep the screen size as its previous size.
         h.state.pointer_motion((1.0, 300.0).into(), 4);
         h.release();
-        h.wait_size("la moitié gauche", 400, 600);
+        h.wait_size("the left half", 400, 600);
         h.shortcut(KEY_DOWN);
-        let states = h.wait_size("la taille du client", 0, 0);
+        let states = h.wait_size("the client size", 0, 0);
         assert!(!states.contains(&XdgState::Maximized));
     }
 
     #[test]
-    fn un_calage_interrompu_ne_rend_pas_le_glisser_suivant_anime() {
+    fn an_interrupted_snap_does_not_make_the_next_drag_animated() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window();
         h.drawn(0);
-        h.assert_follows(1000, "ouverte");
+        h.assert_follows(1000, "opened");
 
-        // Agrandie, puis rendue avant la fin de l'animation.
+        // Maximized, then restored before the end of the animation.
         h.shortcut(KEY_UP);
         let (moving, real) = h.drawn(1010);
-        assert_ne!(moving, real, "le calage est animé");
+        assert_ne!(moving, real, "the snap is animated");
         h.shortcut(KEY_DOWN);
         h.drawn(1050);
-        h.assert_follows(3000, "rendue");
+        h.assert_follows(3000, "restored");
 
-        // Le glisser suivant suit le pointeur, à chaque image.
+        // The next drag follows the pointer, on every frame.
         let serial = h.press(360.0, 270.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((330.0, 280.0).into(), 3);
-        h.assert_follows(3010, "glissée");
+        h.assert_follows(3010, "dragged");
         h.state.pointer_motion((300.0, 290.0).into(), 3);
-        h.assert_follows(3020, "glissée plus loin");
+        h.assert_follows(3020, "dragged further");
         h.release();
     }
 
     #[test]
-    fn un_calage_sans_effet_ne_rend_pas_le_redimensionnement_suivant_anime() {
+    fn a_snap_without_effect_does_not_make_the_next_resize_animated() {
         let mut h = Harness::start();
         let shown = h.show_window();
         h.drawn(0);
         h.shortcut(KEY_LEFT);
-        h.wait_size("la moitié gauche", 400, 600);
+        h.wait_size("the left half", 400, 600);
         h.drawn(1000);
-        h.assert_follows(3000, "calée");
+        h.assert_follows(3000, "snapped");
 
-        // Déjà à gauche : le calage ne change rien.
+        // Already on the left: the snap changes nothing.
         h.shortcut(KEY_LEFT);
-        h.assert_follows(3010, "calée de nouveau");
+        h.assert_follows(3010, "snapped again");
 
-        // Redimensionnée par la bande de droite, elle est dessinée à sa nouvelle taille.
+        // Resized by the right band, it is drawn at its new size.
         h.state.pointer_motion((104.0, 40.0).into(), 1);
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
         assert!(h.state.gesture_active());
         h.state.pointer_motion((134.0, 40.0).into(), 3);
-        h.wait_size("le redimensionnement", 130, 80);
+        h.wait_size("the resize", 130, 80);
         let _file = h.redraw(&shown, 130, 80);
-        h.assert_follows(3020, "redimensionnée");
+        h.assert_follows(3020, "resized");
         assert_eq!(
             h.drawn(3030).0,
             Rectangle::new((0.0, 0.0).into(), (130.0, 80.0).into())
@@ -817,22 +816,22 @@ mod tests {
     }
 
     #[test]
-    fn une_fenetre_calee_detachee_suit_le_pointeur() {
+    fn a_snapped_window_pulled_out_follows_the_pointer() {
         let mut h = Harness::start();
         let Shown { seat, toplevel, .. } = h.show_window();
         h.drawn(0);
         h.shortcut(KEY_LEFT);
-        h.wait_size("la moitié gauche", 400, 600);
+        h.wait_size("the left half", 400, 600);
         h.drawn(1000);
-        h.assert_follows(3000, "calée");
+        h.assert_follows(3000, "snapped");
 
-        // Détachée en la glissant, puis glissée vite : elle reste sous le pointeur.
+        // Pulled out by dragging it, then dragged fast: it stays under the pointer.
         let serial = h.press(10.0, 10.0);
         toplevel._move(&seat, serial);
-        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.run_until("the gesture start", |_, s| s.gesture_active());
         for (i, x) in [100.0, 200.0, 300.0, 400.0].into_iter().enumerate() {
             h.state.pointer_motion((x, 300.0).into(), 3);
-            h.assert_follows(3001 + i as u64, "détachée");
+            h.assert_follows(3001 + i as u64, "pulled out");
         }
         h.release();
     }
@@ -887,7 +886,7 @@ mod tests {
     /// A few turns of the loop, for everything sent to be handled.
     fn settle(h: &mut Harness) {
         for _ in 0..5 {
-            h.run_until("un tour", |_, _| true);
+            h.run_until("one turn", |_, _| true);
         }
     }
 
@@ -896,14 +895,14 @@ mod tests {
     fn anchor(h: &mut Harness, spec: Spec) -> Anchored {
         let qh = h.queue.handle();
         let registry = h.conn.display().get_registry(&qh, ());
-        h.run_until("les globales", |c, _| {
+        h.run_until("the globals", |c, _| {
             c.globals.iter().any(|g| g.1 == "zwlr_layer_shell_v1")
         });
         let compositor: WlCompositor = h.bind(&registry);
         let layer_shell: ZwlrLayerShellV1 = h.bind(&registry);
         let surface = compositor.create_surface(&qh, ());
         let layer =
-            layer_shell.get_layer_surface(&surface, None, spec.layer, "essai".into(), &qh, ());
+            layer_shell.get_layer_surface(&surface, None, spec.layer, "test".into(), &qh, ());
         layer.set_size(spec.size.0, spec.size.1);
         layer.set_anchor(spec.anchor);
         layer.set_exclusive_zone(spec.zone);
@@ -912,7 +911,7 @@ mod tests {
         layer.set_keyboard_interactivity(spec.keyboard);
         surface.commit();
         let (configured, closed) = (h.client.layer_configures.len(), h.client.layer_closed);
-        h.run_until("la réponse à la surface ancrée", |c, _| {
+        h.run_until("the answer to the anchored surface", |c, _| {
             c.layer_configures.len() > configured || c.layer_closed > closed
         });
         let mut anchored = Anchored {
@@ -933,45 +932,45 @@ mod tests {
         assert_eq!(
             h.client.layer_configures,
             vec![(776, 36)],
-            "toute la largeur, moins les marges"
+            "the whole width, minus the margins"
         );
-        h.run_until("la zone exclusive", |_, s| {
+        h.run_until("the exclusive zone", |_, s| {
             s.output_area() != Some(rect(0, 0, 800, 600))
         });
         bar
     }
 
     #[test]
-    fn une_barre_ancree_en_haut_reduit_la_zone_d_agrandissement() {
+    fn a_bar_anchored_at_the_top_reduces_the_maximize_area() {
         let mut h = Harness::start();
         h.show_window();
         h.shortcut(KEY_UP);
-        let states = h.wait_size("l'agrandissement", 800, 600);
+        let states = h.wait_size("maximizing", 800, 600);
         assert!(states.contains(&XdgState::Maximized));
 
         let bar = show_bar(&mut h);
         // 10 of margin and 36 of bar at the top.
         assert_eq!(h.state.output_area(), Some(rect(0, 46, 800, 554)));
-        let states = h.wait_size("l'agrandissement sous la barre", 800, 554);
+        let states = h.wait_size("maximized below the bar", 800, 554);
         assert!(states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((0, 46).into()));
 
         // Back to its size, then snapped to the left: the bar stays uncovered.
         h.shortcut(KEY_DOWN);
-        h.wait_size("la taille d'avant", 100, 80);
+        h.wait_size("the previous size", 100, 80);
         h.shortcut(KEY_LEFT);
-        h.wait_size("la moitié gauche", 400, 554);
+        h.wait_size("the left half", 400, 554);
         assert_eq!(location(&h.state), Some((0, 46).into()));
 
         // A click on the bar gives it the keyboard: it asked for it on demand.
         h.press(100.0, 20.0);
         h.release();
-        let focus = h.state.keyboard_focus().expect("le clavier à la barre");
+        let focus = h.state.keyboard_focus().expect("the keyboard on the bar");
         assert_eq!(focus.id().protocol_id(), bar.surface.id().protocol_id());
     }
 
     #[test]
-    fn avec_deux_ecrans_une_fenetre_se_cale_sur_le_second() {
+    fn with_two_screens_a_window_snaps_on_the_second() {
         let mut h = Harness::start();
         h.state.add_output((800, 600).into(), 1.0);
         h.show_window();
@@ -989,22 +988,22 @@ mod tests {
         h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
         h.state
             .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 7);
-        h.wait_size("la moitié droite du second écran", 400, 600);
+        h.wait_size("the right half of the second screen", 400, 600);
         assert_eq!(location(&h.state), Some((1200, 0).into()));
 
         // Maximized by the shortcut, it stays on the second screen.
         h.shortcut(KEY_UP);
-        h.wait_size("l'agrandissement", 800, 600);
+        h.wait_size("maximizing", 800, 600);
         assert_eq!(location(&h.state), Some((800, 0).into()));
     }
 
     #[test]
-    fn l_echelle_fractionnaire_est_annoncee() {
+    fn the_fractional_scale_is_advertised() {
         // 800 × 600 pixels at 1.5: 533 × 400 points.
         let mut h = Harness::start_scaled(1.5);
         let qh = h.queue.handle();
         let registry = h.conn.display().get_registry(&qh, ());
-        h.run_until("les globales", |c, _| {
+        h.run_until("the globals", |c, _| {
             c.globals
                 .iter()
                 .any(|g| g.1 == "wp_fractional_scale_manager_v1")
@@ -1012,7 +1011,7 @@ mod tests {
         for global in ["wp_viewporter", "zxdg_output_manager_v1"] {
             assert!(
                 h.client.globals.iter().any(|g| g.1 == global),
-                "{global} annoncé"
+                "{global} advertised"
             );
         }
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 533, 400)));
@@ -1025,8 +1024,8 @@ mod tests {
             .get_xdg_surface(&surface, &qh, ())
             .get_toplevel(&qh, ());
         surface.commit();
-        h.run_until("l'échelle de l'écran", |c, _| c.preferred_scale.is_some());
-        assert_eq!(h.client.preferred_scale, Some(180), "1,5 en 120es");
+        h.run_until("the screen scale", |c, _| c.preferred_scale.is_some());
+        assert_eq!(h.client.preferred_scale, Some(180), "1.5 in 120ths");
     }
 
     /// The window is maximized, and its last configure is `w` × `h`.
@@ -1041,11 +1040,11 @@ mod tests {
     }
 
     #[test]
-    fn les_zones_exclusives_s_empilent_puis_se_rendent() {
+    fn exclusive_zones_stack_then_are_given_back() {
         let mut h = Harness::start();
         h.show_window();
         h.shortcut(KEY_UP);
-        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        assert_maximized(&mut h, "maximizing", 800, 600);
         let first = anchor(&mut h, BAR);
         let second = anchor(&mut h, BAR);
         let dock = Spec {
@@ -1059,31 +1058,26 @@ mod tests {
         let dock = anchor(&mut h, dock);
         // Two bars of 10 + 36 at the top, a dock of 76 at the bottom.
         assert_eq!(h.state.output_area(), Some(rect(0, 92, 800, 432)));
-        assert_maximized(
-            &mut h,
-            "sous les deux barres et au-dessus du dock",
-            800,
-            432,
-        );
+        assert_maximized(&mut h, "below the two bars and above the dock", 800, 432);
         // A zone of -1 does not move the others (the surface ignores them).
         let ignoring = anchor(&mut h, Spec { zone: -1, ..BAR });
         assert_eq!(h.state.output_area(), Some(rect(0, 92, 800, 432)));
         second.layer.destroy();
-        assert_maximized(&mut h, "la seconde barre fermée", 800, 478);
+        assert_maximized(&mut h, "the second bar closed", 800, 478);
         assert_eq!(h.state.output_area(), Some(rect(0, 46, 800, 478)));
         for anchored in [first, dock, ignoring] {
             anchored.layer.destroy();
         }
-        assert_maximized(&mut h, "tout fermé", 800, 600);
+        assert_maximized(&mut h, "everything closed", 800, 600);
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
     }
 
     #[test]
-    fn une_zone_exclusive_trop_grande_est_refusee() {
+    fn an_exclusive_zone_too_large_is_refused() {
         let mut h = Harness::start();
         h.show_window();
         h.shortcut(KEY_UP);
-        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        assert_maximized(&mut h, "maximizing", 800, 600);
         let refused = [
             // Larger than the screen.
             Spec {
@@ -1104,21 +1098,21 @@ mod tests {
         ];
         for (i, spec) in refused.into_iter().enumerate() {
             anchor(&mut h, spec);
-            assert_eq!(h.client.layer_closed, i + 1, "surface {i} fermée");
+            assert_eq!(h.client.layer_closed, i + 1, "surface {i} closed");
             assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
         }
         assert_eq!(
             h.last_configure().1,
             600,
-            "la fenêtre agrandie n'a pas bougé"
+            "the maximized window has not moved"
         );
         // The compositor still works: snapped left, the window takes the whole height.
         h.shortcut(KEY_LEFT);
-        h.wait_size("la moitié gauche", 400, 600);
+        h.wait_size("the left half", 400, 600);
     }
 
     #[test]
-    fn des_zones_qui_couvrent_l_ecran_laissent_une_zone_minimale() {
+    fn zones_that_cover_the_screen_leave_a_minimum_area() {
         let mut h = Harness::start();
         h.show_window();
         let top = Spec {
@@ -1149,19 +1143,19 @@ mod tests {
         );
         assert_eq!(h.client.layer_closed, 1);
         h.shortcut(KEY_UP);
-        assert_maximized(&mut h, "l'agrandissement dans la zone minimale", 800, ht);
+        assert_maximized(&mut h, "maximized in the minimum area", 800, ht);
         h.shortcut(KEY_LEFT);
-        h.wait_size("la moitié gauche", 400, ht);
+        h.wait_size("the left half", 400, ht);
     }
 
     #[test]
-    fn une_barre_demappee_rend_sa_zone_et_le_clavier() {
+    fn an_unmapped_bar_gives_back_its_zone_and_the_keyboard() {
         let mut h = Harness::start();
         let shown = h.show_window();
         h.shortcut(KEY_UP);
-        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        assert_maximized(&mut h, "maximizing", 800, 600);
         let mut bar = show_bar(&mut h);
-        assert_maximized(&mut h, "sous la barre", 800, 554);
+        assert_maximized(&mut h, "below the bar", 800, 554);
         h.press(100.0, 20.0);
         h.release();
         assert_eq!(keyboard_id(&h), Some(bar.surface.id().protocol_id()));
@@ -1169,21 +1163,19 @@ mod tests {
         // A null buffer unmaps the bar: its zone and the keyboard come back.
         bar.surface.attach(None, 0, 0);
         bar.surface.commit();
-        assert_maximized(&mut h, "la barre démappée", 800, 600);
+        assert_maximized(&mut h, "the bar unmapped", 800, 600);
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
         assert_eq!(keyboard_id(&h), Some(shown.surface.id().protocol_id()));
 
         // Committed again, it gets a new configure, then shows again.
         bar.surface.commit();
-        h.run_until("la nouvelle configuration", |c, _| {
-            c.layer_configures.len() == 2
-        });
+        h.run_until("the new configure", |c, _| c.layer_configures.len() == 2);
         bar.draw(&mut h);
-        assert_maximized(&mut h, "de nouveau sous la barre", 800, 554);
+        assert_maximized(&mut h, "below the bar again", 800, 554);
     }
 
     #[test]
-    fn une_surface_au_clavier_exclusif_le_garde() {
+    fn a_surface_with_an_exclusive_keyboard_keeps_it() {
         let mut h = Harness::start();
         h.show_window();
         let panel = Spec {
@@ -1196,21 +1188,21 @@ mod tests {
         };
         let panel = anchor(&mut h, panel);
         let id = Some(panel.surface.id().protocol_id());
-        assert_eq!(keyboard_id(&h), id, "dès son premier contenu");
+        assert_eq!(keyboard_id(&h), id, "from its first content");
         h.press(400.0, 300.0);
         h.release();
-        assert_eq!(keyboard_id(&h), id, "même après un clic sur la fenêtre");
+        assert_eq!(keyboard_id(&h), id, "even after a click on the window");
         panel.layer.destroy();
         settle(&mut h);
-        assert_ne!(keyboard_id(&h), id, "rendu en partant");
+        assert_ne!(keyboard_id(&h), id, "given back on leaving");
     }
 
     #[test]
-    fn le_client_de_la_barre_part_et_rend_sa_zone() {
+    fn the_bar_client_leaves_and_gives_back_its_zone() {
         let mut h = Harness::start();
         h.show_window();
         h.shortcut(KEY_UP);
-        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        assert_maximized(&mut h, "maximizing", 800, 600);
         // A second client, the bar, driven by hand.
         let (server_side, client_side) = UnixStream::pair().unwrap();
         h.state.insert_client(server_side);
@@ -1258,7 +1250,7 @@ mod tests {
         surface.attach(Some(&buffer), 0, 0);
         surface.commit();
         step(&mut h, &mut bar_client);
-        assert_maximized(&mut h, "sous la barre de l'autre client", 800, 564);
+        assert_maximized(&mut h, "below the bar of the other client", 800, 564);
         // The bar's client goes away without a word.
         drop(step);
         drop((
@@ -1273,12 +1265,12 @@ mod tests {
             buffer,
         ));
         drop(conn);
-        assert_maximized(&mut h, "le client de la barre parti", 800, 600);
+        assert_maximized(&mut h, "the bar client gone", 800, 600);
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
     }
 
     #[test]
-    fn deux_ecrans_d_echelles_differentes_recoivent_le_pointeur() {
+    fn two_screens_at_different_scales_receive_the_pointer() {
         let event_loop = EventLoop::<State>::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         state.add_output((720, 900).into(), 1.0);
@@ -1292,11 +1284,11 @@ mod tests {
     }
 
     #[test]
-    fn une_taille_au_dela_de_2_31_est_une_erreur_du_client() {
+    fn a_size_beyond_2_31_is_a_client_error() {
         let mut h = Harness::start();
         let qh = h.queue.handle();
         let registry = h.conn.display().get_registry(&qh, ());
-        h.run_until("les globales", |c, _| {
+        h.run_until("the globals", |c, _| {
             c.globals.iter().any(|g| g.1 == "zwlr_layer_shell_v1")
         });
         let compositor: WlCompositor = h.bind(&registry);
@@ -1319,7 +1311,7 @@ mod tests {
             }
             let _ = h.queue.dispatch_pending(&mut h.client);
         }
-        let error = h.conn.protocol_error().expect("une erreur de protocole");
+        let error = h.conn.protocol_error().expect("a protocol error");
         assert_eq!(error.object_interface, "zwlr_layer_surface_v1");
         assert_eq!(error.code, 1, "invalid_size");
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
@@ -1331,7 +1323,7 @@ mod tests {
     fn maximized_before_the_bar(h: &mut Harness, x: i32) {
         let qh = h.queue.handle();
         let registry = h.conn.display().get_registry(&qh, ());
-        h.run_until("les globales", |c, _| {
+        h.run_until("the globals", |c, _| {
             c.globals.iter().any(|g| g.1 == "xdg_wm_base")
         });
         let compositor: WlCompositor = h.bind(&registry);
@@ -1343,28 +1335,28 @@ mod tests {
             .get_toplevel(&qh, ());
         toplevel.set_maximized();
         surface.commit();
-        assert_maximized(h, "l'agrandissement avant tout contenu", 800, 600);
+        assert_maximized(h, "maximized before any content", 800, 600);
         anchor(h, BAR);
-        assert_maximized(h, "sous la barre, toujours sans contenu", 800, 554);
+        assert_maximized(h, "below the bar, still without content", 800, 554);
         let file = shm_file(800 * 554 * 4);
         let pool = shm.create_pool(file.as_fd(), 800 * 554 * 4, &qh, ());
         let buffer = pool.create_buffer(0, 800, 554, 800 * 4, Format::Argb8888, &qh, ());
         surface.attach(Some(&buffer), 0, 0);
         surface.commit();
-        h.run_until("le premier contenu sous la barre", |_, s| {
+        h.run_until("the first content below the bar", |_, s| {
             let window = s.space.elements().next();
             window.and_then(|w| s.space.element_geometry(w)) == Some(rect(x, 46, 800, 554))
         });
     }
 
     #[test]
-    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle() {
+    fn a_window_maximized_before_the_bar_goes_below_it() {
         let mut h = Harness::start();
         maximized_before_the_bar(&mut h, 0);
     }
 
     #[test]
-    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle_sur_le_second_ecran() {
+    fn a_window_maximized_before_the_bar_goes_below_it_on_the_second_screen() {
         let mut h = Harness::start();
         h.state.add_output((800, 600).into(), 1.0);
         h.state.pointer_motion((1200.0, 300.0).into(), 1);

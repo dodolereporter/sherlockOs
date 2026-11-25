@@ -1,8 +1,8 @@
-//! Cible du clavier : la surface d'une fenêtre Wayland, ou une fenêtre X11.
+//! Keyboard target: the surface of a Wayland window, or an X11 window.
 //!
-//! Une fenêtre X11 ne reçoit pas le clavier par sa seule surface Wayland : le gestionnaire de
-//! fenêtres doit aussi lui donner le focus côté X (`SetInputFocus` ou `WM_TAKE_FOCUS`), ce que
-//! fait `X11Surface`. D'où ce type, à la place de `WlSurface`.
+//! An X11 window does not get the keyboard through its Wayland surface alone: the window
+//! manager must also give it the focus on the X side (`SetInputFocus` or `WM_TAKE_FOCUS`), which
+//! `X11Surface` does. Hence this type, instead of `WlSurface`.
 
 use std::borrow::Cow;
 
@@ -20,12 +20,12 @@ use smithay::{
 
 use crate::State;
 
-/// Ce qui a le clavier.
+/// What has the keyboard.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KeyboardFocus {
-    /// Surface principale d'une fenêtre xdg-shell.
+    /// Main surface of an xdg-shell window.
     Wayland(WlSurface),
-    /// Fenêtre X11 gérée, servie par XWayland.
+    /// Managed X11 window, served by XWayland.
     X11(X11Surface),
 }
 

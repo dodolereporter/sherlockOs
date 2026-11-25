@@ -62,11 +62,11 @@ impl WlrLayerShellHandler for State {
             surface.send_close();
             return;
         };
-        tracing::debug!(namespace, output = output.name(), "surface ancrée");
+        tracing::debug!(namespace, output = output.name(), "anchored surface");
         let mapped =
             layer_map_for_output(&output).map_layer(&LayerSurface::new(surface, namespace));
         if let Err(err) = mapped {
-            tracing::warn!("surface ancrée refusée : {err}");
+            tracing::warn!("anchored surface refused: {err}");
         }
     }
 
@@ -169,7 +169,7 @@ impl State {
             tracing::warn!(
                 namespace = layer.namespace(),
                 reason,
-                "surface ancrée refusée"
+                "anchored surface refused"
             );
             map.unmap_layer(&layer);
             layer.layer_surface().send_close();
@@ -181,7 +181,7 @@ impl State {
         } else {
             shown.set(content);
             if remapped && let Err(err) = map.map_layer(&layer) {
-                tracing::warn!("surface ancrée : {err}");
+                tracing::warn!("anchored surface: {err}");
             }
             map.arrange();
             if remapped {
@@ -289,7 +289,7 @@ fn check_reserves(
     let (mut across, mut down) = (0_i64, 0_i64);
     for state in states {
         if state.size.w < 0 || state.size.h < 0 {
-            return Err("taille hors limites");
+            return Err("size out of bounds");
         }
         let m = state.margin;
         let margin = |side: Anchor, value: i32| {
@@ -301,7 +301,7 @@ fn check_reserves(
         };
         let all = [m.top, m.right, m.bottom, m.left];
         if all.iter().any(|v| i64::from(*v).abs() > width.max(height)) {
-            return Err("marge plus grande que l'écran");
+            return Err("margin larger than the screen");
         }
         let ExclusiveZone::Exclusive(amount) = state.exclusive_zone else {
             continue;
@@ -322,7 +322,7 @@ fn check_reserves(
         }
     }
     if across > width || down > height {
-        return Err("zone exclusive plus grande que l'écran");
+        return Err("exclusive zone larger than the screen");
     }
     Ok(())
 }
@@ -358,7 +358,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, WlrLayerSurfaceUserData> for State {
         if let zwlr_layer_surface_v1::Request::SetSize { width, height } = &request
             && (i32::try_from(*width).is_err() || i32::try_from(*height).is_err())
         {
-            tracing::warn!(width, height, "surface ancrée : taille hors limites");
+            tracing::warn!(width, height, "anchored surface: size out of bounds");
             resource.post_error(
                 zwlr_layer_surface_v1::Error::InvalidSize,
                 "size beyond 2^31",

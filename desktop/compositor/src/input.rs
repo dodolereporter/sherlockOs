@@ -1,9 +1,9 @@
-//! Clavier et souris : focus au clic, gestes de déplacement et de redimensionnement, calage,
-//! raccourcis et forme du curseur.
+//! Keyboard and mouse: click to focus, move and resize gestures, snapping, shortcuts and cursor
+//! shape.
 //!
-//! Un geste vient de la touche des gestes (voir [`gesture_modifier_held`]) avec un bouton, d'un
-//! appui dans la bande qui entoure une fenêtre, ou d'une demande du client (`xdg_toplevel.move`
-//! ou `.resize`, sa barre de titre ou ses bords).
+//! A gesture comes from the gesture key (see [`gesture_modifier_held`]) with a button, from a
+//! press in the band around a window, or from a client request (`xdg_toplevel.move` or
+//! `.resize`, its title bar or its edges).
 
 use sherlock_ui::window as ui;
 use smithay::{
@@ -36,13 +36,13 @@ use crate::{
     window_data,
 };
 
-// Codes des boutons, tirés de linux/input-event-codes.h.
+// Button codes, taken from linux/input-event-codes.h.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
-/// Touche des gestes du compositeur. Super en session réelle. En mode imbriqué, la session hôte
-/// garde Super pour elle (sous Plasma : actions des fenêtres de KWin, lanceur), alors c'est Alt,
-/// comme le fait niri.
+/// Gesture key of the compositor. Super in a real session. In nested mode, the host session
+/// keeps Super for itself (under Plasma: KWin window actions, launcher), so it is Alt, as niri
+/// does.
 pub(crate) fn gesture_modifier_held(nested: bool, modifiers: &ModifiersState) -> bool {
     if nested {
         modifiers.alt
@@ -51,62 +51,62 @@ pub(crate) fn gesture_modifier_held(nested: bool, modifiers: &ModifiersState) ->
     }
 }
 
-/// La touche des gestes est la seule tenue : Alt + Maj + flèche, par exemple, reste au client.
+/// The gesture key is the only one held: Alt + Shift + arrow, for example, stays with the client.
 fn gesture_modifier_alone(nested: bool, m: &ModifiersState) -> bool {
     let others = [m.ctrl, m.shift, if nested { m.logo } else { m.alt }];
     gesture_modifier_held(nested, m) && !others.contains(&true)
 }
 
-/// D'où vient un geste, pour le journal.
+/// Where a gesture comes from, for the log.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum GestureSource {
-    /// Touche des gestes et bouton de la souris.
+    /// Gesture key and mouse button.
     Modifier,
-    /// Appui dans la bande de saisie qui entoure la fenêtre.
+    /// Press in the grab band around the window.
     Border,
-    /// Demande du client : `xdg_toplevel.move` ou `xdg_toplevel.resize`.
+    /// Client request: `xdg_toplevel.move` or `xdg_toplevel.resize`.
     Client,
 }
 
-/// Geste en cours : le compositeur déplace ou redimensionne une fenêtre.
+/// Gesture in progress: the compositor moves or resizes a window.
 pub(crate) struct Gesture {
     window: Window,
     source: GestureSource,
-    /// Bouton qui a lancé le geste : seul son relâchement le termine.
+    /// Button that started the gesture: only its release ends it.
     button: u32,
     start: Point<f64, Logical>,
     initial: Rectangle<i32, Logical>,
-    /// `None` pour un déplacement, les bords tirés pour un redimensionnement.
+    /// `None` for a move, the pulled edges for a resize.
     edges: Option<Edges>,
     last_size: Size<i32, Logical>,
-    /// Le pointeur a assez bougé pour déplacer la fenêtre. Un simple clic ne la décale pas.
+    /// The pointer has moved enough to move the window. A mere click does not shift it.
     moved: bool,
-    /// Place flottante de la fenêtre au début du déplacement : celle qu'elle retrouvera si on
-    /// la cale. Une taille nulle laisse le client choisir.
+    /// Floating place of the window at the start of the move: the one it will return to if it
+    /// gets snapped. A zero size lets the client choose.
     floating: Rectangle<i32, Logical>,
-    /// Zone où la fenêtre déplacée sera calée si on la lâche maintenant, et son écran.
+    /// Zone where the moved window will be snapped if dropped now, and its screen.
     zone: Option<(Zone, Output)>,
 }
 
-/// Ce qui est sous le pointeur.
+/// What is under the pointer.
 pub(crate) enum Hit {
-    /// Une surface de client, avec la position de son origine.
+    /// A client surface, with the position of its origin.
     Surface(Window, WlSurface, Point<f64, Logical>),
-    /// La bande de saisie autour d'une fenêtre, et les bords qu'elle tire.
+    /// The grab band around a window, and the edges it pulls.
     Border(Window, Edges),
     /// An anchored surface (or one of its menus or subsurfaces): its main surface, the surface
     /// hit and the position of its origin.
     Layer(WlSurface, WlSurface, Point<f64, Logical>),
 }
 
-/// Raccourci du compositeur : touche des gestes et une flèche.
+/// Compositor shortcut: gesture key and an arrow.
 #[derive(Debug, Clone, Copy)]
 enum Shortcut {
-    /// Flèche haut : agrandit, ou rend la place d'avant.
+    /// Up arrow: maximizes, or restores the previous place.
     ToggleMaximized,
-    /// Flèche gauche ou droite : moitié de l'écran.
+    /// Left or right arrow: half of the screen.
     Snap(Zone),
-    /// Flèche bas : rend la place d'avant.
+    /// Down arrow: restores the previous place.
     Restore,
 }
 
@@ -122,8 +122,8 @@ impl Shortcut {
     }
 }
 
-/// Sort la fenêtre de son agrandissement ou de sa zone. Rend sa place d'avant si elle en avait
-/// une (de taille nulle si elle n'avait pas de contenu), `None` si elle était flottante.
+/// Takes the window out of maximized or of its zone. Returns its previous place if it had one
+/// (of zero size if it had no content), `None` if it was floating.
 fn leave_arrangement(window: &Window) -> Option<Rectangle<i32, Logical>> {
     let data = window_data(window);
     let was_zoned = data.zone.take().is_some();
@@ -134,7 +134,7 @@ fn leave_arrangement(window: &Window) -> Option<Rectangle<i32, Logical>> {
     (was_zoned || was_maximized).then(|| restore.unwrap_or_default())
 }
 
-/// Tailles minimale et maximale que le client accepte, nulles s'il n'en donne pas.
+/// Minimum and maximum sizes the client accepts, zero if it gives none.
 fn size_limits(window: &Window) -> (Size<i32, Logical>, Size<i32, Logical>) {
     if let Some(surface) = window.x11_surface() {
         return (
@@ -151,7 +151,7 @@ fn size_limits(window: &Window) -> (Size<i32, Logical>, Size<i32, Logical>) {
     })
 }
 
-/// Forme du curseur pour tirer ces bords.
+/// Cursor shape to pull these edges.
 fn resize_cursor(edges: Edges) -> CursorIcon {
     match (edges.top, edges.bottom, edges.left, edges.right) {
         (true, _, true, _) => CursorIcon::NwResize,
@@ -166,8 +166,8 @@ fn resize_cursor(edges: Edges) -> CursorIcon {
 }
 
 impl State {
-    /// Lance un geste sur `window`, depuis la position `start` du pointeur et l'appui de
-    /// `button`. `edges` vaut `None` pour un déplacement. Une fenêtre en plein écran ne bouge pas.
+    /// Starts a gesture on `window`, from the pointer position `start` and the press of
+    /// `button`. `edges` is `None` for a move. A fullscreen window does not move.
     pub(crate) fn start_gesture(
         &mut self,
         window: Window,
@@ -177,22 +177,22 @@ impl State {
         source: GestureSource,
     ) {
         if is_fullscreen(&window) {
-            tracing::debug!(?source, "geste refusé : la fenêtre est en plein écran");
+            tracing::debug!(?source, "gesture refused: the window is fullscreen");
             return;
         }
-        // La fenêtre suit le pointeur sans délai : une animation en cours s'arrête, et le
-        // retour à la taille d'avant d'une fenêtre calée qu'on détache n'est pas animé.
+        // The window follows the pointer without delay: a running animation stops, and the
+        // return to the previous size of a snapped window being pulled out is not animated.
         window_data(&window).motion.borrow_mut().follow();
         if let Some(edges) = edges {
-            // Redimensionnée, elle quitte son agrandissement ou sa zone et part de sa taille
-            // actuelle, qui part au client avec le premier mouvement.
+            // When resized, it leaves maximized or its zone and starts from its current size,
+            // which goes to the client with the first motion.
             leave_arrangement(&window);
             if let Some(toplevel) = window.toplevel() {
                 toplevel.send_pending_configure();
             }
             let data = window_data(&window);
             if let Some(initial) = self.space.element_geometry(&window) {
-                // Le recalage sur le bord opposé vaut pendant tout le geste.
+                // Realigning on the opposite edge holds for the whole gesture.
                 data.resize.set(Some(Resize {
                     edges,
                     initial,
@@ -207,7 +207,7 @@ impl State {
             ?source,
             ?edges,
             ?initial,
-            "début du geste (bords vides : déplacement)"
+            "gesture start (empty edges: move)"
         );
         self.gesture = Some(Gesture {
             window,
@@ -266,8 +266,8 @@ impl State {
         }
     }
 
-    /// Une fenêtre X11 prend sa taille dès qu'on la lui donne : on la pose tout de suite, le
-    /// bord opposé à celui qu'on tire restant en place.
+    /// An X11 window takes its size as soon as it is given: it is placed right away, the edge
+    /// opposite the pulled one staying in place.
     fn resize_x11(&mut self, window: &Window, size: Size<i32, Logical>) {
         let data = window_data(window);
         let Some(resize) = data.resize.get() else {
@@ -279,9 +279,9 @@ impl State {
         self.move_window(window, loc, false);
     }
 
-    /// Premier vrai mouvement d'un déplacement : une fenêtre agrandie ou calée reprend sa taille
-    /// d'avant sous le pointeur. Si elle n'en avait pas (agrandie avant son premier contenu),
-    /// le client choisit.
+    /// First real motion of a move: a maximized or snapped window gets its previous size back
+    /// under the pointer. If it had none (maximized before its first content), the client
+    /// chooses.
     fn detach_for_move(&mut self, gesture: &mut Gesture) {
         let Some(restore) = leave_arrangement(&gesture.window) else {
             return;
@@ -310,16 +310,17 @@ impl State {
             zone,
             ..
         } = gesture;
-        tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "fin du geste");
+        tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "gesture end");
         let Some(edges) = edges else {
             if let Some((zone, output)) = zone {
-                // Lâchée contre un bord : calée. Elle retrouvera sa place d'avant le glisser.
+                // Dropped against an edge: snapped. It will return to its place from before the
+                // drag.
                 window_data(&window).restore.set(Some(floating));
                 self.snap(&window, Some(zone), Some(output));
             }
             return;
         };
-        // Le recalage de la position se fait au prochain envoi du client, le dernier du geste.
+        // The position is realigned on the client's next commit, the last of the gesture.
         window_data(&window).resize.set(Some(Resize {
             edges,
             initial,
@@ -337,26 +338,26 @@ impl State {
         }
     }
 
-    /// Oublie les touches de raccourci en attente de relâchement : la fenêtre hôte a perdu le
-    /// clavier, et ces relâchements ne viendront pas.
+    /// Forgets the shortcut keys waiting for their release: the host window has lost the
+    /// keyboard, and these releases will not come.
     pub fn forget_intercepted_keys(&mut self) {
         self.intercepted_keys.clear();
     }
 
-    /// Un geste de déplacement ou de redimensionnement est en cours.
+    /// A move or resize gesture is in progress.
     pub fn gesture_active(&self) -> bool {
         self.gesture.is_some()
     }
 
-    /// Rectangle où la fenêtre déplacée sera calée si on la lâche maintenant, pour l'aperçu.
+    /// Rectangle where the moved window will be snapped if dropped now, for the preview.
     pub fn snap_preview(&self) -> Option<Rectangle<i32, Logical>> {
         let (zone, output) = self.gesture.as_ref()?.zone.as_ref()?;
         Some(zone.geometry(self.work_area(output)?))
     }
 
-    /// Forme du curseur, `None` pour le cacher. Pendant un geste et au-dessus de la bande de
-    /// saisie, c'est le compositeur qui la choisit. Au-dessus d'un client, c'est lui, s'il la
-    /// nomme (protocole des formes de curseur) ; s'il dessine son curseur lui-même, la flèche.
+    /// Cursor shape, `None` to hide it. During a gesture and over the grab band, the compositor
+    /// chooses it. Over a client, the client does, if it names it (cursor shape protocol); if it
+    /// draws its cursor itself, the arrow.
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
         if let Some(gesture) = &self.gesture {
             return Some(gesture.edges.map_or(CursorIcon::Move, resize_cursor));
@@ -372,8 +373,8 @@ impl State {
         }
     }
 
-    /// Ce qui est sous le pointeur en `pos`. La bande d'une fenêtre passe devant les fenêtres
-    /// qu'elle recouvre, pas devant celles qui sont au-dessus d'elle. Overlay and top anchored
+    /// What is under the pointer at `pos`. The band of a window comes before the windows it
+    /// covers, not before those above it. Overlay and top anchored
     /// surfaces come before the windows, bottom and background ones after.
     pub(crate) fn hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
         self.layer_hit(pos, &[Layer::Overlay, Layer::Top])
@@ -409,8 +410,8 @@ impl State {
         None
     }
 
-    /// Une touche (code xkb) est appuyée ou relâchée. Point d'entrée de tous les backends, et
-    /// des tests.
+    /// A key (xkb code) is pressed or released. Entry point of every backend, and of the
+    /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
@@ -426,7 +427,7 @@ impl State {
                     FilterResult::Forward
                 };
             }
-            // Un appui transmis annule une interception dont le relâchement s'est perdu.
+            // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
             match Shortcut::for_key(sym.modified_sym()) {
                 Some(shortcut) if gesture_modifier_alone(state.nested, mods) => {
@@ -445,7 +446,7 @@ impl State {
         let Some(window) = self.focused_window() else {
             return;
         };
-        tracing::debug!(?shortcut, "raccourci");
+        tracing::debug!(?shortcut, "shortcut");
         let maximized = is_maximized(&window);
         let zone = match shortcut {
             Shortcut::ToggleMaximized if !maximized => Some(Zone::Maximized),
@@ -455,7 +456,7 @@ impl State {
         self.snap(&window, zone, None);
     }
 
-    /// Traite un événement d'entrée venu du backend.
+    /// Handles an input event from the backend.
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
             InputEvent::Keyboard { event } => {
@@ -496,12 +497,12 @@ impl State {
         }
     }
 
-    /// Le pointeur est à `location`. Point d'entrée de tous les backends, et des tests.
+    /// The pointer is at `location`. Entry point of every backend, and of the tests.
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        // Pendant un geste, aucun client n'a le pointeur.
+        // During a gesture, no client has the pointer.
         let under = if self.gesture_active() {
             self.update_gesture(location);
             None
@@ -526,7 +527,7 @@ impl State {
         pointer.frame(self);
     }
 
-    /// Un bouton (code de linux/input-event-codes.h) est appuyé ou relâché.
+    /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
@@ -541,8 +542,8 @@ impl State {
             time,
         };
         if let Some(gesture) = self.gesture.take() {
-            // Le pointeur n'a pas de focus pendant le geste : aucun client ne voit les autres
-            // boutons, mais le siège les suit.
+            // The pointer has no focus during the gesture: no client sees the other buttons, but
+            // the seat tracks them.
             let ends = state == ButtonState::Released && button == gesture.button;
             if ends {
                 self.finish_gesture(gesture);
@@ -552,7 +553,7 @@ impl State {
             pointer.button(self, &event);
             pointer.frame(self);
             if ends {
-                // Le focus revient à la surface sous le pointeur.
+                // The focus goes back to the surface under the pointer.
                 self.pointer_motion(location, time);
             }
             return;
@@ -581,7 +582,7 @@ impl State {
                 }
                 None => None,
             };
-            // Un clic dans un menu X11 va au menu : le clavier reste à sa fenêtre.
+            // A click in an X11 menu goes to the menu: the keyboard stays with its window.
             if window.as_ref().is_some_and(is_override_redirect) {
                 pointer.button(self, &event);
                 pointer.frame(self);
@@ -591,13 +592,13 @@ impl State {
             let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
             let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
             let gesture = match (button, held, hit) {
-                // Touche des gestes + bouton : le client ne voit pas l'appui.
+                // Gesture key + button: the client does not see the press.
                 (BTN_LEFT, true, _) => Some((None, GestureSource::Modifier)),
                 (BTN_RIGHT, true, _) => rect.map(|r| {
                     let edges = Edges::nearest(r, location);
                     (Some(edges), GestureSource::Modifier)
                 }),
-                // Appui dans la bande autour d'une fenêtre : on tire ce bord ou ce coin.
+                // Press in the band around a window: pull that edge or corner.
                 (BTN_LEFT, false, Some(Hit::Border(_, edges))) => {
                     Some((Some(edges), GestureSource::Border))
                 }

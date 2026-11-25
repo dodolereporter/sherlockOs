@@ -1,11 +1,11 @@
-//! Rendu du bureau avec le moteur GLES de Smithay et trois programmes maison (`src/shaders`).
+//! Desktop rendering with Smithay's GLES renderer and three in-house programs (`src/shaders`).
 //!
-//! Les éléments vont de l'avant vers l'arrière, comme Smithay les attend : les surfaces ancrées
-//! des couches de surimpression et du haut, l'aperçu du calage, puis chaque fenêtre, de la plus
-//! haute à la plus basse, avec ses menus, sa bordure, son contenu découpé en rectangle arrondi
-//! et son ombre, les surfaces ancrées du bas et du fond, enfin les disques du fond. La couleur
-//! du bureau remplit le reste. Chaque écran a ses éléments, en pixels de l'image, à son
-//! échelle. Voir « Rendu » dans `docs/compositeur.md`.
+//! Elements go from front to back, as Smithay expects them: the anchored surfaces of the
+//! overlay and top layers, the snap preview, then each window, from the topmost to the lowest,
+//! with its menus, its border, its content clipped to a rounded rectangle and its shadow, the
+//! anchored surfaces of the bottom and background layers, and last the background discs. The
+//! desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
+//! scale. See "Rendering" in `docs/compositor.md`.
 
 use std::time::Duration;
 
@@ -38,18 +38,18 @@ use crate::{
     State, anim::Visual, handlers::is_fullscreen, is_override_redirect, output::View, window_data,
 };
 
-/// Pas de remplissage : seule la bordure d'une forme est dessinée.
+/// No fill: only the border of a shape is drawn.
 const NO_FILL: [f32; 4] = [0.0; 4];
 
 render_elements! {
-    /// Tout ce qu'une image du bureau contient.
+    /// Everything a desktop frame contains.
     pub SceneElement<=GlesRenderer>;
     Shape=PixelShaderElement,
     Window=RoundedSurface,
     Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
-/// Programmes compilés une fois pour toutes au démarrage du rendu.
+/// Programs compiled once and for all when rendering starts.
 pub struct Scene {
     shape: GlesPixelProgram,
     shadow: GlesPixelProgram,
@@ -92,9 +92,9 @@ impl Scene {
         })
     }
 
-    /// Éléments de l'écran `output`, vu par `view`, à l'instant `now`, et s'il y a une
-    /// animation en cours. Les éléments sont en pixels de l'image, à l'échelle de l'écran :
-    /// coins, bordures et ombres suivent cette échelle. `preview` est dans l'espace.
+    /// Elements of the screen `output`, seen through `view`, at time `now`, and whether an
+    /// animation is running. Elements are in frame pixels, at the screen's scale: corners,
+    /// borders and shadows follow that scale. `preview` is in the space.
     pub fn elements(
         &self,
         renderer: &mut GlesRenderer,
@@ -239,7 +239,7 @@ impl Scene {
         if rect.size.is_empty() || geometry.size.is_empty() {
             return;
         }
-        // Menu ou bulle X11 : ni découpe, ni bordure, ni ombre, comme un menu Wayland.
+        // X11 menu or tooltip: no clip, no border, no shadow, like a Wayland menu.
         if is_override_redirect(window) {
             let at = Placement {
                 view,
@@ -249,7 +249,7 @@ impl Scene {
             self.push_surface(renderer, elements, surface, at, false);
             return;
         }
-        // Les menus passent devant, sans découpe ni mise à l'échelle.
+        // Menus go in front, without clipping or scaling.
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
             let at = Placement {
                 view,
@@ -258,8 +258,8 @@ impl Scene {
             };
             self.push_surface(renderer, elements, popup.wl_surface(), at, false);
         }
-        // Une fenêtre en plein écran n'a ni coins, ni bordure, ni ombre. Elle les garde tant
-        // qu'elle glisse vers l'écran entier, pour qu'ils ne disparaissent pas avant.
+        // A fullscreen window has no corners, border or shadow. It keeps them while it slides
+        // towards the whole screen, so that they do not vanish before it gets there.
         let decorated = !is_fullscreen(window) || visual.moving;
         let scale = view.scale as f32;
         let radius = if decorated {
@@ -277,8 +277,8 @@ impl Scene {
                 visual.opacity,
             )));
         }
-        // Le contenu est dessiné dans `rect`, la géométrie dessinée, en pixels de l'image :
-        // l'échelle de l'écran, et celle de l'animation s'il y en a une.
+        // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's
+        // scale, and the animation's if there is one.
         let stretch = Scale {
             x: f64::from(rect.size.w) / f64::from(geometry.size.w),
             y: f64::from(rect.size.h) / f64::from(geometry.size.h),
@@ -321,8 +321,8 @@ impl Scene {
         }
     }
 
-    /// Rectangle arrondi : `fill` (prémultiplié) à l'intérieur, `border` sur `border_width`
-    /// pixels le long du bord, à l'intérieur du rectangle comme une bordure CSS.
+    /// Rounded rectangle: `fill` (premultiplied) inside, `border` over `border_width` pixels
+    /// along the edge, inside the rectangle like a CSS border.
     fn shape(
         &self,
         rect: Rectangle<i32, Physical>,
@@ -366,15 +366,15 @@ fn frame_area(rect: Rectangle<i32, Physical>) -> Rectangle<i32, Logical> {
     )
 }
 
-/// Rayon des coins d'une fenêtre, réduit pour une fenêtre plus petite que ses deux coins.
+/// Corner radius of a window, reduced for a window smaller than its two corners.
 pub fn corner_radius(size: Size<i32, Logical>) -> f32 {
     let half = size.w.min(size.h) as f32 / 2.0;
     metrics::WINDOW_RADIUS.min(half.max(0.0))
 }
 
-/// Disques du fond pour un écran de `size`, avec leur couleur : les places de la planche Main,
-/// étirées avec l'écran. Le diamètre suit le plus grand des deux rapports : les disques restent
-/// ronds et couvrent les mêmes régions.
+/// Background discs for a screen of `size`, with their color: the places of the Main board,
+/// stretched with the screen. The diameter follows the larger of the two ratios: the discs stay
+/// round and cover the same regions.
 pub fn desktop_discs(size: Size<i32, Logical>) -> [(Rectangle<i32, Logical>, Color); 3] {
     let (width, height) = metrics::REFERENCE_SCREEN;
     let (sx, sy) = (size.w as f32 / width, size.h as f32 / height);
@@ -395,9 +395,9 @@ pub fn desktop_discs(size: Size<i32, Logical>) -> [(Rectangle<i32, Logical>, Col
     })
 }
 
-/// Ombre d'une fenêtre, comme `box-shadow: 0 28px 70px` en CSS : la fenêtre décalée vers le
-/// bas (`caster`), floutée par une gaussienne d'écart type moitié du flou. L'élément s'étend de
-/// la portée du flou autour d'elle. `caster` et `window` sont donnés dans l'élément.
+/// Shadow of a window, like `box-shadow: 0 28px 70px` in CSS: the window shifted down
+/// (`caster`), blurred by a Gaussian whose standard deviation is half the blur. The element
+/// extends by the blur's reach around it. `caster` and `window` are given in the element.
 #[derive(Debug, PartialEq)]
 pub struct Shadow {
     pub area: Rectangle<i32, Physical>,
@@ -427,9 +427,9 @@ impl Shadow {
     }
 }
 
-/// Rectangle `clip` de l'image dans le tampon où l'on dessine, là où `gl_FragCoord` compte ses
-/// pixels : après la transformation de l'image. Le backend fenêtré retourne l'image
-/// (`Flipped180`) : le haut de l'image est en bas du tampon.
+/// Rectangle `clip` of the frame in the buffer being drawn into, where `gl_FragCoord` counts
+/// its pixels: after the frame transform. The windowed backend flips the frame (`Flipped180`):
+/// the top of the frame is at the bottom of the buffer.
 fn clip_in_frame(
     clip: Rectangle<f64, Physical>,
     transform: Transform,
@@ -439,12 +439,12 @@ fn clip_in_frame(
     [clip.loc.x, clip.loc.y, clip.size.w, clip.size.h].map(|v| v as f32)
 }
 
-/// Une surface de client découpée par le rectangle arrondi de sa fenêtre. Le programme de
-/// texture remplace celui de Smithay le temps de dessiner la surface.
+/// A client surface clipped by the rounded rectangle of its window. The texture program
+/// replaces Smithay's while the surface is drawn.
 pub struct RoundedSurface {
     inner: RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     program: GlesTexProgram,
-    /// Rectangle de découpe, dans l'image, avant sa transformation.
+    /// Clip rectangle, in the frame, before its transform.
     clip: Rectangle<f64, Physical>,
     radius: f32,
     frame_size: Size<i32, Physical>,
@@ -483,8 +483,8 @@ impl Element for RoundedSurface {
         self.inner.damage_since(scale, commit)
     }
 
-    // Pas de régions opaques : les coins découpés laissent voir ce qui est dessous. Les fenêtres
-    // du dessous sont donc toujours dessinées.
+    // No opaque regions: the clipped corners show what is underneath. The windows below are
+    // therefore always drawn.
     fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         OpaqueRegions::default()
     }
@@ -520,7 +520,7 @@ impl RenderElement<GlesRenderer> for RoundedSurface {
         drawn
     }
 
-    // Jamais posée telle quelle sur un plan de l'écran : la découpe serait perdue.
+    // Never put as is on a screen plane: the clip would be lost.
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         None
     }
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn les_disques_suivent_la_planche_main() {
+    fn the_discs_follow_the_main_board() {
         let discs = desktop_discs((1440, 900).into());
         assert_eq!(
             discs[0],
@@ -553,25 +553,25 @@ mod tests {
             discs[2],
             (rect(980, 520, 520, 520), color::DESKTOP_DISCS[2])
         );
-        // Sur un écran deux fois plus grand, tout double.
+        // On a screen twice as large, everything doubles.
         let large = desktop_discs((2880, 1800).into());
         assert_eq!(large[2].0, rect(1960, 1040, 1040, 1040));
-        // Sur un écran plus large, les disques restent ronds.
+        // On a wider screen, the discs stay round.
         let wide = desktop_discs((1920, 900).into());
         assert!(wide.iter().all(|(r, _)| r.size.w == r.size.h));
     }
 
     #[test]
-    fn l_ombre_suit_box_shadow() {
-        // Fenêtre de la planche Main : 836 × 652 en (36, 64).
+    fn the_shadow_follows_box_shadow() {
+        // Window of the Main board: 836 × 652 at (36, 64).
         let shadow = Shadow::of(frame_rect(36, 64, 836, 652), 1.0);
-        // Décalée de 28 vers le bas, étendue de 70 de chaque côté.
+        // Shifted 28 down, extended by 70 on each side.
         assert_eq!(
             shadow.area,
             frame_rect(36 - 70, 64 + 28 - 70, 836 + 140, 652 + 140)
         );
         assert_eq!(shadow.caster, [70.0, 70.0, 836.0, 652.0]);
-        // Dans l'élément, la fenêtre est 28 pixels au-dessus de son ombre.
+        // In the element, the window is 28 pixels above its shadow.
         assert_eq!(shadow.window, [70.0, 42.0, 836.0, 652.0]);
         assert_eq!(shadow.sigma, 35.0);
         // At scale 1.5, the same window takes 1.5 times the pixels, and so does its shadow.
@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn la_vue_met_l_espace_a_l_echelle_de_l_ecran() {
+    fn the_view_scales_the_space_to_the_screen() {
         // Second screen of the frame, from 1440 pixels on, at scale 2: 720 points wide.
         let view = View {
             area: rect(720, 0, 720, 450),
@@ -608,15 +608,15 @@ mod tests {
     }
 
     #[test]
-    fn la_decoupe_suit_le_retournement_de_l_image() {
+    fn the_clip_follows_the_frame_flip() {
         let clip = Rectangle::new((36.0, 64.0).into(), (836.0, 652.0).into());
         let size = (1440, 900).into();
         assert_eq!(
             clip_in_frame(clip, Transform::Normal, size),
             [36.0, 64.0, 836.0, 652.0]
         );
-        // Retournée : la fenêtre en haut de l'écran est en haut de l'image GL, dont l'axe
-        // vertical monte.
+        // Flipped: the window at the top of the screen is at the top of the GL frame, whose
+        // vertical axis goes up.
         assert_eq!(
             clip_in_frame(clip, Transform::Flipped180, size),
             [36.0, 900.0 - 64.0 - 652.0, 836.0, 652.0]
@@ -624,9 +624,9 @@ mod tests {
     }
 
     #[test]
-    fn les_coins_ont_le_rayon_des_fenetres() {
+    fn the_corners_have_the_window_radius() {
         assert_eq!(corner_radius((836, 652).into()), 16.0);
-        // Une fenêtre minuscule devient une pilule, jamais un rayon négatif.
+        // A tiny window becomes a pill, never a negative radius.
         assert_eq!(corner_radius((100, 20).into()), 10.0);
         assert_eq!(corner_radius((0, 0).into()), 0.0);
     }

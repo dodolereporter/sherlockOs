@@ -1,18 +1,18 @@
-//! Scène de mesure du rendu : dix fenêtres s'ouvrent, puis la plus haute s'agrandit et revient
-//! toutes les 700 ms, douze fois, et la scène se termine. Chaque fenêtre est un aplat aux
-//! couleurs du thème : barre de titre, puis corps. Avec `--mesurer`, le compositeur s'arrête
-//! avec elle et écrit son bilan :
+//! Render measurement scene: ten windows open, then the topmost one maximizes and comes back
+//! every 700 ms, twelve times, and the scene ends. Each window is a flat fill in the theme
+//! colors: title bar, then body. With `--measure`, the compositor stops with it and writes its
+//! summary:
 //!
 //! ```sh
-//! cargo build -p compositeur --example scene
-//! cargo run -p compositeur -- --imbrique --mesurer target/debug/examples/scene
+//! cargo build -p compositor --example scene
+//! cargo run -p compositor -- --nested --measure target/debug/examples/scene
 //! ```
 //!
-//! `scene planche` n'ouvre qu'une fenêtre, de la taille de l'éditeur de la planche Main
-//! (836 × 652), et la garde 20 secondes : de quoi comparer les coins, la bordure et l'ombre.
-//! `scene agrandie` does the same with the window maximized from the start: to see that it stays
-//! below the bar (lot D-12). `scene petite` opens a 400 × 260 window, which fits on a screen at
-//! scale 2: to look at corners, border and shadow at every scale.
+//! `scene board` opens a single window, the size of the editor of the Main board (836 × 652),
+//! and keeps it 20 seconds: enough to compare the corners, the border and the shadow.
+//! `scene maximized` does the same with the window maximized from the start: to see that it
+//! stays below the bar (lot D-12). `scene small` opens a 400 × 260 window, which fits on a
+//! screen at scale 2: to look at corners, border and shadow at every scale.
 
 use std::{
     error::Error,
@@ -45,17 +45,17 @@ use wayland_protocols::xdg::shell::client::{
 const WINDOWS: usize = 10;
 const TOGGLES: u32 = 12;
 const TOGGLE_EVERY: Duration = Duration::from_millis(700);
-/// Fenêtre de l'éditeur de code de la planche Main, et durée pendant laquelle elle reste.
-const PLATE_WINDOW: (i32, i32) = (836, 652);
+/// Window of the code editor of the Main board, and how long it stays.
+const BOARD_WINDOW: (i32, i32) = (836, 652);
 const SMALL_WINDOW: (i32, i32) = (400, 260);
-const PLATE_HOLD: Duration = Duration::from_secs(20);
-/// Valeur de l'état `maximized` dans une configuration xdg_toplevel.
+const BOARD_HOLD: Duration = Duration::from_secs(20);
+/// Value of the `maximized` state in an xdg_toplevel configure.
 const MAXIMIZED: u32 = 1;
 
 struct Win {
     surface: WlSurface,
     toplevel: XdgToplevel,
-    /// Taille choisie par le client quand le compositeur le laisse faire.
+    /// Size chosen by the client when the compositor lets it.
     default: (i32, i32),
     pending: (i32, i32),
     maximized: bool,
@@ -71,15 +71,15 @@ struct App {
     error: Option<String>,
 }
 
-/// Une ligne de `width` pixels de la couleur `color`, en ARGB8888 petit-boutiste.
+/// A row of `width` pixels of the color `color`, in little-endian ARGB8888.
 fn row(color: Color, width: i32) -> Vec<u8> {
     let alpha = (color.a * 255.0).round() as u8;
     [color.b, color.g, color.r, alpha].repeat(width.max(0) as usize)
 }
 
-/// Mémoire partagée de `len` octets, sans fichier qui reste sur le disque.
+/// Shared memory of `len` bytes, without a file left on disk.
 fn shm_file(len: u64) -> std::io::Result<File> {
-    let path = std::env::temp_dir().join(format!("compositeur-scene-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("compositor-scene-{}", std::process::id()));
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -92,10 +92,10 @@ fn shm_file(len: u64) -> std::io::Result<File> {
 }
 
 impl App {
-    /// Dessine la fenêtre `index` à sa taille demandée et l'envoie.
+    /// Draws the window `index` at its requested size and commits it.
     fn draw(&mut self, index: usize, qh: &QueueHandle<Self>) -> Result<(), Box<dyn Error>> {
-        let shm = self.shm.as_ref().ok_or("pas de wl_shm")?;
-        let window = self.windows.get_mut(index).ok_or("fenêtre inconnue")?;
+        let shm = self.shm.as_ref().ok_or("no wl_shm")?;
+        let window = self.windows.get_mut(index).ok_or("unknown window")?;
         let (width, height) = window.pending;
         let title = metrics::TITLE_BAR_HEIGHT.round() as i32;
         let (bar, body) = (row(color::TITLE_BAR, width), row(color::WINDOW, width));
@@ -220,14 +220,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut app = App::default();
     queue.roundtrip(&mut app)?;
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {
-        return Err("le compositeur n'annonce pas wl_compositor et xdg_wm_base".into());
+        return Err("the compositor does not advertise wl_compositor and xdg_wm_base".into());
     };
     let mode = std::env::args().nth(1);
-    let maximized = mode.as_deref() == Some("agrandie");
-    let small = mode.as_deref() == Some("petite");
-    let plate = maximized || small || mode.as_deref() == Some("planche");
-    let count = if plate { 1 } else { WINDOWS };
-    // Des fenêtres de plus en plus petites, centrées l'une sur l'autre par le compositeur.
+    let maximized = mode.as_deref() == Some("maximized");
+    let small = mode.as_deref() == Some("small");
+    let board = maximized || small || mode.as_deref() == Some("board");
+    let count = if board { 1 } else { WINDOWS };
+    // Smaller and smaller windows, centered on each other by the compositor.
     for index in 0..count {
         let step = index as i32;
         let surface = compositor.create_surface(&qh, ());
@@ -240,8 +240,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         surface.commit();
         let default = if small {
             SMALL_WINDOW
-        } else if plate {
-            PLATE_WINDOW
+        } else if board {
+            BOARD_WINDOW
         } else {
             (960 - 48 * step, 640 - 32 * step)
         };
@@ -256,14 +256,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let start = Instant::now();
     let mut toggles = 0;
-    // Une période de plus après le dernier changement, pour que son animation finisse.
+    // One more period after the last change, so that its animation finishes.
     while toggles <= TOGGLES {
         queue.roundtrip(&mut app)?;
         if let Some(err) = app.error.take() {
             return Err(err.into());
         }
-        if plate {
-            toggles = if start.elapsed() < PLATE_HOLD {
+        if board {
+            toggles = if start.elapsed() < BOARD_HOLD {
                 0
             } else {
                 TOGGLES + 1

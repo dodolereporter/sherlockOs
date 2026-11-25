@@ -1,10 +1,10 @@
-//! Disposition des fenêtres : où les poser, comment les déplacer, les redimensionner et les caler.
+//! Window layout: where to place windows, how to move, resize and snap them.
 //!
-//! Du calcul pur sur des rectangles, sans Wayland ni rendu, pour se tester seul.
+//! Pure computation on rectangles, without Wayland or rendering, so that it can be tested alone.
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-/// Bords tirés pendant un redimensionnement.
+/// Edges pulled during a resize.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Edges {
     pub top: bool,
@@ -14,7 +14,7 @@ pub struct Edges {
 }
 
 impl Edges {
-    /// Lit les bits de `xdg_toplevel.resize_edge` : haut 1, bas 2, gauche 4, droite 8.
+    /// Reads the bits of `xdg_toplevel.resize_edge`: top 1, bottom 2, left 4, right 8.
     pub fn from_xdg_bits(bits: u32) -> Self {
         Self {
             top: bits & 1 != 0,
@@ -24,7 +24,7 @@ impl Edges {
         }
     }
 
-    /// Bords les plus proches du pointeur : on tire le coin du quart de fenêtre où il se trouve.
+    /// Edges nearest to the pointer: the corner of the window quarter it is in gets pulled.
     pub fn nearest(window: Rectangle<i32, Logical>, pointer: Point<f64, Logical>) -> Self {
         let center = window.loc.to_f64() + window.size.to_f64().downscale(2.0).to_point();
         Self {
@@ -36,10 +36,11 @@ impl Edges {
     }
 }
 
-/// Bords saisis dans la bande qui entoure une fenêtre, à l'extérieur de sa géométrie `window`.
+/// Edges grabbed in the band around a window, outside its geometry `window`.
 ///
-/// La bande fait `band` pixels le long des côtés. Aux coins, elle s'élargit à `corner` pixels,
-/// en diagonale hors de la fenêtre comme le long des côtés : un appui près d'un coin tire le coin.
+/// The band is `band` pixels wide along the sides. At the corners, it widens to `corner` pixels,
+/// diagonally outside the window as well as along the sides: a press near a corner pulls the
+/// corner.
 pub fn border_edges(
     window: Rectangle<i32, Logical>,
     pointer: Point<f64, Logical>,
@@ -49,7 +50,7 @@ pub fn border_edges(
     let (x0, y0) = (f64::from(window.loc.x), f64::from(window.loc.y));
     let (w, h) = (f64::from(window.size.w), f64::from(window.size.h));
     let (x1, y1) = (x0 + w, y0 + h);
-    // Distance hors de la fenêtre sur chaque axe, nulle en face d'elle.
+    // Distance outside the window on each axis, zero in front of it.
     let dx = (x0 - pointer.x).max(pointer.x - x1).max(0.0);
     let dy = (y0 - pointer.y).max(pointer.y - y1).max(0.0);
     let inside = (x0..x1).contains(&pointer.x) && (y0..y1).contains(&pointer.y);
@@ -57,7 +58,7 @@ pub fn border_edges(
     if inside || dx.max(dy) > f64::from(reach) {
         return None;
     }
-    // Une fenêtre étroite partage ses côtés entre les deux coins.
+    // A narrow window shares its sides between the two corners.
     let (kx, ky) = (
         f64::from(corner).min(w / 2.0),
         f64::from(corner).min(h / 2.0),
@@ -72,10 +73,10 @@ pub fn border_edges(
     })
 }
 
-/// Zone de l'écran où caler une fenêtre.
+/// Zone of the screen to snap a window into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zone {
-    /// Tout l'écran : la fenêtre est agrandie.
+    /// The whole screen: the window is maximized.
     Maximized,
     Left,
     Right,
@@ -86,9 +87,9 @@ pub enum Zone {
 }
 
 impl Zone {
-    /// Zone visée par une fenêtre lâchée avec le pointeur en `pointer` : contre le bord haut,
-    /// gauche ou droit de l'écran (à moins de `edge` pixels), ou dans un coin (à moins de
-    /// `corner` pixels de ce coin, le long d'un bord). Le bord bas seul ne cale rien.
+    /// Zone targeted by a window dropped with the pointer at `pointer`: against the top, left or
+    /// right edge of the screen (within `edge` pixels), or in a corner (within `corner` pixels
+    /// of that corner, along an edge). The bottom edge alone snaps nothing.
     pub fn under(
         area: Rectangle<i32, Logical>,
         pointer: Point<f64, Logical>,
@@ -123,8 +124,8 @@ impl Zone {
         })
     }
 
-    /// Rectangle que prend une fenêtre calée dans cette zone de `area`. Un pixel impair va à
-    /// droite ou en bas.
+    /// Rectangle taken by a window snapped into this zone of `area`. An odd pixel goes to the
+    /// right or to the bottom.
     pub fn geometry(self, area: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
         let Point { x, y, .. } = area.loc;
         let Size { w, h, .. } = area.size;
@@ -167,9 +168,9 @@ pub fn work_area(
     Rectangle::new((x, y).into(), (w, h).into())
 }
 
-/// Position d'une fenêtre qu'on détache de sa zone en la déplaçant : elle reprend la taille
-/// `size` sous le pointeur, saisie à la même proportion de sa largeur et à la même distance de
-/// son bord haut (dans la limite de sa nouvelle hauteur).
+/// Position of a window pulled out of its zone by moving it: it gets its size `size` back under
+/// the pointer, grabbed at the same proportion of its width and at the same distance from its
+/// top edge (within its new height).
 pub fn unsnapped(
     current: Rectangle<i32, Logical>,
     size: Size<i32, Logical>,
@@ -185,14 +186,14 @@ pub fn unsnapped(
         .to_i32_round()
 }
 
-/// Position qui centre une fenêtre dans la zone, sans que son coin haut gauche en sorte.
+/// Position that centers a window in the area, without its top left corner leaving it.
 pub fn centered(area: Rectangle<i32, Logical>, size: Size<i32, Logical>) -> Point<i32, Logical> {
     let x = area.loc.x + ((area.size.w - size.w) / 2).max(0);
     let y = area.loc.y + ((area.size.h - size.h) / 2).max(0);
     (x, y).into()
 }
 
-/// Position d'une fenêtre déplacée : elle suit le pointeur depuis le début du geste.
+/// Position of a moved window: it follows the pointer from the start of the gesture.
 pub fn moved(
     initial: Point<i32, Logical>,
     grab_start: Point<f64, Logical>,
@@ -201,9 +202,9 @@ pub fn moved(
     (initial.to_f64() + (pointer - grab_start)).to_i32_round()
 }
 
-/// Taille demandée pendant un redimensionnement, bornée par celles que la fenêtre accepte.
+/// Size requested during a resize, bounded by those the window accepts.
 ///
-/// `min` et `max` viennent du client ; 0 veut dire « pas de borne ».
+/// `min` and `max` come from the client; 0 means no bound.
 pub fn resized(
     initial: Rectangle<i32, Logical>,
     edges: Edges,
@@ -227,7 +228,7 @@ pub fn resized(
     (bound(w, min.w, max.w), bound(h, min.h, max.h)).into()
 }
 
-/// Position d'une fenêtre redimensionnée : le bord opposé à celui qu'on tire reste en place.
+/// Position of a resized window: the edge opposite the pulled one stays in place.
 pub fn anchored(
     initial: Rectangle<i32, Logical>,
     edges: Edges,
@@ -243,19 +244,19 @@ pub fn anchored(
     loc
 }
 
-/// Redimensionnement d'une fenêtre, du premier mouvement jusqu'au dernier envoi du client.
+/// Resize of a window, from the first motion to the client's last commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resize {
     pub edges: Edges,
-    /// Géométrie de la fenêtre au début du geste.
+    /// Geometry of the window at the start of the gesture.
     pub initial: Rectangle<i32, Logical>,
-    /// Le bouton est relâché : le prochain envoi du client est le dernier du geste.
+    /// The button is released: the client's next commit is the last of the gesture.
     pub done: bool,
 }
 
 impl Resize {
-    /// À chaque nouveau contenu du client : position à donner à la fenêtre, et ce qu'il faut
-    /// garder pour l'envoi suivant.
+    /// On each new content from the client: position to give the window, and what to keep for
+    /// the next commit.
     pub fn on_commit(self, size: Size<i32, Logical>) -> (Point<i32, Logical>, Option<Self>) {
         let next = (!self.done).then_some(self);
         (anchored(self.initial, self.edges, size), next)
@@ -271,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn la_zone_de_travail_reste_dans_l_ecran_et_jamais_vide() {
+    fn the_work_area_stays_in_the_screen_and_is_never_empty() {
         let screen = rect(800, 0, 800, 600);
         let min = (320, 240);
         // smithay builds the zone field by field: it can be negative, which `Size::new`
@@ -308,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn centre_la_fenetre_dans_la_zone() {
+    fn centers_the_window_in_the_area() {
         assert_eq!(
             centered(rect(0, 0, 1000, 800), (400, 200).into()),
             (300, 300).into()
@@ -320,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn une_fenetre_trop_grande_reste_dans_la_zone() {
+    fn a_window_too_large_stays_in_the_area() {
         assert_eq!(
             centered(rect(10, 20, 300, 200), (600, 400).into()),
             (10, 20).into()
@@ -328,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn le_deplacement_suit_le_pointeur() {
+    fn moving_follows_the_pointer() {
         let start = Point::from((50.0, 50.0));
         assert_eq!(
             moved((100, 100).into(), start, (80.4, 20.6).into()),
@@ -338,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn lit_les_bords_xdg() {
+    fn reads_the_xdg_edges() {
         let bottom_right = Edges::from_xdg_bits(10);
         assert!(bottom_right.bottom && bottom_right.right);
         assert!(!bottom_right.top && !bottom_right.left);
@@ -346,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn choisit_le_coin_le_plus_proche() {
+    fn picks_the_nearest_corner() {
         let window = rect(0, 0, 200, 100);
         let top_left = Edges::nearest(window, (10.0, 10.0).into());
         assert!(top_left.top && top_left.left && !top_left.bottom && !top_left.right);
@@ -355,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn tirer_a_droite_et_en_bas_agrandit() {
+    fn pulling_right_and_down_enlarges() {
         let edges = Edges::from_xdg_bits(10);
         let size = resized(
             rect(0, 0, 200, 100),
@@ -368,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn tirer_a_gauche_et_en_haut_garde_le_coin_oppose() {
+    fn pulling_left_and_up_keeps_the_opposite_corner() {
         let initial = rect(100, 100, 200, 100);
         let edges = Edges::from_xdg_bits(5);
         let size = resized(
@@ -380,7 +381,7 @@ mod tests {
         );
         assert_eq!(size, (250, 90).into());
         assert_eq!(anchored(initial, edges, size), (50, 110).into());
-        // Le bord bas droit n'a pas bougé.
+        // The bottom right edge has not moved.
         assert_eq!(
             anchored(initial, edges, size) + size.to_point(),
             (300, 200).into()
@@ -388,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn respecte_les_tailles_du_client() {
+    fn respects_the_client_sizes() {
         let edges = Edges::from_xdg_bits(10);
         let initial = rect(0, 0, 200, 100);
         let small = resized(
@@ -407,7 +408,7 @@ mod tests {
             (300, 150).into(),
         );
         assert_eq!(big, (300, 150).into());
-        // Sans minimum, une fenêtre garde au moins un pixel.
+        // Without a minimum, a window keeps at least one pixel.
         let tiny = resized(
             initial,
             edges,
@@ -419,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn un_bord_non_tire_ne_change_pas() {
+    fn an_edge_not_pulled_does_not_change() {
         let edges = Edges {
             right: true,
             ..Edges::default()
@@ -444,41 +445,37 @@ mod tests {
     }
 
     #[test]
-    fn la_bande_autour_de_la_fenetre_tire_chaque_bord() {
+    fn the_band_around_the_window_pulls_each_edge() {
         let window = rect(100, 100, 200, 100);
         let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
-        assert_eq!(at(95.0, 150.0), edges(false, false, true, false), "gauche");
-        assert_eq!(at(305.0, 150.0), edges(false, false, false, true), "droite");
-        assert_eq!(at(200.0, 93.0), edges(true, false, false, false), "haut");
-        assert_eq!(at(200.0, 200.0), edges(false, true, false, false), "bas");
-        // Le long d'un côté, près d'un coin : c'est le coin.
-        assert_eq!(
-            at(95.0, 110.0),
-            edges(true, false, true, false),
-            "haut gauche"
-        );
+        assert_eq!(at(95.0, 150.0), edges(false, false, true, false), "left");
+        assert_eq!(at(305.0, 150.0), edges(false, false, false, true), "right");
+        assert_eq!(at(200.0, 93.0), edges(true, false, false, false), "top");
+        assert_eq!(at(200.0, 200.0), edges(false, true, false, false), "bottom");
+        // Along a side, near a corner: it is the corner.
+        assert_eq!(at(95.0, 110.0), edges(true, false, true, false), "top left");
         assert_eq!(
             at(290.0, 95.0),
             edges(true, false, false, true),
-            "haut droit"
+            "top right"
         );
         assert_eq!(
             at(95.0, 190.0),
             edges(false, true, true, false),
-            "bas gauche"
+            "bottom left"
         );
         assert_eq!(
             at(304.0, 199.0),
             edges(false, true, false, true),
-            "bas droit"
+            "bottom right"
         );
     }
 
     #[test]
-    fn la_bande_est_plus_large_aux_coins() {
+    fn the_band_is_wider_at_the_corners() {
         let window = rect(100, 100, 200, 100);
         let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
-        // 15 pixels hors de la fenêtre : trop loin sur un côté, encore pris en diagonale.
+        // 15 pixels outside the window: too far on a side, still caught diagonally.
         assert_eq!(at(85.0, 150.0), None);
         assert_eq!(at(85.0, 85.0), edges(true, false, true, false));
         assert_eq!(at(315.0, 215.0), edges(false, true, false, true));
@@ -486,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn la_bande_ne_couvre_pas_l_interieur() {
+    fn the_band_does_not_cover_the_inside() {
         let window = rect(100, 100, 200, 100);
         let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
         assert_eq!(at(100.0, 100.0), None);
@@ -496,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn une_fenetre_etroite_partage_ses_cotes_entre_les_coins() {
+    fn a_narrow_window_shares_its_sides_between_the_corners() {
         let window = rect(0, 0, 30, 30);
         let right = border_edges(window, (20.0, -3.0).into(), 8, 20);
         assert_eq!(right, edges(true, false, false, true));
@@ -507,35 +504,35 @@ mod tests {
     }
 
     #[test]
-    fn lachee_contre_un_bord_la_fenetre_se_cale() {
+    fn dropped_against_an_edge_the_window_snaps() {
         assert_eq!(zone(700.0, 0.0), Some(Zone::Maximized));
         assert_eq!(zone(700.0, 7.5), Some(Zone::Maximized));
         assert_eq!(zone(0.0, 450.0), Some(Zone::Left));
         assert_eq!(zone(1439.0, 450.0), Some(Zone::Right));
-        // Le pointeur peut sortir de l'écran pendant le geste : ça compte comme le bord.
+        // The pointer may leave the screen during the gesture: that counts as the edge.
         assert_eq!(zone(-20.0, 450.0), Some(Zone::Left));
         assert_eq!(zone(700.0, 450.0), None);
         assert_eq!(zone(700.0, 8.0), None);
-        assert_eq!(zone(700.0, 899.0), None, "le bord bas seul ne cale rien");
+        assert_eq!(
+            zone(700.0, 899.0),
+            None,
+            "the bottom edge alone snaps nothing"
+        );
     }
 
     #[test]
-    fn lachee_dans_un_coin_la_fenetre_prend_un_quart() {
+    fn dropped_in_a_corner_the_window_takes_a_quarter() {
         assert_eq!(zone(0.0, 0.0), Some(Zone::TopLeft));
-        assert_eq!(
-            zone(3.0, 60.0),
-            Some(Zone::TopLeft),
-            "le long du bord gauche"
-        );
-        assert_eq!(zone(60.0, 3.0), Some(Zone::TopLeft), "le long du bord haut");
+        assert_eq!(zone(3.0, 60.0), Some(Zone::TopLeft), "along the left edge");
+        assert_eq!(zone(60.0, 3.0), Some(Zone::TopLeft), "along the top edge");
         assert_eq!(zone(1439.0, 10.0), Some(Zone::TopRight));
         assert_eq!(zone(2.0, 899.0), Some(Zone::BottomLeft));
         assert_eq!(zone(1400.0, 899.0), Some(Zone::BottomRight));
-        assert_eq!(zone(3.0, 70.0), Some(Zone::Left), "hors du coin");
+        assert_eq!(zone(3.0, 70.0), Some(Zone::Left), "outside the corner");
     }
 
     #[test]
-    fn geometrie_de_chaque_zone() {
+    fn geometry_of_each_zone() {
         let area = rect(10, 20, 1001, 801);
         let cases = [
             (Zone::Maximized, rect(10, 20, 1001, 801)),
@@ -552,21 +549,21 @@ mod tests {
     }
 
     #[test]
-    fn detachee_la_fenetre_reprend_sa_taille_sous_le_pointeur() {
+    fn pulled_out_the_window_gets_its_size_back_under_the_pointer() {
         let maximized = rect(0, 0, 1440, 900);
-        // Saisie aux trois quarts de la largeur, à 12 pixels du haut.
+        // Grabbed at three quarters of the width, 12 pixels from the top.
         let loc = unsnapped(maximized, (400, 300).into(), (1080.0, 12.0).into());
         assert_eq!(loc, (780, 0).into());
-        // Le pointeur reste aux trois quarts de la fenêtre rendue à sa taille.
+        // The pointer stays at three quarters of the window restored to its size.
         assert_eq!(f64::from(1080 - loc.x) / 400.0, 0.75);
-        // Saisie plus bas que la nouvelle hauteur : le pointeur reste dans la fenêtre.
+        // Grabbed lower than the new height: the pointer stays in the window.
         let half = rect(720, 0, 720, 900);
         let loc = unsnapped(half, (400, 300).into(), (900.0, 800.0).into());
         assert_eq!(loc, (800, 500).into());
     }
 
     #[test]
-    fn le_coin_oppose_reste_en_place_pendant_le_geste() {
+    fn the_opposite_corner_stays_in_place_during_the_gesture() {
         let initial = rect(100, 100, 200, 100);
         let top_left = Edges::from_xdg_bits(5);
         let during = Resize {
@@ -574,11 +571,11 @@ mod tests {
             initial,
             done: false,
         };
-        // Pendant le geste, chaque envoi recale la fenêtre et l'état reste.
+        // During the gesture, each commit realigns the window and the state stays.
         let (loc, next) = during.on_commit((260, 140).into());
         assert_eq!(loc, (40, 60).into());
         assert_eq!(next, Some(during));
-        // Après le relâchement, le dernier envoi recale encore, puis l'état disparaît.
+        // After the release, the last commit realigns once more, then the state goes away.
         let (loc, next) = Resize {
             done: true,
             ..during

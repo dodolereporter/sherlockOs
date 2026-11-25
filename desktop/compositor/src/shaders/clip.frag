@@ -1,8 +1,8 @@
 #version 100
-// Contenu d'un client découpé en rectangle arrondi. Programme de texture de Smithay, qui
-// remplace la ligne des définitions par NO_ALPHA, EXTERNAL et DEBUG_FLAGS selon le tampon.
-// La découpe se lit sur `gl_FragCoord`, en pixels de l'image : elle vaut pour chaque surface
-// de la fenêtre, quels que soient sa place, son échelle et son tampon.
+// Client content clipped to a rounded rectangle. Smithay texture program, which replaces the
+// defines line with NO_ALPHA, EXTERNAL and DEBUG_FLAGS depending on the buffer.
+// The clip is read from `gl_FragCoord`, in frame pixels: it holds for every surface of the
+// window, whatever its place, its scale and its buffer.
 //_DEFINES_
 
 #if defined(EXTERNAL)
@@ -28,7 +28,7 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-// Rectangle de découpe dans l'image : x, y, largeur, hauteur.
+// Clip rectangle in the frame: x, y, width, height.
 uniform vec4 clip_rect;
 uniform float radius;
 

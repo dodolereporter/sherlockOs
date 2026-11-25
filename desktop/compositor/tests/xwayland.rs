@@ -1,10 +1,10 @@
-//! Le compositeur démarre sans écran ni backend, lance XWayland, et un client X11 (x11rb) y
-//! ouvre une fenêtre gérée et un menu (override-redirect). La boucle du compositeur tourne dans
-//! le fil du test, le client X11 dans un autre fil.
+//! The compositor starts without a screen or backend, launches XWayland, and an X11 client
+//! (x11rb) opens a managed window and a menu (override-redirect) on it. The compositor loop runs
+//! in the test thread, the X11 client in another thread.
 //!
-//! Il faut `Xwayland` sur le poste, comme pour lancer le compositeur (`docs/compositeur.md`).
+//! It needs `Xwayland` on the machine, as launching the compositor does (`docs/compositor.md`).
 
-// Module de test : clippy y autorise unwrap et expect, comme dans les tests unitaires.
+// Test module: clippy allows unwrap and expect there, as in unit tests.
 #[cfg(test)]
 mod tests {
     use std::{
@@ -47,8 +47,8 @@ mod tests {
     };
 
     const BTN_LEFT: u32 = 0x110;
-    // Codes xkb de Super gauche et de la flèche bas. Sans `--imbrique`, la touche des gestes
-    // est Super.
+    // xkb codes of left Super and of the down arrow. Without `--nested`, the gesture key is
+    // Super.
     const KEY_SUPER: u32 = 133;
     const KEY_DOWN: u32 = 116;
 
@@ -56,8 +56,8 @@ mod tests {
         Rectangle::new((x, y).into(), (w, h).into())
     }
 
-    /// Ouvre une fenêtre blanche : avec un fond, le serveur la peint, et XWayland envoie un
-    /// contenu au compositeur.
+    /// Opens a white window: with a background, the server paints it, and XWayland sends content
+    /// to the compositor.
     fn open(
         conn: &RustConnection,
         root: XWindow,
@@ -89,7 +89,7 @@ mod tests {
             window,
             AtomEnum::WM_NAME,
             AtomEnum::STRING,
-            if menu { b"menu" } else { b"essai x11" },
+            if menu { b"menu" } else { b"test x11" },
         )
         .unwrap();
         conn.map_window(window).unwrap();
@@ -234,7 +234,7 @@ mod tests {
                     return;
                 }
             }
-            panic!("délai dépassé en attendant : {what}");
+            panic!("timed out waiting for: {what}");
         }
 
         fn tick(&mut self) -> u32 {
@@ -268,12 +268,11 @@ mod tests {
     /// Wayland socket and its lock, in the temporary directory: the tests may run without
     /// `XDG_RUNTIME_DIR`.
     fn wayland_socket() -> (PathBuf, PathBuf) {
-        let path =
-            std::env::temp_dir().join(format!("compositeur-xwayland-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("compositor-xwayland-{}", std::process::id()));
         (path.clone(), path.with_extension("lock"))
     }
 
-    /// Fenêtre X11 gérée ou menu.
+    /// Managed X11 window or menu.
     fn x11_window(state: &State, menu: bool) -> Option<Window> {
         state
             .space
@@ -285,7 +284,7 @@ mod tests {
             .cloned()
     }
 
-    /// Place de la fenêtre dans l'espace, et celle que le serveur X lui connaît.
+    /// Place of the window in the space, and the one the X server knows for it.
     fn places(
         state: &State,
         window: &Window,
@@ -298,15 +297,15 @@ mod tests {
     }
 
     #[test]
-    fn une_application_x11_se_gere_comme_une_fenetre_wayland() {
+    fn an_x11_application_is_managed_like_a_wayland_window() {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         state.add_output((800, 600).into(), 1.0);
         let (wayland, wayland_lock) = wayland_socket();
         state.listen_at(wayland.clone(), &event_loop).unwrap();
         assert!(wayland.exists() && wayland_lock.exists());
-        // Le résultat du démarrage : `Some(None)` si XWayland a échoué. Ses messages sont sur
-        // la sortie d'erreur du test.
+        // The startup result: `Some(None)` if XWayland failed. Its messages are on the test's
+        // standard error.
         let started = Rc::new(Cell::new(None));
         let done = started.clone();
         state
@@ -317,8 +316,8 @@ mod tests {
             state,
             time: 0,
         };
-        h.run_until("le démarrage de XWayland", |_| started.get().is_some());
-        let display = started.get().flatten().expect("XWayland n'a pas démarré");
+        h.run_until("XWayland startup", |_| started.get().is_some());
+        let display = started.get().flatten().expect("XWayland did not start");
         assert_eq!(h.state.x_display, Some(display));
         let socket = format!("/tmp/.X11-unix/X{display}");
         assert!(Path::new(&socket).exists());
@@ -326,23 +325,23 @@ mod tests {
         let (commands, receiver) = mpsc::channel();
         let client = thread::spawn(move || x11_client(display, receiver));
 
-        // Affichage et titre : la fenêtre est centrée, et le serveur X connaît sa place.
-        h.run_until("la fenêtre X11", |s| x11_window(s, false).is_some());
+        // Mapping and title: the window is centered, and the X server knows its place.
+        h.run_until("the X11 window", |s| x11_window(s, false).is_some());
         let window = x11_window(&h.state, false).unwrap();
-        assert_eq!(State::title(&window).as_deref(), Some("essai x11"));
+        assert_eq!(State::title(&window).as_deref(), Some("test x11"));
         assert_eq!(
             places(&h.state, &window),
             (rect(300, 250, 200, 100), rect(300, 250, 200, 100))
         );
 
-        // Focus : elle a le clavier dès que XWayland lui a donné sa surface.
-        h.run_until("le clavier à la fenêtre X11", |s| {
+        // Focus: it has the keyboard as soon as XWayland has given it its surface.
+        h.run_until("the keyboard on the X11 window", |s| {
             s.focused_window().as_ref() == Some(&window)
         });
         assert!(h.state.window_visual(&window, Duration::ZERO).is_some());
 
-        // Le menu est à la place qu'il a choisie, sans prendre le clavier.
-        h.run_until("le menu X11", |s| {
+        // The menu is at the place it chose, without taking the keyboard.
+        h.run_until("the X11 menu", |s| {
             x11_window(s, true).is_some_and(|m| m.wl_surface().is_some())
         });
         let menu = x11_window(&h.state, true).unwrap();
@@ -366,7 +365,7 @@ mod tests {
         h.motion(400.0, 300.0);
         h.button(ButtonState::Pressed);
         commands.send(Command::Move).unwrap();
-        h.run_until("le geste demandé par X11", State::gesture_active);
+        h.run_until("the gesture requested by X11", State::gesture_active);
         h.button(ButtonState::Released);
         assert!(!h.state.gesture_active());
 
@@ -386,7 +385,7 @@ mod tests {
         assert!(current_data_device_selection_userdata(&h.state.seat).is_some());
         assert!(current_primary_selection_userdata(&h.state.seat).is_some());
 
-        // Super + glisser jusqu'au bord haut : agrandie, pour le serveur X aussi.
+        // Super + drag up to the top edge: maximized, for the X server too.
         h.motion(400.0, 300.0);
         h.key(KEY_SUPER, KeyState::Pressed);
         h.button(ButtonState::Pressed);
@@ -401,7 +400,7 @@ mod tests {
             (rect(0, 0, 800, 600), rect(0, 0, 800, 600))
         );
 
-        // Super + bas : elle reprend sa place d'avant le glisser.
+        // Super + down: it returns to its place from before the drag.
         h.key(KEY_SUPER, KeyState::Pressed);
         h.key(KEY_DOWN, KeyState::Pressed);
         h.key(KEY_DOWN, KeyState::Released);
@@ -412,8 +411,8 @@ mod tests {
             (rect(300, 250, 200, 100), rect(300, 250, 200, 100))
         );
 
-        // Bande de saisie : le coin bas droit suit le pointeur, le coin haut gauche reste.
-        h.run_until("le contenu de la fenêtre", |s| {
+        // Grab band: the bottom right corner follows the pointer, the top left corner stays.
+        h.run_until("the window content", |s| {
             s.window_visual(&window, Duration::ZERO).is_some()
         });
         h.motion(503.0, 353.0);
@@ -425,17 +424,17 @@ mod tests {
             (rect(300, 250, 250, 130), rect(300, 250, 250, 130))
         );
 
-        // Fermeture : le client part, ses fenêtres disparaissent et personne n'a le clavier.
+        // Closing: the client leaves, its windows go away and nobody has the keyboard.
         commands.send(Command::Quit).unwrap();
         client.join().unwrap();
-        h.run_until("la fermeture des fenêtres X11", |s| {
+        h.run_until("the X11 windows closing", |s| {
             s.space.elements().next().is_none() && s.focused_window().is_none()
         });
 
-        // Arrêt propre : XWayland s'en va avec sa socket, et la socket Wayland et son verrou
-        // disparaissent aussi, although the X11Wm source keeps the event loop alive.
+        // Clean shutdown: XWayland goes away with its socket, and the Wayland socket and its
+        // lock go away too, although the X11Wm source keeps the event loop alive.
         h.state.shutdown();
-        h.run_until("la socket retirée", |_| !Path::new(&socket).exists());
+        h.run_until("the socket removed", |_| !Path::new(&socket).exists());
         assert!(!wayland.exists() && !wayland_lock.exists());
     }
 }

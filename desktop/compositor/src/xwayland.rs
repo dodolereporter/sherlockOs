@@ -1,10 +1,10 @@
-//! XWayland : le serveur X11 qui fait tourner les applications X11 dans le compositeur, et le
-//! gestionnaire de fenêtres X11 de Smithay (`X11Wm`) qui en fait des fenêtres comme les autres.
+//! XWayland: the X11 server that runs X11 applications in the compositor, and Smithay's X11
+//! window manager (`X11Wm`) that turns them into windows like the others.
 //!
-//! XWayland est un client Wayland du compositeur. Chaque fenêtre X11 y a une surface Wayland,
-//! que le protocole xwayland-shell associe à la fenêtre X11. Les fenêtres gérées passent par
-//! `Window` et ont les mêmes gestes, le même rendu et les mêmes états que les fenêtres
-//! xdg-shell. Les fenêtres override-redirect (menus, bulles) se placent elles-mêmes.
+//! XWayland is a Wayland client of the compositor. Each X11 window has a Wayland surface there,
+//! which the xwayland-shell protocol associates with the X11 window. Managed windows go through
+//! `Window` and have the same gestures, the same rendering and the same states as xdg-shell
+//! windows. Override-redirect windows (menus, tooltips) place themselves.
 
 use std::{
     fs::{self, DirBuilder, Permissions},
@@ -54,8 +54,8 @@ use crate::{
 };
 
 impl State {
-    /// Lance XWayland. Une fois prêt, son gestionnaire de fenêtres démarre, `x_display` donne
-    /// son numéro d'affichage, puis `ready` est appelé avec ce numéro (`None` s'il a échoué).
+    /// Launches XWayland. Once it is ready, its window manager starts, `x_display` gives its
+    /// display number, then `ready` is called with that number (`None` if it failed).
     pub fn start_xwayland(
         &mut self,
         event_loop: &EventLoop<'static, State>,
@@ -68,7 +68,7 @@ impl State {
             std::iter::empty::<(String, String)>(),
             true,
             Stdio::null(),
-            // Ses erreurs restent visibles, sur notre sortie d'erreur.
+            // Its errors stay visible, on our standard error.
             Stdio::inherit(),
             |_| (),
         )
@@ -85,13 +85,13 @@ impl State {
                         match X11Wm::start_wm(state.loop_handle.clone(), x11_socket, client.clone())
                         {
                             Ok(xwm) => {
-                                tracing::info!(display = display_number, "XWayland prêt");
+                                tracing::info!(display = display_number, "XWayland ready");
                                 state.xwm = Some(xwm);
                                 state.x_display = Some(display_number);
                                 Some(display_number)
                             }
                             Err(err) => {
-                                tracing::warn!("gestionnaire de fenêtres X11 : {err}");
+                                tracing::warn!("X11 window manager: {err}");
                                 // `start_wm` may fail after tagging the XWayland client with
                                 // its XwmId: smithay's xwayland-shell hook would then ask for
                                 // a window manager that does not exist. Disconnect the client
@@ -107,7 +107,7 @@ impl State {
                         }
                     }
                     XWaylandEvent::Error => {
-                        tracing::warn!("XWayland s'est arrêté pendant son démarrage");
+                        tracing::warn!("XWayland stopped during its startup");
                         state.loop_handle.insert_idle(State::stop_xwayland);
                         None
                     }
@@ -121,9 +121,9 @@ impl State {
         Ok(())
     }
 
-    /// Arrête XWayland : il se termine, et son verrou et sa socket (`/tmp/.X11-unix/X<N>`)
-    /// disparaissent. À appeler en quittant : la source de X11Wm garde une poignée de la
-    /// boucle, qui n'est donc jamais libérée, ni XWayland avec elle.
+    /// Stops XWayland: it exits, and its lock and its socket (`/tmp/.X11-unix/X<N>`) go away.
+    /// To call when quitting: the X11Wm source keeps a handle to the loop, which is therefore
+    /// never freed, nor XWayland with it.
     pub fn stop_xwayland(&mut self) {
         if let Some(token) = self.xwayland.take() {
             self.loop_handle.remove(token);
@@ -131,16 +131,16 @@ impl State {
     }
 }
 
-/// Crée `/tmp/.X11-unix`, où vont les sockets des serveurs X, s'il n'existe pas : sur une
-/// machine sans serveur X, comme celle de la CI, personne ne l'a créé. Il est à tout le monde,
-/// avec le bit collant, comme le crée systemd.
+/// Creates `/tmp/.X11-unix`, where the X server sockets go, if it does not exist: on a machine
+/// without an X server, like the CI one, nobody has created it. It belongs to everyone, with the
+/// sticky bit, as systemd creates it.
 fn ensure_x11_unix_dir() -> io::Result<()> {
     let dir = Path::new("/tmp/.X11-unix");
     if dir.is_dir() {
         return Ok(());
     }
     DirBuilder::new().mode(0o1777).create(dir)?;
-    // Le masque du processus a pu retirer des droits à la création.
+    // The process umask may have removed permissions at creation.
     fs::set_permissions(dir, Permissions::from_mode(0o1777))
 }
 
@@ -152,7 +152,7 @@ impl State {
     }
 }
 
-/// Bords tirés d'une demande `_NET_WM_MOVERESIZE`.
+/// Edges pulled by a `_NET_WM_MOVERESIZE` request.
 fn x11_edges(edge: ResizeEdge) -> Edges {
     let (top, bottom, left, right) = match edge {
         ResizeEdge::Top => (true, false, false, false),
@@ -184,7 +184,7 @@ impl XwmHandler for State {
             // reached. The trait leaves no way out without a window manager to lend: there is
             // no X11Wm to return, so the only option left is to stop.
             None => {
-                tracing::error!(?xwm, "gestionnaire de fenêtres X11 demandé mais absent");
+                tracing::error!(?xwm, "X11 window manager requested but missing");
                 unreachable!("X11 window manager requested before it was started")
             }
         }
@@ -194,11 +194,11 @@ impl XwmHandler for State {
 
     fn new_override_redirect_window(&mut self, _xwm: XwmId, _surface: X11Surface) {}
 
-    /// Une fenêtre gérée demande à s'afficher : on la centre, à la taille qu'elle demande. Elle
-    /// est montrée et reçoit le clavier quand XWayland lui associe sa surface.
+    /// A managed window asks to be mapped: center it, at the size it asks for. It is shown and
+    /// gets the keyboard when XWayland associates its surface with it.
     fn map_window_request(&mut self, _xwm: XwmId, surface: X11Surface) {
         if let Err(err) = surface.set_mapped(true) {
-            tracing::warn!("affichage de la fenêtre X11 : {err}");
+            tracing::warn!("mapping the X11 window: {err}");
             return;
         }
         let size = surface.geometry().size;
@@ -206,13 +206,13 @@ impl XwmHandler for State {
             .output_area()
             .map(|area| layout::centered(area, size))
             .unwrap_or_default();
-        tracing::debug!(title = surface.title(), ?loc, ?size, "fenêtre X11");
+        tracing::debug!(title = surface.title(), ?loc, ?size, "X11 window");
         self.space
             .map_element(Window::new_x11_window(surface.clone()), loc, false);
         configure_x11(&surface, Rectangle::new(loc, size));
     }
 
-    /// Un menu ou une bulle s'affiche à la place qu'il a choisie, au-dessus des fenêtres.
+    /// A menu or a tooltip shows up at the place it chose, above the windows.
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, surface: X11Surface) {
         let loc = surface.geometry().loc;
         let window = Window::new_x11_window(surface);
@@ -231,14 +231,14 @@ impl XwmHandler for State {
         if !surface.is_override_redirect()
             && let Err(err) = surface.set_mapped(false)
         {
-            tracing::warn!("retrait de la fenêtre X11 : {err}");
+            tracing::warn!("unmapping the X11 window: {err}");
         }
     }
 
     fn destroyed_window(&mut self, _xwm: XwmId, _surface: X11Surface) {}
 
-    /// Une fenêtre flottante prend la taille qu'elle demande, mais pas la place : c'est le
-    /// compositeur qui la pose. Agrandie, calée ou en plein écran, elle garde la sienne.
+    /// A floating window takes the size it asks for, but not the place: the compositor places
+    /// it. Maximized, snapped or fullscreen, it keeps its own size.
     fn configure_request(
         &mut self,
         _xwm: XwmId,
@@ -258,13 +258,13 @@ impl XwmHandler for State {
             rect.size.w = w.map_or(rect.size.w, |w| w as i32);
             rect.size.h = h.map_or(rect.size.h, |h| h as i32);
         }
-        // Même refusée, la demande reçoit une réponse : la géométrie actuelle.
+        // Even when refused, the request gets an answer: the current geometry.
         if let Err(err) = surface.configure(rect) {
-            tracing::warn!("configuration de la fenêtre X11 : {err}");
+            tracing::warn!("X11 window configure: {err}");
         }
     }
 
-    /// Un menu bouge de lui-même ; une fenêtre gérée, elle, est à la place qu'on lui a donnée.
+    /// A menu moves by itself; a managed window stays at the place it was given.
     fn configure_notify(
         &mut self,
         _xwm: XwmId,
@@ -314,13 +314,13 @@ impl XwmHandler for State {
         self.x11_gesture(&surface, None);
     }
 
-    /// Un client X11 ne lit le presse-papiers que si une fenêtre X11 a le clavier, comme un
-    /// client Wayland.
+    /// An X11 client only reads the clipboard if an X11 window has the keyboard, like a Wayland
+    /// client.
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
         self.x11_has_keyboard(xwm)
     }
 
-    /// Un client X11 lit la sélection d'un client Wayland.
+    /// An X11 client reads the selection of a Wayland client.
     fn send_selection(
         &mut self,
         _xwm: XwmId,
@@ -337,7 +337,7 @@ impl XwmHandler for State {
                 .map_err(|e| e.to_string()),
         };
         if let Err(err) = sent {
-            tracing::warn!(?selection, "sélection Wayland lue par XWayland : {err}");
+            tracing::warn!(?selection, "Wayland selection read by XWayland: {err}");
         }
     }
 
@@ -350,7 +350,7 @@ impl XwmHandler for State {
         if !self.x11_has_keyboard(xwm) {
             tracing::debug!(
                 ?selection,
-                "sélection X11 refusée : pas de fenêtre X11 au clavier"
+                "X11 selection refused: no X11 window has the keyboard"
             );
             return;
         }
@@ -361,8 +361,8 @@ impl XwmHandler for State {
         }
     }
 
-    /// Le client X11 qui tenait la sélection l'a lâchée. Seule celle qu'on avait posée pour lui
-    /// est effacée, pas celle d'un client Wayland arrivée depuis.
+    /// The X11 client that held the selection has released it. Only the one set on its behalf
+    /// is cleared, not one from a Wayland client that came since.
     fn cleared_selection(&mut self, _xwm: XwmId, selection: SelectionTarget) {
         let dh = &self.display_handle;
         match selection {
@@ -385,8 +385,8 @@ impl XWaylandShellHandler for State {
         &mut self.xwayland_shell_state
     }
 
-    /// La fenêtre X11 a sa surface : elle se montre et reçoit le clavier, comme une fenêtre
-    /// Wayland à son premier contenu. Avant, XWayland n'aurait pas reçu l'entrée du clavier.
+    /// The X11 window has its surface: it shows up and gets the keyboard, like a Wayland window
+    /// at its first content. Before that, XWayland would not have received the keyboard input.
     fn surface_associated(&mut self, _xwm: XwmId, _surface: WlSurface, surface: X11Surface) {
         let Some(window) = self.x11_window(&surface) else {
             return;

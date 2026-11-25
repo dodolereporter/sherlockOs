@@ -1,11 +1,11 @@
-//! Compositeur Wayland du desktop.
+//! Wayland compositor of the desktop.
 //!
-//! `compositeur --imbrique [--mesurer] [commande [arguments…]]` ouvre le compositeur dans une
-//! fenêtre de la session en cours, démarre XWayland, puis lance la commande en lui donnant sa
-//! socket Wayland (`WAYLAND_DISPLAY`) et son affichage X11 (`DISPLAY`).
-//! `--mesurer` journalise chaque seconde la cadence et le temps de rendu des images, puis un
-//! bilan à la fin. La session s'arrête alors avec la commande.
-//! `--ecrans N` splits the window into N screens side by side. `--echelle E` sets the scale of
+//! `compositor --nested [--measure] [command [arguments…]]` opens the compositor in a window of
+//! the current session, starts XWayland, then launches the command, giving it its Wayland
+//! socket (`WAYLAND_DISPLAY`) and its X11 display (`DISPLAY`).
+//! `--measure` logs the frame rate and frame render time every second, then a summary at the
+//! end. The session then stops with the command.
+//! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
 //! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
 
 use std::{
@@ -18,7 +18,7 @@ use smithay::reexports::calloop::{EventLoop, LoopSignal};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Error> {
-    // Niveau des journaux par RUST_LOG (par exemple `RUST_LOG=compositeur=debug`), info sinon.
+    // Log level from RUST_LOG (for example `RUST_LOG=compositor=debug`), info otherwise.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -26,17 +26,17 @@ fn main() -> Result<(), Error> {
         .init();
 
     let mut args = std::env::args_os().skip(1);
-    // Seul le backend fenêtré existe pour l'instant ; la session réelle vient au lot D-14.
-    if args.next().as_deref() != Some(OsStr::new("--imbrique")) {
+    // Only the windowed backend exists for now; the real session comes with lot D-14.
+    if args.next().as_deref() != Some(OsStr::new("--nested")) {
         return Err(Error::Usage);
     }
     let mut command: Vec<_> = args.collect();
     let (mut measure, mut screens, mut scales) = (false, 1, Vec::new());
     loop {
         match command.first().and_then(|a| a.to_str()) {
-            Some("--mesurer") => measure = true,
-            Some("--ecrans") => screens = option(&mut command, 1..=4)?,
-            Some("--echelle") => scales.push(option(&mut command, 0.5..=4.0)?),
+            Some("--measure") => measure = true,
+            Some("--outputs") => screens = option(&mut command, 1..=4)?,
+            Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
             _ => break,
         }
         command.remove(0);
@@ -53,13 +53,12 @@ fn main() -> Result<(), Error> {
     }
     let socket = state.listen(&event_loop)?;
     compositor::winit::init(&event_loop, &mut state, &scales)?;
-    tracing::info!(socket = ?socket, "compositeur prêt");
+    tracing::info!(socket = ?socket, "compositor ready");
 
-    // En mesure, la session s'arrête avec la commande, qui est la scène mesurée.
+    // When measuring, the session stops with the command, which is the measured scene.
     let signal = measure.then(|| state.loop_signal.clone());
-    // XWayland démarre avec le compositeur, et la commande une fois qu'il est prêt : elle peut
-    // être une application X11. Sans Xwayland sur le poste, seules les applications Wayland
-    // s'affichent.
+    // XWayland starts with the compositor, and the command once it is ready: it may be an X11
+    // application. Without Xwayland on the machine, only Wayland applications show up.
     let launch = {
         let (command, socket, signal) = (command.clone(), socket.clone(), signal.clone());
         move |_: &mut State, display: Option<u32>| {
@@ -69,15 +68,15 @@ fn main() -> Result<(), Error> {
         }
     };
     if let Err(err) = state.start_xwayland(&event_loop, launch) {
-        tracing::warn!("pas d'applications X11 : {err}");
+        tracing::warn!("no X11 applications: {err}");
         spawn(&command, &socket, None, signal)?;
     }
 
     event_loop.run(None, &mut state, State::refresh)?;
     state.shutdown();
     if let Some(stats) = &state.frame_stats {
-        tracing::info!("bilan, toutes les images : {}", stats.all);
-        tracing::info!("bilan, images animées : {}", stats.animated);
+        tracing::info!("summary, all frames: {}", stats.all);
+        tracing::info!("summary, animated frames: {}", stats.animated);
     }
     Ok(())
 }
@@ -99,10 +98,10 @@ fn option<T: std::str::FromStr + PartialOrd>(
         .ok_or(Error::Usage)
 }
 
-/// Lance la commande, s'il y en a une, avec la socket Wayland du compositeur et son affichage
-/// X11. Les deux passent par l'environnement de l'enfant seulement : le nôtre garde celui de la
-/// session hôte. Sans affichage X11, l'enfant n'hérite pas de celui de l'hôte, où ses fenêtres
-/// X11 s'ouvriraient hors du compositeur.
+/// Launches the command, if there is one, with the compositor's Wayland socket and its X11
+/// display. Both go through the child's environment only: ours keeps the host session's. Without
+/// an X11 display, the child does not inherit the host's, where its X11 windows would open
+/// outside the compositor.
 fn spawn(
     command: &[OsString],
     socket: &OsStr,
@@ -119,11 +118,11 @@ fn spawn(
         None => child.env_remove("DISPLAY"),
     };
     let mut child = child.spawn()?;
-    // Un fil attend la fin de la commande, pour qu'elle ne reste pas zombie.
+    // A thread waits for the command to end, so that it does not stay a zombie.
     std::thread::spawn(move || {
         match child.wait() {
-            Ok(status) => tracing::info!(%status, "la commande lancée s'est terminée"),
-            Err(err) => tracing::warn!("attente de la commande lancée : {err}"),
+            Ok(status) => tracing::info!(%status, "the launched command has ended"),
+            Err(err) => tracing::warn!("waiting for the launched command: {err}"),
         }
         if let Some(signal) = signal {
             signal.stop();

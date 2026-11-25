@@ -58,12 +58,12 @@ impl State {
     /// Adds a screen of `size` pixels at `scale`, to the right of the existing ones, both in the
     /// space and in the frame.
     pub fn add_output(&mut self, size: Size<i32, Physical>, scale: f64) -> Output {
-        let name = format!("virtuel-{}", self.screens.len() + 1);
+        let name = format!("virtual-{}", self.screens.len() + 1);
         let properties = PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
-            make: "compositeur".into(),
-            model: "virtuel".into(),
+            make: "compositor".into(),
+            model: "virtual".into(),
         };
         let output = Output::new(name, properties);
         output.create_global::<State>(&self.display_handle);

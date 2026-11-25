@@ -1,6 +1,6 @@
-// Ombre portée d'une fenêtre, comme `box-shadow` en CSS : un rectangle arrondi flouté par une
-// gaussienne, effacé sous la fenêtre elle-même. Intégrale exacte en x, quatre échantillons en y,
-// d'après Evan Wallace, « Fast Rounded Rectangle Shadows » (2020, domaine public).
+// Drop shadow of a window, like `box-shadow` in CSS: a rounded rectangle blurred by a Gaussian,
+// cleared under the window itself. Exact integral in x, four samples in y, after Evan Wallace,
+// "Fast Rounded Rectangle Shadows" (2020, public domain).
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -12,7 +12,7 @@ uniform vec2 size;
 varying vec2 v_coords;
 
 uniform vec4 color;
-// Rectangle qui projette l'ombre, puis fenêtre, dans l'élément : x, y, largeur, hauteur.
+// Rectangle that casts the shadow, then window, in the element: x, y, width, height.
 uniform vec4 caster;
 uniform vec4 window;
 uniform float radius;
@@ -58,7 +58,7 @@ float rounded_box(vec2 p, vec2 half_size, float r) {
 void main() {
     vec2 p = v_coords * size;
     float d = rounded_box(p - window.xy - window.zw * 0.5, window.zw * 0.5, radius);
-    // Sous la fenêtre, rien à calculer : la plus grande part de l'élément.
+    // Under the window, nothing to compute: the largest part of the element.
     if (d < -1.0) {
         gl_FragColor = vec4(0.0);
         return;
