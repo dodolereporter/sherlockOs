@@ -20,6 +20,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
+  # The disk of the runner fills up since the real session (lot D-14): ld died with a bus error
+  # on main. Line tables only keep the file and line of backtraces at a fraction of the size of
+  # full debug information, and the incremental state is of no use on a new machine.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   verify:
