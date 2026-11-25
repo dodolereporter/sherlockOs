@@ -62,7 +62,8 @@ protection de branche : ne fusionne jamais une demande dont la CI n'est pas vert
 | `just construire` | `cargo build --workspace` |
 
 Conteneur de build : `just builder`, `just dans-builder <commande>`, `just tester-builder`
-(voir `docs/build.md`). Recette à venir : `just test-boot` (lot Q-04).
+(voir `docs/build.md`). Banc de boot : `just test-boot [image]`, `just temoin`, `just tester-banc`
+(voir `docs/tests-boot.md`). La CI lance aussi le banc : `verifier` et `test-boot` doivent être verts.
 
 Prérequis du poste : `rustup`, `just`, un compilateur C qui sert d'éditeur de liens
 (`gcc` et `libc6-dev` sur Debian) et les bibliothèques du compositeur (`libxkbcommon-dev` et

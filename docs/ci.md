@@ -24,8 +24,10 @@ s'arrête à la première qui échoue.
 La CI n'a pas sa propre liste de commandes : elle lance les recettes du `justfile`. Pour changer ce
 qu'elle vérifie, on change `just verifier`, et le poste local suit.
 
-Le build de l'image et le boot dans QEMU, demandés par la règle 3 de `CLAUDE.md`, viennent avec les
-lots Q-03 et Q-04.
+Le build de l'image et le boot dans QEMU, demandés par la règle 3 de `CLAUDE.md`, tournent dans un
+second workflow, `.github/workflows/ci-boot.yml`, tâche `test-boot`, décrit dans `docs/tests-boot.md`.
+Il ajoute deux actions officielles, `actions/cache` et `actions/upload-artifact`, épinglées par
+empreinte comme les autres. Une demande de fusion n'est verte que si `verifier` et `test-boot` le sont.
 
 ## Comment elle s'installe
 
@@ -70,9 +72,11 @@ just tester            # tests seuls
 
 ## Lire un échec
 
-Dans la demande de fusion, la vérification `CI Rust / verifier` passe au rouge. Le lien « Details »
-ouvre le journal : la dernière recette lancée par `just` est celle qui a échoué, et sa sortie donne le
-fichier et la ligne en cause. On corrige, on relance `just verifier` en local, on pousse.
+Dans la demande de fusion, la vérification `CI Rust / verifier` ou `CI boot / test-boot` passe au
+rouge. Le lien « Details » ouvre le journal : la dernière recette lancée par `just` est celle qui a
+échoué, et sa sortie donne le fichier et la ligne en cause. On corrige, on relance la même recette en
+local (`just verifier`, ou `just test-boot` et `just tester-banc`), on pousse. Pour `test-boot`,
+l'artefact `captures-boot` garde la capture d'écran et le journal série.
 
 On ne désactive jamais un lint ni un test pour faire passer la CI.
 
@@ -85,4 +89,5 @@ règle de protection de branche ou un ensemble de règles (« Require status che
 Au 24 novembre 2026, ce réglage n'est pas disponible sur ce dépôt : il est privé, et GitHub réserve la
 protection des branches des dépôts privés à l'offre Pro. L'API répond « Upgrade to GitHub Pro or make
 this repository public to enable this feature ». En attendant, la règle 1 de `CLAUDE.md` tient par
-discipline : on ne fusionne pas une demande dont `CI Rust / verifier` n'est pas verte.
+discipline : on ne fusionne pas une demande dont `CI Rust / verifier` et `CI boot / test-boot` ne
+sont pas toutes les deux vertes.
