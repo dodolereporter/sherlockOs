@@ -407,42 +407,63 @@ mod tests {
     fn invalid_parameters_end_the_client_not_the_compositor() {
         let (w, h) = SIZE;
         let stride = w as u32 * 4;
-        let linear = u64::from(Modifier::Linear);
         let plane = plane_file(u64::from(stride) * h as u64);
-        // A format that was not announced, a height of zero with a stride that would overflow
-        // the compositor's bound checks, a plane larger than its file.
+        let row = plane_file(u64::from(stride));
+        let (argb, nv12) = (Fourcc::Argb8888 as u32, Fourcc::Nv12 as u32);
         use zwp_linux_buffer_params_v1::Error;
+        // Format, height, `create_immed` or not, file, plane index, offset, stride.
         let cases = [
-            (Fourcc::Nv12 as u32, h, 0, stride, Error::InvalidFormat),
+            // A format that was not announced.
+            (nv12, h, false, &plane, 0, 0, stride, Error::InvalidFormat),
+            // A height of zero with a stride that would overflow the bound checks, by both
+            // requests: `create_immed` is what the bar and the dock send.
             (
-                Fourcc::Argb8888 as u32,
+                argb,
+                0,
+                false,
+                &plane,
                 0,
                 4,
                 u32::MAX,
                 Error::InvalidDimensions,
             ),
             (
-                Fourcc::Argb8888 as u32,
-                h * 2,
+                argb,
                 0,
-                stride,
-                Error::OutOfBounds,
+                true,
+                &plane,
+                0,
+                4,
+                u32::MAX,
+                Error::InvalidDimensions,
             ),
+            // A plane larger than its file.
+            (argb, h * 2, false, &plane, 0, 0, stride, Error::OutOfBounds),
+            (argb, h * 2, true, &plane, 0, 0, stride, Error::OutOfBounds),
+            // A single plane with index 1, over a file of one row: smithay 0.7 checked the full
+            // height of plane 0 only, then made this one plane 0.
+            (argb, h, false, &row, 1, 0, stride, Error::Incomplete),
+            (argb, h, true, &row, 1, 0, stride, Error::Incomplete),
         ];
-        for (format, height, offset, stride, error) in cases {
+        for (format, height, immed, file, index, offset, stride, error) in cases {
+            let case = format!("{error:?}, height {height}, index {index}, immed {immed}");
             let renderer = Rc::new(Renderer::default());
             let mut harness = Harness::start(Some(renderer.clone()));
             let dmabuf = harness.dmabuf(5);
-            let params = harness.params(&dmabuf, &plane, offset, stride, linear);
-            params.create(
-                w,
-                height,
-                format,
-                zwp_linux_buffer_params_v1::Flags::empty(),
-            );
+            let params = dmabuf.create_params(&harness.queue.handle(), ());
+            let linear = u64::from(Modifier::Linear);
+            let (hi, lo) = ((linear >> 32) as u32, linear as u32);
+            params.add(file.as_fd(), index, offset, stride, hi, lo);
+            let flags = zwp_linux_buffer_params_v1::Flags::empty();
+            let _buffer = if immed {
+                Some(params.create_immed(w, height, format, flags, &harness.queue.handle(), ()))
+            } else {
+                params.create(w, height, format, flags);
+                None
+            };
             let ended = harness.run_until(|_| false).err();
-            assert_eq!(ended, Some(error as u32), "{error:?}");
-            assert!(renderer.imports.borrow().is_empty(), "{error:?}");
+            assert_eq!(ended, Some(error as u32), "{case}");
+            assert!(renderer.imports.borrow().is_empty(), "{case}");
             // The compositor goes on: a new client gets its globals.
             let (server_side, client_side) = UnixStream::pair().unwrap();
             harness.state.insert_client(server_side);
@@ -454,7 +475,7 @@ mod tests {
                 .display()
                 .get_registry(&harness.queue.handle(), ());
             harness.sync();
-            assert!(harness.global("zwp_linux_dmabuf_v1").is_some(), "{error:?}");
+            assert!(harness.global("zwp_linux_dmabuf_v1").is_some(), "{case}");
         }
     }
 }

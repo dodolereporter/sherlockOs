@@ -375,12 +375,25 @@ glamor need it as well.
   protocol leaves no other answer than the `invalid_wl_buffer` error. The compositor never stops
   for a buffer: the refusal is logged at the `debug` level (`compositor::dmabuf`).
 - **Checks before smithay.** Smithay 0.7 checks the format (announced or `invalid_format`), the
-  planes against the size of their file (`out_of_bounds`) and the size, but after a width or a
-  height below 1 it only sends `invalid_dimensions` and goes on: with a height of 0, an offset
-  plus a stride overflows, which is a panic in a debug build (seen in `tests/dmabuf.rs`, at
-  `smithay-0.7.0/src/wayland/dmabuf/mod.rs:1177`), and the buffer still reaches the importer.
-  `src/dmabuf.rs` answers that case itself before handing the request to smithay. The rest of
-  smithay's `delegate_dmabuf!` is written out next to it.
+  planes against the size of their file (`out_of_bounds`) and the size, with two holes that
+  `src/dmabuf.rs` closes before handing the request to smithay:
+  - after a width or a height below 1, smithay only sends `invalid_dimensions` and goes on: with
+    a height of 0, an offset plus a stride overflows, which is a panic in a debug build (seen in
+    `tests/dmabuf.rs`, at `smithay-0.7.0/src/wayland/dmabuf/mod.rs:1177`), and the buffer still
+    reaches the importer;
+  - it checks the full height only for the plane the client numbers 0, then numbers the planes
+    again in the order they came: a single plane sent with index 1, over a file of one row,
+    reached the importer as a full buffer.
+
+  The compositor keeps the planes each `zwp_linux_buffer_params_v1` receives (index, offset,
+  stride, size of the file by `lseek`), and at `create` or `create_immed` checks them as wlroots
+  and weston do: indices from 0 to n - 1 and at least the colour planes of the format
+  (`incomplete` otherwise), then each colour plane inside its file, `offset + stride × rows`
+  with the rows of its subsampling (`out_of_bounds`). A metadata plane that a modifier adds
+  (AMD's DCC) is checked for its first row only, as smithay does. The same check runs again on
+  the buffer smithay built, just before the import: a buffer that gets past the first check, or
+  whose file cannot be seeked, gets `failed` and never reaches the renderer. The rest of smithay
+  0.7.0's `delegate_dmabuf!` is written out next to it, to review at each smithay update.
 - **Without a GPU.** If the renderer is software (llvmpipe: Xephyr, the CI) or EGL does not name
   its device, the protocol is not offered and the log says why: clients keep `wl_shm`, as
   before.
@@ -402,6 +415,18 @@ did before, but opens no NVIDIA device file and uses the AMD render node only (s
 **Security.** The global is open to every client, like `wl_shm`. Each imported buffer holds an
 EGL image of the renderer as long as the client keeps its `wl_buffer`: a client can use GPU
 memory as it can use shared memory. Not limited in this lot.
+
+**Follow-ups.**
+
+- **`DmabufBlocker`.** A surface commit does not wait for the client's GPU work
+  (`Dmabuf::generate_blocker` and `add_blocker` are not called): with implicit synchronization,
+  a client can make a compositor frame wait on its own GPU load, up to the kernel timeout (about
+  10 s on amdgpu, then a GPU reset). In nested mode, on a GPU shared with the host, the gain is
+  small; the DRM backend needs it. Planned with lot D-14 or right after.
+- **File descriptors.** Each unused `zwp_linux_buffer_params_v1` holds up to 4 descriptors until
+  the client destroys it or leaves. A client can pile them up to the compositor's
+  `RLIMIT_NOFILE` (often 1024), after which no client can connect. Not specific to dmabuf (any
+  fd passing allows it). Leads: raise the soft limit at startup, or cap the `params` per client.
 
 **Checked on the reference laptop**, in a headless KWin 6.3 (`kwin_wayland --virtual`,
 1440 × 900) in `bwrap` with a `/dev/dri` that only holds the AMD render node, its own D-Bus and
