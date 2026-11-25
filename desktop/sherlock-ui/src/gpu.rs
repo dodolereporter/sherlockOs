@@ -3,12 +3,16 @@
 //! iced picks its renderer and its graphics adapter from environment variables only. Left
 //! alone, wgpu asks every Vulkan driver of the machine for its adapters, and on a laptop with
 //! a dedicated NVIDIA card that alone wakes the card up. So a program decides first, from
-//! `/sys` (which never wakes a card): Vulkan through the Mesa driver of an AMD chip, and that
-//! driver only, or software rendering (tiny-skia). The NVIDIA card is never asked anything.
+//! `/sys` (which never wakes a card): Vulkan through the Mesa driver of the AMD chip that
+//! drives the screen, and that driver only, or software rendering (tiny-skia). A dedicated
+//! card, NVIDIA or AMD, is never asked anything.
+//!
+//! Every program that draws with iced does this first thing in `main` (a test of sherlock-ui
+//! checks it for every program of the workspace):
 //!
 //! ```no_run
 //! let choice = sherlock_ui::gpu::Choice::detect();
-//! // SAFETY: first thing in `main`, before any other thread exists.
+//! // SAFETY: first statement of `main`, no other thread exists yet.
 //! unsafe { choice.apply() };
 //! ```
 //!
@@ -26,6 +30,18 @@ const AMD: u16 = 0x1002;
 const AMDGPU: &str = "amdgpu";
 /// File name prefix of the manifest of RADV (`radeon_icd.json`, `radeon_icd.x86_64.json`).
 const RADV_MANIFEST: &str = "radeon_icd";
+/// Manifests of 32-bit libraries (Arch names them `radeon_icd.i686.json`): never for this
+/// process.
+const OTHER_ARCHES: [&str; 2] = [".i686.", ".i386."];
+
+/// Variables that would bring another GPU back in, unset by `apply` and given back to child
+/// processes: a driver added to the loader's list, the PRIME offload that enables NVIDIA's
+/// implicit Vulkan layer (which loads `libGLX_nvidia.so.0`), Mesa's choice of another GPU.
+const NEUTRALISED: [&str; 3] = [
+    "VK_ADD_DRIVER_FILES",
+    "__NV_PRIME_RENDER_OFFLOAD",
+    "DRI_PRIME",
+];
 
 /// A graphics chip, as `/sys/class/drm/card*/device` describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,12 +56,17 @@ pub struct Chip {
 /// What the program renders with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
-    /// `ICED_BACKEND` is already set: the user chose, nothing is changed.
+    /// `ICED_BACKEND` set by the user without wgpu, or with wgpu on a machine where the GPU
+    /// cannot be narrowed down: nothing is changed.
     Inherited,
     /// Software rendering, with tiny-skia.
     Software(Reason),
-    /// Vulkan, with only these driver manifests visible to the Vulkan loader.
-    Vulkan { manifests: Vec<PathBuf> },
+    /// Vulkan, with only these driver manifests visible to the Vulkan loader. `user_backend`:
+    /// `ICED_BACKEND` was set by the user (with wgpu) and is kept as it is.
+    Vulkan {
+        manifests: Vec<PathBuf>,
+        user_backend: bool,
+    },
 }
 
 /// Why the program renders in software.
@@ -53,19 +74,38 @@ pub enum Choice {
 pub enum Reason {
     /// No AMD chip driven by `amdgpu`: no GPU, or only chips not tried yet (ADR 0018).
     NoAmdChip,
+    /// The AMD chip does not drive the screen: a dedicated card, kept asleep.
+    DedicatedAmdChip,
+    /// Several AMD chips (an APU and a Radeon card): RADV would open both.
+    SeveralAmdChips,
     /// An AMD chip, but no manifest of Mesa's Vulkan driver.
     NoVulkanDriver,
 }
 
 impl Choice {
-    /// Decides from the chips and the Vulkan driver manifests found, unless `ICED_BACKEND`
-    /// was set by the user.
-    pub fn choose(iced_backend_set: bool, chips: &[Chip], manifests: &[PathBuf]) -> Self {
-        if iced_backend_set {
+    /// Decides from `ICED_BACKEND` as the user set it, the chips and the Vulkan driver
+    /// manifests found. The GPU is used only when a single AMD chip is bound to `amdgpu` and
+    /// it is the one that drives the screen (`boot_vga`).
+    pub fn choose(iced_backend: Option<&str>, chips: &[Chip], manifests: &[PathBuf]) -> Self {
+        let wants_wgpu = iced_backend.is_none_or(|b| b.split(',').any(|c| c.trim() == "wgpu"));
+        if !wants_wgpu {
             return Self::Inherited;
         }
-        if !chips.iter().any(|c| c.vendor == AMD && c.driver == AMDGPU) {
-            return Self::Software(Reason::NoAmdChip);
+        let user_backend = iced_backend.is_some();
+        let software = |reason| {
+            if user_backend {
+                Self::Inherited
+            } else {
+                Self::Software(reason)
+            }
+        };
+        let amd: Vec<&Chip> = chips.iter().filter(|c| c.driver == AMDGPU).collect();
+        match amd.as_slice() {
+            [] => return software(Reason::NoAmdChip),
+            [chip] if chip.vendor == AMD && chip.boot_vga => {}
+            [chip] if chip.vendor == AMD => return software(Reason::DedicatedAmdChip),
+            [_] => return software(Reason::NoAmdChip),
+            _ => return software(Reason::SeveralAmdChips),
         }
         let manifests: Vec<PathBuf> = manifests
             .iter()
@@ -73,41 +113,56 @@ impl Choice {
             .cloned()
             .collect();
         if manifests.is_empty() {
-            return Self::Software(Reason::NoVulkanDriver);
+            return software(Reason::NoVulkanDriver);
         }
-        Self::Vulkan { manifests }
+        Self::Vulkan {
+            manifests,
+            user_backend,
+        }
     }
 
     /// Reads the machine: `ICED_BACKEND`, the chips in `/sys/class/drm`, the manifests in the
     /// Vulkan loader's folders.
     pub fn detect() -> Self {
-        let set = std::env::var_os("ICED_BACKEND").is_some();
-        if set {
-            return Self::Inherited;
-        }
-        Self::choose(false, &chips(Path::new("/sys/class/drm")), &manifests())
+        let backend = std::env::var("ICED_BACKEND").ok();
+        Self::choose(
+            backend.as_deref(),
+            &chips(Path::new("/sys/class/drm")),
+            &manifests(),
+        )
     }
 
-    /// The variables to set for this choice.
-    pub fn variables(&self) -> Vec<(&'static str, OsString)> {
+    /// The variables of this choice: a value to set, or `None` to unset it.
+    pub fn variables(&self) -> Vec<(&'static str, Option<OsString>)> {
+        let set = |name, value: OsString| (name, Some(value));
         match self {
             Self::Inherited => Vec::new(),
-            Self::Software(_) => vec![("ICED_BACKEND", "tiny-skia".into())],
-            Self::Vulkan { manifests } => vec![
-                // wgpu first, tiny-skia if it finds no adapter.
-                ("ICED_BACKEND", "wgpu,tiny-skia".into()),
-                // Vulkan only: wgpu's OpenGL backend would load every EGL vendor library,
-                // NVIDIA's included.
-                ("WGPU_BACKEND", "vulkan".into()),
-                ("WGPU_POWER_PREF", "low".into()),
-                // The loader sees Mesa's AMD driver and nothing else.
-                ("VK_DRIVER_FILES", join(manifests)),
-                // iced takes the first format the driver lists without sRGB. On Wayland, Mesa
-                // lists the 10-bit ones first, with 2 bits of alpha: the bar's glass at 0.78
-                // would come out at 0.67. This Mesa option (driconf, read from the
-                // environment) lists 8-bit BGRA first.
-                ("vk_wsi_force_bgra8_unorm_first", "true".into()),
-            ],
+            Self::Software(_) => vec![set("ICED_BACKEND", "tiny-skia".into())],
+            Self::Vulkan {
+                manifests,
+                user_backend,
+            } => {
+                let mut variables = Vec::new();
+                if !user_backend {
+                    // wgpu first, tiny-skia if it finds no adapter.
+                    variables.push(set("ICED_BACKEND", "wgpu,tiny-skia".into()));
+                }
+                variables.extend([
+                    // Vulkan only: wgpu's OpenGL backend would go through EGL vendor libraries,
+                    // NVIDIA's first on Debian. (Only Vulkan is compiled anyway.)
+                    set("WGPU_BACKEND", "vulkan".into()),
+                    set("WGPU_POWER_PREF", "low".into()),
+                    // The loader sees Mesa's AMD driver and nothing else.
+                    set("VK_DRIVER_FILES", join(manifests)),
+                    // iced takes the first format the driver lists without sRGB. On Wayland,
+                    // Mesa lists the 10-bit ones first, with 2 bits of alpha: the bar's glass
+                    // at 0.78 would come out at 0.67. This Mesa option (driconf, read from the
+                    // environment) lists 8-bit BGRA first.
+                    set("vk_wsi_force_bgra8_unorm_first", "true".into()),
+                ]);
+                variables.extend(NEUTRALISED.map(|name| (name, None)));
+                variables
+            }
         }
     }
 
@@ -116,8 +171,10 @@ impl Choice {
     ///
     /// # Safety
     ///
-    /// Changes the process environment (`std::env::set_var`): it must be called before any
-    /// other thread is started, first thing in `main`, and only once.
+    /// Changes the process environment (`std::env::set_var`, `remove_var`). It must be the
+    /// first statement of `main`, called once, while the process has a single thread: no
+    /// thread may have been started before, and `main` must not carry `#[tokio::main]` or any
+    /// other attribute that starts a runtime or threads before its body runs.
     pub unsafe fn apply(&self) {
         let variables = self.variables();
         let previous = variables
@@ -125,8 +182,12 @@ impl Choice {
             .map(|(name, _)| (*name, std::env::var_os(name)))
             .collect();
         for (name, value) in variables {
-            // SAFETY: the caller guarantees that no other thread exists yet.
-            unsafe { std::env::set_var(name, value) };
+            match value {
+                // SAFETY: the caller guarantees that the process has a single thread.
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                // SAFETY: as above.
+                None => unsafe { std::env::remove_var(name) },
+            }
         }
         let _ = PREVIOUS.set(previous);
     }
@@ -136,7 +197,8 @@ impl Choice {
 static PREVIOUS: OnceLock<Vec<(&'static str, Option<OsString>)>> = OnceLock::new();
 
 /// Gives `command` the environment the program was started with: a program launched from
-/// the shell (an application, a game) must not inherit the shell's choice of renderer.
+/// the shell (an application, a game) must not inherit the shell's choice of renderer, and
+/// gets back the variables `apply` unset (`DRI_PRIME`, `__NV_PRIME_RENDER_OFFLOAD`…).
 pub fn for_child(command: &mut Command) -> &mut Command {
     restore(command, PREVIOUS.get().map_or(&[], Vec::as_slice))
 }
@@ -157,7 +219,11 @@ fn restore<'c>(
 fn is_radv_manifest(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(RADV_MANIFEST) && name.ends_with(".json"))
+        .is_some_and(|name| {
+            name.starts_with(RADV_MANIFEST)
+                && name.ends_with(".json")
+                && !OTHER_ARCHES.iter().any(|arch| name.contains(arch))
+        })
 }
 
 fn join(paths: &[PathBuf]) -> OsString {
@@ -239,7 +305,7 @@ mod tests {
         }
     }
 
-    /// The manifests of the reference laptop (Debian), plus Arch's naming.
+    /// The manifests of the reference laptop (Debian), plus Arch's naming (with lib32).
     fn manifests() -> Vec<PathBuf> {
         [
             "/usr/share/vulkan/icd.d/intel_icd.json",
@@ -247,20 +313,33 @@ mod tests {
             "/usr/share/vulkan/icd.d/nouveau_icd.json",
             "/usr/share/vulkan/icd.d/nvidia_icd.json",
             "/usr/share/vulkan/icd.d/radeon_icd.json",
+            "/usr/share/vulkan/icd.d/radeon_icd.i686.json",
             "/usr/share/vulkan/icd.d/radeon_icd.x86_64.json",
         ]
         .map(PathBuf::from)
         .to_vec()
     }
 
+    fn get(variables: &[(&'static str, Option<OsString>)], name: &str) -> Option<Option<OsString>> {
+        variables
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn set(value: &str) -> Option<Option<OsString>> {
+        Some(Some(OsString::from(value)))
+    }
+
     #[test]
     fn the_reference_laptop_renders_on_the_amd_chip_only() {
         let chips = [chip(0x10de, "nvidia", false), chip(AMD, AMDGPU, true)];
-        let choice = Choice::choose(false, &chips, &manifests());
-        let Choice::Vulkan { manifests } = &choice else {
+        let choice = Choice::choose(None, &chips, &manifests());
+        let Choice::Vulkan { manifests, .. } = &choice else {
             panic!("expected Vulkan, got {choice:?}");
         };
-        // Neither NVIDIA's driver nor nouveau's (NVK) nor the software one: only RADV.
+        // Neither NVIDIA's driver nor nouveau's (NVK) nor the software one nor the 32-bit
+        // one: only RADV for this process.
         assert_eq!(
             manifests,
             &[
@@ -269,19 +348,22 @@ mod tests {
             ]
         );
         let variables = choice.variables();
-        let get = |name| variables.iter().find(|(n, _)| *n == name).map(|(_, v)| v);
-        assert_eq!(get("WGPU_BACKEND"), Some(&OsString::from("vulkan")));
-        assert_eq!(get("ICED_BACKEND"), Some(&OsString::from("wgpu,tiny-skia")));
+        assert_eq!(get(&variables, "WGPU_BACKEND"), set("vulkan"));
+        assert_eq!(get(&variables, "ICED_BACKEND"), set("wgpu,tiny-skia"));
         assert_eq!(
-            get("vk_wsi_force_bgra8_unorm_first"),
-            Some(&OsString::from("true"))
+            get(&variables, "vk_wsi_force_bgra8_unorm_first"),
+            set("true")
         );
         assert_eq!(
-            get("VK_DRIVER_FILES"),
-            Some(&OsString::from(
+            get(&variables, "VK_DRIVER_FILES"),
+            set(
                 "/usr/share/vulkan/icd.d/radeon_icd.json:/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
-            ))
+            )
         );
+        // What would bring another GPU back in is unset.
+        for name in NEUTRALISED {
+            assert_eq!(get(&variables, name), Some(None), "{name}");
+        }
     }
 
     #[test]
@@ -295,13 +377,29 @@ mod tests {
             // An AMD card without its kernel driver.
             vec![chip(AMD, "vfio-pci", false)],
         ] {
-            let choice = Choice::choose(false, &chips, &manifests());
+            let choice = Choice::choose(None, &chips, &manifests());
             assert_eq!(choice, Choice::Software(Reason::NoAmdChip), "{chips:?}");
             assert_eq!(
                 choice.variables(),
-                vec![("ICED_BACKEND", OsString::from("tiny-skia"))]
+                vec![("ICED_BACKEND", Some(OsString::from("tiny-skia")))]
             );
         }
+    }
+
+    #[test]
+    fn a_dedicated_amd_card_is_never_woken_up() {
+        // An Intel laptop with a Radeon card: the Intel chip drives the screen.
+        let intel_and_radeon = [chip(0x8086, "i915", true), chip(AMD, AMDGPU, false)];
+        assert_eq!(
+            Choice::choose(None, &intel_and_radeon, &manifests()),
+            Choice::Software(Reason::DedicatedAmdChip)
+        );
+        // An AMD APU with a Radeon card: RADV would open both.
+        let apu_and_radeon = [chip(AMD, AMDGPU, true), chip(AMD, AMDGPU, false)];
+        assert_eq!(
+            Choice::choose(None, &apu_and_radeon, &manifests()),
+            Choice::Software(Reason::SeveralAmdChips)
+        );
     }
 
     #[test]
@@ -312,7 +410,7 @@ mod tests {
             .filter(|p| !is_radv_manifest(p))
             .collect();
         assert_eq!(
-            Choice::choose(false, &chips, &others),
+            Choice::choose(None, &chips, &others),
             Choice::Software(Reason::NoVulkanDriver)
         );
     }
@@ -320,9 +418,25 @@ mod tests {
     #[test]
     fn a_renderer_set_by_the_user_wins() {
         let chips = [chip(AMD, AMDGPU, true)];
-        let choice = Choice::choose(true, &chips, &manifests());
+        let choice = Choice::choose(Some("tiny-skia"), &chips, &manifests());
         assert_eq!(choice, Choice::Inherited);
         assert!(choice.variables().is_empty());
+    }
+
+    #[test]
+    fn wgpu_asked_by_the_user_stays_on_the_amd_chip() {
+        let chips = [chip(0x10de, "nvidia", false), chip(AMD, AMDGPU, true)];
+        let choice = Choice::choose(Some("wgpu"), &chips, &manifests());
+        let variables = choice.variables();
+        // The user's ICED_BACKEND is kept, the Vulkan restriction still applies.
+        assert_eq!(get(&variables, "ICED_BACKEND"), None);
+        assert!(get(&variables, "VK_DRIVER_FILES").is_some());
+        // Where the GPU cannot be narrowed down, the user's choice stands as it is.
+        let intel_and_radeon = [chip(0x8086, "i915", true), chip(AMD, AMDGPU, false)];
+        assert_eq!(
+            Choice::choose(Some("wgpu"), &intel_and_radeon, &manifests()),
+            Choice::Inherited
+        );
     }
 
     #[test]

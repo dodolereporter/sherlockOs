@@ -1,6 +1,7 @@
 # ADR 0014 : Toolkit du shell
 
-- Statut : accepté le 2026-11-25 par l'auteur
+- Statut : accepté le 2026-11-25 par l'auteur ; sa règle de rendu (logiciel seul) est
+  remplacée par l'ADR 0018 (`0018-gpu-rendering-of-the-shell.md`), le choix d'iced reste valable
 - Date : 2026-11-24
 - Lot : D-00
 

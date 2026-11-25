@@ -30,15 +30,28 @@ unsafe { renderer.apply() };
 ```
 
 `Choice::detect` reads `/sys/class/drm` (never `lspci`, which wakes a sleeping card) and the
-Vulkan loader's folders. With an AMD chip bound to `amdgpu` and Mesa's Vulkan manifest
-(`radeon_icd*.json`), it renders with wgpu on Vulkan, the loader seeing that manifest only
-(`VK_DRIVER_FILES`): the NVIDIA card is never asked anything. Otherwise it renders with
-tiny-skia. It also sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see
-ADR 0018). `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software).
+Vulkan loader's folders. With a single chip on `amdgpu`, an AMD chip that drives the screen
+(`boot_vga`), and Mesa's Vulkan manifest (`radeon_icd*.json`, not the 32-bit ones), it renders
+with wgpu on Vulkan, the loader seeing that manifest only (`VK_DRIVER_FILES`): a dedicated card,
+NVIDIA or Radeon, is never asked anything. It also unsets `VK_ADD_DRIVER_FILES`,
+`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`. Otherwise it renders with tiny-skia, a dedicated
+Radeon card included (an Intel laptop with a Radeon card, an APU with a Radeon card). It also sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see
+ADR 0018). `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software); set to
+`wgpu`, it is kept and the Vulkan restriction still applies where it can.
 If wgpu finds no adapter that can present, iced falls back to tiny-skia by itself.
 
+`apply` must be the first statement of `main`, while the process has one thread: no thread
+before it, and no `#[tokio::main]` or similar attribute on that `main`.
+
 A command the program starts goes through `gpu::for_child(&mut command)`, which gives it back
-the environment the program was started with.
+the environment the program was started with, unset variables included.
+
+Every program of the workspace that draws with iced must do this: sherlock-ui compiles iced with
+wgpu, and Cargo enables it for all of them. The test `tests/renderer_choice.rs` walks the
+workspace members that depend on iced, on `iced_exwlshell` or on sherlock-ui with its `iced`
+feature, and fails if one of their `main` (binaries and examples) does not start with
+`gpu::Choice::detect()` and `apply()`. Only wgpu's Vulkan backend is compiled (`wgpu-bare` and a
+`wgpu` dependency with `vulkan` alone): even a forgotten choice cannot load an EGL library.
 
 `surface::gpu_drawn()` tells which renderer drew the last `surface::Shadowed`: a program that
 sizes a surface for a blurred shadow (the bar's menu) learns it from its first frame.
@@ -354,9 +367,12 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
 ## Additions of D-02 (GPU rendering)
 
 - **`gpu`**: the choice of the renderer, see Renderer. Tested without a GPU: the reference
-  laptop picks RADV's manifests only, no AMD chip or no Mesa Vulkan driver gives software, a
-  user's `ICED_BACKEND` wins, chips are read from a fake `/sys/class/drm`, children get the
-  environment back.
+  laptop picks RADV's 64-bit manifests only and unsets the PRIME variables; no AMD chip, a
+  dedicated Radeon card (with an Intel chip, or with an APU) or no Mesa Vulkan driver gives
+  software; a user's `ICED_BACKEND` wins, and `wgpu` keeps the restriction; chips are read from a
+  fake `/sys/class/drm`; `apply` then `for_child` run end to end in a test without harness
+  (`tests/gpu_apply.rs`, one thread); every iced program makes the choice
+  (`tests/renderer_choice.rs`).
 - **Shadows.** `surface::Shadowed` takes an `Elevation` (`Flat`, `Menu`, `Panel`). On the GPU it
   draws the design board's blurred shadow (`color::MENU_SHADOW` or `SHADOW`,
   `metrics::MENU_SHADOW_OFFSET` and `_BLUR`, `SHADOW_OFFSET` and `_BLUR`); in software it keeps

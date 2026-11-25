@@ -3,7 +3,7 @@
 use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
-use iced_exwlshell::actions::IcedNewPopupSettings;
+use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::component::{self as ui};
@@ -210,7 +210,18 @@ impl Bar {
         let id = Id::unique();
         self.menu = Some(id);
         self.cursor = None;
-        Task::done(Message::NewPopUp { settings, id })
+        // Only the menu takes the pointer: the transparent room for the shadow lies over the
+        // bar, whose buttons stay reachable through it.
+        let (x, y, width, height) = menu::input_rect(self.menu_margins);
+        let region = RegionActionCB::new(move |region| {
+            if let Err(error) = region.add(x, y, width, height) {
+                tracing::warn!(%error, "cannot limit the menu's input region");
+            }
+        });
+        Task::done(Message::NewPopUp { settings, id }).chain(Task::done(Message::SetInputRegion {
+            id,
+            callback: region,
+        }))
     }
 
     fn close_menu(&mut self) -> Task<Message> {
@@ -352,7 +363,8 @@ impl Bar {
         }
         let panel = ui::menu(entries, metrics::MENU_WIDTH).height(Length::Fill);
         let panel = surface::shadowed(panel, metrics::MENU_RADIUS, Elevation::Menu);
-        // A click on the shadow, outside the menu, closes it like a click elsewhere.
+        // A click on the shadow, outside the menu, closes it like a click elsewhere, for a
+        // compositor that would ignore the input region.
         let surface = container(opaque(panel)).padding(self.menu_margins);
         mouse_area(surface)
             .on_press(Message::MenuKey(menu::Key::Close))

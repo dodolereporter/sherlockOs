@@ -104,6 +104,17 @@ pub fn anchor_rect(margins: Padding) -> (i32, i32, u32, u32) {
     (centre - 1, 0, 2, top as u32)
 }
 
+/// The menu itself in its surface (x, y, width, height): the input region of the popup.
+pub fn input_rect(margins: Padding) -> (i32, i32, i32, i32) {
+    let (width, height) = surface_size(margins);
+    (
+        margins.left as i32,
+        margins.top as i32,
+        width as i32 - (margins.left + margins.right) as i32,
+        height as i32 - (margins.top + margins.bottom) as i32,
+    )
+}
+
 /// A key that matters in the open menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -191,6 +202,19 @@ mod tests {
             let (x, y, _, height) = anchor_rect(margins(gpu));
             // xdg_positioner: the anchor rectangle stays inside the bar surface.
             assert!(x >= 0 && y >= 0 && height >= 1 && height as f32 <= metrics::TOP_BAR_HEIGHT);
+        }
+        // The input region is the menu alone: on the GPU, the room for the shadow lies over
+        // the bar (from y 20 on the screen), which must keep its pointer.
+        for gpu in [false, true] {
+            let (x, y, width, _) = input_rect(margins(gpu));
+            let (left, top) = menu_on_screen(margins(gpu));
+            let surface_top = top - margins(gpu).top;
+            assert_eq!((x, width), (margins(gpu).left as i32, 256));
+            assert_eq!(surface_top + y as f32, 52.0);
+            assert!(
+                surface_top + y as f32 >= metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT
+            );
+            assert_eq!(left, 18.0);
         }
         // On the GPU the surface holds the shadow: 54 of blur, offset 22 down, cut on the left
         // at the screen edge.

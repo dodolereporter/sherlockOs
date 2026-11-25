@@ -101,9 +101,10 @@ fn the_menu_renders_without_a_screen() {
 }
 
 #[test]
-fn the_menu_renders_with_room_for_its_shadow() {
-    // The surface the GPU gets: the blurred shadow drawn around the menu. In software (the
-    // default for tests), the crisp shadow is drawn instead.
+fn the_menu_surface_sized_for_the_gpu_renders() {
+    // The surface the GPU gets, with room for the shadow. Tests render in software, which
+    // draws the crisp shadow: this only checks that the capture is written. The blurred shadow
+    // shows with `ICED_TEST_BACKEND=wgpu` and the variables of ADR 0018 (docs/bar.md).
     let mut state = sample();
     state.menu_margins = menu::margins(true);
     let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());

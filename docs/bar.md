@@ -340,7 +340,8 @@ glass over the desktop. In software (no AMD chip, or a compositor without `linux
 ours for now), it stays opaque with black corners. Since D-02 the menu surface is placed by the
 centre of its top edge (anchor and gravity `Bottom`), so that its shadow can start left of and
 above the bar surface; the menu itself stays at (18, 52) of the Menus board, which a test checks
-with and without the shadow.
+with and without the shadow. Its input region is the menu alone: the room for the shadow lies
+over the bar, whose buttons stay reachable through it.
 
 ![The bar on the GPU, in a headless KWin, over the desktop background](../desktop/bar/screenshots/bar-kwin-gpu.png)
 
