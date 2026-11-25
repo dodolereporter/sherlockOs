@@ -984,6 +984,7 @@ dependencies = [
 name = "evidence"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "futures",
  "iced",
  "iced_runtime",

@@ -18,7 +18,7 @@ fn main() -> iced::Result {
     let (width, height) = metrics::REFERENCE_WINDOW;
     let app = iced::application(|| App::new(Config::from_env()), App::update, App::view)
         .title(App::title)
-        .theme(theme::window_theme())
+        .theme(|_: &App| theme::window_theme())
         .subscription(App::subscription)
         .default_font(typography::UI)
         .window(iced::window::Settings {

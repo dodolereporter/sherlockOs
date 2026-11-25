@@ -23,6 +23,8 @@ libc = "=0.2.191"
 # Installed applications, file types and default applications (workspace crate).
 mime-apps = { path = "../mime-apps" }
 sherlock-ui = { path = "../sherlock-ui" }
+# The theme of the appearance file, followed live (workspace crate).
+appearance-config = { path = "../appearance-config" }
 # UDisks2 on the system D-Bus: disks, USB keys, cards, mount, unmount, eject. Pure Rust, no
 # libdbus. Only its default pair of features is kept, named explicitly: the blocking API (the
 # watcher runs on its own thread) and its own small async-io executor (no tokio).

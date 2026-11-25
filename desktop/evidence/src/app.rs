@@ -5,9 +5,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
+use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
+use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::metrics;
 use sherlock_ui::texts::evidence as texts;
@@ -26,6 +28,18 @@ use sherlock_ui::motion::{self, Animation, Fade};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
+pub fn appearance(path: &PathBuf) -> UnboundedReceiver<Theme> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let follow = appearance_config::follow_themes(path.clone(), move |theme| {
+        sender.unbounded_send(theme).is_ok()
+    });
+    if let Err(error) = follow {
+        tracing::warn!(%error, "Evidence will not follow the appearance file");
+    }
+    receiver
+}
 
 /// Identifiers of the widgets the application drives.
 pub const LIST: &str = "list";
@@ -234,6 +248,8 @@ pub enum Message {
     Window(WindowAction),
     /// A frame of the window, during an animation or a measurement.
     Frame(Instant),
+    /// The theme of the appearance file, at start then at each change.
+    Theme(Theme),
     /// Content of a location, read off the interface thread. The number discards a read
     /// overtaken by a more recent navigation.
     Loaded(u64, Result<Vec<Entry>, ()>),
@@ -346,6 +362,8 @@ pub struct App {
     pub(crate) chooser: Option<String>,
     /// Application icons, by desktop id.
     pub(crate) icons: Arc<HashMap<String, AppIcon>>,
+    /// The theme of the appearance file, shown with a fade.
+    pub(crate) theme: ThemeFade,
 }
 
 impl App {
@@ -396,6 +414,7 @@ impl App {
             always: false,
             chooser: None,
             icons: Arc::default(),
+            theme: ThemeFade::default(),
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -427,7 +446,11 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([events, frames, devices])
+        let appearance = match appearance_config::path() {
+            Some(path) => Subscription::run_with(path, appearance).map(Message::Theme),
+            None => Subscription::none(),
+        };
+        Subscription::batch([events, frames, devices, appearance])
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -465,7 +488,8 @@ impl App {
             a.as_ref().is_some_and(|a| !a.is_done(now, precision))
         };
         let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
-        spring(&self.highlight, motion::GEOMETRY_PRECISION)
+        self.theme.running()
+            || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
     }
@@ -651,7 +675,11 @@ impl App {
                     self.refilter();
                 }
             }
-            Message::Frame(now) => return self.frame(now),
+            Message::Frame(now) => {
+                self.theme.tick(now);
+                return self.frame(now);
+            }
+            Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Devices(volumes) => self.volumes = volumes,
             Message::Places(available) => self.available = available,
             Message::Catalog(catalog) => {
