@@ -1,6 +1,6 @@
 # ADR 0004 : Desktop en Rust, sur Smithay et iced
 
-- Statut : accepté
+- Statut : accepté. Réserve sur iced levée le 2026-11-25 par l'ADR 0014
 - Date : 2026-11-24
 - Lot : plan, tableau « Décisions figées »
 

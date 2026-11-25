@@ -1,6 +1,6 @@
 # ADR 0014 : Toolkit du shell
 
-- Statut : proposé
+- Statut : accepté le 2026-11-25 par l'auteur
 - Date : 2026-11-24
 - Lot : D-00
 
