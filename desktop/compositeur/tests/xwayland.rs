@@ -7,7 +7,7 @@
 // Module de test : clippy y autorise unwrap et expect, comme dans les tests unitaires.
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::mpsc, thread, time::Duration};
+    use std::{cell::Cell, path::Path, rc::Rc, sync::mpsc, thread, time::Duration};
 
     use compositeur::State;
     use smithay::{
@@ -141,14 +141,21 @@ mod tests {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         state.add_output((800, 600).into(), Transform::Normal);
-        state.start_xwayland(&event_loop, |_, _| {}).unwrap();
+        // Le résultat du démarrage : `Some(None)` si XWayland a échoué. Ses messages sont sur
+        // la sortie d'erreur du test.
+        let started = Rc::new(Cell::new(None));
+        let done = started.clone();
+        state
+            .start_xwayland(&event_loop, move |_, display| done.set(Some(display)))
+            .unwrap();
         let mut h = Harness {
             event_loop,
             state,
             time: 0,
         };
-        h.run_until("XWayland prêt", |s| s.x_display.is_some());
-        let display = h.state.x_display.unwrap();
+        h.run_until("le démarrage de XWayland", |_| started.get().is_some());
+        let display = started.get().flatten().expect("XWayland n'a pas démarré");
+        assert_eq!(h.state.x_display, Some(display));
         let socket = format!("/tmp/.X11-unix/X{display}");
         assert!(Path::new(&socket).exists());
 

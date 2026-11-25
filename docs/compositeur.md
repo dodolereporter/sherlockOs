@@ -128,7 +128,10 @@ d'un client X11. Raisons :
   environ 85 Mo de mémoire résidente (bibliothèques partagées comprises), sans client X11.
 
 Le numéro d'affichage est le premier libre (`:1` sous une session X11 qui occupe `:0`). Il est
-dans le journal : `XWayland prêt display=1`. Sans `Xwayland` sur le poste, le journal le dit
+dans le journal : `XWayland prêt display=1`. Les messages de Xwayland vont sur la sortie d'erreur
+du compositeur, mêlés à ses journaux. Au démarrage, les avertissements de glamor, de GBM et de
+xkbcomp sont attendus : sans accès à la puce graphique, Xwayland dessine en logiciel. À l'arrêt,
+`(EE) failed to read Wayland events` aussi : le compositeur ferme sa connexion. Sans `Xwayland` sur le poste, le journal le dit
 (`pas d'applications X11`), et la commande part sans `DISPLAY` : elle n'hérite pas de celui de
 la session hôte, où ses fenêtres X11 s'ouvriraient hors du compositeur.
 

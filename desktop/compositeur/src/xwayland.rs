@@ -65,7 +65,8 @@ impl State {
             std::iter::empty::<(String, String)>(),
             true,
             Stdio::null(),
-            Stdio::null(),
+            // Ses erreurs restent visibles, sur notre sortie d'erreur.
+            Stdio::inherit(),
             |_| (),
         )
         .map_err(Error::Xwayland)?;
