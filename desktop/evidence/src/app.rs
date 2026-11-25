@@ -1569,6 +1569,8 @@ impl App {
     /// Starts a program off the interface thread, without waiting for it; a thread reaps
     /// it when it ends.
     fn launch(&mut self, mut command: Process) -> Task<Message> {
+        // The program gets the environment Evidence started with, not its renderer choice.
+        sherlock_ui::gpu::for_child(&mut command);
         Task::perform(
             async move {
                 match command.spawn() {

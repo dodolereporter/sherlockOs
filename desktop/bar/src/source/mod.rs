@@ -130,6 +130,7 @@ pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item =
 /// thread that started it ends, and so when the bar ends.
 fn command(program: &str) -> Command {
     let mut command = Command::new(program);
+    sherlock_ui::gpu::for_child(&mut command);
     command.env("LC_ALL", "C").stdin(Stdio::null());
     let parent = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
     // SAFETY: the closure runs in the child between fork and exec. It only calls prctl(2) and

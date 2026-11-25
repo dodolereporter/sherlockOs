@@ -42,6 +42,9 @@ pub fn launch(app: &DesktopEntry, what: What) -> Result<u32, LaunchError> {
         .split_first()
         .ok_or_else(|| LaunchError::NoCommand(app.id.clone()))?;
     let mut command = Command::new(program);
+    // The application gets the environment the dock started with, not its renderer choice:
+    // a game launched from the dock must still see the NVIDIA card (ADR 0018).
+    sherlock_ui::gpu::for_child(&mut command);
     command
         .args(args)
         .stdin(Stdio::null())

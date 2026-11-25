@@ -45,17 +45,20 @@ fn sample() -> Bar {
         let _ = state.update(message);
     }
     state.user = String::from("Dodo");
+    state.menu_margins = menu::margins(false);
     state
 }
 
-/// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its path and size.
+/// Writes the screenshot to `target/tmp/<name>-<renderer>.png` (`tiny-skia`, or `wgpu` with
+/// `ICED_TEST_BACKEND=wgpu`), returns its path and size.
 fn capture(
     mut ui: Simulator<'_, Message>,
     name: &str,
 ) -> Result<(PathBuf, u64), Box<dyn std::error::Error>> {
     let snapshot = ui.snapshot(&theme::theme())?;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
-    let written = path.with_file_name(format!("{name}-tiny-skia.png"));
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = path.with_file_name(format!("{name}-{renderer}.png"));
     let _ = std::fs::remove_file(&written);
     snapshot.matches_image(&path)?;
     let size = std::fs::metadata(&written)?.len();
@@ -77,8 +80,8 @@ fn bar_size() -> (f32, f32) {
     (width, metrics::TOP_BAR_HEIGHT)
 }
 
-fn menu_size() -> (f32, f32) {
-    let (width, height) = menu::surface_size();
+fn menu_size(state: &Bar) -> (f32, f32) {
+    let (width, height) = menu::surface_size(state.menu_margins);
     (width as f32, height as f32)
 }
 
@@ -93,8 +96,38 @@ fn the_bar_renders_without_a_screen() {
 fn the_menu_renders_without_a_screen() {
     let mut state = sample();
     state.cursor = Some(1);
-    let ui = Simulator::with_size(bar::settings(), menu_size(), state.view_menu());
+    let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
     assert_written(capture(ui, "sherlock-menu"));
+}
+
+#[test]
+fn the_menu_surface_sized_for_the_gpu_renders() {
+    // The surface the GPU gets, with room for the shadow. Tests render in software, which
+    // draws the crisp shadow: this only checks that the capture is written. The blurred shadow
+    // shows with `ICED_TEST_BACKEND=wgpu` and the variables of ADR 0018 (docs/bar.md).
+    let mut state = sample();
+    state.menu_margins = menu::margins(true);
+    let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
+    assert_written(capture(ui, "sherlock-menu-shadow"));
+}
+
+#[test]
+fn a_click_on_the_shadow_closes_the_menu() {
+    // The surface sized for the GPU's blurred shadow: a click there is outside the menu.
+    let mut state = sample();
+    state.menu_margins = menu::margins(true);
+    let mut ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
+    ui.point_at(iced::Point::new(4.0, 4.0));
+    ui.simulate(iced_test::simulator::click());
+    ui.click("Verrouiller").expect("entry found");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(matches!(
+        messages[..],
+        [
+            Message::MenuKey(menu::Key::Close),
+            Message::Activate(menu::Action::Lock)
+        ]
+    ));
 }
 
 #[test]
@@ -112,7 +145,7 @@ fn the_bar_shows_time_date_and_workspaces() {
 #[test]
 fn a_click_in_the_menu_picks_its_entry() {
     let state = sample();
-    let mut ui = Simulator::with_size(bar::settings(), menu_size(), state.view_menu());
+    let mut ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
     assert!(ui.find("Dodo").is_ok());
     ui.click("Verrouiller").expect("entry found");
     let activated = ui

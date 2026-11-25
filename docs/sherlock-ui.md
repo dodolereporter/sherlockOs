@@ -3,13 +3,13 @@
 `desktop/sherlock-ui` is the visual library of the desktop: the only place where colors, sizes,
 fonts and interface texts are written. Lot D-01 fills it from the Visual identity section of
 `docs/contexte.md` and from the design boards, which are authoritative for the appearance. The
-toolkit is iced 0.14 with software rendering (ADR 0014).
+toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 0018).
 
 ## Two layers
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -17,8 +17,49 @@ The shell programs compile neither it nor its sample texts.
 
 The `iced` feature is on by default, because every shell program wants it. The compositor,
 which only reads tokens, turns it off with `default-features = false` and does not compile
-iced. iced is compiled with the tiny-skia renderer only: without the `wgpu` feature, no
-environment variable can pick the GPU or wake the NVIDIA card.
+iced. iced is compiled with both renderers, wgpu and tiny-skia: see Renderer.
+
+## Renderer (D-02)
+
+A program chooses its renderer first thing in `main`, before any thread exists (ADR 0018):
+
+```rust
+let renderer = sherlock_ui::gpu::Choice::detect();
+// SAFETY: first statement of `main`, no other thread exists yet.
+unsafe { renderer.apply() };
+```
+
+`Choice::detect` reads `/sys/class/drm` (never `lspci`, which wakes a sleeping card) and the
+Vulkan loader's folders. With a single chip on `amdgpu`, an AMD chip that drives the screen
+(`boot_vga`), and Mesa's Vulkan manifest (`radeon_icd*.json`, not the 32-bit ones), it renders
+with wgpu on Vulkan, the loader seeing that manifest only (`VK_DRIVER_FILES`): a dedicated card,
+NVIDIA or Radeon, is never asked anything. It also unsets `VK_ADD_DRIVER_FILES`,
+`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`. Otherwise it renders with tiny-skia, a dedicated
+Radeon card included (an Intel laptop with a Radeon card, an APU with a Radeon card). It also
+sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see ADR 0018).
+`ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software); set to
+`wgpu`, it is kept and the Vulkan restriction still applies where it can. If wgpu finds no
+adapter that can present, iced falls back to tiny-skia by itself.
+
+`apply` must be the first statement of `main`, while the process has one thread: no thread
+before it, and no `#[tokio::main]` or similar attribute on that `main`.
+
+A command the program starts goes through `gpu::for_child(&mut command)`, which gives it back
+the environment the program was started with, unset variables included.
+
+Every program of the workspace that draws with iced must do this: sherlock-ui compiles iced with
+wgpu, and Cargo enables it for all of them. The test `tests/renderer_choice.rs` walks the
+workspace members that depend on iced, on `iced_exwlshell` or on sherlock-ui with its `iced`
+feature, and fails if one of their `main` (binaries and examples) does not start with
+`gpu::Choice::detect()` and `apply()`. Only wgpu's Vulkan backend is compiled (`wgpu-bare` and a
+`wgpu` dependency with `vulkan` alone): even a forgotten choice cannot load an EGL library.
+
+`surface::gpu_drawn()` tells which renderer drew the last `surface::Shadowed`: a program that
+sizes a surface for a blurred shadow (the bar's menu) learns it from its first frame.
+
+Tests always render with tiny-skia: `.cargo/config.toml` sets `ICED_TEST_BACKEND=tiny-skia`.
+`ICED_TEST_BACKEND=wgpu cargo test` tries the GPU, on the most powerful adapter: not on the
+reference laptop, it wakes the NVIDIA card.
 
 ## Tokens
 
@@ -310,9 +351,9 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   requests its own frames while it runs. Every control without a resting background (menu
   entries, icon, secondary, window and navigation buttons) now uses it: its hover is animated.
   (`animated::Scaled`, which drew menus opening at a scale, was removed: see below.)
-- **Shadows.** Menus and floating panels carry no iced shadow: iced 0.14's software renderer
-  paints a blurred quad shadow as a separate image, outside the redrawn area's clip and
-  without the current transformation, which broke the context menu of Evidence.
+- **Shadows** (revised by D-02, see below). Menus and floating panels carry no iced shadow: iced
+  0.14's software renderer paints a blurred quad shadow as a separate image, outside the redrawn
+  area's clip and without the current transformation, which broke the context menu of Evidence.
   `surface::Shadowed` draws a crisp shadow instead, from `metrics::MENU_SHADOW_LAYERS` and
   `PANEL_SHADOW_LAYERS` (steps of offset, spread and opacity of `color::SHADOW_BASE`).
   `component::floating_menu` (a menu over a window, such as a context menu) and
@@ -323,6 +364,24 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   drop the salmon to 4.39:1 on the lightest desktop disc). The gallery shows the destructive
   button, the toolbar button, the destructive menu entry and the navigation entries, and its
   snapshot is now 2,400 pixels high.
+
+## Additions of D-02 (GPU rendering)
+
+- **`gpu`**: the choice of the renderer, see Renderer. Tested without a GPU: the reference
+  laptop picks RADV's 64-bit manifests only and unsets the PRIME variables; no AMD chip, a
+  dedicated Radeon card (with an Intel chip, or with an APU) or no Mesa Vulkan driver gives
+  software; a user's `ICED_BACKEND` wins, and `wgpu` keeps the restriction; chips are read from a
+  fake `/sys/class/drm`; `apply` then `for_child` run end to end in a test without harness
+  (`tests/gpu_apply.rs`, one thread); every iced program makes the choice
+  (`tests/renderer_choice.rs`).
+- **Shadows.** `surface::Shadowed` takes an `Elevation` (`Flat`, `Menu`, `Panel`). On the GPU it
+  draws the design board's blurred shadow (`menu_shadow` or `shadow` of the active theme's
+  palette, `metrics::MENU_SHADOW_OFFSET` and `_BLUR`, `SHADOW_OFFSET` and `_BLUR`); in software
+  it keeps the crisp steps of D-27, in the palette's `shadow_base`, whose opacity scales each
+  step. A test checks that the light theme gets its own shadow. `Elevation::margins` gives the
+  room the blurred shadow takes around a surface. `Flat` draws nothing and only records the
+  renderer.
+- **Gallery test**: its renderer is created headless with tiny-skia named explicitly.
 
 ## Light theme (D-05a)
 
@@ -365,17 +424,18 @@ Choices the table does not make:
 | `focus_ring` | `#1F64A0` | The light blue `#8FC1E8` reads at 1.9 to 1 on white: the dark variant of the table |
 | Knob of a toggle that is on | `#F6F8FB` (`deepest`) | As in the light « Réglages » board |
 | `toggle_off_hover` | `rgba(20,35,59,0.16)` | 0.26 capped at 0.16: same as at rest, the hover no longer shows |
-| `shadow_base` | `rgba(20,35,59,0.33)` | Its opacity scales each step: `surface::Shadowed` still replaces it (D-05b, after D-02) |
+| `shadow_base` | `rgba(20,35,59,0.33)` | Its opacity scales each step of `surface::Shadowed`'s crisp shadow (wired by D-02) |
 | `logo_ring` | `#2E7D4F` | Ring of the color logo in the bar, the icon green of the table (author's decision) |
 
 ### Contrasts of the light table
 
 The contrast test runs on both palettes and requires 4.5 to 1 for every text, 3 to 1 for the
 logo ring, the tile icon and the focus ring. Other non-text elements are not checked: the track
-of an off toggle reads at 1.37 to 1 in light and 1.75 in dark, its knob carries the state. With the values of the table, five text colors of the light theme
-stayed below 4.5 on some backgrounds; the author chose darker values, listed in
-`docs/appearance.md`. The color logo of the bar takes the icon green `#2E7D4F` for its ring in
-the light theme (`logo_ring`): the fill green reads at 1.4 to 1 on the light bar.
+of an off toggle reads at 1.37 to 1 in light and 1.75 in dark, its knob carries the state. With
+the values of the table, five text colors of the light theme stayed below 4.5 on some
+backgrounds; the author chose darker values, listed in `docs/appearance.md`. The color logo of
+the bar takes the icon green `#2E7D4F` for its ring in the light theme (`logo_ring`): the fill
+green reads at 1.4 to 1 on the light bar.
 
 Two light colors fail on a selected row: the green and the amber of texts (4.06 and 3.90 on a
 card). No component lays them there, since badges move to the darkest background on a selected

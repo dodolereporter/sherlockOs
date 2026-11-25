@@ -7,9 +7,14 @@ use sherlock_ui::{metrics, theme, typography};
 const APP_ID: &str = "evidence";
 
 fn main() -> iced::Result {
+    // Before anything else: the renderer is chosen through the environment (ADR 0018).
+    let renderer = sherlock_ui::gpu::Choice::detect();
+    // SAFETY: first statement of `main`, no other thread exists yet.
+    unsafe { renderer.apply() };
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    tracing::info!(?renderer, "renderer");
     let (width, height) = metrics::REFERENCE_WINDOW;
     let app = iced::application(|| App::new(Config::from_env()), App::update, App::view)
         .title(App::title)

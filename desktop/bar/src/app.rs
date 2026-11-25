@@ -1,14 +1,15 @@
 //! Bar state, messages, and its two views: the bar and the Sherlock menu.
 
-use iced::widget::{column, container, mouse_area, row, space};
+use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
-use iced_exwlshell::actions::IcedNewPopupSettings;
+use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::Icon;
+use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{color, metrics, strings, typography};
 
 use crate::menu::{self, Action};
@@ -33,6 +34,8 @@ pub struct Bar {
     surface: Option<Id>,
     /// Surface of the Sherlock menu while it is open.
     menu: Option<Id>,
+    /// Room around the menu in its surface: the gap below the bar, and its shadow on the GPU.
+    pub menu_margins: Padding,
     /// Menu entry highlighted by the keyboard or the pointer.
     pub cursor: Option<usize>,
     /// Bar button that has the keyboard focus, as an index in `targets()`. The bar keeps it in
@@ -192,18 +195,33 @@ impl Bar {
             tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
         };
-        let (width, height) = menu::surface_size();
-        let (button_width, _) = metrics::SHERLOCK_BUTTON;
-        let anchor = Position::new(metrics::TOP_BAR_PADDING.0 as i32, 0);
-        let anchor_size = PixelSize::px(button_width as u32, metrics::TOP_BAR_HEIGHT as u32);
-        let settings =
-            IcedNewPopupSettings::new(surface, PixelSize::px(width, height), anchor, anchor_size)
-                .anchor(PopupAnchor::BottomLeft)
-                .gravity(PopupGravity::BottomRight);
+        // The bar has been drawn by then: its renderer is known.
+        self.menu_margins = menu::margins(surface::gpu_drawn() == Some(true));
+        let (width, height) = menu::surface_size(self.menu_margins);
+        let (x, y, anchor_width, anchor_height) = menu::anchor_rect(self.menu_margins);
+        let settings = IcedNewPopupSettings::new(
+            surface,
+            PixelSize::px(width, height),
+            Position::new(x, y),
+            PixelSize::px(anchor_width, anchor_height),
+        )
+        .anchor(PopupAnchor::Bottom)
+        .gravity(PopupGravity::Bottom);
         let id = Id::unique();
         self.menu = Some(id);
         self.cursor = None;
-        Task::done(Message::NewPopUp { settings, id })
+        // Only the menu takes the pointer: the transparent room for the shadow lies over the
+        // bar, whose buttons stay reachable through it.
+        let (x, y, width, height) = menu::input_rect(self.menu_margins);
+        let region = RegionActionCB::new(move |region| {
+            if let Err(error) = region.add(x, y, width, height) {
+                tracing::warn!(%error, "cannot limit the menu's input region");
+            }
+        });
+        Task::done(Message::NewPopUp { settings, id }).chain(Task::done(Message::SetInputRegion {
+            id,
+            callback: region,
+        }))
     }
 
     fn close_menu(&mut self) -> Task<Message> {
@@ -278,11 +296,12 @@ impl Bar {
             right: pad_right + metrics::BORDER_WIDTH,
             ..Padding::ZERO
         });
-        container(line)
+        let bar = container(line)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(sherlock_ui::theme::top_bar)
-            .into()
+            .style(sherlock_ui::theme::top_bar);
+        // Flat: no shadow, but drawing it tells the menu which renderer draws the bar.
+        surface::shadowed(bar, metrics::TOP_BAR_RADIUS, Elevation::Flat).into()
     }
 
     /// Network, sound, battery, then date and time. An indicator not read yet is not shown.
@@ -343,7 +362,13 @@ impl Bar {
             entries.push(mouse_area(item).on_enter(Message::Hover(i)).into());
         }
         let panel = ui::menu(entries, metrics::MENU_WIDTH).height(Length::Fill);
-        column![space().height(metrics::TOP_BAR_MENU_GAP), panel].into()
+        let panel = surface::shadowed(panel, metrics::MENU_RADIUS, Elevation::Menu);
+        // A click on the shadow, outside the menu, closes it like a click elsewhere, for a
+        // compositor that would ignore the input region.
+        let surface = container(opaque(panel)).padding(self.menu_margins);
+        mouse_area(surface)
+            .on_press(Message::MenuKey(menu::Key::Close))
+            .into()
     }
 }
 
