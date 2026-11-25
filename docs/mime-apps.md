@@ -46,7 +46,8 @@ mime_apps::set_default(&catalog.dirs, &desktops, &mime, &app.id)?; // remember a
   `Terminal=true`. The terminal is `$TERMINAL` when it names an installed program, else the
   first installed of `x-terminal-emulator`, `konsole`, `gnome-terminal` (with `--`), `kitty`,
   `alacritty`, `foot`, `xterm` (with `-e`). Without any terminal, `Terminal=true` entries are
-  left out of the catalog.
+  left out of the catalog, so nothing that needs one can be picked. `Catalog::load_with_terminal`
+  takes the terminal as an argument instead of looking it up (tests, a future setting).
 - `set_default(dirs, desktops, mime, app)`: in `$XDG_CONFIG_HOME/mimeapps.list`, puts `app`
   first for `mime` under `[Default Applications]` and `[Added Associations]`, keeps the other
   applications after it, and takes `app` out of `[Removed Associations]` for that type (it would

@@ -72,10 +72,22 @@ impl Catalog {
     /// desktop-specific `<desktop>-mimeapps.list` files; `locales` the locale names to try for
     /// the application names, most specific first.
     pub fn load(dirs: Dirs, desktops: &[String], locales: &[String]) -> Self {
+        let terminal = pick_terminal(std::env::var("TERMINAL").ok().as_deref());
+        Self::load_with_terminal(dirs, desktops, locales, terminal)
+    }
+
+    /// Same as `load`, with the terminal given rather than looked up in `$TERMINAL` and
+    /// `PATH` (tests, or a terminal chosen in the settings). `None`: no terminal, and the
+    /// `Terminal=true` entries are left out.
+    pub fn load_with_terminal(
+        dirs: Dirs,
+        desktops: &[String],
+        locales: &[String],
+        terminal: Option<Vec<OsString>>,
+    ) -> Self {
         let applications = read_applications(&dirs, locales);
         let mime = MimeDb::load(&dirs);
         let associations = MimeApps::load(&dirs, desktops);
-        let terminal = pick_terminal(std::env::var("TERMINAL").ok().as_deref());
         let mut catalog = Self {
             dirs,
             mime,
@@ -300,18 +312,28 @@ mod tests {
             "usr/share/applications/vim.desktop",
             "[Desktop Entry]\nType=Application\nName=Vim\nExec=vim %F\nTerminal=true\nMimeType=text/plain;\n",
         );
-        let mut catalog = Catalog::load(tmp.dirs(), &[], &[]);
-        catalog.terminal = pick_terminal(Some("sh"));
+        // The terminal is given: the test needs none installed.
+        let terminal = Some(vec!["test-terminal".into(), "-e".into()]);
+        let catalog = Catalog::load_with_terminal(tmp.dirs(), &[], &[], terminal);
         let vim = catalog.application("vim.desktop").cloned().expect("vim");
         let file = std::path::PathBuf::from("/tmp/a.txt");
         let (program, args) = catalog
             .command(&vim, std::slice::from_ref(&file))
             .expect("command");
-        assert_eq!(program, "sh");
+        assert_eq!(program, "test-terminal");
         assert_eq!(args, ["-e", "vim", "/tmp/a.txt"]);
+        // Without any terminal, the entry is left out instead of failing to start.
+        let none = Catalog::load_with_terminal(tmp.dirs(), &[], &[], None);
+        assert!(none.application("vim.desktop").is_none());
+        assert!(
+            none.handlers("text/plain")
+                .iter()
+                .all(|a| a.id != "vim.desktop")
+        );
+        // `$TERMINAL` naming a missing program is ignored.
         assert_eq!(
-            pick_terminal(Some("/nonexistent/terminal")).is_some(),
-            pick_terminal(None).is_some()
+            pick_terminal(Some("/nonexistent/terminal")),
+            pick_terminal(None)
         );
     }
 }
