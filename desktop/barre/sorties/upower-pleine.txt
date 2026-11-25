@@ -1,0 +1,15 @@
+  power supply:         yes
+  updated:              Wed Nov 25 13:36:51 2026 (209 seconds ago)
+  has history:          no
+  has statistics:       no
+  battery
+    present:             yes
+    state:               fully-charged
+    warning-level:       none
+    energy:              61.742 Wh
+    energy-full:         61.742 Wh
+    energy-rate:         0 W
+    charge-cycles:       N/A
+    percentage:          100%
+    icon-name:          'battery-full-charged-symbolic'
+

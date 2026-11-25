@@ -22,6 +22,34 @@ pub const TOP_BAR_MARGIN_SIDE: f32 = 12.0;
 pub const TOP_BAR_MARGIN_TOP: f32 = 10.0;
 /// Rayon de la barre du haut.
 pub const TOP_BAR_RADIUS: f32 = 12.0;
+/// Marges intérieures de la barre du haut : à gauche, à droite.
+pub const TOP_BAR_PADDING: (f32, f32) = (6.0, 10.0);
+/// Écart entre le bouton Sherlock et le nom de l'application.
+pub const TOP_BAR_LEFT_GAP: f32 = 4.0;
+/// Bouton Sherlock : largeur, hauteur, rayon, taille du symbole.
+pub const SHERLOCK_BUTTON: (f32, f32) = (30.0, 28.0);
+pub const SHERLOCK_BUTTON_RADIUS: f32 = 8.0;
+pub const SHERLOCK_GLYPH: f32 = 20.0;
+/// Anneau vert du bouton Sherlock quand son menu est ouvert.
+pub const SHERLOCK_BUTTON_OPEN_RING: f32 = 2.0;
+/// Nom de l'application active : marges à gauche et à droite.
+pub const APP_NAME_PADDING: (f32, f32) = (8.0, 10.0);
+/// Pastille d'un bureau : hauteur, marge sur les côtés, rayon, écart entre deux pastilles.
+pub const CHIP_HEIGHT: f32 = 24.0;
+pub const CHIP_PADDING: f32 = 12.0;
+pub const CHIP_RADIUS: f32 = 12.0;
+pub const CHIP_GAP: f32 = 4.0;
+/// Indicateurs à droite : écart entre deux indicateurs, entre une icône et sa valeur.
+pub const STATUS_GAP: f32 = 14.0;
+pub const STATUS_ICON_GAP: f32 = 6.0;
+/// Écart entre le bas de la barre et un menu qu'elle ouvre (planche Menus : 46 puis 52).
+pub const TOP_BAR_MENU_GAP: f32 = 6.0;
+/// En-tête du menu Sherlock : côté et rayon de l'avatar, taille du symbole, marges haut,
+/// côtés et bas.
+pub const MENU_AVATAR: f32 = 40.0;
+pub const MENU_AVATAR_RADIUS: f32 = 11.0;
+pub const MENU_AVATAR_GLYPH: f32 = 30.0;
+pub const MENU_HEADER_PADDING: (f32, f32, f32) = (6.0, 8.0, 8.0);
 
 // Fenêtres et panneaux.
 
@@ -150,4 +178,7 @@ const _: () = {
     assert!(MENU_ITEM_RADIUS < MENU_RADIUS && MENU_ITEM_HEIGHT < BUTTON_HEIGHT);
     assert!(SUBMENU_WIDTH < MENU_WIDTH);
     assert!(ICON_SIZE_SMALL < ICON_SIZE && ICON_SIZE < ICON_GRID);
+    // Les éléments de la barre tiennent dans sa hauteur.
+    assert!(SHERLOCK_BUTTON.1 < TOP_BAR_HEIGHT && CHIP_HEIGHT < TOP_BAR_HEIGHT);
+    assert!(SHERLOCK_GLYPH < SHERLOCK_BUTTON.1 && MENU_AVATAR_GLYPH < MENU_AVATAR);
 };

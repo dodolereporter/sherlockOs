@@ -258,6 +258,61 @@ pub fn divider(_: &Theme) -> container::Style {
     }
 }
 
+/// Barre du haut : verre de la planche Main, rayon 12.
+pub fn top_bar(_: &Theme) -> container::Style {
+    surface(
+        color::TOP_BAR_GLASS,
+        color::TOP_BAR_BORDER,
+        metrics::TOP_BAR_RADIUS,
+        Shadow::default(),
+    )
+}
+
+/// Pastille d'un bureau : verte quand le bureau est actif, voilée sinon.
+pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let (fill, text) = match (active, status) {
+            (_, button::Status::Disabled) => (color::DISABLED, color::TEXT_TERTIARY),
+            (true, _) => (color::ACCENT, color::TEXT_ON_ACCENT),
+            (false, button::Status::Active) => (color::CHIP, color::TEXT_SECONDARY),
+            (false, _) => (color::CHIP_HOVER, color::TEXT_PRIMARY),
+        };
+        button_style(Some(fill), text, border::rounded(metrics::CHIP_RADIUS))
+    }
+}
+
+/// Bouton Sherlock : pastille crème, cerclée de vert quand son menu est ouvert.
+pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let fill = match status {
+            // Pas de planche pour ces états : le crème s'assombrit un peu au survol, un peu
+            // plus à l'appui.
+            button::Status::Hovered => color::CREAM.mix(color::TEXT_ON_CREAM, 0.06),
+            button::Status::Pressed => color::CREAM.mix(color::TEXT_ON_CREAM, 0.12),
+            _ => color::CREAM,
+        };
+        let edge = if open {
+            outline(
+                metrics::SHERLOCK_BUTTON_OPEN_RING,
+                color::ACCENT,
+                metrics::SHERLOCK_BUTTON_RADIUS,
+            )
+        } else {
+            border::rounded(metrics::SHERLOCK_BUTTON_RADIUS)
+        };
+        button_style(Some(fill), color::TEXT_ON_CREAM, edge)
+    }
+}
+
+/// Avatar crème en tête du menu Sherlock.
+pub fn menu_avatar(_: &Theme) -> container::Style {
+    container::Style {
+        background: background(color::CREAM),
+        border: border::rounded(metrics::MENU_AVATAR_RADIUS),
+        ..container::Style::default()
+    }
+}
+
 /// Fond d'écran du bureau.
 pub fn desktop(_: &Theme) -> container::Style {
     container::Style {
@@ -424,6 +479,28 @@ mod tests {
             ] {
                 let what = format!("{name} sur entrée active");
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
+            }
+        }
+        // Barre du haut, posée sur le bureau et ses disques : textes et pastilles des bureaux.
+        let desktops = std::iter::once(color::DESKTOP).chain(color::DESKTOP_DISCS);
+        for (i, d) in desktops.enumerate() {
+            let on = (
+                format!("barre sur bureau {i}"),
+                color::TOP_BAR_GLASS.over(d),
+            );
+            for (name, text) in [
+                ("texte de la barre", color::TEXT_PRIMARY),
+                ("indicateur de la barre", color::TEXT_SECONDARY),
+                ("batterie faible", color::AMBER),
+            ] {
+                check(&mut failures, name, text, None, &on);
+            }
+            for active in [true, false] {
+                for status in STATUSES {
+                    let s = chip(active)(&theme, status);
+                    let what = format!("pastille de bureau ({active}, {status:?})");
+                    check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
+                }
             }
         }
         // Textes sur les fonds opaques qui leur sont réservés.

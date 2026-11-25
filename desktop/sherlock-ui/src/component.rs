@@ -12,6 +12,7 @@ use iced::{Alignment, Element, Length, Padding, Theme};
 use crate::color::{self, Color};
 use crate::focus::Focusable;
 use crate::icon::Icon;
+use crate::logo::Logo;
 use crate::{metrics, theme, typography};
 
 type StyleFn<'a> = Box<dyn Fn(&Theme, button::Status) -> button::Style + 'a>;
@@ -348,4 +349,91 @@ pub fn glass_panel<'a, Message: 'a>(
     container(content)
         .padding(metrics::PANEL_PADDING)
         .style(theme::glass)
+}
+
+/// Pastille d'un bureau dans la barre du haut, verte quand il est actif.
+pub fn chip<'a, Message: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    active: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let font = if active {
+        typography::UI_SEMIBOLD
+    } else {
+        typography::UI
+    };
+    let content = container(body(label).font(font)).center_y(Length::Fill);
+    let mut control = Control::new(content, theme::chip(active), on_press, metrics::CHIP_RADIUS);
+    control.button = control
+        .button
+        .height(metrics::CHIP_HEIGHT)
+        .padding([0.0, metrics::CHIP_PADDING]);
+    control
+}
+
+/// Symbole du logo, sans carré, à la taille donnée.
+pub fn logo<'a>(version: Logo, size: f32) -> Svg<'a> {
+    svg(svg::Handle::from_memory(version.bare().as_bytes()))
+        .width(size)
+        .height(size)
+}
+
+/// Bouton Sherlock de la barre du haut : pastille crème et symbole du logo.
+pub fn sherlock_button<'a, Message: Clone + 'a>(
+    open: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let (width, height) = metrics::SHERLOCK_BUTTON;
+    let content = container(logo(Logo::Night, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
+    let mut control = Control::new(
+        content,
+        theme::sherlock_button(open),
+        on_press,
+        metrics::SHERLOCK_BUTTON_RADIUS,
+    );
+    control.button = control.button.width(width).height(height).padding(0);
+    control
+}
+
+/// Indicateur de la barre du haut : une icône, suivie de sa valeur s'il y en a une.
+pub fn status<'a, Message: 'a>(
+    glyph: Icon,
+    value: Option<String>,
+    tint: Color,
+) -> Element<'a, Message> {
+    let mut line = row![icon(glyph, metrics::ICON_SIZE, tint)]
+        .spacing(metrics::STATUS_ICON_GAP)
+        .align_y(Alignment::Center);
+    if let Some(value) = value {
+        line = line.push(body(value).color(tint));
+    }
+    line.into()
+}
+
+/// En-tête d'un menu : avatar crème au symbole du logo, titre et sous-titre.
+pub fn menu_header<'a, Message: 'a>(
+    title: impl text::IntoFragment<'a>,
+    subtitle: &'a str,
+) -> Element<'a, Message> {
+    let avatar = container(logo(Logo::Night, metrics::MENU_AVATAR_GLYPH))
+        .center(metrics::MENU_AVATAR)
+        .style(theme::menu_avatar);
+    let subtitle = text(subtitle)
+        .font(typography::UI)
+        .size(typography::SMALL_SIZE)
+        .color(color::TEXT_SECONDARY);
+    let (top, side, bottom) = metrics::MENU_HEADER_PADDING;
+    row![
+        avatar,
+        column![body(title).font(typography::UI_SEMIBOLD), subtitle]
+    ]
+    .spacing(metrics::GAP_ICON)
+    .align_y(Alignment::Center)
+    .padding(Padding {
+        top,
+        right: side,
+        bottom,
+        left: side,
+    })
+    .into()
 }

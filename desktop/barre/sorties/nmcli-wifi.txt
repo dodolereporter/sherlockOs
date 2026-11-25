@@ -1,0 +1,12 @@
+wifi:connected:CESI_HotSpot
+bridge:connected (externally):br-1f2990721d08
+bridge:connected (externally):br-c7c900c28409
+bridge:connected (externally):lxcbr0
+loopback:connected (externally):lo
+bridge:connected (externally):docker0
+wifi-p2p:disconnected:
+ethernet:unavailable:
+ethernet:unmanaged:
+ethernet:unmanaged:
+ethernet:unmanaged:
+ethernet:unmanaged:

@@ -126,6 +126,8 @@ pub const GLASS: Color = Color::rgba(16, 26, 44, 0.82);
 pub const MENU_GLASS: Color = Color::rgba(22, 34, 56, 0.96);
 /// Dock (flou de 30 px).
 pub const DOCK_GLASS: Color = Color::rgba(244, 235, 227, 0.17);
+/// Barre du haut (flou de 24 px). La planche Main la pose un peu plus claire que `GLASS`.
+pub const TOP_BAR_GLASS: Color = Color::rgba(16, 26, 44, 0.78);
 
 // Traits et voiles.
 
@@ -135,6 +137,11 @@ pub const BORDER: Color = Color::rgba(255, 255, 255, 0.10);
 pub const MENU_BORDER: Color = Color::rgba(255, 255, 255, 0.14);
 /// Bordure d'une carte (planche Réglages).
 pub const CARD_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
+/// Bordure de la barre du haut (planche Main).
+pub const TOP_BAR_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
+/// Pastille d'un bureau inactif dans la barre du haut, au repos puis survolée.
+pub const CHIP: Color = Color::rgba(255, 255, 255, 0.07);
+pub const CHIP_HOVER: Color = Color::rgba(255, 255, 255, 0.12);
 /// Bordure du dock.
 pub const DOCK_BORDER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Bordure d'un bouton secondaire.
