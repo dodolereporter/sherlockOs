@@ -86,9 +86,7 @@ pub enum McpError {
     /// Le programme du serveur n'a pas pu être lancé.
     #[error("le serveur {server} ne se lance pas : {source}")]
     Spawn {
-        /// Nom du serveur.
         server: String,
-        /// Cause.
         source: std::io::Error,
     },
     /// Le serveur a fermé sa sortie : il s'est arrêté ou a planté.
@@ -97,31 +95,22 @@ pub enum McpError {
     /// Le serveur n'a pas répondu à temps.
     #[error("le serveur {server} n'a pas répondu à {method} en {delay:?}")]
     Timeout {
-        /// Nom du serveur.
         server: String,
-        /// Méthode JSON-RPC en attente.
         method: String,
-        /// Délai dépassé.
         delay: Duration,
     },
     /// Le serveur a envoyé un message que le client ne comprend pas.
     #[error("réponse invalide du serveur {server} : {detail}")]
     Protocol {
-        /// Nom du serveur.
         server: String,
-        /// Ce qui ne va pas.
         detail: String,
     },
     /// Le serveur a répondu par une erreur JSON-RPC.
     #[error("le serveur {server} refuse {method} : {message} (code {code})")]
     Rpc {
-        /// Nom du serveur.
         server: String,
-        /// Méthode refusée.
         method: String,
-        /// Code d'erreur JSON-RPC.
         code: i64,
-        /// Message du serveur.
         message: String,
     },
     /// Deux serveurs exposent un outil du même nom.
