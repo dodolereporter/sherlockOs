@@ -415,6 +415,49 @@ fn window_renders_headless() {
     assert!(snapshot.matches_image(&path).expect("writing the capture"));
     println!("capture: {}", written.display());
 
+    // The open menu and its submenu are drawn whole: every entry row of both shows the menu
+    // glass, never the black block a misdrawn shadow left (review 3), and the submenu stands
+    // beside the menu without covering it.
+    let picture = ::image::open(&written).expect("capture").to_rgb8();
+    let scale = picture.width() as f32 / width;
+    let menu = app.menu.clone().expect("menu open");
+    let main_items = app.menu_items(menu.on_selection);
+    let sub_items = app.submenu_items();
+    let check = |left: f32, top: f32, items: &[crate::app::MenuItem], what: &str| {
+        let mut y = top + metrics::MENU_PADDING + metrics::BORDER_WIDTH;
+        for item in items {
+            let row = match item {
+                crate::app::MenuItem::Separator => {
+                    2.0 * metrics::MENU_SEPARATOR_MARGIN.0 + metrics::BORDER_WIDTH
+                }
+                _ => metrics::MENU_ITEM_HEIGHT,
+            };
+            if !matches!(item, crate::app::MenuItem::Separator) {
+                // Near the right edge of the row, where no text is drawn.
+                let x = ((left + 8.0) * scale) as u32;
+                let pixel = picture.get_pixel(x, ((y + row / 2.0) * scale) as u32);
+                assert!(
+                    pixel[2] > 40,
+                    "{what}: row at {y} is too dark, {pixel:?}: the menu is not drawn whole"
+                );
+            }
+            y += row;
+        }
+    };
+    check(menu.at.x, menu.at.y, &main_items, "menu");
+    let before = main_items
+        .iter()
+        .position(|item| *item == crate::app::MenuItem::OpenWith)
+        .unwrap_or_default();
+    let offset = App::menu_height(&main_items[..before])
+        - 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
+    let sub_x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
+    assert!(
+        sub_x >= menu.at.x + metrics::CONTEXT_MENU_WIDTH,
+        "submenu overlaps the menu"
+    );
+    check(sub_x, menu.at.y + offset, &sub_items, "submenu");
+
     // A click on a menu entry runs its command.
     let messages: Vec<_> = {
         let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());

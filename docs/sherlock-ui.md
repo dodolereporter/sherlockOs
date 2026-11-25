@@ -297,7 +297,14 @@ Written in English, like all code and technical documentation from now on.
 - **Animations.** `animated::Hoverable` fades a hover veil in and out over `motion::FADE` and
   requests its own frames while it runs. Every control without a resting background (menu
   entries, icon, secondary, window and navigation buttons) now uses it: its hover is animated.
-  `animated::Scaled` draws a widget at a scale from its top-left corner (menus opening).
+  (`animated::Scaled`, which drew menus opening at a scale, was removed: see below.)
+- **Shadows.** Menus and floating panels carry no iced shadow: iced 0.14's software renderer
+  paints a blurred quad shadow as a separate image, outside the redrawn area's clip and
+  without the current transformation, which broke the context menu of Evidence.
+  `surface::Shadowed` draws a crisp shadow instead, from `metrics::MENU_SHADOW_LAYERS` and
+  `PANEL_SHADOW_LAYERS` (steps of offset, spread and opacity of `color::SHADOW_BASE`).
+  `component::menu` uses it, and `component::floating_panel` gives a glass panel of a given
+  width with it (dialogs). A test checks that no surface style has an iced shadow.
 - **Tests.** The contrast test covers the new components, badges on a selected row, the code
   text, the destructive button (its pressed state keeps the hover veil: the lighter veil would
   drop the salmon to 4.39:1 on the lightest desktop disc). The gallery shows the destructive

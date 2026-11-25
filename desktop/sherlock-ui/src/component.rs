@@ -444,11 +444,12 @@ pub fn menu_separator<'a, Message: 'a>() -> Element<'a, Message> {
 pub fn menu<'a, Message: 'a>(
     entries: impl IntoIterator<Item = Element<'a, Message>>,
     width: f32,
-) -> Container<'a, Message> {
-    container(iced::widget::Column::with_children(entries))
+) -> Element<'a, Message> {
+    let body = container(iced::widget::Column::with_children(entries))
         .width(width)
         .padding(metrics::MENU_PADDING)
-        .style(theme::menu)
+        .style(theme::menu);
+    crate::surface::shadowed(body, metrics::MENU_RADIUS, &metrics::MENU_SHADOW_LAYERS).into()
 }
 
 /// Champ de texte de 32 de haut. Sans `on_input`, il est désactivé.
@@ -513,6 +514,19 @@ pub fn glass_panel<'a, Message: 'a>(
     container(content)
         .padding(metrics::PANEL_PADDING)
         .style(theme::glass)
+}
+
+/// A glass panel of the given width over its crisp shadow: dialogs.
+pub fn floating_panel<'a, Message: 'a>(
+    content: impl Into<Element<'a, Message>>,
+    width: f32,
+) -> Element<'a, Message> {
+    crate::surface::shadowed(
+        glass_panel(content).width(width),
+        metrics::PANEL_RADIUS,
+        &metrics::PANEL_SHADOW_LAYERS,
+    )
+    .into()
 }
 
 /// Marks a menu entry as destructive: salmon text (Evidence mock-up).

@@ -21,4 +21,6 @@ pub mod component;
 #[cfg(feature = "iced")]
 pub mod focus;
 #[cfg(feature = "iced")]
+pub mod surface;
+#[cfg(feature = "iced")]
 pub mod theme;

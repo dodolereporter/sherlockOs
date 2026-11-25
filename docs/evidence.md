@@ -155,12 +155,27 @@ its animations runs (or during `--measure`), never at rest.
 | Hover of rows, menu entries, sidebar entries, icon and secondary buttons | 150 ms fade of the hover veil (`sherlock_ui::animated::Hoverable`, which requests its own frames) |
 | Selection | The highlight glides from row to row on `PREVIEW_SPRING` |
 | Opening a folder | The rows rise 8 px and fade in over 150 ms |
-| Context menu | Opens from its corner, scale 0.92 to 1 on `OPEN_SPRING` |
+| Context menu | Appears at once, with no animation (see below) |
 | Preview | Fades in over 150 ms when its content arrives |
 
 iced 0.14 has no group opacity. A fade is a veil of the background colour laid over the
-content and fading out. The context menu cannot use that trick (it floats over the list), so
-it only scales; it does not fade. Nothing blinks.
+content and fading out. The context menu cannot use that trick (it floats over the list).
+
+It used to open from its corner on a spring (`Scaled`, a transformation). Review 3 showed it
+broken in a real window: a black rounded block with a greenish halo hid every entry but the
+first, and cut the submenu. The cause is iced 0.14's software renderer: a quad's blurred
+shadow is drawn as a separate image, computed in screen pixels and painted without the
+current transformation and without the clip mask of the area being redrawn. Under the scale
+transformation, the menu's shadow (`0 22px 54px`) came out as a large opaque block drawn over
+the menu. Checked in an isolated Xephyr: with the scale removed and the blurred shadow kept,
+the menu draws correctly. Two changes, for safety beyond this case:
+
+- the menu has no scale animation any more (and `Scaled` is gone from sherlock-ui);
+- menus and floating panels no longer use iced shadows at all: `sherlock_ui::surface::Shadowed`
+  draws a crisp, light shadow as a few plain offset rounded rectangles (ordinary quads,
+  clipped and transformed like everything else), close to the planche's.
+
+Nothing blinks.
 
 ## Performance
 
@@ -209,6 +224,12 @@ ADR 0014.
    with a modified `src`, a new `Dockerfile`, an ignored `target`), Dockerfile selected, menu
    and submenu open where the planche has them. Scale it down to 1300 × 676.
 3. Put the two side by side. The pair of this lot is in `docs/evidence/`.
+
+The context menu was also checked in a real window, in an isolated Xephyr (`Xephyr :7 -screen
+1300x676`), Evidence started with `DISPLAY=:7`, temporary `HOME`/XDG directories and neutral
+fake applications, the pointer driven by XTest on `:7` only: `docs/evidence/menu-xephyr.png`
+(menu open), `open-with-xephyr.png` (submenu open) and `open-with-xephyr-2s.png` (the same
+two seconds later, pointer still).
 
 On the author's laptop: `cargo run --release -p evidence -- <a git project>`, then compare
 with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).

@@ -329,10 +329,6 @@ pub struct App {
     /// Fade of the content of a folder that opens, and of the preview.
     pub(crate) content_fade: Option<Fade>,
     pub(crate) preview_fade: Option<Fade>,
-    /// The menu's scale animation is over and one last frame drew it at its exact size.
-    pub(crate) menu_settled: bool,
-    /// Scale of the opening menu.
-    pub(crate) menu_scale: Option<Animation>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
     device_menu: Option<String>,
@@ -391,8 +387,6 @@ impl App {
             highlight: None,
             content_fade: None,
             preview_fade: None,
-            menu_scale: None,
-            menu_settled: false,
             volumes: Vec::new(),
             device_menu: None,
             available: Vec::new(),
@@ -472,8 +466,6 @@ impl App {
         };
         let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
         spring(&self.highlight, motion::GEOMETRY_PRECISION)
-            || (spring(&self.menu_scale, motion::SCALE_PRECISION)
-                || (self.menu_scale.is_some() && !self.menu_settled))
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
     }
@@ -483,8 +475,6 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
-        self.menu_scale = None;
-        self.menu_settled = true;
         if let Some(target) = self.highlight.as_ref().map(Animation::target) {
             self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, target, target, now));
         }
@@ -516,20 +506,6 @@ impl App {
             if self.chooser.is_none() {
                 self.always = false;
             }
-        }
-        // The menu opens by scaling.
-        match (&self.menu, &self.menu_scale) {
-            (Some(_), None) => {
-                self.menu_settled = false;
-                self.menu_scale = Some(Animation::new(
-                    motion::OPEN_SPRING,
-                    motion::OPEN_SCALE,
-                    1.0,
-                    now,
-                ));
-            }
-            (None, Some(_)) => self.menu_scale = None,
-            _ => {}
         }
         Task::batch([task, self.preview_task()])
     }
@@ -750,15 +726,6 @@ impl App {
         }
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
-        }
-        // Once the menu has reached its size, one more frame draws it unscaled: without it,
-        // the last scaled frame could stay on screen until the pointer moves.
-        if self
-            .menu_scale
-            .as_ref()
-            .is_some_and(|a| a.is_done(t, motion::SCALE_PRECISION))
-        {
-            self.menu_settled = true;
         }
         let Some(probe) = &mut self.probe else {
             return Task::none();

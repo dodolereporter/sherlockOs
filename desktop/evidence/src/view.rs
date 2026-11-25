@@ -8,7 +8,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Length, Padding};
 use std::time::Duration;
 
-use sherlock_ui::animated::{hoverable, scaled};
+use sherlock_ui::animated::hoverable;
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::texts::{self, evidence as t};
@@ -667,13 +667,9 @@ impl App {
             let lit = !menu.submenu && menu.highlight == Some(i);
             self.menu_entry(*item, lit, menu.submenu, true)
         });
-        // The menu opens by scaling from its top left corner, on a spring.
-        let factor = self
-            .menu_scale
-            .as_ref()
-            .filter(|_| !self.menu_settled)
-            .map_or(1.0, |a| a.value(self.now()) as f32);
-        let main = scaled(ui::menu(entries, metrics::CONTEXT_MENU_WIDTH), factor);
+        // The menu appears at once: no scale animation (a transformed menu and the software
+        // renderer's partial redraws did not agree), and iced has no group opacity to fade it.
+        let main = ui::menu(entries, metrics::CONTEXT_MENU_WIDTH);
         let mut layers: Vec<Element<'_, Message>> =
             vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
         if menu.submenu {
@@ -714,7 +710,7 @@ impl App {
             actions,
         ]
         .spacing(metrics::PREVIEW_GAP);
-        let panel = ui::glass_panel(card).width(metrics::DIALOG_WIDTH);
+        let panel = ui::floating_panel(card, metrics::DIALOG_WIDTH);
         opaque(container(panel).center(Length::Fill).style(theme::scrim))
     }
 }
@@ -787,8 +783,7 @@ impl App {
             ],
         ]
         .spacing(metrics::PREVIEW_GAP);
-        let panel =
-            ui::glass_panel(card).width(metrics::DIALOG_WIDTH + 2.0 * metrics::PANEL_PADDING);
+        let panel = ui::floating_panel(card, metrics::DIALOG_WIDTH + 2.0 * metrics::PANEL_PADDING);
         opaque(container(panel).center(Length::Fill).style(theme::scrim))
     }
 

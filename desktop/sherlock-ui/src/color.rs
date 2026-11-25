@@ -165,6 +165,9 @@ pub const NEUTRAL_SOFT: Color = Color::rgba(255, 255, 255, 0.08);
 pub const ACCENT_BORDER: Color = Color::rgba(133, 197, 149, 0.5);
 /// Fond d'un élément désactivé.
 pub const DISABLED: Color = Color::rgba(255, 255, 255, 0.05);
+/// Colour of the crisp shadows of floating surfaces (`surface::Shadowed`), the same blue
+/// black as `SHADOW` and `MENU_SHADOW`; each step of the shadow sets its own opacity.
+pub const SHADOW_BASE: Color = Color::rgb(3, 8, 18);
 /// Ombre des fenêtres et des panneaux.
 pub const SHADOW: Color = Color::rgba(3, 8, 18, 0.55);
 /// Ombre des menus.

@@ -154,6 +154,14 @@ pub const SUBMENU_GAP: f32 = 4.0;
 /// Ombre d'un menu : décalage vertical et flou.
 pub const MENU_SHADOW_OFFSET: f32 = 22.0;
 pub const MENU_SHADOW_BLUR: f32 = 54.0;
+/// Crisp shadow of a menu: steps of (vertical offset, spread, opacity), drawn as plain
+/// rounded rectangles (see `surface`). They suggest the planche's `0 22px 54px
+/// rgba(3,8,18,0.6)` without a blur, which the software renderer draws wrongly.
+pub const MENU_SHADOW_LAYERS: [(f32, f32, f32); 3] =
+    [(2.0, 1.0, 0.30), (8.0, 3.0, 0.16), (16.0, 6.0, 0.08)];
+/// Crisp shadow of a floating panel or dialog, after `0 28px 70px rgba(3,8,18,0.55)`.
+pub const PANEL_SHADOW_LAYERS: [(f32, f32, f32); 3] =
+    [(3.0, 1.0, 0.28), (10.0, 4.0, 0.15), (20.0, 8.0, 0.07)];
 /// Entrée de menu : hauteur, rayon, marge sur les côtés.
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 pub const MENU_ITEM_RADIUS: f32 = 7.0;

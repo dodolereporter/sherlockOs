@@ -1,7 +1,7 @@
 //! Thème iced construit sur les jetons, et styles de chaque composant selon son état.
 
 use iced::widget::{button, container, text_input};
-use iced::{Background, Border, Shadow, Theme, Vector, border, theme};
+use iced::{Background, Border, Shadow, Theme, border, theme};
 
 use crate::color::{self, Color};
 use crate::metrics;
@@ -44,14 +44,6 @@ fn background(c: Color) -> Option<Background> {
 
 fn outline(width: f32, c: Color, radius: f32) -> Border {
     border::width(width).color(c).rounded(radius)
-}
-
-fn shadow(c: Color, offset: f32, blur: f32) -> Shadow {
-    Shadow {
-        color: c.into(),
-        offset: Vector::new(0.0, offset),
-        blur_radius: blur,
-    }
 }
 
 fn button_style(fill: Option<Color>, text: Color, edge: Border) -> button::Style {
@@ -253,23 +245,26 @@ pub fn card(_: &Theme) -> container::Style {
 }
 
 /// Panneau de verre flottant. Le flou derrière lui est le travail du compositeur.
+/// Its shadow is drawn by `surface::Shadowed` (see `component::glass_panel`), never as an
+/// iced shadow: the software renderer paints those outside the redrawn area.
 pub fn glass(_: &Theme) -> container::Style {
-    let drop = shadow(color::SHADOW, metrics::SHADOW_OFFSET, metrics::SHADOW_BLUR);
-    surface(color::GLASS, color::BORDER, metrics::PANEL_RADIUS, drop)
+    surface(
+        color::GLASS,
+        color::BORDER,
+        metrics::PANEL_RADIUS,
+        Shadow::default(),
+    )
 }
 
 /// Menu et sous-menu.
+/// Its shadow is drawn by `surface::Shadowed` (see `component::menu`), never as an iced
+/// shadow: the software renderer paints those outside the redrawn area.
 pub fn menu(_: &Theme) -> container::Style {
-    let drop = shadow(
-        color::MENU_SHADOW,
-        metrics::MENU_SHADOW_OFFSET,
-        metrics::MENU_SHADOW_BLUR,
-    );
     surface(
         color::MENU_GLASS,
         color::MENU_BORDER,
         metrics::MENU_RADIUS,
-        drop,
+        Shadow::default(),
     )
 }
 
@@ -742,5 +737,21 @@ mod tests {
         assert!(color::TEXT_TERTIARY.contrast(row) < 4.5);
         let row = color::SELECTED_ROW.over(color::MENU_GLASS.over(color::DESKTOP_DISCS[2]));
         assert!(color::TEXT_TERTIARY.contrast(row) >= 4.5);
+    }
+
+    #[test]
+    fn floating_surfaces_carry_no_iced_shadow() {
+        // iced's software renderer draws a quad shadow outside the clip of the redrawn area:
+        // with several damaged rectangles in a frame, a menu turned into a black block. Their
+        // shadow is drawn by `surface::Shadowed` instead.
+        let theme = theme();
+        for (name, style) in [
+            ("menu", menu(&theme)),
+            ("glass", glass(&theme)),
+            ("tooltip", tooltip(&theme)),
+            ("card", card(&theme)),
+        ] {
+            assert_eq!(style.shadow.color.a, 0.0, "{name}");
+        }
     }
 }
