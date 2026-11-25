@@ -1,7 +1,7 @@
 //! The appearance settings file, `$XDG_CONFIG_HOME/appearance/appearance.conf`: the theme, and
 //! the hours of the automatic mode. Every program reads it the same way and follows it live
 //! (`follow`); the settings application (Control Room, D-26) will write it. Depends on the
-//! tokens of sherlock-ui and on `libc` only.
+//! tokens of sherlock-ui, on `libc` and on `tracing`.
 //!
 //! ```text
 //! [Appearance]
@@ -20,7 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use sherlock_ui::color::Theme;
-pub use watch::{Event, follow};
+pub use watch::{Event, follow, follow_themes};
 
 const GROUP: &str = "Appearance";
 const THEME: &str = "Theme";
@@ -425,6 +425,11 @@ mod tests {
     #[test]
     #[ignore = "run by the_next_switch_follows_daylight_saving_time, with TZ=Europe/Paris"]
     fn daylight_saving_time_in_paris() {
+        // Run straight, by `--include-ignored`, it would read the zone of the machine.
+        if std::env::var("TZ").as_deref() != Ok("Europe/Paris") {
+            println!("skipped: needs TZ=Europe/Paris, which its parent test gives");
+            return;
+        }
         let seven = at(7, 0, 0);
         // Saturday 28 March 2026, 20:00 in Paris (19:00 UTC). The clocks go forward that
         // night: 07:00 comes 10 hours later, at 05:00 UTC.

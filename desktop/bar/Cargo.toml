@@ -18,6 +18,8 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "wayland",
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# The theme of the appearance file, followed live (workspace crate).
+appearance-config = { path = "../appearance-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }

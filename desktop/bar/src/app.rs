@@ -1,16 +1,21 @@
 //! Bar state, messages, and its two views: the bar and the Sherlock menu.
 
+use std::path::PathBuf;
+use std::time::Instant;
+
+use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::surface::{self, Elevation};
-use sherlock_ui::{color, metrics, strings, typography};
+use sherlock_ui::{metrics, strings, typography};
 
 use crate::menu::{self, Action};
 use crate::source::battery::{Battery, Charge, UPower};
@@ -43,6 +48,8 @@ pub struct Bar {
     /// activates, in the same update. (iced's focus operations are applied after the redraw
     /// under `iced_exwlshell`, which left the ring one Tab behind.)
     focus: Option<usize>,
+    /// The theme of the appearance file, shown with a fade.
+    pub theme: ThemeFade,
 }
 
 /// A bar button that Tab can reach.
@@ -70,6 +77,9 @@ pub enum Message {
     /// A mouse button was pressed somewhere in the bar or its menu.
     Pointer,
     Closed(Id),
+    /// The theme of the appearance file, at start then at each change.
+    Theme(Theme),
+    Frame(Instant),
 }
 
 impl Bar {
@@ -86,7 +96,18 @@ impl Bar {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        let appearance = match appearance_config::path() {
+            Some(path) => Subscription::run_with(path, appearance).map(Message::Theme),
+            None => Subscription::none(),
+        };
+        let frames = if self.theme.running() {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            appearance,
+            frames,
             Subscription::run(|| watch(SystemClock::default(), "clock")).map(Message::Clock),
             Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
             Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
@@ -154,6 +175,10 @@ impl Bar {
             }
             // Like `:focus-visible` in a browser: the mouse removes the keyboard ring.
             Message::Pointer => self.focus = None,
+            Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::Frame(now) => {
+                self.theme.tick(now);
+            }
             Message::Closed(id) => {
                 // The compositor closes the menu on a click elsewhere (popup_done).
                 if self.menu == Some(id) {
@@ -306,7 +331,8 @@ impl Bar {
 
     /// Network, sound, battery, then date and time. An indicator not read yet is not shown.
     fn indicators(&self) -> Vec<Element<'_, Message>> {
-        let tint = color::TEXT_SECONDARY;
+        let p = color::palette();
+        let tint = p.text_secondary;
         let mut items = Vec::new();
         if let Some(network) = &self.network {
             let glyph = match network {
@@ -328,7 +354,7 @@ impl Bar {
                 Charge::Charging => Icon::BatteryCharging,
                 _ => Icon::Battery,
             };
-            let tint = if battery.is_low() { color::AMBER } else { tint };
+            let tint = if battery.is_low() { p.amber_text } else { tint };
             let value = strings::percent(battery.percent);
             items.push(ui::status(glyph, Some(value), tint));
         }
@@ -336,7 +362,7 @@ impl Bar {
             items.push(ui::body(clock.date()).color(tint).into());
             let time = ui::body(clock.time())
                 .font(typography::UI_SEMIBOLD)
-                .color(color::TEXT_PRIMARY);
+                .color(p.text_primary);
             items.push(time.into());
         }
         items
@@ -370,6 +396,18 @@ impl Bar {
             .on_press(Message::MenuKey(menu::Key::Close))
             .into()
     }
+}
+
+/// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
+pub fn appearance(path: &PathBuf) -> UnboundedReceiver<Theme> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let follow = appearance_config::follow_themes(path.clone(), move |theme| {
+        sender.unbounded_send(theme).is_ok()
+    });
+    if let Err(error) = follow {
+        tracing::warn!(%error, "the bar will not follow the appearance file");
+    }
+    receiver
 }
 
 /// Any mouse button press, captured by a widget or not.
@@ -516,6 +554,38 @@ mod tests {
         assert_eq!(bar.focused(), Some(Target::Workspace(2)));
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert_eq!(bar.focused(), None);
+    }
+
+    /// The only test of this binary that changes the theme: the others draw nothing.
+    #[test]
+    fn a_new_theme_in_the_file_fades_the_bar_without_restarting() {
+        use iced::futures::StreamExt;
+        use sherlock_ui::color::Palette;
+
+        let dir = std::env::temp_dir().join(format!("bar-theme-{}", std::process::id()));
+        let file = dir.join("appearance.conf");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&file, "[Appearance]\nTheme=dark\n").unwrap();
+        let mut themes = appearance(&file);
+        let mut next = || iced::futures::executor::block_on(themes.next()).unwrap();
+        let mut bar = with_workspaces();
+        let _ = bar.update(Message::Theme(next()));
+        assert_eq!(color::palette(), &Palette::DARK);
+
+        std::fs::write(&file, "[Appearance]\nTheme=light\n").unwrap();
+        let theme = next();
+        assert_eq!(theme, Theme::Light);
+        let start = Instant::now();
+        let _ = bar.update(Message::Theme(theme));
+        assert!(bar.theme.running(), "frames are asked for the fade");
+        let _ = bar.update(Message::Frame(start + sherlock_ui::motion::THEME_FADE / 3));
+        assert_ne!(color::palette(), &Palette::DARK);
+        assert_ne!(color::palette(), &Palette::LIGHT);
+        let _ = bar.update(Message::Frame(start + sherlock_ui::motion::THEME_FADE * 2));
+        assert!(!bar.theme.running());
+        assert_eq!(color::palette(), &Palette::LIGHT);
+        color::set_active(Theme::Dark);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

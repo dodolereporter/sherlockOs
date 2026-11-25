@@ -93,6 +93,7 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "sherlock-ui",
+ "tracing",
 ]
 
 [[package]]
@@ -290,6 +291,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "bar"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "iced",
  "iced_exwlshell",
  "iced_test",

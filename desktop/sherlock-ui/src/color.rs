@@ -2,7 +2,11 @@
 //! and the design boards. A program sets the active theme (`set_active`), and every color is
 //! read from its palette (`palette`): no component looks at the theme itself.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Instant;
+
+use crate::motion::{self, Fade};
 
 /// An sRGB color, with its opacity between 0 and 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +45,19 @@ impl Color {
             channel(self.g, other.g, t),
             channel(self.b, other.b, t),
         )
+    }
+
+    /// Mix of every channel and of the opacity: `t` is 0 for `self`, 1 for `other`. Used for
+    /// the fade between the two palettes.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        let channel =
+            |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+        Self {
+            r: channel(self.r, other.r),
+            g: channel(self.g, other.g),
+            b: channel(self.b, other.b),
+            a: self.a + (other.a - self.a) * t,
+        }
     }
 
     /// `self` laid over `below`, blended in sRGB as the browser and tiny-skia do.
@@ -315,33 +332,104 @@ impl Theme {
             Self::Light => &Palette::LIGHT,
         }
     }
+
+    /// Its step in a fade between the palettes.
+    const fn step(self) -> u8 {
+        match self {
+            Self::Dark => 0,
+            Self::Light => MIX_STEPS,
+        }
+    }
 }
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Steps of a fade between the two palettes: enough for a smooth fade at 60 frames a second,
+/// few enough to build each palette once.
+pub const MIX_STEPS: u8 = 32;
+
+/// Where the program stands between the dark palette (0) and the light one (`MIX_STEPS`).
+static MIX: AtomicU8 = AtomicU8::new(0);
 
 /// Makes `theme` the active theme of the program. The program then redraws: the iced theme
 /// (`theme::theme`) and every component follow it.
 pub fn set_active(theme: Theme) {
-    ACTIVE.store(theme == Theme::Light, Ordering::Relaxed);
+    MIX.store(theme.step(), Ordering::Relaxed);
 }
 
-/// The active theme, dark until the program sets one.
+/// Shows a mix of the two palettes, from 0 (dark) to 1 (light), during a fade from one theme
+/// to the other (`ThemeFade`). It is rounded to a step.
+pub fn set_mix(light: f32) {
+    let step = (light.clamp(0.0, 1.0) * f32::from(MIX_STEPS)).round() as u8;
+    MIX.store(step, Ordering::Relaxed);
+}
+
+/// The step of the palette shown, from 0 (dark) to `MIX_STEPS` (light).
+pub fn mix_step() -> u8 {
+    MIX.load(Ordering::Relaxed)
+}
+
+/// The active theme, dark until the program sets one. During a fade, the closer one.
 pub fn active() -> Theme {
-    if ACTIVE.load(Ordering::Relaxed) {
+    if mix_step() * 2 > MIX_STEPS {
         Theme::Light
     } else {
         Theme::Dark
     }
 }
 
-/// The palette of the active theme.
+/// The palette shown: that of the active theme, or a mix of both during a fade.
 pub fn palette() -> &'static Palette {
-    active().palette()
+    Palette::at_step(mix_step())
+}
+
+/// The theme a program shows, followed with a fade (`motion::THEME_FADE`). The program calls
+/// `set` with each theme of the appearance file, and `tick` on each frame while `running`.
+#[derive(Debug, Clone, Default)]
+pub struct ThemeFade {
+    target: Option<Theme>,
+    /// The fade under way, timed from its instant.
+    fade: Option<(Instant, Fade)>,
+}
+
+impl ThemeFade {
+    /// Heads for `theme`: at once the first time, the theme the program starts in, and with a
+    /// fade afterwards. A fade turned back halfway comes back in half the time.
+    pub fn set(&mut self, theme: Theme, now: Instant) {
+        match self.target {
+            None => set_active(theme),
+            Some(target) if target == theme => return,
+            Some(_) => {
+                let from = f32::from(mix_step()) / f32::from(MIX_STEPS);
+                let to = f32::from(theme.step()) / f32::from(MIX_STEPS);
+                let duration = motion::THEME_FADE.mul_f32((to - from).abs());
+                let fade = Fade::new(from, to, std::time::Duration::ZERO, duration);
+                self.fade = Some((now, fade));
+            }
+        }
+        self.target = Some(theme);
+    }
+
+    /// Shows the fade at `now`. Returns whether it still runs.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let Some((start, fade)) = self.fade else {
+            return false;
+        };
+        let at = now.saturating_duration_since(start);
+        set_mix(fade.value(at));
+        if fade.is_done(at) {
+            self.fade = None;
+        }
+        self.fade.is_some()
+    }
+
+    /// A fade is under way: the program asks for frames.
+    pub fn running(&self) -> bool {
+        self.fade.is_some()
+    }
 }
 
 /// Every color of a theme, named by its role. The module constants above are the dark values,
-/// kept for the programs that do not follow the theme yet (lots D-05b and D-05c): new code
-/// reads `palette()`.
+/// kept for the compositor, which does not follow the theme yet (lot D-05c): new code reads
+/// `palette()`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub desktop: Color,
@@ -421,6 +509,11 @@ pub struct Palette {
     pub focus_ring: Color,
     /// Ring of the color logo in the top bar.
     pub logo_ring: Color,
+    /// Dot of the color logo in the top bar, and dot under an open application in the dock:
+    /// cream on the dark glass, night blue on the light one, where cream would not show.
+    pub logo_dot: Color,
+    /// Separator of the dock, before the open applications that are not pinned.
+    pub dock_separator: Color,
 }
 
 /// Tint and light border of the light theme: the night blue of the text on cream.
@@ -505,6 +598,8 @@ impl Palette {
         active_entry: ACTIVE_ENTRY,
         focus_ring: FOCUS_RING,
         logo_ring: ACCENT,
+        logo_dot: CREAM,
+        dock_separator: Color::rgba(255, 255, 255, 0.28),
     };
 
     /// Values of `docs/design/THEME-CLAIR.md`. Its rules give the veils and the shadows: a
@@ -549,7 +644,9 @@ impl Palette {
         field: navy(0.07),
         hover: navy(0.07),
         pressed: navy(0.12),
-        toggle_off: navy(0.16),
+        // Both dark values pass the 0.16 cap: capped, the hover would not show. The track at
+        // rest takes the 0.12 of the pressed veil, a step below; hovered, the cap.
+        toggle_off: navy(0.12),
         toggle_off_hover: navy(0.16),
         inset: navy(0.05),
         controls: navy(0.06),
@@ -592,7 +689,106 @@ impl Palette {
         focus_ring: Color::rgb(0x1F, 0x64, 0xA0),
         // The green of the table for icons: the fill green reads at 1.4 to 1 on the light bar.
         logo_ring: Color::rgb(0x2E, 0x7D, 0x4F),
+        // Cream reads at 1.1 to 1 on the light bar and dock: the night blue of the light text.
+        logo_dot: TEXT_ON_CREAM,
+        dock_separator: navy(0.16),
     };
+
+    /// The palette at `step` of a fade from dark (0) to light (`MIX_STEPS`).
+    pub fn at_step(step: u8) -> &'static Self {
+        static STEPS: OnceLock<Vec<Palette>> = OnceLock::new();
+        match step {
+            0 => &Self::DARK,
+            s if s >= MIX_STEPS => &Self::LIGHT,
+            s => &STEPS.get_or_init(|| {
+                (0..=MIX_STEPS)
+                    .map(|s| Self::DARK.mix(&Self::LIGHT, f32::from(s) / f32::from(MIX_STEPS)))
+                    .collect()
+            })[usize::from(s)],
+        }
+    }
+
+    /// Mix of every color: `t` is 0 for `self`, 1 for `other`.
+    pub fn mix(&self, other: &Self, t: f32) -> Self {
+        let discs = |a: [Color; 3], b: [Color; 3]| [0, 1, 2].map(|i| a[i].lerp(b[i], t));
+        macro_rules! mixed {
+            ($($field:ident),+ $(,)?) => {
+                Self {
+                    desktop_discs: discs(self.desktop_discs, other.desktop_discs),
+                    system_discs: discs(self.system_discs, other.system_discs),
+                    $($field: self.$field.lerp(other.$field, t)),+
+                }
+            };
+        }
+        mixed!(
+            desktop,
+            system_screen,
+            game,
+            deepest,
+            window,
+            title_bar,
+            sidebar,
+            card,
+            terminal_block,
+            glass,
+            menu_glass,
+            dock_glass,
+            top_bar_glass,
+            border,
+            menu_border,
+            card_border,
+            top_bar_border,
+            chip,
+            chip_hover,
+            top_bar_button_open,
+            dock_border,
+            secondary_border,
+            divider,
+            field,
+            hover,
+            pressed,
+            toggle_off,
+            toggle_off_hover,
+            inset,
+            controls,
+            scrim,
+            amber_soft,
+            accent_soft,
+            neutral_soft,
+            accent_border,
+            disabled,
+            shadow_base,
+            shadow,
+            menu_shadow,
+            text_primary,
+            text_secondary,
+            text_tertiary,
+            text_code,
+            text_code_type,
+            text_line_number,
+            text_on_accent,
+            text_on_cream,
+            accent,
+            accent_text,
+            accent_hover,
+            accent_pressed,
+            blue_dark,
+            blue,
+            blue_bright,
+            blue_light,
+            cream,
+            amber,
+            amber_text,
+            salmon,
+            salmon_text,
+            selected_row,
+            active_entry,
+            focus_ring,
+            logo_ring,
+            logo_dot,
+            dock_separator,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -692,85 +888,87 @@ mod tests {
         ),
     ];
 
-    #[test]
-    fn every_token_has_the_value_of_the_light_theme_table() {
+    /// Rows of the table read token by token: the role, then the dark and light tokens.
+    type Exact = (&'static str, Vec<Color>, Vec<Color>);
+
+    fn exact() -> [Exact; 23] {
         let (d, l) = (&Palette::DARK, &Palette::LIGHT);
-        let exact: [(&str, &[Color], &[Color]); 23] = [
-            ("Fond du bureau", &[d.desktop], &[l.desktop]),
+        let one = |dark: Color, light: Color| (vec![dark], vec![light]);
+        let rows: [(&str, (Vec<Color>, Vec<Color>)); 23] = [
+            ("Fond du bureau", one(d.desktop, l.desktop)),
             (
                 "Disques du fond d'écran",
-                &d.desktop_discs,
-                &l.desktop_discs,
+                (d.desktop_discs.to_vec(), l.desktop_discs.to_vec()),
             ),
             (
                 "Fond des écrans système",
-                &[d.system_screen],
-                &[l.system_screen],
+                one(d.system_screen, l.system_screen),
             ),
             (
                 "Disques des écrans système",
-                &d.system_discs,
-                &l.system_discs,
+                (d.system_discs.to_vec(), l.system_discs.to_vec()),
             ),
-            ("Fond du mode jeu", &[d.game], &[l.game]),
-            ("Terminal, zones de code", &[d.deepest], &[l.deepest]),
-            ("Fenêtre", &[d.window], &[l.window]),
-            ("Barre de titre", &[d.title_bar], &[l.title_bar]),
-            ("Panneau latéral", &[d.sidebar], &[l.sidebar]),
-            ("Carte", &[d.card], &[l.card]),
+            ("Fond du mode jeu", one(d.game, l.game)),
+            ("Terminal, zones de code", one(d.deepest, l.deepest)),
+            ("Fenêtre", one(d.window, l.window)),
+            ("Barre de titre", one(d.title_bar, l.title_bar)),
+            ("Panneau latéral", one(d.sidebar, l.sidebar)),
+            ("Carte", one(d.card, l.card)),
             (
                 "Bloc du terminal, carte de l'installeur",
-                &[d.terminal_block],
-                &[l.terminal_block],
+                one(d.terminal_block, l.terminal_block),
             ),
-            ("Verre des menus", &[d.menu_glass], &[l.menu_glass]),
-            ("Verre du dock", &[d.dock_glass], &[l.dock_glass]),
-            ("Texte principal", &[d.text_primary], &[l.text_primary]),
-            ("Texte secondaire", &[d.text_secondary], &[l.text_secondary]),
-            ("Texte tertiaire", &[d.text_tertiary], &[l.text_tertiary]),
+            ("Verre des menus", one(d.menu_glass, l.menu_glass)),
+            ("Verre du dock", one(d.dock_glass, l.dock_glass)),
+            ("Texte principal", one(d.text_primary, l.text_primary)),
+            ("Texte secondaire", one(d.text_secondary, l.text_secondary)),
+            ("Texte tertiaire", one(d.text_tertiary, l.text_tertiary)),
             (
                 "Numéros de ligne, texte fantôme",
-                &[d.text_line_number],
-                &[l.text_line_number],
+                one(d.text_line_number, l.text_line_number),
             ),
-            ("Texte du code", &[d.text_code], &[l.text_code]),
+            ("Texte du code", one(d.text_code, l.text_code)),
             (
                 "Mots-clés du code, dossiers",
-                &[d.blue_light],
-                &[l.blue_light],
+                one(d.blue_light, l.blue_light),
             ),
             (
                 "Types dans le code",
-                &[d.text_code_type],
-                &[l.text_code_type],
+                one(d.text_code_type, l.text_code_type),
             ),
             (
                 "Vert, quand il colore du texte ou une icône",
-                &[d.accent_text],
-                &[l.accent_text],
+                one(d.accent_text, l.accent_text),
             ),
             (
                 "Ambre, quand il colore du texte",
-                &[d.amber_text],
-                &[l.amber_text],
+                one(d.amber_text, l.amber_text),
             ),
             (
                 "Saumon, quand il colore du texte",
-                &[d.salmon_text],
-                &[l.salmon_text],
+                one(d.salmon_text, l.salmon_text),
             ),
         ];
-        for (role, dark, light) in exact {
+        rows.map(|(role, (dark, light))| (role, dark, light))
+    }
+
+    /// Rows given as a rule rather than as values.
+    const RULES: [&str; 3] = [
+        "Verre des panneaux",
+        "Teintes et bordures légères",
+        "Ombres",
+    ];
+
+    #[test]
+    fn every_token_has_the_value_of_the_light_theme_table() {
+        let (d, l) = (&Palette::DARK, &Palette::LIGHT);
+        for (role, dark, light) in exact() {
             let (table_dark, mut table_light) = row(role);
             if let Some((_, from, to)) = OVERRIDES.iter().find(|(r, ..)| *r == role) {
                 assert_eq!(table_light, [*from], "{role}: the table changed");
                 table_light = vec![*to];
             }
-            assert_eq!(
-                (table_dark, table_light),
-                (dark.to_vec(), light.to_vec()),
-                "{role}"
-            );
+            assert_eq!((table_dark, table_light), (dark, light), "{role}");
         }
         // Rows given as a rule: same tint, the opacity follows the dark one.
         let (dark, light) = row("Verre des panneaux");
@@ -793,8 +991,8 @@ mod tests {
             (d.field, l.field),
             (d.hover, l.hover),
             (d.pressed, l.pressed),
-            (d.toggle_off, l.toggle_off),
             (d.toggle_off_hover, l.toggle_off_hover),
+            (d.dock_separator, l.dock_separator),
             (d.inset, l.inset),
             (d.controls, l.controls),
             (d.neutral_soft, l.neutral_soft),
@@ -804,6 +1002,9 @@ mod tests {
             // « opacité plafonnée à 0,16 ».
             assert_eq!(l.a, d.a.min(0.16), "{d:?}");
         }
+        // The off toggle at rest, a step below its hover (`Palette::LIGHT`).
+        assert_eq!(rgb(l.toggle_off), rgb(light[0]));
+        assert!(l.toggle_off.a < l.toggle_off_hover.a && l.toggle_off.a < 0.16);
         let (dark, light) = row("Ombres");
         for (d, l) in [
             (d.shadow, l.shadow),
@@ -820,39 +1021,16 @@ mod tests {
     fn every_row_of_the_table_is_checked() {
         // The rows read by `every_token_has_the_value_of_the_light_theme_table`: a row added
         // to the table later must be added there too.
-        let checked = [
-            "Fond du bureau",
-            "Disques du fond d'écran",
-            "Fond des écrans système",
-            "Disques des écrans système",
-            "Fond du mode jeu",
-            "Terminal, zones de code",
-            "Fenêtre",
-            "Barre de titre",
-            "Panneau latéral",
-            "Carte",
-            "Bloc du terminal, carte de l'installeur",
-            "Verre des panneaux",
-            "Verre des menus",
-            "Verre du dock",
-            "Teintes et bordures légères",
-            "Ombres",
-            "Texte principal",
-            "Texte secondaire",
-            "Texte tertiaire",
-            "Numéros de ligne, texte fantôme",
-            "Texte du code",
-            "Mots-clés du code, dossiers",
-            "Types dans le code",
-            "Vert, quand il colore du texte ou une icône",
-            "Ambre, quand il colore du texte",
-            "Saumon, quand il colore du texte",
-        ];
+        let mut checked: Vec<&str> = exact().iter().map(|(role, ..)| *role).collect();
+        checked.extend(RULES);
         let rows: Vec<&str> = TABLE
             .lines()
             .filter(|l| l.starts_with("| ") && !l.starts_with("| ---") && !l.starts_with("| Rôle"))
             .filter_map(|l| l.split('|').nth(1).map(str::trim))
             .collect();
+        let mut rows = rows;
+        rows.sort_unstable();
+        checked.sort_unstable();
         assert_eq!(rows, checked);
     }
 
@@ -897,12 +1075,51 @@ mod tests {
     }
 
     #[test]
-    fn the_active_theme_gives_its_palette() {
+    fn the_active_theme_gives_its_palette_and_fades_to_the_next() {
+        // The only test of this crate that changes the active theme: no other one races it.
         assert_eq!(active(), Theme::Dark);
         set_active(Theme::Light);
         assert_eq!(palette(), &Palette::LIGHT);
         set_active(Theme::Dark);
         assert_eq!(palette(), &Palette::DARK);
+
+        let start = Instant::now();
+        let mut fade = ThemeFade::default();
+        // The first theme comes at once: the one the program starts in.
+        fade.set(Theme::Dark, start);
+        assert!(!fade.running());
+        fade.set(Theme::Light, start);
+        assert!(fade.running());
+        assert!(fade.tick(start + motion::THEME_FADE / 4));
+        let between = palette();
+        assert_ne!(between, &Palette::DARK);
+        assert_ne!(between, &Palette::LIGHT);
+        // Turned back halfway: it comes back from where it stands, in less than a full fade.
+        let back = start + motion::THEME_FADE / 4;
+        fade.set(Theme::Dark, back);
+        assert!(fade.tick(back));
+        assert!(!fade.tick(back + motion::THEME_FADE));
+        assert_eq!(palette(), &Palette::DARK);
+        fade.set(Theme::Light, back);
+        assert!(!fade.tick(back + motion::THEME_FADE));
+        assert_eq!((active(), palette()), (Theme::Light, &Palette::LIGHT));
+        set_active(Theme::Dark);
+    }
+
+    #[test]
+    fn the_steps_of_a_fade_go_from_one_palette_to_the_other() {
+        assert_eq!(Palette::at_step(0), &Palette::DARK);
+        assert_eq!(Palette::at_step(MIX_STEPS), &Palette::LIGHT);
+        let (dark, light) = (Palette::DARK.text_primary, Palette::LIGHT.text_primary);
+        let texts: Vec<Color> = (0..=MIX_STEPS)
+            .map(|s| Palette::at_step(s).text_primary)
+            .collect();
+        // Each step darkens the text, so that each one is known by it (`theme::palette`).
+        assert!(texts.windows(2).all(|w| w[1].r < w[0].r), "{texts:?}");
+        assert_eq!((texts[0], texts[usize::from(MIX_STEPS)]), (dark, light));
+        // Translucent colors mix their opacity too.
+        let half = Palette::at_step(MIX_STEPS / 2).dock_glass;
+        assert!(half.a > Palette::DARK.dock_glass.a && half.a < Palette::LIGHT.dock_glass.a);
     }
 
     #[test]

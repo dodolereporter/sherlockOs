@@ -2,7 +2,7 @@
 //! Values from the Dock design board, `docs/design/planches/Dock.dc.html`, and from the dock
 //! menu of the Menus board.
 
-use crate::color::{self, Color};
+use crate::color::{Color, Palette};
 use crate::motion::Spring;
 
 // Geometry, in logical pixels.
@@ -71,22 +71,14 @@ pub const SPRING: Spring = Spring::new(1740.0, 52.6);
 /// Fade of the label (`opacity 120ms` on the board).
 pub const LABEL_FADE_MS: u64 = 120;
 
-// Colors.
+// Colors. The dock bar, its label, dots and separator take the palette shown
+// (`theme::palette`); the tiles keep their colors in both themes (`docs/design/THEME-CLAIR.md`).
 
-/// Label above the hovered icon, and its text.
-pub const LABEL: Color = color::CREAM;
-pub const LABEL_TEXT: Color = color::TEXT_ON_CREAM;
-/// Dot below an open application. The board draws no active application: the active one takes
-/// the green of the active state.
-pub const DOT_OPEN: Color = color::CREAM;
-pub const DOT_ACTIVE: Color = color::ACCENT;
 /// Tile of the Sherlock icon: the night blue square of the color logo.
-pub const SHERLOCK_TILE: Color = color::DESKTOP;
+pub const SHERLOCK_TILE: Color = Palette::DARK.desktop;
 /// Tile of an application whose icon is not found, and its initial (the « Fichiers » tile of the board).
-pub const FALLBACK_TILE: Color = color::BLUE_DARK;
-pub const FALLBACK_LETTER: Color = color::CREAM;
-/// Separator before the open applications that are not pinned (board).
-pub const SEPARATOR_COLOR: Color = Color::rgba(255, 255, 255, 0.28);
+pub const FALLBACK_TILE: Color = Palette::DARK.blue_dark;
+pub const FALLBACK_LETTER: Color = Palette::DARK.cream;
 
 /// Dock texts, in French.
 pub mod text {
@@ -117,6 +109,7 @@ mod styles {
 
     use super::*;
     use crate::metrics;
+    use crate::theme::palette;
 
     fn fill(c: Color, edge: Border) -> container::Style {
         container::Style {
@@ -127,11 +120,12 @@ mod styles {
     }
 
     /// Dock bar: dock glass, its border, radius 22. Blur and shadow are the compositor's job.
-    pub fn bar(_: &Theme) -> container::Style {
+    pub fn bar(theme: &Theme) -> container::Style {
+        let p = palette(theme);
         let edge = border::width(metrics::BORDER_WIDTH)
-            .color(color::DOCK_BORDER)
+            .color(p.dock_border)
             .rounded(metrics::DOCK_RADIUS);
-        fill(color::DOCK_GLASS, edge)
+        fill(p.dock_glass, edge)
     }
 
     /// Tile behind an icon drawn by the dock, at the icon radius (27 % of its side).
@@ -144,18 +138,19 @@ mod styles {
         }
     }
 
-    /// Label above the hovered icon, faded by `opacity`.
+    /// Label above the hovered icon, cream like Sherlock's bubbles, faded by `opacity`.
     pub fn label(opacity: f32) -> impl Fn(&Theme) -> container::Style {
-        move |_| {
+        move |theme| {
+            let p = palette(theme);
             let tint = Color {
-                a: LABEL.a * opacity,
-                ..LABEL
+                a: p.cream.a * opacity,
+                ..p.cream
             };
             container::Style {
                 text_color: Some(
                     Color {
                         a: opacity,
-                        ..LABEL_TEXT
+                        ..p.text_on_cream
                     }
                     .into(),
                 ),
@@ -165,21 +160,25 @@ mod styles {
     }
 
     /// Separator before the open applications that are not pinned.
-    pub fn separator(_: &Theme) -> container::Style {
-        fill(SEPARATOR_COLOR, Border::default())
+    pub fn separator(theme: &Theme) -> container::Style {
+        fill(palette(theme).dock_separator, Border::default())
     }
 
-    /// Dot below an open application.
+    /// Dot below an open application. The board draws no active application: the active one
+    /// takes the green of the active state.
     pub fn dot(active: bool) -> impl Fn(&Theme) -> container::Style {
-        let tint = if active { DOT_ACTIVE } else { DOT_OPEN };
-        move |_| fill(tint, border::rounded(DOT / 2.0))
+        move |theme| {
+            let p = palette(theme);
+            let tint = if active { p.accent } else { p.logo_dot };
+            fill(tint, border::rounded(DOT / 2.0))
+        }
     }
 
     /// Keyboard focus ring around an icon of `side`.
     pub fn ring(side: f32) -> impl Fn(&Theme) -> container::Style {
-        move |_| container::Style {
+        move |theme| container::Style {
             border: border::width(metrics::FOCUS_RING_WIDTH)
-                .color(color::FOCUS_RING)
+                .color(palette(theme).focus_ring)
                 .rounded(side * metrics::DOCK_ICON_RADIUS_RATIO + metrics::FOCUS_RING_GAP),
             ..container::Style::default()
         }
@@ -221,8 +220,13 @@ mod tests {
     }
 
     #[test]
-    fn the_label_reads_on_its_cream() {
-        assert!(LABEL_TEXT.contrast(LABEL) >= 4.5);
+    fn the_label_and_the_dots_read_in_both_themes() {
+        for p in [&Palette::DARK, &Palette::LIGHT] {
+            assert!(p.text_on_cream.contrast(p.cream) >= 4.5);
+            // The open dot, a non-text element, on the dock glass over the desktop.
+            let glass = p.dock_glass.over(p.desktop);
+            assert!(p.logo_dot.contrast(glass) >= 3.0, "{:?}", p.logo_dot);
+        }
         assert!(FALLBACK_LETTER.contrast(FALLBACK_TILE) >= 4.5);
     }
 }

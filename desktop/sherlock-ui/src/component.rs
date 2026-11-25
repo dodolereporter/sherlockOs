@@ -823,13 +823,19 @@ pub fn logo_square<'a>(version: Logo, size: f32) -> Svg<'a> {
         .height(size)
 }
 
-/// Sherlock button of the top bar: the color logo symbol, green ring and cream dot.
+/// Sherlock button of the top bar: the color logo symbol, its ring and dot in the colors of
+/// the palette shown.
 pub fn sherlock_button<'a, Message: Clone + 'a>(
     open: bool,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let (width, height) = metrics::SHERLOCK_BUTTON;
-    let content = container(logo(Logo::Color, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
+    let glyph = svg(svg::Handle::from_memory(
+        Logo::bare_in(color::palette()).into_bytes(),
+    ))
+    .width(metrics::SHERLOCK_GLYPH)
+    .height(metrics::SHERLOCK_GLYPH);
+    let content = container(glyph).center(Length::Fill);
     let mut control = Control::new(
         content,
         theme::sherlock_button(open),

@@ -27,24 +27,31 @@ fn custom(name: &'static str, p: &Palette, background: Color) -> Theme {
     )
 }
 
-/// The iced themes of each theme, built once: a view asks for them for every control. The
-/// desktop one, then the window one.
-fn themes(which: color::Theme) -> &'static (Theme, Theme) {
-    static THEMES: OnceLock<[(Theme, Theme); 2]> = OnceLock::new();
-    let [dark, light] = THEMES.get_or_init(|| {
-        color::Theme::ALL.map(|t| {
-            let p = t.palette();
-            let (desktop, window) = match t {
-                color::Theme::Dark => ("Sherlock", "Sherlock, fenêtre"),
-                color::Theme::Light => ("Sherlock clair", "Sherlock clair, fenêtre"),
-            };
-            (custom(desktop, p, p.desktop), custom(window, p, p.window))
-        })
+/// The iced themes of each step of a fade between the palettes (`color::MIX_STEPS`), built
+/// once: a view asks for them for every control. The desktop one, then the window one.
+fn themes_at(step: u8) -> &'static (Theme, Theme) {
+    static THEMES: OnceLock<Vec<(Theme, Theme)>> = OnceLock::new();
+    let all = THEMES.get_or_init(|| {
+        (0..=color::MIX_STEPS)
+            .map(|s| {
+                let p = Palette::at_step(s);
+                let (desktop, window) = match s {
+                    0 => ("Sherlock", "Sherlock, fenêtre"),
+                    color::MIX_STEPS => ("Sherlock clair", "Sherlock clair, fenêtre"),
+                    _ => ("Sherlock, fondu", "Sherlock, fenêtre, fondu"),
+                };
+                (custom(desktop, p, p.desktop), custom(window, p, p.window))
+            })
+            .collect()
     });
-    match which {
-        color::Theme::Dark => dark,
-        color::Theme::Light => light,
-    }
+    &all[usize::from(step.min(color::MIX_STEPS))]
+}
+
+fn themes(which: color::Theme) -> &'static (Theme, Theme) {
+    themes_at(match which {
+        color::Theme::Dark => 0,
+        color::Theme::Light => color::MIX_STEPS,
+    })
 }
 
 /// The desktop theme of `which`.
@@ -52,29 +59,33 @@ pub fn theme_for(which: color::Theme) -> Theme {
     themes(which).0.clone()
 }
 
-/// The desktop theme, in the active theme. iced widgets without a style of their own take
-/// their colors from it.
+/// The desktop theme, in the active theme or along its fade. iced widgets without a style of
+/// their own take their colors from it.
 pub fn theme() -> Theme {
-    theme_for(color::active())
+    themes_at(color::mix_step()).0.clone()
 }
 
-/// The theme of an application window, in the active theme: its background is the opaque
-/// window body, cleared by the renderer itself instead of drawn as a quad. With the software
-/// renderer, a quad as large as the window is filled again for every damaged rectangle of
-/// every frame.
+/// The theme of an application window, in the active theme or along its fade: its background
+/// is the opaque window body, cleared by the renderer itself instead of drawn as a quad. With
+/// the software renderer, a quad as large as the window is filled again for every damaged
+/// rectangle of every frame.
 pub fn window_theme() -> Theme {
-    themes(color::active()).1.clone()
+    themes_at(color::mix_step()).1.clone()
 }
 
 /// The palette an iced theme was built on, known by its text color, which is exact and
-/// differs between the two palettes (a transparent background would say nothing). A theme
-/// that is not ours gets the dark palette.
+/// differs between the palettes of every step of a fade (a transparent background would say
+/// nothing). A theme that is not ours gets the dark palette.
 pub fn palette(theme: &Theme) -> &'static Palette {
-    if theme.palette().text == iced::Color::from(Palette::LIGHT.text_primary) {
-        &Palette::LIGHT
-    } else {
-        &Palette::DARK
+    let text = theme.palette().text;
+    let shown = color::palette();
+    if text == iced::Color::from(shown.text_primary) {
+        return shown;
     }
+    (0..=color::MIX_STEPS)
+        .map(Palette::at_step)
+        .find(|p| text == iced::Color::from(p.text_primary))
+        .unwrap_or(&Palette::DARK)
 }
 
 fn background(c: Color) -> Option<Background> {
@@ -333,7 +344,7 @@ pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
 }
 
 /// Sherlock button: the color logo straight on the bar glass, without a pill, so that its
-/// cream dot stays visible. Veiled on hover and press, and while its menu is open, like an open
+/// dot stays visible. Veiled on hover and press, and while its menu is open, like an open
 /// menu button of the Menus board.
 pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme, status| {
@@ -793,16 +804,18 @@ mod tests {
             ] {
                 check(&mut failures, name, text, None, &on);
             }
-            // The green ring of the logo, a non-text element: 3 to 1 at least (WCAG 1.4.11),
+            // The ring and dot of the logo, non-text elements: 3 to 1 at least (WCAG 1.4.11),
             // under every state of the Sherlock button.
             for open in [true, false] {
                 for status in STATUSES {
                     let s = sherlock_button(open)(&theme, status);
                     let below = fill(&s).map_or(on.1, |f| f.over(on.1));
-                    let ratio = p.logo_ring.contrast(below);
-                    if ratio < 3.0 {
-                        let what = format!("logo ring ({open}, {status:?}) on {}", on.0);
-                        failures.push((what, p.logo_ring, ratio));
+                    for (part, mark) in [("ring", p.logo_ring), ("dot", p.logo_dot)] {
+                        let ratio = mark.contrast(below);
+                        if ratio < 3.0 {
+                            let what = format!("logo {part} ({open}, {status:?}) on {}", on.0);
+                            failures.push((what, mark, ratio));
+                        }
                     }
                 }
             }
@@ -833,6 +846,12 @@ mod tests {
         for which in color::Theme::ALL {
             assert_eq!(palette(&theme_for(which)), which.palette());
             assert_eq!(palette(&themes(which).1), which.palette());
+        }
+        // Every step of a fade, too.
+        for step in 0..=color::MIX_STEPS {
+            let (desktop, window) = themes_at(step);
+            assert_eq!(palette(desktop), Palette::at_step(step));
+            assert_eq!(palette(window), Palette::at_step(step));
         }
         // A theme that is not ours, even a light one.
         assert_eq!(palette(&Theme::Light), &Palette::DARK);
@@ -865,7 +884,12 @@ mod tests {
                 let ratio = lowest(text);
                 match which {
                     color::Theme::Dark => assert!(ratio >= 4.5, "{name}: {ratio:.2}"),
-                    color::Theme::Light => assert!(ratio < 4.5, "{name} passes now: {ratio:.2}"),
+                    // Close to 4.5 all the same; once it passes, require 4.5 in both themes and
+                    // drop the sentence of docs/sherlock-ui.md about it.
+                    color::Theme::Light => assert!(
+                        (3.8..4.5).contains(&ratio),
+                        "{name}: {ratio:.2}, out of 3.8 to 4.5: see the comment"
+                    ),
                 }
             }
         }

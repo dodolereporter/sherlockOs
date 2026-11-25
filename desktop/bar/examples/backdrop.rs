@@ -1,6 +1,6 @@
 //! The desktop background of the Main board (colour and three discs) on the background layer,
-//! for screenshots of the bar in a compositor without a wallpaper (a nested KWin). Test tool,
-//! not shipped: `cargo run -p bar --example backdrop`.
+//! for screenshots of the bar in a compositor without a wallpaper (a nested KWin), in the theme
+//! of the appearance file at start. Test tool, not shipped: `cargo run -p bar --example backdrop`.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
@@ -10,7 +10,7 @@ use iced::{Background, Element, Length, Rectangle, Renderer, Size, Theme, border
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::to_layer_message;
-use sherlock_ui::{color, metrics};
+use sherlock_ui::{color, metrics, theme};
 
 #[to_layer_message]
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ impl<M> Widget<M, Theme, Renderer> for Desktop {
         &self,
         _: &Tree,
         renderer: &mut Renderer,
-        _: &Theme,
+        theme: &Theme,
         _: &renderer::Style,
         layout: Layout<'_>,
         _: mouse::Cursor,
@@ -47,11 +47,9 @@ impl<M> Widget<M, Theme, Renderer> for Desktop {
             };
             renderer.fill_quad(quad, Background::Color(tint.into()));
         };
-        fill(renderer, bounds, 0.0, color::DESKTOP);
-        for (&(x, y, size), tint) in metrics::DESKTOP_DISC_GEOMETRY
-            .iter()
-            .zip(color::DESKTOP_DISCS)
-        {
+        let p = theme::palette(theme);
+        fill(renderer, bounds, 0.0, p.desktop);
+        for (&(x, y, size), tint) in metrics::DESKTOP_DISC_GEOMETRY.iter().zip(p.desktop_discs) {
             let disc = Rectangle::new(iced::Point::new(x, y), Size::new(size, size));
             fill(renderer, disc, size / 2.0, tint);
         }
@@ -74,7 +72,16 @@ fn main() -> Result<(), iced_exwlshell::Error> {
     // SAFETY: first statement of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
     iced_exwlshell::disable_clipboard();
+    let config = appearance_config::path()
+        .and_then(|path| appearance_config::AppearanceConfig::load(&path).ok())
+        .map(|(config, _)| config)
+        .unwrap_or_default();
+    let now = appearance_config::TimeOfDay::at(appearance_config::epoch_now());
+    if let Ok(now) = now {
+        color::set_active(config.theme_at(now).0);
+    }
     iced_exwlshell::layershell::application(|| (), namespace, update, view)
+        .theme(|_: &()| theme::theme())
         .wl_settings(ExWlSettings {
             layer_settings: LayerShellSettings {
                 anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
