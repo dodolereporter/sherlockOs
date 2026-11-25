@@ -6,5 +6,29 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+# Erreurs avec contexte dans le binaire (main.rs) ; la bibliothèque a ses erreurs typées.
+anyhow = "=1.0.105"
+# Messages JSON-RPC du protocole MCP. Version de serde déjà dans Cargo.lock.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+# Runtime asynchrone, déjà dans Cargo.lock (tiré par iced). Fonctions minimales : un seul fil
+# (`rt`), `process` et `io-util` pour parler aux serveurs MCP sur stdio, `time` pour les délais,
+# `macros` pour `#[tokio::main]` et `#[tokio::test]`.
+tokio = { version = "=1.54.1", default-features = false, features = [
+    "io-util",
+    "macros",
+    "process",
+    "rt",
+    "time",
+] }
+tracing = "=0.1.44"
+# Affiche les journaux sur la sortie d'erreur, niveau réglé par RUST_LOG.
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
 [lints]
 workspace = true
