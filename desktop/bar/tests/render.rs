@@ -49,14 +49,16 @@ fn sample() -> Bar {
     state
 }
 
-/// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its path and size.
+/// Writes the screenshot to `target/tmp/<name>-<renderer>.png` (`tiny-skia`, or `wgpu` with
+/// `ICED_TEST_BACKEND=wgpu`), returns its path and size.
 fn capture(
     mut ui: Simulator<'_, Message>,
     name: &str,
 ) -> Result<(PathBuf, u64), Box<dyn std::error::Error>> {
     let snapshot = ui.snapshot(&theme::theme())?;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
-    let written = path.with_file_name(format!("{name}-tiny-skia.png"));
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = path.with_file_name(format!("{name}-{renderer}.png"));
     let _ = std::fs::remove_file(&written);
     snapshot.matches_image(&path)?;
     let size = std::fs::metadata(&written)?.len();
@@ -96,6 +98,16 @@ fn the_menu_renders_without_a_screen() {
     state.cursor = Some(1);
     let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
     assert_written(capture(ui, "sherlock-menu"));
+}
+
+#[test]
+fn the_menu_renders_with_room_for_its_shadow() {
+    // The surface the GPU gets: the blurred shadow drawn around the menu. In software (the
+    // default for tests), the crisp shadow is drawn instead.
+    let mut state = sample();
+    state.menu_margins = menu::margins(true);
+    let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
+    assert_written(capture(ui, "sherlock-menu-shadow"));
 }
 
 #[test]

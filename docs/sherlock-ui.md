@@ -33,7 +33,8 @@ unsafe { renderer.apply() };
 Vulkan loader's folders. With an AMD chip bound to `amdgpu` and Mesa's Vulkan manifest
 (`radeon_icd*.json`), it renders with wgpu on Vulkan, the loader seeing that manifest only
 (`VK_DRIVER_FILES`): the NVIDIA card is never asked anything. Otherwise it renders with
-tiny-skia. `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software).
+tiny-skia. It also sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see
+ADR 0018). `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software).
 If wgpu finds no adapter that can present, iced falls back to tiny-skia by itself.
 
 A command the program starts goes through `gpu::for_child(&mut command)`, which gives it back

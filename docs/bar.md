@@ -342,6 +342,18 @@ centre of its top edge (anchor and gravity `Bottom`), so that its shadow can sta
 above the bar surface; the menu itself stays at (18, 52) of the Menus board, which a test checks
 with and without the shadow.
 
+![The bar on the GPU, in a headless KWin, over the desktop background](../desktop/bar/screenshots/bar-kwin-gpu.png)
+
+The bar above, rendered by RADV in a headless KWin (`kwin_wayland --virtual`, 1440 × 900) over
+the `backdrop` example: floating, rounded corners, and the glass lets the disc through. Over the
+disc `(22, 49, 79)` the bar reads `(17, 31, 51)`, the board's `rgba(16,26,44,0.78)` laid over it.
+
+![The Sherlock menu in its GPU surface, with the board's blurred shadow](../desktop/bar/screenshots/menu-shadow-gpu.png)
+
+The menu with its blurred shadow, in the surface the GPU gets (headless render by wgpu on RADV,
+scale 2, `ICED_TEST_BACKEND=wgpu` with the variables of ADR 0018). No input could be sent to the
+headless KWin to open it there.
+
 `cargo run -p bar --example backdrop` lays the Main board's desktop background (colour and three
 discs) on the background layer: a nested KWin has no wallpaper, and the translucent glass only
 shows against one.

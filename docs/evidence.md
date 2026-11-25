@@ -239,6 +239,12 @@ two seconds later, pointer still).
 On the author's laptop: `cargo run --release -p evidence -- <a git project>`, then compare
 with the design board at 1440 × 900 (the window is 1300 × 676, as on the design board).
 
+On the GPU (ADR 0018), the same capture rendered by wgpu on the AMD chip
+(`ICED_TEST_BACKEND=wgpu` with the variables of ADR 0018): the menu and its submenu are drawn
+whole, over the design board's blurred shadow.
+
+![Context menu and submenu rendered on the GPU](evidence/menu-gpu.png)
+
 ## Gaps with the design board
 
 - No grid or column views: list only.

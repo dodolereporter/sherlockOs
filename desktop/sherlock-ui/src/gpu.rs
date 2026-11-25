@@ -102,6 +102,11 @@ impl Choice {
                 ("WGPU_POWER_PREF", "low".into()),
                 // The loader sees Mesa's AMD driver and nothing else.
                 ("VK_DRIVER_FILES", join(manifests)),
+                // iced takes the first format the driver lists without sRGB. On Wayland, Mesa
+                // lists the 10-bit ones first, with 2 bits of alpha: the bar's glass at 0.78
+                // would come out at 0.67. This Mesa option (driconf, read from the
+                // environment) lists 8-bit BGRA first.
+                ("vk_wsi_force_bgra8_unorm_first", "true".into()),
             ],
         }
     }
@@ -267,6 +272,10 @@ mod tests {
         let get = |name| variables.iter().find(|(n, _)| *n == name).map(|(_, v)| v);
         assert_eq!(get("WGPU_BACKEND"), Some(&OsString::from("vulkan")));
         assert_eq!(get("ICED_BACKEND"), Some(&OsString::from("wgpu,tiny-skia")));
+        assert_eq!(
+            get("vk_wsi_force_bgra8_unorm_first"),
+            Some(&OsString::from("true"))
+        );
         assert_eq!(
             get("VK_DRIVER_FILES"),
             Some(&OsString::from(

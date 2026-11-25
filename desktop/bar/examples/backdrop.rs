@@ -58,28 +58,33 @@ impl<M> Widget<M, Theme, Renderer> for Desktop {
     }
 }
 
+fn namespace() -> String {
+    String::from("backdrop")
+}
+
+fn update(_: &mut (), _: Message) {}
+
+fn view(_: &()) -> Element<'_, Message> {
+    Element::new(Desktop)
+}
+
 fn main() -> Result<(), iced_exwlshell::Error> {
     // Like the bar: never on the NVIDIA card (ADR 0018).
     let renderer = sherlock_ui::gpu::Choice::detect();
     // SAFETY: first statement of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
     iced_exwlshell::disable_clipboard();
-    iced_exwlshell::application(
-        || (),
-        || String::from("backdrop"),
-        |_: &mut (), _: Message| {},
-        |_: &()| Element::new(Desktop),
-    )
-    .wl_settings(ExWlSettings {
-        layer_settings: LayerShellSettings {
-            anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
-            layer: Layer::Background,
-            exclusive_zone: -1,
-            keyboard_interactivity: KeyboardInteractivity::None,
-            start_mode: StartMode::Active,
-            ..LayerShellSettings::default()
-        },
-        ..ExWlSettings::default()
-    })
-    .run()
+    iced_exwlshell::layershell::application(|| (), namespace, update, view)
+        .wl_settings(ExWlSettings {
+            layer_settings: LayerShellSettings {
+                anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+                layer: Layer::Background,
+                exclusive_zone: -1,
+                keyboard_interactivity: KeyboardInteractivity::None,
+                start_mode: StartMode::Active,
+                ..LayerShellSettings::default()
+            },
+            ..ExWlSettings::default()
+        })
+        .run()
 }
