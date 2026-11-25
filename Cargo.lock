@@ -377,6 +377,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "x11rb",
 ]
 
 [[package]]

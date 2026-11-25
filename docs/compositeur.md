@@ -5,15 +5,22 @@ Il est écrit en Rust avec Smithay 0.7, dans `desktop/compositeur`. Le lot D-10 
 il tourne en fenêtre dans une session existante, sans effet visuel. Le lot D-17 rend les fenêtres
 faciles à prendre en main : bande de saisie, curseurs, calage contre les bords de l'écran. Le lot
 D-11 lui donne l'apparence des planches : fond du bureau, coins arrondis, bordure, ombre, et
-animations à ressorts.
+animations à ressorts. Le lot D-13 y fait tourner les applications X11, par XWayland, avec le
+presse-papiers dans les deux sens.
+
+Prérequis du poste, en plus de ceux de `CLAUDE.md` : le serveur `Xwayland` (paquet `xwayland`
+sur Debian, version 23.1 ou plus récente pour le protocole xwayland-shell). Sans lui, le
+compositeur démarre quand même, et seules les applications Wayland s'affichent.
 
 ## Architecture
 
 | Fichier | Rôle |
 | --- | --- |
-| `src/main.rs` | Lit les options (`--imbrique`, `--mesurer`), crée la boucle d'événements, lance la commande donnée |
+| `src/main.rs` | Lit les options (`--imbrique`, `--mesurer`), crée la boucle d'événements, démarre XWayland, lance la commande donnée |
 | `src/lib.rs` | `State` : affichage Wayland, protocoles, siège, `Space` des fenêtres. Socket, écran, focus |
-| `src/handlers.rs` | Réponses aux protocoles : `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, formes de curseur. Pose d'une fenêtre selon son état (`rearrange`) |
+| `src/handlers.rs` | Réponses aux protocoles : `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, formes de curseur, presse-papiers et sélection primaire. Pose d'une fenêtre selon son état (`rearrange`), qu'elle soit Wayland ou X11 |
+| `src/xwayland.rs` | XWayland : démarrage et arrêt, gestionnaire de fenêtres X11 (`X11Wm`), association des surfaces, presse-papiers vu de X11 |
+| `src/focus.rs` | Cible du clavier : surface Wayland ou fenêtre X11 |
 | `src/input.rs` | Clavier et souris : focus au clic, gestes, calage, raccourcis, forme du curseur |
 | `src/layout.rs` | Disposition : placer, déplacer, redimensionner, bande de saisie, zones de calage, retour à la taille d'avant. Du calcul pur, sans Wayland ni rendu |
 | `src/winit.rs` | Backend fenêtré : la fenêtre hôte, son écran virtuel, son curseur. Lance le rendu de chaque image et sa mesure |
@@ -100,7 +107,74 @@ Curseurs :
 - En mode imbriqué, c'est le curseur de la fenêtre hôte qui change de forme, avec le thème de la
   session hôte. La session réelle (lot D-14) devra dessiner le curseur elle-même.
 
-## Rendu
+## XWayland
+
+XWayland est un serveur X11 qui est aussi un client Wayland du compositeur. Chaque fenêtre X11
+y a une surface Wayland, que le protocole xwayland-shell associe à la fenêtre. Smithay fournit le
+lancement (`XWayland`) et le gestionnaire de fenêtres X11 (`X11Wm`), qui parle au serveur X au
+nom du compositeur. Les fenêtres X11 entrent dans le même `Space` que les fenêtres Wayland, sous
+forme de `Window` : la disposition, les gestes, le rendu et les animations ne font pas la
+différence, sauf aux quelques endroits où un état se lit ou s'envoie.
+
+**Démarrage au lancement.** XWayland démarre avec le compositeur, pas à la première connexion
+d'un client X11. Raisons :
+
+- La commande lancée par `--imbrique` doit connaître `DISPLAY`, et pouvoir être elle-même une
+  application X11 : elle part une fois XWayland prêt, avec `DISPLAY=:N` et `WAYLAND_DISPLAY`.
+- Smithay 0.7 ne sait que lancer XWayland tout de suite. Le démarrage à la demande demanderait
+  d'écouter nous-mêmes les sockets X11 et de passer la première connexion au serveur : plus de
+  code, pour un gain faible.
+- Le coût est modeste : sur le portable de référence, XWayland est prêt en 0,2 s et occupe
+  environ 85 Mo de mémoire résidente (bibliothèques partagées comprises), sans client X11.
+
+Le numéro d'affichage est le premier libre (`:1` sous une session X11 qui occupe `:0`). Il est
+dans le journal : `XWayland prêt display=1`. Sans `Xwayland` sur le poste, le journal le dit
+(`pas d'applications X11`), et la commande part sans `DISPLAY` : elle n'hérite pas de celui de
+la session hôte, où ses fenêtres X11 s'ouvriraient hors du compositeur.
+
+**Arrêt.** En quittant, le compositeur retire XWayland de la boucle : le serveur s'arrête, et son
+verrou (`/tmp/.X<N>-lock`) et sa socket (`/tmp/.X11-unix/X<N>`) disparaissent. Il faut le faire
+à la main (`State::stop_xwayland`) : la source de `X11Wm` garde une poignée de la boucle, qui ne
+serait donc jamais libérée. Tué par un signal (Ctrl + C dans le terminal), le compositeur laisse
+le verrou ; Smithay le reprend au lancement suivant, puisque son processus n'existe plus. Le
+compositeur crée `/tmp/.X11-unix` s'il manque, avec les droits que lui donne systemd (1777).
+
+**Fenêtres gérées.**
+
+- Une fenêtre qui demande à s'afficher est centrée sur l'écran, à la taille qu'elle demande. Elle
+  se montre (avec l'animation d'ouverture) et reçoit le clavier quand XWayland lui associe sa
+  surface : avant, il n'aurait pas reçu l'entrée du clavier.
+- Le clavier passe par la surface Wayland et par le focus X11 (`SetInputFocus` ou
+  `WM_TAKE_FOCUS`, selon ce que la fenêtre accepte). Une fenêtre qui passe au premier plan y
+  passe aussi pour le serveur X.
+- Le compositeur pose la fenêtre : il envoie au serveur X sa place et sa taille à chaque
+  déplacement, calage ou redimensionnement. Une fenêtre flottante obtient la taille qu'elle
+  demande, jamais la place. Agrandie, calée ou en plein écran, elle garde celle qu'on lui a
+  donnée.
+- Les états agrandi et plein écran sont ceux de `_NET_WM_STATE`, que la fenêtre connaît, comme
+  ceux de xdg-shell pour une fenêtre Wayland. Ses demandes (`_NET_WM_STATE` et
+  `_NET_WM_MOVERESIZE`, par exemple la barre de titre d'un navigateur) passent par les mêmes
+  chemins que celles d'une fenêtre Wayland. Comme le serveur X ne donne pas de serial, un geste
+  demandé n'est accordé que pendant l'appui d'un bouton sur une surface de XWayland.
+- Une fenêtre X11 prend sa nouvelle taille dès qu'on la lui envoie. Pendant un
+  redimensionnement, sa place est donc recalée tout de suite, sans attendre son contenu.
+- Le titre est `_NET_WM_NAME` ou `WM_NAME`.
+
+**Menus et bulles.** Les fenêtres override-redirect se placent elles-mêmes, au-dessus des autres.
+Elles sont dessinées telles quelles, comme les menus Wayland : sans coins, ni bordure, ni ombre,
+ni animation, ni bande de saisie. Un clic dedans ne change pas le clavier de place.
+
+**Presse-papiers.** Le compositeur annonce `wl_data_device_manager` (CLIPBOARD) et la sélection
+primaire (`zwp_primary_selection_device_manager_v1`, PRIMARY). Le client qui a le clavier lit et
+pose les deux. Les échanges avec X11 passent par `X11Wm` :
+
+- Un client Wayland pose une sélection : le gestionnaire de fenêtres la prend côté X. Un client
+  X11 qui la lit reçoit les données du client Wayland.
+- Un client X11 pose une sélection : le compositeur la pose côté Wayland pour son compte. Un
+  client Wayland qui la lit reçoit les données du client X11.
+- Comme un client Wayland, un client X11 ne lit une sélection venue de Wayland que si une
+  fenêtre X11 a le clavier.
+
 
 Chaque image est redessinée en entier avec le moteur GLES de Smithay (`GlesRenderer`), dans le
 seul fil du compositeur. `render::Scene` compile trois programmes au démarrage et pose les
@@ -220,7 +294,9 @@ cargo run -p compositeur -- --imbrique
 ```
 
 Une fenêtre s'ouvre dans la session en cours, Wayland ou X11. Tout ce qui suit `--imbrique` est une
-commande lancée avec la socket du compositeur dans `WAYLAND_DISPLAY`. Pour un terminal :
+commande, lancée une fois XWayland prêt, avec la socket du compositeur dans `WAYLAND_DISPLAY` et
+son affichage X11 dans `DISPLAY`. Ce que cette commande lance à son tour hérite des deux. Pour un
+terminal :
 
 ```sh
 cargo run -p compositeur -- --imbrique env QT_QPA_PLATFORM=wayland konsole --separate
@@ -232,9 +308,63 @@ Au niveau `debug`, chaque geste écrit son début et sa fin, avec son type (bord
 pour un déplacement) et sa source (touche des gestes ou demande du client). Une demande du client
 refusée l'est aussi.
 
-`QT_QPA_PLATFORM=wayland` force Konsole à parler Wayland : dans une session X11, Qt choisirait X11
-et s'ouvrirait hors du compositeur. `--separate` évite que la commande rejoigne une Konsole déjà
+`QT_QPA_PLATFORM=wayland` force Konsole à parler Wayland : dans une session X11, Qt choisirait X11,
+et Konsole passerait par XWayland. `--separate` évite que la commande rejoigne une Konsole déjà
 ouverte.
+
+### Une application X11
+
+```sh
+cargo run -p compositeur -- --imbrique xterm
+```
+
+Ou, depuis la Konsole du compositeur, qui a déjà le bon `DISPLAY` : `xterm &`, `xeyes &`. Depuis
+un autre terminal, il faut donner l'affichage du journal : `DISPLAY=:1 xterm`.
+
+### Zen
+
+Zen est installé en Flatpak (`app.zen_browser.zen`). Ses droits comprennent déjà les sockets
+`wayland` et `fallback-x11`, et le dossier personnel. Flatpak lui passe la socket du compositeur,
+lue dans `WAYLAND_DISPLAY`. Deux précautions :
+
+- `--new-instance` : sinon, si Zen tourne déjà dans la session hôte, la commande lui confie la
+  page, et la fenêtre s'ouvre dans la session hôte, hors du compositeur.
+- `--profile` : un profil à part, parce que celui de tous les jours est verrouillé par le Zen de
+  la session hôte. Le dossier d'essai ci-dessous est dans les données de Zen, que le bac à sable
+  voit.
+
+En Wayland natif, ce que Zen choisit seul quand `WAYLAND_DISPLAY` est défini :
+
+```sh
+mkdir -p ~/.var/app/app.zen_browser.zen/compositeur-essai
+cargo run -p compositeur -- --imbrique flatpak run app.zen_browser.zen \
+  --new-instance --profile "$HOME/.var/app/app.zen_browser.zen/compositeur-essai"
+```
+
+En X11, par XWayland : on retire la socket Wayland au bac à sable et on lui donne celle de X11.
+
+```sh
+cargo run -p compositeur -- --imbrique flatpak run --nosocket=wayland --socket=x11 \
+  --env=MOZ_ENABLE_WAYLAND=0 app.zen_browser.zen \
+  --new-instance --profile "$HOME/.var/app/app.zen_browser.zen/compositeur-essai"
+```
+
+Le journal dit lequel des deux tourne : `fenêtre X11 title="Zen Browser"` en X11, rien de tel en
+Wayland. Ferme Zen avant le compositeur : fermé d'abord, le compositeur peut laisser des
+processus de Zen derrière lui (`ps -eo pid,args | grep compositeur-essai` les montre).
+
+### Presse-papiers en ligne de commande
+
+`wl-copy` et `wl-paste` (paquet `wl-clipboard`) sont des clients Wayland, `xclip` un client X11.
+Avec une fenêtre X11 au clavier (lancer le compositeur avec `xterm`), et les numéros du journal :
+
+```sh
+WAYLAND_DISPLAY=wayland-1 wl-copy "venu de Wayland"; DISPLAY=:1 xclip -o -selection clipboard
+echo -n "venu de X11" | DISPLAY=:1 xclip -i -selection clipboard; WAYLAND_DISPLAY=wayland-1 wl-paste
+```
+
+Avec `--primary` pour `wl-copy` et `wl-paste`, et `-selection primary` pour `xclip`, c'est la
+sélection primaire.
 
 ## Mesurer
 
@@ -324,6 +454,7 @@ just verifier
 | `src/render.rs` | Disques à leur place de la planche sur 1440 par 900, ronds sur un autre écran. Dimensions de l'ombre de la fenêtre de la planche. Rayon des coins, réduit pour une petite fenêtre. Découpe retournée avec l'image |
 | `src/stats.rs` | Cadence, images en retard, bilan des images animées |
 | `tests/sans_ecran.rs` | Sans écran ni backend, voir ci-dessous |
+| `tests/xwayland.rs` | XWayland et un client X11, sans écran ni backend, voir ci-dessous |
 
 Les tests de `tests/sans_ecran.rs` :
 
@@ -358,8 +489,24 @@ Le test d'intégration fait tourner le compositeur et le client dans le même fi
 sockets Unix : il ne dépend ni d'un écran, ni de `XDG_RUNTIME_DIR`. Il charge `libwayland-client`
 à l'exécution, comme le backend winit.
 
+Le test de `tests/xwayland.rs` lance un vrai XWayland (il faut `Xwayland` sur le poste, et la CI
+installe le paquet `xwayland`). La boucle du compositeur tourne dans le fil du test, un client X11
+écrit avec x11rb dans un autre. Le client ouvre une fenêtre de 200 × 100 titrée et un menu
+override-redirect en (50, 60). Le test vérifie, en regardant à la fois l'espace du compositeur
+et ce que le serveur X sait de la fenêtre :
+
+- le titre, et la fenêtre centrée, à la même place pour le compositeur et pour le serveur X ;
+- le clavier donné à la fenêtre dès qu'elle a sa surface ;
+- le menu à la place qu'il a choisie, dessiné tel quel, sans prendre le clavier ;
+- Super + glisser jusqu'au bord haut : fenêtre agrandie, `_NET_WM_STATE` compris, sur tout
+  l'écran ; Super + bas : retour à sa place d'avant ;
+- la bande de saisie : le coin bas droit tiré, le coin haut gauche en place ;
+- la fermeture : le client part, ses fenêtres disparaissent, personne n'a le clavier ;
+- l'arrêt propre : XWayland retire sa socket.
+
 Ce que les tests ne voient pas : les programmes GLSL et l'image qu'ils produisent (la CI n'a pas
-de puce graphique), et la forme réelle du curseur de la fenêtre hôte. Pour ça, il faut la
+de puce graphique), la forme réelle du curseur de la fenêtre hôte, et le presse-papiers entre
+Wayland et X11, vérifié à la main et en ligne de commande (voir « Lancer »). Pour ça, il faut la
 procédure à la main ci-dessous, la mesure et la comparaison à la planche.
 
 ## Essai à la main
@@ -420,3 +567,40 @@ Alt + flèches entre en conflit avec les applications qui s'en servent, en mode 
 seulement : ces touches n'arrivent plus à l'application. Par exemple, dans un navigateur,
 Alt + flèche gauche revient à la page précédente, et les IDE JetBrains changent d'onglet avec
 Alt + flèche gauche ou droite. En session réelle, ce sera Super + flèches.
+
+### Applications X11
+
+Depuis la Konsole du compositeur (commande ci-dessus), qui a déjà le bon `DISPLAY` :
+
+```sh
+xterm -xrm 'XTerm*selectToClipboard: true' &
+xeyes &
+```
+
+`selectToClipboard` fait copier à xterm la sélection de la souris dans CLIPBOARD, et coller
+CLIPBOARD avec Maj + Inser et le clic du milieu : sans lui, xterm ne connaît que PRIMARY.
+
+1. **Affichage.** xterm et xeyes apparaissent au centre, avec l'animation d'ouverture, les coins
+   arrondis, la bordure et l'ombre. Les yeux suivent le pointeur.
+2. **Focus au clic.** Clique d'une fenêtre à l'autre et tape : le texte va à celle cliquée. Le
+   curseur de xterm est un bloc plein quand il a le clavier, creux sinon.
+3. **Gestes.** Refais avec xterm les étapes 3, 6, 7, 9, 10, 11, 13 et 14 de la liste ci-dessus :
+   bande de saisie, Alt + glisser, calage en haut, moitiés, quarts, redimensionnement d'une
+   fenêtre calée, Alt + flèches. Le contenu de xterm suit la taille de la fenêtre.
+4. **Menus.** Ctrl + clic gauche dans xterm : son menu s'ouvre sous le pointeur, sans ombre ni
+   coins. Choisis une entrée : elle s'applique, et le clavier reste à xterm.
+5. **Presse-papiers, Wayland vers X11.** Dans Konsole, sélectionne un mot et Ctrl + Maj + C. Clique
+   dans xterm et Maj + Inser : le mot s'affiche.
+6. **Presse-papiers, X11 vers Wayland.** Dans xterm, sélectionne un mot à la souris. Clique dans
+   Konsole et Ctrl + Maj + V : le mot s'affiche.
+7. **Sélection primaire.** Lance un xterm sans `-xrm`. Sélectionne un mot dans Konsole, puis
+   clic du milieu dans ce xterm : le mot s'affiche. Et l'inverse.
+8. **Fermeture.** `exit` dans xterm : la fenêtre disparaît, et le clavier revient à la fenêtre du
+   dessus.
+9. **Zen.** Ferme le compositeur et relance-le avec l'une des deux commandes de Zen (voir
+   « Lancer »). Zen s'ouvre au centre. Navigue, ouvre un menu (clic droit dans la page, menu
+   principal), passe en plein écran (F11) et reviens, agrandis la fenêtre avec Alt + flèche haut.
+   Depuis un autre terminal, `DISPLAY=:1 xterm -xrm 'XTerm*selectToClipboard: true'` (numéro du
+   journal) ouvre un xterm à côté : copie l'adresse de la page dans Zen et colle-la dans xterm.
+10. **Arrêt.** Ferme la fenêtre du compositeur. `ls /tmp/.X11-unix/` ne montre plus la socket
+    `X<N>` du journal, et `pgrep Xwayland` ne trouve plus rien.

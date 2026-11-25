@@ -32,6 +32,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # tire déjà pour son backend winit.
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client"] }
+# Client X11 du test d'intégration de XWayland : la version que smithay tire déjà pour son
+# gestionnaire de fenêtres X11.
+x11rb = "=0.13.2"
 
 [lints]
 workspace = true

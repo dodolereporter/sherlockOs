@@ -6,7 +6,16 @@
 //! `Window` et ont les mêmes gestes, le même rendu et les mêmes états que les fenêtres
 //! xdg-shell. Les fenêtres override-redirect (menus, bulles) se placent elles-mêmes.
 
-use std::{os::fd::OwnedFd, process::Stdio};
+use std::{
+    fs::{self, DirBuilder, Permissions},
+    io,
+    os::{
+        fd::OwnedFd,
+        unix::fs::{DirBuilderExt, PermissionsExt},
+    },
+    path::Path,
+    process::Stdio,
+};
 
 use smithay::{
     delegate_xwayland_shell,
@@ -49,6 +58,7 @@ impl State {
         event_loop: &EventLoop<'static, State>,
         ready: impl FnOnce(&mut State, Option<u32>) + 'static,
     ) -> Result<(), Error> {
+        ensure_x11_unix_dir().map_err(Error::Xwayland)?;
         let (xwayland, client) = XWayland::spawn(
             &self.display_handle,
             None,
@@ -104,6 +114,19 @@ impl State {
             self.loop_handle.remove(token);
         }
     }
+}
+
+/// Crée `/tmp/.X11-unix`, où vont les sockets des serveurs X, s'il n'existe pas : sur une
+/// machine sans serveur X, comme celle de la CI, personne ne l'a créé. Il est à tout le monde,
+/// avec le bit collant, comme le crée systemd.
+fn ensure_x11_unix_dir() -> io::Result<()> {
+    let dir = Path::new("/tmp/.X11-unix");
+    if dir.is_dir() {
+        return Ok(());
+    }
+    DirBuilder::new().mode(0o1777).create(dir)?;
+    // Le masque du processus a pu retirer des droits à la création.
+    fs::set_permissions(dir, Permissions::from_mode(0o1777))
 }
 
 /// Bords tirés d'une demande `_NET_WM_MOVERESIZE`.

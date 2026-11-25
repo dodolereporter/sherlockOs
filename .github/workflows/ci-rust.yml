@@ -43,11 +43,12 @@ jobs:
 
       # Le compositeur (smithay) se lie à libxkbcommon, et son test d'intégration charge
       # libwayland-client. L'image ubuntu-24.04 n'a pas leurs paquets de développement.
+      # xwayland fournit le binaire Xwayland que lance le test d'intégration de XWayland.
       # Garder cette liste alignée sur les prérequis de CLAUDE.md et docs/ci.md.
       - name: Installe les bibliothèques système
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev xwayland
 
       - name: Installe just
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3

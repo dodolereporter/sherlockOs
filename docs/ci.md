@@ -36,8 +36,9 @@ empreinte comme les autres. Une demande de fusion n'est verte que si `verifier` 
   `rust-toolchain.toml` suffit.
 - **Bibliothèques système.** `libxkbcommon-dev` et `libwayland-dev`, installées par `apt-get` à
   chaque exécution, car la machine de CI est neuve à chaque fois. Le compositeur (smithay) se lie à
-  libxkbcommon, et son test d'intégration charge libwayland-client. Toute bibliothèque système
-  ajoutée ici l'est aussi aux prérequis du poste.
+  libxkbcommon, et son test d'intégration charge libwayland-client. `xwayland` fournit le binaire
+  `Xwayland`, que le test d'intégration de XWayland (`tests/xwayland.rs`) lance. Toute bibliothèque
+  système ajoutée ici l'est aussi aux prérequis du poste.
 - **just.** Installé par `taiki-e/install-action`, version 1.59.0, épinglée dans le workflow.
 - **Cache Cargo.** `Swatinem/rust-cache` garde le registre Cargo et le dossier `target`. Sa clé
   contient la version de rustc et le `Cargo.lock` : un changement de l'un ou de l'autre repart d'un
@@ -58,8 +59,9 @@ just verifier
 ```
 
 C'est exactement ce que lance la CI, avec la même version de Rust, lue dans `rust-toolchain.toml`.
-Prérequis du poste : `rustup`, `just`, un compilateur C (`gcc` et `libc6-dev` sur Debian) et les
-bibliothèques du compositeur (`libxkbcommon-dev` et `libwayland-dev` sur Debian).
+Prérequis du poste : `rustup`, `just`, un compilateur C (`gcc` et `libc6-dev` sur Debian), les
+bibliothèques du compositeur (`libxkbcommon-dev` et `libwayland-dev` sur Debian) et le serveur
+`Xwayland` (paquet `xwayland` sur Debian).
 
 Pour lancer une étape seule :
 
