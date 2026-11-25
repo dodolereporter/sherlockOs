@@ -17,6 +17,7 @@ use crate::listing::{self, Column, Entry, Kind, Sort};
 use crate::ops;
 use crate::places::{self, Place};
 use crate::preview::{self, Preview};
+use crate::probe::{Probe, Step};
 use crate::trash::Trash;
 
 /// Identifiants des widgets que l'application pilote.
@@ -31,23 +32,37 @@ pub struct Config {
     pub start: PathBuf,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
+    /// `--mesurer <dossier>` : mesure la fluidité sur ce dossier, puis quitte.
+    pub measure: Option<PathBuf>,
 }
 
 impl Config {
     /// Dossier personnel, dossier donné en argument, corbeille de l'utilisateur.
     pub fn from_env() -> Self {
         let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        let start = std::env::args_os()
-            .nth(1)
-            .map(PathBuf::from)
-            .and_then(|p| std::path::absolute(p).ok())
-            .unwrap_or_else(|| home.clone());
+        let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+        let measure = match args.first() {
+            Some(flag) if flag == "--mesurer" => {
+                args.remove(0);
+                args.first()
+                    .and_then(|p| std::path::absolute(p).ok())
+            }
+            _ => None,
+        };
+        let start = match measure {
+            Some(_) => home.clone(),
+            None => args
+                .first()
+                .and_then(|p| std::path::absolute(p).ok())
+                .unwrap_or_else(|| home.clone()),
+        };
         let favorites = places::favorites(&home, places::read_user_dirs(&home).as_deref());
         Self {
             home,
             start,
             favorites,
             trash: Trash::user(),
+            measure,
         }
     }
 }
@@ -172,6 +187,8 @@ pub enum Message {
     Done(Outcome),
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
+    /// Une image de la fenêtre, pendant une animation ou une mesure.
+    Frame(std::time::Instant),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,6 +226,7 @@ pub struct App {
     pub(crate) size: Size,
     /// Défilement de la liste et hauteur visible, pour garder le curseur en vue.
     scroll: (f32, f32),
+    probe: Option<Probe>,
 }
 
 impl App {
@@ -240,14 +258,20 @@ impl App {
             modifiers: Modifiers::default(),
             size: Size::new(width, height),
             scroll: (0.0, height),
+            probe: None,
         };
+        app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
         (app, task)
     }
 
     /// Clavier, pointeur et taille de la fenêtre.
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, status, _| match event {
+        let frames = match &self.probe {
+            Some(probe) if probe.active() => window::frames().map(Message::Frame),
+            _ => Subscription::none(),
+        };
+        let events = event::listen_with(|event, status, _| match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
                 Some(Message::Modifiers(modifiers))
             }
@@ -255,7 +279,8 @@ impl App {
             Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Cursor(position)),
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             _ => None,
-        })
+        });
+        Subscription::batch([events, frames])
     }
 
     pub fn title(&self) -> String {
@@ -398,6 +423,7 @@ impl App {
                     self.refilter();
                 }
             }
+            Message::Frame(now) => return self.frame(now),
             Message::Window(action) => {
                 return window::latest().and_then(move |id| match action {
                     WindowAction::Drag => window::drag(id),
@@ -408,6 +434,30 @@ impl App {
             }
         }
         Task::none()
+    }
+
+    fn frame(&mut self, now: std::time::Instant) -> Task<Message> {
+        let Some(probe) = &mut self.probe else {
+            return Task::none();
+        };
+        let target = Location::Folder(probe.target.clone());
+        let loaded = self.location == target && !self.entries.is_empty();
+        match probe.frame(now, loaded) {
+            Step::Open => self.go(target),
+            Step::Scroll => operation::scroll_by(
+                LIST,
+                scrollable::AbsoluteOffset {
+                    x: 0.0,
+                    y: crate::probe::SCROLL_STEP,
+                },
+            ),
+            Step::Select => {
+                let next = self.cursor.map_or(0, |c| c + 1) % self.entries.len().max(1);
+                self.move_cursor(next)
+            }
+            Step::Wait | Step::Idle => Task::none(),
+            Step::Exit => iced::exit(),
+        }
     }
 
     // Navigation.

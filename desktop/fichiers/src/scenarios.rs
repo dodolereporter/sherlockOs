@@ -37,6 +37,7 @@ impl Bench {
             start: project,
             favorites: places::favorites(tmp.path(), None),
             trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
+            measure: None,
         };
         let (mut app, task) = App::new(config);
         drain(&mut app, task);
@@ -365,6 +366,7 @@ fn la_fenetre_se_rend_sans_ecran() {
         start: dir.clone(),
         favorites: places::favorites(tmp.path(), None),
         trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
+        measure: None,
     };
     let (mut app, _) = App::new(config);
     let repo = git::status(&dir);

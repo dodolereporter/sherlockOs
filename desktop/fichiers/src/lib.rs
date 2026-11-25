@@ -11,6 +11,7 @@ pub mod listing;
 pub mod ops;
 pub mod places;
 pub mod preview;
+pub mod probe;
 pub mod trash;
 mod view;
 
