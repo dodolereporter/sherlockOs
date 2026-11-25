@@ -1,62 +1,66 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Liste les recettes
+# Lists the recipes
 default:
     @just --list
 
-# Format, clippy et tests : ce que la CI exige
-verifier: verifier-format clippy tester
+# Format, clippy and tests: what the CI requires
+verify: fmt-check lint test
 
-# Vérifie le format sans rien modifier
-verifier-format:
+# Checks the format without changing anything
+fmt-check:
     cargo fmt --all -- --check
 
-# Applique le format
-formater:
+# Applies the format
+fmt:
     cargo fmt --all
 
-# Clippy sur tout le workspace, avertissements refusés
-clippy:
+# Clippy on the whole workspace, warnings refused
+lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Lance tous les tests du workspace
-tester:
+# Runs every test of the workspace
+test:
     cargo test --workspace --all-features
 
-# Compile tout le workspace
-construire:
+# Builds the whole workspace
+build:
     cargo build --workspace
 
-# Construit l'image du conteneur de build de la distribution
+# Reports French left in development text (ADR 0017)
+check-language *paths:
+    python3 distro/tests/check-language.py {{ paths }}
+
+# Builds the image of the build container of the distribution
 builder:
-    distro/builder/builder.sh construire
+    distro/builder/builder.sh build
 
-# Lance une commande dans le conteneur de build, dépôt monté dans /depot (bash sans commande)
+# Runs a command in the build container, repository mounted on /repo (bash without a command)
 [positional-arguments]
-dans-builder *commande:
-    @distro/builder/builder.sh lancer "$@"
+in-builder *command:
+    @distro/builder/builder.sh run "$@"
 
-# Teste le conteneur de build : outils, utilisateur, cache des sources, codes de sortie
-tester-builder:
-    JUST='{{ just_executable() }}' distro/builder/tester.sh rapide
+# Tests the build container: tools, user, source cache, exit codes
+test-builder:
+    JUST='{{ just_executable() }}' distro/builder/test.sh quick
 
-# Construit deux fois l'image sans cache et compare les versions des paquets (lent)
-tester-builder-repro:
-    distro/builder/tester.sh repro
+# Builds the image twice without cache and compares the package versions (slow)
+test-builder-repro:
+    distro/builder/test.sh repro
 
-# Compilations du noyau témoin en parallèle : tous les processeurs, sauf si TEMOIN_JOBS est fixé
-jobs_noyau := env("TEMOIN_JOBS", num_cpus())
+# Parallel compile jobs for the witness kernel: every processor, unless WITNESS_JOBS is set
+kernel_jobs := env("WITNESS_JOBS", num_cpus())
 
-# Construit l'image témoin du banc de boot dans le conteneur : ok (écrit BOOT-OK) ou muet
-temoin variante="ok":
-    distro/builder/builder.sh lancer env TEMOIN_JOBS={{ jobs_noyau }} distro/tests/temoin/construire.sh {{ quote(variante) }}
+# Builds the witness image of the boot bench in the container: ok (writes BOOT-OK) or silent
+witness variant="ok":
+    distro/builder/builder.sh run env WITNESS_JOBS={{ kernel_jobs }} distro/tests/witness/build.sh {{ quote(variant) }}
 
-# Boote une image disque UEFI dans QEMU et attend BOOT-OK (sans argument : l'image témoin, construite avant)
-test-boot image="distro/tests/sortie/temoin.img":
-    if [[ {{ quote(image) }} == distro/tests/sortie/temoin.img ]]; then {{ quote(just_executable()) }} temoin ok; fi
-    distro/builder/builder.sh lancer env BOOT_DELAI="${BOOT_DELAI:-90}" BOOT_SORTIE="${BOOT_SORTIE:-}" distro/tests/boot.sh {{ quote(image) }}
+# Boots a UEFI disk image in QEMU and waits for BOOT-OK (without argument: the witness image, built first)
+test-boot image="distro/tests/output/witness.img":
+    if [[ {{ quote(image) }} == distro/tests/output/witness.img ]]; then {{ quote(just_executable()) }} witness ok; fi
+    distro/builder/builder.sh run env BOOT_TIMEOUT="${BOOT_TIMEOUT:-90}" BOOT_OUTPUT="${BOOT_OUTPUT:-}" distro/tests/boot.sh {{ quote(image) }}
 
-# Vérifie que le banc échoue proprement : initramfs sans BOOT-OK, image absente
-tester-banc:
-    {{ quote(just_executable()) }} temoin muet
-    distro/builder/builder.sh lancer distro/tests/tester-banc.sh
+# Checks that the bench fails cleanly: initramfs without BOOT-OK, missing image
+test-bench:
+    {{ quote(just_executable()) }} witness silent
+    distro/builder/builder.sh run distro/tests/test-bench.sh

@@ -1,17 +1,18 @@
 # Build Rust
 /target/
-/essais/*/target/
+/prototypes/*/target/
 
-# Éditeurs
+# Editors
 .idea/
 *.iml
 .vscode/
 *.swp
 *~
 
-# Système
+# System
 .DS_Store
 
-# Secrets : jamais dans le dépôt
+# Secrets: never in the repository
 .env
 .env.*
+__pycache__/

@@ -1,2 +1,2 @@
-# Sorties du banc de boot : sources du noyau, constructions, images, journaux, captures
-/sortie/
+# Outputs of the boot bench: kernel sources, builds, images, logs, screenshots
+/output/

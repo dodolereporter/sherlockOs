@@ -1,121 +1,120 @@
-# Construire la distribution
+# Building the distribution
 
-La distribution se construit depuis les sources, toujours dans le conteneur de build décrit par
-`distro/builder/Dockerfile`. Le poste ne fournit que Docker : compilateurs, outils du noyau et QEMU
-viennent de l'image. Un build qui marche chez toi marche donc chez un autre et dans la CI.
+The distribution is built from source, always in the build container described by
+`distro/builder/Dockerfile`. The host only provides Docker: compilers, kernel tools and QEMU come
+from the image. A build that works on your machine therefore works on someone else's and in the CI.
 
-## Prérequis du poste
+## Host prerequisites
 
-| Outil | Pourquoi |
+| Tool | Why |
 | --- | --- |
-| Docker | Construit l'image et lance le conteneur. Ton utilisateur doit pouvoir appeler `docker` sans `sudo` |
-| `just` | Lance les recettes du `justfile` |
-| Linux x86_64 | La cible est x86_64 (ADR 0001). Le script de lancement suppose bash et les outils GNU de base |
-| Réseau | La construction de l'image télécharge ses paquets depuis `snapshot.debian.org` |
-| Disque | Environ 930 Mo pour l'image, mesuré à sa première construction, plus le cache des sources |
+| Docker | Builds the image and runs the container. Your user must be able to call `docker` without `sudo` |
+| `just` | Runs the recipes of the `justfile` |
+| Linux x86_64 | The target is x86_64 (ADR 0001). The launch script assumes bash and the basic GNU tools |
+| Network | Building the image downloads its packages from `snapshot.debian.org` |
+| Disk | About 930 MB for the image, measured on its first build, plus the source cache |
 
-KVM est facultatif. Si `/dev/kvm` existe et que ton utilisateur peut l'ouvrir, il est passé au
-conteneur et QEMU s'en sert. Sinon QEMU émule le processeur, beaucoup plus lentement.
+KVM is optional. If `/dev/kvm` exists and your user can open it, it is passed to the container and
+QEMU uses it. Otherwise QEMU emulates the processor, much more slowly.
 
-## Commandes
+## Commands
 
-| Commande | Ce qu'elle fait |
+| Command | What it does |
 | --- | --- |
-| `just builder` | Construit l'image `sherlockos-builder:local` |
-| `just dans-builder <commande>` | Lance la commande dans le conteneur, puis le supprime |
-| `just dans-builder` | Ouvre un bash dans le conteneur |
-| `just tester-builder` | Teste le conteneur, en quelques secondes une fois l'image construite (voir « Tests ») |
-| `just tester-builder-repro` | Vérifie que deux constructions installent les mêmes versions. Lent (voir « Tests ») |
+| `just builder` | Builds the `sherlockos-builder:local` image |
+| `just in-builder <command>` | Runs the command in the container, then removes it |
+| `just in-builder` | Opens a bash in the container |
+| `just test-builder` | Tests the container, in a few seconds once the image is built (see "Tests") |
+| `just test-builder-repro` | Checks that two builds install the same versions. Slow (see "Tests") |
 
-Exemples :
+Examples:
 
 ```sh
 just builder
-just dans-builder gcc --version
-just dans-builder qemu-system-x86_64 --version
-just dans-builder bash -c 'cd "$CACHE_SOURCES" && ls'
+just in-builder gcc --version
+just in-builder qemu-system-x86_64 --version
+just in-builder bash -c 'cd "$SOURCE_CACHE" && ls'
 ```
 
-`just dans-builder` reconstruit l'image tout seul quand elle manque ou quand le `Dockerfile` a
-changé depuis la dernière construction. Il compare une empreinte posée en étiquette sur l'image.
+`just in-builder` rebuilds the image by itself when it is missing or when the `Dockerfile` has
+changed since the last build. It compares a fingerprint set as a label on the image.
 
-## Dans le conteneur
+## Inside the container
 
-| Élément | Valeur |
+| Item | Value |
 | --- | --- |
-| Utilisateur | `builder`, avec l'uid et le gid de ton utilisateur. Jamais root |
-| Dépôt | Monté en lecture et écriture dans `/depot`, qui est aussi le dossier courant |
-| Cache des sources | Monté dans `/cache/sources`, chemin donné par la variable `CACHE_SOURCES` |
-| `/bin/sh` | bash, comme l'exige Linux From Scratch |
-| Nom du conteneur | `sherlockos-builder-<numéro du processus>`, supprimé à la sortie |
+| User | `builder`, with the uid and gid of your user. Never root |
+| Repository | Mounted read-write on `/repo`, which is also the current folder |
+| Source cache | Mounted on `/cache/sources`, path given by the `SOURCE_CACHE` variable |
+| `/bin/sh` | bash, as Linux From Scratch requires |
+| Container name | `sherlockos-builder-<process id>`, removed on exit |
 
-Les fichiers écrits dans `/depot` appartiennent à ton utilisateur sur le poste. Si ton poste tourne
-en root, ce qui arrive sur certaines CI, l'utilisateur du conteneur prend l'uid 1000.
+Files written in `/repo` belong to your user on the host. If your host runs as root, which happens
+on some CI, the container user takes uid 1000.
 
-Tout ce qui est écrit hors de `/depot` et de `/cache/sources` disparaît avec le conteneur.
+Everything written outside `/repo` and `/cache/sources` disappears with the container.
 
-Dans un worktree git, le dossier `.git` du dépôt principal n'est pas monté : `git` ne marche pas
-dans le conteneur. Les commandes de build n'en ont pas besoin.
+In a git worktree, the `.git` folder of the main repository is not mounted: `git` does not work in
+the container. The build commands do not need it.
 
-## Cache des sources
+## Source cache
 
-Les archives de sources téléchargées vivent hors du dépôt git, pour ne pas les retélécharger à
-chaque build et ne jamais les committer.
+Downloaded source archives live outside the git repository, so that they are not downloaded again
+on every build and never committed.
 
-| | Chemin |
+| | Path |
 | --- | --- |
-| Par défaut | `${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources`, soit le plus souvent `~/.cache/sherlockos/sources` |
-| Pour le changer | Exporte `CACHE_SOURCES`, par exemple `CACHE_SOURCES=/data/sources just dans-builder …` |
-| Dans le conteneur | `/cache/sources`, aussi dans la variable `CACHE_SOURCES` |
+| Default | `${XDG_CACHE_HOME:-$HOME/.cache}/sherlockos/sources`, usually `~/.cache/sherlockos/sources` |
+| To change it | Export `SOURCE_CACHE`, for instance `SOURCE_CACHE=/data/sources just in-builder …` |
+| In the container | `/cache/sources`, also in the `SOURCE_CACHE` variable |
 
-Le dossier est créé au premier lancement. Un cache placé dans le dépôt est refusé. Pour le vider,
-supprime simplement le dossier sur le poste.
+The folder is created on the first run. A cache inside the repository is refused. To empty it,
+simply delete the folder on the host.
 
-## Versions figées
+## Pinned versions
 
-Deux constructions de l'image installent exactement les mêmes paquets, aux mêmes versions :
+Two builds of the image install exactly the same packages, at the same versions:
 
-- l'image de base `debian:trixie-slim` est épinglée par son empreinte `sha256` ;
-- apt lit `snapshot.debian.org` à un instant figé (`ARG SNAPSHOT` du `Dockerfile`), pas le miroir
-  courant de Debian. Cet instant est celui à partir duquel l'image de base a été construite.
+- the base image `debian:trixie-slim` is pinned by its `sha256` digest;
+- apt reads `snapshot.debian.org` at a frozen point in time (`ARG SNAPSHOT` of the `Dockerfile`),
+  not the live Debian mirror. That point is the one the base image was built from.
 
-`just tester-builder-repro` le vérifie (voir « Tests »).
+`just test-builder-repro` checks it (see "Tests").
 
-Pour monter de version, relève la nouvelle empreinte de `debian:trixie-slim`, lis l'instant de
-snapshot dans son `/etc/apt/sources.list.d/debian.sources`, change les deux dans le `Dockerfile`,
-reconstruis, puis relance `just tester-builder` et `just tester-builder-repro`. Un instantané plus ancien que l'image
-de base fait échouer apt : il faudrait rétrograder des paquets.
+To move to newer versions, read the new digest of `debian:trixie-slim`, read the snapshot time in
+its `/etc/apt/sources.list.d/debian.sources`, change both in the `Dockerfile`, rebuild, then run
+`just test-builder` and `just test-builder-repro` again. A snapshot older than the base image makes
+apt fail: it would have to downgrade packages.
 
 ## Tests
 
-Les deux recettes appellent `distro/builder/tester.sh`. Elles affichent une ligne `ok` ou `ÉCHEC`
-par vérification et sortent en erreur dès qu'une vérification échoue.
+Both recipes call `distro/builder/test.sh`. They print one `ok` or `FAILED` line per check and exit
+with an error as soon as a check fails.
 
-`just tester-builder` construit l'image si elle manque, puis vérifie que :
+`just test-builder` builds the image if it is missing, then checks that:
 
-- `gcc --version` et `qemu-system-x86_64 --version` répondent dans le conteneur ;
-- l'uid dans le conteneur n'est pas 0 ;
-- `/bin/sh` pointe vers bash ;
-- un `CACHE_SOURCES` placé dans le dépôt est refusé sans que rien soit créé, que le chemin soit
-  absolu, relatif, la racine du dépôt ou un détour par `..` ;
-- le code de sortie de la commande est rendu, par `builder.sh` comme par `just dans-builder` :
-  `false` donne 1 et `bash -c 'exit 7'` donne 7 ;
-- les arguments passent intacts, espaces et apostrophes compris.
+- `gcc --version` and `qemu-system-x86_64 --version` answer in the container;
+- the uid in the container is not 0;
+- `/bin/sh` points to bash;
+- a `SOURCE_CACHE` inside the repository is refused without anything being created, whether the
+  path is absolute, relative, the repository root or a detour through `..`;
+- the exit code of the command is returned, by `builder.sh` as by `just in-builder`: `false` gives
+  1 and `bash -c 'exit 7'` gives 7;
+- arguments pass intact, spaces and apostrophes included.
 
-`just tester-builder-repro` construit deux fois l'image sans cache, sous l'étiquette temporaire
-`sherlockos-builder:repro-<pid>`, et compare la liste `dpkg-query -W` des deux constructions.
-Compte environ 4 min 30, mesuré sur le poste de l'auteur, et deux téléchargements complets des paquets. L'image d'essai est
-supprimée à la fin, même en cas d'échec, et l'image de base aussi si le test a dû la télécharger.
-`sherlockos-builder:local` n'est pas touchée.
+`just test-builder-repro` builds the image twice without cache, under the temporary tag
+`sherlockos-builder:repro-<pid>`, and compares the `dpkg-query -W` list of both builds. Count about
+4 min 30, measured on the author's machine, and two full downloads of the packages. The test image
+is removed at the end, even on failure, and the base image too if the test had to download it.
+`sherlockos-builder:local` is not touched.
 
-Ce test passe par le builder historique de Docker (`DOCKER_BUILDKIT=0`), qui affiche un
-avertissement d'obsolescence. Contrairement à BuildKit, il ne garde pas de cache de construction :
-supprimer l'image d'essai libère tout ce qu'elle occupait. Les versions installées ne dépendent
-que du `Dockerfile`, pas du builder.
+This test goes through the legacy Docker builder (`DOCKER_BUILDKIT=0`), which prints a deprecation
+warning. Unlike BuildKit, it keeps no build cache: removing the test image frees everything it
+used. The installed versions only depend on the `Dockerfile`, not on the builder.
 
 ## Variables
 
-| Variable | Par défaut | Rôle |
+| Variable | Default | Role |
 | --- | --- | --- |
-| `CACHE_SOURCES` | `~/.cache/sherlockos/sources` | Dossier du cache des sources sur le poste |
-| `BUILDER_IMAGE` | `sherlockos-builder:local` | Nom de l'image construite et lancée |
+| `SOURCE_CACHE` | `~/.cache/sherlockos/sources` | Folder of the source cache on the host |
+| `BUILDER_IMAGE` | `sherlockos-builder:local` | Name of the image built and run |
