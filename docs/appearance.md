@@ -61,6 +61,8 @@ with its light one; D-05c links the active theme to the wallpaper.
 | `epoch_now` | Seconds since 1970, from the real-time clock |
 | `follow(path, on_event)` | Calls `on_event` with the theme, then at every change; `Event::Problem` and `Event::Error` report what went wrong |
 | `follow_themes(path, on_theme)` | `follow` for a program that only wants the themes: problems and errors go to the log (`tracing`) |
+| `theme_now(path)` | The theme of the file now, read once: what a program makes active before its first frame |
+| `local(epoch)` | Broken-down local time (`struct tm`) of an instant, the time zone read again first; the top bar's clock uses it |
 | `path` | Path of the file |
 
 `follow` runs one thread, which waits with `poll` on two descriptors:
@@ -80,8 +82,9 @@ with its light one; D-05c links the active theme to the wallpaper.
 No polling. The thread stops the next time it reports something after `on_event` returned
 `false`.
 
-A program wires it like the top bar, Evidence and the dock do: a subscription whose stream
-receives the themes of `follow_themes`, given to a `color::ThemeFade` in `update`, which fades
+A program wires it like the top bar, Evidence and the dock do: `color::set_active(theme_now(..))`
+before its first frame, so that a light session never starts on a dark frame, then a
+subscription whose stream receives the themes of `follow_themes`, given to a `color::ThemeFade` in `update`, which fades
 the palette shown over `motion::THEME_FADE` (see "Following the theme" in
 `docs/sherlock-ui.md`). The sherlock-ui gallery switches at once with `color::set_active`.
 

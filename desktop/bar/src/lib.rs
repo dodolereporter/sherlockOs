@@ -53,6 +53,10 @@ pub fn settings() -> Settings {
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     // The bar has no text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
+    // The theme of the file before the first frame; the subscription follows it afterwards.
+    if let Some(path) = appearance_config::path() {
+        color::set_active(appearance_config::theme_now(&path));
+    }
     let result = iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
         .theme(|_: &Bar, _| Some(theme::theme()))
         .style(|_, _| iced::theme::Style {

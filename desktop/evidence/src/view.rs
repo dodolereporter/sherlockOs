@@ -548,7 +548,7 @@ impl App {
                 let tile = container(ui::icon(
                     entry.icon(),
                     metrics::PREVIEW_TILE_ICON,
-                    color::palette().deepest,
+                    theme::PREVIEW_TILE_ICON,
                 ))
                 .center(metrics::PREVIEW_TILE)
                 .style(theme::preview_tile);
@@ -640,7 +640,7 @@ impl App {
 
     fn status_bar(&self) -> Element<'_, Message> {
         let (left, tint) = match &self.notice {
-            Some(notice) if notice.error => (notice.text.clone(), color::palette().salmon),
+            Some(notice) if notice.error => (notice.text.clone(), color::palette().salmon_text),
             Some(notice) => (notice.text.clone(), color::palette().text_tertiary),
             None => (
                 t::status(self.entries.len(), self.selection.len()),

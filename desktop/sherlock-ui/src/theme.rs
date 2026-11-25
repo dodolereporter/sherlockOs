@@ -532,7 +532,11 @@ pub fn inset(theme: &Theme) -> container::Style {
     plain(theme, palette(theme).inset, metrics::BREADCRUMB_RADIUS)
 }
 
-/// File tile in the preview: bright blue, dark icon.
+/// Stroke of the icon on the preview tile: the dark stroke of the boards, `#0B1220`, in both
+/// themes (FichiersClair keeps it), since the tile keeps its bright blue.
+pub const PREVIEW_TILE_ICON: Color = Palette::DARK.deepest;
+
+/// File tile in the preview: bright blue, dark icon (`PREVIEW_TILE_ICON`).
 pub fn preview_tile(theme: &Theme) -> container::Style {
     let fill = palette(theme).blue_bright;
     plain(theme, fill, metrics::PREVIEW_TILE_RADIUS)
@@ -789,9 +793,9 @@ mod tests {
         let code = (String::from("code snippet"), p.deepest);
         check(&mut failures, "code text", p.text_code, None, &code);
         let tile = (String::from("tile"), p.blue_bright);
-        let tile_icon = p.text_on_accent.contrast(tile.1);
+        let tile_icon = PREVIEW_TILE_ICON.contrast(tile.1);
         if tile_icon < 3.0 {
-            failures.push((String::from("tile icon"), p.text_on_accent, tile_icon));
+            failures.push((String::from("tile icon"), PREVIEW_TILE_ICON, tile_icon));
         }
         // Top bar over the desktop and its discs: texts and workspace chips.
         let desktops = std::iter::once(p.desktop).chain(p.desktop_discs);

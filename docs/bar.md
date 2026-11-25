@@ -161,8 +161,8 @@ commands, a D-Bus source will implement the same trait.
 
 **The clock reads the C library.** The standard library does not know the time zone, and the
 brief does not allow `chrono`. Since D-05b the clock calls `localtime_r` (`libc`, already
-pinned), once a minute, instead of starting `date`: `mktime` first re-reads the time zone, as in
-`appearance-config`. Time zones being offset by whole minutes, the local minute changes at the
+pinned), once a minute, instead of starting `date`, through `appearance_config::local`, where
+`mktime` first re-reads the time zone. Time zones being offset by whole minutes, the local minute changes at the
 same time as the UTC minute, which the thread watches without reading anything.
 
 The OS network service is not chosen yet (batch S-13): `NetworkManager` is the source of the
@@ -276,8 +276,8 @@ Comparing with the design boards, by eye or on the screenshots:
 
 ## Theme
 
-The bar follows the appearance file live (`docs/appearance.md`) and fades from one theme to the
-other (`color::ThemeFade`, see "Following the theme" in `docs/sherlock-ui.md`). In the light
+The bar reads the theme of the appearance file before its first frame, then follows the file
+live (`docs/appearance.md`) and fades from one theme to the other (`color::ThemeFade`, see "Following the theme" in `docs/sherlock-ui.md`). In the light
 theme the logo of the Sherlock button takes a dark green ring and a night blue dot, which show
 on the light glass.
 

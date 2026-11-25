@@ -112,6 +112,10 @@ impl Sources {
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     // The dock has no text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
+    // The theme of the file before the first frame; the subscription follows it afterwards.
+    if let Some(path) = appearance_config::path() {
+        color::set_active(appearance_config::theme_now(&path));
+    }
     let dock = Dock::new(Sources::load());
     let layer = surface(dock.geometry, dock.surface_size);
     // The daemon wants a boot function it may call again: the first dock is handed over once.

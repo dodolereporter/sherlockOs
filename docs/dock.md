@@ -59,7 +59,8 @@ bounds of the settings, the magnification spring `dock::SPRING`, the label fade,
 colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and `ring`, and the texts
 `dock::text`.
 
-**Theme.** The dock follows the appearance file live and fades from one theme to the other
+**Theme.** The dock reads the theme of the appearance file before its first frame, then follows
+the file live and fades from one theme to the other
 (D-05b, see "Following the theme" in `docs/sherlock-ui.md`): its styles read the palette of the
 iced theme. The tiles keep their colors in both themes. Unlike the DockClair board, the dot
 under an open application is night blue in the light theme: cream would read at 1.1 to 1 on
@@ -263,7 +264,10 @@ terminal, editor, browser, games. For each, our own application (Evidence, deskt
 `$XDG_CONFIG_HOME/mimeapps.list` (`inode/directory`, `text/plain`, `x-scheme-handler/https`),
 else a preferred one (Konsole or GNOME's terminals, Steam), else the first one of its category
 (`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Evidence comes before
-`mimeapps`, which often gives folders to the file manager of another desktop.
+`mimeapps`, which often gives folders to the file manager of another desktop: for the files
+role, the `inode/directory` choice of `mimeapps.list` is ignored as long as Evidence is
+installed, even when the user made it on purpose. This only concerns the default pins: a
+`Pinned` list already written is kept as it is.
 
 Evidence is pinned only when its desktop entry is installed in a data directory
 (`$XDG_DATA_HOME/applications`, then those of `$XDG_DATA_DIRS`); otherwise the files role falls

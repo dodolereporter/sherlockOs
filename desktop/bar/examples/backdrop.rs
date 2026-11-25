@@ -72,13 +72,8 @@ fn main() -> Result<(), iced_exwlshell::Error> {
     // SAFETY: first statement of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
     iced_exwlshell::disable_clipboard();
-    let config = appearance_config::path()
-        .and_then(|path| appearance_config::AppearanceConfig::load(&path).ok())
-        .map(|(config, _)| config)
-        .unwrap_or_default();
-    let now = appearance_config::TimeOfDay::at(appearance_config::epoch_now());
-    if let Ok(now) = now {
-        color::set_active(config.theme_at(now).0);
+    if let Some(path) = appearance_config::path() {
+        color::set_active(appearance_config::theme_now(&path));
     }
     iced_exwlshell::layershell::application(|| (), namespace, update, view)
         .theme(|_: &()| theme::theme())

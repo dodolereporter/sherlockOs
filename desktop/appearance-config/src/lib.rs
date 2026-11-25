@@ -129,10 +129,11 @@ pub fn epoch_now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Broken-down local time of `epoch`. The time zone is read again first: glibc's `mktime`
-/// runs `tzset` (POSIX requires it), which notices a new `/etc/localtime`; `localtime_r` alone
-/// would keep the zone it read first.
-fn local(epoch: i64) -> io::Result<libc::tm> {
+/// Broken-down local time of `epoch`, in seconds since 1970. The time zone is read again
+/// first: glibc's `mktime` runs `tzset` (POSIX requires it), which notices a new
+/// `/etc/localtime`; `localtime_r` alone would keep the zone it read first. The top bar reads
+/// its clock with it too.
+pub fn local(epoch: i64) -> io::Result<libc::tm> {
     let time = libc::time_t::try_from(epoch).map_err(io::Error::other)?;
     // SAFETY: `tm` is plain data; zeroed, then filled by the calls below.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -270,6 +271,31 @@ fn read_time(key: &'static str, value: &str, slot: &mut TimeOfDay, problems: &mu
     }
 }
 
+/// The theme of the file at `path` now, read once: a program makes it active before its first
+/// frame, then follows the file (`follow_themes`), so that a light session never shows a dark
+/// frame at start. What cannot be read gives the default and goes to the log.
+pub fn theme_now(path: &Path) -> Theme {
+    let config = match AppearanceConfig::load(path) {
+        Ok((config, problems)) => {
+            for problem in problems {
+                tracing::warn!(%problem, "appearance file");
+            }
+            config
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "cannot read the appearance file");
+            AppearanceConfig::default()
+        }
+    };
+    match TimeOfDay::at(epoch_now()) {
+        Ok(now) => config.theme_at(now).0,
+        Err(error) => {
+            tracing::warn!(%error, "no local time: the default theme");
+            Theme::default()
+        }
+    }
+}
+
 /// Path of the file: `$XDG_CONFIG_HOME/appearance/appearance.conf`, `~/.config` by default.
 pub fn path() -> Option<PathBuf> {
     let home = std::env::var_os("XDG_CONFIG_HOME")
@@ -381,6 +407,18 @@ mod tests {
         ] {
             assert_eq!(TimeOfDay::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_theme_of_a_file_is_read_before_the_first_frame() {
+        let dir = std::env::temp_dir().join(format!("appearance-now-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("appearance.conf");
+        std::fs::write(&file, "[Appearance]\nTheme=light\n").unwrap();
+        assert_eq!(theme_now(&file), Theme::Light);
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(theme_now(&file), Theme::Dark, "no file: the default");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

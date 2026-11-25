@@ -9,7 +9,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Padding, Theme};
 
-use crate::color::{self, Color};
+use crate::color::{self, Color, Palette};
 use crate::focus::Focusable;
 use crate::icon::Icon;
 use crate::logo::Logo;
@@ -830,11 +830,17 @@ pub fn sherlock_button<'a, Message: Clone + 'a>(
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let (width, height) = metrics::SHERLOCK_BUTTON;
-    let glyph = svg(svg::Handle::from_memory(
-        Logo::bare_in(color::palette()).into_bytes(),
-    ))
-    .width(metrics::SHERLOCK_GLYPH)
-    .height(metrics::SHERLOCK_GLYPH);
+    // One logo per step of a fade, built once.
+    static LOGOS: std::sync::OnceLock<Vec<svg::Handle>> = std::sync::OnceLock::new();
+    let logos = LOGOS.get_or_init(|| {
+        (0..=color::MIX_STEPS)
+            .map(|s| svg::Handle::from_memory(Logo::bare_in(Palette::at_step(s)).into_bytes()))
+            .collect()
+    });
+    let step = usize::from(color::mix_step().min(color::MIX_STEPS));
+    let glyph = svg(logos[step].clone())
+        .width(metrics::SHERLOCK_GLYPH)
+        .height(metrics::SHERLOCK_GLYPH);
     let content = container(glyph).center(Length::Fill);
     let mut control = Control::new(
         content,

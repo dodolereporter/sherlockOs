@@ -313,7 +313,8 @@ user's; no test calls the real UDisks.
 
 ## Theme
 
-Evidence follows the appearance file live and fades from one theme to the other (D-05b, see
+Evidence reads the theme of the appearance file before its first frame, then follows it live
+and fades from one theme to the other (D-05b, see
 "Following the theme" in `docs/sherlock-ui.md`): its iced theme is `window_theme()`, read again
 at every redraw, and its view reads `color::palette()`. The capture test also writes
 `target/tmp/evidence-light-tiny-skia.png`, to compare with the light Files board,
@@ -326,7 +327,9 @@ at every redraw, and its view reads `color::palette()`. The capture test also wr
 `just install-evidence` builds Evidence in release and installs it for the user, without root:
 `~/.local/bin/evidence`, and `desktop/evidence/evidence.desktop` in
 `~/.local/share/applications` (or `$XDG_DATA_HOME/applications`) with that absolute path in
-`Exec`, so that it starts even when `~/.local/bin` is not in the `PATH` of the session. The dock
+`Exec`, quoted as the desktop entry specification asks (a home folder with a space works), so
+that it starts even when `~/.local/bin` is not in the `PATH` of the session. It takes the build
+from `$CARGO_TARGET_DIR` when that variable is set. The dock
 then pins it in place of the file manager of another desktop (`docs/dock.md`), and the launcher
 lists it. The packages of the OS will install both in `/usr`.
 

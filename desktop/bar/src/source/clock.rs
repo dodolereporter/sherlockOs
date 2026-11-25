@@ -52,26 +52,14 @@ impl LocalTime {
     }
 }
 
-/// Local time of `epoch`, in seconds since 1970. The time zone is read again first: glibc's
-/// `mktime` runs `tzset` (POSIX requires it), which notices a new `/etc/localtime`;
-/// `localtime_r` alone would keep the zone it read first. Same as `appearance-config`.
+/// Local time of `epoch`, in seconds since 1970, from `localtime_r`
+/// (`appearance_config::local`, which reads the time zone again first).
 pub fn local(epoch: i64) -> Result<LocalTime, SourceError> {
     let error = |detail: String| SourceError::Parse {
         command: "localtime_r",
         detail,
     };
-    // `time_t` is 64 bits on the target, x86-64 (ADR 0001).
-    let time: libc::time_t = epoch;
-    // SAFETY: `tm` is plain data: integers and a null zone pointer, filled by the calls below.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    tm.tm_mday = 1;
-    tm.tm_year = 70;
-    // SAFETY: `tm` is a valid `struct tm` that we own; only its side effect, `tzset`, matters.
-    unsafe { libc::mktime(&mut tm) };
-    // SAFETY: both pointers are valid for the call: `time` is read, `tm` written.
-    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
-        return Err(error(std::io::Error::last_os_error().to_string()));
-    }
+    let tm = appearance_config::local(epoch).map_err(|e| error(e.to_string()))?;
     LocalTime::from_tm(tm.tm_wday, tm.tm_mday, tm.tm_mon, tm.tm_hour, tm.tm_min)
         .ok_or_else(|| error(format!("{epoch} is out of range")))
 }
