@@ -347,7 +347,7 @@ cargo test -p sherlockd
 | `src/proxy.rs` | Refusal of anything but read, call cap, list with the level, giant message |
 | `src/claude_code.rs` | Command line and MCP configuration, truncated text, recap quoted as JSON, private 0700 directory removed at the end |
 | `tests/proxy.rs` | The proxy in front of the real test server: `echo` relayed, `vider_corbeille` refused |
-| `tests/claude_code.rs` | Transcripts of echo, of a refusal, of requested built-in tools, of a missing login and of an API key; trapped init (tool, server, mode, source); unknown block; nothing before `init`, lone result refused; bounded lines; Claude Code missing or not logged in; cleaned environment; timeout; recap of final answers only; bounded history |
+| `tests/claude_code.rs` | Transcripts of echo, of a refusal, of requested built-in tools, of a missing login and of an API key; trapped init (tool, server, mode, source); unknown block; nothing before `init`, lone result refused; bounded lines; Claude Code missing or not logged in; cleaned environment; timeout (Claude Code killed and reaped); recap of final answers only; bounded history |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -355,6 +355,14 @@ never call Claude Code: they replace `claude` with `false` (not logged in), with
 with `sh`, which replays a transcript and refuses to run if it sees a Cargo or Anthropic variable.
 `api-key.jsonl` comes from a real `claude -p` run with a dummy key: the request failed without
 billing anything.
+
+The timeout tests do not depend on the load of the machine. Each one waits for a server or a fake
+Claude Code that never answers, so the result is a timeout whatever the delay. The delay is short
+only where nothing has to happen first (`silent_server`). Where the server or the fake must start
+first (`timeout_server_stopped_and_reaped`, `timeout_claude_killed_and_reaped`), it is 5 seconds:
+with 300 ms, which also covered that start, `timeout_server_stopped_and_reaped` failed twice under
+a load of 18. These two tests check through `/proc` that the process was stopped and reaped, and
+put no tight bound on their own duration.
 
 ## What will come with A-11
 

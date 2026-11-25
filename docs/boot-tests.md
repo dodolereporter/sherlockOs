@@ -26,16 +26,18 @@ The image given to `just test-boot` must be inside the repository, for instance 
 2. starts `qemu-system-x86_64` as a `q35` machine, with the OVMF UEFI firmware (the target is UEFI,
    ADR 0001), the image as a virtio disk, a `std` graphics card without a window
    (`-display none`) and the serial port written to a file;
-3. watches the serial port every half second, until the `BOOT-OK` line, QEMU stopping or the end
-   of the timeout;
+3. watches the serial port every half second, until the `BOOT-OK` line (read by
+   `distro/tests/marker.py`, see "Reading the BOOT-OK line"), QEMU stopping or the end of the
+   timeout;
 4. takes a screenshot over QMP (`screendump`, as PNG), then stops QEMU.
 
 | Result | Code | Output |
 | --- | --- | --- |
-| A line that is exactly `BOOT-OK` comes out before the timeout | 0 | Boot duration, path of the log |
+| A line that is exactly `BOOT-OK`, kernel messages inside it aside, comes out before the timeout | 0 | Boot duration, path of the log |
 | No `BOOT-OK` at the end of the timeout | 1 | `FAILED`, then the last 50 lines of the serial port |
 | QEMU stops before (crash, reboot) | 1 | The same, with the exit code of QEMU |
 | Missing image, invalid timeout, missing tool | 2 | The problem, without starting QEMU |
+| `marker.py` cannot read the log | 2 | The problem, then QEMU is stopped |
 
 A few choices:
 
@@ -63,7 +65,31 @@ Every run writes into its output folder:
 | `screenshot.png` | The virtual screen at the time of the verdict, pass or fail |
 
 An image that wants to pass the bench writes `BOOT-OK`, alone on its line, on the first serial port
-(`ttyS0`, 115200 baud) once booted. The real image (lots S-11 and S-15) will have to do it.
+(`ttyS0`, 115200 baud) once booted. The real image (lots S-11 and S-15) will have to do it. To keep
+kernel messages out of the line, it first lowers the console log level (`dmesg -n 1`), and it keeps
+the kernel timestamps on (`CONFIG_PRINTK_TIME`), which let the bench recognise a message that still
+gets in.
+
+## Reading the BOOT-OK line
+
+The image writes `BOOT-OK` from user space, through the tty layer, while the kernel writes its
+messages straight to the same serial port, sometimes late. A kernel message can therefore land in
+the middle of the line. On 25 November 2026, the CI read `BOOT-OK[    0.207789] Freeing unused
+kernel image...`, four more kernel lines, then the line ending of `BOOT-OK`, and failed although
+the witness had booted.
+
+`distro/tests/marker.py` reads the log for `boot.sh`. A kernel message is written whole, from its
+timestamp (`[    0.207789] `, followed or not by the caller, `[    T1] `) to its line ending: every
+such message is removed from the log, wherever it starts, then `BOOT-OK` is searched alone on a
+complete line. Nothing else is removed, so these never pass:
+
+- `BOOT-OK` inside a kernel message, for instance on the kernel command line;
+- `BOOT-OK` with anything before or after it on its line, `BOOT-OKAY` for instance;
+- a `BOOT-OK` line not finished yet (no line ending);
+- `BOOT-OK` cut by a line without a kernel timestamp: systemd status, firmware.
+
+`python3 distro/tests/marker.py --self-test` runs these cases, the 25 November log included.
+`just test-bench` runs it.
 
 ## The witness image
 
@@ -78,7 +104,9 @@ It proves that the bench works, as long as the real image does not exist. Files 
 | Disk | 64 MiB, GPT table, one EFI partition in FAT32, the kernel in `\EFI\BOOT\BOOTX64.EFI` |
 | Kernel size | About 1.6 MB, initramfs included |
 
-`/init` writes `BOOT-OK` on the serial port and on the screen, then waits. The silent variant writes
+`/init` lowers the console log level, like `dmesg -n 1`, so that the kernel prints nothing but
+emergencies from then on, messages already waiting included. Then it writes `BOOT-OK` on the
+serial port and on the screen, and waits. The silent variant writes
 another line instead. The firmware starts the kernel directly, without a boot loader: the kernel is
 also a UEFI application (`CONFIG_EFI_STUB`), with its built-in command line.
 
@@ -109,6 +137,7 @@ instance `WITNESS_JOBS=4 just test-boot`.
 `just test-boot` is the passing case. `just test-bench` builds the silent variant and checks, with
 `distro/tests/test-bench.sh`, that:
 
+- the cases of `marker.py --self-test` pass;
 - the bench returns 1 after the 90 seconds, with the timeout message;
 - it prints at most 50 lines of the serial port, including the line written by `/init` instead of
   `BOOT-OK`;
