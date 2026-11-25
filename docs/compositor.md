@@ -7,7 +7,8 @@ handle: grab band, cursors, snapping against the screen edges. Lot D-11 gives it
 boards: desktop background, rounded corners, border, shadow, and spring animations. Lot D-13
 runs X11 applications in it, through XWayland, with the clipboard both ways. Lot D-12 adds
 anchored surfaces (layer-shell) for the bar, the dock and the panels, several screens, and
-fractional scaling. Lot D-04 draws the wallpaper.
+fractional scaling. Lot D-04 draws the wallpaper. Lot D-06 accepts the buffers of clients that
+draw on the GPU (linux-dmabuf).
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -23,10 +24,11 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
-| `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement |
+| `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants` |
@@ -217,7 +219,9 @@ Limits to keep in mind:
   bar (outside its rounded corners, behind the translucent glass) come out black, in any
   compositor. The floating bar of the board, with its 10 px gap and its glass, needs either
   a buffer with alpha (a softbuffer that offers `ARGB8888`, or iced's wgpu renderer on the AMD
-  chip) or a square bar. To decide with lot D-20; not checked further here.
+  chip) or a square bar. To decide with lot D-20; not checked further here. Since lot D-02
+  (ADR 0018) the shell draws with wgpu on the AMD chip, and since lot D-06 our compositor
+  accepts its buffers (see "GPU buffers"): the corners and the glass are transparent.
 
 ## Screens and scale
 
@@ -284,9 +288,12 @@ X11 client. Reasons:
 
 The display number is the first free one (`:1` under an X11 session that holds `:0`). It is in
 the log: `XWayland ready display=1`. Xwayland's messages go to the compositor's standard error,
-mixed with its logs. At startup, warnings from glamor, GBM and xkbcomp are expected: without
-access to the GPU, Xwayland draws in software. At shutdown, `(EE) failed to read Wayland events`
-too: the compositor closes its connection. Without `Xwayland` on the machine, the log says so
+mixed with its logs. At startup, warnings from xkbcomp are expected. With linux-dmabuf (lot
+D-06, see "GPU buffers"), Xwayland's glamor finds the render node in the default feedback and
+draws on the GPU: `(II) GLX: Initialized glamor GL provider`. Without it (software rendering,
+or before D-06), glamor gives up (`GBM Wayland interfaces not available`, and `nv_gbm` errors
+on a machine with the NVIDIA driver) and Xwayland draws in software (`DRISWRAST`). At shutdown,
+`(EE) failed to read Wayland events` too: the compositor closes its connection. Without `Xwayland` on the machine, the log says so
 (`no X11 applications`), and the command starts without `DISPLAY`: it does not inherit the host
 session's, where its X11 windows would open outside the compositor.
 
@@ -340,6 +347,89 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   therefore cannot change what the user pastes into a Wayland application. The rule is strict,
   with no exception for command line tools: `xclip -i` launched from a Konsole (Wayland) sets
   nothing on the Wayland side. The log says so at the `debug` level: `X11 selection refused`.
+
+## GPU buffers (linux-dmabuf)
+
+A client that draws on the GPU hands over its image as a dmabuf: GPU memory shared by file
+descriptor, without a copy. Mesa's Vulkan driver presents on Wayland only this way, and Mesa's
+EGL wants the default feedback (version 4 or later) to know which chip to allocate on. Before lot
+D-06, the compositor only offered `wl_shm`: the shell, drawn with wgpu on Vulkan (ADR 0018),
+found no way to present and fell back to software rendering, whose buffers have no alpha, so
+the author saw black around the dock and the rounded corners. Games, browsers and XWayland's
+glamor need it as well.
+
+- **Global.** `zwp_linux_dmabuf_v1` in version 5, the one smithay 0.7 gives with a default
+  feedback (version 4 plus the check that every plane has the same modifier). Clients that bind
+  version 3 receive the same formats as `modifier` events.
+- **Default feedback.** One tranche. The main device and the tranche's target device are the
+  node of the chip the compositor renders on, read from its EGL display
+  (`EGL_EXT_device_drm_render_node`, or the primary node if EGL does not name the render node).
+  The formats are those its GLES renderer can import (`ImportDma::dmabuf_formats`), modifiers
+  included. The log names the node and its kernel driver (read from sysfs), the number of pairs
+  and the formats: `linux-dmabuf offered node=/dev/dri/renderD128 driver="amdgpu" formats=358`;
+  each pair is logged at the `debug` level (`RUST_LOG=info,compositor::winit=debug`).
+- **Import.** Each buffer a client creates goes through the renderer first (`import_dmabuf`,
+  which makes an EGL image of it). Imported, it is drawn like any other surface: clipped to the
+  rounded rectangle by `clip.frag`, external textures (YUV formats) included. Refused, the
+  client receives `failed` (for `create`) and may fall back to `wl_shm`; for `create_immed`, the
+  protocol leaves no other answer than the `invalid_wl_buffer` error. The compositor never stops
+  for a buffer: the refusal is logged at the `debug` level (`compositor::dmabuf`).
+- **Checks before smithay.** Smithay 0.7 checks the format (announced or `invalid_format`), the
+  planes against the size of their file (`out_of_bounds`) and the size, but after a width or a
+  height below 1 it only sends `invalid_dimensions` and goes on: with a height of 0, an offset
+  plus a stride overflows, which is a panic in a debug build (seen in `tests/dmabuf.rs`, at
+  `smithay-0.7.0/src/wayland/dmabuf/mod.rs:1177`), and the buffer still reaches the importer.
+  `src/dmabuf.rs` answers that case itself before handing the request to smithay. The rest of
+  smithay's `delegate_dmabuf!` is written out next to it.
+- **Without a GPU.** If the renderer is software (llvmpipe: Xephyr, the CI) or EGL does not name
+  its device, the protocol is not offered and the log says why: clients keep `wl_shm`, as
+  before.
+
+In nested mode, the compositor renders on the chip of its host window, the one the host session
+gives EGL. Under KWin (Wayland), that is KWin's main device; under X11, the chip that drives the
+screen. With `__EGL_VENDOR_LIBRARY_FILENAMES` set to Mesa's file (see "Measuring"), NVIDIA's EGL
+is never loaded by the compositor. The renderer is shared between the winit backend and the
+importer (`Rc<RefCell<…>>`): the importer runs while the clients are read, never during a frame.
+
+**XWayland.** XWayland is a client like the others: it gets the default feedback, and glamor
+opens the render node it names (`(II) GLX: Initialized glamor GL provider`) instead of falling
+back to software. Before D-06, on the reference laptop, glamor gave up with `GBM Wayland
+interfaces not available` and two `nv_gbm` errors, then `DRISWRAST`. Smithay clears XWayland's
+environment (only `PATH` and `XDG_RUNTIME_DIR` remain), so `__EGL_VENDOR_LIBRARY_FILENAMES` does
+not reach it: XWayland loads NVIDIA's EGL libraries (`libEGL_nvidia`, `libnvidia-egl-gbm`), as it
+did before, but opens no NVIDIA device file and uses the AMD render node only (see below).
+
+**Security.** The global is open to every client, like `wl_shm`. Each imported buffer holds an
+EGL image of the renderer as long as the client keeps its `wl_buffer`: a client can use GPU
+memory as it can use shared memory. Not limited in this lot.
+
+**Checked on the reference laptop**, in a headless KWin 6.3 (`kwin_wayland --virtual`,
+1440 × 900) in `bwrap` with a `/dev/dri` that only holds the AMD render node, its own D-Bus and
+XDG folders, nothing shown on the screen. The compositor itself ran outside `bwrap`, seeing
+every DRM node, with Mesa's EGL only, and the wallpaper `first-clue`:
+
+- the renderer is `AMD Radeon Graphics (radeonsi, renoir)`, and the offer is on
+  `/dev/dri/renderD128`, driver `amdgpu`: 358 format and modifier pairs over 47 formats
+  (`AR24`, `XR24`, `AB24`, `XB24`, `AR30`, `XR30`, `AB30`, `XB30`, 16-bit and half-float
+  formats, `NV12`, `P010`, `YUYV` and the other YUV formats), each with `Linear`, the implicit
+  modifier and AMD's tiled modifiers (9 pairs for `AR24`);
+- `vkcube --wsi wayland` (RADV, `VK_DRIVER_FILES` restricted to `radeon_icd.json`) shows up;
+- the bar and the dock of the D-02 branch (commit `22efe3c`) choose Vulkan on RADV, read the
+  default feedback, create `AR24` buffers with `create_immed`, and are drawn with their
+  transparency: rounded corners and glass over the wallpaper;
+- the compositor, XWayland, the bar and the dock hold `/dev/dri/renderD128` only, no
+  `/dev/nvidia*`, and only XWayland maps NVIDIA libraries (see above);
+- `/sys/bus/pci/devices/0000:01:00.0/power/runtime_status`, read every 100 ms from before the
+  KWin start to after the last stop: `suspended` throughout.
+
+| What | Screenshot |
+| --- | --- |
+| Bar and dock of D-02, before this lot (main): software rendering, black around the dock and the corners of the bar | ![Before](../desktop/compositor/screenshots/dmabuf-shell-before.jpg) |
+| The same, with linux-dmabuf: Vulkan on the AMD chip, transparent | ![After](../desktop/compositor/screenshots/dmabuf-shell.jpg) |
+| Corner of the dock, enlarged 8 times: rounded and smoothed over the wallpaper, glass tinted by what is behind | ![Dock corner](../desktop/compositor/screenshots/dmabuf-dock-corner.png) |
+| `vkcube --wsi wayland` | ![vkcube](../desktop/compositor/screenshots/dmabuf-vkcube.jpg) |
+
+The KWin window decoration around the frame is KWin's: our compositor is one of its windows.
 
 ## Rendering
 
@@ -848,7 +938,9 @@ just verify
 | `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders and its pendant after `set_theme`, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
 | `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, choice per theme (default pair, fixed wallpaper, wallpaper without a pendant, user's path), variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible), 4K variant identical to its original |
 | `sherlock-ui/src/wallpapers.rs` | Every wallpaper of the index has its original, unique ids, pairs that point back to each other across themes, `for_theme` |
+| `src/dmabuf.rs` | Device numbers split as glibc does, for the driver in the log |
 | `tests/headless.rs` | Without a screen or backend, see below |
+| `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 
 The tests in `tests/headless.rs`:
@@ -940,7 +1032,24 @@ at what the X server knows about the window:
 - clean shutdown: XWayland removes its socket, and the compositor's Wayland socket (opened in
   the temporary directory, since the CI has no `XDG_RUNTIME_DIR`) and its lock go away.
 
+The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
+accepts or refuses each import and records it (the CI has no GPU):
+
+- **Not offered without a renderer.** `wl_shm` is there, `zwp_linux_dmabuf_v1` is not.
+- **Global and default feedback.** Version 5. The main device and the single tranche's target
+  are the given device; the tranche's indices, read in the format table, give back exactly the
+  announced pairs (linear and tiled). A client of version 3 receives them as `modifier` events.
+- **Refused buffer.** A one-plane `AR24` buffer of 64 × 48 (backed by a plain file) refused by
+  the renderer: the client receives `failed`, keeps its connection, and the renderer saw that
+  size and format. Accepted, the same request gives a `wl_buffer`, which a surface attaches and
+  commits.
+- **Invalid parameters.** An `NV12` buffer that was not announced (`invalid_format`), a height of
+  0 with a stride of 2^32 - 1 at offset 4 (`invalid_dimensions`, the case that panics inside
+  smithay without our check), a plane larger than its file (`out_of_bounds`): each ends the
+  client with that error, never reaches the renderer, and a new client still finds the global.
+
 What the tests do not see: the GLSL programs and the image they produce (the CI has no GPU),
+the real import of a dmabuf by the GLES renderer (checked by hand, see "GPU buffers"),
 the real shape of the host window's cursor, and the transfer of clipboard data between Wayland
 and X11, checked by hand and from the command line (see "Running"). For those, the manual
 procedure below, the measurement and the comparison with the board are needed.
@@ -1067,3 +1176,24 @@ cargo run -p compositor -- --nested --outputs 2 --scale 1 --scale 2 \
    Konsole's corners, border and shadow keep their proportions and stay sharp.
 6. **X11.** From Konsole, `xterm &`: it opens centered on the screen under the pointer; Alt + Up
    maximizes it below the bar of that screen.
+
+### GPU clients (lot D-06)
+
+On the reference laptop, with the bar and the dock built from lot D-02 (ADR 0018) or later, and
+`vkcube` (`vulkan-tools` package):
+
+```sh
+cargo build -p compositor -p bar -p dock
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+  target/debug/compositor --nested sh -c 'target/debug/bar & target/debug/dock & \
+  exec env VK_DRIVER_FILES=/usr/share/vulkan/icd.d/radeon_icd.json vkcube --wsi wayland'
+```
+
+1. **Offer.** The log says `linux-dmabuf offered node=/dev/dri/renderD128 driver="amdgpu"`, after
+   `GL Renderer: "AMD Radeon Graphics …"`.
+2. **Transparency.** The bar floats 10 pixels from the top with rounded corners, the dock shows
+   its corners and its glass over the wallpaper: no black rectangle around them.
+3. **Vulkan.** The vkcube window turns, with the compositor's rounded corners and shadow.
+4. **XWayland.** The log has `(II) GLX: Initialized glamor GL provider`, and no `nv_gbm` error.
+5. **NVIDIA.** `cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status` gives `suspended`
+   before, during and after.
