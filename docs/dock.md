@@ -141,10 +141,16 @@ and once when it settles.
 ### Icons
 
 The dock reads the desktop entries of `$XDG_DATA_HOME/applications` and of each
-`$XDG_DATA_DIRS/applications` (the first file of an id wins). The `mime-apps` crate is not
-merged: `entry.rs` reads only what the dock needs: `Name` (French first), `Icon`, `Exec`,
-`Path`, `Categories`, `StartupWMClass`, `NoDisplay`, `Hidden`, and the « new window » action
-(`Actions`, an id written `new-window`, `NewWindow` or `new-empty-window`).
+`$XDG_DATA_DIRS/applications` (the first file of an id wins). `entry.rs` reads only what the
+dock needs: `Name` (French first), `Icon`, `Exec`, `Path`, `Categories`, `StartupWMClass`,
+`NoDisplay`, `Hidden`, and the « new window » action (`Actions`, an id written `new-window`,
+`NewWindow` or `new-empty-window`).
+
+The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
+neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
+default roles, its open windows and « Nouvelle fenêtre », and this batch may not change it. The
+dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
+(and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
 
 Icons are looked up as the Icon Theme specification says, without the cache file: in the theme
 of `IconTheme` in the configuration, else the GTK one (`gtk-icon-theme-name` in
