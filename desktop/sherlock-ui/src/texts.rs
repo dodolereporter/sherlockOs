@@ -106,6 +106,8 @@ pub mod files {
     pub const TRASH: &str = "Corbeille";
     /// Nom du dossier racine dans le fil d'Ariane.
     pub const ROOT: &str = "Disque";
+    /// Segments repliés du fil d'Ariane.
+    pub const FOLDED: &str = "…";
 
     // Barre d'outils.
     pub const BACK: &str = "Précédent";

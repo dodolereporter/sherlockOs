@@ -1,0 +1,35 @@
+[package]
+name = "fichiers"
+description = "Fichiers, l'explorateur de fichiers du desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Toolkit du shell (ADR 0014). Les fonctions de rendu viennent de sherlock-ui ; `thread-pool`
+# est nommée ici parce que les copies et l'état git s'exécutent hors du fil de l'interface.
+# `image-without-codecs` ouvre le widget image de l'aperçu, sans les dizaines de formats que
+# tire la fonction `image` : seuls PNG et JPEG sont décodés (dépendance `image` ci-dessous).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "image-without-codecs",
+    "thread-pool",
+] }
+# Décodeurs de l'aperçu des images, PNG et JPEG seulement. Version tirée par iced 0.14.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# Heure locale (localtime_r) pour les dates de la liste et de la corbeille. Déjà tirée par
+# iced et winit : seule la déclaration est nouvelle.
+libc = "=0.2.191"
+sherlock-ui = { path = "../sherlock-ui" }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+# Rendu sans écran pour la capture et les tests de la souris, comme la galerie de D-01.
+iced_test = "=0.14.0"
+
+[lints]
+workspace = true

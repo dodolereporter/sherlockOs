@@ -162,6 +162,14 @@ pub fn secondary_button<'a, Message: Clone + 'a>(
     label_button(label, typography::UI, theme::secondary, on_press)
 }
 
+/// Bouton destructif : secondaire, texte saumon. Pour vider, effacer, jeter.
+pub fn danger_button<'a, Message: Clone + 'a>(
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    label_button(label, typography::UI, theme::danger, on_press)
+}
+
 /// Bouton d'icône seule. `label` est obligatoire : c'est son nom pour qui ne voit pas l'icône.
 pub fn icon_button<'a, Message: Clone + 'a>(
     glyph: Icon,

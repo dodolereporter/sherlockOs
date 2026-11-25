@@ -43,6 +43,9 @@ pub const PANEL_PADDING: f32 = 14.0;
 
 // Fenêtres d'application (planche Fichiers).
 
+/// Fenêtre d'application de la planche Fichiers, sur l'écran de référence.
+pub const REFERENCE_WINDOW: (f32, f32) = (1300.0, 676.0);
+
 /// Barre de titre : marges gauche et droite, pastille de l'application et son rayon.
 pub const TITLE_BAR_PADDING: (f32, f32) = (14.0, 8.0);
 pub const APP_BADGE: f32 = 18.0;
@@ -58,6 +61,9 @@ pub const TOOLBAR_PADDING: f32 = 12.0;
 pub const BREADCRUMB_HEIGHT: f32 = 32.0;
 pub const BREADCRUMB_RADIUS: f32 = 8.0;
 pub const BREADCRUMB_PADDING: f32 = 6.0;
+pub const BREADCRUMB_GAP: f32 = 4.0;
+/// Segments du fil d'Ariane montrés au plus : au-delà, le début se replie.
+pub const BREADCRUMB_MAX: usize = 5;
 pub const CRUMB_PADDING: (f32, f32) = (4.0, 8.0);
 pub const CRUMB_RADIUS: f32 = 6.0;
 /// Étiquette de la branche git : marges et rayon.
@@ -84,6 +90,9 @@ pub const PREVIEW_GAP: f32 = 12.0;
 pub const PREVIEW_TILE: f32 = 44.0;
 pub const PREVIEW_TILE_RADIUS: f32 = 11.0;
 pub const PREVIEW_TILE_ICON: f32 = 22.0;
+/// Aperçu d'un texte : lignes et colonnes montrées au plus. Au-delà, le panneau coupe.
+pub const PREVIEW_LINES: usize = 18;
+pub const PREVIEW_COLUMNS: usize = 120;
 /// Écart entre deux boutons empilés.
 pub const BUTTON_STACK_GAP: f32 = 8.0;
 /// Extrait de code : marges verticale et horizontale, rayon.
@@ -108,6 +117,9 @@ pub const LIST_ICON: f32 = 18.0;
 /// Étiquette d'état : marges verticale et horizontale, rayon.
 pub const BADGE_PADDING: (f32, f32) = (1.0, 8.0);
 pub const BADGE_RADIUS: f32 = 8.0;
+/// Menu du clic droit d'une liste et son sous-menu (planche Fichiers).
+pub const CONTEXT_MENU_WIDTH: f32 = 236.0;
+pub const CONTEXT_SUBMENU_WIDTH: f32 = 216.0;
 /// Question posée dans une fenêtre : largeur.
 pub const DIALOG_WIDTH: f32 = 380.0;
 

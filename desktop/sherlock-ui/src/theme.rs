@@ -81,6 +81,17 @@ pub fn secondary(_: &Theme, status: button::Status) -> button::Style {
     button_style(fill, text, edge)
 }
 
+/// Bouton destructif : un bouton secondaire au texte saumon.
+pub fn danger(theme: &Theme, status: button::Status) -> button::Style {
+    match status {
+        button::Status::Disabled => secondary(theme, status),
+        _ => button::Style {
+            text_color: color::SALMON.into(),
+            ..secondary(theme, status)
+        },
+    }
+}
+
 fn ghost(status: button::Status, rest: Color, radius: f32, hover: Color) -> button::Style {
     let (fill, text) = match status {
         button::Status::Active => (None, rest),
@@ -517,9 +528,10 @@ mod tests {
         let theme = theme();
         let mut failures = Vec::new();
         type Style = fn(&Theme, button::Status) -> button::Style;
-        let buttons: [(&str, Style); 3] = [
+        let buttons: [(&str, Style); 4] = [
             ("bouton principal", primary),
             ("bouton secondaire", secondary),
+            ("bouton destructif", danger),
             ("bouton d'icône", icon_button),
         ];
         let entries: [(&str, Style); 3] = [
@@ -610,7 +622,8 @@ mod tests {
         // d'état posées sur une ligne sélectionnée ou non, extrait de code.
         for on in surfaces_where(|n| ["fenêtre", "barre de titre", "panneau latéral"].contains(&n))
         {
-            let styles: [(&str, Box<dyn Fn(&Theme, button::Status) -> button::Style>); 6] = [
+            type Boxed = Box<dyn Fn(&Theme, button::Status) -> button::Style>;
+            let styles: [(&str, Boxed); 6] = [
                 ("entrée de navigation", Box::new(nav_item(false))),
                 ("entrée de navigation active", Box::new(nav_item(true))),
                 ("bouton de fenêtre", Box::new(window_button)),

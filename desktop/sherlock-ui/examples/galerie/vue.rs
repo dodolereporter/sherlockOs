@@ -239,12 +239,15 @@ fn states<'a>() -> Element<'a, Message> {
         .fold(row![space().width(NAME)], |r, (name, _)| {
             r.push(container(ui::section_label(name)).width(CELL))
         });
-    let lines: [(&str, Cell<'a>); 11] = [
+    let lines: [(&str, Cell<'a>); 12] = [
         ("Bouton principal", |look| {
             control(ui::primary_button("Relancer", enabled(look)), look)
         }),
         ("Bouton secondaire", |look| {
             control(ui::secondary_button("Voir les logs", enabled(look)), look)
+        }),
+        ("Bouton destructif", |look| {
+            control(ui::danger_button("Vider", enabled(look)), look)
         }),
         ("Icône seule", |look| {
             control(ui::icon_button(Icon::Close, "Fermer", enabled(look)), look)
