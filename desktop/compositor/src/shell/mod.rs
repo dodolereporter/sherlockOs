@@ -157,11 +157,12 @@ impl State {
 
     /// Hides `window` until it is activated. If it was the active one, the window on top
     /// becomes active.
+    /// Nothing happens during a gesture, which would put the window back.
     pub fn minimize(&mut self, window: &Window) {
         let Some(geometry) = self.space.element_geometry(window) else {
             return;
         };
-        if is_override_redirect(window) {
+        if is_override_redirect(window) || self.gesture_active() {
             return;
         }
         let output = self.window_output(window).map(|o| o.name());
@@ -267,11 +268,14 @@ impl State {
                 geometry.loc -= screen.loc;
                 Some((w, output.name(), geometry, false))
             });
+        // A minimized window whose screen went away is given the first one.
         let minimized = self.shell.minimized.iter().filter_map(|m| {
-            let screen = self.space.outputs().find(|o| o.name() == m.output);
+            let mut outputs = self.space.outputs();
+            let output = self.space.outputs().find(|o| o.name() == m.output);
+            let output = output.or_else(|| outputs.next())?;
             let mut geometry = m.geometry;
-            geometry.loc -= screen.and_then(|o| self.space.output_geometry(o))?.loc;
-            Some((&m.window, m.output.clone(), geometry, true))
+            geometry.loc -= self.space.output_geometry(output)?.loc;
+            Some((&m.window, output.name(), geometry, true))
         });
         let windows: Vec<_> = shown
             .chain(minimized)
