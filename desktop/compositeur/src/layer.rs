@@ -4,19 +4,35 @@
 //! Each screen has its layer map (smithay's `LayerMap`), which places its surfaces from their
 //! anchors and margins and keeps what their exclusive zones leave to windows: the work area.
 //! Background and bottom surfaces are drawn under the windows, top and overlay ones above.
+//!
+//! Values from clients are checked before smithay places anything: a surface whose size,
+//! margins or exclusive zone do not fit its screen is closed (see `check_reserves`).
+
+use std::cell::Cell;
 
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
-    delegate_layer_shell,
     desktop::{LayerSurface, PopupKind, WindowSurfaceType, layer_map_for_output},
     output::Output,
-    reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+    reexports::{
+        wayland_protocols_wlr::layer_shell::v1::server::{
+            zwlr_layer_shell_v1::ZwlrLayerShellV1,
+            zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
+        },
+        wayland_server::{
+            Client, DataInit, Dispatch, DisplayHandle, Resource,
+            backend::ClientId,
+            delegate_dispatch, delegate_global_dispatch,
+            protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+        },
+    },
     utils::IsAlive,
-    utils::{Logical, Point, Rectangle},
+    utils::{Logical, Point, Rectangle, Size},
     wayland::shell::{
         wlr_layer::{
-            KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler,
-            WlrLayerShellState,
+            Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurface as WlrLayerSurface,
+            LayerSurfaceCachedState, WlrLayerShellGlobalData, WlrLayerShellHandler,
+            WlrLayerShellState, WlrLayerSurfaceUserData,
         },
         xdg::PopupSurface,
     },
@@ -70,23 +86,24 @@ impl WlrLayerShellHandler for State {
     }
 
     fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
-        let Some((output, _)) = self.layer_for(surface.wl_surface()) else {
-            return;
-        };
-        {
+        let surface = surface.wl_surface();
+        self.unmapped_layers
+            .retain(|(l, _)| l.wl_surface() != surface);
+        if let Some((output, _)) = self.layer_for(surface) {
             let mut map = layer_map_for_output(&output);
             let layer = map
-                .layer_for_surface(surface.wl_surface(), WindowSurfaceType::TOPLEVEL)
+                .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
                 .cloned();
             if let Some(layer) = layer {
                 map.unmap_layer(&layer);
             }
+            drop(map);
+            self.reflow(&output);
         }
-        self.reflow(&output);
         // The keyboard goes back to a window if this surface had it.
         let had_keyboard = self
             .keyboard_focus()
-            .is_none_or(|focus| !focus.alive() || &focus == surface.wl_surface());
+            .is_none_or(|focus| !focus.alive() || &focus == surface);
         if had_keyboard {
             self.focus(self.top_window());
         }
@@ -107,30 +124,82 @@ impl State {
         })
     }
 
-    /// An anchored surface committed: its screen places it again, and it gets its first
-    /// configure. When its exclusive zone changes, maximized and snapped windows follow.
+    /// An anchored surface committed. Its values are checked, then its screen places it again
+    /// and it gets its first configure. A null buffer unmaps it until its next commit, which
+    /// maps it again with a new configure. When the exclusive zone changes, maximized and
+    /// snapped windows follow, and the keyboard follows what the surface accepts.
     pub(crate) fn layer_commit(&mut self, surface: &WlSurface) -> bool {
-        let Some((output, _)) = self.layer_for(surface) else {
-            return false;
+        let (output, layer, remapped) = match self.layer_for(surface) {
+            Some((output, _)) => {
+                let map = layer_map_for_output(&output);
+                let layer = map
+                    .layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                    .cloned();
+                drop(map);
+                let Some(layer) = layer else {
+                    return false;
+                };
+                (output, layer, false)
+            }
+            None => {
+                let Some(i) = self
+                    .unmapped_layers
+                    .iter()
+                    .position(|(l, _)| l.wl_surface() == surface)
+                else {
+                    return false;
+                };
+                let (layer, output) = self.unmapped_layers.swap_remove(i);
+                (output, layer, true)
+            }
         };
-        let zone_changed = {
-            let mut map = layer_map_for_output(&output);
-            let before = map.non_exclusive_zone();
+        let Some(screen) = self.space.output_geometry(&output) else {
+            return true;
+        };
+        let mut map = layer_map_for_output(&output);
+        let before = map.non_exclusive_zone();
+        let others = map
+            .layers()
+            .filter(|l| *l != &layer)
+            .map(LayerSurface::cached_state);
+        let checked = check_reserves(others.chain([layer.cached_state()]), screen.size);
+        let shown = layer.user_data().get_or_insert(|| Cell::new(false));
+        let content = has_content(surface);
+        if let Err(reason) = checked {
+            tracing::warn!(
+                namespace = layer.namespace(),
+                reason,
+                "surface ancrée refusée"
+            );
+            map.unmap_layer(&layer);
+            layer.layer_surface().send_close();
+        } else if shown.get() && !content {
+            // A null buffer: unmapped, until its next commit.
+            shown.set(false);
+            map.unmap_layer(&layer);
+            self.unmapped_layers.push((layer.clone(), output.clone()));
+        } else {
+            shown.set(content);
+            if remapped && let Err(err) = map.map_layer(&layer) {
+                tracing::warn!("surface ancrée : {err}");
+            }
             map.arrange();
-            if let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL) {
+            if remapped {
+                layer.layer_surface().send_configure();
+            } else {
                 layer.layer_surface().send_pending_configure();
             }
-            before != map.non_exclusive_zone()
-        };
+        }
+        let zone_changed = before != map.non_exclusive_zone();
+        drop(map);
         if zone_changed {
             self.reflow(&output);
         }
         // An exclusive keyboard surface takes the keyboard, a surface that no longer wants it
-        // gives it back.
+        // (or is gone) gives it back.
         let focused = self.keyboard_focus().as_ref() == Some(surface);
-        let exclusive = self.exclusive_layer();
-        if (exclusive.as_ref() == Some(surface) && !focused)
-            || (focused && exclusive.is_none() && !self.layer_wants_keyboard(surface))
+        if (self.exclusive_layer().as_ref() == Some(surface) && !focused)
+            || (focused && !self.layer_wants_keyboard(surface))
         {
             self.focus(self.focused_window().or_else(|| self.top_window()));
         }
@@ -209,6 +278,56 @@ impl State {
     }
 }
 
+/// Checks the anchored surfaces of a screen of `screen` points before smithay places them:
+/// no size beyond 2^31 (it would turn negative), no margin larger than the screen, and the
+/// exclusive zones with their margins, summed along each axis, fit in the screen. Everything
+/// smithay then computes stays within a few times the screen size: nothing can overflow.
+fn check_reserves(
+    states: impl Iterator<Item = LayerSurfaceCachedState>,
+    screen: Size<i32, Logical>,
+) -> Result<(), &'static str> {
+    let (width, height) = (i64::from(screen.w), i64::from(screen.h));
+    let (mut across, mut down) = (0_i64, 0_i64);
+    for state in states {
+        if state.size.w < 0 || state.size.h < 0 {
+            return Err("taille hors limites");
+        }
+        let m = state.margin;
+        let margin = |side: Anchor, value: i32| {
+            if state.anchor.contains(side) {
+                i64::from(value).abs()
+            } else {
+                0
+            }
+        };
+        let all = [m.top, m.right, m.bottom, m.left];
+        if all.iter().any(|v| i64::from(*v).abs() > width.max(height)) {
+            return Err("marge plus grande que l'écran");
+        }
+        let ExclusiveZone::Exclusive(amount) = state.exclusive_zone else {
+            continue;
+        };
+        let amount = i64::from(amount);
+        let a = state.anchor;
+        let (left, right) = (margin(Anchor::LEFT, m.left), margin(Anchor::RIGHT, m.right));
+        let (top, bottom) = (margin(Anchor::TOP, m.top), margin(Anchor::BOTTOM, m.bottom));
+        // The same cases, in the same order, as smithay's `LayerMap::arrange`.
+        if a.contains(Anchor::TOP | Anchor::BOTTOM)
+            || a.contains(Anchor::LEFT) != a.contains(Anchor::RIGHT)
+        {
+            across += amount + left + right;
+        } else if a.contains(Anchor::LEFT | Anchor::RIGHT)
+            || a.intersects(Anchor::TOP | Anchor::BOTTOM)
+        {
+            down += amount + top + bottom;
+        }
+    }
+    if across > width || down > height {
+        return Err("zone exclusive plus grande que l'écran");
+    }
+    Ok(())
+}
+
 /// The surface has a buffer: it shows something.
 fn has_content(surface: &WlSurface) -> bool {
     with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
@@ -221,4 +340,43 @@ pub(crate) struct PopupGrab {
     pub popup: PopupKind,
 }
 
-delegate_layer_shell!(State);
+delegate_dispatch!(State: [ZwlrLayerShellV1: ()] => WlrLayerShellState);
+delegate_global_dispatch!(State: [ZwlrLayerShellV1: WlrLayerShellGlobalData] => WlrLayerShellState);
+
+/// Requests of a layer surface go to smithay, as `delegate_layer_shell!` would send them, but
+/// a size beyond 2^31 is refused first: smithay turns it into a negative size and asserts
+/// against it. The protocol has an error for it (`invalid_size`), which ends the client.
+impl Dispatch<ZwlrLayerSurfaceV1, WlrLayerSurfaceUserData> for State {
+    fn request(
+        state: &mut Self,
+        client: &Client,
+        resource: &ZwlrLayerSurfaceV1,
+        request: zwlr_layer_surface_v1::Request,
+        data: &WlrLayerSurfaceUserData,
+        dh: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let zwlr_layer_surface_v1::Request::SetSize { width, height } = &request
+            && (i32::try_from(*width).is_err() || i32::try_from(*height).is_err())
+        {
+            tracing::warn!(width, height, "surface ancrée : taille hors limites");
+            resource.post_error(
+                zwlr_layer_surface_v1::Error::InvalidSize,
+                "size beyond 2^31",
+            );
+            return;
+        }
+        <WlrLayerShellState as Dispatch<_, _, Self>>::request(
+            state, client, resource, request, data, dh, data_init,
+        );
+    }
+
+    fn destroyed(
+        state: &mut Self,
+        client: ClientId,
+        resource: &ZwlrLayerSurfaceV1,
+        data: &WlrLayerSurfaceUserData,
+    ) {
+        <WlrLayerShellState as Dispatch<_, _, Self>>::destroyed(state, client, resource, data);
+    }
+}

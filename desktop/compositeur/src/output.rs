@@ -17,7 +17,9 @@ use smithay::{
     },
 };
 
-use crate::State;
+use sherlock_ui::window as ui;
+
+use crate::{State, layout};
 
 /// A screen and the rectangle of the host frame it draws into.
 #[derive(Debug, Clone)]
@@ -177,12 +179,13 @@ impl State {
     }
 
     /// Part of a screen left to windows once anchored surfaces took their exclusive zone, in
-    /// the space: where windows are centered, maximized and snapped.
+    /// the space: where windows are centered, maximized and snapped. Never outside the screen,
+    /// never smaller than `MIN_WORK_AREA` (see `layout::work_area`).
     pub fn work_area(&self, output: &Output) -> Option<Rectangle<i32, Logical>> {
         let geometry = self.space.output_geometry(output)?;
         let mut zone = layer_map_for_output(output).non_exclusive_zone();
         zone.loc += geometry.loc;
-        Some(zone)
+        Some(layout::work_area(geometry, zone, ui::MIN_WORK_AREA))
     }
 
     /// Work area of the screen under the pointer.

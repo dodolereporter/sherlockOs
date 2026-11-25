@@ -123,6 +123,9 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
+    /// them again.
+    unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
     /// Screens and where they draw in the host frame.
     screens: Vec<output::Screen>,
     gesture: Option<input::Gesture>,
@@ -228,6 +231,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
             cursor_status: CursorImageStatus::default_named(),
@@ -433,6 +437,7 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
         }

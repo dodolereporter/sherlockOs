@@ -129,7 +129,10 @@ impl Scene {
                 continue;
             };
             animating |= window_data(window).motion.borrow().is_animating();
-            self.push_window(renderer, &mut elements, window, visual, view);
+            // The shadow stays on the window's own screen: a maximized window does not cast it
+            // on the next one.
+            let shadow = state.window_output(window).as_ref() == Some(output);
+            self.push_window(renderer, &mut elements, window, visual, view, shadow);
         }
         let below = [Layer::Bottom, Layer::Background];
         self.push_layers(renderer, &mut elements, output, view, &below);
@@ -165,15 +168,12 @@ impl Scene {
                     continue;
                 };
                 let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
-                self.push_surface(
-                    renderer,
-                    elements,
-                    surface.wl_surface(),
-                    loc,
+                let at = Placement {
                     view,
-                    1.0,
-                    true,
-                );
+                    loc,
+                    alpha: 1.0,
+                };
+                self.push_surface(renderer, elements, surface.wl_surface(), at, true);
                 self.push_backdrop(elements, view.rect(geometry.to_f64()));
             }
         }
@@ -184,34 +184,25 @@ impl Scene {
     /// drawn as is, translucent over a sharp background.
     fn push_backdrop(&self, _elements: &mut [SceneElement], _rect: Rectangle<i32, Physical>) {}
 
-    /// A surface tree, untouched (no clip, border or shadow), with its origin at `loc` in the
-    /// space. `popups`: its menus too, in front of it (smithay lists nested menus with the
-    /// root surface, so a menu never has menus of its own here).
-    #[allow(clippy::too_many_arguments)]
+    /// A surface tree, untouched (no clip, border or shadow), placed by `at`. `popups`: its
+    /// menus too, in front of it (smithay lists nested menus with the root surface, so a menu
+    /// never has menus of its own here).
     fn push_surface(
         &self,
         renderer: &mut GlesRenderer,
         elements: &mut Vec<SceneElement>,
         surface: &WlSurface,
-        loc: Point<f64, Logical>,
-        view: &View,
-        alpha: f32,
+        at: Placement<'_>,
         popups: bool,
     ) {
         if popups {
             for (popup, offset) in PopupManager::popups_for_surface(surface) {
-                let loc = loc + (offset - popup.geometry().loc).to_f64();
-                self.push_surface(
-                    renderer,
-                    elements,
-                    popup.wl_surface(),
-                    loc,
-                    view,
-                    alpha,
-                    false,
-                );
+                let loc = at.loc + (offset - popup.geometry().loc).to_f64();
+                let at = Placement { loc, ..at };
+                self.push_surface(renderer, elements, popup.wl_surface(), at, false);
             }
         }
+        let Placement { view, loc, alpha } = at;
         // Built at scale 1 from the origin, then scaled around it: subsurfaces keep their
         // logical offsets, multiplied by the screen's scale.
         let origin = view.point(loc).to_i32_round();
@@ -238,6 +229,7 @@ impl Scene {
         window: &Window,
         visual: Visual,
         view: &View,
+        shadow: bool,
     ) {
         let Some(surface) = window.wl_surface() else {
             return;
@@ -249,30 +241,22 @@ impl Scene {
         }
         // Menu ou bulle X11 : ni découpe, ni bordure, ni ombre, comme un menu Wayland.
         if is_override_redirect(window) {
-            self.push_surface(
-                renderer,
-                elements,
-                surface,
-                visual.rect.loc,
+            let at = Placement {
                 view,
-                1.0,
-                false,
-            );
+                loc: visual.rect.loc,
+                alpha: 1.0,
+            };
+            self.push_surface(renderer, elements, surface, at, false);
             return;
         }
         // Les menus passent devant, sans découpe ni mise à l'échelle.
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
-            let loc = visual.rect.loc + (offset - popup.geometry().loc).to_f64();
-            let alpha = visual.opacity;
-            self.push_surface(
-                renderer,
-                elements,
-                popup.wl_surface(),
-                loc,
+            let at = Placement {
                 view,
-                alpha,
-                true,
-            );
+                loc: visual.rect.loc + (offset - popup.geometry().loc).to_f64(),
+                alpha: visual.opacity,
+            };
+            self.push_surface(renderer, elements, popup.wl_surface(), at, false);
         }
         // Une fenêtre en plein écran n'a ni coins, ni bordure, ni ombre. Elle les garde tant
         // qu'elle glisse vers l'écran entier, pour qu'ils ne disparaissent pas avant.
@@ -318,7 +302,7 @@ impl Scene {
                 frame_size: view.frame_size,
             })
         }));
-        if decorated {
+        if decorated && shadow {
             let shadow = Shadow::of(rect, view.scale);
             elements.push(SceneElement::Shape(PixelShaderElement::new(
                 self.shadow.clone(),
@@ -362,6 +346,15 @@ impl Scene {
             Kind::Unspecified,
         )
     }
+}
+
+/// Where a surface tree is drawn: the screen it is drawn for, its origin in the space, its
+/// opacity.
+#[derive(Clone, Copy)]
+struct Placement<'a> {
+    view: &'a View,
+    loc: Point<f64, Logical>,
+    alpha: f32,
 }
 
 /// Area of a pixel shader element. The frame is drawn at scale 1: its "logical" coordinates

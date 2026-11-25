@@ -135,7 +135,21 @@ size and margins, and computes the work area.
 - **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
   taken from the work area. Windows are centered, maximized and snapped inside it. When it
   changes (the bar starts, stops or resizes), maximized and snapped windows of that screen take
-  the new work area. A bar of 36 with a top margin of 10 leaves the area from y = 46.
+  the new work area. A bar of 36 with a top margin of 10 leaves the area from y = 46. The work
+  area always stays inside the screen and is never smaller than `window::MIN_WORK_AREA` of
+  sherlock-ui (320 × 240, or the screen if smaller): zones that cover the whole screen leave
+  that minimum at their edge, never a negative or empty area.
+- **Checks.** Client values are checked before smithay places anything, so that no geometry
+  can overflow. A size beyond 2^31 (`set_size`) is a protocol error (`invalid_size`), sent
+  before smithay reads it, which would otherwise assert against a negative size. At each
+  commit, the surfaces of the screen are refused (`closed` and a warning in the log, the
+  surface leaves the layer map before it is placed) when a margin is larger than the screen, or
+  when the exclusive zones with their margins, summed along each axis, are larger than the
+  screen: a zone of 100 000, or `i32::MAX` with a margin, is refused, and the third panel that
+  no longer fits too.
+- **Null buffer.** A surface that commits a null buffer is unmapped: its exclusive zone and the
+  keyboard come back, as when it is closed. Its next commit maps it again on the same screen,
+  with a new configure.
 - **Keyboard.** `none`: never. `on_demand`: a click on the surface gives it the keyboard, a
   click on a window takes it back. `exclusive`, on the top or overlay layer: the surface takes
   the keyboard as soon as it shows something, and keeps it while it is there; clicks on
@@ -151,7 +165,29 @@ size and margins, and computes the work area.
   keyboard: Escape and arrow keys go to the surface that has it.
 - **Blur.** `Scene::push_backdrop` is the place where the blur behind glass surfaces comes, with
   lot D-11b: it is called for each anchored surface, behind it, with its rectangle in the
-  frame. It draws nothing yet: the bar is translucent over a sharp desktop.
+  frame. It draws nothing yet: a translucent surface shows a sharp desktop behind it.
+
+### Security notes
+
+Not settled by lot D-12, which runs nested only. What its review established, to carry into
+the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
+
+- **The `zwlr_layer_shell_v1` global is open to every Wayland client**, Flatpak ones included:
+  nothing filters it.
+- **Keyboard theft.** An overlay surface with an `exclusive` keyboard keeps it as long as it
+  exists, even a 1 × 1 surface, and even after a click on a window (the test
+  `une_surface_au_clavier_exclusif_le_garde` checks the protocol's behavior). Any client can
+  thus capture all typing with an almost invisible surface. The compositor's shortcuts are
+  still intercepted before the client, but they act on `focused_window()`, which is `None`
+  while an anchored surface has the keyboard: the gesture key + arrows then do nothing.
+- **Clicks.** An overlay surface anchored to the four edges is in front of everything, drawn
+  and hit first: it receives every click.
+- **To reserve to the compositor:**
+  - a layer above the overlay one, for the consent window (ADR 0011) and the lock screen,
+    drawn by the compositor itself and hit before `layer_hit`;
+  - a forced keyboard focus that comes before `exclusive_layer()`;
+  - a filter on the layer-shell global, kept for the shell programs that the session starts;
+  - `ext-session-lock` for D-25, rather than an overlay surface.
 
 ### Layer-shell toolkit of the shell (answer to ADR 0014)
 
@@ -193,7 +229,8 @@ divided by its scale. In the space, screens sit side by side from (0, 0), in ord
 
 - **Windows.** A new window, Wayland or X11, is centered on the screen under the pointer. Snap
   zones are those of the screen under the pointer (see « Caler »). A window across two screens
-  is drawn on both, at each screen's scale.
+  is drawn on both, at each screen's scale. Its shadow is drawn on its own screen only (the
+  one under its center): a maximized window casts none on the next screen.
 - **Scale announced to clients.** `wl_output` gives the scale rounded up (2 for 1.25 or 1.5).
   `wp_fractional_scale_v1` gives the exact scale, in 120ths, for each surface, from the screen
   under its center: clients that know it (Qt 6, GTK 4, iced through `iced_exwlshell`) draw at
@@ -214,7 +251,7 @@ Screenshots, taken in nested mode on the reference laptop with the test bar (its
 | 1 | ![Scale 1](../desktop/compositeur/screenshots/scale-1.png) |
 | 1.5 | ![Scale 1.5](../desktop/compositeur/screenshots/scale-1.5.png) |
 | 2 | ![Scale 2](../desktop/compositeur/screenshots/scale-2.png) |
-| Two screens, 1 and 2, `scene agrandie` maximized on the second | ![Two screens](../desktop/compositeur/screenshots/two-screens.png) |
+| Two screens, 1 and 2, `scene agrandie` maximized on the second (in Xephyr, 1280 × 800): no shadow on the first | ![Two screens](../desktop/compositeur/screenshots/two-screens.png) |
 
 The black corners around the bar and its menu are the test bar's own: iced draws with
 tiny-skia through softbuffer 0.4.8, whose Wayland backend only uses `XRGB8888` buffers, so the
@@ -639,13 +676,32 @@ Les tests de `tests/sans_ecran.rs` :
   receives a configure of 776 × 36, draws, and the work area becomes (0, 46, 800, 554): the
   maximized window is configured at 800 × 554 in (0, 46). Snapped left, it takes 400 × 554 in
   (0, 46). A click on the bar gives it the keyboard (on demand).
+- **Exclusive zones stacked.** Two bars at the top and a dock of 76 at the bottom: work area
+  (0, 92, 800, 432), and the maximized window follows. A surface with a zone of -1 changes
+  nothing. Closing the second bar gives (0, 46, 800, 478), closing them all the whole screen.
+- **Zones too large.** A zone of 100 000, `i32::MAX` with a margin of 10, a margin of
+  `i32::MAX`: each surface is closed, the work area stays whole, the maximized window does not
+  move and snapping still works. A size beyond 2^31 ends the client with `invalid_size`, and
+  the compositor goes on.
+- **Zones that cover the screen.** 300 at the top and 300 at the bottom on 600: the work area
+  is the minimum of sherlock-ui, (0, 300, 800, 240), where maximizing and snapping happen. One
+  more pixel of zone is refused.
+- **Null buffer.** The bar, with the keyboard, commits a null buffer: the maximized window
+  takes 800 × 600 again and the keyboard goes back to it. Committed again, the bar gets a new
+  configure, draws, and the window goes back under it.
+- **Exclusive keyboard.** An overlay surface of 1 × 1 with an exclusive keyboard takes it at
+  its first content and keeps it after a click on the window, until it is destroyed.
+- **The bar's client goes away.** A second client shows a bar, then disconnects: its zone comes
+  back to the maximized window.
 - **Two screens.** A second screen of 800 × 600 to the right. With the pointer on it, its work
   area is the one for new windows. The window, dragged with the gesture key to the right edge
   of the second screen, is shown the right half of that screen in the preview and takes it
   (400 × 600 in (1200, 0)); maximized by the shortcut, it fills the second screen.
 - **Fractional scale.** A screen of 800 × 600 pixels at 1.5 is 533 × 400 in the space.
   `wp_fractional_scale_manager_v1`, `wp_viewporter` and `zxdg_output_manager_v1` are announced,
-  and a new window's surface receives a preferred scale of 180 (1.5 in 120ths).
+  and a new window's surface receives a preferred scale of 180 (1.5 in 120ths). With a screen
+  at 1 and one at 2 sharing a frame of 1440 pixels, the pixel (720, 10) is the point
+  (720, 5) of the space and (1439, 899) the point (1079.5, 449.5).
 - **Ce qui est dessiné suit les gestes.** `State::window_visual` donne la géométrie dessinée à
   un instant choisi, sans rendu. Agrandie puis rendue pendant l'animation, la fenêtre glissée
   ensuite est dessinée sous le pointeur à chaque image. Calée à gauche deux fois de suite, puis
@@ -790,8 +846,9 @@ cargo run -p compositeur -- --imbrique --ecrans 2 --echelle 1 --echelle 2 \
 ```
 
 1. **Bar on both screens.** The window is split in two screens. Each one has the test bar at
-   the top, 10 from the top and 12 from the sides, rounded, translucent, « écran 1 » on the
-   left, « écran 2 » on the right. The one on the right is twice as big and as sharp.
+   the top, 10 from the top and 12 from the sides, opaque with black corners (iced in software
+   rendering, see the layer-shell toolkit limits), « écran 1 » on the left, « écran 2 » on the
+   right. The one on the right is twice as big and as sharp.
 2. **Maximize under the bar.** Alt + flèche haut on Konsole: it fills its screen below the bar,
    without covering it. Alt + flèche gauche: the left half, below the bar too. Drag it to the
    top edge of the other screen: maximized on that screen, below its bar.
