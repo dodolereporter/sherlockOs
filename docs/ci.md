@@ -35,9 +35,11 @@ A pull request is green only if `verify` and `test-boot` both are.
 - **Rust.** `rustup toolchain install`, without an argument, installs the version and the
   components written in `rust-toolchain.toml`. No version is written in the workflow: changing
   `rust-toolchain.toml` is enough.
-- **System libraries.** `libxkbcommon-dev` and `libwayland-dev`, installed by `apt-get` on every
-  run, because the CI machine is new every time. The compositor (smithay) links to libxkbcommon,
-  and its integration test loads libwayland-client. `xwayland` provides the `Xwayland` binary,
+- **System libraries.** `libxkbcommon-dev`, `libwayland-dev`, `libudev-dev`, `libinput-dev`,
+  `libseat-dev`, `libgbm-dev` and `libdrm-dev`, installed by `apt-get` on every run, because the
+  CI machine is new every time. The compositor (smithay) links to libxkbcommon, and to udev,
+  libinput, libseat and GBM for the real session (lot D-14); its integration test loads
+  libwayland-client. `xwayland` provides the `Xwayland` binary,
   which the XWayland integration test (`tests/xwayland.rs`) starts, and `libegl1` the
   `libEGL.so.1` without which Xwayland stops at startup: libepoxy loads it at run time, and the
   `xwayland` package does not pull it in. Any system library added here is also added to the
@@ -64,8 +66,9 @@ just verify
 
 This is exactly what the CI runs, with the same Rust version, read from `rust-toolchain.toml`.
 Prerequisites of the local machine: `rustup`, `just`, `python3`, a C compiler (`gcc` and `libc6-dev` on
-Debian), the compositor libraries (`libxkbcommon-dev` and `libwayland-dev` on Debian) and the
-`Xwayland` server (`xwayland` package on Debian).
+Debian), the compositor libraries (`libxkbcommon-dev`, `libwayland-dev`, `libudev-dev`,
+`libinput-dev`, `libseat-dev`, `libgbm-dev` and `libdrm-dev` on Debian) and the `Xwayland` server
+(`xwayland` package on Debian).
 
 To run a single step:
 

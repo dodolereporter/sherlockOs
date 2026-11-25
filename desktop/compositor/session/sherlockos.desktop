@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NOM_OS
+Comment=Le bureau de NOM_OS, avec Sherlock
+Exec=/usr/local/libexec/nom-os/sherlockos-session
+TryExec=/usr/local/libexec/nom-os/sherlockos-session
+DesktopNames=NOM_OS

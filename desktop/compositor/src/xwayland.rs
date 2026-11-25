@@ -50,7 +50,7 @@ use crate::{
     focus::KeyboardFocus,
     handlers::{Arrangement, configure_x11},
     layout::{self, Edges},
-    window_data,
+    mesa, window_data,
 };
 
 impl State {
@@ -62,10 +62,15 @@ impl State {
         ready: impl FnOnce(&mut State, Option<u32>) + 'static,
     ) -> Result<(), Error> {
         ensure_x11_unix_dir().map_err(Error::Xwayland)?;
+        // Smithay starts Xwayland with an empty environment: it gets what keeps it off the
+        // NVIDIA card (`mesa`).
+        let var = |key: &str| std::env::var_os(key);
+        let env = mesa::xwayland_env(var, mesa::backends_without_nvidia(var));
+        tracing::debug!(?env, "Xwayland environment");
         let (xwayland, client) = XWayland::spawn(
             &self.display_handle,
             None,
-            std::iter::empty::<(String, String)>(),
+            env,
             true,
             Stdio::null(),
             // Its errors stay visible, on our standard error.
