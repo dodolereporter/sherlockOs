@@ -285,7 +285,8 @@ impl Dock {
     /// the sizes of the board's curve, the label follows the closest icon. Returns whether the
     /// pointer entered or left the dock.
     pub fn hover(&mut self, point: Option<Point>, now: Duration) -> bool {
-        self.now = now;
+        self.now = self.now.max(now);
+        let now = self.now;
         self.pointer = point;
         let layout = self.layout(now);
         let inside = point.filter(|p| layout.contains(*p));
@@ -312,7 +313,9 @@ impl Dock {
 
     /// A frame was drawn at `now`.
     pub fn frame(&mut self, now: Duration) {
-        self.now = now;
+        // A frame stamped before the last pointer event must not take the time back.
+        self.now = self.now.max(now);
+        let now = self.now;
         self.frames += 1;
         let elapsed = now.saturating_sub(self.frames_since);
         if elapsed >= Duration::from_secs(1) || !self.animating() {
