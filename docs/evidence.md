@@ -215,9 +215,10 @@ ADR 0014.
 
 ## Comparing with the planche
 
-1. Render the planche once: replace `/_blob/5a8a…` with `docs/design/images/sherlock-tete.png`,
-   drop the `support.js` line, then
-   `chromium --headless --disable-gpu --hide-scrollbars --window-size=1440,900 --screenshot=planche.png Fichiers.html`.
+1. Render the planche once, from a copy of `docs/design/planches/Fichiers.dc.html` saved as
+   `board.html`: replace `/_blob/5a8a…` with `docs/design/images/sherlock-tete.png`, drop the
+   `support.js` line, then
+   `chromium --headless --disable-gpu --hide-scrollbars --window-size=1440,900 --screenshot=board.png board.html`.
    Crop the window: `(70, 64)` to `(1370, 740)`, 1300 × 676.
 2. `cargo test -p evidence window_renders_headless` (see `scenarios.rs`) writes
    `target/tmp/evidence-tiny-skia.png`, at scale 2: the same folder as the planche (a git repo
@@ -275,7 +276,7 @@ with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
 
 ## Tests
 
-`just verifier` runs them without a screen, on temporary folders. The trash, the XDG
+`just verify` runs them without a screen, on temporary folders. The trash, the XDG
 directories and `mimeapps.list` used by the tests are in the temporary folder, never the
 user's; no test calls the real UDisks.
 
@@ -316,8 +317,8 @@ On the author's laptop, Plasma X11:
    the other lines stay as they were). Enter on another file of the same type opens it with
    that application. "Autre application…" lists every application, with a search.
 5. Plug in a USB key: it appears under Appareils. Click it: Plasma's polkit agent may ask for
-   the password, then the key opens. Right-click: Démonter, Éjecter. Click the eject button:
+   the password, then the key opens. Right-click: « Démonter », « Éjecter ». Click the eject button:
    the key disappears from the list and the status bar says it can be removed. With a file of
-   the key open in another program, Démonter shows the "busy" message.
+   the key open in another program, « Démonter » shows the "busy" message.
 6. `RUST_LOG=evidence=info cargo run --release -p evidence -- --measure <folder of 5,000
    files> --maximized` and read the three `measure:` lines.

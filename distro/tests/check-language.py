@@ -33,7 +33,7 @@ EXCLUDED = (
 )
 
 # Data, not development text.
-DATA_SUFFIXES = (".jsonl", ".desktop", ".lock")
+DATA_SUFFIXES = (".jsonl", ".json", ".desktop", ".lock")
 DATA_FOLDERS = ("/fixtures/", "/transcripts/")
 BINARY_SUFFIXES = (".png", ".jpg", ".svg", ".ttf", ".otf", ".woff", ".woff2", ".ico", ".glb")
 
@@ -89,7 +89,8 @@ INTERFACE_NAMES = {"vider_corbeille", "demande", "reponse"}
 
 WORD = re.compile(r"[A-Za-zÀ-ÿœæŒÆ]+")
 IDENT_PART = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
-FRENCH_QUOTE = re.compile(r"«[^»]*»")
+# Quoted text in comments and docs is cited interface text: « … », or "…" with a French accent.
+FRENCH_QUOTE = re.compile(r"«[^»]*»|\"[^\"]*[àâçéèêëîïôûùüÀÂÇÉÈÊ][^\"]*\"")
 INLINE_CODE = re.compile(r"`[^`]*`")
 LINK_TARGET = re.compile(r"\]\([^)]*\)")
 # Paths into the French reference folders, cited from English text.
