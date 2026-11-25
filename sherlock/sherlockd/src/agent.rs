@@ -2,6 +2,8 @@
 
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use crate::mcp::{Level, McpError, ToolHost, ToolOutput};
 use crate::modele::{Message, ModelProvider, ModelReply, ModelRequest, ProviderError, ToolCall};
 
@@ -47,6 +49,9 @@ pub enum CallError {
     /// La réponse du modèle demande plus d'appels que le plafond d'un tour.
     #[error("appel non exécuté : plus de {0} appels d'outils dans une même réponse")]
     TooManyCalls(usize),
+    /// Le mandataire a déjà relayé son plafond d'appels pour cette conversation.
+    #[error("appel non exécuté : plus de {0} appels d'outils dans cette conversation")]
+    SessionCallLimit(usize),
     /// Outil inconnu, refusé faute de courtier, ou serveur en échec.
     #[error(transparent)]
     Mcp(#[from] McpError),
@@ -125,32 +130,41 @@ impl<P: ModelProvider, H: ToolHost> Agent<P, H> {
     }
 
     async fn execute(&mut self, call: &ToolCall) -> Result<ToolOutput, CallError> {
-        let tool = call.name.as_str();
-        let spec = self.tools.tools().iter().find(|t| t.name == tool);
-        let level = spec
-            .ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?
-            .level;
-        if level != Level::Read {
-            // En attendant le courtier (A-11), seul le niveau lecture s'exécute. L'hôte des
-            // outils le vérifie aussi : ce contrôle-ci est une défense en profondeur.
-            tracing::warn!(tool, %level, "appel refusé : courtier d'accords absent");
-            return Err(McpError::BrokerAbsent {
-                tool: tool.to_owned(),
-                level,
-            }
-            .into());
-        }
-        let start = Instant::now();
-        let result = self.tools.call(tool, call.arguments.clone()).await;
-        let ms = start.elapsed().as_millis();
-        match &result {
-            Ok(output) => {
-                tracing::info!(tool, %level, ms, is_error = output.is_error, "appel d'outil")
-            }
-            Err(error) => tracing::error!(tool, %level, ms, %error, "appel d'outil en échec"),
-        }
-        Ok(result?)
+        execute(&mut self.tools, &call.name, call.arguments.clone()).await
     }
+}
+
+/// Exécute un appel d'outil avec les contrôles de `sherlockd` : niveau vérifié, refus hors
+/// lecture, trace. Seule voie d'exécution de la boucle d'agent et du mandataire.
+pub async fn execute<H: ToolHost>(
+    tools: &mut H,
+    tool: &str,
+    arguments: Value,
+) -> Result<ToolOutput, CallError> {
+    let spec = tools.tools().iter().find(|t| t.name == tool);
+    let level = spec
+        .ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?
+        .level;
+    if level != Level::Read {
+        // En attendant le courtier (A-11), seul le niveau lecture s'exécute. L'hôte des
+        // outils le vérifie aussi : ce contrôle-ci est une défense en profondeur.
+        tracing::warn!(tool, %level, "appel refusé : courtier d'accords absent");
+        return Err(McpError::BrokerAbsent {
+            tool: tool.to_owned(),
+            level,
+        }
+        .into());
+    }
+    let start = Instant::now();
+    let result = tools.call(tool, arguments).await;
+    let ms = start.elapsed().as_millis();
+    match &result {
+        Ok(output) => {
+            tracing::info!(tool, %level, ms, is_error = output.is_error, "appel d'outil")
+        }
+        Err(error) => tracing::error!(tool, %level, ms, %error, "appel d'outil en échec"),
+    }
+    Ok(result?)
 }
 
 #[cfg(test)]

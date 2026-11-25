@@ -14,9 +14,11 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 thiserror = "=2.0.21"
 # Runtime asynchrone, déjà dans Cargo.lock (tiré par iced). Fonctions minimales : un seul fil
-# (`rt`), `process` et `io-util` pour parler aux serveurs MCP sur stdio, `time` pour les délais,
-# `macros` pour `#[tokio::main]` et `#[tokio::test]`.
+# (`rt`), `process` et `io-util` pour parler aux serveurs MCP sur stdio, `io-std` pour servir le
+# mandataire sur l'entrée et la sortie standard, `time` pour les délais, `macros` pour
+# `#[tokio::main]`, `#[tokio::test]` et `select!`.
 tokio = { version = "=1.54.1", default-features = false, features = [
+    "io-std",
     "io-util",
     "macros",
     "process",

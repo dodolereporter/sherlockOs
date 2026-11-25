@@ -27,13 +27,14 @@ use smithay::{
     },
     desktop::{PopupManager, Window},
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
+    wayland::seat::WaylandFocus,
 };
 
 use crate::{
     State,
     anim::{RectF, Visual},
     handlers::is_fullscreen,
-    window_data,
+    is_override_redirect, window_data,
 };
 
 /// Pas de remplissage : seule la bordure d'une forme est dessinée.
@@ -145,14 +146,30 @@ impl Scene {
         visual: Visual,
         output_size: Size<i32, Physical>,
     ) {
-        let (Some(toplevel), rect) = (window.toplevel(), snap(visual.rect)) else {
+        let (Some(surface), rect) = (window.wl_surface(), snap(visual.rect)) else {
             return;
         };
         let geometry = window.geometry();
         if rect.size.is_empty() || geometry.size.is_empty() {
             return;
         }
-        let surface = toplevel.wl_surface();
+        let surface = surface.as_ref();
+        // Menu ou bulle X11 : ni découpe, ni bordure, ni ombre, comme un menu Wayland.
+        if is_override_redirect(window) {
+            elements.extend(
+                render_elements_from_surface_tree(
+                    renderer,
+                    surface,
+                    rect.loc.to_physical(1),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )
+                .into_iter()
+                .map(SceneElement::Popup),
+            );
+            return;
+        }
         // Les menus passent devant, sans découpe ni mise à l'échelle.
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
             let loc = rect.loc + offset - popup.geometry().loc;
