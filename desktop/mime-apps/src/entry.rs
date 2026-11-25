@@ -85,6 +85,34 @@ fn unescape(raw: &str) -> String {
     out
 }
 
+/// Splits a list value (`a;b;c;`) on its separators; `\;` is a semicolon inside an item.
+/// Items are unescaped, empty ones dropped.
+fn split_list(raw: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut item = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(';') => item.push(';'),
+                Some(next) => {
+                    item.push('\\');
+                    item.push(next);
+                }
+                None => item.push('\\'),
+            },
+            ';' => items.push(std::mem::take(&mut item)),
+            c => item.push(c),
+        }
+    }
+    items.push(item);
+    items
+        .iter()
+        .map(|i| unescape(i))
+        .filter(|i| !i.is_empty())
+        .collect()
+}
+
 /// Parses one `.desktop` file. Only applications that can run are kept: `Type=Application`,
 /// an `Exec`, not `Hidden`.
 pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<DesktopEntry> {
@@ -107,16 +135,7 @@ pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<De
         return None;
     }
     let exec = unescape(get("Exec")?);
-    let list = |key: &str| -> Vec<String> {
-        get(key)
-            .map(|m| {
-                m.split(';')
-                    .filter(|t| !t.is_empty())
-                    .map(unescape)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    let list = |key: &str| get(key).map(split_list).unwrap_or_default();
     Some(DesktopEntry {
         id: id.to_owned(),
         path: path.to_path_buf(),
@@ -124,7 +143,10 @@ pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<De
         generic_name: get("GenericName").map(unescape).filter(|g| !g.is_empty()),
         keywords: list("Keywords"),
         exec,
-        working_dir: get("Path").filter(|p| !p.is_empty()).map(PathBuf::from),
+        working_dir: get("Path")
+            .map(unescape)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from),
         icon: get("Icon").map(unescape).filter(|i| !i.is_empty()),
         mime_types: list("MimeType"),
         no_display: flag("NoDisplay"),
@@ -278,8 +300,8 @@ mod tests {
     #[test]
     fn entries_read_localized_names_and_types() {
         let text = "[Desktop Entry]\nType=Application\nName=Text Editor\nName[fr]=Éditeur de texte\n\
-                    GenericName=Editor\nGenericName[fr]=Éditeur\nKeywords=text;code;\nKeywords[fr]=texte;code;\n\
-                    Path=/srv/notes\nExec=kate -b %U\nIcon=kate\nMimeType=text/plain;text/x-c;\n\
+                    GenericName=Editor\nGenericName[fr]=Éditeur\nKeywords=text;code;\n\
+                    Keywords[fr]=texte;code;a\\;b;c\\\\;\nPath=/srv/my\\snotes\nExec=kate -b %U\nIcon=kate\nMimeType=text/plain;text/x-c;\n\
                     [Desktop Action new]\nName=New\n";
         let app = parse(
             "kate.desktop",
@@ -291,8 +313,9 @@ mod tests {
         assert_eq!(app.name, "Éditeur de texte");
         assert_eq!(app.mime_types, ["text/plain", "text/x-c"]);
         assert_eq!(app.generic_name.as_deref(), Some("Éditeur"));
-        assert_eq!(app.keywords, ["texte", "code"]);
-        assert_eq!(app.working_dir, Some(PathBuf::from("/srv/notes")));
+        // `\;` stays in its item; `\\` then `;` ends one.
+        assert_eq!(app.keywords, ["texte", "code", "a;b", "c\\"]);
+        assert_eq!(app.working_dir, Some(PathBuf::from("/srv/my notes")));
         assert!(
             parse(
                 "x",

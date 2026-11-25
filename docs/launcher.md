@@ -116,21 +116,33 @@ field codes disappear), run without a shell, with the environment the launcher s
 minus its renderer choice (`sherlock_ui::gpu::for_child`, ADR 0018), in its own process group,
 with no standard streams, in the entry's `Path` when it has one. `Terminal=true` entries run
 in the terminal `mime-apps` picks (`$TERMINAL`, then the usual ones). The launcher closes
-right after; if the start fails, it stays open and logs the error.
+right after, and ignores any further Enter or click meanwhile, so a repeated key starts nothing
+twice. If the start fails, it stays open and logs the error; a `Path` that is not a folder is
+logged as such, apart from a missing program.
 
 ### One launcher at a time
 
 The launcher is started on demand: by a keyboard shortcut of the compositor later, by hand for
 now. Started again while open, it closes the open one: pressing the shortcut twice toggles it.
 
-- The first launcher opens `$XDG_RUNTIME_DIR/launcher.lock`, takes an exclusive `flock` on it
-  without waiting, and writes its process id in it. It keeps the file open while it runs.
-- A second one cannot take the lock: it reads the process id, sends it `SIGTERM`, and stops
-  without showing anything. Only a plain id above 1 and other than its own is signalled.
+- The first launcher opens `$XDG_RUNTIME_DIR/launcher.lock` (without following a symbolic
+  link), takes an exclusive `flock` on it without waiting, and writes its process id in it. It
+  keeps the file open while it runs, and empties it when it closes normally (Escape, a start).
+- A second one cannot take the lock. It reads the process id and checks that it is a launcher
+  before sending anything: it pins the process with `pidfd_open`, compares its program
+  (`/proc/<id>/exe`) with its own (`/proc/self/exe`), and only then sends `SIGTERM` through the
+  pidfd (`pidfd_send_signal`). It then stops without showing anything.
+- Why the check: a launcher closed by `SIGTERM` leaves its id in the file, and a second launcher
+  may read the file before a new first one rewrote it. That id may belong to another process by
+  now: it is never signalled. Should the id be reused between the check and the signal, the
+  pidfd still names the dead process and nothing is sent. Only an id above 1 and other than its
+  own is considered.
+- A launcher whose program file was replaced since it started (a new build) reads as another
+  program: the second start then does nothing and the open launcher stays until Escape.
 - The kernel drops the lock when its holder ends, crash included: a stale file never blocks
   the next start. The file is opened close-on-exec, so started programs never inherit the lock.
-- Without `XDG_RUNTIME_DIR`, or when the file cannot be opened, the launcher runs without the
-  lock and logs a warning.
+- Without `XDG_RUNTIME_DIR` (or with a relative one, which the XDG specification ignores), or
+  when the file cannot be opened, the launcher runs without the lock and logs a warning.
 
 ## Running it
 
@@ -149,6 +161,8 @@ RUST_LOG=launcher=debug cargo run -p launcher
   `Exclusive` the launcher keeps it until Escape or a start. To revisit with the compositor's
   shortcut.
 - The `Comment` key is not read: the line under a name is its `GenericName`.
+- Folding knows the composed accented letters only: a name written with combining accents
+  (`e` then U+0301) is not folded. Desktop entries and typed text hardly use them.
 - No real session was run for this batch: the author's machine rules forbade opening a window.
   The checks of the next section are still to do.
 
@@ -173,11 +187,14 @@ RUST_LOG=launcher=debug cargo run -p launcher
   fixture reachable with two letters; arrows stop at the ends; a new query selects the first
   result; Escape closes; a click starts its result in its `Path`;
 - start: no shell (a `;` in an argument stays in the file name), the working directory, a
-  missing program refused;
+  missing program and a missing working directory told apart, a second Enter or click after a
+  start starting nothing;
 - layout: the panel height for each state, the texts drawn, the surface's place, and three
   screenshots in `target/tmp`;
-- single instance: the lock taken, our own id never signalled, a sleeping child closed by
-  `SIGTERM`, the lock free again after, odd file contents signalling nobody.
+- single instance: the lock taken, our own id never signalled, a stand-in launcher (a copy of
+  the test program) closed by `SIGTERM`, the file emptied by a normal close and the lock free
+  again, a live `sleep` and a dead id never signalled, a linked lock file refused, odd file
+  contents signalling nobody.
 
 `cargo test -p sherlock-ui launcher`: contrast of the texts on the panel and on the selected
 row in both themes, and the panel height.

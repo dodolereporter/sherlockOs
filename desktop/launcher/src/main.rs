@@ -18,7 +18,7 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
     // Held until the end of `main`: the kernel releases it with the process.
-    let _lock = match instance::runtime_dir().map(|dir| instance::claim(&dir)) {
+    let lock = match instance::runtime_dir().map(|dir| instance::claim(&dir)) {
         Some(Ok(Claim::First(lock))) => Some(lock),
         Some(Ok(Claim::Second(closed))) => {
             tracing::info!(?closed, "a launcher was open: closed instead");
@@ -34,7 +34,12 @@ fn main() -> ExitCode {
         }
     };
     tracing::info!(?renderer, "renderer");
-    match launcher::run() {
+    let result = launcher::run();
+    // A normal close (Escape, a start) leaves no process id behind.
+    if let Some(lock) = lock {
+        instance::release(lock);
+    }
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "the launcher stopped");

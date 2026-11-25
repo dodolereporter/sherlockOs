@@ -8,10 +8,12 @@ use crate::source::Command;
 
 /// Error while starting a program.
 #[derive(Debug, thiserror::Error)]
-#[error("cannot start {program}: {source}")]
-pub struct LaunchError {
-    pub program: String,
-    pub source: io::Error,
+pub enum LaunchError {
+    /// The entry's `Path` is not a folder: said apart, the program itself is not at fault.
+    #[error("cannot start {program}: its working directory {dir} is not a folder")]
+    MissingDir { program: String, dir: String },
+    #[error("cannot start {program}: {source}")]
+    Spawn { program: String, source: io::Error },
 }
 
 /// Starts `command` and returns at once with its process id. The program outlives the
@@ -27,11 +29,18 @@ pub fn spawn(command: &Command) -> Result<u32, LaunchError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
+    let program = || command.program.to_string_lossy().into_owned();
     if let Some(dir) = &command.dir {
+        if !dir.is_dir() {
+            return Err(LaunchError::MissingDir {
+                program: program(),
+                dir: dir.display().to_string(),
+            });
+        }
         process.current_dir(dir);
     }
-    let mut child = process.spawn().map_err(|source| LaunchError {
-        program: command.program.to_string_lossy().into_owned(),
+    let mut child = process.spawn().map_err(|source| LaunchError::Spawn {
+        program: program(),
         source,
     })?;
     let pid = child.id();

@@ -118,6 +118,10 @@ impl Launcher {
 
     /// Runs result `index`; the launcher closes once the program started.
     fn choose(&mut self, index: usize) -> Task<Message> {
+        // A second Enter, or Enter then a click, before the exit is handled starts nothing.
+        if self.closing {
+            return Task::none();
+        }
         let Some(Action::Start(command)) = self.hits().nth(index).map(|h| h.action.clone()) else {
             return Task::none();
         };
@@ -210,7 +214,8 @@ impl Launcher {
             .title
             .chars()
             .next()
-            .map_or('?', |c| c.to_ascii_uppercase());
+            .and_then(|c| c.to_uppercase().next())
+            .unwrap_or('?');
         let tile = container(
             text(initial.to_string())
                 .font(typography::UI_SEMIBOLD)

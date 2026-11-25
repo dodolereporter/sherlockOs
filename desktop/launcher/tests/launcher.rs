@@ -147,10 +147,16 @@ fn kitty_starts_with_three_keys() {
     assert_eq!(launcher.query, "ki");
     // Third key: Enter.
     let _ = launcher.update(key(keyboard::key::Named::Enter).expect("a launcher key"));
-    let started = started.lock().expect("record");
-    assert_eq!(started.len(), 1);
-    assert_eq!(started[0].program, "kitty");
+    let programs = |started: &Mutex<Vec<Command>>| -> Vec<std::ffi::OsString> {
+        let started = started.lock().expect("record");
+        started.iter().map(|c| c.program.clone()).collect()
+    };
+    assert_eq!(programs(&started), ["kitty"]);
     assert!(launcher.closing, "the launcher closes after a start");
+    // A second Enter, or a click, before the exit is handled starts nothing more.
+    let _ = launcher.update(key(keyboard::key::Named::Enter).expect("a launcher key"));
+    let _ = launcher.update(Message::Pick(0));
+    assert_eq!(programs(&started), ["kitty"]);
 }
 
 #[test]
@@ -256,7 +262,22 @@ fn a_program_starts_without_a_shell_in_its_directory() {
         args: Vec::new(),
         dir: None,
     };
-    assert!(launcher::launch::spawn(&missing).is_err());
+    assert!(matches!(
+        launcher::launch::spawn(&missing),
+        Err(launcher::launch::LaunchError::Spawn { .. })
+    ));
+    // A missing working directory is told apart from a missing program.
+    let nowhere = Command {
+        program: "touch".into(),
+        args: vec!["x".into()],
+        dir: Some(dir.join("gone")),
+    };
+    let error = launcher::launch::spawn(&nowhere).expect_err("no folder");
+    assert!(matches!(
+        error,
+        launcher::launch::LaunchError::MissingDir { .. }
+    ));
+    assert!(error.to_string().contains("working directory"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
