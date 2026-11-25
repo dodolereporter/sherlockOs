@@ -347,6 +347,17 @@ it. Its test writes `gallery-tiny-skia.png` and `gallery-light-tiny-skia.png`.
 ![Gallery, dark theme](sherlock-ui/gallery-dark.png)
 ![Gallery, light theme](sherlock-ui/gallery-light.png)
 
+To compare: the light « Réglages » board, rendered with chromium as `docs/evidence.md` describes.
+
+![Light Réglages board](sherlock-ui/board-reglages-light.png)
+
+Live switch, checked in a private Xephyr with a temporary `XDG_CONFIG_HOME`: the gallery starts
+with `Theme=dark`, follows `Theme=light` written in place, then `Theme=auto` replaced by a
+rename (dark at that hour), then switches to light by itself when the time reaches
+`AutoLightFrom`, set one minute ahead.
+
+![Live switch](sherlock-ui/live-switch.png)
+
 Choices the table does not make:
 
 | Role | Light value | Why |
