@@ -10,6 +10,7 @@ use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use serde_json::{Value, json};
@@ -502,11 +503,15 @@ impl ClaudeCode {
                 dir.clone()
             }
             None => {
-                // Unique name, non-recursive creation: an existing directory is an error.
+                // Unique name, non-recursive creation: an existing directory is an error. The
+                // counter separates two providers created in the same nanosecond, which happens
+                // between parallel tests when the clock is coarse.
+                static COUNT: AtomicU64 = AtomicU64::new(0);
+                let count = COUNT.fetch_add(1, Ordering::Relaxed);
                 let nanos = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .map_or(0, |d| d.as_nanos());
-                let name = format!("sherlockd-{}-{nanos}", std::process::id());
+                let name = format!("sherlockd-{}-{nanos}-{count}", std::process::id());
                 let dir = std::env::temp_dir().join(name);
                 std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
                 self.private_workdir = true;
