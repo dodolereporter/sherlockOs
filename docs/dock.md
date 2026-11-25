@@ -39,21 +39,30 @@ Surface):
 
 | Module | Role |
 | --- | --- |
-| `lib.rs` | Layer-shell surface, iced settings, startup (`Setup::load`, `run`) |
-| `app.rs` | State (`Dock`), messages, update, the dock view and the menu view |
-| `layout.rs` | Pure geometry: the board's curve, icon places, hit testing, surface size |
+| `lib.rs` | Layer-shell surface for each edge, iced settings, startup (`Sources::load`, `run`) |
+| `app.rs` | State (`Dock`), messages, update, reconfiguration |
+| `view.rs` | The dock view and the menu view |
+| `items.rs` | The icons: pinned applications, Sherlock, open applications after the separator |
+| `layout.rs` | Pure geometry: the board's curve, icon places for each edge, hit testing, surface size |
+| `watch.rs` | Reloading the configuration when its file changes (inotify) |
 | `menu.rs` | Entries of an icon's menu, size of its surface, keyboard keys |
 | `entry.rs` | Key files and desktop entries: name, icon, `Exec`, « new window » action, window class |
 | `icons.rs` | Icon lookup in the themes, `hicolor`, then `pixmaps` |
-| `config.rs` | `$XDG_CONFIG_HOME/dock/dock.conf`, default pinned applications |
+| `config.rs` | Default pinned applications |
 | `launch.rs` | Starting an application without a shell |
 | `windows.rs` | Open windows behind the `Source` trait: placeholder and `zwlr_foreign_toplevel_manager_v1` |
 
 Every color, size and text comes from `sherlock-ui`: `metrics::DOCK_*` (already there since
 D-01), `color::DOCK_GLASS` and `DOCK_BORDER`, and the new module `sherlock_ui::dock` (one new
-file, a `pub mod` line in `lib.rs`): padding, bottom margin, dot, label, menu width and gap,
-the magnification spring `dock::SPRING`, the label fade, the label and dot colors, the styles
-`bar`, `tile`, `label`, `dot` and `ring`, and the texts `dock::text`. The menu reuses `menu`,
+file, a `pub mod` line in `lib.rs`): padding, edge margin, dot, label, separator, menu width
+and gap, the bounds of the settings, the magnification spring `dock::SPRING`, the label fade,
+the label, dot and separator colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and
+`ring`, and the texts `dock::text`.
+
+The configuration file is read and written by its own crate, `desktop/dock-config`, standard
+library and sherlock-ui tokens only, so that the settings application (Control Room, D-26)
+writes the same file the same way. It also holds the key file reader that the dock uses for
+desktop entries and icon themes. The menu reuses `menu`,
 `menu_item`, `menu_separator` and `open` of `sherlock_ui::component`.
 
 ### Surface
@@ -166,26 +175,68 @@ and rasterizes each icon at its current size.
 
 ### Configuration
 
-`$XDG_CONFIG_HOME/dock/dock.conf`, a key file:
+`$XDG_CONFIG_HOME/dock/dock.conf` (`~/.config/dock/dock.conf`), a key file like the desktop
+entries, rather than TOML: no parser to add, and the dock already reads this format. Every key
+is optional:
 
 ```ini
 [Dock]
 Pinned=evidence;org.kde.konsole;org.kde.kate;app.zen_browser.zen;
 IconTheme=breeze
+IconSize=52
+Magnification=true
+MagnificationFactor=1.7
+AutoHide=never
+Position=bottom
 ```
 
-`Pinned` lists desktop file ids, left to right (`.desktop` accepted). Sherlock is not in it: it
-is always in the middle (as many applications on its left as on its right, one more on the left
-for an odd count). An id that is not installed is skipped and logged. An empty `Pinned=` is a
-choice: Sherlock alone.
+| Key | Values | Default |
+| --- | --- | --- |
+| `Pinned` | Desktop file ids, left to right (or top to bottom), `;` after each | Chosen among the installed applications (below) |
+| `IconTheme` | An icon theme name | The GTK one, then `hicolor` |
+| `IconSize` | Side of an icon at rest, from 32 to 96 (`dock::ICON_SIZE_MIN`, `MAX`) | 52 (`metrics::DOCK_ICON`) |
+| `Magnification` | `true`, `false` | `true` |
+| `MagnificationFactor` | From 1.0 to 2.0 (`dock::MAGNIFICATION_MIN`, `MAX`) | 1.7 (`metrics::DOCK_MAGNIFICATION`) |
+| `AutoHide` | `never`, `always`, `smart` | `never` |
+| `Position` | `bottom`, `top`, `left`, `right` | `bottom` |
+
+Words are read without regard to case. A value that cannot be read or is out of its bounds is
+ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
+and the default is used: a bad file never stops the dock. An unknown key is kept when the dock
+writes the file; comments are not. `AutoHide` is read and kept, but the dock does not hide yet
+(batch D-21b).
+
+**Live reload.** The dock watches the file's directory with inotify (one blocking thread, no
+polling), and its parent while the directory does not exist. A file written in place or
+replaced by a rename, as editors and `DockConfig::save` do, is read again 50 ms after the last
+event: icon size, magnification, edge and pinned list apply at once, the surface takes its new
+size, anchor, margin and exclusive zone. `DockConfig::save` writes a temporary file then
+renames it, so that a reader never sees half a file.
+
+`Pinned` lists desktop file ids (`.desktop` accepted). Sherlock is not in it: it is always in
+the middle (as many applications on its left as on its right, one more on the left for an odd
+count). An id that is not installed is skipped and logged. An empty `Pinned=` is a choice:
+Sherlock alone.
 
 Without `Pinned`, the dock fills five roles with what is installed and shown in menus: files,
 terminal, editor, browser, games. For each, the default application of its type in
 `$XDG_CONFIG_HOME/mimeapps.list` (`inode/directory`, `text/plain`, `x-scheme-handler/https`),
 else a preferred one (`evidence` for files, Konsole or GNOME's terminals, Steam), else the first
 one of its category (`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Nothing is
-written until the list changes. « Retirer du dock » writes the file, keeping the keys the dock
-does not know.
+written until the list changes. « Retirer du dock » and « Garder dans le dock » write the file.
+
+### Edges
+
+`Position` puts the dock against one edge, centered along it, 8 away from it, with an
+exclusive zone of the bar's thickness (`IconSize` + 24). `layout.rs` computes everything along
+the dock and away from its edge, then places it for the edge: on the left and right the dock is
+vertical, the icons run top to bottom, the magnification follows the pointer's height, icons
+grow away from the edge, the dot sits between the icon and the edge, and the label shows beside
+the icon (the surface keeps `dock::LABEL_SIDE_ROOM`, 200, for it). The menu of an icon opens
+away from the edge: above at the bottom, below at the top, to the right on the left edge, to
+the left on the right edge.
+
+![The dock on the left edge](../desktop/dock/screenshots/dock-left.png)
 
 ### Launching
 
@@ -201,8 +252,17 @@ Sherlock menu.
 
 ## Open windows
 
-The dot under an open application, the active one in green, the window count in the menu and
-« Quitter » need the list of windows. A source implements `windows::Source`, like the bar's
+The dot under an open application, the active one in green, the open applications that are not
+pinned, the window count in the menu and « Quitter » need the list of windows.
+
+The open applications that no pinned icon owns come after a separator (the board's separator,
+1 by 40, `rgba(255,255,255,0.28)`), in the order their windows came: with their desktop entry
+when one owns the window, otherwise as their `app_id` on a tile. Their menu offers « Garder
+dans le dock », which adds them at the end of the pinned list; a pinned application that is
+still open moves after the separator when it is removed.
+
+![An open application after the separator](../desktop/dock/screenshots/dock-open.png)
+ A source implements `windows::Source`, like the bar's
 sources (`read`, then `wait` for a change), and `windows::watch` turns it into a stream on its
 own thread, connection included:
 
@@ -232,6 +292,9 @@ against a fake compositor written with `wayland-server`: two windows, one active
    `docs/compositeur.md`), the global must not be open to every client, Flatpak ones
    included: it lists and closes every window.
 3. **Game mode**: a way for the dock to know it, so that it hides (see below).
+4. **Windows over the dock**, for `AutoHide=smart` (D-21b): no standard protocol gives clients
+   the geometry of windows. Either an extension of ours that says whether a window overlaps
+   the dock's area, or the rectangles of the windows on each output.
 
 ## Menu of an icon
 
@@ -245,7 +308,8 @@ closes it on a click elsewhere.
 | Header: the application name, its window count when known (« 1 fenêtre ») | |
 | Ouvrir | The application has an `Exec` |
 | Nouvelle fenêtre | Only there when the desktop entry declares the action |
-| Retirer du dock | Always, except for Sherlock |
+| Garder dans le dock | Instead of « Retirer du dock », for an open application that is not pinned |
+| Retirer du dock | Pinned, except Sherlock |
 | Quitter | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
@@ -309,6 +373,14 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
    `/tmp/dock-test/dock/dock.conf` loses it.
 9. **Keyboard**: click the dock, Tab rings the first icon, arrows move the ring, Enter starts
    it, Shift+F10 opens its menu.
+10. **Open applications**: with `DOCK_OPEN=org.kde.konsole,org.kde.kate` and Kate not pinned,
+    Kate shows after a separator with its dot; its menu offers « Garder dans le dock », which
+    moves it before the separator and adds it to `dock.conf`.
+11. **Settings, live**: while the dock runs, write `Position=left` in
+    `/tmp/dock-test/dock/dock.conf`: the dock moves to the left edge at once, vertical, the
+    label beside the icons. Then `Position=right`, `Position=top`, `IconSize=40`,
+    `MagnificationFactor=2`, `Magnification=false`. `IconSize=9999` or `Position=middle` log a
+    warning and keep the default.
 
 With our compositor, in a second Xephyr, the dock is the command it starts (the compositor
 gives it its sockets; `--mesurer` logs its own frame rate):
@@ -335,6 +407,17 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Curve** (`layout.rs`): the target size of each of the board's nine icons, at ten pointer
   positions, equals the board's script transcribed as it is; values at the key points (88 under
   the pointer, 78, 61, 54, 52); the label goes to the closest icon.
+- **Settings** (`dock-config`): every key read, defaults without a file, invalid values give
+  the default and a problem each, bounds accepted, unknown keys kept on writing, atomic save;
+  live reload of a file saved in place or replaced by a rename (`watch.rs`), inotify event
+  parsing.
+- **Edges**: the same places along the dock and distances from the edge on all four edges, the
+  bar against its edge; on the left, the pointer's height decides the magnification, icons grow
+  away from the edge, the label beside, the dot against the edge; icon size and factor change
+  the curve; without magnification nothing grows.
+- **Open applications**: after the separator, with their entry or their `app_id`, glyphs looked
+  up once; « Garder dans le dock » and « Retirer du dock » move an open application across the
+  separator; a new configuration moves and resizes the dock.
 - **Pushed neighbours**: a grown icon widens the bar by its growth on both sides, the middle
   icon keeps its center, the gap stays 8, the outer icons move out, bottoms stay aligned; hit
   testing above the bar and in the gaps; the surface holds the widest dock and the label.
@@ -348,8 +431,8 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.
-- **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, and
-  of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning
+- **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, on
+  the left edge, with an open application after the separator, and of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning
   keeps Sherlock in the middle.
 
 ## Differences from the design board
@@ -366,19 +449,25 @@ X focus): the keyboard steps were checked in the nested KWin.
   green of the active state.
 - **Label position**: the board's script puts it at `(i + 0.5) / n` of the bar width, which only
   matches the icon at rest. The dock centers it on the icon as drawn.
-- **Separator and Réglages**: the board ends with a separator and Réglages. Our settings
-  application does not exist yet: no separator.
+- **Separator**: the board puts it before Réglages, which does not exist yet; the dock puts it
+  before the open applications that are not pinned.
 - **Menu**: the board's dock menu belongs to « Conteneurs » (its containers, « Tout mettre en
-  pause », « Garder dans le dock »). The dock offers the entries the brief lists; « Quitter »
-  shows no Super+Q, which nothing binds yet.
+  pause », « Garder dans le dock » checked). The dock offers « Garder dans le dock » to open
+  applications that are not pinned and « Retirer du dock » to pinned ones; « Quitter » shows no
+  Super+Q, which nothing binds yet.
 - **Screen reader labels**: iced 0.14 exposes nothing (`docs/bar.md`).
 
 ## What this batch does not do
 
+Batch D-21b, split off at the coordinator's request, will add: auto-hide (`AutoHide=always`:
+sliding out with no exclusive zone and an input strip of a few pixels at the edge;
+`AutoHide=smart`: hiding when a window overlaps, behind a trait, since no protocol gives
+clients the geometry of windows), the bounce of an icon while its application starts, sliding
+in and out, smooth adding and removing of icons, reordering by drag and drop, and dragging an
+icon out of the dock to unpin it.
+
 - **Hiding in game mode**: there is no game mode yet, and no way for the dock to know it (see
   what the compositor will have to provide).
-- Applications that are open but not pinned do not show in the dock.
-- Reordering by dragging, pinning from the dock.
 - `Terminal=true` entries are started as they are, without a terminal around them; D-Bus
   activation is not used, `Exec` always is.
 - Several outputs: the dock opens on the active output (`StartMode::Active`), like the bar.
