@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Evidence
+GenericName=Gestionnaire de fichiers
+Comment=Parcours et range tes fichiers
+Exec=evidence %U
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;Utility;
+MimeType=inode/directory;
+StartupWMClass=evidence

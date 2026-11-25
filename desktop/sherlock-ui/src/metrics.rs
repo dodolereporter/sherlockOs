@@ -65,6 +65,105 @@ pub const PANEL_RADIUS: f32 = 20.0;
 /// Marge intérieure d'un panneau flottant.
 pub const PANEL_PADDING: f32 = 14.0;
 
+// Application windows (Evidence mock-up).
+
+/// Application window of the Evidence mock-up, on the reference screen.
+pub const REFERENCE_WINDOW: (f32, f32) = (1300.0, 676.0);
+
+/// Title bar: left and right padding, application badge and its radius.
+pub const TITLE_BAR_PADDING: (f32, f32) = (14.0, 8.0);
+pub const APP_BADGE: f32 = 18.0;
+pub const APP_BADGE_RADIUS: f32 = 5.0;
+/// Pill behind the window buttons: padding, radius; radius of a button.
+pub const WINDOW_CONTROLS_PADDING: f32 = 2.0;
+pub const WINDOW_CONTROLS_RADIUS: f32 = 9.0;
+pub const WINDOW_BUTTON_RADIUS: f32 = 7.0;
+/// Toolbar under the title bar: height, side padding.
+pub const TOOLBAR_HEIGHT: f32 = 48.0;
+pub const TOOLBAR_PADDING: f32 = 12.0;
+/// Breadcrumb: height, radius, padding, gap; segment: padding and radius.
+pub const BREADCRUMB_HEIGHT: f32 = 32.0;
+pub const BREADCRUMB_RADIUS: f32 = 8.0;
+pub const BREADCRUMB_PADDING: f32 = 6.0;
+pub const BREADCRUMB_GAP: f32 = 4.0;
+/// Maximum breadcrumb segments shown: beyond that, the start folds up.
+pub const BREADCRUMB_MAX: usize = 5;
+pub const CRUMB_PADDING: (f32, f32) = (4.0, 8.0);
+pub const CRUMB_RADIUS: f32 = 6.0;
+/// Git branch badge: padding and radius.
+pub const BRANCH_CHIP_PADDING: (f32, f32) = (3.0, 10.0);
+pub const BRANCH_CHIP_RADIUS: f32 = 10.0;
+/// Search field of a toolbar.
+pub const SEARCH_WIDTH: f32 = 210.0;
+/// Gap between the magnifier and the text of the search field.
+pub const SEARCH_ICON_GAP: f32 = 8.0;
+/// Status bar at the bottom of a window: height, side padding.
+pub const STATUS_BAR_HEIGHT: f32 = 30.0;
+pub const STATUS_BAR_PADDING: f32 = 14.0;
+/// Navigation sidebar: width, top, side and bottom padding.
+pub const SIDEBAR_WIDTH: f32 = 210.0;
+pub const SIDEBAR_PADDING: (f32, f32, f32) = (4.0, 8.0, 12.0);
+/// Section label of a navigation: top, side and bottom padding.
+pub const NAV_SECTION_PADDING: (f32, f32, f32) = (12.0, 10.0, 6.0);
+/// Navigation entry: height, radius, side padding.
+pub const NAV_ITEM_HEIGHT: f32 = 32.0;
+pub const NAV_ITEM_RADIUS: f32 = 8.0;
+pub const NAV_ITEM_PADDING: f32 = 10.0;
+/// Preview panel: width, padding, gap between its blocks; file tile and its icon.
+pub const PREVIEW_WIDTH: f32 = 300.0;
+pub const PREVIEW_PADDING: f32 = 16.0;
+pub const PREVIEW_GAP: f32 = 12.0;
+pub const PREVIEW_TILE: f32 = 44.0;
+pub const PREVIEW_TILE_RADIUS: f32 = 11.0;
+pub const PREVIEW_TILE_ICON: f32 = 22.0;
+/// Text preview: maximum lines and columns shown. Beyond that, the panel cuts.
+pub const PREVIEW_LINES: usize = 18;
+/// The preview panel holds 33 characters of JetBrains Mono at 12 px (0.6 em each) inside
+/// its padding and the code block's.
+pub const PREVIEW_COLUMNS: usize = 33;
+/// Largest side of a decoded preview image, in pixels: twice the panel's inner width, for
+/// screens at scale 2.
+pub const PREVIEW_IMAGE_PIXELS: u32 = 536;
+/// Gap between two stacked buttons.
+pub const BUTTON_STACK_GAP: f32 = 8.0;
+/// Code snippet: vertical and horizontal padding, radius.
+pub const CODE_BLOCK_PADDING: (f32, f32) = (10.0, 12.0);
+pub const CODE_BLOCK_RADIUS: f32 = 10.0;
+
+// Lists.
+
+/// Side padding of the list, and gap above the first row.
+pub const LIST_PADDING: f32 = 8.0;
+pub const LIST_TOP_GAP: f32 = 4.0;
+/// Column header and row: heights, radius of a row, side padding.
+pub const LIST_HEADER_HEIGHT: f32 = 34.0;
+pub const LIST_ROW_HEIGHT: f32 = 40.0;
+pub const LIST_ROW_RADIUS: f32 = 9.0;
+pub const LIST_ROW_PADDING: f32 = 12.0;
+/// Gap between two columns, width of the columns after the name (date, size, kind, status).
+pub const LIST_COLUMN_GAP: f32 = 12.0;
+pub const LIST_COLUMNS: [f32; 4] = [150.0, 96.0, 120.0, 84.0];
+/// File kind icon in a row.
+pub const LIST_ICON: f32 = 18.0;
+/// Extra rows drawn above and below the visible part of a long list.
+pub const LIST_OVERSCAN: usize = 4;
+/// Slide of the content of a folder that opens: it rises by this distance while fading in.
+pub const LIST_SLIDE: f32 = 8.0;
+/// Status badge: vertical and horizontal padding, radius.
+pub const BADGE_PADDING: (f32, f32) = (1.0, 8.0);
+pub const BADGE_RADIUS: f32 = 8.0;
+/// Right-click menu of a list and its submenu (Evidence mock-up).
+pub const CONTEXT_MENU_WIDTH: f32 = 236.0;
+pub const CONTEXT_SUBMENU_WIDTH: f32 = 216.0;
+/// "Ouvrir avec" submenu: wider than the planche's, for long application names and the
+/// "always" switch; at most this many applications.
+pub const OPEN_WITH_WIDTH: f32 = 280.0;
+pub const OPEN_WITH_MAX: usize = 8;
+/// Height of the list of the application chooser.
+pub const CHOOSER_LIST_HEIGHT: f32 = 300.0;
+/// Question asked inside a window: width.
+pub const DIALOG_WIDTH: f32 = 380.0;
+
 // Menus.
 
 /// Rayon d'un menu.
@@ -79,6 +178,14 @@ pub const SUBMENU_GAP: f32 = 4.0;
 /// Ombre d'un menu : décalage vertical et flou.
 pub const MENU_SHADOW_OFFSET: f32 = 22.0;
 pub const MENU_SHADOW_BLUR: f32 = 54.0;
+/// Crisp shadow of a menu: steps of (vertical offset, spread, opacity), drawn as plain
+/// rounded rectangles (see `surface`). They suggest the planche's `0 22px 54px
+/// rgba(3,8,18,0.6)` without a blur, which the software renderer draws wrongly.
+pub const MENU_SHADOW_LAYERS: [(f32, f32, f32); 3] =
+    [(2.0, 1.0, 0.30), (8.0, 3.0, 0.16), (16.0, 6.0, 0.08)];
+/// Crisp shadow of a floating panel or dialog, after `0 28px 70px rgba(3,8,18,0.55)`.
+pub const PANEL_SHADOW_LAYERS: [(f32, f32, f32); 3] =
+    [(3.0, 1.0, 0.28), (10.0, 4.0, 0.15), (20.0, 8.0, 0.07)];
 /// Entrée de menu : hauteur, rayon, marge sur les côtés.
 pub const MENU_ITEM_HEIGHT: f32 = 30.0;
 pub const MENU_ITEM_RADIUS: f32 = 7.0;
@@ -124,6 +231,8 @@ pub const ICON_STROKE: f32 = 1.7;
 /// Taille d'affichage courante d'une icône, et celle des chevrons de menu.
 pub const ICON_SIZE: f32 = 16.0;
 pub const ICON_SIZE_SMALL: f32 = 14.0;
+/// Breadcrumb chevrons and sort arrows.
+pub const ICON_SIZE_TINY: f32 = 12.0;
 
 // Dock.
 
@@ -180,6 +289,10 @@ const _: () = {
     assert!(MENU_ITEM_RADIUS < MENU_RADIUS && MENU_ITEM_HEIGHT < BUTTON_HEIGHT);
     assert!(SUBMENU_WIDTH < MENU_WIDTH);
     assert!(ICON_SIZE_SMALL < ICON_SIZE && ICON_SIZE < ICON_GRID);
+    assert!(ICON_SIZE_TINY < ICON_SIZE_SMALL && LIST_ICON < ICON_GRID);
+    // A navigation entry and a list row are taller than twice their radius.
+    assert!(NAV_ITEM_RADIUS < NAV_ITEM_HEIGHT / 2.0 && LIST_ROW_RADIUS < LIST_ROW_HEIGHT / 2.0);
+    assert!(BREADCRUMB_HEIGHT < TOOLBAR_HEIGHT && WINDOW_BUTTON.1 < TITLE_BAR_HEIGHT);
     // The bar's elements fit in its height.
     assert!(SHERLOCK_BUTTON.1 < TOP_BAR_HEIGHT && CHIP_HEIGHT < TOP_BAR_HEIGHT);
     assert!(SHERLOCK_GLYPH < SHERLOCK_BUTTON.1);

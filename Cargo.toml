@@ -4,6 +4,8 @@ members = [
     "desktop/bar",
     "desktop/compositeur",
     "desktop/dock",
+    "desktop/evidence",
+    "desktop/mime-apps",
     "desktop/sherlock-ui",
     "sherlock/sherlockd",
 ]
