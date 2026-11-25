@@ -1,9 +1,10 @@
-//! Workspaces through `ext-workspace-v1`, for the bar.
+//! Workspaces: the model the compositor keeps, and `ext-workspace-v1` for the bar.
 //!
-//! The compositor has one workspace per screen for now: one group per screen, holding one
-//! active workspace named after its number. Switching between several workspaces is a lot of
-//! its own; the protocol already carries it, and `activate` on the active workspace changes
-//! nothing.
+//! Workspaces are shared by every screen (ADR 0021): one group holding every screen, and one
+//! active workspace for all of them. For now there is a single workspace, `1`, holding every
+//! window. Lot D-18w fills `Workspaces` (a fixed number, 3 by default) and shows only the
+//! windows of the active one; the protocols already carry the list, the active workspace, the
+//! workspace of each window, and the requests to switch and to move a window.
 
 use smithay::{
     output::Output,
@@ -23,23 +24,71 @@ use smithay::{
 use super::toplevels::bytes;
 use crate::State;
 
+/// A workspace: its stable id, which the protocols name it by, and the name shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+}
+
+/// The workspaces, in their order, and the active one.
+#[derive(Debug)]
+pub struct Workspaces {
+    list: Vec<Workspace>,
+    active: usize,
+}
+
+impl Default for Workspaces {
+    /// A single workspace, its number for id and name.
+    fn default() -> Self {
+        let first = String::from("1");
+        Self {
+            list: vec![Workspace {
+                id: first.clone(),
+                name: first,
+            }],
+            active: 0,
+        }
+    }
+}
+
+impl Workspaces {
+    pub fn list(&self) -> &[Workspace] {
+        &self.list
+    }
+
+    /// Id of the active workspace.
+    pub fn active(&self) -> &str {
+        self.list.get(self.active).map_or("", |w| &w.id)
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.list.iter().any(|w| w.id == id)
+    }
+
+    /// Makes the workspace `id` active. `false` for an unknown id.
+    pub(super) fn activate(&mut self, id: &str) -> bool {
+        match self.list.iter().position(|w| w.id == id) {
+            Some(i) => {
+                self.active = i;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 pub(super) fn create_global(dh: &DisplayHandle) {
     dh.create_global::<State, ExtWorkspaceManagerV1, ()>(1, ());
 }
 
-/// A bound manager and the groups its client knows.
+/// A bound manager and what its client knows: the shared group, the `wl_output` objects it
+/// entered, and each workspace with its index and active state as last sent.
 pub(super) struct Manager {
     resource: ExtWorkspaceManagerV1,
-    groups: Vec<Group>,
-}
-
-/// The group of a screen and its only workspace.
-struct Group {
-    output: Output,
-    group: ExtWorkspaceGroupHandleV1,
-    workspace: ExtWorkspaceHandleV1,
-    /// The client's `wl_output` objects of the screen already announced.
-    entered: Vec<WlOutput>,
+    group: Option<ExtWorkspaceGroupHandleV1>,
+    entered: Vec<(WlOutput, Output)>,
+    workspaces: Vec<(Workspace, ExtWorkspaceHandleV1, usize, bool)>,
 }
 
 impl Manager {
@@ -47,72 +96,102 @@ impl Manager {
         self.resource.is_alive()
     }
 
-    /// Announces the groups of new screens, removes those of screens gone, and announces the
-    /// `wl_output` objects the client bound since. Then `done` if anything changed.
-    pub(super) fn update(&mut self, dh: &DisplayHandle, outputs: &[Output]) {
+    /// Sends what changed in the screens and the workspaces, then `done` if anything did.
+    pub(super) fn update(&mut self, dh: &DisplayHandle, outputs: &[Output], model: &Workspaces) {
         let Some(client) = self.resource.client() else {
             return;
         };
+        let version = self.resource.version();
         let mut changed = false;
-        self.groups.retain(|g| {
-            let kept = outputs.contains(&g.output);
-            if !kept {
-                g.group.workspace_leave(&g.workspace);
-                g.workspace.removed();
-                g.group.removed();
+        let group = match &self.group {
+            Some(group) => group.clone(),
+            None => {
+                let Ok(group) =
+                    client.create_resource::<ExtWorkspaceGroupHandleV1, (), State>(dh, version, ())
+                else {
+                    return;
+                };
+                self.resource.workspace_group(&group);
+                group.capabilities(GroupCapabilities::empty());
+                self.group = Some(group.clone());
+                changed = true;
+                group
+            }
+        };
+        // Screens: the client's `wl_output` objects enter the group, including those bound
+        // later, and leave it with their screen.
+        self.entered.retain(|(wl_output, output)| {
+            let kept = wl_output.is_alive() && outputs.contains(output);
+            if !kept && wl_output.is_alive() {
+                group.output_leave(wl_output);
                 changed = true;
             }
             kept
         });
         for output in outputs {
-            if self.groups.iter().any(|g| &g.output == output) {
-                continue;
-            }
-            let Some(group) = self.announce(dh, &client, output) else {
-                return;
-            };
-            self.groups.push(group);
-            changed = true;
-        }
-        for group in &mut self.groups {
-            group.entered.retain(Resource::is_alive);
-            for wl_output in group.output.client_outputs(&client) {
-                if !group.entered.contains(&wl_output) {
-                    group.group.output_enter(&wl_output);
-                    group.entered.push(wl_output);
+            for wl_output in output.client_outputs(&client) {
+                if !self.entered.iter().any(|e| e.0 == wl_output) {
+                    group.output_enter(&wl_output);
+                    self.entered.push((wl_output, output.clone()));
                     changed = true;
                 }
             }
+        }
+        // Workspaces: removed, new, changed.
+        self.workspaces.retain(|(workspace, handle, ..)| {
+            let kept = model.contains(&workspace.id);
+            if !kept {
+                group.workspace_leave(handle);
+                handle.removed();
+                changed = true;
+            }
+            kept
+        });
+        for (index, workspace) in model.list().iter().enumerate() {
+            let active = workspace.id == model.active();
+            if let Some(known) = self.workspaces.iter_mut().find(|w| w.0.id == workspace.id) {
+                if known.0.name != workspace.name {
+                    known.1.name(workspace.name.clone());
+                }
+                if known.2 != index {
+                    known.1.coordinates(bytes(&[index as u32]));
+                }
+                if known.3 != active {
+                    known.1.state(state(active));
+                }
+                changed |= (&known.0.name, known.2, known.3) != (&workspace.name, index, active);
+                *known = (workspace.clone(), known.1.clone(), index, active);
+                continue;
+            }
+            let Ok(handle) = client.create_resource::<ExtWorkspaceHandleV1, String, State>(
+                dh,
+                version,
+                workspace.id.clone(),
+            ) else {
+                return;
+            };
+            self.resource.workspace(&handle);
+            handle.id(workspace.id.clone());
+            handle.name(workspace.name.clone());
+            handle.coordinates(bytes(&[index as u32]));
+            handle.state(state(active));
+            handle.capabilities(WorkspaceCapabilities::Activate);
+            group.workspace_enter(&handle);
+            self.workspaces
+                .push((workspace.clone(), handle, index, active));
+            changed = true;
         }
         if changed {
             self.resource.done();
         }
     }
+}
 
-    /// Creates the group of `output` and its workspace on the client's side.
-    fn announce(&self, dh: &DisplayHandle, client: &Client, output: &Output) -> Option<Group> {
-        let version = self.resource.version();
-        let group = client
-            .create_resource::<ExtWorkspaceGroupHandleV1, (), State>(dh, version, ())
-            .ok()?;
-        self.resource.workspace_group(&group);
-        group.capabilities(GroupCapabilities::empty());
-        let workspace = client
-            .create_resource::<ExtWorkspaceHandleV1, (), State>(dh, version, ())
-            .ok()?;
-        self.resource.workspace(&workspace);
-        // The first workspace of the screen: its number, at the first place of the row.
-        workspace.name(String::from("1"));
-        workspace.coordinates(bytes(&[0]));
-        workspace.state(ext_workspace_handle_v1::State::Active);
-        workspace.capabilities(WorkspaceCapabilities::Activate);
-        group.workspace_enter(&workspace);
-        Some(Group {
-            output: output.clone(),
-            group,
-            workspace,
-            entered: Vec::new(),
-        })
+fn state(active: bool) -> ext_workspace_handle_v1::State {
+    if active {
+        ext_workspace_handle_v1::State::Active
+    } else {
+        ext_workspace_handle_v1::State::empty()
     }
 }
 
@@ -127,11 +206,13 @@ impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
     ) {
         let mut manager = Manager {
             resource: data_init.init(resource, ()),
-            groups: Vec::new(),
+            group: None,
+            entered: Vec::new(),
+            workspaces: Vec::new(),
         };
         // Right away, so that a roundtrip after the bind brings the workspaces.
         let outputs: Vec<_> = state.space.outputs().cloned().collect();
-        manager.update(dh, &outputs);
+        manager.update(dh, &outputs, &state.shell.workspace_model);
         state.shell.workspaces.push(manager);
     }
 
@@ -150,10 +231,18 @@ impl Dispatch<ExtWorkspaceManagerV1, ()> for State {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        // `commit` applies nothing: the only workspace of each screen is always active.
-        if let ext_workspace_manager_v1::Request::Stop = request {
-            state.shell.workspaces.retain(|m| &m.resource != resource);
-            resource.finished();
+        match request {
+            // The requests since the last commit apply together: the last activation wins.
+            ext_workspace_manager_v1::Request::Commit => {
+                if let Some(id) = state.shell.pending_workspace.take() {
+                    state.activate_workspace(&id);
+                }
+            }
+            ext_workspace_manager_v1::Request::Stop => {
+                state.shell.workspaces.retain(|m| &m.resource != resource);
+                resource.finished();
+            }
+            _ => {}
         }
     }
 }
@@ -172,17 +261,35 @@ impl Dispatch<ExtWorkspaceGroupHandleV1, ()> for State {
     }
 }
 
-impl Dispatch<ExtWorkspaceHandleV1, ()> for State {
+impl Dispatch<ExtWorkspaceHandleV1, String> for State {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
         _: &ExtWorkspaceHandleV1,
-        _: ext_workspace_handle_v1::Request,
-        _: &(),
+        request: ext_workspace_handle_v1::Request,
+        id: &String,
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        // `activate` targets the active workspace; the other requests are not among the
-        // capabilities.
+        // Only `activate` is among the capabilities; it waits for the manager's commit.
+        if let ext_workspace_handle_v1::Request::Activate = request {
+            state.shell.pending_workspace = Some(id.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_workspace_until_lot_d_18w() {
+        let mut model = Workspaces::default();
+        assert_eq!(model.list().len(), 1);
+        assert_eq!(model.active(), "1");
+        assert!(model.contains("1") && !model.contains("2"));
+        assert!(!model.activate("2"), "an unknown workspace was activated");
+        assert!(model.activate("1"));
+        assert_eq!(model.active(), "1");
     }
 }

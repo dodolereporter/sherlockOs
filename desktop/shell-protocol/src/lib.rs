@@ -30,6 +30,10 @@ pub fn socket_from_env() -> Option<PathBuf> {
     Some(socket_path(&socket))
 }
 
+// The macros read the XML at build time, which cargo does not track: including it here makes a
+// change of the protocol rebuild the bindings.
+const _: &str = include_str!("../protocol/sherlock-shell-v1.xml");
+
 // Generated code: the lints of the workspace do not apply to it.
 #[allow(
     dead_code,

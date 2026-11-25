@@ -60,8 +60,18 @@ mod tests {
         app_id: String,
         states: Vec<u32>,
         output: String,
+        workspace: String,
         geometry: (i32, i32, i32, i32),
         closed: bool,
+    }
+
+    /// A workspace as the shell client knows it: id, name, coordinates, active.
+    #[derive(Debug, Default, Clone, PartialEq)]
+    struct SeenWorkspace {
+        id: String,
+        name: String,
+        coordinates: Vec<u32>,
+        active: bool,
     }
 
     /// What a client has received. One type for both clients: each one only receives the
@@ -78,10 +88,10 @@ mod tests {
         outputs: Vec<(String, Vec<u32>)>,
         removed_outputs: Vec<String>,
         done: usize,
-        /// Workspaces: group, output entered, workspace name, coordinates, state.
+        /// Workspaces: groups, outputs entered, each workspace.
         groups: Vec<ExtWorkspaceGroupHandleV1>,
         group_outputs: usize,
-        workspaces: Vec<(String, Vec<u32>, bool)>,
+        workspaces: Vec<(ExtWorkspaceHandleV1, SeenWorkspace)>,
         workspaces_done: usize,
     }
 
@@ -170,6 +180,7 @@ mod tests {
                 Event::AppId { app_id } => seen.app_id = app_id,
                 Event::State { state } => seen.states = values(&state),
                 Event::Output { name } => seen.output = name,
+                Event::Workspace { workspace } => seen.workspace = workspace,
                 Event::Geometry {
                     x,
                     y,
@@ -194,7 +205,11 @@ mod tests {
             use ext_workspace_manager_v1::Event;
             match event {
                 Event::WorkspaceGroup { workspace_group } => client.groups.push(workspace_group),
-                Event::Workspace { .. } => client.workspaces.push(Default::default()),
+                Event::Workspace { workspace } => {
+                    client
+                        .workspaces
+                        .push((workspace, SeenWorkspace::default()));
+                }
                 Event::Done => client.workspaces_done += 1,
                 _ => {}
             }
@@ -224,19 +239,25 @@ mod tests {
     impl Dispatch<ExtWorkspaceHandleV1, ()> for Client {
         fn event(
             client: &mut Self,
-            _: &ExtWorkspaceHandleV1,
+            handle: &ExtWorkspaceHandleV1,
             event: ext_workspace_handle_v1::Event,
             _: &(),
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
             use ext_workspace_handle_v1::{Event, State as WorkspaceState};
-            let workspace = client.workspaces.last_mut().unwrap();
+            let workspace = &mut client
+                .workspaces
+                .iter_mut()
+                .find(|w| &w.0 == handle)
+                .unwrap()
+                .1;
             match event {
-                Event::Name { name } => workspace.0 = name,
-                Event::Coordinates { coordinates } => workspace.1 = values(&coordinates),
+                Event::Id { id } => workspace.id = id,
+                Event::Name { name } => workspace.name = name,
+                Event::Coordinates { coordinates } => workspace.coordinates = values(&coordinates),
                 Event::State { state } => {
-                    workspace.2 = state
+                    workspace.active = state
                         .into_result()
                         .is_ok_and(|s| s.contains(WorkspaceState::Active));
                 }
@@ -766,25 +787,83 @@ mod tests {
     }
 
     #[test]
-    fn each_screen_has_one_active_workspace() {
+    fn one_workspace_shared_by_every_screen() {
         let mut h = Harness::start();
         let _output: WlOutput = h.shell.bind();
-        let _workspaces: ExtWorkspaceManagerV1 = h.shell.bind();
+        let manager: ExtWorkspaceManagerV1 = h.shell.bind();
         h.run_until("the workspaces", |h| h.shell.client.workspaces_done > 0);
         assert_eq!(h.shell.client.groups.len(), 1);
         assert_eq!(
             h.shell.client.group_outputs, 1,
             "the group did not enter the output"
         );
-        assert_eq!(
-            h.shell.client.workspaces,
-            vec![(String::from("1"), vec![0], true)]
-        );
+        let first = SeenWorkspace {
+            id: String::from("1"),
+            name: String::from("1"),
+            coordinates: vec![0],
+            active: true,
+        };
+        assert_eq!(h.shell.client.workspaces.len(), 1);
+        assert_eq!(h.shell.client.workspaces[0].1, first);
+        assert_eq!(h.state.workspaces().active(), "1");
 
-        // A new screen: its own group and workspace.
+        // A new screen joins the same group, once the client binds its wl_output.
         h.state.add_output((800, 600).into(), 1.0);
-        h.run_until("the second group", |h| h.shell.client.groups.len() == 2);
-        assert_eq!(h.shell.client.workspaces.len(), 2);
-        assert!(h.shell.client.workspaces[1].2);
+        h.run_until("the second wl_output", |h| {
+            h.shell
+                .client
+                .globals
+                .iter()
+                .filter(|g| g.1 == "wl_output")
+                .count()
+                == 2
+        });
+        let (name, _, _) = h
+            .shell
+            .client
+            .globals
+            .iter()
+            .rfind(|g| g.1 == "wl_output")
+            .cloned()
+            .unwrap();
+        let _second: WlOutput = h.shell.registry.bind(name, 4, &h.shell.queue.handle(), ());
+        h.run_until("the group on both screens", |h| {
+            h.shell.client.group_outputs == 2
+        });
+        assert_eq!(h.shell.client.groups.len(), 1);
+        assert_eq!(h.shell.client.workspaces.len(), 1);
+
+        // Activating the active workspace, then committing: nothing changes, nothing breaks.
+        h.shell.client.workspaces[0].0.activate();
+        manager.commit();
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert!(h.shell.conn.protocol_error().is_none());
+        assert_eq!(h.state.workspaces().active(), "1");
+    }
+
+    #[test]
+    fn each_window_belongs_to_a_workspace() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        h.open_window("Window");
+        h.run_until("the window listed", |h| {
+            !h.shell.client.toplevels.is_empty()
+        });
+        let id = h.shell.client.toplevels[0].1.id.unwrap();
+        assert_eq!(h.shell.client.window(id).workspace, "1");
+        let window = h.only_window();
+        assert_eq!(h.state.workspace_of(&window), "1");
+
+        // Moving it to a workspace that does not exist changes nothing; to its own neither.
+        h.shell.client.handle(id).move_to_workspace("9".into());
+        h.shell.client.handle(id).move_to_workspace("1".into());
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert_eq!(h.state.workspace_of(&window), "1");
+        assert_eq!(h.shell.client.window(id).workspace, "1");
+        assert!(h.shell.conn.protocol_error().is_none());
     }
 }

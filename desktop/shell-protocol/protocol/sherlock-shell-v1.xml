@@ -4,7 +4,11 @@
     Private protocol between the compositor and the programs of the shell: the bar, the dock,
     and later Sherlock's window server. It lists the windows with their states and geometry,
     acts on them, and tells for each screen whether a maximized or fullscreen window is on it.
-    Workspaces go through the standard ext-workspace-v1 protocol, offered on the same terms.
+    Workspaces go through the standard ext-workspace-v1 protocol, offered on the same terms:
+    its list, its active workspace and its activate request. This protocol adds what
+    ext-workspace-v1 does not carry: the workspace of each window, and moving a window to
+    another workspace. A workspace is named here by the id that ext_workspace_handle_v1 gives
+    it (its id event).
 
     The compositor only offers the globals of this protocol to clients that connected through
     the shell socket: the Wayland socket of the session followed by "-shell", in the same
@@ -40,7 +44,7 @@
     <event name="toplevel">
       <description summary="a window appears">
         A window shows content, or was already there when the manager was bound. Its id, title,
-        app_id, state, output and geometry follow, before the next done.
+        app_id, state, output, workspace and geometry follow, before the next done.
       </description>
       <arg name="toplevel" type="new_id" interface="sherlock_shell_toplevel_v1"/>
     </event>
@@ -53,7 +57,8 @@
     <event name="output">
       <description summary="a screen and what covers it">
         Sent for each screen when the manager is bound, then when the state of a screen changes
-        or a screen appears. A window is on the screen under its center. The state is an array
+        or a screen appears. A window is on the screen under its center. Only the windows of
+        the active workspace count. The state is an array
         of 32-bit values of output_state, in the machine's byte order; an empty array means no
         maximized nor fullscreen window is on it.
       </description>
@@ -80,7 +85,8 @@
   <interface name="sherlock_shell_toplevel_v1" version="1">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
-      manager. The id comes first, once.
+      manager. The id comes first, once. A window on a workspace that is not active keeps its
+      states; it is simply not shown.
     </description>
 
     <enum name="error">
@@ -112,6 +118,14 @@
         The application receives the close request of its toolkit (xdg_toplevel.close, or
         WM_DELETE_WINDOW for X11), and may ask the user first.
       </description>
+    </request>
+
+    <request name="move_to_workspace">
+      <description summary="put the window on another workspace">
+        The window leaves its workspace for the one of this id (the id event of
+        ext_workspace_handle_v1). An unknown id is ignored.
+      </description>
+      <arg name="workspace" type="string" summary="id of the workspace"/>
     </request>
 
     <request name="set_rectangle">
@@ -167,6 +181,14 @@
         The screen under the center of the window. A minimized window keeps the one it had.
       </description>
       <arg name="name" type="string" summary="wl_output name of the screen"/>
+    </event>
+
+    <event name="workspace">
+      <description summary="workspace of the window">
+        The id of the workspace the window belongs to, as the id event of
+        ext_workspace_handle_v1 gives it. A window belongs to one workspace.
+      </description>
+      <arg name="workspace" type="string" summary="id of the workspace"/>
     </event>
 
     <event name="geometry">

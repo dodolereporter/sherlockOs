@@ -6,6 +6,9 @@
 //! loop iteration, `State::refresh_shell` reads the windows and the screens, and each bound
 //! client receives what changed since it was last told.
 //!
+//! The workspaces are modeled here (`workspaces::Workspaces`): a single one, `1`, for now, which
+//! lot D-18w fills.
+//!
 //! Minimizing lives here too: a minimized window leaves the space, so that rendering, input and
 //! snapping no longer see it, and comes back at the same place when activated.
 
@@ -13,6 +16,7 @@ mod toplevels;
 mod workspaces;
 
 use std::{
+    cell::RefCell,
     os::unix::net::UnixStream,
     path::Path,
     sync::{
@@ -46,7 +50,14 @@ pub(crate) struct Shell {
     icons: Vec<(u32, String, Rectangle<i32, Logical>)>,
     /// Listening shell socket in the loop, removed by `State::shutdown`.
     listener: Option<smithay::reexports::calloop::RegistrationToken>,
+    /// The workspaces and the active one.
+    workspace_model: workspaces::Workspaces,
+    /// Workspace activated by a client of `ext-workspace-v1`, applied at its commit.
+    pending_workspace: Option<String>,
 }
+
+/// Workspace of a window, by id: the active one when the window is first seen.
+struct WindowWorkspace(RefCell<String>);
 
 struct Minimized {
     window: Window,
@@ -150,6 +161,38 @@ impl State {
         Some((icon.1.clone(), icon.2))
     }
 
+    /// The workspaces, in order, and the active one.
+    pub fn workspaces(&self) -> &workspaces::Workspaces {
+        &self.shell.workspace_model
+    }
+
+    /// Makes the workspace `id` active. Lot D-18w shows its windows, hides the others and
+    /// slides between them; for now there is only one.
+    pub fn activate_workspace(&mut self, id: &str) {
+        if self.shell.workspace_model.activate(id) {
+            tracing::debug!(id, "workspace activated");
+        }
+    }
+
+    /// Id of the workspace `window` belongs to.
+    pub fn workspace_of(&self, window: &Window) -> String {
+        self.window_workspace(window).0.borrow().clone()
+    }
+
+    /// Puts `window` on the workspace `id`, if it exists.
+    pub fn move_to_workspace(&mut self, window: &Window, id: &str) {
+        if self.shell.workspace_model.contains(id) {
+            *self.window_workspace(window).0.borrow_mut() = id.to_owned();
+        }
+    }
+
+    fn window_workspace<'a>(&self, window: &'a Window) -> &'a WindowWorkspace {
+        let active = self.shell.workspace_model.active();
+        window
+            .user_data()
+            .get_or_insert(|| WindowWorkspace(RefCell::new(active.to_owned())))
+    }
+
     /// Whether `window` is minimized.
     pub fn is_minimized(&self, window: &Window) -> bool {
         self.shell.minimized.iter().any(|m| &m.window == window)
@@ -249,7 +292,7 @@ impl State {
             let outputs: Vec<_> = self.space.outputs().cloned().collect();
             let dh = self.display_handle.clone();
             for manager in &mut self.shell.workspaces {
-                manager.update(&dh, &outputs);
+                manager.update(&dh, &outputs, &self.shell.workspace_model);
             }
         }
     }
@@ -294,6 +337,7 @@ impl State {
                 ];
                 states.extend(flags.iter().filter(|f| f.1).map(|f| f.0 as u32));
                 let snapshot = toplevels::Snapshot {
+                    workspace: self.workspace_of(window),
                     title: State::title(window).unwrap_or_default(),
                     app_id: app_id(window),
                     states,
@@ -313,8 +357,10 @@ impl State {
                     (OutputState::Maximized, ToplevelState::Maximized),
                     (OutputState::Fullscreen, ToplevelState::Fullscreen),
                 ] {
+                    let active = self.shell.workspace_model.active();
                     let on = windows.iter().any(|(_, w)| {
                         w.output == name
+                            && w.workspace == active
                             && w.states.contains(&(value as u32))
                             && !w.states.contains(&(ToplevelState::Minimized as u32))
                     });

@@ -28,6 +28,8 @@ pub(super) struct Snapshot {
     /// Values of `ToplevelState`.
     pub states: Vec<u32>,
     pub output: String,
+    /// Id of its workspace.
+    pub workspace: String,
     /// Relative to the screen `output`.
     pub geometry: Rectangle<i32, Logical>,
 }
@@ -134,6 +136,9 @@ fn send(resource: &SherlockShellToplevelV1, old: Option<&Snapshot>, new: &Snapsh
     if old.is_none_or(|o| o.output != new.output) {
         resource.output(new.output.clone());
     }
+    if old.is_none_or(|o| o.workspace != new.workspace) {
+        resource.workspace(new.workspace.clone());
+    }
     if old.is_none_or(|o| o.geometry != new.geometry) {
         let g = new.geometry;
         resource.geometry(g.loc.x, g.loc.y, g.size.w, g.size.h);
@@ -223,6 +228,7 @@ impl Dispatch<SherlockShellToplevelV1, u32> for State {
             Request::Activate => state.activate(&window),
             Request::Minimize => state.minimize(&window),
             Request::Close => State::close(&window),
+            Request::MoveToWorkspace { workspace } => state.move_to_workspace(&window, &workspace),
             _ => {}
         }
         tracing::debug!(id, "window request from the shell");
