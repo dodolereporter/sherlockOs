@@ -62,7 +62,7 @@ fn main() -> Result<(), Error> {
     }
 
     event_loop.run(None, &mut state, State::refresh)?;
-    state.stop_xwayland();
+    state.shutdown();
     if let Some(stats) = &state.frame_stats {
         tracing::info!("bilan, toutes les images : {}", stats.all);
         tracing::info!("bilan, images animées : {}", stats.animated);

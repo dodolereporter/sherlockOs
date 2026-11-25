@@ -7,7 +7,14 @@
 // Module de test : clippy y autorise unwrap et expect, comme dans les tests unitaires.
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, path::Path, rc::Rc, sync::mpsc, thread, time::Duration};
+    use std::{
+        cell::Cell,
+        path::{Path, PathBuf},
+        rc::Rc,
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
 
     use compositeur::State;
     use smithay::{
@@ -16,12 +23,24 @@ mod tests {
         input::keyboard::Keycode,
         reexports::calloop::EventLoop,
         utils::{Logical, Rectangle, Transform},
-        wayland::seat::WaylandFocus,
+        wayland::{
+            seat::WaylandFocus,
+            selection::{
+                data_device::current_data_device_selection_userdata,
+                primary_selection::current_primary_selection_userdata,
+            },
+        },
     };
     use x11rb::{
+        CURRENT_TIME, NONE,
         connection::Connection,
-        protocol::xproto::{
-            AtomEnum, ConnectionExt, CreateWindowAux, PropMode, Window as XWindow, WindowClass,
+        protocol::{
+            Event,
+            xproto::{
+                Atom, AtomEnum, ClientMessageEvent, ConnectionExt, CreateWindowAux, EventMask,
+                PropMode, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent,
+                Window as XWindow, WindowClass,
+            },
         },
         rust_connection::RustConnection,
         wrapper::ConnectionExt as _,
@@ -39,7 +58,12 @@ mod tests {
 
     /// Ouvre une fenêtre blanche : avec un fond, le serveur la peint, et XWayland envoie un
     /// contenu au compositeur.
-    fn open(conn: &RustConnection, root: XWindow, geometry: (i16, i16, u16, u16), menu: bool) {
+    fn open(
+        conn: &RustConnection,
+        root: XWindow,
+        geometry: (i16, i16, u16, u16),
+        menu: bool,
+    ) -> XWindow {
         let window = conn.generate_id().unwrap();
         let screen = &conn.setup().roots[0];
         let aux = CreateWindowAux::new()
@@ -69,6 +93,128 @@ mod tests {
         )
         .unwrap();
         conn.map_window(window).unwrap();
+        window
+    }
+
+    /// What the test asks the X11 client thread to do.
+    enum Command {
+        /// Take ownership of CLIPBOARD (`true`) or PRIMARY, and answer the window manager's
+        /// TARGETS request.
+        Own(bool),
+        /// Ask for an interactive move of the managed window (`_NET_WM_MOVERESIZE`).
+        Move,
+        /// Rename the managed window. The window manager sees the new title after everything
+        /// the client did before: the test waits for it to know those requests were handled.
+        Sync(u32),
+        Quit,
+    }
+
+    fn atom(conn: &RustConnection, name: &str) -> Atom {
+        conn.intern_atom(false, name.as_bytes())
+            .unwrap()
+            .reply()
+            .unwrap()
+            .atom
+    }
+
+    /// Answers a selection request: the list of targets, or the text itself.
+    fn answer(conn: &RustConnection, req: &SelectionRequestEvent, targets: Atom, utf8: Atom) {
+        let property = if req.property == NONE {
+            req.target
+        } else {
+            req.property
+        };
+        let property = if req.target == targets {
+            conn.change_property32(
+                PropMode::REPLACE,
+                req.requestor,
+                property,
+                AtomEnum::ATOM,
+                &[targets, utf8],
+            )
+            .unwrap();
+            property
+        } else if req.target == utf8 {
+            conn.change_property8(PropMode::REPLACE, req.requestor, property, utf8, b"x11")
+                .unwrap();
+            property
+        } else {
+            NONE
+        };
+        let notify = SelectionNotifyEvent {
+            response_type: SELECTION_NOTIFY_EVENT,
+            sequence: 0,
+            time: req.time,
+            requestor: req.requestor,
+            selection: req.selection,
+            target: req.target,
+            property,
+        };
+        conn.send_event(false, req.requestor, EventMask::NO_EVENT, notify)
+            .unwrap();
+        conn.flush().unwrap();
+    }
+
+    /// The X11 client: a 200 × 100 window and a menu at (50, 60), then the test's commands.
+    fn x11_client(display: u32, commands: mpsc::Receiver<Command>) {
+        let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
+        let root = conn.setup().roots[screen].root;
+        let window = open(&conn, root, (0, 0, 200, 100), false);
+        open(&conn, root, (50, 60, 80, 40), true);
+        conn.flush().unwrap();
+        let clipboard = atom(&conn, "CLIPBOARD");
+        let targets = atom(&conn, "TARGETS");
+        let utf8 = atom(&conn, "UTF8_STRING");
+        let moveresize = atom(&conn, "_NET_WM_MOVERESIZE");
+        loop {
+            while let Some(event) = conn.poll_for_event().unwrap() {
+                if let Event::SelectionRequest(req) = event {
+                    answer(&conn, &req, targets, utf8);
+                }
+            }
+            match commands.recv_timeout(Duration::from_millis(5)) {
+                Ok(Command::Own(clip)) => {
+                    let selection = if clip {
+                        clipboard
+                    } else {
+                        AtomEnum::PRIMARY.into()
+                    };
+                    conn.set_selection_owner(window, selection, CURRENT_TIME)
+                        .unwrap();
+                    conn.flush().unwrap();
+                    // The window manager reads the targets before it reports the selection.
+                    loop {
+                        if let Event::SelectionRequest(req) = conn.wait_for_event().unwrap() {
+                            answer(&conn, &req, targets, utf8);
+                            if req.target == targets {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(Command::Move) => {
+                    // Direction 8 is _NET_WM_MOVERESIZE_MOVE, button 1, source 1 (application).
+                    let event = ClientMessageEvent::new(32, window, moveresize, [0, 0, 8, 1, 1]);
+                    let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+                    conn.send_event(false, root, mask, event).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Sync(n)) => {
+                    let title = format!("sync {n}");
+                    conn.change_property8(
+                        PropMode::REPLACE,
+                        window,
+                        AtomEnum::WM_NAME,
+                        AtomEnum::STRING,
+                        title.as_bytes(),
+                    )
+                    .unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
     }
 
     struct Harness {
@@ -110,6 +256,21 @@ mod tests {
             let time = self.tick();
             self.state.pointer_button(BTN_LEFT, state, time);
         }
+
+        /// Waits until the window manager has handled everything the client sent so far.
+        fn sync(&mut self, client: &mpsc::Sender<Command>, window: &Window, n: u32) {
+            client.send(Command::Sync(n)).unwrap();
+            let title = format!("sync {n}");
+            self.run_until(&title, |_| State::title(window).as_deref() == Some(&title));
+        }
+    }
+
+    /// Wayland socket and its lock, in the temporary directory: the tests may run without
+    /// `XDG_RUNTIME_DIR`.
+    fn wayland_socket() -> (PathBuf, PathBuf) {
+        let path =
+            std::env::temp_dir().join(format!("compositeur-xwayland-{}", std::process::id()));
+        (path.clone(), path.with_extension("lock"))
     }
 
     /// Fenêtre X11 gérée ou menu.
@@ -141,6 +302,9 @@ mod tests {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         state.add_output((800, 600).into(), Transform::Normal);
+        let (wayland, wayland_lock) = wayland_socket();
+        state.listen_at(wayland.clone(), &event_loop).unwrap();
+        assert!(wayland.exists() && wayland_lock.exists());
         // Le résultat du démarrage : `Some(None)` si XWayland a échoué. Ses messages sont sur
         // la sortie d'erreur du test.
         let started = Rc::new(Cell::new(None));
@@ -159,17 +323,8 @@ mod tests {
         let socket = format!("/tmp/.X11-unix/X{display}");
         assert!(Path::new(&socket).exists());
 
-        // Le client X11 ouvre une fenêtre de 200 × 100 et un menu en (50, 60), puis attend
-        // le signal de partir.
-        let (quit, wait) = mpsc::channel::<()>();
-        let client = thread::spawn(move || {
-            let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
-            let root = conn.setup().roots[screen].root;
-            open(&conn, root, (0, 0, 200, 100), false);
-            open(&conn, root, (50, 60, 80, 40), true);
-            conn.flush().unwrap();
-            wait.recv().unwrap();
-        });
+        let (commands, receiver) = mpsc::channel();
+        let client = thread::spawn(move || x11_client(display, receiver));
 
         // Affichage et titre : la fenêtre est centrée, et le serveur X connaît sa place.
         h.run_until("la fenêtre X11", |s| x11_window(s, false).is_some());
@@ -198,6 +353,38 @@ mod tests {
         let visual = h.state.window_visual(&menu, Duration::ZERO).unwrap();
         assert_eq!(visual.rect, rect(50, 60, 80, 40).to_f64());
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));
+
+        // A move requested by the X11 window is refused while the button is held on another
+        // X11 window (the menu), even though both belong to the same Wayland client.
+        h.motion(60.0, 70.0);
+        h.button(ButtonState::Pressed);
+        commands.send(Command::Move).unwrap();
+        h.sync(&commands, &window, 1);
+        assert!(!h.state.gesture_active());
+        h.button(ButtonState::Released);
+        // Held on the window itself, it is granted, and ends with the button.
+        h.motion(400.0, 300.0);
+        h.button(ButtonState::Pressed);
+        commands.send(Command::Move).unwrap();
+        h.run_until("le geste demandé par X11", State::gesture_active);
+        h.button(ButtonState::Released);
+        assert!(!h.state.gesture_active());
+
+        // Selections: an X11 client without the keyboard sets neither CLIPBOARD nor PRIMARY
+        // on the Wayland side.
+        h.state.focus(None);
+        commands.send(Command::Own(true)).unwrap();
+        commands.send(Command::Own(false)).unwrap();
+        h.sync(&commands, &window, 2);
+        assert!(current_data_device_selection_userdata(&h.state.seat).is_none());
+        assert!(current_primary_selection_userdata(&h.state.seat).is_none());
+        // With the keyboard, both are passed on.
+        h.state.focus(Some(window.clone()));
+        commands.send(Command::Own(true)).unwrap();
+        commands.send(Command::Own(false)).unwrap();
+        h.sync(&commands, &window, 3);
+        assert!(current_data_device_selection_userdata(&h.state.seat).is_some());
+        assert!(current_primary_selection_userdata(&h.state.seat).is_some());
 
         // Super + glisser jusqu'au bord haut : agrandie, pour le serveur X aussi.
         h.motion(400.0, 300.0);
@@ -239,14 +426,16 @@ mod tests {
         );
 
         // Fermeture : le client part, ses fenêtres disparaissent et personne n'a le clavier.
-        quit.send(()).unwrap();
+        commands.send(Command::Quit).unwrap();
         client.join().unwrap();
         h.run_until("la fermeture des fenêtres X11", |s| {
             s.space.elements().next().is_none() && s.focused_window().is_none()
         });
 
-        // Arrêt propre : XWayland s'en va avec sa socket.
-        h.state.stop_xwayland();
+        // Arrêt propre : XWayland s'en va avec sa socket, et la socket Wayland et son verrou
+        // disparaissent aussi, although the X11Wm source keeps the event loop alive.
+        h.state.shutdown();
         h.run_until("la socket retirée", |_| !Path::new(&socket).exists());
+        assert!(!wayland.exists() && !wayland_lock.exists());
     }
 }

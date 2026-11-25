@@ -20,7 +20,10 @@ use std::{
 use smithay::{
     delegate_xwayland_shell,
     desktop::{Window, space::RenderZindex},
-    reexports::{calloop::EventLoop, wayland_server::protocol::wl_surface::WlSurface},
+    reexports::{
+        calloop::EventLoop,
+        wayland_server::{backend::DisconnectReason, protocol::wl_surface::WlSurface},
+    },
     utils::{Logical, Rectangle},
     wayland::{
         selection::{
@@ -89,12 +92,23 @@ impl State {
                             }
                             Err(err) => {
                                 tracing::warn!("gestionnaire de fenêtres X11 : {err}");
+                                // `start_wm` may fail after tagging the XWayland client with
+                                // its XwmId: smithay's xwayland-shell hook would then ask for
+                                // a window manager that does not exist. Disconnect the client
+                                // right away, so that none of its requests is dispatched, and
+                                // stop XWayland once this callback has returned.
+                                state
+                                    .display_handle
+                                    .backend_handle()
+                                    .kill_client(client.id(), DisconnectReason::ConnectionClosed);
+                                state.loop_handle.insert_idle(State::stop_xwayland);
                                 None
                             }
                         }
                     }
                     XWaylandEvent::Error => {
                         tracing::warn!("XWayland s'est arrêté pendant son démarrage");
+                        state.loop_handle.insert_idle(State::stop_xwayland);
                         None
                     }
                 };
@@ -130,6 +144,14 @@ fn ensure_x11_unix_dir() -> io::Result<()> {
     fs::set_permissions(dir, Permissions::from_mode(0o1777))
 }
 
+impl State {
+    /// A window of the X server behind `xwm` has the keyboard.
+    fn x11_has_keyboard(&self, xwm: XwmId) -> bool {
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        matches!(focus, Some(KeyboardFocus::X11(surface)) if surface.xwm_id() == Some(xwm))
+    }
+}
+
 /// Bords tirés d'une demande `_NET_WM_MOVERESIZE`.
 fn x11_edges(edge: ResizeEdge) -> Edges {
     let (top, bottom, left, right) = match edge {
@@ -151,12 +173,20 @@ fn x11_edges(edge: ResizeEdge) -> Edges {
 }
 
 impl XwmHandler for State {
-    fn xwm_state(&mut self, _xwm: XwmId) -> &mut X11Wm {
+    fn xwm_state(&mut self, xwm: XwmId) -> &mut X11Wm {
         match self.xwm.as_mut() {
-            Some(xwm) => xwm,
-            // Smithay n'appelle ce gestionnaire que pour un X11Wm qui tourne, et on le range
-            // dans `self.xwm` avant de rendre la main à la boucle : il ne peut pas manquer.
-            None => unreachable!("gestionnaire de fenêtres X11 absent"),
+            Some(wm) => wm,
+            // Smithay calls this from two places only: the X11Wm's own event source, which
+            // exists only once `start_wm` has succeeded (and the X11Wm is stored right after),
+            // and the xwayland-shell commit hook, which only runs for requests of the XWayland
+            // client. When `start_wm` fails, that client is disconnected before any of its
+            // requests can be dispatched (see `start_xwayland`), so this branch cannot be
+            // reached. The trait leaves no way out without a window manager to lend: there is
+            // no X11Wm to return, so the only option left is to stop.
+            None => {
+                tracing::error!(?xwm, "gestionnaire de fenêtres X11 demandé mais absent");
+                unreachable!("X11 window manager requested before it was started")
+            }
         }
     }
 
@@ -287,8 +317,7 @@ impl XwmHandler for State {
     /// Un client X11 ne lit le presse-papiers que si une fenêtre X11 a le clavier, comme un
     /// client Wayland.
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
-        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
-        matches!(focus, Some(KeyboardFocus::X11(surface)) if surface.xwm_id() == Some(xwm))
+        self.x11_has_keyboard(xwm)
     }
 
     /// Un client X11 lit la sélection d'un client Wayland.
@@ -312,8 +341,19 @@ impl XwmHandler for State {
         }
     }
 
-    /// Un client X11 pose une sélection : le compositeur la pose côté Wayland pour son compte.
-    fn new_selection(&mut self, _xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+    /// An X11 client set a selection: the compositor sets it on the Wayland side on its
+    /// behalf, but only while one of this X server's windows has the keyboard. That is the
+    /// rule smithay applies to Wayland clients, and the one used for reading above: a
+    /// background X11 program cannot replace what the user pastes elsewhere. No exception
+    /// for command line tools such as `xclip` run from a Wayland terminal.
+    fn new_selection(&mut self, xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
+        if !self.x11_has_keyboard(xwm) {
+            tracing::debug!(
+                ?selection,
+                "sélection X11 refusée : pas de fenêtre X11 au clavier"
+            );
+            return;
+        }
         let dh = &self.display_handle;
         match selection {
             SelectionTarget::Clipboard => set_data_device_selection(dh, &self.seat, mime_types, ()),

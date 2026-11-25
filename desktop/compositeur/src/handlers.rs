@@ -175,13 +175,19 @@ impl State {
     }
 
     /// Geste demandé par une fenêtre X11 (`_NET_WM_MOVERESIZE`). Le serveur X ne donne pas de
-    /// serial : il faut qu'un bouton soit tenu sur une surface de XWayland.
+    /// serial : il faut qu'un bouton soit tenu sur la surface de cette fenêtre. All X11 clients
+    /// share one Wayland client (XWayland), so "same client" would let an X11 window move
+    /// itself during a click in another one.
     pub(crate) fn x11_gesture(&mut self, surface: &X11Surface, edges: Option<Edges>) {
+        let own = surface.wl_surface();
         let start = self
             .seat
             .get_pointer()
             .filter(|pointer| pointer.is_grabbed())
-            .and_then(|pointer| pointer.grab_start_data());
+            .and_then(|pointer| pointer.grab_start_data())
+            .filter(|start| {
+                own.is_some() && start.focus.as_ref().map(|(focus, _)| focus) == own.as_ref()
+            });
         tracing::debug!("geste demandé par un client X11");
         self.client_gesture(self.x11_window(surface), start, edges);
     }

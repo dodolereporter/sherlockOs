@@ -135,10 +135,13 @@ xkbcomp sont attendus : sans accès à la puce graphique, Xwayland dessine en lo
 (`pas d'applications X11`), et la commande part sans `DISPLAY` : elle n'hérite pas de celui de
 la session hôte, où ses fenêtres X11 s'ouvriraient hors du compositeur.
 
-**Arrêt.** En quittant, le compositeur retire XWayland de la boucle : le serveur s'arrête, et son
-verrou (`/tmp/.X<N>-lock`) et sa socket (`/tmp/.X11-unix/X<N>`) disparaissent. Il faut le faire
-à la main (`State::stop_xwayland`) : la source de `X11Wm` garde une poignée de la boucle, qui ne
-serait donc jamais libérée. Tué par un signal (Ctrl + C dans le terminal), le compositeur laisse
+**Arrêt.** En quittant, le compositeur retire de la boucle XWayland et sa socket Wayland
+(`State::shutdown`) : le serveur X s'arrête, son verrou (`/tmp/.X<N>-lock`) et sa socket
+(`/tmp/.X11-unix/X<N>`) disparaissent, et la socket Wayland (`$XDG_RUNTIME_DIR/wayland-N`) et son
+verrou aussi. Il faut le faire à la main : la source de `X11Wm` garde une poignée de la boucle,
+qui n'est donc jamais libérée, ni rien de ce qu'elle contient. Si `X11Wm` ne démarre pas, le
+compositeur coupe tout de suite la connexion de XWayland et l'arrête : les applications X11 ne
+s'affichent pas, mais la session continue. Tué par un signal (Ctrl + C dans le terminal), le compositeur laisse
 le verrou ; Smithay le reprend au lancement suivant, puisque son processus n'existe plus. Le
 compositeur crée `/tmp/.X11-unix` s'il manque, avec les droits que lui donne systemd (1777).
 
@@ -158,7 +161,9 @@ compositeur crée `/tmp/.X11-unix` s'il manque, avec les droits que lui donne sy
   ceux de xdg-shell pour une fenêtre Wayland. Ses demandes (`_NET_WM_STATE` et
   `_NET_WM_MOVERESIZE`, par exemple la barre de titre d'un navigateur) passent par les mêmes
   chemins que celles d'une fenêtre Wayland. Comme le serveur X ne donne pas de serial, un geste
-  demandé n'est accordé que pendant l'appui d'un bouton sur une surface de XWayland.
+  demandé n'est accordé que pendant l'appui d'un bouton sur la surface de cette fenêtre même.
+  Une surface de XWayland ne suffit pas : tous les clients X11 sont un seul client Wayland, et
+  un autre programme X11 pourrait sinon déplacer sa fenêtre pendant un clic dans xterm.
 - Une fenêtre X11 prend sa nouvelle taille dès qu'on la lui envoie. Pendant un
   redimensionnement, sa place est donc recalée tout de suite, sans attendre son contenu.
 - Le titre est `_NET_WM_NAME` ou `WM_NAME`.
@@ -175,8 +180,12 @@ pose les deux. Les échanges avec X11 passent par `X11Wm` :
   X11 qui la lit reçoit les données du client Wayland.
 - Un client X11 pose une sélection : le compositeur la pose côté Wayland pour son compte. Un
   client Wayland qui la lit reçoit les données du client X11.
-- Comme un client Wayland, un client X11 ne lit une sélection venue de Wayland que si une
-  fenêtre X11 a le clavier.
+- Comme un client Wayland, un client X11 ne lit une sélection venue de Wayland, et ne pose la
+  sienne côté Wayland, que si une fenêtre X11 a le clavier. Un programme X11 en arrière-plan ne
+  peut donc pas changer ce que l'utilisateur colle dans une application Wayland. La règle est
+  stricte, sans exception pour les outils en ligne de commande : `xclip -i` lancé depuis une
+  Konsole (Wayland) ne pose rien côté Wayland. Le journal le dit au niveau `debug` :
+  `sélection X11 refusée`.
 
 
 Chaque image est redessinée en entier avec le moteur GLES de Smithay (`GlesRenderer`), dans le
@@ -359,7 +368,8 @@ processus de Zen derrière lui (`ps -eo pid,args | grep compositeur-essai` les m
 ### Presse-papiers en ligne de commande
 
 `wl-copy` et `wl-paste` (paquet `wl-clipboard`) sont des clients Wayland, `xclip` un client X11.
-Avec une fenêtre X11 au clavier (lancer le compositeur avec `xterm`), et les numéros du journal :
+Il faut qu'une fenêtre X11 ait le clavier, dans les deux sens : lancer le compositeur avec
+`xterm`, et ne pas cliquer ailleurs. Avec les numéros du journal :
 
 ```sh
 WAYLAND_DISPLAY=wayland-1 wl-copy "venu de Wayland"; DISPLAY=:1 xclip -o -selection clipboard
@@ -504,12 +514,17 @@ et ce que le serveur X sait de la fenêtre :
 - Super + glisser jusqu'au bord haut : fenêtre agrandie, `_NET_WM_STATE` compris, sur tout
   l'écran ; Super + bas : retour à sa place d'avant ;
 - la bande de saisie : le coin bas droit tiré, le coin haut gauche en place ;
+- un déplacement demandé par la fenêtre (`_NET_WM_MOVERESIZE`) : refusé pendant un appui sur le
+  menu, qui est pourtant du même client Wayland ; accordé pendant un appui sur la fenêtre ;
+- le presse-papiers : la fenêtre sans le clavier ne pose ni CLIPBOARD ni PRIMARY côté Wayland ;
+  avec le clavier, elle pose les deux ;
 - la fermeture : le client part, ses fenêtres disparaissent, personne n'a le clavier ;
-- l'arrêt propre : XWayland retire sa socket.
+- l'arrêt propre : XWayland retire sa socket, et la socket Wayland du compositeur (ouverte dans
+  le dossier temporaire, la CI n'ayant pas de `XDG_RUNTIME_DIR`) et son verrou disparaissent.
 
 Ce que les tests ne voient pas : les programmes GLSL et l'image qu'ils produisent (la CI n'a pas
-de puce graphique), la forme réelle du curseur de la fenêtre hôte, et le presse-papiers entre
-Wayland et X11, vérifié à la main et en ligne de commande (voir « Lancer »). Pour ça, il faut la
+de puce graphique), la forme réelle du curseur de la fenêtre hôte, et le transfert des données du
+presse-papiers entre Wayland et X11, vérifié à la main et en ligne de commande (voir « Lancer »). Pour ça, il faut la
 procédure à la main ci-dessous, la mesure et la comparaison à la planche.
 
 ## Essai à la main
@@ -597,7 +612,9 @@ CLIPBOARD avec Maj + Inser et le clic du milieu : sans lui, xterm ne connaît qu
 6. **Presse-papiers, X11 vers Wayland.** Dans xterm, sélectionne un mot à la souris. Clique dans
    Konsole et Ctrl + Maj + V : le mot s'affiche.
 7. **Sélection primaire.** Lance un xterm sans `-xrm`. Sélectionne un mot dans Konsole, puis
-   clic du milieu dans ce xterm : le mot s'affiche. Et l'inverse.
+   clic du milieu dans ce xterm : le mot s'affiche. Et l'inverse. Enfin, dans Konsole, tape
+   `echo -n intrus | xclip -i -selection clipboard`, puis Ctrl + Maj + V : c'est l'ancien
+   contenu qui se colle, pas `intrus`, car aucune fenêtre X11 n'a le clavier.
 8. **Fermeture.** `exit` dans xterm : la fenêtre disparaît, et le clavier revient à la fenêtre du
    dessus.
 9. **Zen.** Ferme le compositeur et relance-le avec l'une des deux commandes de Zen (voir
@@ -606,4 +623,5 @@ CLIPBOARD avec Maj + Inser et le clic du milieu : sans lui, xterm ne connaît qu
    Depuis un autre terminal, `DISPLAY=:1 xterm -xrm 'XTerm*selectToClipboard: true'` (numéro du
    journal) ouvre un xterm à côté : copie l'adresse de la page dans Zen et colle-la dans xterm.
 10. **Arrêt.** Ferme la fenêtre du compositeur. `ls /tmp/.X11-unix/` ne montre plus la socket
-    `X<N>` du journal, et `pgrep Xwayland` ne trouve plus rien.
+    `X<N>` du journal, `ls $XDG_RUNTIME_DIR` ne montre plus `wayland-N` ni `wayland-N.lock`, et
+    `pgrep Xwayland` ne trouve plus rien.

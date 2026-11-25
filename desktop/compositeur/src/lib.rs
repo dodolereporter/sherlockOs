@@ -15,9 +15,10 @@ mod xwayland;
 
 use std::{
     cell::{Cell, RefCell},
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt,
     os::unix::net::UnixStream,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -36,7 +37,7 @@ use smithay::{
             RegistrationToken, generic::Generic,
         },
         wayland_server::{
-            Display, DisplayHandle,
+            Display, DisplayHandle, ListeningSocket,
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::wl_surface::WlSurface,
         },
@@ -49,7 +50,6 @@ use smithay::{
         selection::{data_device::DataDeviceState, primary_selection::PrimarySelectionState},
         shell::xdg::{XdgShellState, XdgToplevelSurfaceData},
         shm::ShmState,
-        socket::ListeningSocketSource,
         xwayland_shell::XWaylandShellState,
     },
     xwayland::{X11Surface, X11Wm},
@@ -122,6 +122,8 @@ pub struct State {
     pub x_display: Option<u32>,
     /// Source de XWayland dans la boucle, pour l'arrêter.
     xwayland: Option<RegistrationToken>,
+    /// Listening Wayland socket in the loop, removed by `shutdown`.
+    listener: Option<RegistrationToken>,
 }
 
 /// Données qu'on accroche à chaque fenêtre.
@@ -207,6 +209,7 @@ impl State {
             xwm: None,
             x_display: None,
             xwayland: None,
+            listener: None,
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -215,14 +218,59 @@ impl State {
     }
 
     /// Ouvre une socket `wayland-N` et y accepte les clients. Rend le nom de la socket.
-    pub fn listen(&self, event_loop: &EventLoop<'static, State>) -> Result<OsString, Error> {
-        let socket = ListeningSocketSource::new_auto()?;
-        let name = socket.socket_name().to_os_string();
-        event_loop
-            .handle()
-            .insert_source(socket, |stream, _, state| state.insert_client(stream))
-            .map_err(|err| err.error)?;
+    pub fn listen(&mut self, event_loop: &EventLoop<'static, State>) -> Result<OsString, Error> {
+        // Same range as smithay's `ListeningSocketSource::new_auto`: wayland-0 is skipped so
+        // that clients without WAYLAND_DISPLAY do not end up here by accident.
+        let socket = ListeningSocket::bind_auto("wayland", 1..33)?;
+        let name = socket
+            .socket_name()
+            .map(OsStr::to_os_string)
+            .unwrap_or_default();
+        tracing::info!(socket = ?name, "socket Wayland ouverte");
+        self.accept_on(socket, event_loop)?;
         Ok(name)
+    }
+
+    /// Accepts clients on a socket at `path` (its lock file is `path` with the `.lock`
+    /// extension). Used by the tests, which may run without `XDG_RUNTIME_DIR`.
+    pub fn listen_at(
+        &mut self,
+        path: PathBuf,
+        event_loop: &EventLoop<'static, State>,
+    ) -> Result<(), Error> {
+        let socket = ListeningSocket::bind_absolute(path)?;
+        self.accept_on(socket, event_loop)
+    }
+
+    fn accept_on(
+        &mut self,
+        socket: ListeningSocket,
+        event_loop: &EventLoop<'static, State>,
+    ) -> Result<(), Error> {
+        let source = Generic::new(socket, Interest::READ, LoopMode::Level);
+        let token = event_loop
+            .handle()
+            .insert_source(source, |_, socket, state| {
+                while let Some(stream) = socket.accept()? {
+                    state.insert_client(stream);
+                }
+                Ok(PostAction::Continue)
+            })
+            .map_err(|err| err.error)?;
+        self.listener = Some(token);
+        Ok(())
+    }
+
+    /// Releases what the compositor leaves on disk: the Wayland socket and its lock, and
+    /// XWayland with its own lock and socket. Call it when leaving the event loop.
+    ///
+    /// Dropping the event loop is not enough: smithay's `X11Wm` source keeps a handle to the
+    /// loop, so the loop, and every source in it, is never freed. Removing a source drops it.
+    pub fn shutdown(&mut self) {
+        self.stop_xwayland();
+        if let Some(token) = self.listener.take() {
+            self.loop_handle.remove(token);
+        }
     }
 
     /// Branche un client déjà connecté.
