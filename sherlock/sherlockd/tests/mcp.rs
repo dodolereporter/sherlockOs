@@ -210,7 +210,11 @@ async fn server_crashing_during_conversation() {
 
 #[tokio::test]
 async fn timeout_server_stopped_and_reaped() {
-    let config = config(Some("silent-on-call")).timeout(Duration::from_millis(300));
+    // The same timeout covers the start (`initialize`, `tools/list`) and the call. The start gets
+    // the generous TIMEOUT of the other tests: under load, starting the server once took more
+    // than a short delay. The call cannot answer in time whatever the delay, since the server
+    // never answers it: a longer delay only makes the test last longer.
+    let config = config(Some("silent-on-call"));
     let client = McpClient::spawn(&config).await.unwrap();
     let pid = client.pid().unwrap();
     let mut servers = McpServers::new();

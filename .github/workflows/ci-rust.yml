@@ -52,6 +52,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev xwayland libegl1
 
+      # `just verify` runs check-language, a Python script that only uses the standard library.
+      - name: Show the Python of check-language
+        run: python3 --version
+
       - name: Install just
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:

@@ -12,12 +12,13 @@ described in `.github/workflows/ci-rust.yml`.
 
 ## What it checks
 
-A single job, `verify`, runs `just verify`. It chains three recipes of the `justfile` and stops at
-the first one that fails.
+A single job, `verify`, runs `just verify`. It chains four recipes of the `justfile` and stops at
+the first one that fails. The two checks that compile nothing come first, so they fail in seconds.
 
 | Recipe | Command | Fails if |
 | --- | --- | --- |
 | `just fmt-check` | `cargo fmt --all -- --check` | A file does not follow `rustfmt.toml` |
+| `just check-language` | `distro/tests/check-language.py --self-test`, then `distro/tests/check-language.py` | One of the checker's own cases fails, or French is left in development text (ADR 0017) |
 | `just lint` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Clippy or rustc emits a warning, or a lint of `[workspace.lints]` is broken |
 | `just test` | `cargo test --workspace --all-features` | A test fails or does not compile |
 
@@ -41,6 +42,8 @@ A pull request is green only if `verify` and `test-boot` both are.
   `libEGL.so.1` without which Xwayland stops at startup: libepoxy loads it at run time, and the
   `xwayland` package does not pull it in. Any system library added here is also added to the
   prerequisites of the local machine.
+- **Python.** `check-language` runs with the `python3` of the image (3.12 on `ubuntu-24.04`) and
+  only uses its standard library. The workflow prints its version before `just verify`.
 - **just.** Installed by `taiki-e/install-action`, version 1.59.0, pinned in the workflow.
 - **Cargo cache.** `Swatinem/rust-cache` keeps the Cargo registry and the `target` folder. Its key
   contains the rustc version and `Cargo.lock`: a change to either starts from a fresh cache. Only
@@ -60,24 +63,27 @@ just verify
 ```
 
 This is exactly what the CI runs, with the same Rust version, read from `rust-toolchain.toml`.
-Prerequisites of the local machine: `rustup`, `just`, a C compiler (`gcc` and `libc6-dev` on
+Prerequisites of the local machine: `rustup`, `just`, `python3`, a C compiler (`gcc` and `libc6-dev` on
 Debian), the compositor libraries (`libxkbcommon-dev` and `libwayland-dev` on Debian) and the
 `Xwayland` server (`xwayland` package on Debian).
 
 To run a single step:
 
 ```sh
-just fmt-check   # format only
-just fmt         # fixes the format
-just lint        # clippy only
-just test        # tests only
+just fmt-check       # format only
+just check-language  # French left in development text
+just fmt             # fixes the format
+just lint            # clippy only
+just test            # tests only
 ```
 
 `just check-language` runs `distro/tests/check-language.py`, which reports French left in
 development text (ADR 0017), after its own test cases (`--self-test`). It skips Rust string
 literals, interface labels quoted « … » in docs and Rust comments, and data files. A French name
 kept on purpose in a script or configuration file is announced by a comment containing
-`check-language: allow-next-line` on the line above. It is not part of `just verify` yet.
+`check-language: allow-next-line` on the line above. It is part of `just verify`, so the CI fails
+a pull request that leaves French in development text. To check only some paths:
+`just check-language docs/ci.md justfile`.
 
 ## Reading a failure
 

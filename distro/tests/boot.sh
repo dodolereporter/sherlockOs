@@ -4,10 +4,11 @@
 #
 #   boot.sh <image>
 #
-# Succeeds (code 0) if a BOOT-OK line comes out on the serial port before the timeout. Fails
-# (code 1) otherwise, and prints the last 50 lines of the serial port. Code 2: wrong usage or
-# missing tool. In both cases, a screenshot of the graphical output is taken over QMP while
-# QEMU runs.
+# Succeeds (code 0) if a BOOT-OK line comes out on the serial port before the timeout, kernel
+# messages written in the middle of it aside (see marker.py). Fails (code 1) otherwise, and prints
+# the last 50 lines of the serial port. In both cases, a screenshot of the graphical output is
+# taken over QMP while QEMU runs. Code 2: wrong usage, missing tool, or log that marker.py cannot
+# read.
 #
 # Environment variables:
 #   BOOT_TIMEOUT   seconds given to the boot, 90 by default
@@ -82,18 +83,29 @@ qemu-system-x86_64 \
 qemu_pid=$!
 printf 'boot: %s starts, %s s given for the %s line\n' "$name" "$timeout" "$marker"
 
-# The serial port writes \r\n line endings: the line is BOOT-OK, followed or not by \r.
+# 0: the BOOT-OK line is in the log, 1: not yet. marker.py tolerates kernel messages written in
+# the middle of the line, and nothing else. Any other code stops the bench.
+marker_seen() {
+    local code=0
+    python3 -I "$here/marker.py" "$marker" "$log" || code=$?
+    if ((code > 1)); then
+        printf 'boot: marker.py failed (code %s)\n' "$code" >&2
+        exit 2
+    fi
+    return "$code"
+}
+
 result=""
 start=$SECONDS
 while [[ -z "$result" ]]; do
-    if grep -qE "^${marker}"$'\r?$' "$log"; then
+    if marker_seen; then
         result=passed
     elif ! kill -0 "$qemu_pid" 2>/dev/null; then
         qemu_code=0
         wait "$qemu_pid" || qemu_code=$?
         qemu_pid=""
         # QEMU may have written the line just before stopping: read it one last time.
-        if grep -qE "^${marker}"$'\r?$' "$log"; then
+        if marker_seen; then
             result=passed
         else
             result="QEMU stopped (code $qemu_code) without writing $marker"
