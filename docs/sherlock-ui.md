@@ -324,6 +324,66 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   button, the toolbar button, the destructive menu entry and the navigation entries, and its
   snapshot is now 2,400 pixels high.
 
+## Light theme (D-05a)
+
+`color::Palette` holds every color of a theme by role; `Palette::DARK` and `Palette::LIGHT`
+take the values of `docs/design/THEME-CLAIR.md` (decision: ADR 0019). The table gives the
+backgrounds and texts; its rules give the rest: a white veil or border becomes
+`rgba(20,35,59,A)`, capped at 0.16; a shadow keeps a third of its opacity; the fills of the
+green, amber, salmon, cream and blues do not change, nor the selection, the active entry and
+the soft badges, as in the light boards. Where a vivid color colors a text, the palette has a
+role of its own: `accent_text`, `amber_text`, `salmon_text`.
+
+A program sets its theme with `color::set_active` and returns `theme::theme()` from its iced
+`theme` function. The styles read the palette of the iced theme they are given
+(`theme::palette`), the constructors of `component` read `color::palette()`: no component
+tests the theme. The module constants of `color` stay, with the dark values, for the programs
+that do not follow the theme yet (D-05b, D-05c). The file and the automatic mode are in
+`docs/appearance.md`.
+
+The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch
+it. Its test writes `gallery-tiny-skia.png` and `gallery-light-tiny-skia.png`.
+
+![Gallery, dark theme](sherlock-ui/gallery-dark.png)
+![Gallery, light theme](sherlock-ui/gallery-light.png)
+
+To compare: the light « Réglages » board, rendered with chromium as `docs/evidence.md` describes.
+
+![Light « Réglages » board](sherlock-ui/board-reglages-light.png)
+
+Live switch, checked in a private Xephyr with a temporary `XDG_CONFIG_HOME`: the gallery starts
+with `Theme=dark`, follows `Theme=light` written in place, then `Theme=auto` replaced by a
+rename (dark at that hour), then switches to light by itself when the time reaches
+`AutoLightFrom`, set one minute ahead.
+
+![Live switch](sherlock-ui/live-switch.png)
+
+Choices the table does not make:
+
+| Role | Light value | Why |
+| --- | --- | --- |
+| `focus_ring` | `#1F64A0` | The light blue `#8FC1E8` reads at 1.9 to 1 on white: the dark variant of the table |
+| Knob of a toggle that is on | `#F6F8FB` (`deepest`) | As in the light « Réglages » board |
+| `toggle_off_hover` | `rgba(20,35,59,0.16)` | 0.26 capped at 0.16: same as at rest, the hover no longer shows |
+| `shadow_base` | `rgba(20,35,59,0.33)` | Its opacity scales each step: `surface::Shadowed` still replaces it (D-05b, after D-02) |
+| `logo_ring` | `#2E7D4F` | Ring of the color logo in the bar, the icon green of the table (author's decision) |
+
+### Contrasts of the light table
+
+The contrast test runs on both palettes and requires 4.5 to 1 for every text, 3 to 1 for the
+logo ring, the tile icon and the focus ring. Other non-text elements are not checked: the track
+of an off toggle reads at 1.37 to 1 in light and 1.75 in dark, its knob carries the state. With the values of the table, five text colors of the light theme
+stayed below 4.5 on some backgrounds; the author chose darker values, listed in
+`docs/appearance.md`. The color logo of the bar takes the icon green `#2E7D4F` for its ring in
+the light theme (`logo_ring`): the fill green reads at 1.4 to 1 on the light bar.
+
+Two light colors fail on a selected row: the green and the amber of texts (4.06 and 3.90 on a
+card). No component lays them there, since badges move to the darkest background on a selected
+row; a test keeps the gap visible.
+
+The cream bubbles of Sherlock read at 1.01 to 1 on the light desktop: no bubble component
+exists yet, to settle in D-05b or the lot of the bubble (a border or a shadow, for the author).
+
 ## What the lot does not do
 
 - Animated components: the springs and the fade are in `motion` since D-11, to be wired to the

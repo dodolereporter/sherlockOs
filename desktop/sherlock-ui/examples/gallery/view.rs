@@ -3,8 +3,10 @@
 //!
 //! Every component appears in its five states, on the desktop then on glass, with the
 //! « Fenêtre » menu of the Menus design board, cards of the « Réglages » design board and the
-//! logo. The texts are those of the design boards.
+//! logo. The texts are those of the design boards. It follows the theme of the appearance
+//! file live, and two chips switch it.
 
+use iced::futures::{Stream, StreamExt};
 use iced::widget::{Column, button, column, container, row, scrollable, space, svg};
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 
@@ -46,6 +48,7 @@ pub enum Message {
     Search(String),
     Submenu,
     Focus(Direction),
+    Theme(color::Theme),
 }
 
 /// The five states shown for each component.
@@ -82,14 +85,18 @@ impl Gallery {
             Message::Search(value) => self.search = value,
             Message::Submenu => self.submenu = !self.submenu,
             Message::Focus(direction) => return focus::advance(direction),
+            Message::Theme(theme) => color::set_active(theme),
         }
         Task::none()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen()
-            .filter_map(focus::tab)
-            .map(Message::Focus)
+        Subscription::batch([
+            keyboard::listen()
+                .filter_map(focus::tab)
+                .map(Message::Focus),
+            Subscription::run(appearance),
+        ])
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -97,6 +104,11 @@ impl Gallery {
             ui::title("Galerie de sherlock-ui"),
             ui::description("Tab et Maj+Tab déplacent le focus. Entrée ou Espace active."),
             ui::body(format!("Dernière action : {}", self.last)),
+            row![
+                theme_chip("Sombre", color::Theme::Dark),
+                theme_chip("Clair", color::Theme::Light),
+            ]
+            .spacing(metrics::GAP_TIGHT),
         ]
         .spacing(metrics::GAP_TIGHT);
         let page = column![
@@ -228,6 +240,24 @@ impl Gallery {
             .width(Length::Fill)
             .into()
     }
+}
+
+/// The theme of the appearance file, each time it changes.
+fn appearance() -> impl Stream<Item = Message> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    if let Some(path) = appearance_config::path() {
+        let _ = appearance_config::follow(path, move |event| match event {
+            appearance_config::Event::Theme(theme) => sender.unbounded_send(theme).is_ok(),
+            _ => true,
+        });
+    }
+    receiver.map(Message::Theme)
+}
+
+/// Chip that switches the gallery to `theme`.
+fn theme_chip<'a>(label: &'a str, theme: color::Theme) -> Element<'a, Message> {
+    let active = color::active() == theme;
+    ui::chip(label, active, Some(Message::Theme(theme))).into()
 }
 
 /// Builds the cell of a component in a given state.
@@ -382,11 +412,11 @@ fn logos<'a>() -> Element<'a, Message> {
         let squares = layout::LOGO_SIZES.map(|size| logo.square(size));
         let bare = [logo.bare(); 4];
         let behind = if logo == Logo::Night {
-            color::CREAM
+            color::palette().cream
         } else {
-            color::DESKTOP
+            color::palette().desktop
         };
-        row![tile(squares, color::CARD), tile(bare, behind)]
+        row![tile(squares, color::palette().card), tile(bare, behind)]
             .spacing(metrics::GAP_ROW)
             .into()
     });

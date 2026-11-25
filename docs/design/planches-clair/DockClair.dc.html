@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Dock, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 760px; height: 150px; box-sizing: border-box; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 8px; background: {{fond}}; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 12px">
+<nav aria-label="Dock" onMouseMove="{{ bouge }}" onMouseLeave="{{ sort }}" style="position: relative; display: flex; align-items: flex-end; gap: 8px; height: 76px; box-sizing: border-box; padding: 0 12px 12px; border-radius: 22px; background: rgba(255,255,255,0.62); backdrop-filter: blur(30px) saturate(170%); border: 1px solid rgba(20,35,59,0.16); box-shadow: 0 18px 44px rgba(20,35,59,0.182)">
+<span aria-hidden="true" style="position: absolute; left: {{etiquetteGauche}}; bottom: 108px; transform: translateX(-50%); padding: 3px 10px; border-radius: 8px; background: #F4EBE3; color: #14233B; font-weight: 600; white-space: nowrap; opacity: {{etiquetteOpacite}}; transition: opacity 120ms ease-out, left 90ms ease-out; pointer-events: none">{{etiquette}}</span>
+
+<button aria-label="Fichiers" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t0}}px; height: {{t0}}px; padding: 0; border: 0; border-radius: 27%; background: #2B5F86; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #F4EBE3; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 9.7v7.8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"></path></svg></button>
+
+<button aria-label="Terminal, ouvert" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t1}}px; height: {{t1}}px; padding: 0; border: 0; border-radius: 27%; background: #F6F8FB; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.16); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #2E7D4F; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M7 9l3.5 3L7 15M12.5 15.5H17"></path></svg><span aria-hidden="true" style="position: absolute; left: 50%; bottom: -9px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: #F4EBE3"></span></button>
+
+<button aria-label="Éditeur, ouvert" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t2}}px; height: {{t2}}px; padding: 0; border: 0; border-radius: 27%; background: #3E7FA8; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #F4EBE3; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"></path></svg><span aria-hidden="true" style="position: absolute; left: 50%; bottom: -9px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: #F4EBE3"></span></button>
+
+<button aria-label="Navigateur" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t3}}px; height: {{t3}}px; padding: 0; border: 0; border-radius: 27%; background: #1F4A6B; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #F4EBE3; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M12 3a9 9 0 1 0 0 18a9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.500 5.6 12 3z"></path></svg></button>
+
+<button aria-label="Sherlock, ouvert" style="position: relative; flex: none; display: flex; align-items: flex-end; justify-content: center; width: {{t4}}px; height: {{t4}}px; padding: 0; border: 0; border-radius: 27%; background: #F4EBE3; box-shadow: inset 0 -3px 0 rgba(20,35,59,0.10); cursor: pointer; overflow: hidden; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><img src="/_blob/5a8a7b7276da27a1a4cc419bd21d291a" alt="" style="width: 92%; height: 86%; object-fit: contain; object-position: center bottom"><span aria-hidden="true" style="position: absolute; left: 50%; bottom: -9px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: #F4EBE3"></span></button>
+
+<button aria-label="Labo" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t5}}px; height: {{t5}}px; padding: 0; border: 0; border-radius: 27%; background: #2F7A52; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #F4EBE3; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M9 3h6M10 3v6.2L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.2V3M7.5 14.5h9"></path></svg></button>
+
+<button aria-label="Conteneurs, ouvert" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t6}}px; height: {{t6}}px; padding: 0; border: 0; border-radius: 27%; background: #5BA3D0; box-shadow: inset 0 1px 0 rgba(255,255,255,0.30); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #0B1220; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M12 3l8 4.2v9.6L12 21l-8-4.2V7.2zM4 7.2l8 4.2 8-4.2M12 11.4V21"></path></svg><span aria-hidden="true" style="position: absolute; left: 50%; bottom: -9px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: #F4EBE3"></span></button>
+
+<button aria-label="Jeux" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t7}}px; height: {{t7}}px; padding: 0; border: 0; border-radius: 27%; background: #85C595; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 56%; height: 56%; fill: none; stroke: #0B1220; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M7.5 8h9a4.5 4.5 0 0 1 4.4 5.4l-.6 3a2.2 2.2 0 0 1-3.9.9L15 15.5H9l-1.4 1.800a2.2 2.2 0 0 1-3.9-.9l-.6-3A4.5 4.5 0 0 1 7.5 8zM8 10.500v3M6.5 12h3M15.5 11h.01M17.5 13h.01"></path></svg></button>
+
+<span aria-hidden="true" style="flex: none; align-self: center; width: 1px; height: 40px; margin: 0 2px; background: rgba(20,35,59,0.16)"></span>
+
+<button aria-label="Réglages" style="position: relative; flex: none; display: flex; align-items: center; justify-content: center; width: {{t8}}px; height: {{t8}}px; padding: 0; border: 0; border-radius: 27%; background: #3A4A63; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22); cursor: pointer; transition: width 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), height 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 54%; height: 54%; fill: none; stroke: #F4EBE3; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4"></path></svg></button>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"integre":{"editor":null,"default":null},"$preview":{"width":760,"height":150}}'>
+class Component extends DCLogic {
+renderVals() {
+const noms = ['Fichiers', 'Terminal', 'Éditeur', 'Navigateur', 'Sherlock', 'Labo', 'Conteneurs', 'Jeux', 'Réglages'];
+const st = this.state || {};
+const p = typeof st.p === 'number' ? st.p : null;
+const n = noms.length;
+const base = 52;
+const max = 1.7;
+const portee = 1.2;
+const vals = {};
+let proche = -1;
+let ecart = 99;
+for (let i = 0; i < n; i++) {
+let k = 1;
+if (p !== null) {
+const d = p * n - (i + 0.5);
+k = 1 + (max - 1) * Math.exp(-(d * d) / (2 * portee * portee));
+if (Math.abs(d) < ecart) { ecart = Math.abs(d); proche = i; }
+}
+vals['t' + i] = Math.round(base * k);
+}
+vals.etiquette = proche >= 0 ? noms[proche] : '';
+vals.etiquetteGauche = (proche >= 0 ? ((proche + 0.5) / n * 100).toFixed(1) : '50') + '%';
+vals.etiquetteOpacite = proche >= 0 ? 1 : 0;
+vals.fond = this.props.integre ? 'transparent' : '#E9EEF4';
+vals.bouge = (e) => {
+const r = e.currentTarget.getBoundingClientRect();
+if (r.width > 0) {
+const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+this.setState({ p: x });
+}
+};
+vals.sort = () => this.setState({ p: null });
+return vals;
+}
+}
+</script>
+</body>
+</html>
