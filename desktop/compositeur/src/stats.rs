@@ -92,6 +92,9 @@ impl FrameStats {
     pub fn record(&mut self, now: Duration, render: Duration, animating: bool) -> Option<Tally> {
         let interval = self.last.map(|last| now.saturating_sub(last));
         self.last = Some(now);
+        if let Some(interval) = interval.filter(|i| *i > frame_budget()) {
+            tracing::debug!(?now, ?interval, ?render, animating, "image en retard");
+        }
         self.all.add(interval, render);
         if animating {
             self.animated.add(interval, render);

@@ -108,9 +108,10 @@ fn render(
         .snap_preview()
         .map(|rect| Rectangle::new(rect.loc - area.loc, rect.size));
     let preview = preview.frame(now, zone);
-    let started = Instant::now();
-    let animating = {
+    let (animating, render_time) = {
         let (renderer, mut framebuffer) = backend.bind()?;
+        // Compté après `bind`, qui peut attendre qu'un tampon de la fenêtre hôte se libère.
+        let started = Instant::now();
         let (elements, animating) = scene.elements(renderer, state, area, preview, now);
         // Âge 0 : l'image est redessinée en entier à chaque fois.
         let result = damage_tracker.render_output(
@@ -125,14 +126,14 @@ fn render(
         if state.frame_stats.is_some() {
             result.sync.wait()?;
         }
-        animating
+        (animating, started.elapsed())
     };
-    let render_time = started.elapsed();
     backend.submit(None)?;
     if let Some(stats) = state.frame_stats.as_mut()
         && let Some(period) = stats.record(state.start_time.elapsed(), render_time, animating)
     {
         tracing::info!(animation = animating, "mesure : {period}");
     }
+
     Ok(())
 }

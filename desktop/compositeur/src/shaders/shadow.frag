@@ -57,7 +57,12 @@ float rounded_box(vec2 p, vec2 half_size, float r) {
 
 void main() {
     vec2 p = v_coords * size;
-    float value = shadow(p - caster.xy - caster.zw * 0.5, caster.zw * 0.5);
     float d = rounded_box(p - window.xy - window.zw * 0.5, window.zw * 0.5, radius);
+    // Sous la fenêtre, rien à calculer : la plus grande part de l'élément.
+    if (d < -1.0) {
+        gl_FragColor = vec4(0.0);
+        return;
+    }
+    float value = shadow(p - caster.xy - caster.zw * 0.5, caster.zw * 0.5);
     gl_FragColor = color * (value * clamp(0.5 + d, 0.0, 1.0) * alpha);
 }

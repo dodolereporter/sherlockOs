@@ -6,7 +6,8 @@
 //!
 //! `docs/contexte.md` demande des ressorts avec un léger dépassement et des survols de 110 à
 //! 150 ms. Les raideurs et les amortissements ci-dessous sont des choix du lot D-11 : un
-//! dépassement de 2 à 3 %, posé en moins de 300 ms. Voir `docs/sherlock-ui.md`.
+//! dépassement de 2 à 3 %, posé en moins de 300 ms. Voir « Animations » dans
+//! `docs/compositeur.md`.
 
 use std::time::Duration;
 

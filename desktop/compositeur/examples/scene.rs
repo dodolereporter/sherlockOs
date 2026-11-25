@@ -7,6 +7,9 @@
 //! cargo build -p compositeur --example scene
 //! cargo run -p compositeur -- --imbrique --mesurer target/debug/examples/scene
 //! ```
+//!
+//! `scene planche` n'ouvre qu'une fenêtre, de la taille de l'éditeur de la planche Main
+//! (836 × 652), et la garde 20 secondes : de quoi comparer les coins, la bordure et l'ombre.
 
 use std::{
     error::Error,
@@ -39,6 +42,9 @@ use wayland_protocols::xdg::shell::client::{
 const WINDOWS: usize = 10;
 const TOGGLES: u32 = 12;
 const TOGGLE_EVERY: Duration = Duration::from_millis(700);
+/// Fenêtre de l'éditeur de code de la planche Main, et durée pendant laquelle elle reste.
+const PLATE_WINDOW: (i32, i32) = (836, 652);
+const PLATE_HOLD: Duration = Duration::from_secs(20);
 /// Valeur de l'état `maximized` dans une configuration xdg_toplevel.
 const MAXIMIZED: u32 = 1;
 
@@ -212,15 +218,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {
         return Err("le compositeur n'annonce pas wl_compositor et xdg_wm_base".into());
     };
-    // Dix fenêtres de plus en plus petites, centrées l'une sur l'autre par le compositeur.
-    for index in 0..WINDOWS {
+    let plate = std::env::args().nth(1).as_deref() == Some("planche");
+    let count = if plate { 1 } else { WINDOWS };
+    // Des fenêtres de plus en plus petites, centrées l'une sur l'autre par le compositeur.
+    for index in 0..count {
         let step = index as i32;
         let surface = compositor.create_surface(&qh, ());
         let toplevel = wm_base
             .get_xdg_surface(&surface, &qh, index)
             .get_toplevel(&qh, index);
         surface.commit();
-        let default = (960 - 48 * step, 640 - 32 * step);
+        let default = if plate {
+            PLATE_WINDOW
+        } else {
+            (960 - 48 * step, 640 - 32 * step)
+        };
         app.windows.push(Win {
             surface,
             toplevel,
@@ -238,7 +250,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(err) = app.error.take() {
             return Err(err.into());
         }
-        if start.elapsed() >= TOGGLE_EVERY * (toggles + 1) {
+        if plate {
+            toggles = if start.elapsed() < PLATE_HOLD {
+                0
+            } else {
+                TOGGLES + 1
+            };
+        } else if start.elapsed() >= TOGGLE_EVERY * (toggles + 1) {
             if let (true, Some(top)) = (toggles < TOGGLES, app.windows.last()) {
                 if top.maximized {
                     top.toplevel.unset_maximized();
