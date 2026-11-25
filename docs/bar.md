@@ -284,7 +284,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 
 ## Tests
 
-`just verifier` runs everything, without a screen:
+`just verify` runs everything, without a screen:
 
 - **Clock**: parsing of `date`'s output, date and time of the board (« mar. 24 nov. »,
   « 21:46 »), leading zeros, rejected outputs; formats of `sherlock_ui::strings`.
@@ -310,7 +310,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   vanish on cream), and a light veil while the menu is open (a green ring would merge with the
   green logo). The menu avatar is the logo in its square instead of the mascot on cream (see
   Logo).
-- **Application menus** (Fichier, Édition…): the board shows them after the application name.
+- **Application menus** (« Fichier », « Édition »…): the board shows them after the application name.
   They will come with the global menu of our applications, outside this batch.
 - **Containers and sandboxes**: the board shows them on the right. They will come with the L
   batches.
@@ -320,7 +320,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
   yet, so they are not shown.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
-- **Éteindre**: the board announces a submenu that it does not draw. The chevron is there; the
+- **« Éteindre »**: the board announces a submenu that it does not draw. The chevron is there; the
   entry is logged like the others.
 - **Blur and shadows**: the glass is only a translucent tint; blur is the compositor's job.
   The menu shadow (`0 22px 54px`) would overflow its surface: it is not drawn.
