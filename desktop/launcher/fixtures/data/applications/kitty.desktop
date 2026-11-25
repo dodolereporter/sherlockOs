@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kitty
+GenericName=Terminal emulator
+GenericName[fr]=Émulateur de terminal
+Keywords=shell;prompt;command;commandline;cmd;
+Exec=kitty
+Icon=kitty

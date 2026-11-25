@@ -36,12 +36,15 @@ pub const TILE_LETTER_SIZE: f32 = 14.0;
 /// the dock on the 900 high reference screen.
 pub const MAX_RESULTS: usize = 8;
 
-/// Height of the panel holding `sections` section labels and `rows` result rows.
+/// Height of the panel holding `sections` section labels and `rows` result rows: its border
+/// and padding, the search row and the line under it, the labels, the rows.
 pub fn panel_height(sections: usize, rows: usize) -> f32 {
     let label = crate::typography::SECTION_LABEL_SIZE * crate::typography::LINE_HEIGHT;
     let (top, _, bottom) = SECTION_PADDING;
-    2.0 * PADDING
+    let border = crate::metrics::BORDER_WIDTH;
+    2.0 * (border + PADDING)
         + SEARCH_HEIGHT
+        + border
         + sections as f32 * (top + label + bottom)
         + rows as f32 * ROW_HEIGHT
 }
@@ -233,9 +236,9 @@ mod tests {
 
     #[test]
     fn the_panel_grows_with_its_rows() {
-        assert_eq!(panel_height(0, 0), 68.0);
+        assert_eq!(panel_height(0, 0), 71.0);
         let one = panel_height(1, 1);
-        assert!((one - (68.0 + 14.0 + 11.0 * 1.4 + 46.0)).abs() < 1e-3);
+        assert!((one - (71.0 + 14.0 + 11.0 * 1.4 + 46.0)).abs() < 1e-3);
         assert!(panel_height(1, MAX_RESULTS) < metrics_room());
     }
 
