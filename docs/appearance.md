@@ -2,7 +2,7 @@
 
 `desktop/appearance-config` reads the appearance settings file and follows it live. Every
 program of the desktop uses it to pick its theme; the settings application (Control Room, D-26)
-will write the file. Decision: ADR 0018.
+will write the file. Decision: ADR 0019.
 
 ## The file
 
@@ -27,6 +27,29 @@ its default and a `Problem` for the caller to log. Two equal hours are refused: 
 their defaults. `AutoLightFrom` may come after `AutoDarkFrom`: the light span then holds
 midnight (light from 22:00 to 06:00, for instance).
 
+## Light values that replace the table
+
+The light palette follows `docs/design/THEME-CLAIR.md`, except for five text colors. With the
+values of the table, they stayed below 4.5 to 1 on some backgrounds of the light theme; on the
+author's decision (D-05a), these values replace those of the table. Each is the table color
+darkened toward the night blue `#14233B` just enough to reach 4.5 on its worst background.
+
+| Role | Table | Kept | Worst background, before then after |
+| --- | --- | --- | --- |
+| Tertiary text | `#5C6B82` | `#4F5E75` | Lightest desktop disc `#C8D8E9`: 3.73, then 4.53 |
+| Line numbers, ghost text | `#7A889D` | `#657388` | Code area `#F6F8FB`: 3.38, then 4.53 |
+| Green as text or icon | `#2E7D4F` | `#2C764D` | Success badge on the title bar: 4.15, then 4.54 |
+| Amber as text | `#9A6412` | `#936114` | Warning badge on the title bar: 4.26, then 4.52 |
+| Salmon as text | `#B23A2A` | `#92352D` | Destructive button hovered, on the lightest disc: 3.60, then 4.59 |
+
+The ring of the color logo in the top bar takes the icon green of the table, `#2E7D4F`, in the
+light theme (4.65 to 1 on the bar, against 1.41 for the fill green). The sherlock-ui test checks
+the table value of each row and these replacements (`OVERRIDES` in `color.rs`).
+
+The wallpaper follows the theme (author's decision): in the light theme, the default becomes
+the light version of « Premier indice ». D-04 holds the pictures and pairs each dark wallpaper
+with its light one; D-05c links the active theme to the wallpaper.
+
 ## API
 
 | Item | Role |
@@ -50,7 +73,7 @@ subscription whose stream receives the themes, and `color::set_active(theme)` in
 - The timer counts monotonic time: after a suspend that runs past a switch time, the theme
   changes at the next edit or the next switch. A change of time zone or of daylight saving time
   is seen at the next wake-up as well.
-- Fixed hours only: sunrise and sunset would need a position (ADR 0018).
+- Fixed hours only: sunrise and sunset would need a position (ADR 0019).
 - The crate does not write the file yet: Control Room will need it, with the unknown keys kept,
   as `dock-config` does.
 

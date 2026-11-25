@@ -359,6 +359,8 @@ pub struct Palette {
     pub selected_row: Color,
     pub active_entry: Color,
     pub focus_ring: Color,
+    /// Ring of the color logo in the top bar.
+    pub logo_ring: Color,
 }
 
 /// Tint and light border of the light theme: the night blue of the text on cream.
@@ -442,12 +444,14 @@ impl Palette {
         selected_row: SELECTED_ROW,
         active_entry: ACTIVE_ENTRY,
         focus_ring: FOCUS_RING,
+        logo_ring: ACCENT,
     };
 
     /// Values of `docs/design/THEME-CLAIR.md`. Its rules give the veils and the shadows: a
     /// white veil becomes night blue at the same opacity, capped at 0.16; a shadow keeps a
     /// third of its opacity (× 0.33). The fills of the green, amber, salmon, cream and blues,
-    /// the selection and the soft badges do not change, as in the light boards.
+    /// the selection and the soft badges do not change, as in the light boards. Five text
+    /// colors replace those of the table, on the author's decision (`docs/appearance.md`).
     pub const LIGHT: Self = Self {
         desktop: Color::rgb(0xE9, 0xEE, 0xF4),
         desktop_discs: [
@@ -500,14 +504,16 @@ impl Palette {
         menu_shadow: navy(0.6 * 0.33),
         text_primary: Color::rgb(0x14, 0x23, 0x3B),
         text_secondary: Color::rgb(0x46, 0x56, 0x6F),
-        text_tertiary: Color::rgb(0x5C, 0x6B, 0x82),
+        // This one and the four text colors below are darker than the table, to reach 4.5 to
+        // 1 everywhere: the author's decision, see `docs/appearance.md`.
+        text_tertiary: Color::rgb(0x4F, 0x5E, 0x75),
         text_code: Color::rgb(0x1E, 0x2B, 0x40),
         text_code_type: Color::rgb(0x7A, 0x4E, 0x12),
-        text_line_number: Color::rgb(0x7A, 0x88, 0x9D),
+        text_line_number: Color::rgb(0x65, 0x73, 0x88),
         text_on_accent: TEXT_ON_ACCENT,
         text_on_cream: TEXT_ON_CREAM,
         accent: ACCENT,
-        accent_text: Color::rgb(0x2E, 0x7D, 0x4F),
+        accent_text: Color::rgb(0x2C, 0x76, 0x4D),
         accent_hover: ACCENT_HOVER,
         accent_pressed: ACCENT_PRESSED,
         blue_dark: BLUE_DARK,
@@ -516,14 +522,16 @@ impl Palette {
         blue_light: Color::rgb(0x1F, 0x64, 0xA0),
         cream: CREAM,
         amber: AMBER,
-        amber_text: Color::rgb(0x9A, 0x64, 0x12),
+        amber_text: Color::rgb(0x93, 0x61, 0x14),
         salmon: SALMON,
-        salmon_text: Color::rgb(0xB2, 0x3A, 0x2A),
+        salmon_text: Color::rgb(0x92, 0x35, 0x2D),
         selected_row: SELECTED_ROW,
         active_entry: ACTIVE_ENTRY,
         // The light blue of the dark theme reads at 1.9 to 1 on white: the focus ring takes
         // the dark variant of the table, that of the keywords.
         focus_ring: Color::rgb(0x1F, 0x64, 0xA0),
+        // The green of the table for icons: the fill green reads at 1.4 to 1 on the light bar.
+        logo_ring: Color::rgb(0x2E, 0x7D, 0x4F),
     };
 }
 
@@ -594,6 +602,36 @@ mod tests {
         (c.r, c.g, c.b)
     }
 
+    /// Rows of the table whose light value the author replaced, to reach 4.5 to 1: the value
+    /// of the table, then the one kept.
+    const OVERRIDES: [(&str, Color, Color); 5] = [
+        (
+            "Texte tertiaire",
+            Color::rgb(0x5C, 0x6B, 0x82),
+            Color::rgb(0x4F, 0x5E, 0x75),
+        ),
+        (
+            "Numéros de ligne, texte fantôme",
+            Color::rgb(0x7A, 0x88, 0x9D),
+            Color::rgb(0x65, 0x73, 0x88),
+        ),
+        (
+            "Vert, quand il colore du texte ou une icône",
+            Color::rgb(0x2E, 0x7D, 0x4F),
+            Color::rgb(0x2C, 0x76, 0x4D),
+        ),
+        (
+            "Ambre, quand il colore du texte",
+            Color::rgb(0x9A, 0x64, 0x12),
+            Color::rgb(0x93, 0x61, 0x14),
+        ),
+        (
+            "Saumon, quand il colore du texte",
+            Color::rgb(0xB2, 0x3A, 0x2A),
+            Color::rgb(0x92, 0x35, 0x2D),
+        ),
+    ];
+
     #[test]
     fn every_token_has_the_value_of_the_light_theme_table() {
         let (d, l) = (&Palette::DARK, &Palette::LIGHT);
@@ -663,7 +701,16 @@ mod tests {
             ),
         ];
         for (role, dark, light) in exact {
-            assert_eq!(row(role), (dark.to_vec(), light.to_vec()), "{role}");
+            let (table_dark, mut table_light) = row(role);
+            if let Some((_, from, to)) = OVERRIDES.iter().find(|(r, ..)| *r == role) {
+                assert_eq!(table_light, [*from], "{role}: the table changed");
+                table_light = vec![*to];
+            }
+            assert_eq!(
+                (table_dark, table_light),
+                (dark.to_vec(), light.to_vec()),
+                "{role}"
+            );
         }
         // Rows given as a rule: same tint, the opacity follows the dark one.
         let (dark, light) = row("Verre des panneaux");

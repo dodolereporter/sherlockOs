@@ -1,4 +1,4 @@
-# ADR 0018: Light theme, automatic mode and live switching
+# ADR 0019: Light theme, automatic mode and live switching
 
 - Status: proposed
 - Date: 2026-11-25

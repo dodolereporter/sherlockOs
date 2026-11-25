@@ -603,33 +603,12 @@ mod tests {
         }
     }
 
-    /// Colors of the light theme table that stay below the threshold somewhere (4.5 to 1, 3
-    /// to 1 for the logo ring), each held just under its lowest contrast until the author
-    /// decides (`docs/sherlock-ui.md`, « Light theme »). The dark theme has none.
-    fn gaps(which: color::Theme) -> Vec<(Color, f32)> {
-        let p = &Palette::LIGHT;
-        match which {
-            color::Theme::Dark => Vec::new(),
-            color::Theme::Light => vec![
-                (p.text_tertiary, 3.72),
-                (p.text_line_number, 3.38),
-                (p.salmon_text, 3.59),
-                (p.amber_text, 4.25),
-                (p.accent_text, 4.15),
-                (p.accent, 1.40),
-            ],
-        }
-    }
-
     #[test]
     fn every_text_contrasts_at_least_4_5_on_its_background() {
         let mut failures = Vec::new();
         for which in color::Theme::ALL {
-            for (what, text, ratio) in contrasts(which) {
-                let gap = gaps(which).into_iter().find(|(c, _)| *c == text);
-                if gap.is_none_or(|(_, floor)| ratio < floor) {
-                    failures.push(format!("{which:?}: {what}: {ratio:.2}"));
-                }
+            for (what, _, ratio) in contrasts(which) {
+                failures.push(format!("{which:?}: {what}: {ratio:.2}"));
             }
         }
         assert!(
@@ -637,22 +616,6 @@ mod tests {
             "insufficient contrast:\n{}",
             failures.join("\n")
         );
-    }
-
-    #[test]
-    fn the_gaps_of_the_light_theme_are_the_measured_floors() {
-        let found = contrasts(color::Theme::Light);
-        for (text, floor) in gaps(color::Theme::Light) {
-            let lowest = found
-                .iter()
-                .filter(|(_, c, _)| *c == text)
-                .map(|(_, _, ratio)| *ratio)
-                .fold(f32::MAX, f32::min);
-            assert!(
-                (0.0..0.01).contains(&(lowest - floor)),
-                "{text:?}: {lowest:.3}"
-            );
-        }
     }
 
     /// Every text of `which` below 4.5 to 1 on a background it can sit on, and every
@@ -814,10 +777,10 @@ mod tests {
                 for status in STATUSES {
                     let s = sherlock_button(open)(&theme, status);
                     let below = fill(&s).map_or(on.1, |f| f.over(on.1));
-                    let ratio = p.accent.contrast(below);
+                    let ratio = p.logo_ring.contrast(below);
                     if ratio < 3.0 {
                         let what = format!("logo ring ({open}, {status:?}) on {}", on.0);
-                        failures.push((what, p.accent, ratio));
+                        failures.push((what, p.logo_ring, ratio));
                     }
                 }
             }
