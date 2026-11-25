@@ -30,6 +30,10 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 [dev-dependencies]
 # Rendu sans écran pour la capture et les tests de la souris, comme la galerie de D-01.
 iced_test = "=0.14.0"
+# Exécution des tâches de l'application dans les scénarios de test, sans fenêtre. Déjà tirés
+# par iced : seules les déclarations sont nouvelles.
+iced_runtime = "=0.14.0"
+futures = "=0.3.34"
 
 [lints]
 workspace = true

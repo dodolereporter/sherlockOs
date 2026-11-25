@@ -15,4 +15,6 @@ pub mod trash;
 mod view;
 
 #[cfg(test)]
+mod scenarios;
+#[cfg(test)]
 mod testing;

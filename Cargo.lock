@@ -663,7 +663,9 @@ dependencies = [
 name = "fichiers"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "iced",
+ "iced_runtime",
  "iced_test",
  "image",
  "libc",
