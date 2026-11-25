@@ -520,7 +520,7 @@ impl App {
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
             .style(theme::list_row(painted));
-        let line = hoverable(line, color::HOVER, metrics::LIST_ROW_RADIUS);
+        let line = hoverable(line, color::HOVER, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))
             .on_double_click(Message::DoubleClick(i))

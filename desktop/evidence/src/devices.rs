@@ -37,6 +37,32 @@ const BLOCK: &str = "org.freedesktop.UDisks2.Block";
 const FILESYSTEM: &str = "org.freedesktop.UDisks2.Filesystem";
 const DRIVE: &str = "org.freedesktop.UDisks2.Drive";
 const ENCRYPTED: &str = "org.freedesktop.UDisks2.Encrypted";
+const PARTITION: &str = "org.freedesktop.UDisks2.Partition";
+
+/// Partition types that never hold the user's data, GPT GUIDs and MBR codes: EFI system,
+/// extended boot (XBOOTLDR), BIOS boot, Microsoft reserved, Windows recovery, Linux swap.
+const SYSTEM_PARTITION_TYPES: [&str; 10] = [
+    "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",
+    "bc13c2ff-59e6-4262-a352-b275fd6f7172",
+    "21686148-6449-6e6f-744e-656564454649",
+    "e3c9e316-0b5c-4db8-817d-f92df00215ae",
+    "de94bba4-06d1-4d40-a16a-bfd50179d6ac",
+    "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f",
+    "0xef",
+    "0x27",
+    "0x82",
+    "0xea",
+];
+
+/// A filesystem that can hold the user's files, on a partition that is not one of the
+/// system's own.
+fn is_data_partition(block: &Properties, partition: Option<&Properties>) -> bool {
+    let mountable = string(block, "IdUsage") == "filesystem" && string(block, "IdType") != "swap";
+    let kind = partition
+        .map(|p| string(p, "Type").to_lowercase())
+        .unwrap_or_default();
+    mountable && !SYSTEM_PARTITION_TYPES.contains(&kind.as_str())
+}
 /// The empty object path, which UDisks uses for "none".
 const NO_OBJECT: &str = "/";
 
@@ -202,7 +228,14 @@ pub fn volumes(objects: &Objects, free: &dyn Fn(&std::path::Path) -> Option<u64>
             .and_then(|points| points.into_iter().next());
         match &mount_point {
             Some(point) if is_system_mount(point) => continue,
-            None if boolean(block, "HintSystem") && !locked => continue,
+            // An unmounted volume of an internal disk shows only if it holds data: not the
+            // EFI or boot partition, not a recovery or reserved one, not swap.
+            None if boolean(block, "HintSystem")
+                && !locked
+                && !is_data_partition(block, ifaces.get(PARTITION)) =>
+            {
+                continue;
+            }
             _ => {}
         }
         // An unlocked container's cleartext block lives on the container's drive.
@@ -441,11 +474,18 @@ pub mod tests {
     #[test]
     fn system_partitions_stay_hidden_and_removable_media_show() {
         let names: Vec<_> = recorded().into_iter().map(|v| v.name).collect();
-        // EFI (HintIgnore), root, swap, zram and the snap loop device are hidden. The internal
-        // data partition shows because the user mounted it under /media.
+        // EFI (HintIgnore), root, swap, zram and the snap loop device are hidden, and so are an
+        // unmounted recovery partition and an unmounted EFI partition. The internal data
+        // partitions show: one mounted under /media, one (Windows) not mounted at all.
         assert_eq!(
             names,
-            ["Données", "CLE_USB", "SL32G de 32 Go", "Volume de 64 Go"]
+            [
+                "Données",
+                "Windows",
+                "CLE_USB",
+                "SL32G de 32 Go",
+                "Volume de 64 Go"
+            ]
         );
     }
 

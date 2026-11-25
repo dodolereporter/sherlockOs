@@ -78,11 +78,7 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
         // A component without a background at rest (menu entry, icon button, secondary
         // button…) fades its hover veil in: the button no longer draws it, `Hoverable` lays it
         // underneath. A forced state (gallery) is still drawn as is.
-        let rest = style(&Theme::Dark, button::Status::Active).background;
-        let hover = match style(&Theme::Dark, button::Status::Hovered).background {
-            Some(iced::Background::Color(c)) if rest.is_none() && forced.is_none() => Some(c),
-            _ => None,
-        };
+        let hover = hover_fill(&style, forced.is_some(), on_press.is_some());
         let styled = button.style(move |theme, status| {
             let mut s = style(theme, forced.unwrap_or(status));
             if hover.is_some() && status == button::Status::Hovered {
@@ -108,6 +104,19 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
             .into(),
             None => focusable.into(),
         }
+    }
+}
+
+/// The veil a control fades in on hover: only for an enabled control without a background
+/// at rest, and not when the gallery forces its state.
+fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::Color> {
+    if forced || !enabled {
+        return None;
+    }
+    let rest = style(&Theme::Dark, button::Status::Active).background;
+    match style(&Theme::Dark, button::Status::Hovered).background {
+        Some(iced::Background::Color(c)) if rest.is_none() => Some(c),
+        _ => None,
     }
 }
 
@@ -715,4 +724,25 @@ pub fn code_block<'a, Message: 'a>(lines: &'a [Vec<(String, CodeRole)>]) -> Cont
         .padding([vertical, horizontal])
         .width(Length::Fill)
         .style(theme::code_block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_enabled_ghost_controls_fade_their_hover() {
+        let ghost: StyleFn<'_> = Box::new(theme::menu_item);
+        let filled: StyleFn<'_> = Box::new(theme::primary);
+        assert!(hover_fill(&ghost, false, true).is_some());
+        assert!(hover_fill(&ghost, false, false).is_none(), "disabled");
+        assert!(
+            hover_fill(&ghost, true, true).is_none(),
+            "forced by the gallery"
+        );
+        assert!(
+            hover_fill(&filled, false, true).is_none(),
+            "background at rest"
+        );
+    }
 }

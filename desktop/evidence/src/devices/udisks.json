@@ -928,6 +928,246 @@
       "data": false
      }
     }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p5": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       53,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 200000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ntfs"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "Windows"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
+     },
+     "Size": {
+      "type": "t",
+      "data": 200000000000
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p6": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       54,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 800000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ntfs"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "Recovery"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
+     },
+     "Size": {
+      "type": "t",
+      "data": 800000000
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p7": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       55,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 300000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "vfat"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+     },
+     "Size": {
+      "type": "t",
+      "data": 300000000
+     }
+    }
    }
   }
  ]
