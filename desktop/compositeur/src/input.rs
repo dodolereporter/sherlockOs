@@ -310,9 +310,10 @@ impl State {
             if key_state == KeyState::Released {
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
-                return match state.intercepted_keys.len() < len {
-                    true => FilterResult::Intercept(None),
-                    false => FilterResult::Forward,
+                return if state.intercepted_keys.len() < len {
+                    FilterResult::Intercept(None)
+                } else {
+                    FilterResult::Forward
                 };
             }
             match Shortcut::for_key(sym.modified_sym()) {
