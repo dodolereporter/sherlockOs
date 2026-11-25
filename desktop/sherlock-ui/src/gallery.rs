@@ -53,6 +53,16 @@ const LOOKS: [(&str, Look); 5] = [
 ];
 
 impl Gallery {
+    /// Les interrupteurs allumés, comme sur la planche Réglages.
+    pub fn new() -> Self {
+        Self {
+            variable_rate: true,
+            quiet: true,
+            last: "aucune",
+            ..Self::default()
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Action(name) => self.last = name,
@@ -317,9 +327,9 @@ fn field<'a>(look: Look) -> Element<'a, Message> {
 /// Les trois versions du logo, avec et sans carré, à plusieurs tailles.
 fn logos<'a>() -> Element<'a, Message> {
     let versions = [
-        (logo::COLOR, color::DESKTOP),
+        (logo::COLOR, color::CARD),
         (logo::COLOR_BARE, color::DESKTOP),
-        (logo::CREAM, color::DESKTOP),
+        (logo::CREAM, color::CARD),
         (logo::CREAM_BARE, color::DESKTOP),
         (logo::NIGHT, color::CREAM),
         (logo::NIGHT_BARE, color::CREAM),

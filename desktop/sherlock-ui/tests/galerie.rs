@@ -26,7 +26,7 @@ fn settings() -> Settings {
 /// Elle se compare à l'œil aux planches : voir docs/sherlock-ui.md.
 #[test]
 fn la_galerie_se_rend_sans_ecran() {
-    let mut gallery = Gallery::default();
+    let mut gallery = Gallery::new();
     let _ = gallery.update(Message::Submenu);
     let (width, _) = metrics::REFERENCE_SCREEN;
     let mut ui = simulator::Simulator::with_size(settings(), (width, 1500.0), gallery.view());
