@@ -1,4 +1,4 @@
-//! Tests de la galerie sans écran : capture du rendu, souris, clavier.
+//! Headless tests of the gallery: render snapshot, mouse, keyboard.
 
 #[path = "../examples/gallery/view.rs"]
 mod view;
@@ -16,7 +16,7 @@ use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::{metrics, theme, typography};
 use view::{Gallery, Message};
 
-/// Hauteur qui montre toute la galerie d'un coup, logos compris.
+/// Height that shows the whole gallery at once, logos included.
 const FULL_HEIGHT: f32 = 2400.0;
 
 fn settings() -> Settings {
@@ -28,61 +28,60 @@ fn settings() -> Settings {
     }
 }
 
-/// Capture toute la galerie, sous-menu ouvert, dans `target/tmp/galerie-tiny-skia.png`, à
-/// l'échelle 2. Elle se compare à l'œil aux planches : voir docs/sherlock-ui.md.
+/// Captures the whole gallery, submenu open, into `target/tmp/gallery-tiny-skia.png`, at
+/// scale 2. It is compared by eye with the design boards: see docs/sherlock-ui.md.
 #[test]
-fn la_galerie_se_rend_sans_ecran() {
+fn the_gallery_renders_headless() {
     let mut gallery = Gallery::new();
     let _ = gallery.update(Message::Submenu);
-    // La galerie écoute Tab : l'abonnement se construit sans fenêtre.
+    // The gallery listens to Tab: the subscription builds without a window.
     let _ = gallery.subscription();
     let (width, _) = metrics::REFERENCE_SCREEN;
     let mut ui = simulator::Simulator::with_size(settings(), (width, FULL_HEIGHT), gallery.view());
-    let snapshot = ui.snapshot(&theme::theme()).expect("capture de la galerie");
+    let snapshot = ui
+        .snapshot(&theme::theme())
+        .expect("snapshot of the gallery");
 
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("galerie.png");
-    let written = path.with_file_name("galerie-tiny-skia.png");
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gallery.png");
+    let written = path.with_file_name("gallery-tiny-skia.png");
     let _ = std::fs::remove_file(&written);
-    assert!(
-        snapshot
-            .matches_image(&path)
-            .expect("écriture de la capture")
-    );
-    let size = std::fs::metadata(&written).expect("capture écrite").len();
+    assert!(snapshot.matches_image(&path).expect("writing the snapshot"));
+    let size = std::fs::metadata(&written).expect("snapshot written").len();
     assert!(
         size > 100_000,
-        "capture trop petite pour une galerie : {size} octets"
+        "snapshot too small for a gallery: {size} bytes"
     );
-    println!("capture : {}", written.display());
+    println!("snapshot: {}", written.display());
 }
 
 #[test]
-fn un_clic_declenche_l_action() {
+fn a_click_triggers_the_action() {
     let gallery = Gallery::new();
     let (width, _) = metrics::REFERENCE_SCREEN;
     let mut ui = simulator::Simulator::with_size(settings(), (width, FULL_HEIGHT), gallery.view());
     ui.click("Essayer une nouvelle version")
-        .expect("bouton trouvé");
+        .expect("button found");
     let messages: Vec<_> = ui.into_messages().collect();
     assert_eq!(messages, [Message::Action("nouvelle version")]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Msg {
-    Premier,
+    First,
     Second,
-    Interrupteur(bool),
+    Toggle(bool),
 }
 
 type Ui<'a> = UserInterface<'a, Msg, iced::Theme, iced::Renderer>;
 
-/// Trois composants actifs, un désactivé entre eux. `premier` dit si le premier est actif.
-fn view<'a>(premier: bool) -> Element<'a, Msg> {
+/// Three enabled components, a disabled one among them. `first` tells whether the first one
+/// is enabled.
+fn view<'a>(first: bool) -> Element<'a, Msg> {
     iced::widget::column![
-        ui::primary_button("Premier", premier.then_some(Msg::Premier)),
+        ui::primary_button("Premier", first.then_some(Msg::First)),
         ui::secondary_button("Ignoré", None),
         ui::menu_item("Second", Trailing::None, Some(Msg::Second)),
-        ui::toggle(false, Some(Msg::Interrupteur)),
+        ui::toggle(false, Some(Msg::Toggle)),
     ]
     .into()
 }
@@ -91,7 +90,7 @@ fn build<'a>(view: Element<'a, Msg>, cache: Cache, renderer: &mut iced::Renderer
     UserInterface::build(view, Size::new(400.0, 300.0), cache, renderer)
 }
 
-/// Fait passer le focus au composant suivant, comme le fait Tab dans un programme.
+/// Moves the focus to the next component, as Tab does in a program.
 fn focus_next(ui: &mut Ui<'_>, renderer: &iced::Renderer) {
     let mut current: Option<Box<dyn Operation>> =
         Some(Box::new(operation::focusable::focus_next()));
@@ -139,18 +138,18 @@ fn send(ui: &mut Ui<'_>, events: &[Event], renderer: &mut iced::Renderer, out: &
 }
 
 #[test]
-fn le_clavier_parcourt_et_active_les_composants() {
-    // Le moteur logiciel, seul compilé : il dessine sans écran.
+fn the_keyboard_walks_and_activates_the_components() {
+    // The software renderer, the only one compiled: it draws without a screen.
     let mut renderer = iced::Renderer::new(typography::UI, Pixels(typography::UI_SIZE));
     let mut ui = build(view(true), Cache::default(), &mut renderer);
     let mut messages = Vec::new();
     let enter = press(Named::Enter, false);
 
-    // Aucun focus : Entrée ne fait rien.
+    // No focus: Enter does nothing.
     send(&mut ui, &enter, &mut renderer, &mut messages);
     assert!(messages.is_empty());
 
-    // Entrée gardée enfoncée n'active qu'une fois.
+    // Enter held down activates only once.
     focus_next(&mut ui, &renderer);
     send(&mut ui, &enter, &mut renderer, &mut messages);
     send(
@@ -159,7 +158,7 @@ fn le_clavier_parcourt_et_active_les_composants() {
         &mut renderer,
         &mut messages,
     );
-    // Le bouton désactivé est sauté.
+    // The disabled button is skipped.
     focus_next(&mut ui, &renderer);
     send(&mut ui, &enter, &mut renderer, &mut messages);
     focus_next(&mut ui, &renderer);
@@ -169,26 +168,23 @@ fn le_clavier_parcourt_et_active_les_composants() {
         &mut renderer,
         &mut messages,
     );
-    assert_eq!(
-        messages,
-        [Msg::Premier, Msg::Second, Msg::Interrupteur(true)]
-    );
+    assert_eq!(messages, [Msg::First, Msg::Second, Msg::Toggle(true)]);
 }
 
 #[test]
-fn un_composant_desactive_perd_le_focus() {
+fn a_disabled_component_loses_the_focus() {
     let mut renderer = iced::Renderer::new(typography::UI, Pixels(typography::UI_SIZE));
     let mut messages = Vec::new();
     let enter = press(Named::Enter, false);
 
     let mut ui = build(view(true), Cache::default(), &mut renderer);
     focus_next(&mut ui, &renderer);
-    // Le premier bouton a le focus, puis devient désactivé, puis redevient actif.
+    // The first button has the focus, then becomes disabled, then enabled again.
     let ui = build(view(false), ui.into_cache(), &mut renderer);
     let mut ui = build(view(true), ui.into_cache(), &mut renderer);
     send(&mut ui, &enter, &mut renderer, &mut messages);
     assert!(
         messages.is_empty(),
-        "le focus aurait dû partir : {messages:?}"
+        "the focus should have gone: {messages:?}"
     );
 }

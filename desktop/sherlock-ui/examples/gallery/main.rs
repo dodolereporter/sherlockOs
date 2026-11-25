@@ -1,5 +1,5 @@
-//! Galerie des composants de sherlock-ui : `cargo run -p sherlock-ui --example galerie`.
-//! La procédure de comparaison aux planches est dans `docs/sherlock-ui.md`.
+//! Gallery of the sherlock-ui components: `cargo run -p sherlock-ui --example gallery`.
+//! The procedure to compare it with the design boards is in `docs/sherlock-ui.md`.
 
 mod view;
 

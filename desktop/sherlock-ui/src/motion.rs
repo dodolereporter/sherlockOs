@@ -1,17 +1,17 @@
-//! Ressorts et fondus : la physique des animations du desktop, en calcul pur.
+//! Springs and fades: the physics of the desktop animations, as pure computation.
 //!
-//! Le compositeur et le shell partagent ces fonctions et ces jetons, sans iced. Le temps est
-//! une `Duration` comptée depuis une origine que l'appelant choisit : une animation se calcule
-//! à n'importe quel instant, sans état qui avance image par image.
+//! The compositor and the shell share these functions and tokens, without iced. Time is a
+//! `Duration` counted from an origin the caller chooses: an animation is computed at any
+//! instant, with no state that advances frame by frame.
 //!
-//! `docs/contexte.md` demande des ressorts avec un léger dépassement et des survols de 110 à
-//! 150 ms. Les raideurs et les amortissements ci-dessous sont des choix du lot D-11 : un
-//! dépassement de 2 à 3 %, posé en moins de 300 ms. Voir « Mouvement » dans
-//! `docs/sherlock-ui.md`, et « Animations » dans `docs/compositeur.md` pour leur usage.
+//! `docs/contexte.md` asks for springs with a slight overshoot and hovers of 110 to 150 ms.
+//! The stiffnesses and dampings below are choices of lot D-11: an overshoot of 2 to 3 %,
+//! settled in less than 300 ms. See "Motion" in `docs/sherlock-ui.md`, and "Animations" in
+//! `docs/compositor.md` for their use.
 
 use std::time::Duration;
 
-/// Ressort amorti, de masse 1 : `x'' = -raideur × (x - cible) - amortissement × x'`.
+/// Damped spring, of mass 1: `x'' = -stiffness × (x - target) - damping × x'`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spring {
     pub stiffness: f64,
@@ -23,13 +23,13 @@ impl Spring {
         Self { stiffness, damping }
     }
 
-    /// Taux d'amortissement : sous 1, le ressort dépasse sa cible avant de s'y poser.
+    /// Damping ratio: below 1, the spring overshoots its target before settling on it.
     pub fn damping_ratio(self) -> f64 {
         self.damping / (2.0 * self.stiffness.sqrt())
     }
 
-    /// Écart à la cible et vitesse au bout de `t` secondes, en partant de l'écart `offset`
-    /// avec la vitesse `velocity`. Solution exacte de l'équation, sans pas de temps.
+    /// Offset from the target and velocity after `t` seconds, starting from the offset
+    /// `offset` with the velocity `velocity`. Exact solution of the equation, with no time step.
     pub fn solve(self, offset: f64, velocity: f64, t: f64) -> (f64, f64) {
         let omega = self.stiffness.sqrt();
         let zeta = self.damping_ratio();
@@ -58,7 +58,7 @@ impl Spring {
     }
 }
 
-/// Une valeur menée par un ressort vers sa cible.
+/// A value driven by a spring towards its target.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Animation {
     spring: Spring,
@@ -69,7 +69,7 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// Part de `from` au repos, à l'instant `start`, vers `to`.
+    /// Starts from `from` at rest, at the instant `start`, towards `to`.
     pub fn new(spring: Spring, from: f64, to: f64, start: Duration) -> Self {
         Self {
             spring,
@@ -86,17 +86,17 @@ impl Animation {
         (self.to + offset, speed)
     }
 
-    /// Valeur à l'instant `now`.
+    /// Value at the instant `now`.
     pub fn value(&self, now: Duration) -> f64 {
         self.solve(now).0
     }
 
-    /// Cible.
+    /// Target.
     pub fn target(&self) -> f64 {
         self.to
     }
 
-    /// Change de cible sans à-coup : la valeur et la vitesse de `now` sont gardées.
+    /// Changes target without a jolt: the value and the velocity at `now` are kept.
     pub fn retarget(&mut self, now: Duration, to: f64) {
         let (value, velocity) = self.solve(now);
         *self = Self {
@@ -108,16 +108,16 @@ impl Animation {
         };
     }
 
-    /// La valeur est à moins de `precision` de sa cible et n'en bouge presque plus : elle
-    /// parcourrait moins de `precision` en un dixième de seconde.
+    /// The value is within `precision` of its target and barely moves any more: it would
+    /// travel less than `precision` in a tenth of a second.
     pub fn is_done(&self, now: Duration, precision: f64) -> bool {
         let (value, speed) = self.solve(now);
         (value - self.to).abs() < precision && speed.abs() * 0.1 < precision
     }
 }
 
-/// Fondu d'une valeur, le plus souvent une opacité, sur une durée fixe, avec un départ vif et
-/// une arrivée douce (cubique).
+/// Fade of a value, most often an opacity, over a fixed duration, with a brisk start and a
+/// gentle arrival (cubic).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fade {
     from: f32,
@@ -136,7 +136,7 @@ impl Fade {
         }
     }
 
-    /// Avancement de 0 à 1.
+    /// Progress from 0 to 1.
     fn progress(&self, now: Duration) -> f32 {
         if self.duration.is_zero() {
             return 1.0;
@@ -145,12 +145,12 @@ impl Fade {
         1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
     }
 
-    /// Valeur à l'instant `now`.
+    /// Value at the instant `now`.
     pub fn value(&self, now: Duration) -> f32 {
         self.from + (self.to - self.from) * self.progress(now)
     }
 
-    /// Cible.
+    /// Target.
     pub fn target(&self) -> f32 {
         self.to
     }
@@ -159,9 +159,9 @@ impl Fade {
         now >= self.start + self.duration
     }
 
-    /// Repart de la valeur de `now` vers `to`. La durée est celle du trajet entier, réduite à
-    /// la part qui reste à parcourir : un fondu interrompu à mi-course revient en deux fois
-    /// moins de temps, et rien ne saute.
+    /// Restarts from the value at `now` towards `to`. The duration is that of the full run,
+    /// reduced to the share left to travel: a fade interrupted halfway comes back in half the
+    /// time, and nothing jumps.
     pub fn retarget(&mut self, now: Duration, to: f32, full: Duration) {
         let from = self.value(now);
         let span = (self.to - self.from).abs().max(f32::EPSILON);
@@ -170,27 +170,27 @@ impl Fade {
     }
 }
 
-// Jetons. Le taux d'amortissement de chaque ressort est noté : sous 1, il dépasse sa cible.
+// Tokens. The damping ratio of each spring is noted: below 1, it overshoots its target.
 
-/// Calage, agrandissement et retour d'une fenêtre (taux 0,75, dépassement de 3 %).
+/// Snap, maximize and restore of a window (ratio 0.75, overshoot of 3 %).
 pub const SNAP_SPRING: Spring = Spring::new(500.0, 33.5);
-/// Ouverture d'une fenêtre : son échelle (taux 0,80, dépassement de 2 %).
+/// Opening of a window: its scale (ratio 0.80, overshoot of 2 %).
 pub const OPEN_SPRING: Spring = Spring::new(450.0, 34.0);
-/// Aperçu du calage, plus vif que la fenêtre qu'il annonce (taux 0,79).
+/// Snap preview, brisker than the window it announces (ratio 0.79).
 pub const PREVIEW_SPRING: Spring = Spring::new(700.0, 42.0);
 
-/// Échelle d'une fenêtre au début de son ouverture.
+/// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
-/// Fondu d'ouverture d'une fenêtre, et d'apparition de l'aperçu du calage : la durée d'un
-/// survol, dans la gamme de 110 à 150 ms.
+/// Fade of a window opening, and of the snap preview appearing: the duration of a hover, in
+/// the 110 to 150 ms range.
 pub const FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
 
-/// Cadence que le desktop doit tenir, animations comprises (`docs/contexte.md`).
+/// Frame rate the desktop must hold, animations included (`docs/contexte.md`).
 pub const FRAME_RATE: u32 = 60;
 
-/// Précision sous laquelle une géométrie animée est posée, en pixels.
+/// Precision below which an animated geometry is settled, in pixels.
 pub const GEOMETRY_PRECISION: f64 = 0.5;
-/// Précision sous laquelle une échelle animée est posée.
+/// Precision below which an animated scale is settled.
 pub const SCALE_PRECISION: f64 = 0.001;
 
 #[cfg(test)]
@@ -203,14 +203,14 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    /// Valeurs d'un trajet de 0 à 1, toutes les millisecondes pendant `total` ms.
-    fn course(spring: Spring, total: u64) -> Vec<f64> {
+    /// Values of a run from 0 to 1, every millisecond for `total` ms.
+    fn trajectory(spring: Spring, total: u64) -> Vec<f64> {
         let animation = Animation::new(spring, 0.0, 1.0, Duration::ZERO);
         (0..=total).map(|t| animation.value(ms(t))).collect()
     }
 
     #[test]
-    fn chaque_ressort_converge_vers_sa_cible() {
+    fn every_spring_converges_to_its_target() {
         for spring in ALL {
             let animation = Animation::new(spring, 10.0, 250.0, ms(40));
             assert_eq!(animation.value(ms(40)), 10.0);
@@ -224,50 +224,50 @@ mod tests {
     }
 
     #[test]
-    fn le_depassement_est_leger_et_borne() {
+    fn the_overshoot_is_slight_and_bounded() {
         for spring in ALL {
-            let peak = course(spring, 2000).into_iter().fold(0.0, f64::max);
-            // Léger : visible, mais sous 4 %.
-            assert!(peak > 1.005 && peak < 1.04, "{spring:?} culmine à {peak}");
+            let peak = trajectory(spring, 2000).into_iter().fold(0.0, f64::max);
+            // Slight: visible, but under 4 %.
+            assert!(peak > 1.005 && peak < 1.04, "{spring:?} peaks at {peak}");
             assert!(spring.damping_ratio() > 0.7 && spring.damping_ratio() < 0.85);
         }
     }
 
     #[test]
-    fn les_ressorts_repondent_vite() {
+    fn springs_respond_quickly() {
         for spring in ALL {
-            let values = course(spring, 1000);
-            // 90 % du trajet en moins de 150 ms, posé à 1 % près en moins de 300 ms.
+            let values = trajectory(spring, 1000);
+            // 90 % of the run in less than 150 ms, settled within 1 % in less than 300 ms.
             let first_90 = values.iter().position(|v| *v >= 0.9).unwrap();
-            assert!(first_90 < 150, "{spring:?} : 90 % à {first_90} ms");
+            assert!(first_90 < 150, "{spring:?}: 90 % at {first_90} ms");
             let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
-            assert!(settled < 300, "{spring:?} : posé à {settled} ms");
+            assert!(settled < 300, "{spring:?}: settled at {settled} ms");
         }
     }
 
     #[test]
-    fn un_changement_de_cible_garde_la_valeur_et_la_vitesse() {
+    fn a_retarget_keeps_the_value_and_the_velocity() {
         let mut animation = Animation::new(SNAP_SPRING, 0.0, 100.0, Duration::ZERO);
         let before = (animation.value(ms(50)), animation.value(ms(51)));
         animation.retarget(ms(50), -40.0);
         assert!((animation.value(ms(50)) - before.0).abs() < 1e-9);
-        // La vitesse est continue : la première milliseconde va encore dans le même sens.
+        // The velocity is continuous: the first millisecond still goes the same way.
         assert!(animation.value(ms(51)) - before.0 > 0.0);
         assert!((animation.value(ms(51)) - before.1).abs() < 0.1);
         assert!((animation.value(ms(3000)) + 40.0).abs() < 1e-6);
     }
 
     #[test]
-    fn les_ressorts_amortis_ou_critiques_ne_depassent_pas() {
+    fn overdamped_or_critical_springs_do_not_overshoot() {
         for spring in [Spring::new(400.0, 40.0), Spring::new(400.0, 80.0)] {
-            let values = course(spring, 3000);
+            let values = trajectory(spring, 3000);
             assert!(values.iter().all(|v| *v <= 1.0 + 1e-9), "{spring:?}");
             assert!((values[3000] - 1.0).abs() < 1e-3, "{spring:?}");
         }
     }
 
     #[test]
-    fn le_fondu_dure_un_survol_et_ne_saute_pas() {
+    fn the_fade_lasts_a_hover_and_does_not_jump() {
         let (low, high) = crate::metrics::HOVER_MS;
         assert!(FADE >= ms(low) && FADE <= ms(high));
         let mut fade = Fade::new(0.0, 1.0, ms(10), FADE);
@@ -275,7 +275,7 @@ mod tests {
         assert!(fade.value(ms(80)) > 0.5 && fade.value(ms(80)) < 1.0);
         assert_eq!(fade.value(ms(10) + FADE), 1.0);
         assert!(fade.is_done(ms(10) + FADE));
-        // Interrompu, il repart de sa valeur et revient en moins de temps.
+        // Interrupted, it restarts from its value and comes back in less time.
         let midway = fade.value(ms(40));
         fade.retarget(ms(40), 0.0, FADE);
         assert_eq!(fade.value(ms(40)), midway);

@@ -1,4 +1,4 @@
-//! Thème iced construit sur les jetons, et styles de chaque composant selon son état.
+//! iced theme built on the tokens, and the style of each component by its state.
 
 use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Shadow, Theme, border, theme};
@@ -6,7 +6,7 @@ use iced::{Background, Border, Shadow, Theme, border, theme};
 use crate::color::{self, Color};
 use crate::metrics;
 
-/// Le thème du desktop. Les widgets iced sans style propre en tirent leurs couleurs.
+/// The desktop theme. iced widgets without a style of their own take their colors from it.
 pub fn theme() -> Theme {
     Theme::custom(
         "Sherlock",
@@ -55,7 +55,7 @@ fn button_style(fill: Option<Color>, text: Color, edge: Border) -> button::Style
     }
 }
 
-/// Bouton principal : vert, texte sombre. Désactivé, il perd son vert et garde un contour.
+/// Primary button: green, dark text. Disabled, it loses its green and keeps an outline.
 pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
     let fill = match status {
         button::Status::Active => color::ACCENT,
@@ -70,7 +70,7 @@ pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
     )
 }
 
-/// Bouton secondaire : sans fond, bordure claire.
+/// Secondary button: no background, light border.
 pub fn secondary(_: &Theme, status: button::Status) -> button::Style {
     let (fill, text, edge) = match status {
         button::Status::Active => (None, color::TEXT_PRIMARY, color::SECONDARY_BORDER),
@@ -114,7 +114,7 @@ fn ghost(status: button::Status, rest: Color, radius: f32, hover: Color) -> butt
     button_style(fill, text, border::rounded(radius))
 }
 
-/// Bouton d'icône seule, sans fond au repos.
+/// Icon-only button, without background at rest.
 pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
     ghost(
         status,
@@ -136,7 +136,7 @@ pub fn toolbar_button(_: &Theme, status: button::Status) -> button::Style {
     button_style(fill, text, border::rounded(metrics::ICON_BUTTON_RADIUS))
 }
 
-/// Entrée de menu : la ligne survolée prend le bleu de sélection.
+/// Menu entry: the hovered row takes the selection blue.
 pub fn menu_item(_: &Theme, status: button::Status) -> button::Style {
     ghost(
         status,
@@ -146,7 +146,7 @@ pub fn menu_item(_: &Theme, status: button::Status) -> button::Style {
     )
 }
 
-/// Entrée de menu dont le sous-menu est ouvert.
+/// Menu entry whose submenu is open.
 pub fn menu_item_open(theme: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Disabled => menu_item(theme, status),
@@ -158,7 +158,7 @@ pub fn menu_item_open(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Piste de l'interrupteur, verte quand il est actif.
+/// Track of the toggle, green when it is on.
 pub fn toggle_track(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let fill = match (on, status) {
@@ -177,7 +177,7 @@ pub fn toggle_track(on: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
     }
 }
 
-/// Bouton rond de l'interrupteur : sombre sur le vert, clair sur la piste éteinte.
+/// Round knob of the toggle: dark on the green, light on the off track.
 pub fn toggle_knob(on: bool, enabled: bool) -> impl Fn(&Theme) -> container::Style {
     move |_| {
         let fill = match (on, enabled) {
@@ -193,7 +193,7 @@ pub fn toggle_knob(on: bool, enabled: bool) -> impl Fn(&Theme) -> container::Sty
     }
 }
 
-/// Champ de texte : fond voilé, anneau de focus quand il a le clavier.
+/// Text field: veiled background, focus ring when it has the keyboard.
 pub fn text_field(_: &Theme, status: text_input::Status) -> text_input::Style {
     let edge = match status {
         text_input::Status::Focused { .. } => outline(
@@ -208,8 +208,8 @@ pub fn text_field(_: &Theme, status: text_input::Status) -> text_input::Style {
         ),
         _ => border::rounded(metrics::FIELD_RADIUS),
     };
-    // Le gris tertiaire tombe à 4,25 sur le champ posé sur le disque le plus clair du bureau :
-    // l'indication et la valeur désactivée prennent le gris secondaire.
+    // The tertiary grey drops to 4.25 on the field laid over the lightest disc of the
+    // desktop: the placeholder and the disabled value take the secondary grey.
     let value = match status {
         text_input::Status::Disabled => color::TEXT_SECONDARY,
         _ => color::TEXT_PRIMARY,
@@ -234,7 +234,7 @@ fn surface(fill: Color, edge: Color, radius: f32, drop: Shadow) -> container::St
     }
 }
 
-/// Carte posée dans une fenêtre.
+/// Card laid in a window.
 pub fn card(_: &Theme) -> container::Style {
     surface(
         color::CARD,
@@ -244,7 +244,7 @@ pub fn card(_: &Theme) -> container::Style {
     )
 }
 
-/// Panneau de verre flottant. Le flou derrière lui est le travail du compositeur.
+/// Floating glass panel. The blur behind it is the compositor's job.
 /// Its shadow is drawn by `surface::Shadowed` (see `component::glass_panel`), never as an
 /// iced shadow: the software renderer paints those outside the redrawn area.
 pub fn glass(_: &Theme) -> container::Style {
@@ -256,7 +256,7 @@ pub fn glass(_: &Theme) -> container::Style {
     )
 }
 
-/// Menu et sous-menu.
+/// Menu and submenu.
 /// Its shadow is drawn by `surface::Shadowed` (see `component::menu`), never as an iced
 /// shadow: the software renderer paints those outside the redrawn area.
 pub fn menu(_: &Theme) -> container::Style {
@@ -268,7 +268,7 @@ pub fn menu(_: &Theme) -> container::Style {
     )
 }
 
-/// Bulle du libellé d'une icône seule : un menu en plus petit.
+/// Label bubble of an icon-only button: a smaller menu.
 pub fn tooltip(theme: &Theme) -> container::Style {
     container::Style {
         border: outline(
@@ -280,7 +280,7 @@ pub fn tooltip(theme: &Theme) -> container::Style {
     }
 }
 
-/// Séparateur entre deux groupes d'entrées d'un menu.
+/// Separator between two groups of entries of a menu.
 pub fn separator(_: &Theme) -> container::Style {
     container::Style {
         background: background(color::BORDER),
@@ -288,7 +288,7 @@ pub fn separator(_: &Theme) -> container::Style {
     }
 }
 
-/// Trait entre deux lignes d'une carte (planche Réglages).
+/// Line between two rows of a card (« Réglages » design board).
 pub fn divider(_: &Theme) -> container::Style {
     container::Style {
         background: background(color::DIVIDER),
@@ -338,7 +338,7 @@ pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
-/// Fond d'écran du bureau.
+/// Desktop wallpaper.
 pub fn desktop(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(color::TEXT_PRIMARY.into()),
@@ -538,13 +538,13 @@ pub fn scrim(_: &Theme) -> container::Style {
 mod tests {
     use super::*;
 
-    /// Les fonds sur lesquels un composant peut se poser : le bureau et ses disques, puis les
-    /// verres posés sur chacun d'eux, et les fonds opaques des fenêtres.
+    /// The backgrounds a component can sit on: the desktop and its discs, then the glasses
+    /// laid over each of them, and the opaque backgrounds of windows.
     fn surfaces() -> Vec<(String, Color)> {
         surfaces_where(|_| true)
     }
 
-    /// Les menus seuls : une entrée de menu ne se pose que dans un menu.
+    /// Menus only: a menu entry only sits in a menu.
     fn menus() -> Vec<(String, Color)> {
         surfaces_where(|name| name.starts_with("menu"))
     }
@@ -553,18 +553,18 @@ mod tests {
         let desktops = std::iter::once(color::DESKTOP).chain(color::DESKTOP_DISCS);
         let mut all: Vec<(String, Color)> = Vec::new();
         for (i, d) in desktops.enumerate() {
-            all.push((format!("bureau {i}"), d));
-            all.push((format!("verre sur bureau {i}"), color::GLASS.over(d)));
-            all.push((format!("menu sur bureau {i}"), color::MENU_GLASS.over(d)));
+            all.push((format!("desktop {i}"), d));
+            all.push((format!("glass on desktop {i}"), color::GLASS.over(d)));
+            all.push((format!("menu on desktop {i}"), color::MENU_GLASS.over(d)));
         }
         for (name, c) in [
-            ("fenêtre", color::WINDOW),
-            ("barre de titre", color::TITLE_BAR),
-            ("panneau latéral", color::SIDEBAR),
-            ("carte", color::CARD),
-            ("écran système", color::SYSTEM_SCREEN),
-            ("zone de code", color::DEEPEST),
-            ("bloc du terminal", color::TERMINAL_BLOCK),
+            ("window", color::WINDOW),
+            ("title bar", color::TITLE_BAR),
+            ("sidebar", color::SIDEBAR),
+            ("card", color::CARD),
+            ("system screen", color::SYSTEM_SCREEN),
+            ("code area", color::DEEPEST),
+            ("terminal block", color::TERMINAL_BLOCK),
         ] {
             all.push((name.to_owned(), c));
         }
@@ -589,7 +589,7 @@ mod tests {
         let below = fill.map_or(on.1, |f| f.over(on.1));
         let ratio = text.contrast(below);
         if ratio < 4.5 {
-            failures.push(format!("{what} sur {} : {ratio:.2}", on.0));
+            failures.push(format!("{what} on {}: {ratio:.2}", on.0));
         }
     }
 
@@ -601,20 +601,20 @@ mod tests {
     }
 
     #[test]
-    fn chaque_texte_contraste_d_au_moins_4_5_sur_son_fond() {
+    fn every_text_contrasts_at_least_4_5_on_its_background() {
         let theme = theme();
         let mut failures = Vec::new();
         type Style = fn(&Theme, button::Status) -> button::Style;
         let buttons: [(&str, Style); 4] = [
-            ("bouton principal", primary),
-            ("bouton secondaire", secondary),
-            ("bouton destructif", danger),
-            ("bouton d'icône", icon_button),
+            ("primary button", primary),
+            ("secondary button", secondary),
+            ("destructive button", danger),
+            ("icon button", icon_button),
         ];
         let entries: [(&str, Style); 3] = [
-            ("entrée de menu", menu_item),
-            ("entrée de menu ouverte", menu_item_open),
-            ("entrée de menu destructive", menu_item_danger),
+            ("menu entry", menu_item),
+            ("open menu entry", menu_item_open),
+            ("destructive menu entry", menu_item_danger),
         ];
         for on in menus() {
             for (name, style) in entries {
@@ -622,8 +622,8 @@ mod tests {
                     let s = style(&theme, status);
                     let what = format!("{name} ({status:?})");
                     check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
-                    // Raccourci, en texte tertiaire sur la même ligne.
-                    let what = format!("raccourci de {what}");
+                    // Shortcut, in tertiary text on the same row.
+                    let what = format!("shortcut of {what}");
                     check(&mut failures, &what, color::TEXT_TERTIARY, fill(&s), &on);
                 }
             }
@@ -644,73 +644,71 @@ mod tests {
             ] {
                 let s = text_field(&theme, status);
                 let Background::Color(field) = s.background else {
-                    panic!("champ sans couleur de fond");
+                    panic!("field without a background color");
                 };
-                for (part, text) in [("valeur", s.value), ("indication", s.placeholder)] {
-                    let what = format!("{part} du champ ({status:?})");
+                for (part, text) in [("value", s.value), ("placeholder", s.placeholder)] {
+                    let what = format!("field {part} ({status:?})");
                     check(&mut failures, &what, text.into(), Some(field.into()), &on);
                 }
             }
-            // Textes posés directement sur la surface : contenu, description, étiquette.
+            // Texts laid straight on the surface: content, description, label.
             for (name, text) in [
-                ("texte principal", color::TEXT_PRIMARY),
-                ("texte secondaire", color::TEXT_SECONDARY),
-                ("étiquette de section", color::TEXT_TERTIARY),
+                ("primary text", color::TEXT_PRIMARY),
+                ("secondary text", color::TEXT_SECONDARY),
+                ("section label", color::TEXT_TERTIARY),
             ] {
                 check(&mut failures, name, text, None, &on);
             }
         }
-        // Code : numéros de ligne, mots-clés et messages, sur les fonds de code et l'éditeur.
-        for on in surfaces_where(|n| ["zone de code", "bloc du terminal", "fenêtre"].contains(&n))
-        {
+        // Code: line numbers, keywords and messages, on the code backgrounds and the editor.
+        for on in surfaces_where(|n| ["code area", "terminal block", "window"].contains(&n)) {
             for (name, text) in [
-                ("numéro de ligne", color::TEXT_LINE_NUMBER),
-                ("mot-clé bleu", color::BLUE_BRIGHT),
-                ("mot-clé bleu clair", color::BLUE_LIGHT),
-                ("réussite", color::ACCENT),
-                ("avertissement", color::AMBER),
-                ("erreur", color::SALMON),
+                ("line number", color::TEXT_LINE_NUMBER),
+                ("blue keyword", color::BLUE_BRIGHT),
+                ("light blue keyword", color::BLUE_LIGHT),
+                ("success", color::ACCENT),
+                ("warning", color::AMBER),
+                ("error", color::SALMON),
             ] {
                 check(&mut failures, name, text, None, &on);
             }
         }
-        // Listes : ligne sélectionnée dans une fenêtre, un panneau latéral ou une carte, et
-        // entrée active d'une navigation sur le panneau latéral.
-        for on in surfaces_where(|n| ["fenêtre", "panneau latéral", "carte"].contains(&n)) {
+        // Lists: selected row in a window, a sidebar or a card, and active entry of a
+        // navigation on the sidebar.
+        for on in surfaces_where(|n| ["window", "sidebar", "card"].contains(&n)) {
             for (name, text) in [
-                ("texte principal", color::TEXT_PRIMARY),
-                ("texte secondaire", color::TEXT_SECONDARY),
-                ("texte tertiaire", color::TEXT_TERTIARY),
+                ("primary text", color::TEXT_PRIMARY),
+                ("secondary text", color::TEXT_SECONDARY),
+                ("tertiary text", color::TEXT_TERTIARY),
             ] {
-                let what = format!("{name} sur ligne sélectionnée");
+                let what = format!("{name} on selected row");
                 check(&mut failures, &what, text, Some(color::SELECTED_ROW), &on);
             }
         }
-        for on in surfaces_where(|n| n == "panneau latéral") {
+        for on in surfaces_where(|n| n == "sidebar") {
             for (name, text) in [
-                ("texte principal", color::TEXT_PRIMARY),
-                ("texte secondaire", color::TEXT_SECONDARY),
+                ("primary text", color::TEXT_PRIMARY),
+                ("secondary text", color::TEXT_SECONDARY),
             ] {
-                let what = format!("{name} sur entrée active");
+                let what = format!("{name} on active entry");
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
             }
         }
         // Evidence mock-up: navigation, window buttons, breadcrumb, headers, status badges on
         // a selected row or not, code snippet.
-        for on in surfaces_where(|n| ["fenêtre", "barre de titre", "panneau latéral"].contains(&n))
-        {
+        for on in surfaces_where(|n| ["window", "title bar", "sidebar"].contains(&n)) {
             type Boxed = Box<dyn Fn(&Theme, button::Status) -> button::Style>;
             let styles: [(&str, Boxed); 7] = [
-                ("entrée de navigation", Box::new(nav_item(false))),
-                ("entrée de navigation active", Box::new(nav_item(true))),
-                ("bouton de fenêtre", Box::new(window_button)),
-                ("segment du fil d'Ariane", Box::new(crumb(false))),
-                ("dossier courant du fil d'Ariane", Box::new(crumb(true))),
-                ("en-tête de colonne", Box::new(column_header)),
-                ("bouton de barre d'outils", Box::new(toolbar_button)),
+                ("navigation entry", Box::new(nav_item(false))),
+                ("active navigation entry", Box::new(nav_item(true))),
+                ("window button", Box::new(window_button)),
+                ("breadcrumb segment", Box::new(crumb(false))),
+                ("current folder of the breadcrumb", Box::new(crumb(true))),
+                ("column header", Box::new(column_header)),
+                ("toolbar button", Box::new(toolbar_button)),
             ];
-            let inset = (format!("retrait sur {}", on.0), color::INSET.over(on.1));
-            let pill = (format!("pastille sur {}", on.0), color::CONTROLS.over(on.1));
+            let inset = (format!("inset on {}", on.0), color::INSET.over(on.1));
+            let pill = (format!("pill on {}", on.0), color::CONTROLS.over(on.1));
             for (name, style) in &styles {
                 for status in STATUSES {
                     let s = style(&theme, status);
@@ -721,30 +719,24 @@ mod tests {
                 }
             }
             let row = (
-                format!("ligne sélectionnée sur {}", on.0),
+                format!("selected row on {}", on.0),
                 color::SELECTED_ROW.over(on.1),
             );
             for tone in [Tone::Warning, Tone::Success, Tone::Neutral] {
                 for (selected, below) in [(false, &on), (true, &row)] {
                     let (text, fill) = tone.colors(selected);
-                    let what = format!("étiquette {tone:?}");
+                    let what = format!("badge {tone:?}");
                     check(&mut failures, &what, text, Some(fill), below);
                 }
             }
-            check(&mut failures, "branche git", color::ACCENT, None, &inset);
+            check(&mut failures, "git branch", color::ACCENT, None, &inset);
         }
-        let code = (String::from("extrait de code"), color::DEEPEST);
-        check(
-            &mut failures,
-            "texte du code",
-            color::TEXT_CODE,
-            None,
-            &code,
-        );
-        let tile = (String::from("vignette"), color::BLUE_BRIGHT);
+        let code = (String::from("code snippet"), color::DEEPEST);
+        check(&mut failures, "code text", color::TEXT_CODE, None, &code);
+        let tile = (String::from("tile"), color::BLUE_BRIGHT);
         let tile_icon = color::DEEPEST.contrast(tile.1);
         if tile_icon < 3.0 {
-            failures.push(format!("icône de la vignette : {tile_icon:.2}"));
+            failures.push(format!("tile icon: {tile_icon:.2}"));
         }
         // Top bar over the desktop and its discs: texts and workspace chips.
         let desktops = std::iter::once(color::DESKTOP).chain(color::DESKTOP_DISCS);
@@ -783,11 +775,11 @@ mod tests {
                 }
             }
         }
-        // Textes sur les fonds opaques qui leur sont réservés.
-        let cream = (String::from("crème"), color::CREAM);
+        // Texts on the opaque backgrounds reserved for them.
+        let cream = (String::from("cream"), color::CREAM);
         check(
             &mut failures,
-            "texte sur crème",
+            "text on cream",
             color::TEXT_ON_CREAM,
             None,
             &cream,
@@ -795,22 +787,22 @@ mod tests {
         let menu = (String::from("menu"), color::MENU_GLASS.over(color::DESKTOP));
         check(
             &mut failures,
-            "bulle d'icône",
+            "icon tooltip",
             color::TEXT_PRIMARY,
             None,
             &menu,
         );
         assert!(
             failures.is_empty(),
-            "contraste insuffisant :\n{}",
+            "insufficient contrast:\n{}",
             failures.join("\n")
         );
     }
 
     #[test]
-    fn la_selection_des_planches_ferait_echouer_les_raccourcis() {
-        // La planche Menus pose une entrée ouverte à 0,30 d'opacité. Avec un raccourci, le
-        // texte tertiaire tomberait sous 4,5 : le jeton garde les 0,26 de `contexte.md`.
+    fn the_design_board_selection_would_fail_the_shortcuts() {
+        // The Menus board lays an open entry at 0.30 opacity. With a shortcut, the tertiary
+        // text would drop below 4.5: the token keeps the 0.26 of `contexte.md`.
         let row =
             Color::rgba(91, 163, 208, 0.30).over(color::MENU_GLASS.over(color::DESKTOP_DISCS[2]));
         assert!(color::TEXT_TERTIARY.contrast(row) < 4.5);

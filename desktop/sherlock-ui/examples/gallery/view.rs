@@ -1,9 +1,9 @@
-//! Vue de la galerie, partagée par l'exemple et par ses tests. Elle vit hors de la
-//! bibliothèque : les programmes du shell ne compilent ni elle ni ses textes d'exemple.
+//! View of the gallery, shared by the example and by its tests. It lives outside the library:
+//! the shell programs compile neither it nor its sample texts.
 //!
-//! Chaque composant y paraît dans ses cinq états, sur le bureau puis sur le verre, avec le
-//! menu Fenêtre de la planche Menus, des cartes de la planche Réglages et le logo. Les textes
-//! sont ceux des planches.
+//! Every component appears in its five states, on the desktop then on glass, with the
+//! « Fenêtre » menu of the Menus design board, cards of the « Réglages » design board and the
+//! logo. The texts are those of the design boards.
 
 use iced::widget::{Column, button, column, container, row, scrollable, space, svg};
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
@@ -14,21 +14,21 @@ use sherlock_ui::icon::Icon;
 use sherlock_ui::logo::Logo;
 use sherlock_ui::{color, metrics, theme, typography};
 
-/// Mise en page propre à la galerie. Ces tailles ne viennent pas du design : elles rangent le
-/// tableau des états et les logos, et ne servent nulle part ailleurs.
+/// Layout specific to the gallery. These sizes do not come from the design: they arrange the
+/// table of states and the logos, and are used nowhere else.
 pub mod layout {
-    /// Largeur d'une case du tableau des états, et de la colonne des noms.
+    /// Width of a cell of the table of states, and of the names column.
     pub const CELL: f32 = 180.0;
     pub const NAME: f32 = 150.0;
-    /// Écart entre la colonne des menus et celle des réglages.
+    /// Gap between the menus column and the settings column.
     pub const COLUMN_GAP: f32 = 28.0;
-    /// Tailles d'affichage du logo.
+    /// Display sizes of the logo.
     pub const LOGO_SIZES: [f32; 4] = [96.0, 64.0, 32.0, 16.0];
 }
 
 use layout::{CELL, NAME};
 
-/// État de la galerie : ce que les composants vivants modifient.
+/// State of the gallery: what the live components change.
 #[derive(Debug, Clone, Default)]
 pub struct Gallery {
     variable_rate: bool,
@@ -48,7 +48,7 @@ pub enum Message {
     Focus(Direction),
 }
 
-/// Les cinq états montrés pour chaque composant.
+/// The five states shown for each component.
 #[derive(Debug, Clone, Copy)]
 enum Look {
     Status(button::Status),
@@ -64,7 +64,7 @@ const LOOKS: [(&str, Look); 5] = [
 ];
 
 impl Gallery {
-    /// Les interrupteurs allumés, comme sur la planche Réglages.
+    /// The toggles on, as on the « Réglages » design board.
     pub fn new() -> Self {
         Self {
             variable_rate: true,
@@ -119,7 +119,8 @@ impl Gallery {
             .into()
     }
 
-    /// Le menu Fenêtre de la planche Menus, et son sous-menu « Déplacer vers le bureau ».
+    /// The « Fenêtre » menu of the Menus design board, and its « Déplacer vers le bureau »
+    /// submenu.
     fn menus(&self) -> Element<'_, Message> {
         let action = |name| Some(Message::Action(name));
         let entry =
@@ -152,7 +153,7 @@ impl Gallery {
             metrics::MENU_WIDTH,
         );
         let sub: Element<'_, Message> = if self.submenu {
-            // Le sous-menu s'aligne sur son entrée, sous quatre entrées et un séparateur.
+            // The submenu lines up with its entry, below four entries and a separator.
             let (top, _) = metrics::MENU_SEPARATOR_MARGIN;
             let offset = 4.0 * metrics::MENU_ITEM_HEIGHT + 2.0 * top + metrics::BORDER_WIDTH;
             let menu = ui::menu(
@@ -173,7 +174,7 @@ impl Gallery {
         row![window, sub].spacing(metrics::SUBMENU_GAP).into()
     }
 
-    /// Deux cartes de la planche Réglages.
+    /// Two cards of the « Réglages » design board.
     fn settings(&self) -> Element<'_, Message> {
         let toggles = ui::card(column![
             ui::setting_row(
@@ -229,10 +230,10 @@ impl Gallery {
     }
 }
 
-/// Fabrique la case d'un composant dans un état donné.
+/// Builds the cell of a component in a given state.
 type Cell<'a> = fn(Look) -> Element<'a, Message>;
 
-/// Le tableau des états : une ligne par composant, une colonne par état.
+/// The table of states: one row per component, one column per state.
 fn states<'a>() -> Element<'a, Message> {
     let header = LOOKS
         .iter()
@@ -265,7 +266,7 @@ fn states<'a>() -> Element<'a, Message> {
             control(ui::toggle(false, toggled(look)), look)
         }),
         ("Entrée de menu", |look| {
-            // Une entrée de menu ne vit que dans un menu : elle s'y montre.
+            // A menu entry only lives in a menu: it is shown in one.
             let item = ui::menu_item("Réglages", Trailing::Shortcut("Super+,"), enabled(look));
             ui::menu([control(item, look)], CELL - 2.0 * metrics::GAP_INLINE).into()
         }),
@@ -334,7 +335,7 @@ fn control<'a>(control: ui::Control<'a, Message>, look: Look) -> Element<'a, Mes
     }
 }
 
-/// Le champ de texte n'a ni appui ni anneau à part : son focus est son état propre.
+/// The text field has neither a pressed state nor a separate ring: its focus is its own state.
 fn field<'a>(look: Look, value: &str) -> Element<'a, Message> {
     use iced::widget::text_input::Status;
     let status = match look {
@@ -351,8 +352,8 @@ fn field<'a>(look: Look, value: &str) -> Element<'a, Message> {
         .into()
 }
 
-/// Les trois versions du logo, avec carré puis sans carré, à plusieurs tailles. À 32 et 16 px,
-/// le carré prend sa version optique.
+/// The three versions of the logo, with a square then without, at several sizes. At 32 and
+/// 16 px, the square takes its optical version.
 fn logos<'a>() -> Element<'a, Message> {
     let tile = |sources: [&'static str; 4], behind: color::Color| -> Element<'a, Message> {
         let images = sources

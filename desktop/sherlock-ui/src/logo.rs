@@ -1,22 +1,22 @@
-//! Logo de l'OS, sans texte ni nom. Les SVG et leurs PNG sont dans `logo/`, écrits par
-//! `logo/exporter.py` ; la construction est décrite dans `docs/sherlock-ui.md`.
+//! Logo of the OS, with no text nor name. The SVGs and their PNGs are in `logo/`, written by
+//! `logo/export.py`; the construction is described in `docs/sherlock-ui.md`.
 
-/// Les trois versions du logo.
+/// The three versions of the logo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Logo {
-    /// Anneau vert, point crème, carré bleu nuit.
+    /// Green ring, cream dot, night blue square.
     Color,
-    /// Crème sur bleu nuit.
+    /// Cream on night blue.
     Cream,
-    /// Bleu nuit sur crème.
+    /// Night blue on cream.
     Night,
 }
 
 impl Logo {
     pub const ALL: [Self; 3] = [Self::Color, Self::Cream, Self::Night];
 
-    /// Le logo dans son carré, pour un affichage de `size` pixels de côté. À 32 px et moins, la
-    /// version optique : anneau plus épais, symbole plus grand, queue plus courte.
+    /// The logo in its square, for a display of `size` pixels per side. At 32 px and below, the
+    /// optical version: thicker ring, larger symbol, shorter tail.
     pub const fn square(self, size: f32) -> &'static str {
         let [large, medium, small] = self.squares();
         if size <= 16.0 {
@@ -28,7 +28,7 @@ impl Logo {
         }
     }
 
-    /// Le symbole seul, sans carré. Il remplit son cadre et se lit à toutes les tailles.
+    /// The symbol alone, without a square. It fills its frame and reads at every size.
     pub const fn bare(self) -> &'static str {
         match self {
             Self::Color => include_str!("../logo/logo-transparent.svg"),
@@ -37,7 +37,7 @@ impl Logo {
         }
     }
 
-    /// Versions avec carré : grande, optique 32 px, optique 16 px.
+    /// Versions with a square: large, optical 32 px, optical 16 px.
     const fn squares(self) -> [&'static str; 3] {
         match self {
             Self::Color => [
@@ -75,32 +75,32 @@ mod tests {
             .collect()
     }
 
-    /// Le premier nombre qui suit `marker` dans `svg`.
+    /// The first number that follows `marker` in `svg`.
     fn number_after(svg: &str, marker: &str) -> i32 {
-        let start = svg.find(marker).expect("repère présent") + marker.len();
+        let start = svg.find(marker).expect("marker present") + marker.len();
         let digits: String = svg[start..]
             .chars()
             .take_while(char::is_ascii_digit)
             .collect();
-        digits.parse().expect("nombre")
+        digits.parse().expect("number")
     }
 
     #[test]
-    fn les_logos_n_emploient_que_les_couleurs_du_theme() {
+    fn logos_use_only_theme_colors() {
         let allowed = [color::DESKTOP, color::ACCENT, color::CREAM].map(hex);
         for svg in all() {
             for value in svg.split('"').filter(|v| v.starts_with('#')) {
                 assert!(
                     allowed.iter().any(|a| a == value),
-                    "couleur hors thème : {value}"
+                    "color outside the theme: {value}"
                 );
             }
-            assert!(!svg.contains("<text"), "le logo n'a pas de texte");
+            assert!(!svg.contains("<text"), "the logo has no text");
         }
     }
 
     #[test]
-    fn la_queue_part_de_l_anneau_dans_chaque_version() {
+    fn the_tail_starts_on_the_ring_in_every_version() {
         for svg in all() {
             let r = number_after(svg, "r=\"");
             let x = number_after(svg, "d=\"M");
@@ -110,12 +110,12 @@ mod tests {
     }
 
     #[test]
-    fn les_petites_tailles_prennent_la_version_optique() {
+    fn small_sizes_take_the_optical_version() {
         let [large, medium, small] = Logo::Color.squares();
         assert_eq!(Logo::Color.square(16.0), small);
         assert_eq!(Logo::Color.square(32.0), medium);
         assert_eq!(Logo::Color.square(64.0), large);
-        // La version optique a un anneau plus épais que la grande.
+        // The optical version has a thicker ring than the large one.
         let width = |svg| number_after(svg, "stroke-width=\"");
         assert!(width(small) > width(medium) && width(medium) > width(large));
     }

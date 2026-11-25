@@ -1,35 +1,35 @@
-//! Prise en main des fenêtres par le compositeur : saisie des bords, calage contre l'écran.
+//! Window handling by the compositor: grabbing the edges, snapping against the screen.
 //!
-//! Les tailles sont en pixels logiques. `docs/contexte.md` ne les fixe pas : ce sont des choix
-//! du lot D-17, à revoir avec le design.
+//! Sizes are in logical pixels. `docs/contexte.md` does not set them: they are choices of lot
+//! D-17, to review with the design.
 
 use crate::color::{self, Color};
 
-/// Largeur de la bande de saisie, à l'extérieur de chaque côté d'une fenêtre.
+/// Width of the grab band, outside each side of a window.
 pub const RESIZE_BAND: i32 = 8;
 
-/// Taille de la saisie d'un coin : le long des côtés depuis le coin, et en diagonale hors de
-/// la fenêtre. Plus large que la bande, pour qu'un coin se trouve sans viser au pixel.
+/// Size of a corner grab: along the sides from the corner, and diagonally outside the window.
+/// Wider than the band, so that a corner can be found without aiming at the pixel.
 pub const RESIZE_CORNER: i32 = 20;
 
-/// Distance au bord de l'écran sous laquelle une fenêtre lâchée se cale.
+/// Distance to the screen edge below which a dropped window snaps.
 pub const SNAP_EDGE: i32 = 8;
 
-/// Distance à un coin de l'écran, le long d'un bord, sous laquelle une fenêtre lâchée prend
-/// ce quart de l'écran.
+/// Distance to a screen corner, along an edge, below which a dropped window takes that
+/// quarter of the screen.
 pub const SNAP_CORNER: i32 = 64;
 
-/// Fond de l'aperçu de calage : celui d'une entrée active.
+/// Background of the snap preview: that of an active entry.
 pub const SNAP_PREVIEW_FILL: Color = color::ACTIVE_ENTRY;
 
-/// Bordure de l'aperçu de calage.
+/// Border of the snap preview.
 pub const SNAP_PREVIEW_BORDER: Color = color::ACCENT;
 
-/// Épaisseur de la bordure de l'aperçu de calage.
+/// Width of the snap preview border.
 pub const SNAP_PREVIEW_BORDER_WIDTH: i32 = 2;
 
-/// Distance que le pointeur doit parcourir avant qu'un déplacement bouge la fenêtre : un simple
-/// clic ne la décale pas, et ne la détache pas de sa zone.
+/// Distance the pointer must travel before a move shifts the window: a plain click neither
+/// moves it nor detaches it from its zone.
 pub const DRAG_THRESHOLD: i32 = 4;
 
 /// Smallest work area that anchored surfaces leave to windows on a screen, in logical pixels

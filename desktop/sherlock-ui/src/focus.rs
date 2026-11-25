@@ -1,9 +1,8 @@
-//! Focus clavier des composants qu'iced 0.14 ne sait pas focaliser (boutons, interrupteurs,
-//! entrées de menu).
+//! Keyboard focus for the components iced 0.14 cannot focus (buttons, toggles, menu entries).
 //!
-//! `Focusable` enveloppe un widget : il se déclare aux opérations de focus d'iced, déclenche
-//! son action à Entrée ou Espace, et dessine l'anneau de focus. Le programme fait circuler le
-//! focus : `keyboard::listen().filter_map(focus::tab)` puis `focus::advance` dans son `update`.
+//! `Focusable` wraps a widget: it registers with iced's focus operations, triggers its action
+//! on Enter or Space, and draws the focus ring. The program moves the focus around:
+//! `keyboard::listen().filter_map(focus::tab)` then `focus::advance` in its `update`.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
@@ -15,14 +14,14 @@ use iced::{border, widget};
 
 use crate::{color, metrics};
 
-/// Sens du déplacement du focus.
+/// Direction of the focus move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Next,
     Previous,
 }
 
-/// Tab avance, Maj + Tab recule. À passer à `keyboard::listen().filter_map`.
+/// Tab moves forward, Shift + Tab moves back. To pass to `keyboard::listen().filter_map`.
 pub fn tab(event: keyboard::Event) -> Option<Direction> {
     match event {
         keyboard::Event::KeyPressed {
@@ -38,7 +37,7 @@ pub fn tab(event: keyboard::Event) -> Option<Direction> {
     }
 }
 
-/// Déplace le focus vers le composant suivant ou précédent.
+/// Moves the focus to the next or previous component.
 pub fn advance<T>(direction: Direction) -> Task<T> {
     match direction {
         Direction::Next => widget::operation::focus_next(),
@@ -46,7 +45,7 @@ pub fn advance<T>(direction: Direction) -> Task<T> {
     }
 }
 
-/// Un widget qui prend le focus clavier.
+/// A widget that takes the keyboard focus.
 pub struct Focusable<'a, Message> {
     content: Element<'a, Message>,
     on_activate: Option<Message>,
@@ -55,8 +54,8 @@ pub struct Focusable<'a, Message> {
 }
 
 impl<'a, Message> Focusable<'a, Message> {
-    /// `on_activate` part à Entrée ou Espace. Sans action, le widget est désactivé et ne
-    /// prend pas le focus. `radius` est celui du widget, que l'anneau suit.
+    /// `on_activate` fires on Enter or Space. Without an action, the widget is disabled and
+    /// does not take the focus. `radius` is the widget's, which the ring follows.
     pub fn new(
         content: impl Into<Element<'a, Message>>,
         on_activate: Option<Message>,
@@ -70,7 +69,7 @@ impl<'a, Message> Focusable<'a, Message> {
         }
     }
 
-    /// Dessine l'anneau même sans focus : sert à la galerie.
+    /// Draws the ring even without focus: used by the gallery.
     pub fn ring(mut self, ring: bool) -> Self {
         self.ring = ring;
         self
@@ -110,7 +109,7 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
     }
 
     fn diff(&self, tree: &mut Tree) {
-        // Un composant qui devient désactivé pendant qu'il a le focus le perd.
+        // A component that becomes disabled while it has the focus loses it.
         if self.on_activate.is_none() {
             tree.state.downcast_mut::<State>().focused = false;
         }
@@ -169,7 +168,7 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
                 ..
             }) if state.focused => {
                 if let Some(message) = &self.on_activate {
-                    // Une touche gardée enfoncée n'active qu'une fois.
+                    // A key held down activates only once.
                     if !repeat {
                         shell.publish(message.clone());
                     }
@@ -177,7 +176,7 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
                     return;
                 }
             }
-            // Comme `:focus-visible` dans un navigateur : la souris efface l'anneau.
+            // Like `:focus-visible` in a browser: the mouse clears the ring.
             Event::Mouse(mouse::Event::ButtonPressed(_)) => state.focused = false,
             _ => {}
         }

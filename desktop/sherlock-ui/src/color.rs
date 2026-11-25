@@ -1,6 +1,6 @@
-//! Couleurs du thème, nommées par rôle. Valeurs de `docs/contexte.md` et des planches.
+//! Theme colors, named by role. Values from `docs/contexte.md` and the design boards.
 
-/// Une couleur sRGB, avec son opacité entre 0 et 1.
+/// An sRGB color, with its opacity between 0 and 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: u8,
@@ -10,24 +10,24 @@ pub struct Color {
 }
 
 impl Color {
-    /// Couleur opaque, comme `#RRGGBB`.
+    /// Opaque color, like `#RRGGBB`.
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 1.0 }
     }
 
-    /// Couleur translucide, comme `rgba(r, g, b, a)` en CSS.
+    /// Translucent color, like `rgba(r, g, b, a)` in CSS.
     pub const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Self {
         Self { r, g, b, a }
     }
 
-    /// Composantes entre 0 et 1, multipliées par l'opacité : la forme qu'attendent les moteurs
-    /// de rendu pour mélanger les couleurs.
+    /// Channels between 0 and 1, multiplied by the opacity: the form renderers expect to blend
+    /// colors.
     pub fn premultiplied(self) -> [f32; 4] {
         let channel = |c: u8| f32::from(c) / 255.0 * self.a;
         [channel(self.r), channel(self.g), channel(self.b), self.a]
     }
 
-    /// Mélange opaque : `t` vaut 0 pour `self`, 1 pour `other`. Sert aux nuances de survol.
+    /// Opaque mix: `t` is 0 for `self`, 1 for `other`. Used for the hover shades.
     pub const fn mix(self, other: Self, t: f32) -> Self {
         const fn channel(a: u8, b: u8, t: f32) -> u8 {
             (a as f32 + (b as f32 - a as f32) * t + 0.5) as u8
@@ -39,7 +39,7 @@ impl Color {
         )
     }
 
-    /// `self` posée sur `below`, mélangée en sRGB comme le font le navigateur et tiny-skia.
+    /// `self` laid over `below`, blended in sRGB as the browser and tiny-skia do.
     pub fn over(self, below: Self) -> Self {
         let a = self.a + below.a * (1.0 - self.a);
         if a <= 0.0 {
@@ -58,7 +58,7 @@ impl Color {
         )
     }
 
-    /// Luminance relative au sens des WCAG 2, opacité ignorée.
+    /// Relative luminance as defined by WCAG 2, opacity ignored.
     pub fn luminance(self) -> f32 {
         let linear = |c: u8| {
             let c = f32::from(c) / 255.0;
@@ -71,7 +71,7 @@ impl Color {
         0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
     }
 
-    /// Rapport de contraste WCAG entre deux couleurs opaques, de 1 à 21.
+    /// WCAG contrast ratio between two opaque colors, from 1 to 21.
     pub fn contrast(self, other: Self) -> f32 {
         let (a, b) = (self.luminance(), other.luminance());
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
@@ -93,49 +93,49 @@ impl From<iced::Color> for Color {
     }
 }
 
-// Fonds.
+// Backgrounds.
 
-/// Fond d'écran du bureau.
+/// Desktop wallpaper.
 pub const DESKTOP: Color = Color::rgb(0x0E, 0x1A, 0x2E);
-/// Les trois grands disques du fond d'écran, du plus sombre au plus clair.
+/// The three large discs of the wallpaper, from darkest to lightest.
 pub const DESKTOP_DISCS: [Color; 3] = [
     Color::rgb(0x13, 0x2A, 0x49),
     Color::rgb(0x16, 0x31, 0x4F),
     Color::rgb(0x1B, 0x3F, 0x63),
 ];
-/// Fond des écrans système : connexion, démarrage, installeur.
+/// Background of the system screens: login, boot, installer.
 pub const SYSTEM_SCREEN: Color = Color::rgb(0x0A, 0x14, 0x24);
-/// Fond le plus sombre : terminal, zones de code. Sert aussi de texte sur le vert.
+/// Darkest background: terminal, code areas. Also used as text on the green.
 pub const DEEPEST: Color = Color::rgb(0x0B, 0x12, 0x20);
-/// Corps des fenêtres opaques.
+/// Body of opaque windows.
 pub const WINDOW: Color = Color::rgb(0x0F, 0x18, 0x28);
-/// Barre de titre des fenêtres.
+/// Title bar of windows.
 pub const TITLE_BAR: Color = Color::rgb(0x13, 0x1E, 0x32);
-/// Panneau latéral : navigation à gauche, aperçu à droite.
+/// Side panel: navigation on the left, preview on the right.
 pub const SIDEBAR: Color = Color::rgb(0x11, 0x1B, 0x2E);
-/// Carte dans une fenêtre.
+/// Card inside a window.
 pub const CARD: Color = Color::rgb(0x15, 0x22, 0x38);
-/// Bloc de commande du terminal.
+/// Command block of the terminal.
 pub const TERMINAL_BLOCK: Color = Color::rgb(0x10, 0x1B, 0x2E);
 
-// Verres. Le flou est l'affaire du compositeur : ici, seulement la teinte.
+// Glass. The blur is the compositor's business: here, only the tint.
 
-/// Panneaux flottants (flou de 24 px).
+/// Floating panels (24 px blur).
 pub const GLASS: Color = Color::rgba(16, 26, 44, 0.82);
-/// Menus et sous-menus (flou de 28 px).
+/// Menus and submenus (28 px blur).
 pub const MENU_GLASS: Color = Color::rgba(22, 34, 56, 0.96);
-/// Dock (flou de 30 px).
+/// Dock (30 px blur).
 pub const DOCK_GLASS: Color = Color::rgba(244, 235, 227, 0.17);
 /// Top bar (24 px blur). The Main design board makes it slightly lighter than `GLASS`.
 pub const TOP_BAR_GLASS: Color = Color::rgba(16, 26, 44, 0.78);
 
-// Traits et voiles.
+// Lines and veils.
 
-/// Bordure d'un panneau de verre et d'une fenêtre, séparateur de menu.
+/// Border of a glass panel and of a window, menu separator.
 pub const BORDER: Color = Color::rgba(255, 255, 255, 0.10);
-/// Bordure d'un menu (planche Menus).
+/// Border of a menu (Menus design board).
 pub const MENU_BORDER: Color = Color::rgba(255, 255, 255, 0.14);
-/// Bordure d'une carte (planche Réglages).
+/// Border of a card (« Réglages » design board).
 pub const CARD_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
 /// Border of the top bar (Main design board).
 pub const TOP_BAR_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
@@ -145,20 +145,20 @@ pub const CHIP_HOVER: Color = Color::rgba(255, 255, 255, 0.12);
 /// Veil of a top bar button whose menu is open (the open « Fenêtre » button of the Menus
 /// board).
 pub const TOP_BAR_BUTTON_OPEN: Color = Color::rgba(255, 255, 255, 0.14);
-/// Bordure du dock.
+/// Border of the dock.
 pub const DOCK_BORDER: Color = Color::rgba(255, 255, 255, 0.26);
-/// Bordure d'un bouton secondaire.
+/// Border of a secondary button.
 pub const SECONDARY_BORDER: Color = Color::rgba(255, 255, 255, 0.18);
-/// Trait entre deux lignes d'une carte, bas de la barre de titre.
+/// Line between two rows of a card, bottom of the title bar.
 pub const DIVIDER: Color = Color::rgba(255, 255, 255, 0.07);
-/// Fond d'un champ de texte.
+/// Background of a text field.
 pub const FIELD: Color = Color::rgba(255, 255, 255, 0.07);
-/// Voile de survol sur un élément sans fond.
+/// Hover veil on an element without background.
 pub const HOVER: Color = Color::rgba(255, 255, 255, 0.07);
-/// Voile d'appui sur un élément sans fond.
+/// Press veil on an element without background.
 pub const PRESSED: Color = Color::rgba(255, 255, 255, 0.12);
-/// Piste d'un interrupteur éteint, au repos et survolée. Les planches ne montrent que des
-/// interrupteurs allumés : la piste éteinte reprend la bordure d'un bouton secondaire.
+/// Track of a toggle that is off, at rest and hovered. The design boards only show toggles
+/// that are on: the off track reuses the border of a secondary button.
 pub const TOGGLE_OFF: Color = Color::rgba(255, 255, 255, 0.18);
 pub const TOGGLE_OFF_HOVER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Inset area of a toolbar: the breadcrumb (Evidence mock-up).
@@ -173,65 +173,65 @@ pub const AMBER_SOFT: Color = Color::rgba(240, 196, 138, 0.18);
 pub const ACCENT_SOFT: Color = Color::rgba(133, 197, 149, 0.18);
 pub const NEUTRAL_SOFT: Color = Color::rgba(255, 255, 255, 0.08);
 pub const ACCENT_BORDER: Color = Color::rgba(133, 197, 149, 0.5);
-/// Fond d'un élément désactivé.
+/// Background of a disabled element.
 pub const DISABLED: Color = Color::rgba(255, 255, 255, 0.05);
 /// Colour of the crisp shadows of floating surfaces (`surface::Shadowed`), the same blue
 /// black as `SHADOW` and `MENU_SHADOW`; each step of the shadow sets its own opacity.
 pub const SHADOW_BASE: Color = Color::rgb(3, 8, 18);
-/// Ombre des fenêtres et des panneaux.
+/// Shadow of windows and panels.
 pub const SHADOW: Color = Color::rgba(3, 8, 18, 0.55);
-/// Ombre des menus.
+/// Shadow of menus.
 pub const MENU_SHADOW: Color = Color::rgba(3, 8, 18, 0.6);
 
-// Textes.
+// Texts.
 
-/// Titres et contenu.
+/// Titles and content.
 pub const TEXT_PRIMARY: Color = Color::rgb(0xEE, 0xF2, 0xF7);
-/// Descriptions, valeurs.
+/// Descriptions, values.
 pub const TEXT_SECONDARY: Color = Color::rgb(0xC5, 0xCE, 0xDB);
-/// Étiquettes, raccourcis, texte d'un élément désactivé.
+/// Labels, shortcuts, text of a disabled element.
 pub const TEXT_TERTIARY: Color = Color::rgb(0xA9, 0xB4, 0xC6);
 /// Text of a code snippet or of a file preview (Evidence mock-up).
 pub const TEXT_CODE: Color = Color::rgb(0xDC, 0xE4, 0xEE);
-/// Numéros de ligne.
+/// Line numbers.
 pub const TEXT_LINE_NUMBER: Color = Color::rgb(0x84, 0x92, 0xA8);
-/// Texte posé sur le vert.
+/// Text laid on the green.
 pub const TEXT_ON_ACCENT: Color = DEEPEST;
-/// Texte posé sur le crème.
+/// Text laid on the cream.
 pub const TEXT_ON_CREAM: Color = Color::rgb(0x14, 0x23, 0x3B);
 
 // Accents.
 
-/// Vert de l'écharpe : action principale, état actif, réussite.
+/// Green of the scarf: main action, active state, success.
 pub const ACCENT: Color = Color::rgb(0x85, 0xC5, 0x95);
-/// Vert survolé.
+/// Hovered green.
 pub const ACCENT_HOVER: Color = ACCENT.mix(TEXT_PRIMARY, 0.18);
-/// Vert appuyé.
+/// Pressed green.
 pub const ACCENT_PRESSED: Color = ACCENT.mix(DEEPEST, 0.14);
-/// Bleu des icônes et des dossiers, le plus sombre.
+/// Blue of icons and folders, the darkest.
 pub const BLUE_DARK: Color = Color::rgb(0x2B, 0x5F, 0x86);
-/// Bleu des icônes et des dossiers.
+/// Blue of icons and folders.
 pub const BLUE: Color = Color::rgb(0x32, 0x6D, 0x93);
-/// Bleu de la sélection et des mots-clés du code.
+/// Blue of the selection and of code keywords.
 pub const BLUE_BRIGHT: Color = Color::rgb(0x5B, 0xA3, 0xD0);
-/// Bleu clair des mots-clés du code.
+/// Light blue of code keywords.
 pub const BLUE_LIGHT: Color = Color::rgb(0x8F, 0xC1, 0xE8);
-/// Ce qui vient de Sherlock ou du système de confiance.
+/// What comes from Sherlock or from the trust system.
 pub const CREAM: Color = Color::rgb(0xF4, 0xEB, 0xE3);
-/// Attente d'un accord, avertissement.
+/// Awaiting a consent, warning.
 pub const AMBER: Color = Color::rgb(0xF0, 0xC4, 0x8A);
-/// Erreur, action destructive.
+/// Error, destructive action.
 pub const SALMON: Color = Color::rgb(0xF6, 0xB5, 0xA6);
 
 /// Fully transparent: the background of a shell surface that draws its own shapes.
 pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0.0);
 
-/// Ligne sélectionnée d'une liste ou d'un menu, entrée de menu survolée.
+/// Selected row of a list or of a menu, hovered menu entry.
 pub const SELECTED_ROW: Color = Color::rgba(91, 163, 208, 0.26);
-/// Fond de l'entrée active d'une navigation.
+/// Background of the active entry of a navigation.
 pub const ACTIVE_ENTRY: Color = Color::rgba(133, 197, 149, 0.16);
-/// Anneau du focus clavier. Les planches n'en montrent pas : bleu clair, visible sur tous les
-/// fonds et distinct du vert de l'état actif.
+/// Keyboard focus ring. The design boards show none: light blue, visible on every background
+/// and distinct from the green of the active state.
 pub const FOCUS_RING: Color = BLUE_LIGHT;
 
 #[cfg(test)]
@@ -239,35 +239,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_couleur_opaque_garde_ses_composantes() {
+    fn an_opaque_color_keeps_its_channels() {
         assert_eq!(Color::rgb(255, 0, 51).premultiplied(), [1.0, 0.0, 0.2, 1.0]);
     }
 
     #[test]
-    fn une_couleur_translucide_est_multipliee_par_son_opacite() {
+    fn a_translucent_color_is_multiplied_by_its_opacity() {
         let [r, g, b, a] = Color::rgba(255, 255, 0, 0.5).premultiplied();
         assert_eq!((r, g, b, a), (0.5, 0.5, 0.0, 0.5));
     }
 
     #[test]
-    fn le_contraste_suit_les_wcag() {
-        let noir = Color::rgb(0, 0, 0);
-        let blanc = Color::rgb(255, 255, 255);
-        assert!((noir.contrast(blanc) - 21.0).abs() < 0.01);
-        assert!((blanc.contrast(blanc) - 1.0).abs() < f32::EPSILON);
-        // Valeur de référence : #777777 sur blanc donne 4,48.
-        assert!((Color::rgb(0x77, 0x77, 0x77).contrast(blanc) - 4.48).abs() < 0.01);
+    fn contrast_follows_wcag() {
+        let black = Color::rgb(0, 0, 0);
+        let white = Color::rgb(255, 255, 255);
+        assert!((black.contrast(white) - 21.0).abs() < 0.01);
+        assert!((white.contrast(white) - 1.0).abs() < f32::EPSILON);
+        // Reference value: #777777 on white gives 4.48.
+        assert!((Color::rgb(0x77, 0x77, 0x77).contrast(white) - 4.48).abs() < 0.01);
     }
 
     #[test]
-    fn un_voile_se_pose_comme_dans_le_navigateur() {
-        let posee = Color::rgba(255, 255, 255, 0.5).over(Color::rgb(0, 0, 0));
-        assert_eq!(posee, Color::rgb(128, 128, 128));
+    fn a_veil_is_laid_as_in_the_browser() {
+        let laid = Color::rgba(255, 255, 255, 0.5).over(Color::rgb(0, 0, 0));
+        assert_eq!(laid, Color::rgb(128, 128, 128));
         assert_eq!(GLASS.over(DESKTOP).a, 1.0);
     }
 
     #[test]
-    fn les_nuances_restent_proches_du_vert() {
+    fn shades_stay_close_to_the_green() {
         assert_eq!(ACCENT.mix(DEEPEST, 0.0), ACCENT);
         assert!(ACCENT_HOVER.luminance() > ACCENT.luminance());
         assert!(ACCENT_PRESSED.luminance() < ACCENT.luminance());

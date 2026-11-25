@@ -1,9 +1,9 @@
-//! Bibliothèque visuelle du desktop.
+//! Visual library of the desktop.
 //!
-//! Seul endroit où s'écrivent les couleurs, les tailles et les textes d'interface. Les jetons
-//! (`color`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `logo`, `window`)
-//! ne dépendent de rien. Le thème et les composants iced sont derrière la fonction `iced`,
-//! active par défaut. La galerie vit dans `examples/galerie`. Voir `docs/sherlock-ui.md`.
+//! The only place where colors, sizes and interface texts are written. The tokens (`color`,
+//! `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `logo`, `window`) depend on
+//! nothing. The theme and the iced components sit behind the `iced` feature, on by default.
+//! The gallery lives in `examples/gallery`. See `docs/sherlock-ui.md`.
 
 pub mod color;
 pub mod icon;
