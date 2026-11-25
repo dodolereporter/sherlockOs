@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Top
+GenericName[fr]=Moniteur système
+Exec=top
+Terminal=true

@@ -15,7 +15,13 @@ pub struct DesktopEntry {
     pub path: PathBuf,
     /// Name in the user's language when the entry has one.
     pub name: String,
+    /// `GenericName`, such as « Navigateur web », and `Keywords`, both localized: what a
+    /// search matches besides the name.
+    pub generic_name: Option<String>,
+    pub keywords: Vec<String>,
     pub exec: String,
+    /// `Path`: working directory of the command.
+    pub working_dir: Option<PathBuf>,
     pub icon: Option<String>,
     pub mime_types: Vec<String>,
     /// Hidden from menus, but still able to open files.
@@ -79,6 +85,34 @@ fn unescape(raw: &str) -> String {
     out
 }
 
+/// Splits a list value (`a;b;c;`) on its separators; `\;` is a semicolon inside an item.
+/// Items are unescaped, empty ones dropped.
+fn split_list(raw: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut item = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(';') => item.push(';'),
+                Some(next) => {
+                    item.push('\\');
+                    item.push(next);
+                }
+                None => item.push('\\'),
+            },
+            ';' => items.push(std::mem::take(&mut item)),
+            c => item.push(c),
+        }
+    }
+    items.push(item);
+    items
+        .iter()
+        .map(|i| unescape(i))
+        .filter(|i| !i.is_empty())
+        .collect()
+}
+
 /// Parses one `.desktop` file. Only applications that can run are kept: `Type=Application`,
 /// an `Exec`, not `Hidden`.
 pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<DesktopEntry> {
@@ -101,20 +135,20 @@ pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<De
         return None;
     }
     let exec = unescape(get("Exec")?);
+    let list = |key: &str| get(key).map(split_list).unwrap_or_default();
     Some(DesktopEntry {
         id: id.to_owned(),
         path: path.to_path_buf(),
         name: unescape(get("Name")?),
+        generic_name: get("GenericName").map(unescape).filter(|g| !g.is_empty()),
+        keywords: list("Keywords"),
         exec,
+        working_dir: get("Path")
+            .map(unescape)
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from),
         icon: get("Icon").map(unescape).filter(|i| !i.is_empty()),
-        mime_types: get("MimeType")
-            .map(|m| {
-                m.split(';')
-                    .filter(|t| !t.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        mime_types: list("MimeType"),
         no_display: flag("NoDisplay"),
         terminal: flag("Terminal"),
         try_exec: get("TryExec").map(unescape).filter(|t| !t.is_empty()),
@@ -266,7 +300,9 @@ mod tests {
     #[test]
     fn entries_read_localized_names_and_types() {
         let text = "[Desktop Entry]\nType=Application\nName=Text Editor\nName[fr]=Éditeur de texte\n\
-                    Exec=kate -b %U\nIcon=kate\nMimeType=text/plain;text/x-c;\n[Desktop Action new]\nName=New\n";
+                    GenericName=Editor\nGenericName[fr]=Éditeur\nKeywords=text;code;\n\
+                    Keywords[fr]=texte;code;a\\;b;c\\\\;\nPath=/srv/my\\snotes\nExec=kate -b %U\nIcon=kate\nMimeType=text/plain;text/x-c;\n\
+                    [Desktop Action new]\nName=New\n";
         let app = parse(
             "kate.desktop",
             Path::new("/x/kate.desktop"),
@@ -276,6 +312,10 @@ mod tests {
         .expect("entry");
         assert_eq!(app.name, "Éditeur de texte");
         assert_eq!(app.mime_types, ["text/plain", "text/x-c"]);
+        assert_eq!(app.generic_name.as_deref(), Some("Éditeur"));
+        // `\;` stays in its item; `\\` then `;` ends one.
+        assert_eq!(app.keywords, ["texte", "code", "a;b", "c\\"]);
+        assert_eq!(app.working_dir, Some(PathBuf::from("/srv/my notes")));
         assert!(
             parse(
                 "x",
@@ -302,7 +342,10 @@ mod tests {
             id: "a.desktop".into(),
             path: PathBuf::from("/apps/a.desktop"),
             name: "App".into(),
+            generic_name: None,
+            keywords: Vec::new(),
             exec: r#""/opt/My App/bin/app" --title "%c's \"window\"" %U %i --flag=%%"#.into(),
+            working_dir: None,
             icon: Some("app".into()),
             mime_types: Vec::new(),
             no_display: false,

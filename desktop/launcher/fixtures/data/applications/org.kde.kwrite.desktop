@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=KWrite
+GenericName=Text Editor
+GenericName[fr]=Éditeur de texte
+Exec=kwrite %U

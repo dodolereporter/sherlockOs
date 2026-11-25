@@ -10,6 +10,7 @@ pub mod color;
 pub mod dock;
 pub mod gpu;
 pub mod icon;
+pub mod launcher;
 pub mod logo;
 pub mod metrics;
 pub mod motion;

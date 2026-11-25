@@ -1990,6 +1990,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "launcher"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "libc",
+ "mime-apps",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
