@@ -1,4 +1,4 @@
-//! État de la barre, ses messages et ses deux vues : la barre et le menu Sherlock.
+//! Bar state, messages, and its two views: the bar and the Sherlock menu.
 
 use iced::widget::{column, container, mouse_area, row, space};
 use iced::window::Id;
@@ -23,17 +23,17 @@ use crate::user;
 #[derive(Debug, Default)]
 pub struct Bar {
     pub clock: Option<LocalTime>,
-    /// `Some(None)` : le poste n'a pas de batterie.
+    /// `Some(None)`: the machine has no battery.
     pub battery: Option<Option<Battery>>,
     pub network: Option<Network>,
     pub sound: Option<Sound>,
     pub workspaces: Option<Workspaces>,
     pub user: String,
-    /// Surface de la barre, à laquelle le menu se rattache.
+    /// Surface of the bar, which the menu attaches to.
     surface: Option<Id>,
-    /// Surface du menu Sherlock quand il est ouvert.
+    /// Surface of the Sherlock menu while it is open.
     menu: Option<Id>,
-    /// Entrée du menu surlignée au clavier ou à la souris.
+    /// Menu entry highlighted by the keyboard or the pointer.
     pub cursor: Option<usize>,
 }
 
@@ -70,11 +70,11 @@ impl Bar {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            Subscription::run(|| watch(SystemClock::default(), "horloge")).map(Message::Clock),
-            Subscription::run(|| watch(UPower::default(), "batterie")).map(Message::Battery),
-            Subscription::run(|| watch(NetworkManager::default(), "réseau")).map(Message::Network),
-            Subscription::run(|| watch(Pactl::default(), "son")).map(Message::Sound),
-            Subscription::run(|| watch(Placeholder, "bureaux")).map(Message::Workspaces),
+            Subscription::run(|| watch(SystemClock::default(), "clock")).map(Message::Clock),
+            Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
+            Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
+            Subscription::run(|| watch(Pactl::default(), "sound")).map(Message::Sound),
+            Subscription::run(|| watch(Placeholder, "workspaces")).map(Message::Workspaces),
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
         ])
@@ -101,14 +101,14 @@ impl Bar {
             Message::MenuKey(_) => {}
             Message::Hover(index) => self.cursor = Some(index),
             Message::Activate(action) => {
-                // Rien n'existe encore derrière ces entrées : on le dit, on ne fait pas semblant.
-                tracing::info!(?action, "entrée du menu Sherlock pas encore disponible");
+                // Nothing exists behind these entries yet: say so, never pretend.
+                tracing::info!(?action, "Sherlock menu entry not available yet");
                 return self.close_menu();
             }
             Message::SelectWorkspace(index) => {
                 tracing::info!(
                     index,
-                    "changer de bureau attend le protocole ext-workspace du compositeur"
+                    "switching workspaces waits for the compositor's ext-workspace protocol"
                 );
             }
             Message::Focus(direction) if self.menu_open() => {
@@ -120,7 +120,7 @@ impl Bar {
             }
             Message::Focus(direction) => return focus::advance(direction),
             Message::Closed(id) => {
-                // Le compositeur ferme le menu sur un clic ailleurs (popup_done).
+                // The compositor closes the menu on a click elsewhere (popup_done).
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
@@ -136,7 +136,7 @@ impl Bar {
             return self.close_menu();
         }
         let Some(surface) = self.surface else {
-            tracing::warn!("surface de la barre inconnue : le menu ne peut pas s'ouvrir");
+            tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
         };
         let (width, height) = menu::surface_size();
@@ -198,7 +198,7 @@ impl Bar {
             .spacing(metrics::STATUS_GAP)
             .align_y(Alignment::Center);
 
-        // Les deux côtés se partagent la place qui reste : les bureaux tombent au centre.
+        // Both sides share the remaining space: the workspaces land in the middle.
         let (pad_left, pad_right) = metrics::TOP_BAR_PADDING;
         let line = row![
             container(left).width(Length::Fill),
@@ -221,8 +221,7 @@ impl Bar {
             .into()
     }
 
-    /// Réseau, son, batterie, puis la date et l'heure. Un indicateur qu'on n'a pas encore lu
-    /// ne s'affiche pas.
+    /// Network, sound, battery, then date and time. An indicator not read yet is not shown.
     fn indicators(&self) -> Vec<Element<'_, Message>> {
         let tint = color::TEXT_SECONDARY;
         let mut items = Vec::new();
@@ -284,7 +283,7 @@ impl Bar {
     }
 }
 
-/// Tab déplace le focus ; les autres touches utiles vont au menu.
+/// Tab moves the focus; the other useful keys go to the menu.
 fn on_key(event: keyboard::Event) -> Option<Message> {
     focus::tab(event.clone())
         .map(Message::Focus)
@@ -305,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn les_fleches_et_tab_parcourent_le_menu() {
+    fn arrows_and_tab_walk_the_menu() {
         let (mut bar, _) = with_menu();
         let _ = bar.update(Message::MenuKey(menu::Key::Next));
         let _ = bar.update(Message::MenuKey(menu::Key::Next));
@@ -317,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn entree_active_l_entree_surlignee_et_ferme_le_menu() {
+    fn enter_activates_the_highlighted_entry_and_closes_the_menu() {
         let (mut bar, _) = with_menu();
         let _ = bar.update(Message::Hover(4));
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
@@ -326,21 +325,21 @@ mod tests {
     }
 
     #[test]
-    fn echap_ferme_le_menu() {
+    fn escape_closes_the_menu() {
         let (mut bar, _) = with_menu();
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert!(!bar.menu_open());
     }
 
     #[test]
-    fn menu_ferme_les_touches_du_menu_ne_font_rien() {
+    fn menu_keys_do_nothing_while_the_menu_is_closed() {
         let mut bar = Bar::default();
         let _ = bar.update(Message::MenuKey(menu::Key::Next));
         assert_eq!(bar.cursor, None);
     }
 
     #[test]
-    fn le_compositeur_peut_fermer_le_menu() {
+    fn the_compositor_can_close_the_menu() {
         let (mut bar, id) = with_menu();
         let _ = bar.update(Message::Hover(2));
         let _ = bar.update(Message::Closed(Id::unique()));
@@ -351,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn sans_surface_le_menu_ne_s_ouvre_pas() {
+    fn without_a_surface_the_menu_does_not_open() {
         let mut bar = Bar::default();
         let _ = bar.update(Message::ToggleMenu);
         assert!(!bar.menu_open());

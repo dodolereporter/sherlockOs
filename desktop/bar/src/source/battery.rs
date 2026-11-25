@@ -1,20 +1,20 @@
-//! Batterie, lue chez UPower par la commande `upower`. Le périphérique « DisplayDevice » est
-//! celui qu'UPower compose pour l'affichage : toutes les batteries du portable en une.
+//! Battery, read from UPower with the `upower` command. The "DisplayDevice" is the device
+//! UPower composes for display: all the laptop's batteries as one.
 
 use super::{Monitor, Source, SourceError, field, run};
 
 const DISPLAY_DEVICE: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 
-/// Sous ce pourcentage, une batterie qui se vide est signalée.
+/// Below this percentage, a discharging battery is flagged.
 pub const LOW_PERCENT: u8 = 15;
 
-/// Ce que fait la batterie.
+/// What the battery is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Charge {
     Charging,
     Discharging,
     Full,
-    /// Branchée sans charger, ou état inconnu.
+    /// Plugged in without charging, or unknown state.
     Idle,
 }
 
@@ -25,13 +25,13 @@ pub struct Battery {
 }
 
 impl Battery {
-    /// Faible : elle se vide et passe sous `LOW_PERCENT`.
+    /// Low: discharging and below `LOW_PERCENT`.
     pub fn is_low(&self) -> bool {
         self.charge == Charge::Discharging && self.percent < LOW_PERCENT
     }
 }
 
-/// Lit la sortie de `upower -i …/DisplayDevice`. `None` : pas de batterie.
+/// Parses the output of `upower -i …/DisplayDevice`. `None`: no battery.
 pub fn parse(output: &str) -> Result<Option<Battery>, SourceError> {
     let error = |detail: &str| SourceError::Parse {
         command: "upower",
@@ -42,7 +42,7 @@ pub fn parse(output: &str) -> Result<Option<Battery>, SourceError> {
     }
     let percent = field(output, "percentage")
         .and_then(|p| p.trim_end_matches('%').parse::<f32>().ok())
-        .ok_or_else(|| error("pourcentage absent"))?;
+        .ok_or_else(|| error("missing percentage"))?;
     let charge = match field(output, "state") {
         Some("charging") => Charge::Charging,
         Some("discharging") => Charge::Discharging,
@@ -55,7 +55,7 @@ pub fn parse(output: &str) -> Result<Option<Battery>, SourceError> {
     }))
 }
 
-/// La batterie du poste, surveillée par `upower --monitor`.
+/// The machine's battery, watched with `upower --monitor`.
 pub struct UPower {
     monitor: Monitor,
 }
@@ -89,9 +89,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn batterie_pleine_sur_secteur() {
-        // Enregistrée sur le portable de référence, branché.
-        let battery = parse(include_str!("../../sorties/upower-pleine.txt")).unwrap();
+    fn full_battery_on_mains() {
+        // Recorded on the reference laptop, plugged in.
+        let battery = parse(include_str!("../../fixtures/upower-full.txt")).unwrap();
         assert_eq!(
             battery,
             Some(Battery {
@@ -103,9 +103,9 @@ mod tests {
     }
 
     #[test]
-    fn batterie_faible_qui_se_vide() {
-        // La même, réécrite à 12 % et en décharge.
-        let battery = parse(include_str!("../../sorties/upower-faible.txt"))
+    fn low_battery_discharging() {
+        // The same output, rewritten at 12 % and discharging.
+        let battery = parse(include_str!("../../fixtures/upower-low.txt"))
             .unwrap()
             .unwrap();
         assert_eq!(battery.percent, 12);
@@ -114,14 +114,14 @@ mod tests {
     }
 
     #[test]
-    fn sans_batterie_rien_ne_s_affiche() {
+    fn without_battery_nothing_is_shown() {
         let output = "  power supply:         no\n  unknown\n    present:             no\n";
         assert_eq!(parse(output).unwrap(), None);
         assert!(parse("  battery\n    present:  yes\n").is_err());
     }
 
     #[test]
-    fn un_pourcentage_decimal_est_arrondi() {
+    fn a_decimal_percentage_is_rounded() {
         let output = "  battery\n    present: yes\n    state: charging\n    percentage: 54.6%\n";
         let battery = parse(output).unwrap().unwrap();
         assert_eq!((battery.percent, battery.charge), (55, Charge::Charging));

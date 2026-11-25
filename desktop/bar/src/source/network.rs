@@ -1,9 +1,9 @@
-//! Réseau, lu chez NetworkManager par la commande `nmcli`. Le service réseau de l'OS n'est pas
-//! encore choisi (lot S-13) : une autre implémentation de `Source` le remplacera au besoin.
+//! Network, read from NetworkManager with the `nmcli` command. The OS network service is not
+//! chosen yet (batch S-13): another `Source` implementation will replace this one if needed.
 
 use super::{Monitor, Source, SourceError, run};
 
-/// Le lien qui porte la connexion.
+/// The link that carries the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Link {
     Wifi,
@@ -16,7 +16,7 @@ pub enum Network {
     Disconnected,
 }
 
-/// Découpe une ligne de `nmcli -t`, où `\:` est un deux-points dans une valeur.
+/// Splits a `nmcli -t` line, where `\:` is a colon inside a value.
 fn split_terse(line: &str) -> Vec<String> {
     let mut fields = vec![String::new()];
     let mut chars = line.chars();
@@ -33,8 +33,8 @@ fn split_terse(line: &str) -> Vec<String> {
     fields
 }
 
-/// Lit la sortie de `nmcli -t -f TYPE,STATE,CONNECTION device`. Seules les cartes Wi-Fi et
-/// Ethernet comptent : les ponts de Docker ou la boucle locale ne sont pas une connexion.
+/// Parses the output of `nmcli -t -f TYPE,STATE,CONNECTION device`. Only Wi-Fi and Ethernet
+/// devices count: Docker bridges or the loopback are not a connection.
 pub fn parse(output: &str) -> Network {
     output
         .lines()
@@ -50,7 +50,7 @@ pub fn parse(output: &str) -> Network {
         .unwrap_or(Network::Disconnected)
 }
 
-/// Le réseau du poste, surveillé par `nmcli monitor`.
+/// The machine's network, watched with `nmcli monitor`.
 pub struct NetworkManager {
     monitor: Monitor,
 }
@@ -81,9 +81,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wifi_connecte() {
-        // Enregistrée sur le portable de référence : Wi-Fi, ponts Docker, Ethernet débranché.
-        let network = parse(include_str!("../../sorties/nmcli-wifi.txt"));
+    fn wifi_connected() {
+        // Recorded on the reference laptop: Wi-Fi, Docker bridges, Ethernet unplugged.
+        let network = parse(include_str!("../../fixtures/nmcli-wifi.txt"));
         assert_eq!(
             network,
             Network::Connected {
@@ -94,8 +94,8 @@ mod tests {
     }
 
     #[test]
-    fn ethernet_connecte() {
-        let network = parse(include_str!("../../sorties/nmcli-filaire.txt"));
+    fn ethernet_connected() {
+        let network = parse(include_str!("../../fixtures/nmcli-wired.txt"));
         assert!(matches!(
             network,
             Network::Connected {
@@ -106,14 +106,14 @@ mod tests {
     }
 
     #[test]
-    fn les_ponts_ne_comptent_pas() {
-        let network = parse(include_str!("../../sorties/nmcli-deconnecte.txt"));
+    fn bridges_do_not_count() {
+        let network = parse(include_str!("../../fixtures/nmcli-disconnected.txt"));
         assert_eq!(network, Network::Disconnected);
         assert_eq!(parse(""), Network::Disconnected);
     }
 
     #[test]
-    fn un_deux_points_echappe_reste_dans_le_nom() {
+    fn an_escaped_colon_stays_in_the_name() {
         let network = parse("wifi:connected:Café\\:2\n");
         assert_eq!(
             network,

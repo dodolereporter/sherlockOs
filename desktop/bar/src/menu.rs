@@ -1,10 +1,11 @@
-//! Menu Sherlock : ses entrées (planche Menus), sa taille et sa navigation au clavier.
+//! Sherlock menu: its entries (Menus design board), the size of its surface and its keyboard
+//! navigation.
 
 use iced::keyboard::{self, Key as IcedKey, key::Named};
 use sherlock_ui::component::Trailing;
 use sherlock_ui::{metrics, strings::top_bar as text};
 
-/// Les entrées du menu. Aucune n'est encore branchée : l'activer l'écrit au journal.
+/// The menu entries. None of them is wired yet: activating one logs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     About,
@@ -44,19 +45,19 @@ impl Action {
             Self::Settings => Trailing::Shortcut(text::SETTINGS_SHORTCUT),
             Self::GameMode => Trailing::Shortcut(text::GAME_MODE_SHORTCUT),
             Self::Lock => Trailing::Shortcut(text::LOCK_SHORTCUT),
-            // La planche annonce un sous-menu, qu'elle ne dessine pas.
+            // The design board announces a submenu that it does not draw.
             Self::PowerOff => Trailing::Submenu,
             _ => Trailing::None,
         }
     }
 
-    /// Première entrée d'un groupe : un séparateur la précède.
+    /// First entry of a group: a separator comes before it.
     pub fn starts_group(self) -> bool {
         self == Self::GameMode
     }
 }
 
-/// Taille de la surface du menu : largeur, puis hauteur avec l'écart sous la barre.
+/// Size of the menu surface: width, then height including the gap below the bar.
 pub fn surface_size() -> (u32, u32) {
     let (top, _, bottom) = metrics::MENU_HEADER_PADDING;
     let header = top + metrics::MENU_AVATAR + bottom;
@@ -71,7 +72,7 @@ pub fn surface_size() -> (u32, u32) {
     (metrics::MENU_WIDTH as u32, height.ceil() as u32)
 }
 
-/// Touche utile dans le menu ouvert.
+/// A key that matters in the open menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Next,
@@ -82,7 +83,7 @@ pub enum Key {
     Close,
 }
 
-/// Les touches du menu : flèches, Début, Fin, Entrée, Espace, Échap. Tab passe par le focus.
+/// Menu keys: arrows, Home, End, Enter, Space, Escape. Tab goes through focus.
 pub fn key(event: keyboard::Event) -> Option<Key> {
     let keyboard::Event::KeyPressed { key, .. } = event else {
         return None;
@@ -101,8 +102,8 @@ pub fn key(event: keyboard::Event) -> Option<Key> {
     })
 }
 
-/// Entrée surlignée après `key`. Les flèches bouclent ; sans entrée surlignée, Bas prend la
-/// première et Haut la dernière.
+/// Highlighted entry after `key`. Arrows wrap around; with no highlighted entry, Down takes the
+/// first one and Up the last one.
 pub fn move_cursor(cursor: Option<usize>, key: Key) -> Option<usize> {
     let last = Action::ALL.len() - 1;
     match (key, cursor) {
@@ -119,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_fleches_parcourent_et_bouclent() {
+    fn arrows_walk_and_wrap() {
         assert_eq!(move_cursor(None, Key::Next), Some(0));
         assert_eq!(move_cursor(None, Key::Previous), Some(6));
         assert_eq!(move_cursor(Some(0), Key::Next), Some(1));
@@ -130,12 +131,12 @@ mod tests {
     }
 
     #[test]
-    fn le_menu_suit_la_planche() {
+    fn the_menu_follows_the_design_board() {
         let labels: Vec<_> = Action::ALL.iter().map(|a| a.label()).collect();
         assert_eq!(labels[0], "À propos de cet ordinateur");
         assert_eq!(labels[6], "Éteindre");
-        // Planche Menus : 256 de large ; en-tête de 54, deux séparateurs de 9, sept entrées
-        // de 30, marges de 6, plus l'écart de 6 sous la barre.
+        // Menus board: 256 wide; header of 54, two separators of 9, seven entries of 30,
+        // padding of 6, plus the gap of 6 below the bar.
         assert_eq!(surface_size(), (256, 6 + 12 + 54 + 18 + 210));
     }
 }

@@ -21,13 +21,13 @@ pub enum Icon {
     Network,
     /// Son activé.
     Sound,
-    /// Réseau déconnecté.
+    /// Network disconnected.
     NetworkOff,
-    /// Son coupé.
+    /// Sound muted.
     SoundMuted,
-    /// Batterie.
+    /// Battery.
     Battery,
-    /// Batterie en charge.
+    /// Battery charging.
     BatteryCharging,
 }
 
@@ -47,8 +47,10 @@ impl Icon {
     ];
 
     /// Tracé sur la grille de 24. Ceux du réseau, du son, de la recherche, du chevron et de la
-    /// coche sont ceux des planches. Les planches ne dessinent ni la batterie, ni le réseau
-    /// coupé, ni le son coupé : ces trois-là reprennent le trait des autres.
+    /// coche sont ceux des planches.
+    ///
+    /// The boards draw neither the battery, nor the network off, nor the muted sound: those
+    /// three follow the stroke of the others.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",

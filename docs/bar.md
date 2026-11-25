@@ -1,0 +1,270 @@
+# Top bar
+
+`desktop/bar` is the desktop's top bar: a separate program, anchored at the top of the screen
+with layer-shell (ADR 0005), written with iced 0.14 and tiny-skia software rendering
+(ADR 0014). Batch D-20 builds it from the `Main.dc.html` design board and, for the Sherlock
+menu, `Menus.dc.html`. The crate, the binary and the layer-shell namespace are all `bar`. The
+texts it shows stay in French, from `sherlock-ui`.
+
+![The bar in a nested KWin](../desktop/bar/screenshots/bar-kwin.png)
+
+![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
+
+## What it shows
+
+| Place | Content | Source |
+| --- | --- | --- |
+| Left | Sherlock button, which opens the Sherlock menu as an `xdg_popup` | |
+| Left | Name of the active application | Placeholder (see Workspaces) |
+| Center | The workspaces, the active one in green | Placeholder (see Workspaces) |
+| Right | Network, sound, battery and its percentage | NetworkManager, PulseAudio or PipeWire, UPower |
+| Right | Short date and time, in French | Local clock |
+
+An indicator that has not been read yet is not shown. Without a battery, the battery
+indicator disappears. A battery discharging below 15 % turns amber.
+
+## Architecture
+
+| Module | Role |
+| --- | --- |
+| `lib.rs` | Layer-shell surface and iced settings, startup (`run`) |
+| `app.rs` | State (`Bar`), messages, update, bar view and menu view |
+| `menu.rs` | Sherlock menu entries, size of its surface, keyboard keys |
+| `source/` | One source per piece of system data, behind the `Source` trait |
+| `user.rs` | User name, read from the GECOS field of `/etc/passwd` |
+
+Every color, size and text comes from `sherlock-ui`: tokens `TOP_BAR_*`, `CHIP*`,
+`SHERLOCK_*`, `STATUS_*`, `MENU_AVATAR*`, `MENU_HEADER_PADDING`; components `chip`,
+`sherlock_button`, `status`, `menu_header`, `logo`; the `strings` text module; icons
+`NetworkOff`, `SoundMuted`, `Battery` and `BatteryCharging`. The only threshold written in the
+bar is the low battery one (`battery::LOW_PERCENT`), which is behavior.
+
+### Surface
+
+The layer-shell surface is anchored to the top, left and right, on the `Top` layer, 36 high
+with margins of 10 at the top and 12 on the sides. It declares an exclusive zone of 36. It gets
+the keyboard on demand (`OnDemand`): only when clicking into the bar or its menu. Protocol log
+taken in the nested KWin (`WAYLAND_DEBUG=client`):
+
+```text
+zwlr_layer_surface_v1#29.set_anchor(13)
+zwlr_layer_surface_v1#29.set_keyboard_interactivity(2)
+zwlr_layer_surface_v1#29.set_size(0, 36)
+zwlr_layer_surface_v1#29.set_exclusive_zone(36)
+zwlr_layer_surface_v1#29.set_margin(10, 12, 0, 12)
+zwlr_layer_surface_v1#29.configure(101, 1416, 36)
+```
+
+The Sherlock menu is an `xdg_popup` attached to the bar surface, anchored below the Sherlock
+button. Its surface is 256 wide and starts 6 below the bar: the Menus board puts it at
+(18, 52), and that is where it shows. The compositor closes it on a click elsewhere.
+
+### Layer-shell crate: `iced_exwlshell` 0.21.4
+
+The brief asked to try `iced_exwlshell` 0.21, never tried by D-00, before falling back to
+`iced_layershell` 0.19.1. Version 0.21.4 works at the first try with iced 0.14.0 and tiny-skia;
+the bar keeps it, pinned. What we learnt:
+
+- It is declared with `default-features = false, features = ["macros"]`. The default
+  `linux-theme-detection` feature pulls `mundy` to read the system theme: useless here, our
+  theme comes from `sherlock-ui`.
+- It pulls `winit-core` and `winit-common` 0.31.0-beta.4 and builds with them: the
+  `iced_exdevtools` 0.19.1 breakage noted by D-00 is gone. It also pulls `iced_devtools` and
+  `iced_exdevtools`, even without its `debug` feature.
+- It does not pull wgpu: `iced_renderer` comes without default features, so the renderer stays
+  the one `sherlock-ui` enables (tiny-skia only). The NVIDIA card is not woken up.
+- API changes since 0.19: `ExWlSettings` replaces `Settings` (passed with `.wl_settings(..)`,
+  iced's own settings with `.settings(..)`); `LayerSize::fill_width(36)` replaces
+  `size: Some((0, 36))`; `Margin { top, right, bottom, left }` replaces the tuple; the macro is
+  still `#[to_layer_message(multi)]` for a program with several surfaces.
+- `IcedNewPopupSettings::new(parent, size, anchor position, anchor size)` places a popup;
+  `.anchor(..)` and `.gravity(..)` tune it.
+- `.on_new_shell(..)` reports each created surface with its type: the bar learns its own surface
+  id this way, where the D-00 prototype guessed it at the first `view`.
+- It can ask the compositor for a blur (`BlurOption`), but only on rectangles: the rounded
+  corners of the bar would show a square blur. The bar does not use it.
+- It offers `.redraw_scope(..)` to skip redraws on some messages. Not used: the bar already only
+  gets a message when a value changes.
+
+## Sources
+
+Each piece of data comes from a source implementing the `source::Source` trait:
+
+```rust
+pub trait Source: Send + 'static {
+    type State: Clone + PartialEq + Send + Debug + 'static;
+    fn read(&mut self) -> Result<Self::State, SourceError>; // reads the current state
+    fn wait(&mut self) -> bool; // waits until it may have changed, false if it never will
+}
+```
+
+`source::watch` runs a source on its own thread and turns it into a stream for an iced
+subscription. It only sends a state when it changed: the bar does not redraw for nothing.
+`source::Fixed` is the fake implementation used by tests, a state that never changes.
+
+| Source | Read | Watch | Parsing tested on |
+| --- | --- | --- | --- |
+| `SystemClock` | `date "+%u %d %m %H %M"`, once a minute | The thread looks at the clock every 5 s at most, to catch up after a suspend | Handwritten outputs |
+| `UPower` | `upower -i /org/freedesktop/UPower/devices/DisplayDevice` | `upower --monitor` | `fixtures/upower-*.txt` |
+| `NetworkManager` | `nmcli -t -f TYPE,STATE,CONNECTION device` | `nmcli monitor` | `fixtures/nmcli-*.txt` |
+| `Pactl` | `pactl get-sink-volume` and `get-sink-mute` on `@DEFAULT_SINK@` | `pactl subscribe`, lines about an output or the server | `fixtures/pactl-*.txt` |
+| `Placeholder` | Variables `BAR_WORKSPACES` and `BAR_APP` | None | Module tests |
+
+Commands run with `LC_ALL=C`, for an output that does not depend on the language. A watch
+command that stops is restarted 30 s later. The `upower-full.txt`, `nmcli-wifi.txt` and
+`pactl-55.txt` outputs were recorded on the reference laptop; the others are rewritten from
+them by hand (battery at 12 % discharging, sound muted, Ethernet, network off).
+
+**Why commands and not D-Bus.** The brief allowed `zbus`. The machine's commands are enough,
+add no dependency, and can be tested on recorded outputs. Their watch mode reports changes:
+nothing polls. Sound is not on D-Bus with PipeWire anyway. If the OS does not ship these
+commands, a D-Bus source will implement the same trait.
+
+**Why `date` for the clock.** The standard library does not know the time zone, and the brief
+does not allow `chrono`. `date` runs once a minute; time zones being offset by whole minutes,
+the local minute changes at the same time as the UTC minute, which the thread watches without
+running anything.
+
+The OS network service is not chosen yet (batch S-13): `NetworkManager` is the source of the
+development machine, another one will replace it if needed.
+
+### Workspaces and active application
+
+The compositor publishes neither its workspaces nor its windows yet. The `Placeholder` source
+is fake: three numbered workspaces, the first one active, no active application. To compare
+with the design board:
+
+```sh
+BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" cargo run -p bar
+```
+
+A click on a workspace is logged; the active workspace does not change, since nothing really
+switches workspaces.
+
+**What the compositor will have to provide** to replace `Placeholder` with a real source:
+
+1. **Workspaces**: the `ext-workspace-v1` protocol. One workspace group per output; for each
+   workspace its `name`, its place (`coordinates`, for the number) and its `active` state; and
+   the `activate` request to switch workspaces on click. The bar shows the workspaces of the
+   group of the output it sits on.
+2. **Active application**: `ext-foreign-toplevel-list-v1` lists the windows with their `app_id`
+   and title, but does not say which one has the focus. The "activated" state of a window is
+   needed as well: `zwlr_foreign_toplevel_manager_v1` (`activated` state) or an extension of our
+   compositor. The bar shows the application name, taken from its `.desktop` file by `app_id`.
+3. Events on every change, so the bar never has to poll.
+
+## Sherlock menu
+
+It has the entries of the Menus board: a header with the user name and « Session ouverte »,
+then « À propos de cet ordinateur », « Réglages », « Mises à jour », « Passer en mode jeu »,
+« Verrouiller », « Fermer la session », « Éteindre ». None of these actions exists yet: each
+entry stays enabled, so it can be walked through, and activating it logs it and closes the
+menu. Nothing is simulated.
+
+Keyboard:
+
+| Where | Key | Effect |
+| --- | --- | --- |
+| Bar | Tab, Shift+Tab | Moves between the buttons (Sherlock, workspaces), light blue ring |
+| Bar | Enter, Space | Activates the focused button: opens the Sherlock menu |
+| Menu | Down, Up, Tab, Shift+Tab | Highlights the next or previous entry, wrapping around |
+| Menu | Home, End | First, last entry |
+| Menu | Enter, Space | Activates the highlighted entry |
+| Menu | Escape | Closes the menu |
+
+Hovering with the pointer highlights an entry too: keyboard and pointer share the same cursor.
+
+## Running and checking by hand
+
+On the author's machine (Plasma X11), in a nested KWin Wayland:
+
+```sh
+cargo build -p bar
+kwin_wayland --x11-display :0 --width 1440 --height 900 --socket wayland-bar &
+WAYLAND_DISPLAY=wayland-bar BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar
+```
+
+Rendering is tiny-skia: no variable to set, the NVIDIA card sleeps. Logs go to standard
+error; `RUST_LOG=bar=debug` shows more.
+
+1. **Anchoring**: the bar floats 10 from the top and 12 from the sides, across the whole width.
+2. **Exclusive zone**: open a window in the nested KWin and maximize it. It must start below
+   the bar without covering it. To open a window there without it being handed to the main
+   session over D-Bus:
+   `WAYLAND_DISPLAY=wayland-bar QT_QPA_PLATFORM=wayland DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent kwrite`.
+3. **Real data**: the machine's time and date, the network icon (crossed out when Wi-Fi is
+   off), the sound (crossed out when muted), the battery and its percentage. Mute the sound
+   (`pactl set-sink-mute @DEFAULT_SINK@ toggle`) or unplug the charger: the bar should follow
+   right away.
+4. **Menu**: click the Sherlock button. The menu opens below it, the button gets its green
+   ring. Down, Up, Enter, Escape. An activated entry is logged:
+   `Sherlock menu entry not available yet action=Lock`. A click elsewhere closes the menu.
+5. **Keyboard in the bar**: click into the bar, then Tab: the ring moves from the Sherlock
+   button to the workspaces.
+
+Comparing with the design boards, by eye or on the screenshots:
+
+- Open `docs/design/planches/Main.dc.html` alongside. Compare: glass `rgba(16,26,44,0.78)`,
+  border `rgba(255,255,255,0.09)`, radius 12, inner padding 6 on the left and 10 on the right,
+  cream button of 30 by 28 with radius 8, application name at weight 600, workspace chips 24
+  high with radius 12 (active one green, text `#0B1220` at weight 600; the others
+  `rgba(255,255,255,0.07)`, text `#C5CEDB`), 4 between them, indicators in `#C5CEDB` 14 apart,
+  16 px icons, time in `#EEF2F7` at weight 600.
+- Open `Menus.dc.html`: menu 256 wide at (18, 52), padding 6, header with a cream avatar of 40
+  and radius 11, separators, shortcuts in `#A9B4C6` at 12 px, chevron on « Éteindre ».
+- Pixel measurements: `cargo test -p bar --test render` writes `target/tmp/bar-tiny-skia.png`
+  and `target/tmp/sherlock-menu-tiny-skia.png`, at scale 2, from fake sources (the date and
+  time of the board).
+
+To take a screenshot of the nested KWin from X11: `wmctrl -i -R <id>` brings its window to the
+front (`wmctrl -l` gives the id), then `import -window <id> screenshot.png`.
+
+## Tests
+
+`just verifier` runs everything, without a screen:
+
+- **Clock**: parsing of `date`'s output, date and time of the board (« mar. 24 nov. »,
+  « 21:46 »), leading zeros, rejected outputs; formats of `sherlock_ui::strings`.
+- **Battery, network, sound**: parsing of the recorded and rewritten outputs in `fixtures/`.
+- **Sources**: `watch` only sends changes; `Fixed` yields its state once.
+- **Placeholder workspaces** and **user name**.
+- **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the
+  board.
+- **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, expected
+  texts, a click on a workspace and on a menu entry yields the right message.
+- **Contrast** (`sherlock-ui`): bar texts and workspace chips, on the bar over the desktop and
+  its three discs.
+
+## Differences from the design board
+
+- **Sherlock button**: the board puts the mascot's head in it. The brief asks for the logo or a
+  `sherlock-ui` icon: it is the logo symbol, night blue on cream. Same for the menu avatar.
+- **Open menu ring**: the board writes it as a 2 px `box-shadow` outside the button; iced has
+  no shadow without blur, so the green ring is a 2 px border inside.
+- **Application menus** (Fichier, Édition…): the board shows them after the application name.
+  They will come with the global menu of our applications, outside this batch.
+- **Containers and sandboxes**: the board shows them on the right. They will come with the L
+  batches.
+- **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
+  15 % while discharging.
+- **User name**: the board says « Dodo ». The bar reads the user's GECOS, otherwise the login.
+- **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
+- **Éteindre**: the board announces a submenu that it does not draw. The chevron is there; the
+  entry is logged like the others.
+- **Blur and shadows**: the glass is only a translucent tint; blur is the compositor's job.
+  The menu shadow (`0 22px 54px`) would overflow its surface: it is not drawn.
+- **Animations**: the menu opens at once, hovers change at once (`sherlock-ui` does not wire
+  `motion` into its components yet).
+- **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
+  in a 36 high surface: the indicators have none.
+- **Background**: the nested KWin has no wallpaper; the bar shows over black there.
+
+## What this batch does not do
+
+- Real workspaces and active application: they wait for the compositor protocols.
+- The Sherlock menu actions: lock (login screen), game mode, settings, updates.
+- Quick settings on a click on an indicator (Panels batch), the dock (D-21), the launcher
+  (D-22).
+- Several outputs: the bar opens on the active output (`StartMode::Active`).
+- A real session: the bar only ran in a nested KWin. Our compositor supports layer-shell in
+  batch D-12.

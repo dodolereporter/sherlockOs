@@ -258,7 +258,7 @@ pub fn divider(_: &Theme) -> container::Style {
     }
 }
 
-/// Barre du haut : verre de la planche Main, rayon 12.
+/// Top bar: glass of the Main design board, radius 12.
 pub fn top_bar(_: &Theme) -> container::Style {
     surface(
         color::TOP_BAR_GLASS,
@@ -268,7 +268,7 @@ pub fn top_bar(_: &Theme) -> container::Style {
     )
 }
 
-/// Pastille d'un bureau : verte quand le bureau est actif, voilée sinon.
+/// Workspace chip: green when the workspace is active, veiled otherwise.
 pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let (fill, text) = match (active, status) {
@@ -281,12 +281,12 @@ pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
-/// Bouton Sherlock : pastille crème, cerclée de vert quand son menu est ouvert.
+/// Sherlock button: cream pill, ringed in green while its menu is open.
 pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let fill = match status {
-            // Pas de planche pour ces états : le crème s'assombrit un peu au survol, un peu
-            // plus à l'appui.
+            // No design board for these states: the cream darkens a little on hover, a
+            // little more when pressed.
             button::Status::Hovered => color::CREAM.mix(color::TEXT_ON_CREAM, 0.06),
             button::Status::Pressed => color::CREAM.mix(color::TEXT_ON_CREAM, 0.12),
             _ => color::CREAM,
@@ -304,7 +304,7 @@ pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button:
     }
 }
 
-/// Avatar crème en tête du menu Sherlock.
+/// Cream avatar at the top of the Sherlock menu.
 pub fn menu_avatar(_: &Theme) -> container::Style {
     container::Style {
         background: background(color::CREAM),
@@ -481,24 +481,24 @@ mod tests {
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
             }
         }
-        // Barre du haut, posée sur le bureau et ses disques : textes et pastilles des bureaux.
+        // Top bar over the desktop and its discs: texts and workspace chips.
         let desktops = std::iter::once(color::DESKTOP).chain(color::DESKTOP_DISCS);
         for (i, d) in desktops.enumerate() {
             let on = (
-                format!("barre sur bureau {i}"),
+                format!("top bar on desktop {i}"),
                 color::TOP_BAR_GLASS.over(d),
             );
             for (name, text) in [
-                ("texte de la barre", color::TEXT_PRIMARY),
-                ("indicateur de la barre", color::TEXT_SECONDARY),
-                ("batterie faible", color::AMBER),
+                ("top bar text", color::TEXT_PRIMARY),
+                ("top bar indicator", color::TEXT_SECONDARY),
+                ("low battery", color::AMBER),
             ] {
                 check(&mut failures, name, text, None, &on);
             }
             for active in [true, false] {
                 for status in STATUSES {
                     let s = chip(active)(&theme, status);
-                    let what = format!("pastille de bureau ({active}, {status:?})");
+                    let what = format!("workspace chip ({active}, {status:?})");
                     check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
                 }
             }

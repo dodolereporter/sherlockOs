@@ -351,7 +351,7 @@ pub fn glass_panel<'a, Message: 'a>(
         .style(theme::glass)
 }
 
-/// Pastille d'un bureau dans la barre du haut, verte quand il est actif.
+/// Workspace chip in the top bar, green when the workspace is active.
 pub fn chip<'a, Message: Clone + 'a>(
     label: impl text::IntoFragment<'a>,
     active: bool,
@@ -371,14 +371,14 @@ pub fn chip<'a, Message: Clone + 'a>(
     control
 }
 
-/// Symbole du logo, sans carré, à la taille donnée.
+/// Logo symbol, without its square, at the given size.
 pub fn logo<'a>(version: Logo, size: f32) -> Svg<'a> {
     svg(svg::Handle::from_memory(version.bare().as_bytes()))
         .width(size)
         .height(size)
 }
 
-/// Bouton Sherlock de la barre du haut : pastille crème et symbole du logo.
+/// Sherlock button of the top bar: cream pill and logo symbol.
 pub fn sherlock_button<'a, Message: Clone + 'a>(
     open: bool,
     on_press: Option<Message>,
@@ -395,7 +395,7 @@ pub fn sherlock_button<'a, Message: Clone + 'a>(
     control
 }
 
-/// Indicateur de la barre du haut : une icône, suivie de sa valeur s'il y en a une.
+/// Top bar indicator: an icon, followed by its value if there is one.
 pub fn status<'a, Message: 'a>(
     glyph: Icon,
     value: Option<String>,
@@ -410,7 +410,7 @@ pub fn status<'a, Message: 'a>(
     line.into()
 }
 
-/// En-tête d'un menu : avatar crème au symbole du logo, titre et sous-titre.
+/// Menu header: cream avatar with the logo symbol, title and subtitle.
 pub fn menu_header<'a, Message: 'a>(
     title: impl text::IntoFragment<'a>,
     subtitle: &'a str,

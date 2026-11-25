@@ -1,20 +1,21 @@
-//! Rendu de la barre et du menu Sherlock sans écran, à partir de fausses sources.
+//! Rendering the bar and the Sherlock menu without a screen, from fake sources.
 
 use std::path::PathBuf;
 
-use barre::app::{Bar, Message};
-use barre::menu;
-use barre::source::battery::{Battery, Charge};
-use barre::source::clock::LocalTime;
-use barre::source::network::{Link, Network};
-use barre::source::sound::Sound;
-use barre::source::workspaces::Workspaces;
+use bar::app::{Bar, Message};
+use bar::menu;
+use bar::source::battery::{Battery, Charge};
+use bar::source::clock::LocalTime;
+use bar::source::network::{Link, Network};
+use bar::source::sound::Sound;
+use bar::source::workspaces::Workspaces;
 use iced_test::simulator::Simulator;
 use sherlock_ui::{metrics, theme};
 
-/// La barre de la planche Main : trois bureaux, le premier actif, l'éditeur au premier plan.
-fn bar() -> Bar {
-    let mut bar = Bar::default();
+/// The bar of the Main design board: three workspaces, the first one active, the editor
+/// focused.
+fn sample() -> Bar {
+    let mut state = Bar::default();
     let messages = [
         Message::Clock(LocalTime {
             weekday: 2,
@@ -41,13 +42,13 @@ fn bar() -> Bar {
         )),
     ];
     for message in messages {
-        let _ = bar.update(message);
+        let _ = state.update(message);
     }
-    bar.user = String::from("Dodo");
-    bar
+    state.user = String::from("Dodo");
+    state
 }
 
-/// Écrit la capture dans `target/tmp/<nom>-tiny-skia.png` et rend son chemin et sa taille.
+/// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its path and size.
 fn capture(
     mut ui: Simulator<'_, Message>,
     name: &str,
@@ -61,61 +62,59 @@ fn capture(
     Ok((written, size))
 }
 
-/// Une capture écrite et pas vide.
+/// A screenshot that was written and is not empty.
 fn assert_written(result: Result<(PathBuf, u64), Box<dyn std::error::Error>>) {
     match result {
-        Ok((path, size)) => assert!(size > 2_000, "{} trop petite", path.display()),
-        Err(error) => panic!("capture impossible : {error}"),
+        Ok((path, size)) => assert!(size > 2_000, "{} too small", path.display()),
+        Err(error) => panic!("cannot capture: {error}"),
     }
 }
 
-/// Largeur de la barre sur l'écran de référence, marges ôtées.
+/// Width of the bar on the reference screen, margins removed.
 fn bar_size() -> (f32, f32) {
     let (width, _) = metrics::REFERENCE_SCREEN;
     let width = width - 2.0 * metrics::TOP_BAR_MARGIN_SIDE;
     (width, metrics::TOP_BAR_HEIGHT)
 }
 
-#[test]
-fn la_barre_se_rend_sans_ecran() {
-    let bar = bar();
-    let ui = Simulator::with_size(barre::settings(), bar_size(), bar.view_bar());
-    assert_written(capture(ui, "barre"));
-}
-
-#[test]
-fn le_menu_se_rend_sans_ecran() {
-    let mut bar = bar();
-    bar.cursor = Some(1);
+fn menu_size() -> (f32, f32) {
     let (width, height) = menu::surface_size();
-    let size = (width as f32, height as f32);
-    let ui = Simulator::with_size(barre::settings(), size, bar.view_menu());
-    assert_written(capture(ui, "menu-sherlock"));
+    (width as f32, height as f32)
 }
 
 #[test]
-fn la_barre_affiche_l_heure_la_date_et_les_bureaux() {
-    let bar = bar();
-    let mut ui = Simulator::with_size(barre::settings(), bar_size(), bar.view_bar());
+fn the_bar_renders_without_a_screen() {
+    let state = sample();
+    let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+    assert_written(capture(ui, "bar"));
+}
+
+#[test]
+fn the_menu_renders_without_a_screen() {
+    let mut state = sample();
+    state.cursor = Some(1);
+    let ui = Simulator::with_size(bar::settings(), menu_size(), state.view_menu());
+    assert_written(capture(ui, "sherlock-menu"));
+}
+
+#[test]
+fn the_bar_shows_time_date_and_workspaces() {
+    let state = sample();
+    let mut ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
     for text in ["21:46", "mar. 24 nov.", "82\u{202F}%", "Éditeur", "3 · Jeu"] {
-        assert!(ui.find(text).is_ok(), "{text} absent de la barre");
+        assert!(ui.find(text).is_ok(), "{text} missing from the bar");
     }
-    ui.click("2 · Web").expect("bureau trouvé");
+    ui.click("2 · Web").expect("workspace found");
     let messages: Vec<_> = ui.into_messages().collect();
     assert!(matches!(messages[..], [Message::SelectWorkspace(1)]));
 }
 
 #[test]
-fn un_clic_dans_le_menu_choisit_son_entree() {
-    let bar = bar();
-    let (width, height) = menu::surface_size();
-    let mut ui = Simulator::with_size(
-        barre::settings(),
-        (width as f32, height as f32),
-        bar.view_menu(),
-    );
+fn a_click_in_the_menu_picks_its_entry() {
+    let state = sample();
+    let mut ui = Simulator::with_size(bar::settings(), menu_size(), state.view_menu());
     assert!(ui.find("Dodo").is_ok());
-    ui.click("Verrouiller").expect("entrée trouvée");
+    ui.click("Verrouiller").expect("entry found");
     let activated = ui
         .into_messages()
         .any(|m| matches!(m, Message::Activate(menu::Action::Lock)));

@@ -1,31 +1,31 @@
-//! Bureaux et application active.
+//! Workspaces and active application.
 //!
-//! Le compositeur ne publie encore ni ses bureaux (`ext-workspace-v1`) ni ses fenêtres
-//! (`ext-foreign-toplevel-list-v1`). En attendant, `Placeholder` est une source factice, fixée
-//! au démarrage par deux variables d'environnement. Ce que le compositeur devra fournir est
-//! décrit dans `docs/barre.md`.
+//! The compositor publishes neither its workspaces (`ext-workspace-v1`) nor its windows
+//! (`ext-foreign-toplevel-list-v1`) yet. Until then, `Placeholder` is a fake source, set at
+//! startup by two environment variables. What the compositor will have to provide is described
+//! in `docs/bar.md`.
 
 use super::{Source, SourceError};
 
-/// Noms des bureaux factices, séparés par des virgules. Un nom vide garde le seul numéro.
-pub const NAMES_VAR: &str = "BARRE_BUREAUX";
-/// Nom de l'application active factice.
-pub const APP_VAR: &str = "BARRE_APPLICATION";
-/// Nombre de bureaux factices sans `BARRE_BUREAUX`.
+/// Names of the placeholder workspaces, comma separated. An empty name keeps the number only.
+pub const NAMES_VAR: &str = "BAR_WORKSPACES";
+/// Name of the placeholder active application.
+pub const APP_VAR: &str = "BAR_APP";
+/// Number of placeholder workspaces without `BAR_WORKSPACES`.
 const DEFAULT_COUNT: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspaces {
-    /// Nom de chaque bureau, dans l'ordre de leurs numéros.
+    /// Name of each workspace, in the order of their numbers.
     pub names: Vec<Option<String>>,
-    /// Indice du bureau actif dans `names`.
+    /// Index of the active workspace in `names`.
     pub active: usize,
-    /// Nom de l'application qui a le focus.
+    /// Name of the focused application.
     pub app: Option<String>,
 }
 
 impl Workspaces {
-    /// Les bureaux factices : ceux de `names` (variable `BARRE_BUREAUX`), le premier actif.
+    /// The placeholder workspaces: those of `names` (`BAR_WORKSPACES`), the first one active.
     pub fn placeholder(names: Option<&str>, app: Option<&str>) -> Self {
         let names = match names {
             Some(list) => list
@@ -46,7 +46,7 @@ impl Workspaces {
     }
 }
 
-/// Source factice : lit les variables une fois, ne change jamais.
+/// Fake source: reads the variables once, never changes.
 #[derive(Debug, Default)]
 pub struct Placeholder;
 
@@ -69,14 +69,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sans_variable_trois_bureaux_numerotes() {
+    fn without_variable_three_numbered_workspaces() {
         let w = Workspaces::placeholder(None, None);
         assert_eq!(w.names, [None, None, None]);
         assert_eq!((w.active, w.app), (0, None));
     }
 
     #[test]
-    fn les_noms_viennent_de_la_variable() {
+    fn names_come_from_the_variable() {
         let w = Workspaces::placeholder(Some("Code, ,Jeu"), Some(" Éditeur "));
         assert_eq!(
             w.names,

@@ -1,5 +1,6 @@
-//! Barre du haut du desktop : un programme séparé, ancré en haut de l'écran par layer-shell
-//! (ADR 0005), écrit en iced 0.14 en rendu logiciel (ADR 0014). Voir `docs/barre.md`.
+//! Top bar of the desktop: a separate program, anchored at the top of the screen with
+//! layer-shell (ADR 0005), written with iced 0.14 and software rendering (ADR 0014). See
+//! `docs/bar.md`.
 
 pub mod app;
 pub mod menu;
@@ -14,11 +15,11 @@ use sherlock_ui::{color, metrics, theme, typography};
 
 use app::{Bar, Message};
 
-/// Nom de la surface layer-shell, que le compositeur peut lire.
-const NAMESPACE: &str = "barre";
+/// Name of the layer-shell surface, readable by the compositor.
+const NAMESPACE: &str = "bar";
 
-/// Réglages de la surface : ancrée en haut et sur les côtés, 36 de haut, marges de la
-/// planche, zone exclusive de sa hauteur. Le clavier ne vient que si on clique dans la barre.
+/// Surface settings: anchored to the top and both sides, 36 high, margins of the design
+/// board, exclusive zone of its height. The keyboard only comes when clicking into the bar.
 pub fn layer_settings() -> LayerShellSettings {
     let side = metrics::TOP_BAR_MARGIN_SIDE as i32;
     LayerShellSettings {
@@ -38,7 +39,7 @@ pub fn layer_settings() -> LayerShellSettings {
     }
 }
 
-/// Réglages d'iced : polices de sherlock-ui, texte de l'interface.
+/// iced settings: sherlock-ui fonts and interface text size.
 pub fn settings() -> Settings {
     Settings {
         fonts: typography::FONTS.map(std::borrow::Cow::Borrowed).to_vec(),
@@ -48,9 +49,9 @@ pub fn settings() -> Settings {
     }
 }
 
-/// Lance la barre jusqu'à la fin de la session.
+/// Runs the bar until the session ends.
 pub fn run() -> Result<(), iced_exwlshell::Error> {
-    // La barre n'a aucun champ de saisie : inutile de lancer le fil du presse-papiers.
+    // The bar has no text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
     iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
         .theme(|_: &Bar, _| Some(theme::theme()))

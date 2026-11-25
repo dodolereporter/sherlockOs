@@ -1,5 +1,5 @@
-//! Horloge locale. La bibliothèque standard ne connaît pas le fuseau horaire : l'heure locale
-//! vient de la commande `date`, lancée une fois par minute.
+//! Local clock. The standard library does not know the time zone: local time comes from the
+//! `date` command, run once a minute.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -7,15 +7,15 @@ use sherlock_ui::strings;
 
 use super::{Source, SourceError, run};
 
-/// Le plus long sommeil entre deux regards sur l'horloge. Le fil se réveille plus souvent que
-/// la minute pour ne pas rester en retard après une mise en veille ; il ne relit `date` que
-/// quand la minute a changé.
+/// Longest sleep between two looks at the clock. The thread wakes up more often than once a
+/// minute so it does not lag behind after a suspend; it only runs `date` once the minute
+/// changed.
 const MAX_SLEEP: Duration = Duration::from_secs(5);
 
-/// Format passé à `date` : jour de la semaine (1 pour lundi), jour, mois, heure, minute.
+/// Format given to `date`: day of the week (1 is Monday), day, month, hour, minute.
 const DATE_FORMAT: &str = "+%u %d %m %H %M";
 
-/// Heure locale, à la minute.
+/// Local time, to the minute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalTime {
     pub weekday: u8,
@@ -26,18 +26,18 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
-    /// Date courte, comme « mar. 24 nov. ».
+    /// Short date, such as « mar. 24 nov. ».
     pub fn date(&self) -> String {
         strings::short_date(self.weekday, self.day, self.month).unwrap_or_default()
     }
 
-    /// Heure, comme « 21:46 ».
+    /// Time, such as « 21:46 ».
     pub fn time(&self) -> String {
         strings::clock(self.hour, self.minute)
     }
 }
 
-/// Lit la sortie de `date "+%u %d %m %H %M"`.
+/// Parses the output of `date "+%u %d %m %H %M"`.
 pub fn parse(output: &str) -> Result<LocalTime, SourceError> {
     let error = || SourceError::Parse {
         command: "date",
@@ -68,14 +68,14 @@ pub fn parse(output: &str) -> Result<LocalTime, SourceError> {
     })
 }
 
-/// L'horloge du système.
+/// The system clock.
 #[derive(Debug, Default)]
 pub struct SystemClock {
     minute: u64,
 }
 
-/// Minutes écoulées depuis 1970. Les fuseaux sont décalés de minutes entières : la minute
-/// locale change en même temps que celle-ci.
+/// Minutes since 1970. Time zones are offset by whole minutes: the local minute changes at
+/// the same time as this one.
 fn epoch_minute() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -107,22 +107,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn la_sortie_de_date_donne_l_heure_de_la_planche() {
-        // Sortie de `date "+%u %d %m %H %M"`, le mardi 24 novembre 2026 à 21:46.
+    fn date_output_gives_the_time_of_the_design_board() {
+        // Output of `date "+%u %d %m %H %M"` on Tuesday 24 November 2026 at 21:46.
         let time = parse("2 24 11 21 46\n").unwrap();
         assert_eq!(time.date(), "mar. 24 nov.");
         assert_eq!(time.time(), "21:46");
     }
 
     #[test]
-    fn minuit_et_les_petits_nombres_gardent_deux_chiffres() {
+    fn midnight_and_small_numbers_keep_two_digits() {
         let time = parse("7 01 08 00 05").unwrap();
         assert_eq!(time.date(), "dim. 1 août");
         assert_eq!(time.time(), "00:05");
     }
 
     #[test]
-    fn une_sortie_inattendue_est_refusee() {
+    fn unexpected_output_is_rejected() {
         assert!(parse("").is_err());
         assert!(parse("2 24 11 21").is_err());
         assert!(parse("8 24 11 21 46").is_err());

@@ -1,6 +1,6 @@
 [package]
-name = "barre"
-description = "Barre du haut du desktop, ancrée par layer-shell"
+name = "bar"
+description = "Top bar of the desktop, anchored with layer-shell"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

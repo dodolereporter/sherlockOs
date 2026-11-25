@@ -1,36 +1,36 @@
-//! Textes d'interface partagés, en français et au tutoiement. Un programme n'écrit aucun texte
-//! d'interface lui-même : il le prend ici.
+//! Shared interface texts, in French and using « tu ». A program writes no interface text
+//! itself: it takes it from here.
 
-/// Jours de la semaine abrégés, du lundi au dimanche.
+/// Abbreviated days of the week, Monday to Sunday.
 pub const WEEKDAYS_SHORT: [&str; 7] = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."];
 
-/// Mois abrégés, de janvier à décembre.
+/// Abbreviated months, January to December.
 pub const MONTHS_SHORT: [&str; 12] = [
     "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.",
     "déc.",
 ];
 
-/// Date courte de la barre du haut, comme « mar. 24 nov. ». `weekday` va de 1 (lundi) à 7,
-/// `month` de 1 à 12. Rend `None` hors de ces bornes.
+/// Short date of the top bar, such as « mar. 24 nov. ». `weekday` goes from 1 (Monday) to 7,
+/// `month` from 1 to 12. Returns `None` outside these bounds.
 pub fn short_date(weekday: u8, day: u8, month: u8) -> Option<String> {
     let weekday = WEEKDAYS_SHORT.get(usize::from(weekday).checked_sub(1)?)?;
     let month = MONTHS_SHORT.get(usize::from(month).checked_sub(1)?)?;
     Some(format!("{weekday} {day} {month}"))
 }
 
-/// Heure sur 24 heures, comme « 09:05 ».
+/// 24-hour time, such as « 09:05 ».
 pub fn clock(hour: u8, minute: u8) -> String {
     format!("{hour:02}:{minute:02}")
 }
 
-/// Pourcentage, avec l'espace fine insécable du français : « 55 % ».
+/// Percentage, with the French narrow no-break space: « 55 % ».
 pub fn percent(value: u8) -> String {
     format!("{value}\u{202F}%")
 }
 
-/// Textes de la barre du haut.
+/// Top bar texts.
 pub mod top_bar {
-    /// Nom d'un bureau : son numéro, puis son nom s'il en a un (« 1 · Code »).
+    /// Workspace label: its number, then its name if it has one (« 1 · Code »).
     pub fn workspace(number: usize, name: Option<&str>) -> String {
         match name {
             Some(name) if !name.is_empty() => format!("{number} · {name}"),
@@ -38,7 +38,7 @@ pub mod top_bar {
         }
     }
 
-    /// Sous le nom de l'utilisateur, en tête du menu Sherlock.
+    /// Below the user name, at the top of the Sherlock menu.
     pub const SESSION_OPEN: &str = "Session ouverte";
     pub const ABOUT: &str = "À propos de cet ordinateur";
     pub const SETTINGS: &str = "Réglages";
@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn la_date_courte_suit_la_planche() {
+    fn the_short_date_follows_the_design_board() {
         assert_eq!(short_date(2, 24, 11).as_deref(), Some("mar. 24 nov."));
         assert_eq!(short_date(7, 1, 8).as_deref(), Some("dim. 1 août"));
         assert_eq!(short_date(0, 1, 1), None);
@@ -65,13 +65,13 @@ mod tests {
     }
 
     #[test]
-    fn l_heure_garde_deux_chiffres() {
+    fn the_time_keeps_two_digits() {
         assert_eq!(clock(9, 5), "09:05");
         assert_eq!(clock(21, 46), "21:46");
     }
 
     #[test]
-    fn un_bureau_sans_nom_garde_son_numero() {
+    fn a_workspace_without_name_keeps_its_number() {
         assert_eq!(top_bar::workspace(1, Some("Code")), "1 · Code");
         assert_eq!(top_bar::workspace(2, None), "2");
         assert_eq!(top_bar::workspace(3, Some("")), "3");

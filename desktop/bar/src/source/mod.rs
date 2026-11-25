@@ -1,6 +1,6 @@
-//! Sources de l'état du système. Chacune implémente `Source` ; `Fixed` en est la fausse
-//! implémentation des tests. `watch` fait tourner une source dans son propre fil et en tire un
-//! flux d'états, qui ne contient que les changements.
+//! Sources of system state. Each one implements `Source`; `Fixed` is the fake implementation
+//! used by tests. `watch` runs a source on its own thread and turns it into a stream of states
+//! that only carries changes.
 
 pub mod battery;
 pub mod clock;
@@ -16,41 +16,41 @@ use std::time::Duration;
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
 
-/// Délai avant de relancer une commande de surveillance qui s'est arrêtée.
+/// Delay before restarting a monitoring command that stopped.
 const MONITOR_RETRY: Duration = Duration::from_secs(30);
 
-/// Erreur d'une source.
+/// Error from a source.
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
-    #[error("la commande {command} n'a pas pu être lancée : {source}")]
+    #[error("could not start {command}: {source}")]
     Spawn {
         command: &'static str,
         source: std::io::Error,
     },
-    #[error("la commande {command} a échoué : {stderr}")]
+    #[error("{command} failed: {stderr}")]
     Failed {
         command: &'static str,
         stderr: String,
     },
-    #[error("sortie de {command} illisible : {detail}")]
+    #[error("unreadable output from {command}: {detail}")]
     Parse {
         command: &'static str,
         detail: String,
     },
 }
 
-/// Une source d'état du système.
+/// A source of system state.
 pub trait Source: Send + 'static {
     type State: Clone + PartialEq + Send + Debug + 'static;
 
-    /// Lit l'état courant.
+    /// Reads the current state.
     fn read(&mut self) -> Result<Self::State, SourceError>;
 
-    /// Attend que l'état ait pu changer. Rend `false` quand il ne changera plus.
+    /// Waits until the state may have changed. Returns `false` once it will never change again.
     fn wait(&mut self) -> bool;
 }
 
-/// Fausse source : un état fixe, qui ne change jamais.
+/// Fake source: a fixed state that never changes.
 #[derive(Debug, Clone)]
 pub struct Fixed<S>(pub S);
 
@@ -66,8 +66,8 @@ impl<S: Clone + PartialEq + Send + Debug + 'static> Source for Fixed<S> {
     }
 }
 
-/// Fait tourner `source` dans un fil : lit, envoie l'état s'il a changé, attend, recommence.
-/// Le fil s'arrête quand le flux est abandonné ou quand la source ne changera plus.
+/// Runs `source` on a thread: read, send the state if it changed, wait, repeat. The thread
+/// stops when the stream is dropped or when the source will never change again.
 pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item = S::State> {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
@@ -83,7 +83,7 @@ pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item =
                         last = Some(state);
                     }
                     Ok(_) => {}
-                    Err(error) => tracing::warn!(source = name, %error, "lecture impossible"),
+                    Err(error) => tracing::warn!(source = name, %error, "cannot read"),
                 }
                 if !source.wait() {
                     return;
@@ -91,12 +91,12 @@ pub fn watch<S: Source>(mut source: S, name: &'static str) -> impl Stream<Item =
             }
         });
     if let Err(error) = spawned {
-        tracing::error!(source = name, %error, "fil de la source impossible à lancer");
+        tracing::error!(source = name, %error, "cannot start the source thread");
     }
     receiver
 }
 
-/// Lance `program` avec `args` dans la langue C, pour une sortie stable, et rend sa sortie.
+/// Runs `program` with `args` in the C locale, for a stable output, and returns its output.
 pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> {
     let output = Command::new(program)
         .args(args)
@@ -116,11 +116,11 @@ pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Une commande qui écrit une ligne à chaque changement, comme `upower --monitor`.
+/// A command that prints a line on every change, such as `upower --monitor`.
 pub struct Monitor {
     program: &'static str,
     args: &'static [&'static str],
-    /// Les lignes qui annoncent un changement utile.
+    /// Lines that announce a relevant change.
     relevant: fn(&str) -> bool,
     running: Option<(Child, Lines<BufReader<ChildStdout>>)>,
 }
@@ -139,14 +139,14 @@ impl Monitor {
         }
     }
 
-    /// Attend la prochaine ligne utile. Si la commande s'arrête, la relance après un délai.
+    /// Waits for the next relevant line. If the command stops, restarts it after a delay.
     pub fn wait(&mut self) -> bool {
         loop {
             let Some((_, lines)) = &mut self.running else {
                 match self.start() {
                     Ok(running) => self.running = Some(running),
                     Err(error) => {
-                        tracing::warn!(command = self.program, %error, "surveillance impossible");
+                        tracing::warn!(command = self.program, %error, "cannot monitor");
                         std::thread::sleep(MONITOR_RETRY);
                         return true;
                     }
@@ -158,7 +158,7 @@ impl Monitor {
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => {
                     self.stop();
-                    tracing::warn!(command = self.program, "surveillance arrêtée, relance");
+                    tracing::warn!(command = self.program, "monitor stopped, restarting");
                     std::thread::sleep(MONITOR_RETRY);
                     return true;
                 }
@@ -177,7 +177,7 @@ impl Monitor {
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| std::io::Error::other("sortie standard absente"))?;
+            .ok_or_else(|| std::io::Error::other("no standard output"))?;
         Ok((child, BufReader::new(stdout).lines()))
     }
 
@@ -195,7 +195,7 @@ impl Drop for Monitor {
     }
 }
 
-/// La valeur d'une ligne `clé: valeur` dans une sortie, espaces retirés.
+/// Value of a `key: value` line in an output, trimmed.
 fn field<'a>(output: &'a str, key: &str) -> Option<&'a str> {
     output.lines().find_map(|line| {
         let (k, v) = line.split_once(':')?;
@@ -210,12 +210,12 @@ mod tests {
     use iced::futures::executor::block_on;
 
     #[test]
-    fn une_source_fixe_rend_son_etat_une_fois() {
+    fn a_fixed_source_yields_its_state_once() {
         let states: Vec<_> = block_on(watch(Fixed(42), "test").collect());
         assert_eq!(states, [42]);
     }
 
-    /// Une source qui rend une suite d'états, puis s'arrête.
+    /// A source that yields a sequence of states, then stops.
     struct Sequence(Vec<u8>);
 
     impl Source for Sequence {
@@ -224,7 +224,7 @@ mod tests {
         fn read(&mut self) -> Result<u8, SourceError> {
             self.0.first().copied().ok_or(SourceError::Parse {
                 command: "test",
-                detail: String::from("vide"),
+                detail: String::from("empty"),
             })
         }
 
@@ -235,13 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn seuls_les_changements_sont_envoyes() {
+    fn only_changes_are_sent() {
         let states: Vec<_> = block_on(watch(Sequence(vec![1, 1, 2, 2, 1]), "test").collect());
         assert_eq!(states, [1, 2, 1]);
     }
 
     #[test]
-    fn un_champ_se_lit_par_sa_cle() {
+    fn a_field_is_read_by_its_key() {
         let output = "  state:   charging\n  percentage:  55%\n";
         assert_eq!(field(output, "state"), Some("charging"));
         assert_eq!(field(output, "percentage"), Some("55%"));
