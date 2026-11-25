@@ -566,6 +566,7 @@ version = "0.0.0"
 dependencies = [
  "desktop-config",
  "image",
+ "shell-protocol",
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
