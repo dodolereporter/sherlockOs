@@ -391,7 +391,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "compositeur"
+name = "compositor"
 version = "0.0.0"
 dependencies = [
  "sherlock-ui",

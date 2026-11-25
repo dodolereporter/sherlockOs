@@ -1,5 +1,5 @@
 [package]
-name = "compositeur"
+name = "compositor"
 description = "Compositeur Wayland du desktop, écrit avec Smithay"
 version.workspace = true
 edition.workspace = true

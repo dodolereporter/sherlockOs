@@ -12,7 +12,7 @@ mod tests {
         time::Duration,
     };
 
-    use compositeur::State;
+    use compositor::State;
     use smithay::reexports::wayland_server::Resource as _;
     use smithay::{
         backend::input::{ButtonState, KeyState},

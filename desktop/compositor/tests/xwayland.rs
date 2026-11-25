@@ -16,7 +16,7 @@ mod tests {
         time::Duration,
     };
 
-    use compositeur::State;
+    use compositor::State;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         desktop::Window,

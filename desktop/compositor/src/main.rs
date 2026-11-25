@@ -13,7 +13,7 @@ use std::{
     process::Command,
 };
 
-use compositeur::{Error, State, stats::FrameStats};
+use compositor::{Error, State, stats::FrameStats};
 use smithay::reexports::calloop::{EventLoop, LoopSignal};
 use tracing_subscriber::EnvFilter;
 
@@ -52,7 +52,7 @@ fn main() -> Result<(), Error> {
         state.frame_stats = Some(FrameStats::default());
     }
     let socket = state.listen(&event_loop)?;
-    compositeur::winit::init(&event_loop, &mut state, &scales)?;
+    compositor::winit::init(&event_loop, &mut state, &scales)?;
     tracing::info!(socket = ?socket, "compositeur prêt");
 
     // En mesure, la session s'arrête avec la commande, qui est la scène mesurée.
