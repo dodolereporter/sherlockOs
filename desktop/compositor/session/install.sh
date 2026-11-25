@@ -14,20 +14,29 @@ for program in compositor bar dock; do
 	fi
 done
 
+# The repository path is quoted in the commands: it may hold spaces.
+q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
 cat <<EOF
 # Run as root to install the NOM_OS session (shown by the login screen as "NOM_OS"):
 
 sudo install -d $dest
-sudo install -m 755 $repo/target/release/compositor $repo/target/release/bar $repo/target/release/dock $dest/
-sudo install -m 755 $repo/desktop/compositor/session/sherlockos-session $dest/
-sudo install -m 644 $repo/desktop/compositor/session/sherlockos.desktop $sessions/
+sudo install -m 755 $q/target/release/compositor $q/target/release/bar $q/target/release/dock $dest/
+sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
+sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 
 # To remove it:
 #   sudo rm -r $dest $sessions/sherlockos.desktop
 EOF
 
-# The compositor needs libseat at run time (seatd or logind behind it).
-if ! ldconfig -p 2>/dev/null | grep -q 'libseat\.so\.1 '; then
+# The compositor needs libseat at run time (seatd or logind behind it). ldconfig is in the
+# administrator's PATH only.
+ldconfig=$(command -v ldconfig || true)
+for candidate in /sbin/ldconfig /usr/sbin/ldconfig; do
+	if [ -z "$ldconfig" ] && [ -x "$candidate" ]; then
+		ldconfig=$candidate
+	fi
+done
+if [ -n "$ldconfig" ] && ! "$ldconfig" -p | grep -q 'libseat\.so\.1 '; then
 	echo
 	echo "# libseat is missing:"
 	echo "sudo apt install libseat1"

@@ -22,6 +22,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches |
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
+| `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
 | `src/cursor.rs` | Cursor images of the real session, from the cursor theme |
 | `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
 | `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
@@ -774,7 +775,9 @@ primary selection.
 
 Without `--nested`, the compositor takes the screens, the keyboard, the mouse and the touchpad of
 the machine (lot D-14). It is started from a text console (TTY) or by the login screen (SDDM on
-the author's Debian), never from inside another graphical session.
+the author's Debian), never from inside another graphical session: when `DISPLAY` or
+`WAYLAND_DISPLAY` is set, it refuses to start and suggests `--nested`. Inside Plasma it would
+take the seat's screens and input devices from it.
 
 How it works (`src/udev.rs`):
 
@@ -789,7 +792,30 @@ How it works (`src/udev.rs`):
 - **EGL.** Before anything else, the compositor sets `__EGL_VENDOR_LIBRARY_FILENAMES` to Mesa's
   vendor file (`50_mesa.json`, looked for in `/etc/glvnd/egl_vendor.d` and
   `/usr/share/glvnd/egl_vendor.d`), unless the user set it: libglvnd never loads NVIDIA's EGL
-  library, which comes first on Debian. The launched command gets the variable back as it was.
+  library, which comes first on Debian. The programs it launches keep it (Konsole, Firefox and
+  every EGL client would otherwise load NVIDIA's first); a user who set the variable keeps
+  their own value. A game meant for the NVIDIA card has to be launched with the variable unset,
+  for now by hand.
+- **XWayland: off unless asked for (`--xwayland`).** Smithay starts Xwayland with an empty
+  environment; `src/mesa.rs` gives it the EGL restriction and `GBM_BACKENDS_PATH` pointing to
+  `$XDG_RUNTIME_DIR/nom-os/gbm-backends`, a folder of links to the system's GBM backends without
+  NVIDIA's (`nvidia-drm_gbm.so`), so that libgbm falls back to Mesa's. Measured with
+  `tests/xwayland.rs` on the reference laptop (Xwayland 24.1.6), sampling the descriptors of
+  Xwayland every 10 ms:
+
+  | Xwayland's environment | `nv_gbm` errors | NVIDIA nodes seen open |
+  | --- | --- | --- |
+  | Empty (before) | 2 | not measured |
+  | EGL restricted to Mesa | 1 | `card1` |
+  | GBM backends without NVIDIA's | 0 | `card1`, `renderD129` |
+  | Both | 0 | `card1` |
+  | Both, and glamor off (`XWAYLAND_NO_GLAMOR=1`) | 0 | `card1` |
+
+  Xwayland still opens the NVIDIA card's node at startup, whatever it is given, and opening it
+  may wake the card. So the real session starts XWayland only with `--xwayland`
+  (`NOM_OS_XWAYLAND=1` for the start script): without it, X11 applications do not show up, and
+  the launched command gets no `DISPLAY`. Nested mode starts it as before, with the same
+  environment.
 - **Screens.** Every connector with a screen gets a CRTC, its preferred mode and a
   `DrmCompositor` (GBM buffers, `XRGB8888`). They sit side by side in the space, in the order
   the card lists them; `--scale S` sets their scale, one per screen in order, the last one
@@ -798,7 +824,9 @@ How it works (`src/udev.rs`):
   the screens on its right close ranks, the pointer comes back on a screen, and the windows no
   screen shows any more come to the screen under the pointer: snapped and maximized ones take
   its work area, the others are centered in it. Its `wl_output` global is hidden at once and
-  destroyed five seconds later, so that a client binding it right then gets no error.
+  destroyed five seconds later, so that a client binding it right then gets no error. If no
+  screen can be driven at startup, the compositor leaves with `no screen driven` rather than
+  stay dark (opening the card switched its screens off).
 - **Rendering.** The same scene as the windowed backend (`Scene::screens`), built for each
   screen in its own frame, at scale 1 in the `DrmCompositor` (the scene already applies the
   screen's scale). Everything is composited: no plane is given to a client buffer, since the
@@ -806,8 +834,10 @@ How it works (`src/udev.rs`):
   previous one; a frame that changes nothing is tried again 16 ms later. The cursor is drawn in
   front of the scene, from the cursor theme (`XCURSOR_THEME`, or the system's `default`;
   `XCURSOR_SIZE`, 24 by default, times the screen's scale), in the shape `cursor_icon` asks for;
-  a client that draws its own cursor image gets the arrow, as in nested mode.
-- **Input.** libinput, on the session's seat: keyboard (see "Behavior" for the layout), mouse,
+  a client that draws its own cursor image gets the arrow, as in nested mode. A frame that
+  fails is logged at its 1st, 2nd, 4th, 8th… failure in a row, not on every frame.
+- **Input.** libinput, on the session's seat: keyboard (see "Behavior" for the layout; a layout
+  xkb refuses falls back to AZERTY with a warning), mouse,
   touchpad with tap to click. The pointer moves by steps and stays on the screens. The gesture
   key is Super.
 - **Console switch.** Ctrl + Alt + F1 to F12 switch console. When the session is left, input
@@ -816,6 +846,8 @@ How it works (`src/udev.rs`):
 - **Way out.** **Ctrl + Alt + Backspace stops the compositor**, whatever has the keyboard: the
   emergency exit when nothing answers any more. These keys never reach a client. In nested mode
   they do nothing (the host session keeps its consoles, and closing the window stops it).
+- **Leaving.** The screens and the card are released first, which gives the console back its
+  display state, then the seat (`RealSession::close`).
 
 The compositor links to libseat, libinput, udev and GBM: on Debian, `libseat-dev`,
 `libinput-dev`, `libudev-dev`, `libgbm-dev` and `libdrm-dev` to build it, and `libseat1` to run
@@ -835,6 +867,8 @@ it.
 
    Or the whole session, as the login screen starts it:
    `NOM_OS_BIN=$PWD/target/release desktop/compositor/session/sherlockos-session`.
+   With `--xwayland` after `compositor` (`NOM_OS_XWAYLAND=1` for the script), X11 applications
+   too, at the risk of waking the NVIDIA card (see above).
 
 4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
    Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
@@ -852,8 +886,10 @@ the commands that install the session, without running them:
 
 At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
-then launches the compositor, which launches the bar and the dock once XWayland is ready. The bar
-and the dock start again a second after they stop (ADR 0005), as long as the compositor is there.
+then launches the compositor, which launches the bar and the dock once it is ready. The bar and
+the dock start again when they stop (ADR 0005), as long as the compositor is there, after 1, 2,
+4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given up, with a line in the
+log (`session: … given up`).
 To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
@@ -866,11 +902,15 @@ The package recipes of `distro/` will install them from here.
   comes back, or the console.
 - **The keyboard does not answer either.** In a graphical session the kernel leaves the
   console keys to the compositor: if it no longer reads the keyboard, Ctrl + Alt + Fn does
-  nothing either. Then, in order: from another machine, `ssh` and `pkill compositor`; or the
-  kernel's SysRq keys, which Debian allows (`kernel.sysrq = 438`): Alt + SysRq (Print Screen)
-  + K kills every program of the current console, the compositor included, and Alt + SysRq + R
-  gives the keyboard back to the kernel, after which Ctrl + Alt + F2 switches console. Last
-  resort, a long press on the power button.
+  nothing either. Then, in order:
+  1. from another machine, `ssh` and `pkill compositor`;
+  2. the kernel's SysRq keys, which Debian allows (`kernel.sysrq = 438`): Alt + SysRq (Print
+     Screen) + R gives the keyboard back to the kernel; then Ctrl + Alt + F2 switches console
+     (logind releases the console without waiting for the compositor); log in there and
+     `pkill compositor`. Do not use Alt + SysRq + K under SDDM: it kills the programs that
+     hold the console, which is then logind, not the compositor (from a console where you
+     launched the compositor yourself, K does stop it);
+  3. last resort, a long press on the power button.
 - **The session does not start.** SDDM comes back at once: the reason is at the end of the log.
 - **Back to Plasma.** Pick Plasma in SDDM's session menu: it stays the default as long as it was
   the last one used. To remove our entry from the menu, the `sudo rm` above.
@@ -880,12 +920,21 @@ The package recipes of `distro/` will install them from here.
 | Started from | Log |
 | --- | --- |
 | A console, `compositor` | Its standard error: `2> /tmp/compositor.log` as above |
-| `sherlockos-session` (SDDM or a console) | `~/.local/state/nom-os/session.log`, the previous session in `session.log.old` |
+| `sherlockos-session` (SDDM or a console) | `~/.local/state/nom-os/session.log`; the previous session, or the first 5 MiB of a long one, in `session.log.old` |
 | SDDM, before the script runs | `~/.local/share/sddm/wayland-session.log`, and `journalctl -b -u sddm` |
 
 The level follows `RUST_LOG`; the start-up lines name the card (`real session card=/dev/dri/…`),
 each screen with its mode and scale (`screen plugged in`), the input devices and the cursor
 theme. Each console switch logs `session paused` and `session active again`.
+
+### Left for later
+
+- Screens plugged in again after the last one was unplugged: windows keep their place, and
+  those outside the new screens are not brought back (no crash: the pointer and the layout
+  handle having no screen).
+- XWayland in the real session by default, once Xwayland can be kept off the NVIDIA card (the
+  dmabuf feedback of lot D-06 names the main device, which may be enough).
+- Drawing on damage only, for the battery.
 
 ## Measuring
 
@@ -981,10 +1030,11 @@ just verify
 | `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, choice per theme (default pair, fixed wallpaper, wallpaper without a pendant, user's path), variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible), 4K variant identical to its original |
 | `sherlock-ui/src/wallpapers.rs` | Every wallpaper of the index has its original, unique ids, pairs that point back to each other across themes, `for_theme` |
 | `src/card.rs` | Card choice on a fake `/sys/class/drm`: AMD alone, AMD and NVIDIA (the NVIDIA card never chosen, even alone or `boot_vga`), Intel and a dedicated AMD card, no screen plugged in, no `boot_vga` |
-| `src/keyboard.rs` | AZERTY without a setting, Debian's `/etc/default/keyboard` and `vconsole.conf` read, `XKB_DEFAULT_LAYOUT` left to xkbcommon |
-| `src/options.rs` | Real session without `--nested`, scales repeated, the command and its own options, wrong options refused |
+| `src/keyboard.rs` | AZERTY without a setting, Debian's `/etc/default/keyboard` and `vconsole.conf` read, `XKB_DEFAULT_LAYOUT` left to xkbcommon, an unknown layout refused by xkb where AZERTY is accepted (the fallback) |
+| `src/options.rs` | Real session without `--nested`, scales repeated, the command and its own options, wrong options refused; the real session refused under `DISPLAY` or `WAYLAND_DISPLAY` with a message naming `--nested`; XWayland only with `--xwayland` in the real session |
 | `src/input.rs` | Ctrl + Alt + Fn and Ctrl + Alt + Backspace in a real session, nothing in nested mode |
-| `src/udev.rs` | The pointer kept on screens of different heights, Mesa's EGL vendor file found and NVIDIA's left out |
+| `src/mesa.rs` | Mesa's EGL vendor file found and NVIDIA's left out; Xwayland's environment: the EGL restriction and a GBM folder without NVIDIA's backend (an older link to it removed), nothing more without a runtime folder |
+| `src/udev.rs` | The pointer kept on screens of different heights |
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 

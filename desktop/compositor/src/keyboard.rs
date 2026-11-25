@@ -34,10 +34,7 @@ impl Layout {
         let value = |key: &str| system.and_then(|text| value(text, key)).unwrap_or_default();
         let layout = value("XKBLAYOUT");
         if layout.is_empty() {
-            return Self {
-                layout: DEFAULT_LAYOUT.into(),
-                ..Self::default()
-            };
+            return Self::azerty();
         }
         let options = value("XKBOPTIONS");
         Self {
@@ -45,6 +42,14 @@ impl Layout {
             layout,
             variant: value("XKBVARIANT"),
             options: (!options.is_empty()).then_some(options),
+        }
+    }
+
+    /// French AZERTY, whatever the setting: the fallback when xkb refuses the layout set.
+    pub fn azerty() -> Self {
+        Self {
+            layout: DEFAULT_LAYOUT.into(),
+            ..Self::default()
         }
     }
 
@@ -121,5 +126,16 @@ mod tests {
         // An empty variable is no setting.
         let empty = |key: &str| (key == "XKB_DEFAULT_LAYOUT").then(String::new);
         assert_eq!(Layout::read(empty, None).layout, "fr");
+    }
+
+    #[test]
+    fn a_layout_xkb_does_not_know_is_refused_and_azerty_is_not() {
+        // What `State::new` relies on to fall back to AZERTY.
+        let display = smithay::reexports::wayland_server::Display::<crate::State>::new().unwrap();
+        let mut seats = smithay::input::SeatState::<crate::State>::new();
+        let mut seat = seats.new_wl_seat(&display.handle(), "test");
+        let unknown = Layout::read(no_env, Some("XKBLAYOUT=\"no-such-layout\"\n"));
+        assert!(seat.add_keyboard(unknown.xkb(), 200, 25).is_err());
+        assert!(seat.add_keyboard(Layout::azerty().xkb(), 200, 25).is_ok());
     }
 }

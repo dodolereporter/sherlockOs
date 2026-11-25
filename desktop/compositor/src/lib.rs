@@ -194,8 +194,16 @@ impl State {
 
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&dh, "seat0");
-        // AZERTY by default, unless the environment or the system sets a layout.
-        seat.add_keyboard(keyboard::Layout::system().xkb(), 200, 25)?;
+        // AZERTY by default, unless the environment or the system sets a layout. A layout xkb
+        // does not know falls back to AZERTY: a session that does not start would be worse.
+        let layout = keyboard::Layout::system();
+        if let Err(err) = seat.add_keyboard(layout.xkb(), 200, 25) {
+            tracing::warn!(
+                ?layout,
+                "keyboard layout refused ({err}): French AZERTY instead"
+            );
+            seat.add_keyboard(keyboard::Layout::azerty().xkb(), 200, 25)?;
+        }
         seat.add_pointer();
 
         event_loop
