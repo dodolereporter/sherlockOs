@@ -10,9 +10,27 @@ texts it shows stay in French, from `sherlock-ui`.
 
 ![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
 
-The menu screenshot was taken before the unwired shortcuts were removed from the menu, and the
-login name in its header is masked. The headless render of `tests/render.rs` shows the current
-menu.
+Both screenshots come from a nested KWin running inside a Xephyr display started for the test,
+with `USER=Dodo` so that no login name of the machine shows (see « Running and checking by
+hand »).
+
+### Logo
+
+The Sherlock button shows the color logo, without its square: green ring `#85C595` and cream
+dot `#F4EBE3` (`logo-sans-fond.svg`), 22 px high, straight on the bar glass. The button has no
+fill at rest, the hover and press veils of the other ghost buttons, and while its menu is open
+the 0.14 white veil of the open « Fenêtre » button of the Menus board (`TOP_BAR_BUTTON_OPEN`). A
+cream pill would hide the cream dot, so the button has none.
+
+The menu avatar is the color logo in its night blue square, 40 px: `Logo::square(40)` picks the
+large version. `Logo::square` has optical versions for 32 and 16 px; the bare symbol has none,
+since it fills its frame and reads at 16 px (D-01). On the bar, the bare symbol is the more
+legible one: the night blue square disappears into the glass and only shrinks the ring.
+
+Contrast of the green ring, a non-text element (3 to 1 required), on the bar glass over the
+desktop and its three discs: 7.9 to 8.6 at rest, 6.5 to 7.1 under the hover veil, 5.1 to 5.7
+under the open veil. The contrast test of `sherlock-ui` checks it in every state. The cream dot
+is at 8.8 or more.
 
 ## What it shows
 
@@ -38,8 +56,8 @@ indicator disappears. A battery discharging below 15 % turns amber.
 | `user.rs` | User name, read from the GECOS field of `/etc/passwd` |
 
 Every color, size and text comes from `sherlock-ui`: tokens `TOP_BAR_*`, `CHIP*`,
-`SHERLOCK_*`, `STATUS_*`, `MENU_AVATAR*`, `MENU_HEADER_PADDING`; components `chip`,
-`sherlock_button`, `status`, `menu_header`, `logo`; the `strings` text module; icons
+`SHERLOCK_*`, `STATUS_*`, `MENU_AVATAR`, `MENU_HEADER_PADDING`; components `chip`,
+`sherlock_button`, `status`, `menu_header`, `logo`, `logo_square`; the `strings` text module; icons
 `NetworkOff`, `SoundMuted`, `Battery` and `BatteryCharging`. The only threshold written in the
 bar is the low battery one (`battery::LOW_PERCENT`), which is behavior.
 
@@ -117,7 +135,9 @@ subscription. It only sends a state when it changed: the bar does not redraw for
 Commands run with `LC_ALL=C`, for an output that does not depend on the language. A watch
 command that stops is restarted 30 s later. A burst of watch lines (a volume slider being
 dragged, a network reconnecting) gives a single refresh: the lines that follow within
-`metrics::EVENT_COALESCE_MS` (150 ms) of each other are drained before reading again. A read
+`metrics::EVENT_COALESCE_MS` (150 ms) of each other are drained before reading again, for
+`metrics::EVENT_COALESCE_MAX_MS` (500 ms) at most, so that a long drag still refreshes. When the
+bar stops, the monitors stop quietly and are not restarted. A read
 error, such as an `upower` output without a battery section, is logged as a warning once, until
 the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs
 were recorded on the reference laptop, with the Wi-Fi name and the Docker bridge ids replaced by
@@ -224,14 +244,14 @@ error; `RUST_LOG=bar=debug` shows more.
    off), the sound (crossed out when muted), the battery and its percentage. Mute the sound
    (`pactl set-sink-mute @DEFAULT_SINK@ toggle`) or unplug the charger: the bar should follow
    right away.
-4. **Menu**: click the Sherlock button. The menu opens below it, the button gets its green
-   ring. Down, Up, Enter, Escape. An activated entry is logged:
+4. **Menu**: click the Sherlock button. The menu opens below it, the button gets a light
+   veil. Down, Up, Enter, Escape. An activated entry is logged:
    `Sherlock menu entry not available yet action=Lock`. A click elsewhere closes the menu.
 5. **Keyboard in the bar**: click into the bar (on its background, between the buttons), then
    Tab. The first Tab rings the Sherlock button; each Tab moves the ring to the next workspace,
    then back to Sherlock. Enter activates exactly the ringed button: the menu opens on
    Sherlock, a workspace logs `index=<n>` matching the ringed chip (`index=0` for « 1 · Code »).
-   Escape removes the ring.
+   Escape or a mouse click removes the ring.
 6. **No orphans**: stop the bar (Ctrl+C, `kill`, or stop the nested KWin), then
    `ps -eo pid,args | grep -E 'upower --monitor|nmcli monitor|pactl subscribe'` lists nothing
    started by the bar.
@@ -240,18 +260,27 @@ Comparing with the design boards, by eye or on the screenshots:
 
 - Open `docs/design/planches/Main.dc.html` alongside. Compare: glass `rgba(16,26,44,0.78)`,
   border `rgba(255,255,255,0.09)`, radius 12, inner padding 6 on the left and 10 on the right,
-  cream button of 30 by 28 with radius 8, application name at weight 600, workspace chips 24
+  Sherlock button of 30 by 28 with radius 8 (color logo, see Logo), application name at weight 600, workspace chips 24
   high with radius 12 (active one green, text `#0B1220` at weight 600; the others
   `rgba(255,255,255,0.07)`, text `#C5CEDB`), 4 between them, indicators in `#C5CEDB` 14 apart,
   16 px icons, time in `#EEF2F7` at weight 600.
-- Open `Menus.dc.html`: menu 256 wide at (18, 52), padding 6, header with a cream avatar of 40
-  and radius 11, separators, shortcuts in `#A9B4C6` at 12 px, chevron on « Éteindre ».
+- Open `Menus.dc.html`: menu 256 wide at (18, 52), padding 6, header with an avatar of 40
+  (the logo in its square), separators, chevron on « Éteindre ».
 - Pixel measurements: `cargo test -p bar --test render` writes `target/tmp/bar-tiny-skia.png`
   and `target/tmp/sherlock-menu-tiny-skia.png`, at scale 2, from fake sources (the date and
   time of the board).
 
-To take a screenshot of the nested KWin from X11: `wmctrl -i -R <id>` brings its window to the
-front (`wmctrl -l` gives the id), then `import -window <id> screenshot.png`.
+Screenshots and test input never go to the author's session (`:0`). Run the nested KWin
+inside a Xephyr display started for the test, and work on that display only:
+
+```sh
+Xephyr :5 -screen 1440x900 -br -nolisten tcp &
+DISPLAY=:5 kwin_wayland --x11-display :5 --width 1440 --height 900 --socket wayland-bar &
+WAYLAND_DISPLAY=wayland-bar USER=Dodo BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar &
+DISPLAY=:5 import -window root screenshot.png
+```
+
+Clicks and keys for a test (XTest) go to `:5` only, after checking the display name.
 
 ## Tests
 
@@ -276,10 +305,11 @@ front (`wmctrl -l` gives the id), then `import -window <id> screenshot.png`.
 
 ## Differences from the design board
 
-- **Sherlock button**: the board puts the mascot's head in it. The brief asks for the logo or a
-  `sherlock-ui` icon: it is the logo symbol, night blue on cream. Same for the menu avatar.
-- **Open menu ring**: the board writes it as a 2 px `box-shadow` outside the button; iced has
-  no shadow without blur, so the green ring is a 2 px border inside.
+- **Sherlock button**: the board puts the mascot's head on a cream pill, with a green ring
+  while the menu is open. The bar shows the color logo without a pill (the cream dot would
+  vanish on cream), and a light veil while the menu is open (a green ring would merge with the
+  green logo). The menu avatar is the logo in its square instead of the mascot on cream (see
+  Logo).
 - **Application menus** (Fichier, Édition…): the board shows them after the application name.
   They will come with the global menu of our applications, outside this batch.
 - **Containers and sandboxes**: the board shows them on the right. They will come with the L

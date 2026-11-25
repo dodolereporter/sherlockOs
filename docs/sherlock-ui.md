@@ -43,10 +43,10 @@ Tous les jetons sont nommés par leur rôle, en anglais comme le reste du code.
   (« 1 · Code ») and the Sherlock menu entries (`strings::top_bar`).
 - **Top bar** (D-20): `color::TOP_BAR_GLASS` and `TOP_BAR_BORDER` (Main board, slightly
   lighter than `GLASS` and `BORDER`), `CHIP` and `CHIP_HOVER` for the workspace chips;
-  `metrics::TOP_BAR_*`, `SHERLOCK_*`, `CHIP_*`, `STATUS_*`, `MENU_AVATAR*`,
-  `MENU_HEADER_PADDING`; icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`;
+  `metrics::TOP_BAR_*`, `SHERLOCK_*`, `CHIP_*`, `STATUS_*`, `MENU_AVATAR`,
+  `MENU_HEADER_PADDING`; `color::TOP_BAR_BUTTON_OPEN` (veil of an open bar button); icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`;
   `color::TRANSPARENT` for the background of a shell surface, `metrics::EVENT_COALESCE_MS`
-  (150 ms) for merging bursts of system events.
+  (150 ms) and `EVENT_COALESCE_MAX_MS` (500 ms) for merging bursts of system events.
 - **`window`** : bande de saisie et calage des fenêtres, posés par D-17 pour le compositeur.
 - **`metrics::DESKTOP_DISC_GEOMETRY`** : place et diamètre des trois disques du fond sur l'écran
   de référence (planche Main), ajoutés par D-11.
@@ -109,7 +109,7 @@ style par état dans `theme`, et son constructeur dans `component` :
 | Carte, panneau de verre | `card`, `glass_panel` | Réglages, Panneaux |
 | Textes | `body`, `description`, `title`, `icon` | Toutes |
 | Workspace chip (D-20) | `chip(label, active, message)` | Main |
-| Sherlock button, logo symbol (D-20) | `sherlock_button(open, message)`, `logo` | Main, Menus |
+| Sherlock button, logo (D-20) | `sherlock_button(open, message)`, `logo`, `logo_square` | Main, Menus |
 | Top bar indicator (D-20) | `status(icon, value, tint)` | Main |
 | Menu header (D-20) | `menu_header(title, subtitle)` | Menus |
 

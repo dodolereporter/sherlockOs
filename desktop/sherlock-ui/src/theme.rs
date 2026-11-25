@@ -281,35 +281,22 @@ pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
-/// Sherlock button: cream pill, ringed in green while its menu is open.
+/// Sherlock button: the color logo straight on the bar glass, without a pill, so that its
+/// cream dot stays visible. Veiled on hover and press, and while its menu is open, like an open
+/// menu button of the Menus board.
 pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
-        let fill = match status {
-            // No design board for these states: the cream darkens a little on hover, a
-            // little more when pressed.
-            button::Status::Hovered => color::CREAM.mix(color::TEXT_ON_CREAM, 0.06),
-            button::Status::Pressed => color::CREAM.mix(color::TEXT_ON_CREAM, 0.12),
-            _ => color::CREAM,
+        let fill = match (open, status) {
+            (true, _) => Some(color::TOP_BAR_BUTTON_OPEN),
+            (false, button::Status::Hovered) => Some(color::HOVER),
+            (false, button::Status::Pressed) => Some(color::PRESSED),
+            (false, _) => None,
         };
-        let edge = if open {
-            outline(
-                metrics::SHERLOCK_BUTTON_OPEN_RING,
-                color::ACCENT,
-                metrics::SHERLOCK_BUTTON_RADIUS,
-            )
-        } else {
-            border::rounded(metrics::SHERLOCK_BUTTON_RADIUS)
-        };
-        button_style(Some(fill), color::TEXT_ON_CREAM, edge)
-    }
-}
-
-/// Cream avatar at the top of the Sherlock menu.
-pub fn menu_avatar(_: &Theme) -> container::Style {
-    container::Style {
-        background: background(color::CREAM),
-        border: border::rounded(metrics::MENU_AVATAR_RADIUS),
-        ..container::Style::default()
+        button_style(
+            fill,
+            color::TEXT_PRIMARY,
+            border::rounded(metrics::SHERLOCK_BUTTON_RADIUS),
+        )
     }
 }
 
@@ -494,6 +481,21 @@ mod tests {
                 ("low battery", color::AMBER),
             ] {
                 check(&mut failures, name, text, None, &on);
+            }
+            // The green ring of the logo, a non-text element: 3 to 1 at least (WCAG 1.4.11),
+            // under every state of the Sherlock button.
+            for open in [true, false] {
+                for status in STATUSES {
+                    let s = sherlock_button(open)(&theme, status);
+                    let below = fill(&s).map_or(on.1, |f| f.over(on.1));
+                    let ratio = color::ACCENT.contrast(below);
+                    if ratio < 3.0 {
+                        failures.push(format!(
+                            "logo ring ({open}, {status:?}) on {}: {ratio:.2}",
+                            on.0
+                        ));
+                    }
+                }
             }
             for active in [true, false] {
                 for status in STATUSES {

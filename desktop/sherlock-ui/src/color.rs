@@ -142,6 +142,9 @@ pub const TOP_BAR_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
 /// Chip of an inactive workspace in the top bar, at rest then hovered.
 pub const CHIP: Color = Color::rgba(255, 255, 255, 0.07);
 pub const CHIP_HOVER: Color = Color::rgba(255, 255, 255, 0.12);
+/// Veil of a top bar button whose menu is open (the open « Fenêtre » button of the Menus
+/// board).
+pub const TOP_BAR_BUTTON_OPEN: Color = Color::rgba(255, 255, 255, 0.14);
 /// Bordure du dock.
 pub const DOCK_BORDER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Bordure d'un bouton secondaire.

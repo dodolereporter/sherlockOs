@@ -64,6 +64,8 @@ pub enum Message {
     Activate(Action),
     SelectWorkspace(usize),
     Focus(Direction),
+    /// A mouse button was pressed somewhere in the bar or its menu.
+    Pointer,
     Closed(Id),
 }
 
@@ -89,6 +91,7 @@ impl Bar {
             Subscription::run(|| watch(Placeholder, "workspaces")).map(Message::Workspaces),
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
+            iced::event::listen_with(on_pointer),
         ])
     }
 
@@ -146,6 +149,8 @@ impl Bar {
                     (Direction::Previous, _) => Some(count - 1),
                 };
             }
+            // Like `:focus-visible` in a browser: the mouse removes the keyboard ring.
+            Message::Pointer => self.focus = None,
             Message::Closed(id) => {
                 // The compositor closes the menu on a click elsewhere (popup_done).
                 if self.menu == Some(id) {
@@ -342,6 +347,15 @@ impl Bar {
     }
 }
 
+/// Any mouse button press, captured by a widget or not.
+fn on_pointer(event: iced::Event, _: iced::event::Status, _: Id) -> Option<Message> {
+    matches!(
+        event,
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
+    )
+    .then_some(Message::Pointer)
+}
+
 /// Tab moves the focus; Enter, Space and Escape go to the menu when it is open, to the focused
 /// bar button otherwise.
 fn on_key(event: keyboard::Event) -> Option<Message> {
@@ -459,6 +473,15 @@ mod tests {
         let _ = bar.update(Message::Focus(Direction::Next));
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert!(bar.menu_open());
+    }
+
+    #[test]
+    fn a_click_clears_the_bar_focus() {
+        let mut bar = with_workspaces();
+        let _ = bar.update(Message::Focus(Direction::Next));
+        assert!(bar.focused().is_some());
+        let _ = bar.update(Message::Pointer);
+        assert_eq!(bar.focused(), None);
     }
 
     #[test]

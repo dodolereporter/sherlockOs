@@ -16,9 +16,10 @@ use std::fmt::Debug;
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::futures::Stream;
 use iced::futures::channel::mpsc as stream;
@@ -29,6 +30,11 @@ const MONITOR_RETRY: Duration = Duration::from_secs(30);
 
 /// Window in which a burst of monitor lines becomes a single refresh.
 const COALESCE: Duration = Duration::from_millis(metrics::EVENT_COALESCE_MS);
+/// Longest burst: past it, the refresh happens even if lines keep coming.
+const COALESCE_MAX: Duration = Duration::from_millis(metrics::EVENT_COALESCE_MAX_MS);
+
+/// Set by `shutdown`: monitors stop quietly and are not restarted.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Process ids of the monitors still running, stopped by `shutdown`.
 static CHILDREN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
@@ -164,16 +170,23 @@ pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> 
 
 /// Stops the monitors still running. Called when the bar leaves `run`.
 pub fn shutdown() {
-    let children = std::mem::take(&mut *lock_children());
-    for pid in children {
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
+    // The lock is held while signalling: `Monitor::stop` removes a pid under the same lock
+    // before it waits for that child, so every pid signalled here is still unreaped.
+    let mut children = lock_children();
+    for pid in children.drain(..) {
         if let Ok(pid) = libc::pid_t::try_from(pid) {
             // SAFETY: kill(2) touches no memory of ours. The pid is one of our children that
-            // has not been waited for yet, so no other process can have reused it.
+            // has not been waited for yet (see above), so no other process can have reused it.
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
         }
     }
+}
+
+fn shutting_down() -> bool {
+    SHUTTING_DOWN.load(Ordering::SeqCst)
 }
 
 fn lock_children() -> MutexGuard<'static, Vec<u32>> {
@@ -204,9 +217,13 @@ impl Monitor {
     }
 
     /// Waits for the next relevant line, then lets the burst it belongs to pass. If the command
-    /// stops, restarts it after a delay.
+    /// stops, restarts it after a delay. Returns `false` once the bar shuts down.
     pub fn wait(&mut self) -> bool {
         loop {
+            if shutting_down() {
+                self.stop();
+                return false;
+            }
             let Some((_, lines)) = &self.running else {
                 match self.start() {
                     Ok(running) => self.running = Some(running),
@@ -218,10 +235,13 @@ impl Monitor {
                 }
                 continue;
             };
-            if coalesce(lines, self.relevant, COALESCE) {
+            if coalesce(lines, self.relevant, COALESCE, COALESCE_MAX) {
                 return true;
             }
             self.stop();
+            if shutting_down() {
+                return false;
+            }
             tracing::warn!(command = self.program, "monitor stopped, restarting");
             std::thread::sleep(MONITOR_RETRY);
             return true;
@@ -257,9 +277,11 @@ impl Monitor {
     fn stop(&mut self) {
         if let Some((mut child, _)) = self.running.take() {
             let id = child.id();
+            // Out of the list before the child is reaped: `shutdown` never signals a pid that
+            // could have been reused.
+            lock_children().retain(|pid| *pid != id);
             let _ = child.kill();
             let _ = child.wait();
-            lock_children().retain(|pid| *pid != id);
         }
     }
 }
@@ -271,8 +293,14 @@ impl Drop for Monitor {
 }
 
 /// Blocks until a relevant line arrives, then drains the lines that follow it within `window`
-/// of each other. Returns `false` when the lines end before any relevant one.
-fn coalesce(lines: &Receiver<String>, relevant: fn(&str) -> bool, window: Duration) -> bool {
+/// of each other, for `max` at most. Returns `false` when the lines end before any relevant
+/// one.
+fn coalesce(
+    lines: &Receiver<String>,
+    relevant: fn(&str) -> bool,
+    window: Duration,
+    max: Duration,
+) -> bool {
     loop {
         match lines.recv() {
             Ok(line) if relevant(&line) => break,
@@ -280,9 +308,15 @@ fn coalesce(lines: &Receiver<String>, relevant: fn(&str) -> bool, window: Durati
             Err(_) => return false,
         }
     }
-    // A timeout ends the burst; so does the end of the command, whose restart comes next.
-    while lines.recv_timeout(window).is_ok() {}
-    true
+    // A pause ends the burst, and so does its length, or the end of the command, whose
+    // restart comes next.
+    let end = Instant::now() + max;
+    loop {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() || lines.recv_timeout(window.min(left)).is_err() {
+            return true;
+        }
+    }
 }
 
 /// Value of a `key: value` line in an output, trimmed.
@@ -336,12 +370,29 @@ mod tests {
         for line in ["noise", "change", "change", "change"] {
             sender.send(String::from(line)).unwrap();
         }
-        let window = Duration::from_millis(20);
-        assert!(coalesce(&lines, |l| l == "change", window));
+        let (window, max) = (Duration::from_millis(20), Duration::from_secs(5));
+        assert!(coalesce(&lines, |l| l == "change", window, max));
         // The whole burst is gone: nothing is left to trigger a second refresh.
         assert!(lines.try_recv().is_err());
         drop(sender);
-        assert!(!coalesce(&lines, |l| l == "change", window));
+        assert!(!coalesce(&lines, |l| l == "change", window, max));
+    }
+
+    #[test]
+    fn an_endless_burst_still_refreshes() {
+        let (sender, lines) = mpsc::channel();
+        // A slider dragged for a long time: a line every 5 ms, never a pause.
+        let feeder = std::thread::spawn(move || {
+            while sender.send(String::from("change")).is_ok() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let started = Instant::now();
+        let (window, max) = (Duration::from_millis(50), Duration::from_millis(200));
+        assert!(coalesce(&lines, |l| l == "change", window, max));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(lines);
+        let _ = feeder.join();
     }
 
     #[test]

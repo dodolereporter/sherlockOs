@@ -373,20 +373,28 @@ pub fn chip<'a, Message: Clone + 'a>(
     control
 }
 
-/// Logo symbol, without its square, at the given size.
+/// Logo symbol, without its square, at the given size. The bare symbol has no optical
+/// version: it fills its frame and reads at 16 px.
 pub fn logo<'a>(version: Logo, size: f32) -> Svg<'a> {
     svg(svg::Handle::from_memory(version.bare().as_bytes()))
         .width(size)
         .height(size)
 }
 
-/// Sherlock button of the top bar: cream pill and logo symbol.
+/// Logo in its square, at the given size: the optical version at 32 px and below.
+pub fn logo_square<'a>(version: Logo, size: f32) -> Svg<'a> {
+    svg(svg::Handle::from_memory(version.square(size).as_bytes()))
+        .width(size)
+        .height(size)
+}
+
+/// Sherlock button of the top bar: the color logo symbol, green ring and cream dot.
 pub fn sherlock_button<'a, Message: Clone + 'a>(
     open: bool,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let (width, height) = metrics::SHERLOCK_BUTTON;
-    let content = container(logo(Logo::Night, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
+    let content = container(logo(Logo::Color, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
     let mut control = Control::new(
         content,
         theme::sherlock_button(open),
@@ -412,14 +420,12 @@ pub fn status<'a, Message: 'a>(
     line.into()
 }
 
-/// Menu header: cream avatar with the logo symbol, title and subtitle.
+/// Menu header: the color logo in its night blue square, title and subtitle.
 pub fn menu_header<'a, Message: 'a>(
     title: impl text::IntoFragment<'a>,
     subtitle: &'a str,
 ) -> Element<'a, Message> {
-    let avatar = container(logo(Logo::Night, metrics::MENU_AVATAR_GLYPH))
-        .center(metrics::MENU_AVATAR)
-        .style(theme::menu_avatar);
+    let avatar = logo_square(Logo::Color, metrics::MENU_AVATAR);
     let subtitle = text(subtitle)
         .font(typography::UI)
         .size(typography::SMALL_SIZE)
