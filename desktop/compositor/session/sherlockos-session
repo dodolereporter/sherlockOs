@@ -1,0 +1,37 @@
+#!/bin/sh
+# Starts a NOM_OS session, from the login screen (sherlockos.desktop) or from a text console:
+# the compositor on the screens of the machine, then the bar and the dock inside it.
+#
+# The programs are looked for next to this script (`just install-session` puts them in
+# /usr/local/libexec/nom-os), or in NOM_OS_BIN. The log of the session goes to
+# $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log), the previous one to
+# session.log.old. Ctrl + Alt + Backspace stops the compositor, and the session with it.
+set -eu
+
+bin="${NOM_OS_BIN:-$(dirname "$(readlink -f "$0")")}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/nom-os"
+mkdir -p "$state"
+if [ -f "$state/session.log" ]; then
+	mv -f "$state/session.log" "$state/session.log.old"
+fi
+
+export XDG_CURRENT_DESKTOP=NOM_OS
+export XDG_SESSION_DESKTOP=NOM_OS
+export XDG_SESSION_TYPE=wayland
+
+# The compositor launches this command once XWayland is ready, with WAYLAND_DISPLAY and
+# DISPLAY. The bar and the dock start again if they stop (ADR 0005), as long as the compositor,
+# their parent's parent, is there.
+shell='
+compositor=$PPID
+keep() {
+	while kill -0 "$compositor" 2>/dev/null; do
+		"$@" || echo "$1 stopped ($?), started again" >&2
+		sleep 1
+	done
+}
+keep "$0/bar" &
+keep "$0/dock" &
+wait
+'
+exec "$bin/compositor" sh -c "$shell" "$bin" >>"$state/session.log" 2>&1
