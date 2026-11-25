@@ -134,8 +134,9 @@ size and margins, and computes the work area.
   shadow, which are the client's business (the bar draws its own glass).
 - **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
   taken from the work area. Windows are centered, maximized and snapped inside it. When it
-  changes (the bar starts, stops or resizes), maximized and snapped windows of that screen take
-  the new work area. A bar of 36 with a top margin of 10 leaves the area from y = 46. The work
+  changes (the bar starts, stops or resizes), maximized, fullscreen and snapped windows of that
+  screen take the new work area, Wayland or X11, including those that do not have their first
+  content yet (a window maximized at startup, before the bar arrives). A bar of 36 with a top margin of 10 leaves the area from y = 46. The work
   area always stays inside the screen and is never smaller than `window::MIN_WORK_AREA` of
   sherlock-ui (320 × 240, or the screen if smaller): zones that cover the whole screen leave
   that minimum at their edge, never a negative or empty area.
@@ -689,6 +690,10 @@ Les tests de `tests/sans_ecran.rs` :
 - **Null buffer.** The bar, with the keyboard, commits a null buffer: the maximized window
   takes 800 × 600 again and the keyboard goes back to it. Committed again, the bar gets a new
   configure, draws, and the window goes back under it.
+- **Maximized before the bar.** A window maximized before its first content receives
+  800 × 600; the bar arrives; the window, still without content, receives 800 × 554, and its
+  first content lands in (0, 46). The same on the second of two screens, in (800, 46), the
+  first screen keeping its whole work area.
 - **Exclusive keyboard.** An overlay surface of 1 × 1 with an exclusive keyboard takes it at
   its first content and keeps it after a click on the window, until it is destroyed.
 - **The bar's client goes away.** A second client shows a bar, then disconnects: its zone comes

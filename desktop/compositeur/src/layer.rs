@@ -206,15 +206,14 @@ impl State {
         true
     }
 
-    /// Maximized, fullscreen and snapped windows of `output` take its new geometry.
+    /// Maximized, fullscreen and snapped windows of `output` take its new geometry, Wayland
+    /// or X11, including those still waiting for their first content: a window maximized at
+    /// startup, before the bar arrives, must not stay under it.
     pub(crate) fn reflow(&mut self, output: &Output) {
         let windows: Vec<_> = self
             .space
             .elements()
-            .filter(|w| {
-                let data = window_data(w);
-                data.shown.get() && data.restore.get().is_some()
-            })
+            .filter(|w| window_data(w).restore.get().is_some())
             .filter(|w| self.window_output(w).as_ref() == Some(output))
             .cloned()
             .collect();

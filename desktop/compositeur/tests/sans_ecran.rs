@@ -1324,4 +1324,53 @@ mod tests {
         assert_eq!(error.code, 1, "invalid_size");
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
     }
+
+    /// A client maximizes its window before its first content, then the bar arrives on the
+    /// screen under the pointer, then the client draws: the window ends up under the bar, at
+    /// (`x`, 46), whatever the order.
+    fn maximized_before_the_bar(h: &mut Harness, x: i32) {
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "xdg_wm_base")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        toplevel.set_maximized();
+        surface.commit();
+        assert_maximized(h, "l'agrandissement avant tout contenu", 800, 600);
+        anchor(h, BAR);
+        assert_maximized(h, "sous la barre, toujours sans contenu", 800, 554);
+        let file = shm_file(800 * 554 * 4);
+        let pool = shm.create_pool(file.as_fd(), 800 * 554 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 800, 554, 800 * 4, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        h.run_until("le premier contenu sous la barre", |_, s| {
+            let window = s.space.elements().next();
+            window.and_then(|w| s.space.element_geometry(w)) == Some(rect(x, 46, 800, 554))
+        });
+    }
+
+    #[test]
+    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle() {
+        let mut h = Harness::start();
+        maximized_before_the_bar(&mut h, 0);
+    }
+
+    #[test]
+    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle_sur_le_second_ecran() {
+        let mut h = Harness::start();
+        h.state.add_output((800, 600).into(), 1.0);
+        h.state.pointer_motion((1200.0, 300.0).into(), 1);
+        maximized_before_the_bar(&mut h, 800);
+        // The first screen has no bar: its work area is whole.
+        h.state.pointer_motion((400.0, 300.0).into(), 2);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+    }
 }
