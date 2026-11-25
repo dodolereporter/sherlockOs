@@ -26,7 +26,8 @@ use smithay::{
 
 use crate::{
     State,
-    handlers::is_fullscreen,
+    handlers::{Arrangement, is_fullscreen, is_maximized},
+    is_override_redirect,
     layout::{self, Edges, Resize, Zone},
     window_data,
 };
@@ -119,11 +120,28 @@ impl Shortcut {
 fn leave_arrangement(window: &Window) -> Option<Rectangle<i32, Logical>> {
     let data = window_data(window);
     let was_zoned = data.zone.take().is_some();
-    let was_maximized = window
-        .toplevel()
-        .is_some_and(|t| t.with_pending_state(|s| s.states.unset(XdgState::Maximized)));
+    let mut arrangement = Arrangement::of(window);
+    let was_maximized = std::mem::take(&mut arrangement.maximized);
+    arrangement.apply(window);
     let restore = data.restore.take();
     (was_zoned || was_maximized).then(|| restore.unwrap_or_default())
+}
+
+/// Tailles minimale et maximale que le client accepte, nulles s'il n'en donne pas.
+fn size_limits(window: &Window) -> (Size<i32, Logical>, Size<i32, Logical>) {
+    if let Some(surface) = window.x11_surface() {
+        return (
+            surface.min_size().unwrap_or_default(),
+            surface.max_size().unwrap_or_default(),
+        );
+    }
+    let Some(toplevel) = window.toplevel() else {
+        return Default::default();
+    };
+    with_states(toplevel.wl_surface(), |states| {
+        let mut cached = states.cached_state.get::<SurfaceCachedState>();
+        (cached.current().min_size, cached.current().max_size)
+    })
 }
 
 /// Forme du curseur pour tirer ces bords.
@@ -158,11 +176,13 @@ impl State {
         // La fenêtre suit le pointeur sans délai : une animation en cours s'arrête, et le
         // retour à la taille d'avant d'une fenêtre calée qu'on détache n'est pas animé.
         window_data(&window).motion.borrow_mut().follow();
-        if let (Some(edges), Some(toplevel)) = (edges, window.toplevel()) {
+        if let Some(edges) = edges {
             // Redimensionnée, elle quitte son agrandissement ou sa zone et part de sa taille
             // actuelle, qui part au client avec le premier mouvement.
             leave_arrangement(&window);
-            toplevel.send_pending_configure();
+            if let Some(toplevel) = window.toplevel() {
+                toplevel.send_pending_configure();
+            }
             let data = window_data(&window);
             if let Some(initial) = self.space.element_geometry(&window) {
                 // Le recalage sur le bord opposé vaut pendant tout le geste.
@@ -204,9 +224,6 @@ impl State {
     }
 
     fn drive_gesture(&mut self, gesture: &mut Gesture, pointer: Point<f64, Logical>) {
-        let Some(toplevel) = gesture.window.toplevel() else {
-            return;
-        };
         let Some(edges) = gesture.edges else {
             let delta = pointer - gesture.start;
             let threshold = f64::from(ui::DRAG_THRESHOLD);
@@ -218,44 +235,58 @@ impl State {
                 self.detach_for_move(gesture);
             }
             let loc = layout::moved(gesture.initial.loc, gesture.start, pointer);
-            self.space.map_element(gesture.window.clone(), loc, true);
+            self.move_window(&gesture.window, loc, true);
             gesture.zone = self
                 .output_area()
                 .and_then(|a| Zone::under(a, pointer, ui::SNAP_EDGE, ui::SNAP_CORNER));
             return;
         };
-        let (min, max) = with_states(toplevel.wl_surface(), |states| {
-            let mut cached = states.cached_state.get::<SurfaceCachedState>();
-            (cached.current().min_size, cached.current().max_size)
-        });
+        let (min, max) = size_limits(&gesture.window);
         gesture.last_size =
             layout::resized(gesture.initial, edges, pointer - gesture.start, min, max);
-        toplevel.with_pending_state(|s| {
-            s.states.set(XdgState::Resizing);
-            s.size = Some(gesture.last_size);
-        });
-        toplevel.send_pending_configure();
+        match gesture.window.toplevel() {
+            Some(toplevel) => {
+                toplevel.with_pending_state(|s| {
+                    s.states.set(XdgState::Resizing);
+                    s.size = Some(gesture.last_size);
+                });
+                toplevel.send_pending_configure();
+            }
+            None => self.resize_x11(&gesture.window, gesture.last_size),
+        }
+    }
+
+    /// Une fenêtre X11 prend sa taille dès qu'on la lui donne : on la pose tout de suite, le
+    /// bord opposé à celui qu'on tire restant en place.
+    fn resize_x11(&mut self, window: &Window, size: Size<i32, Logical>) {
+        let data = window_data(window);
+        let Some(resize) = data.resize.get() else {
+            return;
+        };
+        let (loc, next) = resize.on_commit(size);
+        data.resize.set(next);
+        self.request_size(window, Some(size));
+        self.move_window(window, loc, false);
     }
 
     /// Premier vrai mouvement d'un déplacement : une fenêtre agrandie ou calée reprend sa taille
     /// d'avant sous le pointeur. Si elle n'en avait pas (agrandie avant son premier contenu),
     /// le client choisit.
     fn detach_for_move(&mut self, gesture: &mut Gesture) {
-        let (Some(toplevel), Some(restore)) = (
-            gesture.window.toplevel(),
-            leave_arrangement(&gesture.window),
-        ) else {
+        let Some(restore) = leave_arrangement(&gesture.window) else {
             return;
         };
         let size = (!restore.size.is_empty()).then_some(restore.size);
+        self.request_size(&gesture.window, size);
         if let Some(size) = size {
             let loc = layout::unsnapped(gesture.initial, size, gesture.start);
             gesture.initial = Rectangle::new(loc, size);
-            self.space.map_element(gesture.window.clone(), loc, true);
+            self.move_window(&gesture.window, loc, true);
         }
         gesture.floating = Rectangle::new(gesture.initial.loc, restore.size);
-        toplevel.with_pending_state(|s| s.size = size);
-        toplevel.send_pending_configure();
+        if let Some(toplevel) = gesture.window.toplevel() {
+            toplevel.send_pending_configure();
+        }
     }
 
     fn finish_gesture(&mut self, gesture: Gesture) {
@@ -270,9 +301,6 @@ impl State {
             ..
         } = gesture;
         tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "fin du geste");
-        let Some(toplevel) = window.toplevel() else {
-            return;
-        };
         let Some(edges) = edges else {
             if let Some(zone) = zone {
                 // Lâchée contre un bord : calée. Elle retrouvera sa place d'avant le glisser.
@@ -281,17 +309,22 @@ impl State {
             }
             return;
         };
-        toplevel.with_pending_state(|s| {
-            s.states.unset(XdgState::Resizing);
-            s.size = Some(last_size);
-        });
-        toplevel.send_pending_configure();
         // Le recalage de la position se fait au prochain envoi du client, le dernier du geste.
         window_data(&window).resize.set(Some(Resize {
             edges,
             initial,
             done: true,
         }));
+        match window.toplevel() {
+            Some(toplevel) => {
+                toplevel.with_pending_state(|s| {
+                    s.states.unset(XdgState::Resizing);
+                    s.size = Some(last_size);
+                });
+                toplevel.send_pending_configure();
+            }
+            None => self.resize_x11(&window, last_size),
+        }
     }
 
     /// Oublie les touches de raccourci en attente de relâchement : la fenêtre hôte a perdu le
@@ -346,7 +379,9 @@ impl State {
             let edges = self
                 .space
                 .element_geometry(window)
-                .filter(|r| !r.size.is_empty() && !is_fullscreen(window))
+                .filter(|r| {
+                    !r.size.is_empty() && !is_fullscreen(window) && !is_override_redirect(window)
+                })
                 .and_then(|r| layout::border_edges(r, pos, ui::RESIZE_BAND, ui::RESIZE_CORNER));
             if let Some(edges) = edges {
                 return Some(Hit::Border(window.clone(), edges));
@@ -388,14 +423,11 @@ impl State {
     }
 
     fn run_shortcut(&mut self, shortcut: Shortcut) {
-        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
-        let Some(window) = focus.and_then(|surface| self.window_for(&surface)) else {
+        let Some(window) = self.focused_window() else {
             return;
         };
         tracing::debug!(?shortcut, "raccourci");
-        let maximized = window
-            .toplevel()
-            .is_some_and(|t| t.with_pending_state(|s| s.states.contains(XdgState::Maximized)));
+        let maximized = is_maximized(&window);
         let zone = match shortcut {
             Shortcut::ToggleMaximized if !maximized => Some(Zone::Maximized),
             Shortcut::ToggleMaximized | Shortcut::Restore => None,
@@ -507,6 +539,12 @@ impl State {
                 Some(Hit::Surface(window, ..) | Hit::Border(window, _)) => Some(window.clone()),
                 None => None,
             };
+            // Un clic dans un menu X11 va au menu : le clavier reste à sa fenêtre.
+            if window.as_ref().is_some_and(is_override_redirect) {
+                pointer.button(self, &event);
+                pointer.frame(self);
+                return;
+            }
             self.focus(window.clone());
             let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
             let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());

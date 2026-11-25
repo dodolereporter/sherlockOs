@@ -7,13 +7,14 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Seules les fonctions utiles au lot : backend fenêtré (winit, avec le rendu GLES),
-# serveur Wayland et outils de bureau (Space, Window). Le reste (DRM, libinput,
-# XWayland…) viendra avec ses lots.
+# Seules les fonctions utiles : backend fenêtré (winit, avec le rendu GLES), serveur
+# Wayland, outils de bureau (Space, Window) et XWayland avec son gestionnaire de fenêtres
+# X11 (X11Wm, lot D-13). Le reste (DRM, libinput…) viendra avec ses lots.
 smithay = { version = "=0.7.0", default-features = false, features = [
     "backend_winit",
     "desktop",
     "wayland_frontend",
+    "xwayland",
 ] }
 # Couleurs et tailles de l'aperçu de calage et de la bande de saisie. Les jetons seuls :
 # sans la fonction `iced`, le compositeur ne compile pas le toolkit du shell.
@@ -31,6 +32,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # tire déjà pour son backend winit.
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client"] }
+# Client X11 du test d'intégration de XWayland : la version que smithay tire déjà pour son
+# gestionnaire de fenêtres X11.
+x11rb = "=0.13.2"
 
 [lints]
 workspace = true
