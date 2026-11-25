@@ -31,7 +31,8 @@ lui, le compositeur démarre quand même, et seules les applications Wayland s'a
 | `src/shaders/` | Les trois programmes GLSL du rendu : `shape.frag`, `shadow.frag`, `clip.frag` |
 | `src/anim.rs` | Mouvements des fenêtres et de l'aperçu : ressorts appliqués aux rectangles. Du calcul pur |
 | `src/stats.rs` | Statistiques des images pour `--mesurer` |
-| `examples/scene.rs` | Client de test : la scène de mesure, et une fenêtre pour comparer à la planche |
+| `examples/scene.rs` | Client de test : la scène de mesure, et une fenêtre pour comparer à la planche (`planche`), maximized from the start (`agrandie`) or small enough for scale 2 (`petite`) |
+| `../../essais/bar-test` | Test bar of lot D-12, out of the workspace: 36 px, anchored at the top of every screen, with a menu |
 
 Les couleurs, les tailles, les durées et les ressorts viennent de `sherlock-ui` (modules `color`,
 `metrics`, `motion` et `window`), sans sa fonction `iced`.
@@ -103,7 +104,8 @@ Caler :
   leave (see below). A maximized or snapped window never covers the bar or the dock; a
   fullscreen one covers the whole screen. Dropped by a drag, a window snaps on the screen under
   the pointer, against that screen's edges. A shortcut or a client request acts on the window's
-  screen, the one under its center.
+  screen, the one under its center. Along the edge that two screens share, both edges snap:
+  dragging a window from one screen to the other shows the preview of each side in turn.
 
 Curseurs :
 

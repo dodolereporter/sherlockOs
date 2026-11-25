@@ -11,6 +11,7 @@ use smithay::{
     desktop::{LayerSurface, PopupKind, WindowSurfaceType, layer_map_for_output},
     output::Output,
     reexports::wayland_server::protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+    utils::IsAlive,
     utils::{Logical, Point, Rectangle},
     wayland::shell::{
         wlr_layer::{
@@ -82,7 +83,13 @@ impl WlrLayerShellHandler for State {
             }
         }
         self.reflow(&output);
-        self.focus(self.focused_window().or_else(|| self.top_window()));
+        // The keyboard goes back to a window if this surface had it.
+        let had_keyboard = self
+            .keyboard_focus()
+            .is_none_or(|focus| !focus.alive() || &focus == surface.wl_surface());
+        if had_keyboard {
+            self.focus(self.top_window());
+        }
     }
 }
 
@@ -122,8 +129,8 @@ impl State {
         // gives it back.
         let focused = self.keyboard_focus().as_ref() == Some(surface);
         let exclusive = self.exclusive_layer();
-        if exclusive.as_ref() == Some(surface) && !focused
-            || focused && exclusive.is_none() && !self.layer_wants_keyboard(surface)
+        if (exclusive.as_ref() == Some(surface) && !focused)
+            || (focused && exclusive.is_none() && !self.layer_wants_keyboard(surface))
         {
             self.focus(self.focused_window().or_else(|| self.top_window()));
         }

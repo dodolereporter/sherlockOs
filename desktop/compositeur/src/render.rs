@@ -185,7 +185,8 @@ impl Scene {
     fn push_backdrop(&self, _elements: &mut [SceneElement], _rect: Rectangle<i32, Physical>) {}
 
     /// A surface tree, untouched (no clip, border or shadow), with its origin at `loc` in the
-    /// space. `popups`: its menus too, in front of it.
+    /// space. `popups`: its menus too, in front of it (smithay lists nested menus with the
+    /// root surface, so a menu never has menus of its own here).
     #[allow(clippy::too_many_arguments)]
     fn push_surface(
         &self,
@@ -207,7 +208,7 @@ impl Scene {
                     loc,
                     view,
                     alpha,
-                    true,
+                    false,
                 );
             }
         }
