@@ -24,8 +24,10 @@ s'arrête à la première qui échoue.
 La CI n'a pas sa propre liste de commandes : elle lance les recettes du `justfile`. Pour changer ce
 qu'elle vérifie, on change `just verifier`, et le poste local suit.
 
-Le build de l'image et le boot dans QEMU, demandés par la règle 3 de `CLAUDE.md`, viennent avec les
-lots Q-03 et Q-04.
+Le build de l'image et le boot dans QEMU, demandés par la règle 3 de `CLAUDE.md`, tournent dans un
+second workflow, `.github/workflows/ci-boot.yml`, tâche `test-boot`, décrit dans `docs/tests-boot.md`.
+Il ajoute deux actions officielles, `actions/cache` et `actions/upload-artifact`, épinglées par
+empreinte comme les autres. Une demande de fusion n'est verte que si `verifier` et `test-boot` le sont.
 
 ## Comment elle s'installe
 

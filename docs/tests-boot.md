@@ -10,7 +10,7 @@ build (voir `docs/build.md`) : le poste ne fournit que Docker et `just`.
 | Commande | Ce qu'elle fait |
 | --- | --- |
 | `just test-boot` | Construit l'image témoin, puis la boote. Réussit si `BOOT-OK` sort |
-| `just test-boot <image>` | Boote l'image donnée, sans rien construire |
+| `just test-boot <image>` | Boote l'image donnée. Seule l'image témoin par défaut, `distro/tests/sortie/temoin.img`, est reconstruite avant |
 | `just temoin` | Construit l'image témoin seule : `distro/tests/sortie/temoin.img` |
 | `just temoin muet` | Construit la variante qui n'écrit pas `BOOT-OK` : `temoin-muet.img` |
 | `just tester-banc` | Vérifie que le banc échoue proprement (voir « Tests du banc ») |
