@@ -73,6 +73,7 @@ pub struct State {
     shm_state: ShmState,
     seat_state: SeatState<State>,
     popups: PopupManager,
+    gesture: Option<input::Gesture>,
 }
 
 /// Données qu'on accroche à chaque fenêtre.
@@ -140,6 +141,7 @@ impl State {
             seat,
             space: Space::default(),
             popups: PopupManager::default(),
+            gesture: None,
             loop_signal: event_loop.get_signal(),
             start_time: Instant::now(),
             display_handle: dh,
@@ -231,21 +233,6 @@ impl State {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.send_pending_configure();
             }
-        }
-    }
-
-    /// Demande à la fenêtre qui a le clavier de se fermer.
-    pub fn close_focused(&mut self) {
-        let focused = self.seat.get_keyboard().and_then(|k| k.current_focus());
-        if let Some(window) = focused.and_then(|s| self.window_for(&s)) {
-            Self::close(&window);
-        }
-    }
-
-    /// Demande à une fenêtre de se fermer : le client décide (enregistrer, confirmer…).
-    pub fn close(window: &Window) {
-        if let Some(toplevel) = window.toplevel() {
-            toplevel.send_close();
         }
     }
 

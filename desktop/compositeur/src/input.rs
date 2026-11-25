@@ -1,25 +1,17 @@
 //! Clavier et souris : focus au clic, Super + glisser pour déplacer, Super + clic droit
-//! pour redimensionner, Super + Q pour fermer.
+//! pour redimensionner.
 
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent,
         KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
     },
-    desktop::Window,
+    desktop::{Space, Window},
     input::{
-        keyboard::{FilterResult, Keysym},
-        pointer::{
-            AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
-            GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
-            GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData,
-            MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
-        },
+        keyboard::FilterResult,
+        pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
-        wayland_server::protocol::wl_surface::WlSurface,
-    },
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
     utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
 };
@@ -34,11 +26,68 @@ use crate::{
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
+/// Geste Super + bouton en cours : le compositeur déplace ou redimensionne une fenêtre.
+pub(crate) struct Gesture {
+    window: Window,
+    start: Point<f64, Logical>,
+    initial: Rectangle<i32, Logical>,
+    /// `None` pour un déplacement, les bords tirés pour un redimensionnement.
+    edges: Option<Edges>,
+    last_size: Size<i32, Logical>,
+}
+
+impl Gesture {
+    fn update(&mut self, space: &mut Space<Window>, pointer: Point<f64, Logical>) {
+        let Some(toplevel) = self.window.toplevel() else {
+            return;
+        };
+        let Some(edges) = self.edges else {
+            let loc = layout::moved(self.initial.loc, self.start, pointer);
+            space.map_element(self.window.clone(), loc, true);
+            return;
+        };
+        let (min, max) = with_states(toplevel.wl_surface(), |states| {
+            let mut cached = states.cached_state.get::<SurfaceCachedState>();
+            (cached.current().min_size, cached.current().max_size)
+        });
+        self.last_size = layout::resized(self.initial, edges, pointer - self.start, min, max);
+        toplevel.with_pending_state(|s| {
+            s.states.set(XdgState::Resizing);
+            s.size = Some(self.last_size);
+        });
+        toplevel.send_pending_configure();
+    }
+
+    fn finish(self) {
+        let (Some(toplevel), Some(edges)) = (self.window.toplevel(), self.edges) else {
+            return;
+        };
+        toplevel.with_pending_state(|s| {
+            s.states.unset(XdgState::Resizing);
+            s.size = Some(self.last_size);
+        });
+        toplevel.send_pending_configure();
+        // Le recalage de la position se fait au prochain envoi du client, le dernier du geste.
+        window_data(&self.window)
+            .resize
+            .set(Some((edges, self.initial, true)));
+    }
+}
+
 impl State {
     /// Traite un événement d'entrée venu du backend.
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
-            InputEvent::Keyboard { event } => self.on_key::<I>(&event),
+            InputEvent::Keyboard { event } => {
+                let Some(keyboard) = self.seat.get_keyboard() else {
+                    return;
+                };
+                let serial = SERIAL_COUNTER.next_serial();
+                let (key, state, time) = (event.key_code(), event.state(), event.time_msec());
+                keyboard.input::<(), _>(self, key, state, serial, time, |_, _, _| {
+                    FilterResult::Forward
+                });
+            }
             InputEvent::PointerMotionAbsolute { event } => {
                 let Some(area) = self.output_area() else {
                     return;
@@ -71,43 +120,24 @@ impl State {
         }
     }
 
-    fn on_key<I: InputBackend>(&mut self, event: &I::KeyboardKeyEvent) {
-        let Some(keyboard) = self.seat.get_keyboard() else {
-            return;
-        };
-        let serial = SERIAL_COUNTER.next_serial();
-        let close = keyboard.input(
-            self,
-            event.key_code(),
-            event.state(),
-            serial,
-            event.time_msec(),
-            |_, modifiers, handle| {
-                let pressed = event.state() == smithay::backend::input::KeyState::Pressed;
-                let is_q = handle.modified_sym() == Keysym::q || handle.modified_sym() == Keysym::Q;
-                if pressed && modifiers.logo && is_q {
-                    FilterResult::Intercept(true)
-                } else {
-                    FilterResult::Forward
-                }
-            },
-        );
-        if close == Some(true) {
-            self.close_focused();
-        }
-    }
-
-    fn on_motion(&mut self, pos: Point<f64, Logical>, time: u32) {
+    fn on_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        let under = self.surface_under(pos);
+        // Pendant un geste, aucun client n'a le pointeur.
+        let under = match self.gesture.as_mut() {
+            Some(gesture) => {
+                gesture.update(&mut self.space, location);
+                None
+            }
+            None => self.surface_under(location),
+        };
         let serial = SERIAL_COUNTER.next_serial();
         pointer.motion(
             self,
             under,
             &MotionEvent {
-                location: pos,
+                location,
                 serial,
                 time,
             },
@@ -120,31 +150,42 @@ impl State {
         else {
             return;
         };
-        let serial = SERIAL_COUNTER.next_serial();
+        let location = pointer.current_location();
+        // Le client n'a vu ni l'appui ni le relâchement d'un geste.
+        if let Some(gesture) = self.gesture.take() {
+            if state == ButtonState::Pressed {
+                self.gesture = Some(gesture);
+            } else {
+                gesture.finish();
+                self.on_motion(location, time);
+            }
+            return;
+        }
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
-            let location = pointer.current_location();
             let window = self.space.element_under(location).map(|(w, _)| w.clone());
             self.focus(window.clone());
-            // Super + bouton : le compositeur prend le geste, le client ne voit pas le clic.
-            if let Some(window) = window.filter(|_| keyboard.modifier_state().logo) {
-                let edges = match button {
-                    BTN_LEFT => Some(None),
-                    BTN_RIGHT => self
-                        .space
-                        .element_geometry(&window)
-                        .map(|rect| Some(Edges::nearest(rect, location))),
-                    _ => None,
-                };
-                let start = GrabStartData {
-                    focus: None,
-                    button,
-                    location,
-                };
-                if let Some(grab) = edges.and_then(|e| self.start_grab(start, window, e)) {
-                    pointer.set_grab(self, grab, serial, Focus::Clear);
-                }
+            let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
+            let edges = match button {
+                BTN_LEFT => Some(None),
+                BTN_RIGHT => rect.map(|r| Some(Edges::nearest(r, location))),
+                _ => None,
+            };
+            if let (Some(window), Some(initial), Some(edges), true) =
+                (window, rect, edges, keyboard.modifier_state().logo)
+            {
+                let last_size = initial.size;
+                self.gesture = Some(Gesture {
+                    window,
+                    start: location,
+                    initial,
+                    edges,
+                    last_size,
+                });
+                self.on_motion(location, time);
+                return;
             }
         }
+        let serial = SERIAL_COUNTER.next_serial();
         pointer.button(
             self,
             &ButtonEvent {
@@ -156,154 +197,4 @@ impl State {
         );
         pointer.frame(self);
     }
-}
-
-/// Ce que fait un geste en cours.
-pub(crate) enum GrabKind {
-    Move {
-        initial: Point<i32, Logical>,
-    },
-    Resize {
-        edges: Edges,
-        initial: Rectangle<i32, Logical>,
-        last: Size<i32, Logical>,
-    },
-}
-
-/// Geste du pointeur sur une fenêtre, jusqu'au relâchement de tous les boutons.
-pub(crate) struct WindowGrab {
-    pub(crate) start: GrabStartData<State>,
-    pub(crate) window: Window,
-    pub(crate) kind: GrabKind,
-}
-
-impl WindowGrab {
-    fn update(&mut self, data: &mut State, pointer: Point<f64, Logical>) {
-        let Some(toplevel) = self.window.toplevel() else {
-            return;
-        };
-        match &mut self.kind {
-            GrabKind::Move { initial } => {
-                let loc = layout::moved(*initial, self.start.location, pointer);
-                data.space.map_element(self.window.clone(), loc, true);
-            }
-            GrabKind::Resize {
-                edges,
-                initial,
-                last,
-            } => {
-                let (min, max) = with_states(toplevel.wl_surface(), |states| {
-                    let mut cached = states.cached_state.get::<SurfaceCachedState>();
-                    let current = cached.current();
-                    (current.min_size, current.max_size)
-                });
-                let delta = pointer - self.start.location;
-                *last = layout::resized(*initial, *edges, delta, min, max);
-                toplevel.with_pending_state(|s| {
-                    s.states.set(xdg_toplevel::State::Resizing);
-                    s.size = Some(*last);
-                });
-                toplevel.send_pending_configure();
-            }
-        }
-    }
-
-    fn finish(&mut self) {
-        let (
-            Some(toplevel),
-            GrabKind::Resize {
-                edges,
-                initial,
-                last,
-            },
-        ) = (self.window.toplevel(), &self.kind)
-        else {
-            return;
-        };
-        toplevel.with_pending_state(|s| {
-            s.states.unset(xdg_toplevel::State::Resizing);
-            s.size = Some(*last);
-        });
-        toplevel.send_pending_configure();
-        // La position se recale au prochain envoi du client, qui sera le dernier du geste.
-        window_data(&self.window)
-            .resize
-            .set(Some((*edges, *initial, true)));
-    }
-}
-
-/// Les événements que le geste ne traite pas passent tels quels.
-macro_rules! forward {
-    ($($name:ident: $event:ty),* $(,)?) => {$(
-        fn $name(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>, event: &$event) {
-            handle.$name(data, event);
-        }
-    )*};
-}
-
-impl PointerGrab<State> for WindowGrab {
-    fn motion(
-        &mut self,
-        data: &mut State,
-        handle: &mut PointerInnerHandle<'_, State>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
-        event: &MotionEvent,
-    ) {
-        // Pendant le geste, aucun client n'a le pointeur.
-        handle.motion(data, None, event);
-        self.update(data, event.location);
-    }
-
-    fn relative_motion(
-        &mut self,
-        data: &mut State,
-        handle: &mut PointerInnerHandle<'_, State>,
-        _focus: Option<(WlSurface, Point<f64, Logical>)>,
-        event: &RelativeMotionEvent,
-    ) {
-        handle.relative_motion(data, None, event);
-    }
-
-    fn button(
-        &mut self,
-        data: &mut State,
-        handle: &mut PointerInnerHandle<'_, State>,
-        event: &ButtonEvent,
-    ) {
-        handle.button(data, event);
-        if handle.current_pressed().is_empty() {
-            self.finish();
-            handle.unset_grab(self, data, event.serial, event.time, true);
-        }
-    }
-
-    fn axis(
-        &mut self,
-        data: &mut State,
-        handle: &mut PointerInnerHandle<'_, State>,
-        details: AxisFrame,
-    ) {
-        handle.axis(data, details);
-    }
-
-    fn frame(&mut self, data: &mut State, handle: &mut PointerInnerHandle<'_, State>) {
-        handle.frame(data);
-    }
-
-    forward! {
-        gesture_swipe_begin: GestureSwipeBeginEvent,
-        gesture_swipe_update: GestureSwipeUpdateEvent,
-        gesture_swipe_end: GestureSwipeEndEvent,
-        gesture_pinch_begin: GesturePinchBeginEvent,
-        gesture_pinch_update: GesturePinchUpdateEvent,
-        gesture_pinch_end: GesturePinchEndEvent,
-        gesture_hold_begin: GestureHoldBeginEvent,
-        gesture_hold_end: GestureHoldEndEvent,
-    }
-
-    fn start_data(&self) -> &GrabStartData<State> {
-        &self.start
-    }
-
-    fn unset(&mut self, _data: &mut State) {}
 }
