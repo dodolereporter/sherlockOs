@@ -538,6 +538,8 @@ dependencies = [
 name = "compositor"
 version = "0.0.0"
 dependencies = [
+ "desktop-config",
+ "image",
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
