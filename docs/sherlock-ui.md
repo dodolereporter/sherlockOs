@@ -234,7 +234,7 @@ Procédure de comparaison aux planches, sur le poste de l'auteur (Plasma X11) :
 - **Cohérence des jetons** : gammes du design vérifiées à la compilation, nuances du vert, logo
   limité aux couleurs du thème, icônes dans leur grille.
 - **Galerie** (`tests/galerie.rs`) : capture du rendu de la galerie, sous-menu ouvert, dans
-  `target/tmp/galerie-tiny-skia.png`, sur 2 000 de haut pour tout contenir ; un clic déclenche
+  `target/tmp/galerie-tiny-skia.png`, sur 2 400 de haut pour tout contenir ; un clic déclenche
   son action ; Tab parcourt les composants en sautant les désactivés, Entrée ou Espace les
   active, une touche gardée enfoncée n'active qu'une fois, un composant désactivé perd le
   focus.

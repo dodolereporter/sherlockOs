@@ -15,6 +15,8 @@ pub mod typography;
 pub mod window;
 
 #[cfg(feature = "iced")]
+pub mod animated;
+#[cfg(feature = "iced")]
 pub mod component;
 #[cfg(feature = "iced")]
 pub mod focus;

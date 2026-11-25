@@ -17,7 +17,7 @@ use sherlock_ui::{metrics, theme, typography};
 use vue::{Gallery, Message};
 
 /// Hauteur qui montre toute la galerie d'un coup, logos compris.
-const FULL_HEIGHT: f32 = 2000.0;
+const FULL_HEIGHT: f32 = 2400.0;
 
 fn settings() -> Settings {
     Settings {

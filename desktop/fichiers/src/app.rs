@@ -19,6 +19,8 @@ use crate::places::{self, Place};
 use crate::preview::{self, Preview};
 use crate::probe::{Probe, Step};
 use crate::trash::Trash;
+use sherlock_ui::motion::{self, Animation, Fade};
+use std::time::{Duration, Instant};
 
 /// Identifiants des widgets que l'application pilote.
 pub const LIST: &str = "liste";
@@ -44,8 +46,7 @@ impl Config {
         let measure = match args.first() {
             Some(flag) if flag == "--mesurer" => {
                 args.remove(0);
-                args.first()
-                    .and_then(|p| std::path::absolute(p).ok())
+                args.first().and_then(|p| std::path::absolute(p).ok())
             }
             _ => None,
         };
@@ -188,7 +189,12 @@ pub enum Message {
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
     /// Une image de la fenêtre, pendant une animation ou une mesure.
-    Frame(std::time::Instant),
+    Frame(Instant),
+    /// Contenu d'un emplacement, lu hors du fil de l'interface. Le numéro écarte une lecture
+    /// dépassée par une navigation plus récente.
+    Loaded(u64, Result<Vec<Entry>, ()>),
+    /// Aperçu préparé hors du fil de l'interface.
+    Preview(PathBuf, Preview),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,8 +231,26 @@ pub struct App {
     modifiers: Modifiers,
     pub(crate) size: Size,
     /// Défilement de la liste et hauteur visible, pour garder le curseur en vue.
-    scroll: (f32, f32),
+    pub(crate) scroll: (f32, f32),
     probe: Option<Probe>,
+    /// Numéro de la dernière lecture demandée, éléments à sélectionner quand elle arrive, et
+    /// renommage à ouvrir alors (nouveau dossier).
+    generation: u64,
+    pending: Vec<PathBuf>,
+    pending_rename: bool,
+    /// L'emplacement vient de changer : son contenu arrivera en fondu.
+    fresh: bool,
+    /// Élément dont l'aperçu est montré ou attendu.
+    preview_path: Option<PathBuf>,
+    /// Origine du temps des animations.
+    origin: Instant,
+    /// Position verticale du surlignage de la sélection, qui glisse d'une ligne à l'autre.
+    pub(crate) highlight: Option<Animation>,
+    /// Fondu du contenu d'un dossier qui s'ouvre, et de l'aperçu.
+    pub(crate) content_fade: Option<Fade>,
+    pub(crate) preview_fade: Option<Fade>,
+    /// Échelle du menu qui s'ouvre.
+    pub(crate) menu_scale: Option<Animation>,
 }
 
 impl App {
@@ -259,6 +283,16 @@ impl App {
             size: Size::new(width, height),
             scroll: (0.0, height),
             probe: None,
+            generation: 0,
+            pending: Vec::new(),
+            pending_rename: false,
+            fresh: true,
+            preview_path: None,
+            origin: Instant::now(),
+            highlight: None,
+            content_fade: None,
+            preview_fade: None,
+            menu_scale: None,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -267,9 +301,12 @@ impl App {
 
     /// Clavier, pointeur et taille de la fenêtre.
     pub fn subscription(&self) -> Subscription<Message> {
-        let frames = match &self.probe {
-            Some(probe) if probe.active() => window::frames().map(Message::Frame),
-            _ => Subscription::none(),
+        // Les images ne battent que pendant une animation ou une mesure, jamais au repos.
+        let measuring = self.probe.as_ref().is_some_and(Probe::active);
+        let frames = if measuring || self.animating(self.now()) {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
         };
         let events = event::listen_with(|event, status, _| match event {
             Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) => {
@@ -306,7 +343,90 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Temps des animations.
+    pub fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    /// Une animation de l'application court encore.
+    pub fn animating(&self, now: Duration) -> bool {
+        let spring = |a: &Option<Animation>, precision| {
+            a.as_ref().is_some_and(|a| !a.is_done(now, precision))
+        };
+        let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
+        spring(&self.highlight, motion::GEOMETRY_PRECISION)
+            || spring(&self.menu_scale, motion::SCALE_PRECISION)
+            || fade(&self.content_fade)
+            || fade(&self.preview_fade)
+    }
+
+    /// Pose toutes les animations à leur fin. Pour les captures.
+    pub fn settle(&mut self) {
+        let now = self.now();
+        self.content_fade = None;
+        self.preview_fade = None;
+        self.menu_scale = None;
+        if let Some(target) = self.highlight.as_ref().map(Animation::target) {
+            self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, target, target, now));
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        let now = self.now();
+        // Le surlignage suit le curseur quand un seul élément est sélectionné.
+        let target = match (self.selection.len(), self.cursor) {
+            (1, Some(i)) => Some(
+                f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT),
+            ),
+            _ => None,
+        };
+        match (target, &mut self.highlight) {
+            (None, _) => self.highlight = None,
+            (Some(y), Some(anim)) if (anim.target() - y).abs() > f64::EPSILON => {
+                anim.retarget(now, y)
+            }
+            (Some(_), Some(_)) => {}
+            (Some(y), None) => {
+                self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, y, y, now))
+            }
+        }
+        // Le menu s'ouvre à l'échelle.
+        match (&self.menu, &self.menu_scale) {
+            (Some(_), None) => {
+                self.menu_scale = Some(Animation::new(
+                    motion::OPEN_SPRING,
+                    motion::OPEN_SCALE,
+                    1.0,
+                    now,
+                ));
+            }
+            (None, Some(_)) => self.menu_scale = None,
+            _ => {}
+        }
+        Task::batch([task, self.preview_task()])
+    }
+
+    /// Demande l'aperçu de l'élément sélectionné, s'il a changé.
+    fn preview_task(&mut self) -> Task<Message> {
+        let wanted = self.single().cloned();
+        let path = wanted.as_ref().map(|e| e.path.clone());
+        if path == self.preview_path {
+            return Task::none();
+        }
+        self.preview_path.clone_from(&path);
+        self.preview = Preview::Info;
+        match (wanted, path) {
+            (Some(entry), Some(path)) => {
+                Task::perform(async move { preview::load(&entry) }, move |preview| {
+                    Message::Preview(path.clone(), preview)
+                })
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Go(location) => return self.go(location),
             Message::Back => {
@@ -328,9 +448,7 @@ impl App {
                     && let Some(parent) = dir.parent()
                 {
                     let (child, parent) = (dir.clone(), parent.to_path_buf());
-                    let task = self.go(Location::Folder(parent));
-                    self.select_paths(&[child]);
-                    return task;
+                    return self.go_select(Location::Folder(parent), vec![child]);
                 }
             }
             Message::Click(index) => {
@@ -341,7 +459,6 @@ impl App {
                         self.selection.insert(index);
                     }
                     self.cursor = Some(index);
-                    self.refresh_preview();
                 } else {
                     self.select_only(index);
                 }
@@ -424,6 +541,17 @@ impl App {
                 }
             }
             Message::Frame(now) => return self.frame(now),
+            Message::Loaded(generation, result) => {
+                if generation == self.generation {
+                    return self.loaded(result);
+                }
+            }
+            Message::Preview(path, preview) => {
+                if self.preview_path.as_ref() == Some(&path) {
+                    self.preview = preview;
+                    self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
+                }
+            }
             Message::Window(action) => {
                 return window::latest().and_then(move |id| match action {
                     WindowAction::Drag => window::drag(id),
@@ -436,7 +564,15 @@ impl App {
         Task::none()
     }
 
-    fn frame(&mut self, now: std::time::Instant) -> Task<Message> {
+    fn frame(&mut self, now: Instant) -> Task<Message> {
+        // Une animation finie est oubliée : l'abonnement aux images s'arrête.
+        let t = self.now();
+        if self.content_fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.content_fade = None;
+        }
+        if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.preview_fade = None;
+        }
         let Some(probe) = &mut self.probe else {
             return Task::none();
         };
@@ -463,13 +599,17 @@ impl App {
     // Navigation.
 
     fn go(&mut self, location: Location) -> Task<Message> {
+        self.go_select(location, Vec::new())
+    }
+
+    fn go_select(&mut self, location: Location, select: Vec<PathBuf>) -> Task<Message> {
         if location == self.location {
             return Task::none();
         }
         let previous = std::mem::replace(&mut self.location, location);
         self.history.push(previous);
         self.future.clear();
-        self.reset_and_load(&[])
+        self.reset_and_load(&select)
     }
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
@@ -477,6 +617,8 @@ impl App {
         self.clear_selection();
         self.repo = None;
         self.notice = None;
+        self.fresh = true;
+        self.scroll.0 = 0.0;
         let load = self.load(select);
         Task::batch([
             load,
@@ -489,57 +631,56 @@ impl App {
     fn load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.menu = None;
         self.renaming = None;
-        let mut keep = self.selected_paths();
-        if !select.is_empty() {
-            keep = select.to_vec();
-        }
-        let task = match self.location.clone() {
+        self.pending = if select.is_empty() {
+            self.selected_paths()
+        } else {
+            select.to_vec()
+        };
+        self.generation += 1;
+        let generation = self.generation;
+        let location = self.location.clone();
+        let hidden = self.show_hidden;
+        let trash = self.config.trash.clone();
+        let listing = Task::perform(
+            async move { read_location(&location, hidden, trash.as_ref()) },
+            move |result| Message::Loaded(generation, result),
+        );
+        let git = match self.location.clone() {
             Location::Folder(dir) => {
-                match listing::read_dir(&dir, self.show_hidden) {
-                    Ok(entries) => self.all = entries,
-                    Err(_) => {
-                        self.all.clear();
-                        self.notice = Some(Notice {
-                            text: texts::UNREADABLE.into(),
-                            error: true,
-                        });
-                    }
-                }
-                self.apply_repo();
                 let target = dir.clone();
                 Task::perform(async move { git::status(&target) }, move |repo| {
                     Message::Git(dir.clone(), repo)
                 })
             }
-            Location::Trash => {
-                self.all = self.trash_entries();
-                Task::none()
-            }
+            Location::Trash => Task::none(),
         };
-        self.refilter();
-        self.select_paths(&keep);
-        task
+        Task::batch([listing, git])
     }
 
-    fn trash_entries(&self) -> Vec<Entry> {
-        let items = self
-            .config
-            .trash
-            .as_ref()
-            .and_then(|trash| trash.list().ok())
-            .unwrap_or_default();
-        items
-            .into_iter()
-            .filter_map(|item| {
-                let mut entry = Entry::read(&item.path, true).ok()?;
-                if let Some(name) = item.original.file_name() {
-                    entry.name = name.to_string_lossy().into_owned();
-                }
-                entry.modified = item.deleted;
-                entry.origin = Some(item.original);
-                Some(entry)
-            })
-            .collect()
+    /// Le contenu de l'emplacement est arrivé.
+    fn loaded(&mut self, result: Result<Vec<Entry>, ()>) -> Task<Message> {
+        match result {
+            Ok(entries) => self.all = entries,
+            Err(()) => {
+                self.all.clear();
+                self.notice = Some(Notice {
+                    text: texts::UNREADABLE.into(),
+                    error: true,
+                });
+            }
+        }
+        self.apply_repo();
+        self.refilter();
+        let pending = std::mem::take(&mut self.pending);
+        self.select_paths(&pending);
+        if std::mem::take(&mut self.fresh) {
+            self.highlight = None;
+            self.content_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
+        }
+        if std::mem::take(&mut self.pending_rename) {
+            return self.start_rename();
+        }
+        Task::none()
     }
 
     fn apply_repo(&mut self) {
@@ -555,7 +696,7 @@ impl App {
         self.entries = self
             .all
             .iter()
-            .filter(|e| needle.is_empty() || e.name.to_lowercase().contains(&needle))
+            .filter(|e| needle.is_empty() || e.labels.lower.contains(&needle))
             .cloned()
             .collect();
         listing::sort(&mut self.entries, self.sort);
@@ -581,26 +722,16 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         self.cursor = self.selection.iter().next().copied();
-        self.refresh_preview();
     }
 
     fn select_only(&mut self, index: usize) {
         self.selection = BTreeSet::from([index]);
         self.cursor = Some(index);
-        self.refresh_preview();
     }
 
     fn clear_selection(&mut self) {
         self.selection.clear();
         self.cursor = None;
-        self.refresh_preview();
-    }
-
-    fn refresh_preview(&mut self) {
-        self.preview = match self.single() {
-            Some(entry) => preview::load(entry),
-            None => Preview::Info,
-        };
     }
 
     /// L'élément sélectionné, s'il est seul.
@@ -961,7 +1092,6 @@ impl App {
             Command::SelectAll => {
                 self.selection = (0..self.entries.len()).collect();
                 self.cursor = self.selection.iter().next().copied();
-                self.refresh_preview();
             }
             _ => {}
         }
@@ -1039,10 +1169,11 @@ impl App {
         };
         match ops::new_folder(&dir) {
             Ok(path) => {
-                // Le dossier se crée vide, la recherche le cacherait.
+                // Le dossier se crée vide, la recherche le cacherait. Le renommage s'ouvre
+                // quand la liste relue l'a sélectionné.
                 self.search.clear();
-                let load = self.load(&[path]);
-                Task::batch([load, self.start_rename()])
+                self.pending_rename = true;
+                self.load(&[path])
             }
             Err(error) => {
                 self.fail(&error);
@@ -1175,5 +1306,34 @@ fn direction(modifiers: Modifiers) -> Direction {
         Direction::Previous
     } else {
         Direction::Next
+    }
+}
+
+/// Lit un emplacement : un dossier, ou la corbeille avec le nom et la place d'origine de
+/// chaque élément. Hors du fil de l'interface.
+fn read_location(
+    location: &Location,
+    hidden: bool,
+    trash: Option<&Trash>,
+) -> Result<Vec<Entry>, ()> {
+    let now = crate::clock::now();
+    match location {
+        Location::Folder(dir) => listing::read_dir(dir, hidden).map_err(|_| ()),
+        Location::Trash => {
+            let items = trash.and_then(|t| t.list().ok()).unwrap_or_default();
+            Ok(items
+                .into_iter()
+                .filter_map(|item| {
+                    let mut entry = Entry::read(&item.path, true).ok()?;
+                    if let Some(name) = item.original.file_name() {
+                        entry.name = name.to_string_lossy().into_owned();
+                    }
+                    entry.modified = item.deleted;
+                    entry.origin = Some(item.original);
+                    entry.relabel(now);
+                    Some(entry)
+                })
+                .collect())
+        }
     }
 }

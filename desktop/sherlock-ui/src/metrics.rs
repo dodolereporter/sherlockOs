@@ -71,6 +71,8 @@ pub const CHIP_PADDING: (f32, f32) = (3.0, 10.0);
 pub const CHIP_RADIUS: f32 = 10.0;
 /// Champ de recherche d'une barre d'outils.
 pub const SEARCH_WIDTH: f32 = 210.0;
+/// Écart entre la loupe et le texte du champ de recherche.
+pub const SEARCH_ICON_GAP: f32 = 8.0;
 /// Barre d'état en bas d'une fenêtre : hauteur, marge sur les côtés.
 pub const STATUS_BAR_HEIGHT: f32 = 30.0;
 pub const STATUS_BAR_PADDING: f32 = 14.0;
@@ -114,6 +116,10 @@ pub const LIST_COLUMN_GAP: f32 = 12.0;
 pub const LIST_COLUMNS: [f32; 4] = [150.0, 96.0, 120.0, 84.0];
 /// Icône du type de fichier dans une ligne.
 pub const LIST_ICON: f32 = 18.0;
+/// Lignes dessinées en plus au-dessus et au-dessous de la partie visible d'une longue liste.
+pub const LIST_OVERSCAN: usize = 4;
+/// Glissement du contenu d'un dossier qui s'ouvre : il monte de cette distance en fondu.
+pub const LIST_SLIDE: f32 = 8.0;
 /// Étiquette d'état : marges verticale et horizontale, rayon.
 pub const BADGE_PADDING: (f32, f32) = (1.0, 8.0);
 pub const BADGE_RADIUS: f32 = 8.0;

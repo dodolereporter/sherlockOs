@@ -6,9 +6,12 @@ use iced::widget::{
     stack, text,
 };
 use iced::{Alignment, Element, Length, Padding};
+use std::time::Duration;
+
+use sherlock_ui::animated::{hoverable, scaled};
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::icon::Icon;
-use sherlock_ui::texts::{self, LocalTime, files as t};
+use sherlock_ui::texts::{self, files as t};
 use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 
@@ -36,15 +39,43 @@ fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
         .into()
 }
 
+/// Texte secondaire d'une cellule, sans copie.
+fn cell_ref(content: &str, width: f32) -> Element<'_, Message> {
+    ui::body(content)
+        .color(color::TEXT_SECONDARY)
+        .wrapping(text::Wrapping::None)
+        .width(width)
+        .into()
+}
+
+/// Voile d'une couleur de fond, pour les fondus.
+fn veil<'a>(fill: color::Color, alpha: f32) -> Element<'a, Message> {
+    let fill = color::Color { a: alpha, ..fill };
+    container(space())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| theme::veil(fill))
+        .into()
+}
+
+/// Libellé et ton de l'état git.
+fn git_badge(status: GitStatus) -> (&'static str, Tone) {
+    match status {
+        GitStatus::Modified => (t::GIT_MODIFIED, Tone::Warning),
+        GitStatus::New => (t::GIT_NEW, Tone::Success),
+        GitStatus::Ignored => (t::GIT_IGNORED, Tone::Neutral),
+    }
+}
+
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
-        let now = clock::now();
+        let now = self.now();
         let mut body = Row::new()
             .push(self.sidebar())
             .push(vline())
             .push(self.list(now));
         if self.show_preview {
-            body = body.push(vline()).push(self.preview_panel());
+            body = body.push(vline()).push(self.preview_panel(now));
         }
         let page = column![
             self.title_bar(),
@@ -115,12 +146,12 @@ impl App {
     }
 
     fn toolbar(&self) -> Element<'_, Message> {
-        let back = ui::icon_button(
+        let back = ui::toolbar_button(
             Icon::Back,
             t::BACK,
             self.can_go_back().then_some(Message::Back),
         );
-        let forward = ui::icon_button(
+        let forward = ui::toolbar_button(
             Icon::Chevron,
             t::FORWARD,
             self.can_go_forward().then_some(Message::Forward),
@@ -130,24 +161,19 @@ impl App {
         if folded {
             crumbs.drain(1..crumbs.len() + 1 - metrics::BREADCRUMB_MAX);
         }
+        let chevron = || ui::icon(Icon::Chevron, metrics::ICON_SIZE_TINY, color::TEXT_TERTIARY);
         let mut trail = Row::new()
             .spacing(metrics::BREADCRUMB_GAP)
             .align_y(Alignment::Center);
         let count = crumbs.len();
         for (i, (label, location)) in crumbs.into_iter().enumerate() {
             if i > 0 {
-                let chevron =
-                    ui::icon(Icon::Chevron, metrics::ICON_SIZE_TINY, color::TEXT_TERTIARY);
-                trail = trail.push(chevron);
+                trail = trail.push(chevron());
             }
             if folded && i == 1 {
                 trail = trail
                     .push(ui::body(t::FOLDED).color(color::TEXT_TERTIARY))
-                    .push(ui::icon(
-                        Icon::Chevron,
-                        metrics::ICON_SIZE_TINY,
-                        color::TEXT_TERTIARY,
-                    ));
+                    .push(chevron());
             }
             let current = i + 1 == count;
             trail = trail.push(ui::crumb(label, current, Some(Message::Go(location))));
@@ -164,13 +190,13 @@ impl App {
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             line = line.push(ui::chip(t::branch(branch)));
         }
-        let search = ui::text_field(
+        let search = ui::search_field(
             &t::search_placeholder(&self.location_name()),
             &self.search,
             Some(Message::Search),
-        )
-        .id(SEARCH)
-        .width(metrics::SEARCH_WIDTH);
+            SEARCH,
+            metrics::SEARCH_WIDTH,
+        );
         let line = line.push(space::horizontal()).push(search);
         container(line)
             .width(Length::Fill)
@@ -180,13 +206,34 @@ impl App {
             .into()
     }
 
+    /// Le favori qui contient l'emplacement courant, le plus profond : sous Documents, c'est
+    /// Documents qui est actif. Accueil ne l'est que pour le dossier personnel lui-même.
+    fn active_place(&self) -> Option<usize> {
+        let Location::Folder(dir) = &self.location else {
+            return None;
+        };
+        self.config
+            .favorites
+            .iter()
+            .enumerate()
+            .filter(|(i, place)| dir.starts_with(&place.path) && (*i > 0 || *dir == place.path))
+            .max_by_key(|(_, place)| place.path.components().count())
+            .map(|(i, _)| i)
+    }
+
     fn sidebar(&self) -> Element<'_, Message> {
+        let active = self.active_place();
         let mut nav = Column::new().push(ui::nav_section(t::FAVORITES));
-        for place in &self.config.favorites {
+        for (i, place) in self.config.favorites.iter().enumerate() {
             let here = Location::Folder(place.path.clone());
-            let active = self.location == here;
             let go = place.path.is_dir().then_some(Message::Go(here));
-            nav = nav.push(ui::nav_item(place.icon, place.label, None, active, go));
+            nav = nav.push(ui::nav_item(
+                place.icon,
+                place.label,
+                None,
+                active == Some(i),
+                go,
+            ));
         }
         if self.config.trash.is_some() {
             let active = self.location == Location::Trash;
@@ -199,7 +246,7 @@ impl App {
             ));
         }
         let (top, side, bottom) = metrics::SIDEBAR_PADDING;
-        container(nav.spacing(metrics::GAP_TIGHT))
+        container(nav)
             .width(metrics::SIDEBAR_WIDTH)
             .height(Length::Fill)
             .padding(Padding {
@@ -212,7 +259,7 @@ impl App {
             .into()
     }
 
-    fn list(&self, now: Option<LocalTime>) -> Element<'_, Message> {
+    fn list(&self, now: Duration) -> Element<'_, Message> {
         let in_trash = self.location == Location::Trash;
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let header = |label: &str, column: SortColumn, sortable: bool| {
@@ -238,6 +285,10 @@ impl App {
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center);
 
+        // Le contenu d'un dossier qui s'ouvre monte de quelques pixels en fondu. Faute
+        // d'opacité de groupe dans iced, le fondu est un voile du fond de la fenêtre posé
+        // dessus, qui s'efface.
+        let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
         let content: Element<'_, Message> = if self.entries.is_empty() {
             let empty = match (in_trash, self.search.is_empty()) {
                 (_, false) => t::NO_MATCH,
@@ -248,36 +299,70 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            let rows = self
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, entry)| self.row(i, entry, now));
-            scrollable(Column::with_children(rows).padding(Padding {
-                top: metrics::LIST_TOP_GAP,
-                ..Padding::ZERO
-            }))
-            .id(crate::app::LIST)
-            .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
-            .height(Length::Fill)
-            .into()
+            scrollable(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
+                .id(crate::app::LIST)
+                .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
+                .height(Length::Fill)
+                .into()
         };
         let content = mouse_area(container(content).width(Length::Fill).height(Length::Fill))
             .on_press(Message::Blank)
             .on_right_press(Message::RightClick(None));
+        let content: Element<'_, Message> = if reveal < 1.0 {
+            stack![content, veil(color::WINDOW, 1.0 - reveal)].into()
+        } else {
+            content.into()
+        };
         column![headers, ui::divider(), content]
             .width(Length::Fill)
             .padding([0.0, metrics::LIST_PADDING])
             .into()
     }
 
-    fn row<'a>(
-        &'a self,
-        i: usize,
-        entry: &'a Entry,
-        now: Option<LocalTime>,
-    ) -> Element<'a, Message> {
+    /// Les lignes visibles seulement, entre deux espaces qui tiennent la place des autres : une
+    /// liste de 5 000 fichiers ne pose que quelques dizaines de widgets.
+    fn rows(&self, now: Duration, slide: f32) -> Element<'_, Message> {
+        let row_height = metrics::LIST_ROW_HEIGHT;
+        let total = self.entries.len();
+        let (offset, _) = self.scroll;
+        let visible = self.size.height;
+        let first = ((offset - metrics::LIST_TOP_GAP) / row_height)
+            .floor()
+            .max(0.0) as usize;
+        let first = first.saturating_sub(metrics::LIST_OVERSCAN).min(total);
+        let last = ((offset + visible) / row_height).ceil() as usize + metrics::LIST_OVERSCAN;
+        let last = last.min(total);
+        let before = metrics::LIST_TOP_GAP + first as f32 * row_height + slide;
+        let after = (total - last) as f32 * row_height;
+        let rows = (first..last).map(|i| self.row(i, &self.entries[i]));
+        let rows = Column::new()
+            .push(space().height(before))
+            .extend(rows)
+            .push(space().height(after))
+            .width(Length::Fill);
+        // Le surlignage d'une sélection seule glisse d'une ligne à l'autre, sous les lignes.
+        match &self.highlight {
+            Some(highlight) if self.selection.len() == 1 => {
+                let y = highlight.value(now) as f32 + slide;
+                let bar = container(space())
+                    .width(Length::Fill)
+                    .height(row_height)
+                    .style(theme::list_row(true));
+                // Le premier calque d'une pile en fixe la taille : il couvre toute la liste.
+                let height = before + (total - first) as f32 * row_height;
+                let layer = column![space().height(y.max(0.0)), bar]
+                    .width(Length::Fill)
+                    .height(height);
+                stack![layer, rows].width(Length::Fill).into()
+            }
+            _ => rows.into(),
+        }
+    }
+
+    fn row<'a>(&'a self, i: usize, entry: &'a Entry) -> Element<'a, Message> {
         let selected = self.selection.contains(&i);
+        // Une sélection seule est dessinée par le surlignage qui glisse.
+        let painted = selected && self.selection.len() > 1;
         let tint = match entry.kind {
             Kind::Folder => color::BLUE_LIGHT,
             _ => color::TEXT_SECONDARY,
@@ -300,25 +385,10 @@ impl App {
             .width(Length::Fill)
             .clip(true);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
-        let date = entry
-            .modified
-            .and_then(clock::local)
-            .zip(now)
-            .map(|(when, now)| texts::short_date(when, now))
-            .unwrap_or_default();
-        let size = match entry.kind {
-            Kind::Folder => entry.children.map(texts::items).unwrap_or_default(),
-            Kind::File => texts::size(entry.size),
-            Kind::Link => String::new(),
-        };
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
             (Some(origin), _) => cell(self.origin_label(origin), w_last),
             (None, Some(status)) => {
-                let (label, tone) = match status {
-                    GitStatus::Modified => (t::GIT_MODIFIED, Tone::Warning),
-                    GitStatus::New => (t::GIT_NEW, Tone::Success),
-                    GitStatus::Ignored => (t::GIT_IGNORED, Tone::Neutral),
-                };
+                let (label, tone) = git_badge(status);
                 container(ui::badge(label, tone, selected))
                     .width(w_last)
                     .into()
@@ -327,9 +397,9 @@ impl App {
         };
         let line = row![
             name,
-            cell(date, w_date),
-            cell(size, w_size),
-            cell(entry.kind_label(), w_kind),
+            cell_ref(&entry.labels.date, w_date),
+            cell_ref(&entry.labels.size, w_size),
+            cell_ref(&entry.labels.kind, w_kind),
             last,
         ]
         .spacing(metrics::LIST_COLUMN_GAP)
@@ -339,7 +409,8 @@ impl App {
             .height(metrics::LIST_ROW_HEIGHT)
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
-            .style(theme::list_row(selected));
+            .style(theme::list_row(painted));
+        let line = hoverable(line, color::HOVER, metrics::LIST_ROW_RADIUS);
         mouse_area(line)
             .on_press(Message::Click(i))
             .on_double_click(Message::DoubleClick(i))
@@ -347,7 +418,7 @@ impl App {
             .into()
     }
 
-    fn preview_panel(&self) -> Element<'_, Message> {
+    fn preview_panel(&self, now: Duration) -> Element<'_, Message> {
         let content: Element<'_, Message> = match self.single() {
             None => container(ui::description(t::NOTHING_SELECTED))
                 .center(Length::Fill)
@@ -361,22 +432,18 @@ impl App {
                 ))
                 .center(metrics::PREVIEW_TILE)
                 .style(theme::preview_tile);
-                let size = match entry.kind {
-                    Kind::Folder => entry.children.map(texts::items).unwrap_or_default(),
-                    _ => texts::size(entry.size),
-                };
                 let subtitle = match entry.git {
-                    Some(GitStatus::Modified) => t::in_git(&size, t::GIT_MODIFIED),
-                    Some(GitStatus::New) => t::in_git(&size, t::GIT_NEW),
-                    Some(GitStatus::Ignored) => t::in_git(&size, t::GIT_IGNORED),
-                    None => size,
+                    Some(status) => t::in_git(&entry.labels.size, git_badge(status).0),
+                    None => entry.labels.size.clone(),
                 };
                 let title = column![
                     ui::body(entry.name.as_str())
                         .font(typography::UI_SEMIBOLD)
-                        .size(typography::CARD_TITLE_SIZE),
+                        .size(typography::CARD_TITLE_SIZE)
+                        .wrapping(text::Wrapping::None),
                     ui::body(subtitle).color(color::TEXT_SECONDARY),
-                ];
+                ]
+                .clip(true);
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
                     .align_y(Alignment::Center);
@@ -385,15 +452,20 @@ impl App {
                     Preview::Image(path) => image(path.as_path()).width(Length::Fill).into(),
                     Preview::Info => self.info(entry),
                 };
-                let action = if in_trash {
-                    ui::primary_button(t::RESTORE, Some(Message::Run(Command::Restore)))
+                // L'aperçu arrive en fondu : un voile du fond du panneau qui s'efface.
+                let reveal = self.preview_fade.as_ref().map_or(1.0, |f| f.value(now));
+                let body: Element<'_, Message> = if reveal < 1.0 {
+                    stack![body, veil(color::SIDEBAR, 1.0 - reveal)].into()
                 } else {
-                    ui::primary_button(t::OPEN, Some(Message::Run(Command::Open)))
+                    body
                 };
-                let copy =
-                    ui::secondary_button(t::COPY_PATH, Some(Message::Run(Command::CopyPath)));
-                let actions = column![action.width(Length::Fill), copy.width(Length::Fill)]
-                    .spacing(metrics::BUTTON_STACK_GAP);
+                let action = if in_trash {
+                    ui::primary_block(t::RESTORE, Some(Message::Run(Command::Restore)))
+                } else {
+                    ui::primary_block(t::OPEN, Some(Message::Run(Command::Open)))
+                };
+                let copy = ui::secondary_block(t::COPY_PATH, Some(Message::Run(Command::CopyPath)));
+                let actions = column![action, copy].spacing(metrics::BUTTON_STACK_GAP);
                 column![header, body, actions]
                     .spacing(metrics::PREVIEW_GAP)
                     .into()
@@ -423,7 +495,7 @@ impl App {
             .map(|p| p.display().to_string());
         let lines = [
             (date_label, date),
-            (t::COLUMN_KIND, Some(entry.kind_label())),
+            (t::COLUMN_KIND, Some(entry.labels.kind.clone())),
             (t::LOCATION, place),
         ];
         let lines = lines.into_iter().filter_map(|(label, value)| {
@@ -476,7 +548,12 @@ impl App {
             let lit = !menu.submenu && menu.highlight == Some(i);
             menu_entry(*item, lit, menu.submenu, true)
         });
-        let main = ui::menu(entries, metrics::CONTEXT_MENU_WIDTH);
+        // Le menu s'ouvre à l'échelle, depuis son coin haut gauche, sur un ressort.
+        let factor = self
+            .menu_scale
+            .as_ref()
+            .map_or(1.0, |a| a.value(self.now()) as f32);
+        let main = scaled(ui::menu(entries, metrics::CONTEXT_MENU_WIDTH), factor);
         let mut layers: Vec<Element<'_, Message>> =
             vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
         if menu.submenu {

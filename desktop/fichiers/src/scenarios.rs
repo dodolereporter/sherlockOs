@@ -14,7 +14,6 @@ use iced_test::simulator;
 use sherlock_ui::{metrics, theme, typography};
 
 use crate::app::{App, Config, Location, Message};
-use crate::git;
 use crate::places;
 use crate::testing::TempDir;
 use crate::trash::Trash;
@@ -368,19 +367,24 @@ fn la_fenetre_se_rend_sans_ecran() {
         trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
         measure: None,
     };
-    let (mut app, _) = App::new(config);
-    let repo = git::status(&dir);
-    let _ = app.update(Message::Git(dir.clone(), repo));
+    let (mut app, task) = App::new(config);
+    drain(&mut app, task);
     let docker = app
         .entries
         .iter()
         .position(|e| e.name == "Dockerfile")
         .expect("Dockerfile listé");
-    let _ = app.update(Message::Click(docker));
     let (width, height) = metrics::REFERENCE_WINDOW;
-    let _ = app.update(Message::Cursor(iced::Point::new(450.0, 406.0)));
-    let _ = app.update(Message::RightClick(Some(docker)));
-    let _ = app.update(Message::Submenu(true));
+    for message in [
+        Message::Click(docker),
+        Message::Cursor(iced::Point::new(450.0, 406.0)),
+        Message::RightClick(Some(docker)),
+        Message::Submenu(true),
+    ] {
+        let task = app.update(message);
+        drain(&mut app, task);
+    }
+    app.settle();
 
     let settings = Settings {
         fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),

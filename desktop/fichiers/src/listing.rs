@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use sherlock_ui::icon::Icon;
-use sherlock_ui::texts::files as texts;
+use sherlock_ui::texts::{self as all_texts, LocalTime, files as texts};
+
+use crate::clock;
 
 use crate::git::GitStatus;
 
@@ -37,6 +39,18 @@ pub struct Entry {
     pub git: Option<GitStatus>,
     /// Dans la corbeille : chemin d'origine.
     pub origin: Option<PathBuf>,
+    /// Textes de la ligne, préparés à la lecture : la vue ne fait ni `stat` ni calcul.
+    pub labels: Labels,
+}
+
+/// Textes d'une ligne de la liste.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Labels {
+    pub date: String,
+    pub size: String,
+    pub kind: String,
+    /// Nom en minuscules, pour la recherche.
+    pub lower: String,
 }
 
 impl Entry {
@@ -57,7 +71,7 @@ impl Entry {
             }),
             _ => None,
         };
-        Ok(Self {
+        let mut entry = Self {
             name: path.file_name().map_or_else(
                 || path.display().to_string(),
                 |n| n.to_string_lossy().into(),
@@ -69,7 +83,29 @@ impl Entry {
             modified: meta.modified().ok(),
             git: None,
             origin: None,
-        })
+            labels: Labels::default(),
+        };
+        entry.relabel(clock::now());
+        Ok(entry)
+    }
+
+    /// Prépare les textes de la ligne. `now` sert aux dates relatives (« hier »).
+    pub fn relabel(&mut self, now: Option<LocalTime>) {
+        self.labels = Labels {
+            date: self
+                .modified
+                .and_then(clock::local)
+                .zip(now)
+                .map(|(when, now)| all_texts::short_date(when, now))
+                .unwrap_or_default(),
+            size: match self.kind {
+                Kind::Folder => self.children.map(all_texts::items).unwrap_or_default(),
+                Kind::File => all_texts::size(self.size),
+                Kind::Link => String::new(),
+            },
+            kind: self.kind_label(),
+            lower: self.name.to_lowercase(),
+        };
     }
 
     /// Type affiché dans la colonne Type : « Dossier », « Markdown », « Verrou Cargo »…
@@ -109,6 +145,7 @@ impl Entry {
         match self.kind {
             Kind::Folder => Icon::Folder,
             _ if self.is_image() => Icon::Image,
+            _ if self.name == "Dockerfile" || self.name.starts_with("compose.") => Icon::Cube,
             _ => Icon::Document,
         }
     }
@@ -180,7 +217,7 @@ pub fn sort(entries: &mut [Entry], sort: Sort) {
             Column::Name => Ordering::Equal,
             Column::Modified => a.modified.cmp(&b.modified),
             Column::Size => size_key(a).cmp(&size_key(b)),
-            Column::Kind => a.kind_label().cmp(&b.kind_label()),
+            Column::Kind => a.labels.kind.cmp(&b.labels.kind),
             // Sans état git en dernier : `None` passe après les états, dans le sens croissant.
             Column::Git => match (a.git, b.git) {
                 (Some(x), Some(y)) => x.cmp(&y),
@@ -243,7 +280,7 @@ mod tests {
     use std::time::Duration;
 
     fn entry(name: &str, kind: Kind, size: u64, age: u64, git: Option<GitStatus>) -> Entry {
-        Entry {
+        let mut entry = Entry {
             name: name.into(),
             path: PathBuf::from(name),
             kind,
@@ -252,7 +289,10 @@ mod tests {
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 - age)),
             git,
             origin: None,
-        }
+            labels: Labels::default(),
+        };
+        entry.relabel(None);
+        entry
     }
 
     fn names(entries: &[Entry]) -> Vec<&str> {

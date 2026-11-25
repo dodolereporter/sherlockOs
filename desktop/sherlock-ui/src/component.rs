@@ -75,8 +75,26 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
             ring,
             label,
         } = control;
-        let styled = button.style(move |theme, status| style(theme, forced.unwrap_or(status)));
-        let focusable = Focusable::new(styled, on_press, radius).ring(ring);
+        // Un composant sans fond au repos (entrée de menu, bouton d'icône, bouton secondaire…)
+        // prend son voile de survol en fondu : le bouton ne le dessine plus, `Hoverable` le
+        // pose dessous. Un état imposé (galerie) reste dessiné tel quel.
+        let rest = style(&Theme::Dark, button::Status::Active).background;
+        let hover = match style(&Theme::Dark, button::Status::Hovered).background {
+            Some(iced::Background::Color(c)) if rest.is_none() && forced.is_none() => Some(c),
+            _ => None,
+        };
+        let styled = button.style(move |theme, status| {
+            let mut s = style(theme, forced.unwrap_or(status));
+            if hover.is_some() && status == button::Status::Hovered {
+                s.background = None;
+            }
+            s
+        });
+        let content: Element<'a, Message> = match hover {
+            Some(fill) => crate::animated::hoverable(styled, fill.into(), radius).into(),
+            None => styled.into(),
+        };
+        let focusable = Focusable::new(content, on_press, radius).ring(ring);
         match label {
             // iced 0.14 n'expose rien aux lecteurs d'écran : le libellé d'une icône seule
             // s'affiche en bulle au survol, en attendant AccessKit (voir docs/sherlock-ui.md).
@@ -118,12 +136,31 @@ pub fn section_label<'a>(content: &str) -> Text<'a> {
     text(content.to_uppercase())
         .font(typography::UI_SEMIBOLD)
         .size(typography::SECTION_LABEL_SIZE)
+        .line_height(text::LineHeight::Relative(typography::LINE_HEIGHT))
         .color(color::TEXT_TERTIARY)
+}
+
+/// Le document SVG d'une icône, construit une fois pour toutes : une vue qui en dessine des
+/// centaines ne refait ni la chaîne ni son empreinte.
+fn handle(glyph: Icon) -> svg::Handle {
+    static HANDLES: std::sync::OnceLock<Vec<svg::Handle>> = std::sync::OnceLock::new();
+    let all = HANDLES.get_or_init(|| {
+        Icon::ALL
+            .iter()
+            .map(|i| svg::Handle::from_memory(i.svg().into_bytes()))
+            .collect()
+    });
+    Icon::ALL
+        .iter()
+        .position(|i| *i == glyph)
+        .and_then(|p| all.get(p))
+        .cloned()
+        .unwrap_or_else(|| svg::Handle::from_memory(glyph.svg().into_bytes()))
 }
 
 /// Icône au trait, à la couleur donnée.
 pub fn icon<'a>(icon: Icon, size: f32, tint: Color) -> Svg<'a> {
-    svg(svg::Handle::from_memory(icon.svg().into_bytes()))
+    svg(handle(icon))
         .width(size)
         .height(size)
         .style(move |_, _| svg::Style {
@@ -144,6 +181,100 @@ fn label_button<'a, Message: Clone + 'a>(
         .height(metrics::BUTTON_HEIGHT)
         .padding([0.0, metrics::BUTTON_PADDING]);
     control
+}
+
+fn block_button<'a, Message: Clone + 'a>(
+    label: &'a str,
+    font: iced::Font,
+    style: fn(&Theme, button::Status) -> button::Style,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let content = container(body(label).font(font)).center(Length::Fill);
+    let mut control = Control::new(content, style, on_press, metrics::BUTTON_RADIUS);
+    control.button = control
+        .button
+        .width(Length::Fill)
+        .height(metrics::BUTTON_HEIGHT)
+        .padding(0);
+    control
+}
+
+/// Bouton principal sur toute la largeur, libellé centré (panneau d'aperçu).
+pub fn primary_block<'a, Message: Clone + 'a>(
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    block_button(label, typography::UI_SEMIBOLD, theme::primary, on_press)
+}
+
+/// Bouton secondaire sur toute la largeur, libellé centré.
+pub fn secondary_block<'a, Message: Clone + 'a>(
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    block_button(label, typography::UI, theme::secondary, on_press)
+}
+
+/// Bouton d'icône d'une barre d'outils (précédent, suivant) : fond voilé quand il agit,
+/// effacé quand il ne peut rien faire. `label` est obligatoire.
+pub fn toolbar_button<'a, Message: Clone + 'a>(
+    glyph: Icon,
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let tint = if on_press.is_some() {
+        color::TEXT_PRIMARY
+    } else {
+        color::TEXT_TERTIARY
+    };
+    let content = container(icon(glyph, metrics::ICON_SIZE, tint)).center(Length::Fill);
+    let mut control = Control::new(
+        content,
+        theme::toolbar_button,
+        on_press,
+        metrics::ICON_BUTTON_RADIUS,
+    );
+    control.button = control
+        .button
+        .width(metrics::ICON_BUTTON)
+        .height(metrics::ICON_BUTTON)
+        .padding(0);
+    control.label = Some(label);
+    control
+}
+
+/// Champ de recherche : la loupe à gauche, dans le champ. `id` permet d'y donner le focus.
+pub fn search_field<'a, Message: Clone + 'a>(
+    placeholder: &str,
+    value: &str,
+    on_input: Option<fn(String) -> Message>,
+    id: impl Into<iced::widget::Id>,
+    width: f32,
+) -> Element<'a, Message> {
+    let inset = metrics::FIELD_PADDING + metrics::ICON_SIZE_SMALL + metrics::SEARCH_ICON_GAP;
+    let line = typography::UI_SIZE * typography::LINE_HEIGHT;
+    let vertical = (metrics::FIELD_HEIGHT - line) / 2.0;
+    let field = text_field(placeholder, value, on_input)
+        .id(id)
+        .width(width)
+        .padding(Padding {
+            top: vertical,
+            bottom: vertical,
+            left: inset,
+            right: metrics::FIELD_PADDING,
+        });
+    let glass = container(icon(
+        Icon::Search,
+        metrics::ICON_SIZE_SMALL,
+        color::TEXT_TERTIARY,
+    ))
+    .padding(Padding {
+        left: metrics::FIELD_PADDING,
+        ..Padding::ZERO
+    })
+    .height(metrics::FIELD_HEIGHT)
+    .center_y(metrics::FIELD_HEIGHT);
+    iced::widget::stack![field, glass].into()
 }
 
 /// Bouton principal, vert.
@@ -530,10 +661,35 @@ pub fn column_header<'a, Message: Clone + 'a>(
     control
 }
 
-/// Extrait de code ou début d'un fichier texte, en JetBrains Mono.
-pub fn code_block<'a, Message: 'a>(lines: &'a [String]) -> Container<'a, Message> {
+/// Rôle d'un morceau de code : sa couleur dans un extrait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeRole {
+    Plain,
+    /// Mot-clé, en bleu clair comme sur les planches.
+    Keyword,
+    /// Commentaire, dans le gris des numéros de ligne.
+    Comment,
+}
+
+impl CodeRole {
+    pub const fn color(self) -> Color {
+        match self {
+            Self::Plain => color::TEXT_CODE,
+            Self::Keyword => color::BLUE_LIGHT,
+            Self::Comment => color::TEXT_LINE_NUMBER,
+        }
+    }
+}
+
+/// Extrait de code ou début d'un fichier texte, en JetBrains Mono : une ligne par entrée,
+/// chacune faite de morceaux colorés selon leur rôle.
+pub fn code_block<'a, Message: 'a>(lines: &'a [Vec<(String, CodeRole)>]) -> Container<'a, Message> {
     let lines = lines.iter().map(|line| {
-        text(line.as_str())
+        let spans: Vec<iced::widget::text::Span<'a, (), iced::Font>> = line
+            .iter()
+            .map(|(piece, role)| iced::widget::span(piece.as_str()).color(role.color()))
+            .collect();
+        iced::widget::rich_text(spans)
             .font(typography::CODE)
             .size(typography::CODE_SMALL_SIZE)
             .line_height(text::LineHeight::Absolute(

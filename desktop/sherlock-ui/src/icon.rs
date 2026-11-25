@@ -37,11 +37,13 @@ pub enum Icon {
     Folder,
     Image,
     Trash,
+    /// Conteneur : Dockerfile, fichier compose.
+    Cube,
 }
 
 impl Icon {
     /// Toutes les icônes, pour les tests et la galerie.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -60,6 +62,7 @@ impl Icon {
         Self::Folder,
         Self::Image,
         Self::Trash,
+        Self::Cube,
     ];
 
     /// Tracé sur la grille de 24. Tous sont ceux des planches, sauf la croix et les deux
@@ -92,6 +95,7 @@ impl Icon {
             }
             Self::Image => "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4",
             Self::Trash => "M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13",
+            Self::Cube => "M12 3l8 4.2v9.6L12 21l-8-4.2V7.2zM4 7.2l8 4.2 8-4.2M12 11.4V21",
         }
     }
 

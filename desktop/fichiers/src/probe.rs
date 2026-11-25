@@ -98,7 +98,7 @@ impl Probe {
                 self.phase = Phase::Done;
                 Step::Exit
             }
-            Phase::Selecting if self.intervals.len() % SELECT_EVERY == 0 => Step::Select,
+            Phase::Selecting if self.intervals.len().is_multiple_of(SELECT_EVERY) => Step::Select,
             Phase::Selecting => Step::Idle,
             Phase::Done => Step::Exit,
         }

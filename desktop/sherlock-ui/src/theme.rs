@@ -81,10 +81,13 @@ pub fn secondary(_: &Theme, status: button::Status) -> button::Style {
     button_style(fill, text, edge)
 }
 
-/// Bouton destructif : un bouton secondaire au texte saumon.
+/// Bouton destructif : un bouton secondaire au texte saumon. Appuyé, il garde le voile du
+/// survol : le voile plus clair ferait tomber le saumon sous 4,5 de contraste sur le disque le
+/// plus clair du bureau.
 pub fn danger(theme: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Disabled => secondary(theme, status),
+        button::Status::Pressed => danger(theme, button::Status::Hovered),
         _ => button::Style {
             text_color: color::SALMON.into(),
             ..secondary(theme, status)
@@ -110,6 +113,18 @@ pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
         metrics::ICON_BUTTON_RADIUS,
         color::HOVER,
     )
+}
+
+/// Bouton d'une barre d'outils : fond voilé au repos, plus clair au survol, effacé désactivé.
+pub fn toolbar_button(_: &Theme, status: button::Status) -> button::Style {
+    let (fill, text) = match status {
+        button::Status::Active => (Some(color::FIELD), color::TEXT_PRIMARY),
+        button::Status::Hovered | button::Status::Pressed => {
+            (Some(color::PRESSED), color::TEXT_PRIMARY)
+        }
+        button::Status::Disabled => (None, color::TEXT_TERTIARY),
+    };
+    button_style(fill, text, border::rounded(metrics::ICON_BUTTON_RADIUS))
 }
 
 /// Entrée de menu : la ligne survolée prend le bleu de sélection.
@@ -452,6 +467,14 @@ pub fn code_block(_: &Theme) -> container::Style {
     }
 }
 
+/// Voile d'une couleur quelconque, pour un fondu fait d'un aplat qui s'efface.
+pub fn veil(fill: Color) -> container::Style {
+    container::Style {
+        background: background(fill),
+        ..container::Style::default()
+    }
+}
+
 /// Voile derrière une question qui attend une réponse.
 pub fn scrim(_: &Theme) -> container::Style {
     plain(color::SCRIM, 0.0)
@@ -623,13 +646,14 @@ mod tests {
         for on in surfaces_where(|n| ["fenêtre", "barre de titre", "panneau latéral"].contains(&n))
         {
             type Boxed = Box<dyn Fn(&Theme, button::Status) -> button::Style>;
-            let styles: [(&str, Boxed); 6] = [
+            let styles: [(&str, Boxed); 7] = [
                 ("entrée de navigation", Box::new(nav_item(false))),
                 ("entrée de navigation active", Box::new(nav_item(true))),
                 ("bouton de fenêtre", Box::new(window_button)),
                 ("segment du fil d'Ariane", Box::new(crumb(false))),
                 ("dossier courant du fil d'Ariane", Box::new(crumb(true))),
                 ("en-tête de colonne", Box::new(column_header)),
+                ("bouton de barre d'outils", Box::new(toolbar_button)),
             ];
             let inset = (format!("retrait sur {}", on.0), color::INSET.over(on.1));
             let pill = (format!("pastille sur {}", on.0), color::CONTROLS.over(on.1));

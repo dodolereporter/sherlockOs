@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
+use sherlock_ui::component::CodeRole;
 use sherlock_ui::metrics;
 
 use crate::listing::{Entry, Kind};
@@ -16,8 +17,8 @@ const TAB: &str = "    ";
 /// Ce que montre le panneau d'aperçu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Preview {
-    /// Premières lignes d'un fichier texte.
-    Text(Vec<String>),
+    /// Premières lignes d'un fichier texte, découpées en morceaux colorés.
+    Text(Vec<Vec<(String, CodeRole)>>),
     /// Image à afficher.
     Image(PathBuf),
     /// Rien à montrer de plus que les informations du fichier.
@@ -46,17 +47,141 @@ pub fn load(entry: &Entry) -> Preview {
         }
         Err(_) => return Preview::Info,
     };
+    let language = Language::of(entry);
     let lines = text
         .lines()
         .take(metrics::PREVIEW_LINES)
         .map(|line| {
-            line.replace('\t', TAB)
+            let line: String = line
+                .replace('\t', TAB)
                 .chars()
                 .take(metrics::PREVIEW_COLUMNS)
-                .collect()
+                .collect();
+            language.highlight(&line)
         })
         .collect();
     Preview::Text(lines)
+}
+
+/// Coloration légère de l'aperçu : mots-clés et commentaires de quelques langages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Language {
+    Docker,
+    Rust,
+    Toml,
+    Shell,
+    Python,
+    Plain,
+}
+
+const DOCKER: &[&str] = &[
+    "FROM",
+    "AS",
+    "RUN",
+    "COPY",
+    "ADD",
+    "WORKDIR",
+    "ENV",
+    "ARG",
+    "CMD",
+    "ENTRYPOINT",
+    "EXPOSE",
+    "USER",
+    "LABEL",
+    "VOLUME",
+    "HEALTHCHECK",
+];
+const RUST: &[&str] = &[
+    "as", "async", "await", "const", "crate", "else", "enum", "fn", "for", "if", "impl", "in",
+    "let", "loop", "match", "mod", "move", "mut", "pub", "return", "self", "Self", "static",
+    "struct", "trait", "type", "use", "where", "while",
+];
+const SHELL: &[&str] = &[
+    "if", "then", "else", "elif", "fi", "for", "in", "do", "done", "case", "esac", "while",
+    "function", "export", "local", "return",
+];
+const PYTHON: &[&str] = &[
+    "def", "class", "import", "from", "as", "if", "elif", "else", "for", "in", "while", "return",
+    "with", "try", "except", "None", "True", "False", "lambda", "yield",
+];
+
+impl Language {
+    fn of(entry: &Entry) -> Self {
+        if entry.name == "Dockerfile" || entry.name.starts_with("Dockerfile.") {
+            return Self::Docker;
+        }
+        match entry.extension().as_deref() {
+            Some("rs") => Self::Rust,
+            Some("toml") => Self::Toml,
+            Some("sh" | "bash" | "zsh") => Self::Shell,
+            Some("py") => Self::Python,
+            _ if entry.name == "justfile" || entry.name == "Makefile" => Self::Shell,
+            _ => Self::Plain,
+        }
+    }
+
+    fn keywords(self) -> &'static [&'static str] {
+        match self {
+            Self::Docker => DOCKER,
+            Self::Rust => RUST,
+            Self::Shell => SHELL,
+            Self::Python => PYTHON,
+            Self::Toml | Self::Plain => &[],
+        }
+    }
+
+    fn comment(self) -> Option<&'static str> {
+        match self {
+            Self::Rust => Some("//"),
+            Self::Plain => None,
+            _ => Some("#"),
+        }
+    }
+
+    /// Découpe une ligne en morceaux colorés.
+    fn highlight(self, line: &str) -> Vec<(String, CodeRole)> {
+        let trimmed = line.trim_start();
+        if self.comment().is_some_and(|c| trimmed.starts_with(c)) {
+            return vec![(line.to_owned(), CodeRole::Comment)];
+        }
+        if self == Self::Toml && trimmed.starts_with('[') {
+            return vec![(line.to_owned(), CodeRole::Keyword)];
+        }
+        let keywords = self.keywords();
+        let mut pieces: Vec<(String, CodeRole)> = Vec::new();
+        let mut push = |piece: &str, role: CodeRole| match pieces.last_mut() {
+            Some((last, r)) if *r == role => last.push_str(piece),
+            _ => pieces.push((piece.to_owned(), role)),
+        };
+        let mut word_start = None;
+        for (i, c) in line
+            .char_indices()
+            .chain(std::iter::once((line.len(), ' ')))
+        {
+            let in_word = c.is_alphanumeric() || c == '_';
+            match (in_word, word_start) {
+                (true, None) => word_start = Some(i),
+                (false, Some(start)) => {
+                    let word = &line[start..i];
+                    let role = if keywords.contains(&word) {
+                        CodeRole::Keyword
+                    } else {
+                        CodeRole::Plain
+                    };
+                    push(word, role);
+                    word_start = None;
+                    if i < line.len() {
+                        push(&line[i..i + c.len_utf8()], CodeRole::Plain);
+                    }
+                }
+                (false, None) if i < line.len() => {
+                    push(&line[i..i + c.len_utf8()], CodeRole::Plain)
+                }
+                _ => {}
+            }
+        }
+        pieces
+    }
 }
 
 #[cfg(test)]
@@ -78,7 +203,28 @@ mod tests {
             panic!("aperçu texte attendu");
         };
         assert_eq!(lines.len(), metrics::PREVIEW_LINES);
-        assert_eq!(lines[0], "RUN    étape 0");
+        assert_eq!(
+            lines[0],
+            [
+                ("RUN".to_owned(), CodeRole::Keyword),
+                ("    étape 0".to_owned(), CodeRole::Plain)
+            ]
+        );
+    }
+
+    #[test]
+    fn la_coloration_trouve_mots_cles_et_commentaires() {
+        let rust = Language::Rust.highlight("pub fn main() // fin");
+        assert_eq!(rust[0], ("pub".to_owned(), CodeRole::Keyword));
+        assert_eq!(rust[2], ("fn".to_owned(), CodeRole::Keyword));
+        let comment = Language::Shell.highlight("  # commentaire");
+        assert_eq!(comment, [("  # commentaire".to_owned(), CodeRole::Comment)]);
+        let text: String = Language::Docker
+            .highlight("COPY . .")
+            .into_iter()
+            .map(|(piece, _)| piece)
+            .collect();
+        assert_eq!(text, "COPY . .");
     }
 
     #[test]
