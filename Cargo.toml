@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "desktop/compositeur",
     "desktop/evidence",
+    "desktop/mime-apps",
     "desktop/sherlock-ui",
     "sherlock/sherlockd",
 ]
