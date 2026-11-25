@@ -59,6 +59,7 @@ use crate::{
     anim::PreviewMotion,
     card,
     cursor::Cursors,
+    dmabuf,
     options::Options,
     output::View,
     render::{Scene, SceneElement},
@@ -234,6 +235,7 @@ pub fn init(
         options: options.clone(),
         failures: 0,
     }));
+    enable_dmabuf(state, &backend);
     backend.borrow_mut().scan(state);
     if backend.borrow().heads.is_empty() {
         // The card's screens were switched off when it was opened: better leave than stay dark.
@@ -254,6 +256,33 @@ pub fn init(
         handle,
         sources,
     })
+}
+
+/// Offers linux-dmabuf (lot D-06) on the render node of the card the session drives, with the
+/// formats its renderer imports. Without it, clients keep `wl_shm`.
+fn enable_dmabuf(state: &mut State, backend: &Rc<RefCell<Backend>>) {
+    let (node, formats) = {
+        let backend = backend.borrow();
+        match dmabuf::render_node(&backend.renderer) {
+            Ok(node) => (node, backend.renderer.dmabuf_formats()),
+            Err(err) => {
+                tracing::warn!("no linux-dmabuf, GPU clients will draw in software: {err}");
+                return;
+            }
+        }
+    };
+    tracing::info!(node = %node.path.display(), "linux-dmabuf offered");
+    let backend = Rc::clone(backend);
+    let import: dmabuf::Importer = Box::new(move |buffer| {
+        // Called while the clients are read, never during a frame: the loop runs one source
+        // at a time.
+        let mut backend = backend.try_borrow_mut()?;
+        backend.renderer.import_dmabuf(buffer, None)?;
+        Ok(())
+    });
+    if let Err(err) = state.enable_dmabuf(node.dev, formats, import) {
+        tracing::warn!("no linux-dmabuf, the feedback table cannot be created: {err}");
+    }
 }
 
 fn insert_sources(

@@ -6,6 +6,7 @@
 pub mod anim;
 pub mod card;
 mod cursor;
+pub mod dmabuf;
 pub mod focus;
 mod handlers;
 mod input;
@@ -125,6 +126,8 @@ pub struct State {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
     shm_state: ShmState,
+    /// GPU buffers (linux-dmabuf), offered once a renderer can import them.
+    dmabuf: dmabuf::Dmabufs,
     _cursor_shape_state: CursorShapeManagerState,
     xwayland_shell_state: XWaylandShellState,
     layer_shell_state: WlrLayerShellState,
@@ -225,6 +228,7 @@ impl State {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
             shm_state: ShmState::new::<Self>(&dh, vec![]),
+            dmabuf: dmabuf::Dmabufs::default(),
             // Clients that know it name their cursor instead of drawing one.
             _cursor_shape_state: CursorShapeManagerState::new::<Self>(&dh),
             // Only XWayland sees this protocol: it associates its X11 windows with its surfaces.
