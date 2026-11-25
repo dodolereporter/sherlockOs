@@ -32,31 +32,111 @@ impl Repo {
     }
 }
 
-/// Runs git in `dir`. `None` if the folder is not in a repository or git is missing.
+/// Settings forced on every git command Evidence runs, over whatever the repository's own
+/// `.git/config` (or a file it includes) says. A folder can come from a USB key or an
+/// archive: its repository configuration is not trusted, and must not be able to run a
+/// program when the folder is merely listed.
+const LOCKED_CONFIG: [&str; 6] = [
+    // The fsmonitor hook is a command git runs on `status`.
+    "core.fsmonitor=false",
+    // The untracked cache can be rebuilt with the fsmonitor; keep it out of the way.
+    "core.untrackedCache=false",
+    // `status` runs no hook today; this keeps it so if that changes.
+    "core.hooksPath=/dev/null",
+    // Nothing should ever ask for a password or open a pager.
+    "core.askPass=",
+    "core.pager=cat",
+    // Diff drivers and their text conversions are commands too.
+    "diff.external=",
+];
+
+/// Environment of every git command: no system or user configuration (only the repository's,
+/// neutralised above), no prompt, no lock taken, and none of the caller's `GIT_*` overrides.
+fn git_command(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(dir)
+        .arg("--no-optional-locks");
+    for setting in LOCKED_CONFIG {
+        command.arg("-c").arg(setting);
+    }
+    command
+}
+
+fn run(mut command: Command) -> Option<Vec<u8>> {
+    let output = command.stdin(std::process::Stdio::null()).output().ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+/// The filter drivers the repository configuration declares (`filter.<name>.clean`,
+/// `.smudge`, `.process`), included files counted. Reading the configuration runs nothing.
+fn filter_drivers(dir: &Path) -> Vec<String> {
+    let mut command = git_command(dir);
+    command.args([
+        "config",
+        "--includes",
+        "--name-only",
+        "--get-regexp",
+        r"^filter\.",
+    ]);
+    let output = run(command).unwrap_or_default();
+    let mut names: Vec<String> = String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|key| {
+            let rest = key.strip_prefix("filter.")?;
+            let (name, _) = rest.rsplit_once('.')?;
+            Some(name.to_owned())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Runs git in `dir`, with a locked-down configuration (see `LOCKED_CONFIG`): every filter
+/// driver the repository declares is emptied, which git treats as no filter at all, and
+/// submodules (each with its own configuration) are not entered. `None` if the folder is
+/// not in a repository or git is missing.
 pub fn status(dir: &Path) -> Option<Repo> {
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .arg("--no-optional-locks")
-            .args(args)
-            .output()
-            .ok()?;
-        output.status.success().then_some(output.stdout)
-    };
-    let prefix = git(&["rev-parse", "--show-prefix"])?;
+    let mut command = git_command(dir);
+    command.args(["rev-parse", "--show-prefix"]);
+    let prefix = run(command)?;
     let prefix = String::from_utf8_lossy(&prefix).trim_end().to_owned();
-    let output = git(&[
+    let mut command = git_command(dir);
+    for name in filter_drivers(dir) {
+        for (key, value) in [
+            ("clean", ""),
+            ("smudge", ""),
+            ("process", ""),
+            ("required", "false"),
+        ] {
+            command
+                .arg("-c")
+                .arg(format!("filter.{name}.{key}={value}"));
+        }
+    }
+    command.args([
         "status",
         "--porcelain=v2",
         "-z",
         "--branch",
         "--ignored",
         "--untracked-files=normal",
+        "--ignore-submodules=all",
         "--",
         ".",
-    ])?;
-    Some(parse(&output, &prefix))
+    ]);
+    Some(parse(&run(command)?, &prefix))
 }
 
 /// Parses the output of `git status --porcelain=v2 -z --branch`. Paths there are relative to
@@ -200,5 +280,64 @@ mod tests {
         assert_eq!(repo.status("cible"), Some(GitStatus::Ignored));
         assert_eq!(repo.status(".gitignore"), None);
         assert!(status(&std::env::temp_dir().join("not-a-repository-evidence")).is_none());
+    }
+
+    #[test]
+    fn a_trapped_repository_runs_nothing() {
+        let dir = crate::testing::TempDir::new("trapped");
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).expect("folder");
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .expect("git is installed")
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("tracked.txt"), "one").expect("write");
+        std::fs::write(repo.join(".gitattributes"), "* filter=trap\n").expect("write");
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "initial"]);
+        // Every hook a status could reach writes a witness file.
+        let witness = |name: &str| dir.path().join(name);
+        let touch = |name: &str| format!("touch '{}'", witness(name).display());
+        let included = dir.path().join("included.config");
+        std::fs::write(
+            &included,
+            format!("[core]\n\tfsmonitor = \"{}\"\n", touch("included")),
+        )
+        .expect("write");
+        let config = format!(
+            "[core]\n\tfsmonitor = \"{}\"\n\thooksPath = hooks\n\
+             [filter \"trap\"]\n\tclean = \"{} ; cat\"\n\tprocess = \"{}\"\n\trequired = true\n\
+             [include]\n\tpath = {}\n",
+            touch("fsmonitor"),
+            touch("clean"),
+            touch("process"),
+            included.display(),
+        );
+        let git_config = repo.join(".git/config");
+        let mut full = std::fs::read_to_string(&git_config).expect("config");
+        full.push_str(&config);
+        std::fs::write(&git_config, full).expect("write");
+        // A modified file makes status hash it again, through the clean filter.
+        std::fs::write(repo.join("tracked.txt"), "two!").expect("write");
+
+        let found = status(&repo).expect("repository read");
+        assert_eq!(found.status("tracked.txt"), Some(GitStatus::Modified));
+        for name in ["fsmonitor", "included", "clean", "process"] {
+            assert!(!witness(name).exists(), "git ran the {name} command");
+        }
     }
 }

@@ -3,9 +3,12 @@
 //! Nothing ever overwrites an existing file. A copy whose name is taken becomes
 //! "name (copie)"; a move or a rename to a taken name is refused.
 
+use std::ffi::{CString, OsStr, OsString};
 use std::fmt;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use sherlock_ui::texts::evidence as texts;
@@ -81,28 +84,41 @@ fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-fn file_name(path: &Path) -> Result<String> {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .ok_or(Error::InvalidName)
+fn file_name(path: &Path) -> Result<&OsStr> {
+    path.file_name().ok_or(Error::InvalidName)
+}
+
+fn exists_error(path: &Path) -> Error {
+    // Only the message shows the name, so a lossy form is fine here.
+    Error::Exists(
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    )
 }
 
 /// First free name in `dir`: `name` if it is, otherwise "name (copie)", "name (copie 2)"…
-/// A file's extension stays at the end; a folder's is not split off.
-pub fn free_name(dir: &Path, name: &str, is_dir: bool) -> String {
+/// A file's extension stays at the end; a folder's is not split off. Names are kept as
+/// raw bytes: a name that is not UTF-8 keeps its exact bytes.
+pub fn free_name(dir: &Path, name: &OsStr, is_dir: bool) -> OsString {
     if !exists(&dir.join(name)) {
         return name.to_owned();
     }
     let path = Path::new(name);
     let (stem, extension) = match (is_dir, path.file_stem(), path.extension()) {
-        (false, Some(stem), Some(ext)) => (
-            stem.to_string_lossy().into_owned(),
-            Some(ext.to_string_lossy().into_owned()),
-        ),
-        _ => (name.to_owned(), None),
+        (false, Some(stem), Some(ext)) => (stem, Some(ext)),
+        _ => (name, None),
     };
     (1..)
-        .map(|n| texts::copy_name(&stem, n, extension.as_deref()))
+        .map(|n| {
+            let mut candidate = stem.to_owned();
+            candidate.push(texts::copy_suffix(n));
+            if let Some(extension) = extension {
+                candidate.push(".");
+                candidate.push(extension);
+            }
+            candidate
+        })
         .find(|candidate| !exists(&dir.join(candidate)))
         .unwrap_or_else(|| name.to_owned())
 }
@@ -118,57 +134,195 @@ fn check_not_inside(source: &Path, dest: &Path) -> Result<()> {
     }
 }
 
-/// Recursive copy. Symbolic links are copied as links, not followed.
-fn copy_recursive(from: &Path, to: &Path) -> io::Result<()> {
-    let meta = fs::symlink_metadata(from)?;
-    if meta.file_type().is_symlink() {
-        std::os::unix::fs::symlink(fs::read_link(from)?, to)
-    } else if meta.is_dir() {
-        fs::create_dir(to)?;
-        for item in fs::read_dir(from)? {
-            let item = item?;
-            copy_recursive(&item.path(), &to.join(item.file_name()))?;
+fn c_path(path: &Path) -> io::Result<CString> {
+    Ok(CString::new(path.as_os_str().as_bytes())?)
+}
+
+/// `rename` that never replaces an existing target, even if one appears at the last moment
+/// (`renameat2` with `RENAME_NOREPLACE`). A filesystem that does not support the flag falls
+/// back to a check then a plain rename.
+pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let (from_c, to_c) = (c_path(from)?, c_path(to)?);
+    // SAFETY: both pointers are NUL-terminated strings owned by `from_c` and `to_c`, alive
+    // for the whole call; `AT_FDCWD` resolves relative paths like rename(2). The call only
+    // reads the two strings.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::EINVAL | libc::ENOSYS) => {
+            if exists(to) {
+                Err(io::ErrorKind::AlreadyExists.into())
+            } else {
+                fs::rename(from, to)
+            }
         }
-        fs::set_permissions(to, meta.permissions())
-    } else {
-        fs::copy(from, to).map(|_| ())
+        _ => Err(error),
     }
 }
 
-/// Copies each source into `dest`. Returns the created paths.
-pub fn copy_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
-    let mut created = Vec::with_capacity(sources.len());
+/// What a copy did besides the copied items.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// The created (or moved) paths.
+    pub paths: Vec<PathBuf>,
+    /// Sockets and device files found in copied folders: never read, never recreated.
+    pub skipped: usize,
+}
+
+/// Times of a source, to keep them on the copy.
+fn times(meta: &fs::Metadata) -> fs::FileTimes {
+    let mut times = fs::FileTimes::new();
+    if let Ok(modified) = meta.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = meta.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    times
+}
+
+/// Copies one regular file into a new file that must not exist yet.
+fn copy_file(from: &Path, to: &Path, meta: &fs::Metadata) -> io::Result<()> {
+    // O_NONBLOCK: if the source was swapped for a FIFO since it was checked, opening it
+    // does not wait for a writer.
+    let mut source = fs::File::options()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(from)?;
+    if !source.metadata()?.is_file() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut target = fs::File::options()
+        .write(true)
+        .create_new(true)
+        .mode(meta.mode() & 0o7777)
+        .open(to)?;
+    io::copy(&mut source, &mut target)?;
+    target.set_permissions(meta.permissions())?;
+    target.set_times(times(meta))
+}
+
+/// Recreates a named pipe without reading it.
+fn make_fifo(to: &Path, mode: u32) -> io::Result<()> {
+    let to_c = c_path(to)?;
+    // SAFETY: `to_c` is a NUL-terminated string alive for the whole call; mkfifo only reads
+    // it and creates the node, failing if the name exists.
+    if unsafe { libc::mkfifo(to_c.as_ptr(), mode & 0o7777) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Recursive copy into `to`, which must not exist. Links are copied as links, named pipes
+/// are recreated, sockets and devices are skipped: nothing special is ever read. `created`
+/// tells whether `to` itself was created, so a failure can remove it.
+fn copy_recursive(
+    from: &Path,
+    to: &Path,
+    report: &mut Report,
+    created: &mut bool,
+) -> io::Result<()> {
+    let meta = fs::symlink_metadata(from)?;
+    let kind = meta.file_type();
+    if kind.is_symlink() {
+        std::os::unix::fs::symlink(fs::read_link(from)?, to)?;
+        *created = true;
+    } else if kind.is_dir() {
+        fs::create_dir(to)?;
+        *created = true;
+        for item in fs::read_dir(from)? {
+            let item = item?;
+            copy_recursive(&item.path(), &to.join(item.file_name()), report, &mut false)?;
+        }
+        fs::set_permissions(to, meta.permissions())?;
+        fs::File::open(to)?.set_times(times(&meta))?;
+    } else if kind.is_file() {
+        copy_file(from, to, &meta)?;
+        *created = true;
+    } else if kind.is_fifo() {
+        make_fifo(to, meta.mode())?;
+        *created = true;
+    } else {
+        report.skipped += 1;
+    }
+    Ok(())
+}
+
+fn remove_tree(path: &Path) {
+    let removed = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(_) => Ok(()),
+    };
+    if let Err(error) = removed {
+        tracing::warn!(%error, path = %path.display(), "partial copy not removed");
+    }
+}
+
+/// Copies `from` to `to`; on failure, removes what it created at `to`.
+fn copy_tree(from: &Path, to: &Path, report: &mut Report) -> Result<()> {
+    let mut created = false;
+    match copy_recursive(from, to, report, &mut created) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if created {
+                remove_tree(to);
+            }
+            if error.kind() == io::ErrorKind::AlreadyExists && !created {
+                return Err(exists_error(to));
+            }
+            Err(error.into())
+        }
+    }
+}
+
+/// Copies each source into `dest`.
+pub fn copy_into(sources: &[PathBuf], dest: &Path) -> Result<Report> {
+    let mut report = Report::default();
     for source in sources {
         let is_dir = fs::symlink_metadata(source)?.is_dir();
         if is_dir {
             check_not_inside(source, dest)?;
         }
-        let target = dest.join(free_name(dest, &file_name(source)?, is_dir));
-        copy_recursive(source, &target)?;
-        created.push(target);
+        let target = dest.join(free_name(dest, file_name(source)?, is_dir));
+        copy_tree(source, &target, &mut report)?;
+        report.paths.push(target);
     }
-    Ok(created)
+    Ok(report)
 }
 
 /// Copies each item next to itself: "name (copie)".
-pub fn duplicate(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut created = Vec::with_capacity(sources.len());
+pub fn duplicate(sources: &[PathBuf]) -> Result<Report> {
+    let mut report = Report::default();
     for source in sources {
         let parent = source.parent().ok_or(Error::InvalidName)?;
-        created.extend(copy_into(std::slice::from_ref(source), parent)?);
+        let one = copy_into(std::slice::from_ref(source), parent)?;
+        report.paths.extend(one.paths);
+        report.skipped += one.skipped;
     }
-    Ok(created)
+    Ok(report)
 }
 
-/// Moves an item to `target`, even across disks (copy then delete).
-pub fn move_path(source: &Path, target: &Path) -> Result<()> {
-    if exists(target) {
-        return Err(Error::Exists(file_name(target)?));
-    }
-    match fs::rename(source, target) {
+/// Moves an item to `target`, even across disks (copy then delete), never over an
+/// existing item.
+pub fn move_path(source: &Path, target: &Path, report: &mut Report) -> Result<()> {
+    match rename_noreplace(source, target) {
         Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(exists_error(target)),
         Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
-            copy_recursive(source, target)?;
+            copy_tree(source, target, report)?;
             if fs::symlink_metadata(source)?.is_dir() {
                 fs::remove_dir_all(source)?;
             } else {
@@ -180,23 +334,22 @@ pub fn move_path(source: &Path, target: &Path) -> Result<()> {
     }
 }
 
-/// Moves each source into `dest`. A source already in `dest` does not move. Returns the new
-/// paths.
-pub fn move_into(sources: &[PathBuf], dest: &Path) -> Result<Vec<PathBuf>> {
-    let mut moved = Vec::with_capacity(sources.len());
+/// Moves each source into `dest`. A source already in `dest` does not move.
+pub fn move_into(sources: &[PathBuf], dest: &Path) -> Result<Report> {
+    let mut report = Report::default();
     for source in sources {
         let target = dest.join(file_name(source)?);
         if source.parent() == Some(dest) {
-            moved.push(target);
+            report.paths.push(target);
             continue;
         }
         if fs::symlink_metadata(source)?.is_dir() {
             check_not_inside(source, dest)?;
         }
-        move_path(source, &target)?;
-        moved.push(target);
+        move_path(source, &target, &mut report)?;
+        report.paths.push(target);
     }
-    Ok(moved)
+    Ok(report)
 }
 
 /// Renames an item within its folder. Returns its new path.
@@ -207,11 +360,13 @@ pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf> {
     if target == path {
         return Ok(target);
     }
-    if exists(&target) {
-        return Err(Error::Exists(new_name.to_owned()));
+    match rename_noreplace(path, &target) {
+        Ok(()) => Ok(target),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(Error::Exists(new_name.to_owned()))
+        }
+        Err(error) => Err(error.into()),
     }
-    fs::rename(path, &target)?;
-    Ok(target)
 }
 
 /// Creates "Nouveau dossier", or "Nouveau dossier 2"… if the name is taken.
@@ -252,7 +407,9 @@ mod tests {
         std::os::unix::fs::symlink("a.txt", src.join("lien")).expect("link");
         fs::create_dir(&dest).expect("folder");
 
-        let created = copy_into(std::slice::from_ref(&src), &dest).expect("copy");
+        let created = copy_into(std::slice::from_ref(&src), &dest)
+            .expect("copy")
+            .paths;
         assert_eq!(created, [dest.join("projet")]);
         assert_eq!(read(&dest.join("projet/sous/b.txt")), "b");
         assert_eq!(
@@ -268,8 +425,8 @@ mod tests {
         let tmp = TempDir::new("conflict");
         let file = tmp.path().join("notes.txt");
         write(&file, "original");
-        let first = duplicate(std::slice::from_ref(&file)).expect("copy");
-        let second = duplicate(std::slice::from_ref(&file)).expect("copy");
+        let first = duplicate(std::slice::from_ref(&file)).expect("copy").paths;
+        let second = duplicate(std::slice::from_ref(&file)).expect("copy").paths;
         assert_eq!(first, [tmp.path().join("notes (copie).txt")]);
         assert_eq!(second, [tmp.path().join("notes (copie 2).txt")]);
         assert_eq!(read(&file), "original");
@@ -278,7 +435,7 @@ mod tests {
         let dir = tmp.path().join("v1.2");
         fs::create_dir(&dir).expect("folder");
         assert_eq!(
-            duplicate(&[dir]).expect("copy"),
+            duplicate(&[dir]).expect("copy").paths,
             [tmp.path().join("v1.2 (copie)")]
         );
     }
@@ -306,7 +463,7 @@ mod tests {
         write(&a.join("y.txt"), "y");
         write(&b.join("y.txt"), "autre");
 
-        let moved = move_into(&[a.join("x.txt")], &b).expect("move");
+        let moved = move_into(&[a.join("x.txt")], &b).expect("move").paths;
         assert_eq!(moved, [b.join("x.txt")]);
         assert!(!a.join("x.txt").exists());
         assert_eq!(read(&b.join("x.txt")), "x");
@@ -317,7 +474,7 @@ mod tests {
         assert_eq!(read(&b.join("y.txt")), "autre");
         // Moving to where the item already is does nothing.
         assert_eq!(
-            move_into(&[b.join("x.txt")], &b).expect("in place"),
+            move_into(&[b.join("x.txt")], &b).expect("in place").paths,
             [b.join("x.txt")]
         );
     }
@@ -366,5 +523,100 @@ mod tests {
             Error::Exists("a.txt".into()).to_string(),
             "« a.txt » existe déjà ici."
         );
+    }
+
+    #[test]
+    fn named_pipes_are_recreated_and_never_read() {
+        let tmp = TempDir::new("fifo");
+        let src = tmp.path().join("with-pipe");
+        write(&src.join("a.txt"), "a");
+        make_fifo(&src.join("pipe"), 0o644).expect("fifo");
+        let dest = tmp.path().join("dest");
+        fs::create_dir(&dest).expect("folder");
+        // Would hang forever if the pipe were opened for reading.
+        let report = copy_into(std::slice::from_ref(&src), &dest).expect("copy");
+        let copied = fs::symlink_metadata(dest.join("with-pipe/pipe")).expect("pipe copied");
+        assert!(copied.file_type().is_fifo());
+        assert_eq!(report.skipped, 0);
+        assert_eq!(read(&dest.join("with-pipe/a.txt")), "a");
+    }
+
+    #[test]
+    fn names_that_are_not_utf8_keep_their_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        let tmp = TempDir::new("bytes");
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        fs::create_dir_all(&a).expect("folder");
+        fs::create_dir_all(&b).expect("folder");
+        let name = OsString::from_vec(b"caf\xE9.txt".to_vec());
+        let other = OsString::from_vec(b"caf\xE8.txt".to_vec());
+        fs::write(a.join(&name), "1").expect("write");
+        fs::write(a.join(&other), "2").expect("write");
+        let copied = copy_into(&[a.join(&name)], &b).expect("copy").paths;
+        assert_eq!(copied, [b.join(&name)]);
+        // Two names that differ by an invalid byte stay two names.
+        let moved = move_into(&[a.join(&other)], &b).expect("move").paths;
+        assert_eq!(moved, [b.join(&other)]);
+        let again = copy_into(&[a.join(&name)], &b).expect("copy").paths;
+        let mut expected = OsString::from_vec(b"caf\xE9".to_vec());
+        expected.push(" (copie).txt");
+        assert_eq!(again, [b.join(expected)]);
+    }
+
+    #[test]
+    fn a_copy_keeps_modification_times() {
+        let tmp = TempDir::new("times");
+        let src = tmp.path().join("old");
+        write(&src.join("a.txt"), "a");
+        let past =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        let file = fs::File::options()
+            .write(true)
+            .open(src.join("a.txt"))
+            .expect("open");
+        file.set_times(fs::FileTimes::new().set_modified(past))
+            .expect("times");
+        fs::File::open(&src)
+            .expect("open")
+            .set_times(fs::FileTimes::new().set_modified(past))
+            .expect("times");
+        let dest = tmp.path().join("dest");
+        fs::create_dir(&dest).expect("folder");
+        copy_into(std::slice::from_ref(&src), &dest).expect("copy");
+        let modified = |p: &Path| fs::metadata(p).expect("meta").modified().expect("time");
+        assert_eq!(modified(&dest.join("old/a.txt")), past);
+        assert_eq!(modified(&dest.join("old")), past);
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_nothing_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new("failed");
+        let src = tmp.path().join("src");
+        write(&src.join("a.txt"), "a");
+        write(&src.join("z-locked.txt"), "secret");
+        fs::set_permissions(src.join("z-locked.txt"), fs::Permissions::from_mode(0o000))
+            .expect("chmod");
+        if fs::File::open(src.join("z-locked.txt")).is_ok() {
+            // Running as root: nothing can be unreadable, the case does not exist.
+            return;
+        }
+        let dest = tmp.path().join("dest");
+        fs::create_dir(&dest).expect("folder");
+        assert!(copy_into(std::slice::from_ref(&src), &dest).is_err());
+        assert_eq!(fs::read_dir(&dest).expect("dest").count(), 0);
+        fs::set_permissions(src.join("z-locked.txt"), fs::Permissions::from_mode(0o644))
+            .expect("chmod");
+    }
+
+    #[test]
+    fn rename_never_replaces() {
+        let tmp = TempDir::new("noreplace");
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        write(&a, "a");
+        write(&b, "b");
+        let error = rename_noreplace(&a, &b).expect_err("refused");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(read(&b), "b");
     }
 }

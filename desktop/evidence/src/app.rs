@@ -214,6 +214,10 @@ pub enum Message {
     Loaded(u64, Result<Vec<Entry>, ()>),
     /// Preview prepared off the interface thread.
     Preview(PathBuf, Preview),
+    /// A program was started, or could not be.
+    Launched(bool),
+    /// Which favourites exist, checked off the interface thread.
+    Places(Vec<bool>),
     /// The volumes of the sidebar, as UDisks2 sees them now.
     Devices(Vec<Volume>),
     /// A click on a volume: open it, mounting it first if needed.
@@ -291,6 +295,10 @@ pub struct App {
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
     device_menu: Option<String>,
+    /// Which favourites exist, as last checked off the interface thread.
+    pub(crate) available: Vec<bool>,
+    /// The trash items shown when the user was asked to empty it: only those are deleted.
+    empty_ids: Vec<String>,
 }
 
 impl App {
@@ -335,6 +343,8 @@ impl App {
             menu_scale: None,
             volumes: Vec::new(),
             device_menu: None,
+            available: Vec::new(),
+            empty_ids: Vec::new(),
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -574,11 +584,13 @@ impl App {
             Message::Done(outcome) => {
                 self.busy = self.busy.saturating_sub(1);
                 let select = match outcome {
+                    // A quiet operation (rename, new folder) leaves no message behind.
                     Ok((text, select)) => {
-                        self.notice = Some(Notice { text, error: false });
+                        self.notice = (!text.is_empty()).then_some(Notice { text, error: false });
                         select
                     }
                     Err(text) => {
+                        self.pending_rename = false;
                         self.notice = Some(Notice { text, error: true });
                         Vec::new()
                     }
@@ -594,6 +606,15 @@ impl App {
             }
             Message::Frame(now) => return self.frame(now),
             Message::Devices(volumes) => self.volumes = volumes,
+            Message::Places(available) => self.available = available,
+            Message::Launched(started) => {
+                if !started {
+                    self.notice = Some(Notice {
+                        text: texts::CANNOT_OPEN.into(),
+                        error: true,
+                    });
+                }
+            }
             Message::OpenDevice(id) => return self.device(DeviceAction::Open, id),
             Message::EjectDevice(id) => return self.device(DeviceAction::Eject, id),
             Message::DeviceMenu(id) => {
@@ -662,6 +683,11 @@ impl App {
     }
 
     // Devices.
+
+    /// How many items the open "empty the trash" question is about.
+    pub fn empty_ids_len(&self) -> usize {
+        self.empty_ids.len()
+    }
 
     /// The volume whose menu is open.
     fn menu_volume(&self) -> Option<&Volume> {
@@ -811,7 +837,17 @@ impl App {
             }
             Location::Trash => Task::none(),
         };
-        Task::batch([listing, git])
+        let places: Vec<PathBuf> = self
+            .config
+            .favorites
+            .iter()
+            .map(|p| p.path.clone())
+            .collect();
+        let check = Task::perform(
+            async move { places.iter().map(|p| p.is_dir()).collect() },
+            Message::Places,
+        );
+        Task::batch([listing, git, check])
     }
 
     /// The content of the location has arrived.
@@ -1221,16 +1257,13 @@ impl App {
                 if let Some(dir) = self.current_dir() {
                     let mut terminal = Process::new("x-terminal-emulator");
                     terminal.current_dir(dir);
-                    self.launch(terminal);
+                    return self.launch(terminal);
                 }
             }
             Command::Rename if !in_trash => return self.start_rename(),
             Command::Duplicate if !in_trash && !selected.is_empty() => {
                 let text = texts::copying(selected.len());
-                return self.spawn(text, move || {
-                    let created = ops::duplicate(&selected)?;
-                    Ok((texts::DONE.into(), created))
-                });
+                return self.spawn(text, move || done(ops::duplicate(&selected)?));
             }
             Command::CopyPath if !selected.is_empty() => {
                 let paths: Vec<String> = selected.iter().map(|p| p.display().to_string()).collect();
@@ -1265,7 +1298,15 @@ impl App {
                 });
             }
             Command::Restore if in_trash => return self.restore(),
-            Command::EmptyTrash if in_trash => self.confirm_empty = !self.all.is_empty(),
+            Command::EmptyTrash if in_trash => {
+                self.empty_ids = self
+                    .all
+                    .iter()
+                    .filter_map(|e| e.path.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .collect();
+                self.confirm_empty = !self.empty_ids.is_empty();
+            }
             Command::Refresh => return self.load(&[]),
             Command::TogglePreview => self.show_preview = !self.show_preview,
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
@@ -1295,9 +1336,14 @@ impl App {
         job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>)> + Send + 'static,
     ) -> Task<Message> {
         self.busy += 1;
-        self.notice = Some(Notice { text, error: false });
+        self.notice = (!text.is_empty()).then_some(Notice { text, error: false });
         Task::perform(
-            async move { job().map_err(|e| e.to_string()) },
+            async move {
+                job().map_err(|error| {
+                    tracing::warn!(%error, "operation refused");
+                    error.to_string()
+                })
+            },
             Message::Done,
         )
     }
@@ -1312,24 +1358,27 @@ impl App {
         }
         let mut open = Process::new("xdg-open");
         open.arg(&entry.path);
-        self.launch(open);
-        Task::none()
+        self.launch(open)
     }
 
-    /// Starts a program without waiting for it; a thread reaps it when it ends.
-    fn launch(&mut self, mut command: Process) {
-        match command.spawn() {
-            Ok(mut child) => {
-                std::thread::spawn(move || child.wait());
-            }
-            Err(error) => {
-                tracing::warn!(%error, "launch failed");
-                self.notice = Some(Notice {
-                    text: texts::CANNOT_OPEN.into(),
-                    error: true,
-                });
-            }
-        }
+    /// Starts a program off the interface thread, without waiting for it; a thread reaps
+    /// it when it ends.
+    fn launch(&mut self, mut command: Process) -> Task<Message> {
+        Task::perform(
+            async move {
+                match command.spawn() {
+                    Ok(mut child) => {
+                        std::thread::spawn(move || child.wait());
+                        true
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "launch failed");
+                        false
+                    }
+                }
+            },
+            Message::Launched,
+        )
     }
 
     fn paste(&mut self) -> Task<Message> {
@@ -1339,15 +1388,13 @@ impl App {
         };
         match mode {
             Clip::Copy => self.spawn(texts::copying(sources.len()), move || {
-                let created = ops::copy_into(&sources, &dest)?;
-                Ok((texts::DONE.into(), created))
+                done(ops::copy_into(&sources, &dest)?)
             }),
             Clip::Cut => {
                 // A cut item is pasted only once.
                 self.clipboard = None;
                 self.spawn(texts::moving(sources.len()), move || {
-                    let moved = ops::move_into(&sources, &dest)?;
-                    Ok((texts::DONE.into(), moved))
+                    done(ops::move_into(&sources, &dest)?)
                 })
             }
         }
@@ -1357,19 +1404,14 @@ impl App {
         let Some(dir) = self.current_dir() else {
             return Task::none();
         };
-        match ops::new_folder(&dir) {
-            Ok(path) => {
-                // The folder is created empty, the search would hide it. The rename opens
-                // when the reread listing has selected it.
-                self.search.clear();
-                self.pending_rename = true;
-                self.load(&[path])
-            }
-            Err(error) => {
-                self.fail(&error);
-                Task::none()
-            }
-        }
+        // The folder is created empty, the search would hide it. The rename opens when the
+        // reread listing has selected it.
+        self.search.clear();
+        self.pending_rename = true;
+        self.spawn(String::new(), move || {
+            let path = ops::new_folder(&dir)?;
+            Ok((String::new(), vec![path]))
+        })
     }
 
     fn start_rename(&mut self) -> Task<Message> {
@@ -1395,13 +1437,11 @@ impl App {
         let Some(entry) = self.entries.get(index) else {
             return Task::none();
         };
-        match ops::rename(&entry.path, &name) {
-            Ok(path) => self.load(&[path]),
-            Err(error) => {
-                self.fail(&error);
-                Task::none()
-            }
-        }
+        let path = entry.path.clone();
+        self.spawn(String::new(), move || {
+            let renamed = ops::rename(&path, &name)?;
+            Ok((String::new(), vec![renamed]))
+        })
     }
 
     fn restore(&mut self) -> Task<Message> {
@@ -1413,41 +1453,25 @@ impl App {
             .iter()
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .collect();
-        let mut restored = 0;
-        for id in &ids {
-            match trash.restore(id) {
-                Ok(_) => restored += 1,
-                Err(error) => {
-                    let task = self.load(&[]);
-                    self.fail(&error);
-                    return task;
-                }
+        let count = ids.len();
+        self.spawn(String::new(), move || {
+            for id in &ids {
+                trash.restore(id)?;
             }
-        }
-        let task = self.load(&[]);
-        self.notice = Some(Notice {
-            text: texts::restored(restored),
-            error: false,
-        });
-        task
+            Ok((texts::restored(count), Vec::new()))
+        })
     }
 
     fn empty_trash(&mut self) -> Task<Message> {
         let Some(trash) = self.config.trash.clone() else {
             return Task::none();
         };
+        // Only what the user saw when asked is deleted.
+        let ids = std::mem::take(&mut self.empty_ids);
         self.spawn(texts::EMPTY_TRASH.into(), move || {
-            trash.empty()?;
+            trash.remove(&ids)?;
             Ok((texts::TRASH_EMPTIED.into(), Vec::new()))
         })
-    }
-
-    fn fail(&mut self, error: &ops::Error) {
-        tracing::warn!(%error, "operation refused");
-        self.notice = Some(Notice {
-            text: error.to_string(),
-            error: true,
-        });
     }
 
     /// The path shown by the breadcrumb: segments and the folder of each. Under the home
@@ -1526,4 +1550,13 @@ fn read_location(
                 .collect())
         }
     }
+}
+
+/// The message of a finished copy or move, and what to select.
+fn done(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>)> {
+    let text = match report.skipped {
+        0 => texts::DONE.to_owned(),
+        n => texts::done_skipping(n),
+    };
+    Ok((text, report.paths))
 }

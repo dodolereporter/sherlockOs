@@ -445,7 +445,7 @@ pub mod tests {
         // data partition shows because the user mounted it under /media.
         assert_eq!(
             names,
-            ["Données", "CLE_DODO", "SL32G de 32 Go", "Volume de 64 Go"]
+            ["Données", "CLE_USB", "SL32G de 32 Go", "Volume de 64 Go"]
         );
     }
 
@@ -457,11 +457,11 @@ pub mod tests {
         assert_eq!(data.kind, DeviceKind::Internal);
         assert_eq!(
             data.mount_point.as_deref(),
-            Some(std::path::Path::new("/media/dodo/Données"))
+            Some(std::path::Path::new("/media/utilisateur/Données"))
         );
         assert_eq!(data.detail().as_deref(), Some("12 Go libres"));
         assert!(!data.ejectable);
-        let key = by_name("CLE_DODO");
+        let key = by_name("CLE_USB");
         assert_eq!(
             (key.kind, key.mount_point.is_none(), key.ejectable),
             (DeviceKind::UsbKey, true, true)

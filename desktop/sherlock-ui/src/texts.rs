@@ -103,6 +103,7 @@ pub mod evidence {
     pub const DOCUMENTS: &str = "Documents";
     pub const DOWNLOADS: &str = "Téléchargements";
     pub const PICTURES: &str = "Images";
+    pub const PROJECTS: &str = "Projets";
     pub const TRASH: &str = "Corbeille";
     /// Devices: disks, keys, cards.
     pub const DEVICES: &str = "Appareils";
@@ -167,6 +168,8 @@ pub mod evidence {
     // File kinds.
     pub const KIND_FOLDER: &str = "Dossier";
     pub const KIND_LINK: &str = "Lien";
+    /// Named pipe, socket or device: never opened by the file manager.
+    pub const KIND_SPECIAL: &str = "Fichier spécial";
     pub const KIND_FILE: &str = "Fichier";
     /// Kind of a file from its exact name, checked before the extension.
     pub const KINDS_BY_NAME: [(&str, &str); 7] = [
@@ -260,12 +263,17 @@ pub mod evidence {
             n => format!("{NEW_FOLDER} {n}"),
         }
     }
-    /// Name of a copy when the name is taken: "notes (copie).txt", "notes (copie 2).txt".
-    pub fn copy_name(stem: &str, n: usize, extension: Option<&str>) -> String {
-        let suffix = match n {
+    /// What a copy adds to its name: « (copie) », « (copie 2) »… Kept apart so that names
+    /// that are not UTF-8 can be built from their raw bytes.
+    pub fn copy_suffix(n: usize) -> String {
+        match n {
             0 | 1 => String::from(" (copie)"),
             n => format!(" (copie {n})"),
-        };
+        }
+    }
+    /// Name of a copy when the name is taken: "notes (copie).txt", "notes (copie 2).txt".
+    pub fn copy_name(stem: &str, n: usize, extension: Option<&str>) -> String {
+        let suffix = copy_suffix(n);
         match extension {
             Some(extension) => format!("{stem}{suffix}.{extension}"),
             None => format!("{stem}{suffix}"),
@@ -305,6 +313,17 @@ pub mod evidence {
             n => format!("{n} éléments sont revenus à leur place."),
         }
     }
+    /// A copy that left special files (sockets, devices) aside.
+    pub fn done_skipping(skipped: usize) -> String {
+        match skipped {
+            1 => String::from(
+                "C'est fait. Un fichier spécial (socket ou périphérique) est resté de côté.",
+            ),
+            n => format!(
+                "C'est fait. {n} fichiers spéciaux (sockets ou périphériques) sont restés de côté."
+            ),
+        }
+    }
     pub const DONE: &str = "C'est fait.";
     pub const PATH_COPIED: &str = "Chemin copié.";
     pub const TRASH_EMPTIED: &str = "La corbeille est vide.";
@@ -312,13 +331,11 @@ pub mod evidence {
     // Confirmation before emptying the trash.
     pub const EMPTY_TRASH_QUESTION: &str = "Vider la corbeille ?";
     pub fn empty_trash_detail(count: usize) -> String {
-        format!(
-            "{} de la corbeille seront supprimés pour de bon. Tu ne pourras pas revenir en arrière.",
-            match count {
-                1 => String::from("L'élément"),
-                n => format!("Les {n} éléments"),
-            }
-        )
+        let what = match count {
+            1 => String::from("L'élément de la corbeille sera supprimé"),
+            n => format!("Les {n} éléments de la corbeille seront supprimés"),
+        };
+        format!("{what} pour de bon. Tu ne pourras pas revenir en arrière.")
     }
     pub const CANCEL: &str = "Annuler";
     pub const CONFIRM_EMPTY: &str = "Vider";

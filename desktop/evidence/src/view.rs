@@ -236,7 +236,13 @@ impl App {
         let mut nav = Column::new().push(ui::nav_section(t::FAVORITES));
         for (i, place) in self.config.favorites.iter().enumerate() {
             let here = Location::Folder(place.path.clone());
-            let go = place.path.is_dir().then_some(Message::Go(here));
+            // Existence is checked off the interface thread when a folder loads; an optional
+            // favourite (Projets) is hidden when missing, the others are shown disabled.
+            let exists = self.available.get(i).copied().unwrap_or(true);
+            if place.optional && !exists {
+                continue;
+            }
+            let go = exists.then_some(Message::Go(here));
             nav = nav.push(ui::nav_item(
                 place.icon,
                 place.label,
@@ -484,7 +490,13 @@ impl App {
             .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
-            (Some(origin), _) => cell(self.origin_label(origin), w_last),
+            (Some(origin), _) => {
+                let chars = (w_last / typography::UI_CHAR_WIDTH) as usize;
+                cell(
+                    elide(&self.origin_label(origin), chars).into_owned(),
+                    w_last,
+                )
+            }
             (None, Some(status)) => {
                 let (label, tone) = git_badge(status);
                 container(ui::badge(label, tone, selected))
@@ -553,7 +565,7 @@ impl App {
                     .align_y(Alignment::Center);
                 let body: Element<'_, Message> = match &self.preview {
                     Preview::Text(lines) => ui::code_block(lines).into(),
-                    Preview::Image(path) => image(path.as_path()).width(Length::Fill).into(),
+                    Preview::Image(handle) => image(handle.clone()).width(Length::Fill).into(),
                     Preview::Info => self.info(entry),
                 };
                 // The preview fades in: a veil of the panel background that fades away.
@@ -692,7 +704,7 @@ impl App {
             ui::body(t::EMPTY_TRASH_QUESTION)
                 .font(typography::UI_SEMIBOLD)
                 .size(typography::CARD_TITLE_SIZE),
-            ui::description(t::empty_trash_detail(self.entries.len())),
+            ui::description(t::empty_trash_detail(self.empty_ids_len())),
             actions,
         ]
         .spacing(metrics::PREVIEW_GAP);

@@ -199,6 +199,11 @@ impl DeviceSource for UDisks {
             let backing = read_string(block, "CryptoBackingDevice");
             drive = read_string(objects.get(&backing).and_then(|i| i.get(BLOCK)), "Drive");
         }
+        // No drive found (LUKS on LVM, a loop device…): refuse, rather than unmount every
+        // block whose drive is also "none".
+        if drive.is_empty() || drive == "/" {
+            return Err(DeviceError::Failed(String::from("no drive to eject")));
+        }
         // Everything mounted from the same drive is unmounted first.
         for (path, ifaces) in &objects {
             let on_drive = read_string(ifaces.get(BLOCK), "Drive") == drive;

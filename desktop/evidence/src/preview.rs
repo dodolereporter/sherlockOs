@@ -2,8 +2,12 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
+use iced::widget::image::Handle;
 use sherlock_ui::component::CodeRole;
 use sherlock_ui::metrics;
 
@@ -13,30 +17,84 @@ use crate::listing::{Entry, Kind};
 const READ_LIMIT: u64 = 16 * 1024;
 /// Width of a tab in the preview.
 const TAB: &str = "    ";
+/// Longest a preview may take: a slow disk or a stuck mount gives up rather than holding a
+/// thread of the pool.
+const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What the preview panel shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Preview {
     /// First lines of a text file, split into coloured pieces.
     Text(Vec<Vec<(String, CodeRole)>>),
-    /// Image to display.
-    Image(PathBuf),
+    /// An image, already decoded and scaled to the panel off the interface thread.
+    Image(Handle),
     /// Nothing to show beyond the file information.
     Info,
 }
 
-/// Prepares the preview of an item. An unreadable, binary or empty file only gets its
-/// information.
+/// Runs `work` on its own thread and waits at most `TIMEOUT` for it. A read that never
+/// returns (a dead network mount) is left behind instead of blocking the caller.
+fn with_timeout<T: Send + 'static>(work: impl FnOnce() -> Option<T> + Send + 'static) -> Option<T> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver.recv_timeout(TIMEOUT).ok().flatten()
+}
+
+/// Opens a file for the preview only if it is a regular file. `O_NONBLOCK`: even if it was
+/// swapped for a named pipe since it was listed, opening it does not wait for a writer.
+fn open_regular(path: &Path) -> Option<File> {
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let file = File::options()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+fn read_head(path: PathBuf) -> Option<Vec<u8>> {
+    with_timeout(move || {
+        let mut bytes = Vec::new();
+        open_regular(&path)?
+            .take(READ_LIMIT)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        Some(bytes)
+    })
+}
+
+/// Decodes an image and scales it down to the panel, keeping its proportions.
+fn decode_image(path: PathBuf) -> Option<Handle> {
+    with_timeout(move || {
+        let file = open_regular(&path)?;
+        let reader = image::ImageReader::new(std::io::BufReader::new(file))
+            .with_guessed_format()
+            .ok()?;
+        let side = metrics::PREVIEW_IMAGE_PIXELS;
+        let picture = reader.decode().ok()?.thumbnail(side, side).to_rgba8();
+        let (width, height) = picture.dimensions();
+        Some(Handle::from_rgba(width, height, picture.into_raw()))
+    })
+}
+
+/// Prepares the preview of an item, off the interface thread. Only regular files are ever
+/// opened: a named pipe, a socket or a device only gets its information. An unreadable,
+/// binary or empty file too.
 pub fn load(entry: &Entry) -> Preview {
     if entry.kind != Kind::File {
         return Preview::Info;
     }
     if entry.is_image() {
-        return Preview::Image(entry.path.clone());
+        return decode_image(entry.path.clone()).map_or(Preview::Info, Preview::Image);
     }
-    let mut bytes = Vec::new();
-    let read = File::open(&entry.path).and_then(|f| f.take(READ_LIMIT).read_to_end(&mut bytes));
-    if read.is_err() || bytes.is_empty() || bytes.contains(&0) {
+    let Some(bytes) = read_head(entry.path.clone()) else {
+        return Preview::Info;
+    };
+    if bytes.is_empty() || bytes.contains(&0) {
         return Preview::Info;
     }
     // The read may have split a character in two: only the end can be invalid.
@@ -232,16 +290,43 @@ mod tests {
         let tmp = TempDir::new("preview-others");
         let binary = tmp.path().join("programme");
         std::fs::write(&binary, [0x7f, b'E', b'L', b'F', 0, 1]).expect("write");
-        assert_eq!(load(&entry(binary)), Preview::Info);
+        assert!(matches!(load(&entry(binary)), Preview::Info));
         let image = tmp.path().join("photo.png");
-        std::fs::write(&image, []).expect("write");
-        assert_eq!(load(&entry(image.clone())), Preview::Image(image));
-        assert_eq!(load(&entry(tmp.path().to_path_buf())), Preview::Info);
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]))
+            .save(&image)
+            .expect("png");
+        assert!(matches!(load(&entry(image)), Preview::Image(_)));
+        let broken = tmp.path().join("broken.png");
+        std::fs::write(&broken, b"not a png").expect("write");
+        assert!(matches!(load(&entry(broken)), Preview::Info));
+        assert!(matches!(
+            load(&entry(tmp.path().to_path_buf())),
+            Preview::Info
+        ));
         // A character cut by the read limit does not spoil the preview.
         let cut = tmp.path().join("long.txt");
         let mut text = "a".repeat(READ_LIMIT as usize - 1).into_bytes();
         text.extend("é".as_bytes());
         std::fs::write(&cut, text).expect("write");
         assert!(matches!(load(&entry(cut)), Preview::Text(_)));
+    }
+
+    #[test]
+    fn a_named_pipe_is_never_opened() {
+        let tmp = TempDir::new("preview-fifo");
+        let pipe = tmp.path().join("tube");
+        let c = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).expect("path");
+        // SAFETY: `c` is a NUL-terminated path alive for the call.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        let listed = entry(pipe.clone());
+        assert_eq!(listed.kind, Kind::Special);
+        // Even forced through as a regular file, opening it does not wait for a writer.
+        let forced = Entry {
+            kind: Kind::File,
+            ..listed
+        };
+        let started = std::time::Instant::now();
+        assert!(matches!(load(&forced), Preview::Info));
+        assert!(started.elapsed() < TIMEOUT);
     }
 }

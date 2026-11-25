@@ -35,6 +35,29 @@ pub fn local(time: SystemTime) -> Option<LocalTime> {
     })
 }
 
+/// Converts a local date and time back to an instant (`mktime`, the machine's time zone).
+pub fn to_system(t: LocalTime) -> Option<SystemTime> {
+    // SAFETY: an all-zero `tm` is a valid value (integers and a null zone pointer); every
+    // field mktime reads is set below.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = t.year - 1900;
+    tm.tm_mon = libc::c_int::from(t.month) - 1;
+    tm.tm_mday = libc::c_int::from(t.day);
+    tm.tm_hour = libc::c_int::from(t.hour);
+    tm.tm_min = libc::c_int::from(t.minute);
+    tm.tm_sec = libc::c_int::from(t.second);
+    // Let the C library decide whether summer time applies.
+    tm.tm_isdst = -1;
+    // SAFETY: `tm` is a valid, initialised structure owned by this function; mktime reads
+    // it and normalises it in place.
+    let seconds = unsafe { libc::mktime(&mut tm) };
+    if seconds == -1 {
+        return None;
+    }
+    let seconds = u64::try_from(seconds).ok()?;
+    Some(UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+}
+
 /// Now, in local time.
 pub fn now() -> Option<LocalTime> {
     local(SystemTime::now())

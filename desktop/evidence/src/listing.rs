@@ -19,6 +19,8 @@ pub enum Kind {
     Folder,
     File,
     Link,
+    /// A named pipe, a socket or a device: listed, never opened nor read.
+    Special,
 }
 
 /// An item of a folder, or of the trash.
@@ -58,7 +60,8 @@ impl Entry {
         let link = fs::symlink_metadata(path)?;
         let (kind, meta) = match fs::metadata(path) {
             Ok(meta) if meta.is_dir() => (Kind::Folder, meta),
-            Ok(meta) => (Kind::File, meta),
+            Ok(meta) if meta.is_file() => (Kind::File, meta),
+            Ok(meta) => (Kind::Special, meta),
             Err(_) => (Kind::Link, link),
         };
         let children = match kind {
@@ -100,7 +103,7 @@ impl Entry {
             size: match self.kind {
                 Kind::Folder => self.children.map(all_texts::items).unwrap_or_default(),
                 Kind::File => all_texts::size(self.size),
-                Kind::Link => String::new(),
+                Kind::Link | Kind::Special => String::new(),
             },
             kind: self.kind_label(),
             lower: self.name.to_lowercase(),
@@ -112,6 +115,7 @@ impl Entry {
         match self.kind {
             Kind::Folder => return texts::KIND_FOLDER.into(),
             Kind::Link => return texts::KIND_LINK.into(),
+            Kind::Special => return texts::KIND_SPECIAL.into(),
             Kind::File => {}
         }
         if let Some((_, label)) = texts::KINDS_BY_NAME.iter().find(|(n, _)| *n == self.name) {

@@ -97,6 +97,9 @@ pub const PREVIEW_LINES: usize = 18;
 /// The preview panel holds 33 characters of JetBrains Mono at 12 px (0.6 em each) inside
 /// its padding and the code block's.
 pub const PREVIEW_COLUMNS: usize = 33;
+/// Largest side of a decoded preview image, in pixels: twice the panel's inner width, for
+/// screens at scale 2.
+pub const PREVIEW_IMAGE_PIXELS: u32 = 536;
 /// Gap between two stacked buttons.
 pub const BUTTON_STACK_GAP: f32 = 8.0;
 /// Code snippet: vertical and horizontal padding, radius.

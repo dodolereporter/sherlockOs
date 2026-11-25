@@ -12,6 +12,8 @@ pub struct Place {
     pub label: &'static str,
     pub icon: Icon,
     pub path: PathBuf,
+    /// Hidden when the folder does not exist, instead of shown disabled.
+    pub optional: bool,
 }
 
 /// The favourites, in the mock-up's order. `user_dirs` is the content of
@@ -27,26 +29,38 @@ pub fn favorites(home: &Path, user_dirs: Option<&str>) -> Vec<Place> {
             label: texts::HOME,
             icon: Icon::Home,
             path: home.to_path_buf(),
+            optional: false,
         },
         Place {
             label: texts::DESKTOP,
             icon: Icon::Desktop,
             path: lookup("XDG_DESKTOP_DIR", texts::DESKTOP),
+            optional: false,
         },
         Place {
             label: texts::DOCUMENTS,
             icon: Icon::Document,
             path: lookup("XDG_DOCUMENTS_DIR", texts::DOCUMENTS),
+            optional: false,
         },
         Place {
             label: texts::DOWNLOADS,
             icon: Icon::Download,
             path: lookup("XDG_DOWNLOAD_DIR", texts::DOWNLOADS),
+            optional: false,
+        },
+        // The planche's "Projets": a plain folder of the home, shown only when it exists.
+        Place {
+            label: texts::PROJECTS,
+            icon: Icon::Folder,
+            path: home.join(texts::PROJECTS),
+            optional: true,
         },
         Place {
             label: texts::PICTURES,
             icon: Icon::Image,
             path: lookup("XDG_PICTURES_DIR", texts::PICTURES),
+            optional: false,
         },
     ]
 }
@@ -82,7 +96,7 @@ mod tests {
 
     #[test]
     fn folders_follow_user_dirs() {
-        let home = Path::new("/home/dodo");
+        let home = Path::new("/home/utilisateur");
         let content = "# commentaire\nXDG_DESKTOP_DIR=\"$HOME/Bureau\"\n\
                        XDG_DOWNLOAD_DIR=\"/data/dl\"\nXDG_PICTURES_DIR=\"$HOME/\"\n";
         let places = favorites(home, Some(content));
@@ -91,10 +105,11 @@ mod tests {
             paths,
             [
                 home,
-                Path::new("/home/dodo/Bureau"),
-                Path::new("/home/dodo/Documents"),
+                Path::new("/home/utilisateur/Bureau"),
+                Path::new("/home/utilisateur/Documents"),
                 Path::new("/data/dl"),
-                Path::new("/home/dodo/Images"),
+                Path::new("/home/utilisateur/Projets"),
+                Path::new("/home/utilisateur/Images"),
             ]
         );
         assert_eq!(places[0].label, "Accueil");

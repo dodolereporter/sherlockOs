@@ -10,7 +10,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 16557015040
+      "data": 16000000000
      }
     },
     "org.freedesktop.UDisks2.Block": {
@@ -36,11 +36,11 @@
      },
      "Size": {
       "type": "t",
-      "data": 16557015040
+      "data": 16000000000
      },
      "Drive": {
       "type": "o",
-      "data": "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A"
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
      },
      "IdUsage": {
       "type": "s",
@@ -104,7 +104,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 1023410176
+      "data": 1000000000
      }
     },
     "org.freedesktop.UDisks2.Block": {
@@ -130,11 +130,11 @@
      },
      "Size": {
       "type": "t",
-      "data": 1023410176
+      "data": 1000000000
      },
      "Drive": {
       "type": "o",
-      "data": "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A"
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
      },
      "IdUsage": {
       "type": "s",
@@ -166,50 +166,6 @@
      }
     }
    },
-   "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A": {
-    "org.freedesktop.UDisks2.Drive": {
-     "Vendor": {
-      "type": "s",
-      "data": ""
-     },
-     "Model": {
-      "type": "s",
-      "data": "INTEL SSDPEKNU512GZ"
-     },
-     "Media": {
-      "type": "s",
-      "data": ""
-     },
-     "MediaCompatibility": {
-      "type": "as",
-      "data": []
-     },
-     "MediaRemovable": {
-      "type": "b",
-      "data": false
-     },
-     "Size": {
-      "type": "t",
-      "data": 0
-     },
-     "ConnectionBus": {
-      "type": "s",
-      "data": ""
-     },
-     "Removable": {
-      "type": "b",
-      "data": false
-     },
-     "Ejectable": {
-      "type": "b",
-      "data": false
-     },
-     "CanPowerOff": {
-      "type": "b",
-      "data": false
-     }
-    }
-   },
    "/org/freedesktop/UDisks2/block_devices/nvme0n1": {
     "org.freedesktop.UDisks2.PartitionTable": {
      "Type": {
@@ -238,11 +194,11 @@
      },
      "Size": {
       "type": "t",
-      "data": 512110190592
+      "data": 512000000000
      },
      "Drive": {
       "type": "o",
-      "data": "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A"
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
      },
      "IdUsage": {
       "type": "s",
@@ -287,7 +243,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 494528364544
+      "data": 480000000000
      }
     },
     "org.freedesktop.UDisks2.Partition": {
@@ -297,7 +253,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 494528364544
+      "data": 480000000000
      }
     },
     "org.freedesktop.UDisks2.Block": {
@@ -323,11 +279,11 @@
      },
      "Size": {
       "type": "t",
-      "data": 494528364544
+      "data": 480000000000
      },
      "Drive": {
       "type": "o",
-      "data": "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A"
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
      },
      "IdUsage": {
       "type": "s",
@@ -371,17 +327,15 @@
         97,
         112,
         47,
-        115,
-        110,
-        97,
+        101,
+        120,
+        101,
+        109,
         112,
-        100,
+        108,
+        101,
         47,
-        50,
-        55,
-        55,
         49,
-        48,
         0
        ]
       ]
@@ -410,7 +364,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 52535296
+      "data": 50000000
      },
      "Drive": {
       "type": "o",
@@ -466,7 +420,7 @@
      },
      "Size": {
       "type": "t",
-      "data": 8079802368
+      "data": 8000000000
      },
      "Drive": {
       "type": "o",
@@ -531,7 +485,7 @@
      },
      "Drive": {
       "type": "o",
-      "data": "/org/freedesktop/UDisks2/drives/INTEL_SSDPEKNU512GZ_BTKA150315S1512A"
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
      },
      "IdUsage": {
       "type": "s",
@@ -574,10 +528,17 @@
         105,
         97,
         47,
-        100,
-        111,
-        100,
-        111,
+        117,
+        116,
+        105,
+        108,
+        105,
+        115,
+        97,
+        116,
+        101,
+        117,
+        114,
         47,
         68,
         111,
@@ -678,7 +639,7 @@
      },
      "IdLabel": {
       "type": "s",
-      "data": "CLE_DODO"
+      "data": "CLE_USB"
      },
      "CryptoBackingDevice": {
       "type": "o",
@@ -923,6 +884,50 @@
      }
     },
     "org.freedesktop.UDisks2.Encrypted": {}
+   },
+   "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000": {
+    "org.freedesktop.UDisks2.Drive": {
+     "Vendor": {
+      "type": "s",
+      "data": ""
+     },
+     "Model": {
+      "type": "s",
+      "data": "ACME SSD 512"
+     },
+     "Media": {
+      "type": "s",
+      "data": ""
+     },
+     "MediaCompatibility": {
+      "type": "as",
+      "data": []
+     },
+     "MediaRemovable": {
+      "type": "b",
+      "data": false
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     },
+     "ConnectionBus": {
+      "type": "s",
+      "data": ""
+     },
+     "Removable": {
+      "type": "b",
+      "data": false
+     },
+     "Ejectable": {
+      "type": "b",
+      "data": false
+     },
+     "CanPowerOff": {
+      "type": "b",
+      "data": false
+     }
+    }
    }
   }
  ]

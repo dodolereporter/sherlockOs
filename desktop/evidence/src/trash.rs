@@ -87,6 +87,9 @@ impl Trash {
             .ok_or(Error::InvalidName)?
             .to_string_lossy()
             .into_owned();
+        // The record is named after the item plus `.N.trashinfo`: a long name is cut so that
+        // the record's name still fits the 255-byte limit of most filesystems.
+        let name = cut_to_bytes(&name, ID_MAX_BYTES);
         let deleted = clock::now().map(clock::iso).unwrap_or_default();
         let record = format!(
             "[Trash Info]\nPath={}\nDeletionDate={deleted}\n",
@@ -106,8 +109,10 @@ impl Trash {
             };
             let target = self.files.join(&id);
             if fs::symlink_metadata(&target).is_ok() {
-                // An item without a record holds this name: keep the reserved record so the
-                // name is not reused, as gio does.
+                // An item without a record holds this name: give the name back and try the
+                // next one, without leaving an empty record behind.
+                drop(file);
+                let _ = fs::remove_file(&info);
                 continue;
             }
             let moved = file
@@ -142,17 +147,19 @@ impl Trash {
             if fs::symlink_metadata(&path).is_err() {
                 continue;
             }
-            let Some(original) = fs::read_to_string(entry.path())
-                .ok()
-                .and_then(|s| parse(&s))
-            else {
+            let Ok(record) = fs::read_to_string(entry.path()) else {
                 continue;
             };
+            let Some(original) = parse(&record) else {
+                continue;
+            };
+            let deleted = deletion_date(&record);
             items.push(Item {
                 id: id.to_owned(),
                 path,
                 original,
-                deleted: entry.metadata().and_then(|m| m.modified()).ok(),
+                // The date written in the record; the record's own time if it cannot be read.
+                deleted: deleted.or_else(|| entry.metadata().and_then(|m| m.modified()).ok()),
             });
         }
         Ok(items)
@@ -173,32 +180,60 @@ impl Trash {
         if let Some(parent) = original.parent() {
             fs::create_dir_all(parent)?;
         }
-        crate::ops::move_path(&path, &original)?;
+        crate::ops::move_path(&path, &original, &mut crate::ops::Report::default())?;
         fs::remove_file(&info)?;
         Ok(original)
     }
 
-    /// Empties the trash for good. Returns the number of items deleted.
-    pub fn empty(&self) -> Result<usize> {
+    /// Deletes for good the given items, and only them: what arrived in the trash after the
+    /// user was asked stays. Returns how many were deleted.
+    pub fn remove(&self, ids: &[String]) -> Result<usize> {
         let mut count = 0;
-        if let Ok(entries) = fs::read_dir(&self.files) {
-            for entry in entries {
-                let path = entry?.path();
-                if fs::symlink_metadata(&path)?.is_dir() {
-                    fs::remove_dir_all(&path)?;
-                } else {
-                    fs::remove_file(&path)?;
-                }
-                count += 1;
+        for id in ids {
+            // An id is a plain name inside the trash, never a path elsewhere.
+            if id.is_empty() || id.contains('/') || id == "." || id == ".." {
+                continue;
             }
-        }
-        if let Ok(entries) = fs::read_dir(&self.info) {
-            for entry in entries {
-                fs::remove_file(entry?.path())?;
+            let path = self.files.join(id);
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => fs::remove_dir_all(&path)?,
+                Ok(_) => fs::remove_file(&path)?,
+                Err(_) => continue,
             }
+            let _ = fs::remove_file(self.info_path(id));
+            count += 1;
         }
         Ok(count)
     }
+}
+
+/// Longest id kept from a name, in bytes: room is left for `.N.trashinfo`.
+const ID_MAX_BYTES: usize = 200;
+
+/// Cuts a name to at most `max` bytes, on a character boundary.
+fn cut_to_bytes(name: &str, max: usize) -> String {
+    let mut end = name.len().min(max);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    name[..end].to_owned()
+}
+
+/// Reads `DeletionDate=` (local time, `2026-11-24T21:46:00`) from a record.
+fn deletion_date(record: &str) -> Option<SystemTime> {
+    let value = record
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("DeletionDate="))?;
+    let number = |range: std::ops::Range<usize>| value.get(range)?.parse::<u16>().ok();
+    let time = sherlock_ui::texts::LocalTime {
+        year: i32::from(number(0..4)?),
+        month: u8::try_from(number(5..7)?).ok()?,
+        day: u8::try_from(number(8..10)?).ok()?,
+        hour: u8::try_from(number(11..13)?).ok()?,
+        minute: u8::try_from(number(14..16)?).ok()?,
+        second: u8::try_from(number(17..19)?).ok()?,
+    };
+    clock::to_system(time)
 }
 
 /// Encodes a path as the specification requires (RFC 2396): every byte outside the safe
@@ -315,7 +350,25 @@ mod tests {
         fs::write(&keep, "").expect("write");
         trash.put(&dir).expect("folder trashed");
 
-        assert_eq!(trash.empty().expect("emptied"), 1);
+        let ids: Vec<String> = trash
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        // Something trashed after the question stays.
+        let late = tmp.path().join("late.txt");
+        fs::write(&late, "").expect("write");
+        trash.put(&late).expect("trashed");
+        assert_eq!(trash.remove(&ids).expect("emptied"), 1);
+        assert_eq!(trash.list().expect("list").len(), 1);
+        let late_id: Vec<String> = trash
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(trash.remove(&late_id).expect("emptied"), 1);
         assert!(trash.list().expect("list").is_empty());
         assert!(keep.exists());
         assert_eq!(fs::read_dir(trash.files_dir()).expect("files").count(), 0);
@@ -323,11 +376,46 @@ mod tests {
 
     #[test]
     fn encoding_round_trips() {
-        let path = Path::new("/home/dodo/Téléchargements/a b%c#.txt");
+        let path = Path::new("/home/utilisateur/Téléchargements/a b%c#.txt");
         let encoded = encode(path);
         assert!(!encoded.contains(' ') && !encoded.contains('#'));
         assert_eq!(decode(&encoded).as_deref(), Some(path));
         assert_eq!(decode("/a%2"), None);
         assert_eq!(parse("[Trash Info]\nPath=relatif\n"), None);
+    }
+
+    #[test]
+    fn long_names_orphans_and_the_deletion_date() {
+        let (tmp, trash) = setup("details");
+        // A name near the 255-byte limit still goes to the trash.
+        let long = tmp.path().join("é".repeat(120));
+        fs::write(&long, "").expect("write");
+        let id = trash.put(&long).expect("trashed");
+        assert!(id.len() <= ID_MAX_BYTES);
+        assert_eq!(trash.restore(&id).expect("restored"), long);
+        // An orphan item holding the name: no empty record is left behind.
+        let file = tmp.path().join("b.txt");
+        fs::write(&file, "").expect("write");
+        fs::write(trash.files_dir().join("b.txt"), "orphan").expect("write");
+        let id = trash.put(&file).expect("trashed");
+        assert_eq!(id, "b.txt.2");
+        assert!(!trash.info_path("b.txt").exists());
+        // The listed date is the one written in the record.
+        let record = format!(
+            "[Trash Info]\nPath={}\nDeletionDate=2001-09-09T03:46:40\n",
+            encode(&file)
+        );
+        fs::write(trash.info_path(&id), record).expect("write");
+        let item = trash
+            .list()
+            .expect("list")
+            .into_iter()
+            .find(|i| i.id == id)
+            .expect("item");
+        let local = item.deleted.and_then(clock::local).expect("date");
+        assert_eq!(
+            (local.year, local.month, local.day, local.hour),
+            (2001, 9, 9, 3)
+        );
     }
 }
