@@ -21,6 +21,7 @@ use crate::{Error, State};
 /// Ouvre la fenêtre, crée l'écran qui lui correspond et branche le rendu sur la boucle.
 pub fn init(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result<(), Error> {
     let (mut backend, winit) = winit::init::<GlesRenderer>()?;
+    state.nested = true;
     // GLES dessine la tête en bas : l'écran est retourné pour compenser.
     let output = state.add_output(backend.window_size(), Transform::Flipped180);
     let mut damage_tracker = OutputDamageTracker::from_output(&output);

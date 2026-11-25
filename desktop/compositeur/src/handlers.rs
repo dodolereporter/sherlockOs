@@ -8,9 +8,9 @@ use smithay::{
     desktop::{PopupKind, Window},
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
+        wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{
-            Client,
+            Client, Resource,
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat, wl_surface::WlSurface},
         },
     },
@@ -26,7 +26,12 @@ use smithay::{
     },
 };
 
-use crate::{ClientState, State, layout, window_data};
+use crate::{
+    ClientState, State,
+    input::GestureSource,
+    layout::{self, Edges},
+    window_data,
+};
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -99,6 +104,44 @@ impl State {
             data.resize.set(next);
             self.space.map_element(window, loc, false);
         }
+    }
+
+    /// Geste demandé par le client, qui dessine lui-même sa barre de titre et ses bords.
+    ///
+    /// Comme le veut xdg-shell, il n'est accordé que sur notre siège, pendant l'appui d'un bouton
+    /// sur une surface de ce client, et avec le serial de cet appui.
+    fn client_gesture(
+        &mut self,
+        surface: &ToplevelSurface,
+        seat: &wl_seat::WlSeat,
+        serial: Serial,
+        edges: Option<Edges>,
+    ) {
+        let pointer = Seat::<State>::from_resource(seat)
+            .filter(|seat| *seat == self.seat)
+            .and_then(|seat| seat.get_pointer());
+        let start = pointer
+            .as_ref()
+            .filter(|pointer| pointer.has_grab(serial))
+            .and_then(|pointer| pointer.grab_start_data());
+        let same_client = start.as_ref().is_some_and(|start| {
+            start
+                .focus
+                .as_ref()
+                .is_some_and(|(focus, _)| focus.id().same_client_as(&surface.wl_surface().id()))
+        });
+        let window = self.window_for(surface.wl_surface());
+        let (Some(pointer), Some(start), Some(window), true, false) =
+            (pointer, start, window, same_client, self.gesture_active())
+        else {
+            tracing::debug!(?serial, ?edges, "demande de geste du client refusée");
+            return;
+        };
+        // On reprend le pointeur au client : il ne reçoit plus rien jusqu'au relâchement.
+        let time = self.start_time.elapsed().as_millis() as u32;
+        pointer.unset_grab(self, serial, time);
+        self.start_gesture(window, start.location, edges, GestureSource::Client);
+        self.pointer_motion(pointer.current_location(), time);
     }
 
     /// Fait entrer la fenêtre dans l'état `mode` (agrandie ou plein écran), ou l'en fait sortir.
@@ -185,6 +228,23 @@ impl XdgShellHandler for State {
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
         // Pas de saisie exclusive pour les menus : ils se ferment quand le client le décide.
+    }
+
+    fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        self.client_gesture(&surface, &seat, serial, None);
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        seat: wl_seat::WlSeat,
+        serial: Serial,
+        edges: ResizeEdge,
+    ) {
+        let edges = Edges::from_xdg_bits(edges as u32);
+        if edges != Edges::default() {
+            self.client_gesture(&surface, &seat, serial, Some(edges));
+        }
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {

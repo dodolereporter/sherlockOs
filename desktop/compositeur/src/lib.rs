@@ -74,6 +74,8 @@ pub struct State {
     seat_state: SeatState<State>,
     popups: PopupManager,
     gesture: Option<input::Gesture>,
+    /// Le compositeur tourne dans une fenêtre d'une autre session (`--imbrique`).
+    nested: bool,
 }
 
 /// Données qu'on accroche à chaque fenêtre.
@@ -139,6 +141,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             gesture: None,
+            nested: false,
             loop_signal: event_loop.get_signal(),
             start_time: Instant::now(),
             display_handle: dh,

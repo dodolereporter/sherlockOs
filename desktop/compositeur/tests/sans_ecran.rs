@@ -5,13 +5,27 @@
 // Module de test : clippy y autorise unwrap et expect, comme dans les tests unitaires.
 #[cfg(test)]
 mod tests {
-    use std::{os::unix::net::UnixStream, time::Duration};
+    use std::{
+        fs::{File, OpenOptions},
+        os::{fd::AsFd, unix::net::UnixStream},
+        time::Duration,
+    };
 
     use compositeur::State;
-    use smithay::{reexports::calloop::EventLoop, utils::Transform};
+    use smithay::{backend::input::ButtonState, reexports::calloop::EventLoop, utils::Transform};
     use wayland_client::{
         Connection, Dispatch, EventQueue, QueueHandle, delegate_noop,
-        protocol::{wl_compositor::WlCompositor, wl_registry, wl_surface::WlSurface},
+        protocol::{
+            wl_buffer::WlBuffer,
+            wl_callback::{self, WlCallback},
+            wl_compositor::WlCompositor,
+            wl_pointer::{self, WlPointer},
+            wl_registry,
+            wl_seat::WlSeat,
+            wl_shm::{Format, WlShm},
+            wl_shm_pool::WlShmPool,
+            wl_surface::WlSurface,
+        },
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
@@ -25,6 +39,40 @@ mod tests {
         globals: Vec<(u32, String, u32)>,
         /// Chaque configuration de la fenêtre : largeur, hauteur, états.
         configures: Vec<(i32, i32, Vec<XdgState>)>,
+        /// Serial du dernier appui de bouton reçu.
+        button_serial: Option<u32>,
+        /// Le compositeur a répondu au dernier `wl_display.sync`.
+        synced: bool,
+    }
+
+    impl Dispatch<WlPointer, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlPointer,
+            event: wl_pointer::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_pointer::Event::Button { serial, .. } = event {
+                client.button_serial = Some(serial);
+            }
+        }
+    }
+
+    impl Dispatch<WlCallback, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlCallback,
+            event: wl_callback::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_callback::Event::Done { .. } = event {
+                client.synced = true;
+            }
+        }
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -105,6 +153,27 @@ mod tests {
 
     delegate_noop!(Client: WlCompositor);
     delegate_noop!(Client: ignore WlSurface);
+    delegate_noop!(Client: ignore WlSeat);
+    delegate_noop!(Client: ignore WlShm);
+    delegate_noop!(Client: WlShmPool);
+    delegate_noop!(Client: ignore WlBuffer);
+
+    /// Mémoire partagée pour un tampon de `size` octets, sans fichier qui reste sur le disque.
+    fn shm_file(size: u64) -> File {
+        let path = std::env::temp_dir().join(format!("compositeur-test-{}", std::process::id()));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        file.set_len(size).unwrap();
+        file
+    }
+
+    const BTN_LEFT: u32 = 0x110;
 
     struct Harness {
         event_loop: EventLoop<'static, State>,
@@ -226,5 +295,72 @@ mod tests {
         h.run_until("la fermeture de la fenêtre", |_, s| {
             s.space.elements().count() == 0
         });
+    }
+
+    #[test]
+    fn un_client_deplace_sa_fenetre_depuis_sa_barre_de_titre() {
+        let mut h = Harness::start();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "wl_shm")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let seat: WlSeat = h.bind(&registry);
+        let _pointer = seat.get_pointer(&qh, ());
+
+        let surface = compositor.create_surface(&qh, ());
+        let toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("la première configuration", |c, _| {
+            !c.configures.is_empty()
+        });
+
+        // Premier contenu, 100 × 80 : la fenêtre est centrée dans l'écran de 800 × 600.
+        let file = shm_file(100 * 80 * 4);
+        let pool = shm.create_pool(file.as_fd(), 100 * 80 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 100, 80, 400, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        let location = |s: &State| {
+            let window = s.space.elements().next()?;
+            s.space.element_location(window)
+        };
+        h.run_until("le placement", |_, s| {
+            location(s) == Some((350, 260).into())
+        });
+
+        // Appui sur la barre de titre, que le client dessine lui-même.
+        h.state.pointer_motion((360.0, 270.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.run_until("l'appui", |c, _| c.button_serial.is_some());
+        let serial = h.client.button_serial.unwrap();
+
+        // Un serial qui ne vient pas de cet appui est refusé.
+        toplevel._move(&seat, serial + 1000);
+        h.conn.display().sync(&qh, ());
+        h.run_until("la réponse au sync", |c, _| c.synced);
+        assert!(!h.state.gesture_active());
+
+        toplevel._move(&seat, serial);
+        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.state.pointer_motion((410.0, 300.0).into(), 3);
+        assert_eq!(
+            location(&h.state),
+            Some((400, 290).into()),
+            "la fenêtre suit le pointeur"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        assert!(!h.state.gesture_active());
+        h.state.pointer_motion((500.0, 400.0).into(), 5);
+        assert_eq!(
+            location(&h.state),
+            Some((400, 290).into()),
+            "le geste est fini"
+        );
     }
 }

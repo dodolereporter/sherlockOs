@@ -1,5 +1,7 @@
-//! Clavier et souris : focus au clic, Super + glisser pour déplacer, Super + clic droit
-//! pour redimensionner.
+//! Clavier et souris : focus au clic, gestes de déplacement et de redimensionnement.
+//!
+//! Un geste vient soit de la touche des gestes (voir [`gesture_modifier_held`]) avec un bouton,
+//! soit d'une demande du client (`xdg_toplevel.move` ou `.resize`, sa barre de titre ou ses bords).
 
 use smithay::{
     backend::input::{
@@ -8,7 +10,7 @@ use smithay::{
     },
     desktop::{Space, Window},
     input::{
-        keyboard::FilterResult,
+        keyboard::{FilterResult, ModifiersState},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
@@ -26,9 +28,30 @@ use crate::{
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
-/// Geste Super + bouton en cours : le compositeur déplace ou redimensionne une fenêtre.
+/// Touche des gestes du compositeur. Super en session réelle. En mode imbriqué, la session hôte
+/// garde Super pour elle (sous Plasma : actions des fenêtres de KWin, lanceur), alors c'est Alt,
+/// comme le fait niri.
+pub(crate) fn gesture_modifier_held(nested: bool, modifiers: &ModifiersState) -> bool {
+    if nested {
+        modifiers.alt
+    } else {
+        modifiers.logo
+    }
+}
+
+/// D'où vient un geste, pour le journal.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum GestureSource {
+    /// Touche des gestes et bouton de la souris.
+    Modifier,
+    /// Demande du client : `xdg_toplevel.move` ou `xdg_toplevel.resize`.
+    Client,
+}
+
+/// Geste en cours : le compositeur déplace ou redimensionne une fenêtre.
 pub(crate) struct Gesture {
     window: Window,
+    source: GestureSource,
     start: Point<f64, Logical>,
     initial: Rectangle<i32, Logical>,
     /// `None` pour un déplacement, les bords tirés pour un redimensionnement.
@@ -42,7 +65,14 @@ impl Gesture {
         start: Point<f64, Logical>,
         initial: Rectangle<i32, Logical>,
         edges: Option<Edges>,
+        source: GestureSource,
     ) -> Self {
+        tracing::debug!(
+            ?source,
+            ?edges,
+            ?initial,
+            "début du geste (bords vides : déplacement)"
+        );
         let data = window_data(&window);
         match (edges, window.toplevel()) {
             // Le recalage sur le bord opposé vaut pendant tout le geste, pas seulement à la fin.
@@ -74,6 +104,7 @@ impl Gesture {
         }
         Self {
             window,
+            source,
             start,
             initial,
             edges,
@@ -103,6 +134,7 @@ impl Gesture {
     }
 
     fn finish(self) {
+        tracing::debug!(source = ?self.source, edges = ?self.edges, size = ?self.last_size, "fin du geste");
         let (Some(toplevel), Some(edges)) = (self.window.toplevel(), self.edges) else {
             return;
         };
@@ -121,6 +153,25 @@ impl Gesture {
 }
 
 impl State {
+    /// Lance un geste sur `window`, depuis la position `start` du pointeur. `edges` vaut `None`
+    /// pour un déplacement.
+    pub(crate) fn start_gesture(
+        &mut self,
+        window: Window,
+        start: Point<f64, Logical>,
+        edges: Option<Edges>,
+        source: GestureSource,
+    ) {
+        if let Some(initial) = self.space.element_geometry(&window) {
+            self.gesture = Some(Gesture::begin(window, start, initial, edges, source));
+        }
+    }
+
+    /// Un geste de déplacement ou de redimensionnement est en cours.
+    pub fn gesture_active(&self) -> bool {
+        self.gesture.is_some()
+    }
+
     /// Traite un événement d'entrée venu du backend.
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
@@ -139,10 +190,10 @@ impl State {
                     return;
                 };
                 let pos = event.position_transformed(area.size) + area.loc.to_f64();
-                self.on_motion(pos, event.time_msec());
+                self.pointer_motion(pos, event.time_msec());
             }
             InputEvent::PointerButton { event } => {
-                self.on_button(event.button_code(), event.state(), event.time_msec());
+                self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event } => {
                 let Some(pointer) = self.seat.get_pointer() else {
@@ -166,7 +217,8 @@ impl State {
         }
     }
 
-    fn on_motion(&mut self, location: Point<f64, Logical>, time: u32) {
+    /// Le pointeur est à `location`. Point d'entrée de tous les backends, et des tests.
+    pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -191,19 +243,30 @@ impl State {
         pointer.frame(self);
     }
 
-    fn on_button(&mut self, button: u32, state: ButtonState, time: u32) {
+    /// Un bouton (code de linux/input-event-codes.h) est appuyé ou relâché.
+    pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;
         };
         let location = pointer.current_location();
-        // Le client n'a vu ni l'appui ni le relâchement d'un geste.
+        let serial = SERIAL_COUNTER.next_serial();
+        let event = ButtonEvent {
+            button,
+            state,
+            serial,
+            time,
+        };
         if let Some(gesture) = self.gesture.take() {
             if state == ButtonState::Pressed {
                 self.gesture = Some(gesture);
             } else {
                 gesture.finish();
-                self.on_motion(location, time);
+                // Le pointeur n'a pas de focus pendant le geste : aucun client ne voit ce
+                // relâchement, mais le siège oublie le bouton. Puis le focus revient.
+                pointer.button(self, &event);
+                pointer.frame(self);
+                self.pointer_motion(location, time);
             }
             return;
         }
@@ -216,24 +279,15 @@ impl State {
                 BTN_RIGHT => rect.map(|r| Some(Edges::nearest(r, location))),
                 _ => None,
             };
-            if let (Some(window), Some(initial), Some(edges), true) =
-                (window, rect, edges, keyboard.modifier_state().logo)
-            {
-                self.gesture = Some(Gesture::begin(window, location, initial, edges));
-                self.on_motion(location, time);
+            let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
+            // Touche des gestes + bouton : le client ne voit pas l'appui.
+            if let (Some(window), Some(edges), true) = (window, edges, held) {
+                self.start_gesture(window, location, edges, GestureSource::Modifier);
+                self.pointer_motion(location, time);
                 return;
             }
         }
-        let serial = SERIAL_COUNTER.next_serial();
-        pointer.button(
-            self,
-            &ButtonEvent {
-                button,
-                state,
-                serial,
-                time,
-            },
-        );
+        pointer.button(self, &event);
         pointer.frame(self);
     }
 }
