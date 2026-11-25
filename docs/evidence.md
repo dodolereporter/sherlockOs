@@ -17,34 +17,68 @@ renderer is several times slower (see Performance).
 
 | Module | Role | iced |
 | --- | --- | --- |
-| `listing` | Reads a folder, kind of each entry, labels of each row (date, size, kind), sort by column | no |
-| `ops` | Copy, move, rename, duplicate, new folder. Never overwrites; typed errors with French messages | no |
-| `trash` | freedesktop Trash 1.0 in `$XDG_DATA_HOME/Trash`: put, list, restore, empty | no |
-| `git` | Runs `git status --porcelain=v2 -z --branch --ignored` and reads it | no |
-| `preview` | First lines of a text file with light highlighting, image, or information | no |
+| `listing` | Reads a folder, kind of each entry (folder, file, link, special), labels of each row (date, size, kind), sort by column | no |
+| `ops` | Copy, move, rename, duplicate, new folder, on raw (`OsStr`) names. Never overwrites, even in a race; typed errors with French messages | no |
+| `trash` | freedesktop Trash 1.0 in `$XDG_DATA_HOME/Trash`: put, list, restore, remove | no |
+| `git` | Runs `git status --porcelain=v2` with a locked-down configuration and reads it | no |
+| `preview` | First lines of a text file with light highlighting, decoded image, or information | no |
 | `devices` | Reads UDisks2 objects, chooses and names volumes, `DeviceSource` trait | no |
 | `udisks` | The real `DeviceSource`: UDisks2 on the system bus through zbus, and its watcher | no |
+| `icons` | Application icons (hicolor, pixmaps, absolute paths), decoded off the interface thread | no |
 | `places` | Favourites from `user-dirs.dirs` | no |
-| `clock` | Local time (`localtime_r`) | no |
+| `clock` | Local time (`localtime_r`, `mktime`) | no |
 | `probe` | `--measure`: smoothness measurement | no |
 | `app` | State, messages, keyboard, commands, animations | yes |
 | `view` | The window, after the planche | yes |
 | `scenarios` | End-to-end tests driven by the keyboard, headless capture | tests |
 
-Nothing slow runs in `update` or `view`. Reading a folder (with one `stat` per entry and the
-item count of each subfolder), the git state, the preview, the trash listing, copies, moves,
-emptying the trash and every device action are tasks on iced's thread pool. A folder read
-carries a generation number, so a slow read overtaken by a newer navigation is dropped.
+Installed applications, file types and default applications come from the workspace crate
+`mime-apps` (`docs/mime-apps.md`), which Control Room will reuse.
+
+No file system access runs in `update` or `view`. Reading a folder (with one `stat` per
+entry and the item count of each subfolder), checking which favourites exist, the git
+state, the preview (text read and image decoding), the trash listing, copies, moves,
+renames, new folders, restoring, emptying the trash, launching programs, reading the
+applications and their icons, writing `mimeapps.list` and every device action are tasks on
+iced's thread pool. A folder read carries a generation number, so a slow read overtaken by a
+newer navigation is dropped. `view` only reads what those tasks cached.
 
 The list is virtualised: only the visible rows and four more above and below are in the
 widget tree, between two spacers. Row labels are computed once when the folder is read, icons
 are built once (`sherlock_ui::component::icon` caches the SVG handles).
 
+## Safety
+
+- **Special files.** A named pipe, a socket or a device is listed as "Fichier spécial" and
+  never opened: the preview opens regular files only, checks the type again on the open
+  descriptor, opens with `O_NONBLOCK`, and gives up after 2 s on its own thread. A copy
+  recreates named pipes (`mkfifo`) without reading them, and leaves sockets and devices aside
+  with a message.
+- **git.** Listing a folder must not run code, even from a repository found on a USB key or
+  in an archive. Evidence runs git with `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`,
+  none of the caller's `GIT_*` variables, `--no-optional-locks`, and forced settings that win
+  over the repository's `.git/config` and the files it includes: `core.fsmonitor=false`,
+  `core.untrackedCache=false`, `core.hooksPath=/dev/null`, no pager, no ask-pass, no external
+  diff. It first reads (without running anything) the filter drivers the repository declares,
+  then empties each one (`filter.<name>.clean=`, `.smudge=`, `.process=`, `.required=false`),
+  which git treats as no filter. Submodules, each with its own configuration, are not entered
+  (`--ignore-submodules=all`). A test builds a trapped repository (fsmonitor, clean and process
+  filters, an included file) and checks that no command ran while the state is still read.
+  Asking the user to trust each repository was the alternative; it adds a question for every
+  project folder, for no more safety once the configuration is locked down.
+- **No overwrite, even in a race.** Copies create files with `create_new`; renames and moves
+  use `renameat2(RENAME_NOREPLACE)` (a plain check then rename on filesystems without it).
+- **Failures clean up.** A copy, or a move between disks, that fails removes what it created
+  at the destination; the source is untouched. Modification times are kept from one disk to
+  another.
+- **Names are bytes.** Copy, move and conflict names keep the exact bytes of a name that is not
+  UTF-8; only the display is lossy.
+
 ## What it does
 
-- Sidebar: Favourites (home, Desktop, Documents, Downloads, Pictures, from xdg-user-dirs),
-  Devices, System (system disk, trash). The favourite that contains the current folder is
-  active; Home only for the home folder itself.
+- Sidebar: Favourites (home, Desktop, Documents, Downloads, Projets when `~/Projets` exists,
+  Pictures, from xdg-user-dirs), Devices, System (system disk, trash). The favourite that
+  contains the current folder is active; Home only for the home folder itself.
 - Toolbar: back, forward, breadcrumb (folded with "…" beyond five segments), git branch,
   search in the current folder.
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
@@ -53,23 +87,31 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Preview: header with tile, size and git state; first lines of a text file in JetBrains Mono
   with keywords and comments coloured (Dockerfile, Rust, TOML, shell, Python); PNG and JPEG
   images; date, kind and place for the rest. Buttons: Open, Copy path (Restore in the trash).
-- Context menu as on the planche, with the "Open with" submenu: default application, terminal
-  in this folder. On the background: new folder, paste, hidden files. In the trash: restore,
-  empty. On a device: open or mount, unmount, eject.
+- Context menu as on the planche. "Ouvrir avec" lists the installed applications that open the
+  file's type (from their `.desktop` files, with their icon, the default first and checked),
+  then "Terminal, dans ce dossier", "Autre application…" (a chooser of every application, with
+  a search), and the switch "Toujours ouvrir ce type ainsi". With the switch on, the chosen
+  application becomes the default in `~/.config/mimeapps.list`; opening a file then uses the
+  default application of its type (xdg-open when there is none). On the background: new folder,
+  paste, hidden files. In the trash: restore, empty. On a device: open or mount, unmount, eject.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
-  The trash view lists the original name, deletion date and origin. Emptying asks first.
+  The trash view lists the original name, the deletion date read from the record, and the
+  origin. Emptying asks first and deletes only what was listed when the question was asked.
+  Long names are cut in the record's name, never refused; no empty record is left behind.
 - Operations: copy, cut, paste, duplicate, rename in place, new folder (named right away).
   Pasting a copy over a taken name makes "name (copie).ext"; a move or rename onto a taken
   name is refused with a message. Copying a folder into itself is refused.
-- Devices: internal partitions mounted by the user, USB keys, external disks, memory cards,
-  optical discs, from UDisks2. Name: volume label, else UDisks' name hint, else model and size,
-  else "Volume de 32 Go". Icon by kind. Free space when mounted. A click mounts (through
-  `Filesystem.Mount`, so polkit asks when needed) then opens. Unmount and eject in the menu,
-  eject button beside removable media. A medium plugged in or pulled out shows up or goes away
-  at once (UDisks2 signals watched on a thread). Hidden: what UDisks marks `HintIgnore`, what it
-  marks `HintSystem` unless mounted outside system places, anything mounted at `/`, `/boot`,
-  `/efi`, `/usr`, `/var` or `/home`, and blocks without a drive (loop devices, zram). LUKS
-  volumes show locked.
+- Devices: internal data partitions (mounted or not, even when UDisks marks them
+  `HintSystem`), USB keys, external disks, memory cards, optical discs, from UDisks2. Name:
+  volume label, else UDisks' name hint, else model and size, else "Volume de 32 Go". Icon by
+  kind. Free space when mounted. A click mounts (through `Filesystem.Mount`, so polkit asks
+  when needed) then opens. Unmount and eject in the menu, eject button beside removable media.
+  A medium plugged in or pulled out shows up or goes away at once (UDisks2 signals watched on a
+  thread). Hidden: what UDisks marks `HintIgnore`; anything mounted at `/`, `/boot`, `/efi`,
+  `/usr`, `/var` or `/home`; unmounted EFI, extended boot, BIOS boot, Microsoft reserved,
+  Windows recovery and swap partitions (by partition type) and blocks without a mountable
+  filesystem; blocks without a drive (loop devices, zram). LUKS volumes show locked. Eject is
+  refused when no drive can be found for the volume.
 
 ## Keyboard
 
@@ -169,17 +211,19 @@ with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
 
 ## Gaps with the planche
 
-- No grid or column views: list only (the lot's size went to smoothness and devices).
+- No grid or column views: list only.
 - No "Ask Sherlock" button, Sherlock bubble, "Build the image" or "Run in a sandbox"
   buttons, no Dev section (Docker volumes, sandboxes): out of this lot's scope.
-- "Open with" offers the default application and a terminal in the folder; "Other
-  application" is shown disabled. The planche's "Editor" and "Sandbox" entries are not there.
+- "Ouvrir avec" is wider than the planche's submenu (280 instead of 216): application names
+  and the "always" switch. The planche's "Éditeur" entry is the list of installed
+  applications; its "Bac à sable" entry is out of scope.
 - The open submenu entry uses the selection token at 0.26 (the planche has 0.30; see
   `docs/sherlock-ui.md`).
 - A selected row's git badge sits on the darkest background: the planche's veil would fall
   under 4.5:1 contrast on the selection.
 - The search field has no clear button. Column header letter spacing is not supported by iced.
-- The sort arrow next to the sorted column is an addition.
+- The sort arrow next to the sorted column is an addition, and so are Copier and Couper in
+  the context menu.
 - The planche has no Devices section: its entries use the sidebar's style, with an eject
   button in the style of sherlock-ui's icon buttons.
 - The context menu scales in but cannot fade (see Animations).
@@ -192,32 +236,40 @@ with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
 - Copy progress is a message in the status bar, without a percentage; a copy cannot be
   cancelled.
 - The trash handles the home trash only: a file on another disk is refused with a message.
+  `directorysizes` is not maintained yet (the specification makes it optional).
 - Encrypted volumes show locked; unlocking them is not done yet.
-- Internal partitions that UDisks marks `HintSystem` show only once mounted elsewhere than the
-  system's places. On the reference laptop (EFI, root, swap), the Devices section is empty until
-  a key or a card is plugged in.
+- File types come from names (`globs2`); content sniffing (`magic`) is not done.
+- Application icons are looked up in hicolor and pixmaps only, not in the current icon theme.
+  Applications with `Terminal=true` are started directly, not in a terminal.
 - Long names are cut from an estimated character width, not measured text.
-- Image preview decodes PNG and JPEG only, on the interface thread at draw time.
 - Accessibility: iced 0.14 exposes nothing to screen readers (ADR 0014).
 
 ## Tests
 
-`just verifier` runs them without a screen, on temporary folders. The trash used by the tests is
-in the temporary folder, never the user's; no test calls the real UDisks.
+`just verifier` runs them without a screen, on temporary folders. The trash, the XDG
+directories and `mimeapps.list` used by the tests are in the temporary folder, never the
+user's; no test calls the real UDisks.
 
-- `ops`: copy (with links), duplicate and name conflicts, folder into itself, move and refused
-  move, rename and invalid names, new folder.
+- `ops`: copy (with links), named pipes recreated and never read, names that are not UTF-8,
+  modification times kept, a failed copy that leaves nothing, no-replace rename, duplicate and
+  name conflicts, folder into itself, move and refused move, rename and invalid names, new
+  folder.
 - `trash`: put and restore (folder recreated), two items with the same name, refused restore,
-  empty, path encoding.
-- `git`: porcelain v2 parsing (renames, spaces, root prefix, whole ignored folder) and a real
-  repository.
-- `listing`: sort by each column, natural order, kinds.
-- `preview`, `places`, `clock`, `devices` (filtering, naming, kinds, free space and errors
-  from UDisks2 objects recorded with `busctl --json` on the reference laptop, plus a USB key,
+  emptying only the listed items, long names, orphan items, the deletion date from the record,
+  path encoding.
+- `git`: porcelain v2 parsing (renames, spaces, root prefix, whole ignored folder), a real
+  repository, and a trapped repository that must run nothing.
+- `listing`, `preview` (named pipe never opened, image decoded, broken image), `places`,
+  `clock`, `icons`, `devices` (filtering, internal data partitions, naming, kinds, free space
+  and errors from UDisks2 objects recorded with `busctl --json`, made anonymous, plus a USB key,
   an SD card and a LUKS disk in the same format).
 - `scenarios`: keyboard navigation, copy/cut/paste and conflicts, rename and new folder, trash
   with restore and confirmed emptying, context menu from the keyboard, devices through a fake
-  source (mount and open, menu, eject, locked, busy), and a headless capture of the window.
+  source, "Ouvrir avec" with fake applications and a default written to a temporary
+  `mimeapps.list`, and a headless capture of the window.
+- `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
+  `sherlock_ui::component`: no hover on a disabled control.
+- `mime-apps`: see `docs/mime-apps.md`.
 
 ## Manual procedure
 
@@ -229,9 +281,14 @@ On the author's laptop, Plasma X11:
    folder (rows rise and fade in), right-click (the menu scales in), hover "Ouvrir avec".
 3. In a scratch folder: copy, cut, paste, Ctrl+D, F2, Ctrl+Shift+N, Delete, then the trash:
    restore, then empty (the question appears; Escape cancels).
-4. Plug in a USB key: it appears under Appareils. Click it: Plasma's polkit agent may ask for
+4. Right-click a text file, hover "Ouvrir avec": the editors installed on the laptop are
+   listed with their icon. Turn on "Toujours ouvrir ce type ainsi", pick one: it opens, and
+   `~/.config/mimeapps.list` gains it under `[Default Applications]` (back the file up first;
+   the other lines stay as they were). Enter on another file of the same type opens it with
+   that application. "Autre application…" lists every application, with a search.
+5. Plug in a USB key: it appears under Appareils. Click it: Plasma's polkit agent may ask for
    the password, then the key opens. Right-click: Démonter, Éjecter. Click the eject button:
    the key disappears from the list and the status bar says it can be removed. With a file of
    the key open in another program, Démonter shows the "busy" message.
-5. `RUST_LOG=evidence=info cargo run --release -p evidence -- --measure <folder of 5,000
+6. `RUST_LOG=evidence=info cargo run --release -p evidence -- --measure <folder of 5,000
    files> --maximized` and read the three `measure:` lines.

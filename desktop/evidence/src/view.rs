@@ -688,12 +688,8 @@ impl App {
                 .enumerate()
                 .map(|(i, item)| self.menu_entry(*item, menu.highlight == Some(i), false, false));
             let x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
-            let width = if self.open_with.is_empty() {
-                metrics::CONTEXT_SUBMENU_WIDTH
-            } else {
-                metrics::OPEN_WITH_WIDTH
-            };
-            let sub = ui::menu(entries, width);
+            // Wider than the planche's 216: application names and the "always" switch.
+            let sub = ui::menu(entries, metrics::OPEN_WITH_WIDTH);
             layers.push(pin(sub).x(x).y(menu.at.y + offset).into());
         }
         stack(layers)

@@ -1242,7 +1242,7 @@ impl App {
         let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
         let width = metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
-        let width = width + metrics::CONTEXT_SUBMENU_WIDTH;
+        let width = width + metrics::OPEN_WITH_WIDTH;
         let at = Point::new(
             at.x.min(self.size.width - width).max(0.0),
             at.y.min(self.size.height - height).max(0.0),

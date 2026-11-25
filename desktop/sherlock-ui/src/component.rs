@@ -405,11 +405,11 @@ pub fn menu_item_with<'a, Message: Clone + 'a>(
         Trailing::Checked => icon(Icon::Check, metrics::ICON_SIZE_SMALL, color::ACCENT).into(),
     };
     let start: Element<'a, Message> = match leading {
-        Some(leading) => row![leading, body(label)]
+        Some(leading) => row![leading, body(label).wrapping(text::Wrapping::None)]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center)
             .into(),
-        None => body(label).into(),
+        None => body(label).wrapping(text::Wrapping::None).into(),
     };
     let line = row![start, space::horizontal(), end]
         .spacing(metrics::GAP_INLINE)
