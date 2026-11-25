@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use barre::app::{Bar, Message};
 use barre::menu;
 use barre::source::battery::{Battery, Charge};
-use barre::source::clock;
+use barre::source::clock::LocalTime;
 use barre::source::network::{Link, Network};
 use barre::source::sound::Sound;
 use barre::source::workspaces::Workspaces;
@@ -16,7 +16,13 @@ use sherlock_ui::{metrics, theme};
 fn bar() -> Bar {
     let mut bar = Bar::default();
     let messages = [
-        Message::Clock(clock::parse("2 24 11 21 46").unwrap()),
+        Message::Clock(LocalTime {
+            weekday: 2,
+            day: 24,
+            month: 11,
+            hour: 21,
+            minute: 46,
+        }),
         Message::Battery(Some(Battery {
             percent: 82,
             charge: Charge::Discharging,
@@ -41,20 +47,26 @@ fn bar() -> Bar {
     bar
 }
 
-/// Écrit la capture dans `target/tmp/<nom>-tiny-skia.png` et vérifie qu'elle n'est pas vide.
-fn capture(mut ui: Simulator<'_, Message>, name: &str) {
-    let snapshot = ui.snapshot(&theme::theme()).expect("capture");
+/// Écrit la capture dans `target/tmp/<nom>-tiny-skia.png` et rend son chemin et sa taille.
+fn capture(
+    mut ui: Simulator<'_, Message>,
+    name: &str,
+) -> Result<(PathBuf, u64), Box<dyn std::error::Error>> {
+    let snapshot = ui.snapshot(&theme::theme())?;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
     let written = path.with_file_name(format!("{name}-tiny-skia.png"));
     let _ = std::fs::remove_file(&written);
-    assert!(
-        snapshot
-            .matches_image(&path)
-            .expect("écriture de la capture")
-    );
-    let size = std::fs::metadata(&written).expect("capture écrite").len();
-    assert!(size > 2_000, "capture trop petite : {size} octets");
-    println!("capture : {}", written.display());
+    snapshot.matches_image(&path)?;
+    let size = std::fs::metadata(&written)?.len();
+    Ok((written, size))
+}
+
+/// Une capture écrite et pas vide.
+fn assert_written(result: Result<(PathBuf, u64), Box<dyn std::error::Error>>) {
+    match result {
+        Ok((path, size)) => assert!(size > 2_000, "{} trop petite", path.display()),
+        Err(error) => panic!("capture impossible : {error}"),
+    }
 }
 
 /// Largeur de la barre sur l'écran de référence, marges ôtées.
@@ -68,7 +80,7 @@ fn bar_size() -> (f32, f32) {
 fn la_barre_se_rend_sans_ecran() {
     let bar = bar();
     let ui = Simulator::with_size(barre::settings(), bar_size(), bar.view_bar());
-    capture(ui, "barre");
+    assert_written(capture(ui, "barre"));
 }
 
 #[test]
@@ -78,7 +90,7 @@ fn le_menu_se_rend_sans_ecran() {
     let (width, height) = menu::surface_size();
     let size = (width as f32, height as f32);
     let ui = Simulator::with_size(barre::settings(), size, bar.view_menu());
-    capture(ui, "menu-sherlock");
+    assert_written(capture(ui, "menu-sherlock"));
 }
 
 #[test]
