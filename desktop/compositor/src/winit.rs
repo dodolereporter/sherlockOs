@@ -17,7 +17,12 @@ use smithay::{
     utils::{Rectangle, Scale, Transform},
 };
 
-use crate::{Error, State, anim::PreviewMotion, render::Scene};
+use crate::{
+    Error, State,
+    anim::PreviewMotion,
+    render::Scene,
+    wallpaper::{Textures, Wallpaper},
+};
 
 /// Opens the window, creates one screen per scale in `scales`, side by side in the window, and
 /// plugs rendering into the loop.
@@ -33,6 +38,13 @@ pub fn init(
     }
     state.resize_frame(backend.window_size());
     let scene = Scene::new(backend.renderer())?;
+    let var = |key: &str| std::env::var_os(key);
+    state.wallpaper = Wallpaper::start(
+        &event_loop.handle(),
+        desktop_config::wallpaper::config_file(var),
+        desktop_config::data_dirs(var),
+    )?;
+    let mut textures = Textures::default();
     let mut preview = PreviewMotion::default();
     let mut cursor = Some(CursorIcon::Default);
 
@@ -47,7 +59,8 @@ pub fn init(
             WinitEvent::Redraw => {
                 // A client may change its cursor without the pointer moving.
                 update_cursor(&backend, &mut cursor, state.cursor_icon());
-                if let Err(err) = render(&mut backend, &scene, &mut preview, state) {
+                let frame = (&scene, &mut textures, &mut preview);
+                if let Err(err) = render(&mut backend, frame, state) {
                     tracing::warn!("render: {err}");
                 }
                 send_frames(state);
@@ -102,8 +115,7 @@ fn update_cursor(
 /// screen's slice: a window across two screens is drawn twice, once at each scale.
 fn render(
     backend: &mut WinitGraphicsBackend<GlesRenderer>,
-    scene: &Scene,
-    preview: &mut PreviewMotion,
+    (scene, textures, preview): (&Scene, &mut Textures, &mut PreviewMotion),
     state: &mut State,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let now = state.start_time.elapsed();
@@ -115,11 +127,20 @@ fn render(
         let started = Instant::now();
         let mut animating = false;
         let mut screens = Vec::new();
+        // Each screen's wallpaper, by its size in pixels: a texture per variant, uploaded once.
+        textures.update(renderer, &mut state.wallpaper);
+        let mut used = Vec::new();
         for (output, view) in state.views() {
-            let (elements, moving) = scene.elements(renderer, state, &output, &view, preview, now);
+            let image = state.wallpaper.image_for(view.frame.size);
+            let wallpaper = image.as_deref().and_then(|path| textures.get(path));
+            let screen = (&output, &view);
+            let (elements, moving) =
+                scene.elements(renderer, state, screen, preview, wallpaper, now);
             animating |= moving;
             screens.push((view.frame, elements));
+            used.extend(image);
         }
+        textures.retain(&used);
         // GLES draws upside down: the frame is flipped to make up for it. Redrawn in full every
         // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Example Browser
+Exec=example-browser %u
+Icon=example-browser
+Categories=Network;WebBrowser;
+StartupWMClass=ExampleBrowser
+Actions=new-private-window;
+
+[Desktop Action new-private-window]
+Name=New Private Window
+Exec=example-browser --private-window %u

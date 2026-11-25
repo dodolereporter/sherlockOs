@@ -546,6 +546,8 @@ dependencies = [
 name = "compositor"
 version = "0.0.0"
 dependencies = [
+ "desktop-config",
+ "image",
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
@@ -754,6 +756,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "desktop-config"
+version = "0.0.0"
+dependencies = [
+ "image",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -786,6 +797,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "dock"
+version = "0.0.0"
+dependencies = [
+ "dock-config",
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "libc",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
+ "wayland-server",
+]
+
+[[package]]
+name = "dock-config"
+version = "0.0.0"
+dependencies = [
+ "sherlock-ui",
 ]
 
 [[package]]

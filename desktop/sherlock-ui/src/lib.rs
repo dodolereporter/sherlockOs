@@ -6,6 +6,7 @@
 //! The gallery lives in `examples/gallery`. See `docs/sherlock-ui.md`.
 
 pub mod color;
+pub mod dock;
 pub mod icon;
 pub mod logo;
 pub mod metrics;
@@ -13,6 +14,7 @@ pub mod motion;
 pub mod strings;
 pub mod texts;
 pub mod typography;
+pub mod wallpapers;
 pub mod window;
 
 #[cfg(feature = "iced")]

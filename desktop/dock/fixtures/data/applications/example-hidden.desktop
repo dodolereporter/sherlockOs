@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Hidden Terminal
+Exec=hidden-terminal
+NoDisplay=true
+Categories=System;TerminalEmulator;
