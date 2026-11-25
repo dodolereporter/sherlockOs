@@ -13,7 +13,7 @@ mod tests {
         rc::Rc,
         sync::mpsc,
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use compositor::State;
@@ -51,6 +51,10 @@ mod tests {
     // Super.
     const KEY_SUPER: u32 = 133;
     const KEY_DOWN: u32 = 116;
+    // Time given to each step of the test. XWayland startup gets more: it starts a whole X
+    // server, which took 9.9 s on a loaded machine.
+    const STEP_BUDGET: Duration = Duration::from_secs(10);
+    const XWAYLAND_STARTUP_BUDGET: Duration = Duration::from_secs(30);
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())
@@ -225,7 +229,12 @@ mod tests {
 
     impl Harness {
         fn run_until(&mut self, what: &str, done: impl Fn(&State) -> bool) {
-            for _ in 0..2000 {
+            self.run_within(STEP_BUDGET, what, done);
+        }
+
+        fn run_within(&mut self, budget: Duration, what: &str, done: impl Fn(&State) -> bool) {
+            let deadline = Instant::now() + budget;
+            while Instant::now() < deadline {
                 self.event_loop
                     .dispatch(Some(Duration::from_millis(5)), &mut self.state)
                     .unwrap();
@@ -316,7 +325,9 @@ mod tests {
             state,
             time: 0,
         };
-        h.run_until("XWayland startup", |_| started.get().is_some());
+        h.run_within(XWAYLAND_STARTUP_BUDGET, "XWayland startup", |_| {
+            started.get().is_some()
+        });
         let display = started.get().flatten().expect("XWayland did not start");
         assert_eq!(h.state.x_display, Some(display));
         let socket = format!("/tmp/.X11-unix/X{display}");
