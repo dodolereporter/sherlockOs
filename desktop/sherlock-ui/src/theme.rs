@@ -267,6 +267,185 @@ pub fn desktop(_: &Theme) -> container::Style {
     }
 }
 
+/// Entrée de menu qui détruit ou jette : texte saumon.
+pub fn menu_item_danger(theme: &Theme, status: button::Status) -> button::Style {
+    match status {
+        button::Status::Disabled => menu_item(theme, status),
+        _ => button::Style {
+            text_color: color::SALMON.into(),
+            ..menu_item(theme, status)
+        },
+    }
+}
+
+/// Entrée d'une navigation : verte quand elle est active, voilée au survol sinon.
+pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| match (active, status) {
+        (true, button::Status::Disabled) | (false, _) => ghost(
+            status,
+            color::TEXT_SECONDARY,
+            metrics::NAV_ITEM_RADIUS,
+            color::HOVER,
+        ),
+        (true, _) => button_style(
+            Some(color::ACTIVE_ENTRY),
+            color::TEXT_PRIMARY,
+            border::rounded(metrics::NAV_ITEM_RADIUS),
+        ),
+    }
+}
+
+/// Bouton de fenêtre (réduire, agrandir, fermer), dans sa pastille.
+pub fn window_button(_: &Theme, status: button::Status) -> button::Style {
+    ghost(
+        status,
+        color::TEXT_SECONDARY,
+        metrics::WINDOW_BUTTON_RADIUS,
+        color::HOVER,
+    )
+}
+
+/// Segment du fil d'Ariane. Le dossier courant est en texte principal.
+pub fn crumb(current: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    let rest = if current {
+        color::TEXT_PRIMARY
+    } else {
+        color::TEXT_SECONDARY
+    };
+    move |_, status| ghost(status, rest, metrics::CRUMB_RADIUS, color::HOVER)
+}
+
+/// En-tête de colonne cliquable : gris tertiaire, plus clair au survol.
+pub fn column_header(_: &Theme, status: button::Status) -> button::Style {
+    let text = match status {
+        button::Status::Active | button::Status::Disabled => color::TEXT_TERTIARY,
+        _ => color::TEXT_PRIMARY,
+    };
+    button_style(None, text, border::rounded(0.0))
+}
+
+/// Ton d'une étiquette d'état.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// Ambre : à surveiller, comme un fichier modifié.
+    Warning,
+    /// Vert : nouveau, réussi.
+    Success,
+    /// Gris : sans conséquence, comme un fichier ignoré.
+    Neutral,
+}
+
+impl Tone {
+    /// Texte et fond de l'étiquette. Sur une ligne sélectionnée, le voile du ton tomberait
+    /// sous 4,5 de contraste : l'étiquette se pose alors sur le fond le plus sombre.
+    pub fn colors(self, selected: bool) -> (Color, Color) {
+        let (text, soft) = match self {
+            Self::Warning => (color::AMBER, color::AMBER_SOFT),
+            Self::Success => (color::ACCENT, color::ACCENT_SOFT),
+            Self::Neutral => (color::TEXT_TERTIARY, color::NEUTRAL_SOFT),
+        };
+        let fill = if selected {
+            soft.over(color::DEEPEST)
+        } else {
+            soft
+        };
+        (text, fill)
+    }
+}
+
+/// Étiquette d'état, comme l'état git d'un fichier, sur une ligne sélectionnée ou non.
+pub fn badge(tone: Tone, selected: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| {
+        let (text, fill) = tone.colors(selected);
+        container::Style {
+            text_color: Some(text.into()),
+            background: background(fill),
+            border: border::rounded(metrics::BADGE_RADIUS),
+            ..container::Style::default()
+        }
+    }
+}
+
+/// Étiquette verte sans fond, comme la branche git.
+pub fn chip(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(color::ACCENT.into()),
+        border: outline(
+            metrics::BORDER_WIDTH,
+            color::ACCENT_BORDER,
+            metrics::CHIP_RADIUS,
+        ),
+        ..container::Style::default()
+    }
+}
+
+/// Ligne d'une liste, bleue quand elle est sélectionnée.
+pub fn list_row(selected: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        text_color: Some(color::TEXT_PRIMARY.into()),
+        background: selected.then_some(color::SELECTED_ROW).and_then(background),
+        border: border::rounded(metrics::LIST_ROW_RADIUS),
+        ..container::Style::default()
+    }
+}
+
+fn plain(fill: Color, radius: f32) -> container::Style {
+    container::Style {
+        text_color: Some(color::TEXT_PRIMARY.into()),
+        background: background(fill),
+        border: border::rounded(radius),
+        ..container::Style::default()
+    }
+}
+
+/// Corps d'une fenêtre opaque.
+pub fn window(_: &Theme) -> container::Style {
+    plain(color::WINDOW, 0.0)
+}
+
+/// Barre de titre d'une fenêtre.
+pub fn title_bar(_: &Theme) -> container::Style {
+    plain(color::TITLE_BAR, 0.0)
+}
+
+/// Panneau latéral : navigation à gauche, aperçu à droite.
+pub fn sidebar(_: &Theme) -> container::Style {
+    plain(color::SIDEBAR, 0.0)
+}
+
+/// Pastille de l'application, dans sa barre de titre.
+pub fn app_badge(_: &Theme) -> container::Style {
+    plain(color::BLUE_DARK, metrics::APP_BADGE_RADIUS)
+}
+
+/// Pastille des boutons de fenêtre.
+pub fn window_controls(_: &Theme) -> container::Style {
+    plain(color::CONTROLS, metrics::WINDOW_CONTROLS_RADIUS)
+}
+
+/// Zone en retrait d'une barre d'outils, comme le fil d'Ariane.
+pub fn inset(_: &Theme) -> container::Style {
+    plain(color::INSET, metrics::BREADCRUMB_RADIUS)
+}
+
+/// Vignette d'un fichier dans l'aperçu : bleu vif, icône sombre.
+pub fn preview_tile(_: &Theme) -> container::Style {
+    plain(color::BLUE_BRIGHT, metrics::PREVIEW_TILE_RADIUS)
+}
+
+/// Extrait de code : fond le plus sombre.
+pub fn code_block(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(color::TEXT_CODE.into()),
+        ..plain(color::DEEPEST, metrics::CODE_BLOCK_RADIUS)
+    }
+}
+
+/// Voile derrière une question qui attend une réponse.
+pub fn scrim(_: &Theme) -> container::Style {
+    plain(color::SCRIM, 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,9 +522,10 @@ mod tests {
             ("bouton secondaire", secondary),
             ("bouton d'icône", icon_button),
         ];
-        let entries: [(&str, Style); 2] = [
+        let entries: [(&str, Style); 3] = [
             ("entrée de menu", menu_item),
             ("entrée de menu ouverte", menu_item_open),
+            ("entrée de menu destructive", menu_item_danger),
         ];
         for on in menus() {
             for (name, style) in entries {
@@ -425,6 +605,55 @@ mod tests {
                 let what = format!("{name} sur entrée active");
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
             }
+        }
+        // Planche Fichiers : navigation, boutons de fenêtre, fil d'Ariane, en-têtes, étiquettes
+        // d'état posées sur une ligne sélectionnée ou non, extrait de code.
+        for on in surfaces_where(|n| ["fenêtre", "barre de titre", "panneau latéral"].contains(&n))
+        {
+            let styles: [(&str, Box<dyn Fn(&Theme, button::Status) -> button::Style>); 6] = [
+                ("entrée de navigation", Box::new(nav_item(false))),
+                ("entrée de navigation active", Box::new(nav_item(true))),
+                ("bouton de fenêtre", Box::new(window_button)),
+                ("segment du fil d'Ariane", Box::new(crumb(false))),
+                ("dossier courant du fil d'Ariane", Box::new(crumb(true))),
+                ("en-tête de colonne", Box::new(column_header)),
+            ];
+            let inset = (format!("retrait sur {}", on.0), color::INSET.over(on.1));
+            let pill = (format!("pastille sur {}", on.0), color::CONTROLS.over(on.1));
+            for (name, style) in &styles {
+                for status in STATUSES {
+                    let s = style(&theme, status);
+                    let what = format!("{name} ({status:?})");
+                    for below in [&on, &inset, &pill] {
+                        check(&mut failures, &what, s.text_color.into(), fill(&s), below);
+                    }
+                }
+            }
+            let row = (
+                format!("ligne sélectionnée sur {}", on.0),
+                color::SELECTED_ROW.over(on.1),
+            );
+            for tone in [Tone::Warning, Tone::Success, Tone::Neutral] {
+                for (selected, below) in [(false, &on), (true, &row)] {
+                    let (text, fill) = tone.colors(selected);
+                    let what = format!("étiquette {tone:?}");
+                    check(&mut failures, &what, text, Some(fill), below);
+                }
+            }
+            check(&mut failures, "branche git", color::ACCENT, None, &inset);
+        }
+        let code = (String::from("extrait de code"), color::DEEPEST);
+        check(
+            &mut failures,
+            "texte du code",
+            color::TEXT_CODE,
+            None,
+            &code,
+        );
+        let tile = (String::from("vignette"), color::BLUE_BRIGHT);
+        let tile_icon = color::DEEPEST.contrast(tile.1);
+        if tile_icon < 3.0 {
+            failures.push(format!("icône de la vignette : {tile_icon:.2}"));
         }
         // Textes sur les fonds opaques qui leur sont réservés.
         let cream = (String::from("crème"), color::CREAM);

@@ -32,6 +32,11 @@ pub const TITLE_LARGE_SIZE: f32 = 44.0;
 /// Code et terminal, de 12 à 12,5, sur un interligne de 20.
 pub const CODE_SIZE: f32 = 12.5;
 pub const CODE_LINE_HEIGHT: f32 = 20.0;
+/// Code dans un panneau étroit : aperçu de fichier, étiquette de branche.
+pub const CODE_SMALL_SIZE: f32 = 12.0;
+/// En-têtes de colonnes d'une liste et étiquettes d'état, en majuscules pour les premiers.
+pub const COLUMN_HEADER_SIZE: f32 = 11.5;
+pub const BADGE_SIZE: f32 = 11.5;
 /// Étiquette de section, de 11 à 11,5, en majuscules.
 pub const SECTION_LABEL_SIZE: f32 = 11.0;
 /// Interlettrage de l'étiquette de section, en part de la taille. iced 0.14 ne sait pas
@@ -76,6 +81,7 @@ mod fonts {
 const _: () = {
     assert!(TITLE_SMALL_SIZE >= 17.0 && TITLE_LARGE_SIZE <= 44.0);
     assert!(CODE_SIZE >= 12.0 && CODE_SIZE <= 12.5);
+    assert!(CODE_SMALL_SIZE >= 12.0 && CODE_SMALL_SIZE <= CODE_SIZE);
     assert!(SECTION_LABEL_SIZE >= 11.0 && SECTION_LABEL_SIZE <= 11.5);
     assert!(SYSTEM_SIZE >= 14.0 && SYSTEM_SIZE <= 15.0);
 };

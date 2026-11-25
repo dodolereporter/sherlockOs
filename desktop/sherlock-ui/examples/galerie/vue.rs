@@ -239,7 +239,7 @@ fn states<'a>() -> Element<'a, Message> {
         .fold(row![space().width(NAME)], |r, (name, _)| {
             r.push(container(ui::section_label(name)).width(CELL))
         });
-    let lines: [(&str, Cell<'a>); 8] = [
+    let lines: [(&str, Cell<'a>); 11] = [
         ("Bouton principal", |look| {
             control(ui::primary_button("Relancer", enabled(look)), look)
         }),
@@ -259,6 +259,30 @@ fn states<'a>() -> Element<'a, Message> {
             // Une entrée de menu ne vit que dans un menu : elle s'y montre.
             let item = ui::menu_item("Réglages", Trailing::Shortcut("Super+,"), enabled(look));
             ui::menu([control(item, look)], CELL - 2.0 * metrics::GAP_INLINE).into()
+        }),
+        ("Entrée destructive", |look| {
+            let item = ui::menu_item(
+                "Mettre à la corbeille",
+                Trailing::Shortcut("Suppr"),
+                enabled(look),
+            );
+            ui::menu(
+                [control(ui::danger(item), look)],
+                CELL - 2.0 * metrics::GAP_INLINE,
+            )
+            .into()
+        }),
+        ("Navigation", |look| {
+            control(
+                ui::nav_item(Icon::Folder, "Documents", None, false, enabled(look)),
+                look,
+            )
+        }),
+        ("Navigation active", |look| {
+            control(
+                ui::nav_item(Icon::Home, "Accueil", None, true, enabled(look)),
+                look,
+            )
         }),
         ("Champ vide", |look| field(look, "")),
         ("Champ rempli", |look| field(look, "Wi-Fi")),

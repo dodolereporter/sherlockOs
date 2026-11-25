@@ -349,3 +349,195 @@ pub fn glass_panel<'a, Message: 'a>(
         .padding(metrics::PANEL_PADDING)
         .style(theme::glass)
 }
+
+/// Marque une entrée de menu comme destructive : texte saumon (planche Fichiers).
+pub fn danger<'a, Message: Clone + 'a>(mut item: Control<'a, Message>) -> Control<'a, Message> {
+    item.style = Box::new(theme::menu_item_danger);
+    item
+}
+
+/// Entrée d'une navigation latérale : icône, libellé, compteur éventuel à droite.
+pub fn nav_item<'a, Message: Clone + 'a>(
+    glyph: Icon,
+    label: &'a str,
+    count: Option<String>,
+    active: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let tint = if active {
+        color::TEXT_PRIMARY
+    } else {
+        color::TEXT_SECONDARY
+    };
+    let font = if active {
+        typography::UI_SEMIBOLD
+    } else {
+        typography::UI
+    };
+    let mut line = row![
+        icon(glyph, metrics::ICON_SIZE, tint),
+        body(label).font(font)
+    ]
+    .spacing(metrics::GAP_ICON)
+    .align_y(Alignment::Center)
+    .height(Length::Fill);
+    if let Some(count) = count {
+        line = line
+            .push(space::horizontal())
+            .push(body(count).color(color::TEXT_TERTIARY));
+    }
+    let mut control = Control::new(
+        line,
+        theme::nav_item(active),
+        on_press,
+        metrics::NAV_ITEM_RADIUS,
+    );
+    control.button = control
+        .button
+        .width(Length::Fill)
+        .height(metrics::NAV_ITEM_HEIGHT)
+        .padding([0.0, metrics::NAV_ITEM_PADDING]);
+    control
+}
+
+/// Étiquette de section d'une navigation latérale, avec ses marges.
+pub fn nav_section<'a, Message: 'a>(label: &str) -> Element<'a, Message> {
+    let (top, side, bottom) = metrics::NAV_SECTION_PADDING;
+    container(section_label(label))
+        .padding(Padding {
+            top,
+            right: side,
+            bottom,
+            left: side,
+        })
+        .into()
+}
+
+/// Étiquette d'état, comme l'état git d'un fichier. `selected` : posée sur une ligne
+/// sélectionnée.
+pub fn badge<'a, Message: 'a>(
+    label: &'a str,
+    tone: theme::Tone,
+    selected: bool,
+) -> Element<'a, Message> {
+    let (vertical, horizontal) = metrics::BADGE_PADDING;
+    container(
+        text(label)
+            .font(typography::UI)
+            .size(typography::BADGE_SIZE),
+    )
+    .padding([vertical, horizontal])
+    .style(theme::badge(tone, selected))
+    .into()
+}
+
+/// Étiquette verte en police de code, comme la branche git.
+pub fn chip<'a, Message: 'a>(label: String) -> Element<'a, Message> {
+    let (vertical, horizontal) = metrics::CHIP_PADDING;
+    container(
+        text(label)
+            .font(typography::CODE)
+            .size(typography::CODE_SMALL_SIZE),
+    )
+    .padding([vertical, horizontal])
+    .style(theme::chip)
+    .into()
+}
+
+/// Les trois boutons d'une fenêtre dans leur pastille : réduire, agrandir, fermer.
+pub fn window_controls<'a, Message: Clone + 'a>(
+    labels: [&'a str; 3],
+    on_press: [Message; 3],
+) -> Element<'a, Message> {
+    let glyphs = [Icon::Minimize, Icon::Maximize, Icon::Close];
+    let (width, height) = metrics::WINDOW_BUTTON;
+    let buttons = glyphs
+        .into_iter()
+        .zip(labels)
+        .zip(on_press)
+        .map(|((glyph, label), message)| {
+            let content = container(icon(glyph, metrics::ICON_SIZE_SMALL, color::TEXT_SECONDARY))
+                .center(Length::Fill);
+            let mut control = Control::new(
+                content,
+                theme::window_button,
+                Some(message),
+                metrics::WINDOW_BUTTON_RADIUS,
+            );
+            control.button = control.button.width(width).height(height).padding(0);
+            control.label = Some(label);
+            control.into()
+        });
+    container(iced::widget::Row::with_children(buttons).spacing(metrics::GAP_TIGHT))
+        .padding(metrics::WINDOW_CONTROLS_PADDING)
+        .style(theme::window_controls)
+        .into()
+}
+
+/// Segment cliquable du fil d'Ariane. Le dossier courant est en demi-gras.
+pub fn crumb<'a, Message: Clone + 'a>(
+    label: String,
+    current: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let font = if current {
+        typography::UI_SEMIBOLD
+    } else {
+        typography::UI
+    };
+    let mut control = Control::new(
+        body(label).font(font),
+        theme::crumb(current),
+        on_press,
+        metrics::CRUMB_RADIUS,
+    );
+    let (vertical, horizontal) = metrics::CRUMB_PADDING;
+    control.button = control.button.padding([vertical, horizontal]);
+    control
+}
+
+/// En-tête de colonne d'une liste, cliquable pour trier. `sorted` donne le sens du tri quand
+/// la liste est triée sur cette colonne : vrai pour croissant.
+pub fn column_header<'a, Message: Clone + 'a>(
+    label: &str,
+    sorted: Option<bool>,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let label = text(label.to_uppercase())
+        .font(typography::UI_SEMIBOLD)
+        .size(typography::COLUMN_HEADER_SIZE);
+    let mut line = row![label]
+        .spacing(metrics::GAP_TIGHT)
+        .align_y(Alignment::Center);
+    if let Some(ascending) = sorted {
+        let glyph = if ascending {
+            Icon::SortUp
+        } else {
+            Icon::SortDown
+        };
+        line = line.push(icon(glyph, metrics::ICON_SIZE_TINY, color::TEXT_TERTIARY));
+    }
+    let mut control = Control::new(line, theme::column_header, on_press, 0.0);
+    control.button = control.button.padding(0);
+    control
+}
+
+/// Extrait de code ou début d'un fichier texte, en JetBrains Mono.
+pub fn code_block<'a, Message: 'a>(lines: &'a [String]) -> Container<'a, Message> {
+    let lines = lines.iter().map(|line| {
+        text(line.as_str())
+            .font(typography::CODE)
+            .size(typography::CODE_SMALL_SIZE)
+            .line_height(text::LineHeight::Absolute(
+                typography::CODE_LINE_HEIGHT.into(),
+            ))
+            .wrapping(text::Wrapping::None)
+            .into()
+    });
+    let (vertical, horizontal) = metrics::CODE_BLOCK_PADDING;
+    container(iced::widget::Column::with_children(lines))
+        .padding([vertical, horizontal])
+        .width(Length::Fill)
+        .clip(true)
+        .style(theme::code_block)
+}

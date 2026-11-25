@@ -21,21 +21,49 @@ pub enum Icon {
     Network,
     /// Son activé.
     Sound,
+    /// Revenir en arrière : dossier précédent.
+    Back,
+    /// Tri croissant et décroissant.
+    SortUp,
+    SortDown,
+    /// Réduire et agrandir une fenêtre.
+    Minimize,
+    Maximize,
+    /// Emplacements et types de fichiers (planche Fichiers).
+    Home,
+    Desktop,
+    Document,
+    Download,
+    Folder,
+    Image,
+    Trash,
 }
 
 impl Icon {
     /// Toutes les icônes, pour les tests et la galerie.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 18] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
         Self::Close,
         Self::Network,
         Self::Sound,
+        Self::Back,
+        Self::SortUp,
+        Self::SortDown,
+        Self::Minimize,
+        Self::Maximize,
+        Self::Home,
+        Self::Desktop,
+        Self::Document,
+        Self::Download,
+        Self::Folder,
+        Self::Image,
+        Self::Trash,
     ];
 
-    /// Tracé sur la grille de 24. Ceux du réseau, du son, de la recherche, du chevron et de la
-    /// coche sont ceux des planches.
+    /// Tracé sur la grille de 24. Tous sont ceux des planches, sauf la croix et les deux
+    /// flèches de tri.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -48,6 +76,22 @@ impl Icon {
             Self::Sound => {
                 "M4 10v4h3.5L12 18V6L7.5 10zM15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"
             }
+            Self::Back => "M15 6l-6 6 6 6",
+            Self::SortUp => "M6 15l6-6 6 6",
+            Self::SortDown => "M6 9l6 6 6-6",
+            Self::Minimize => "M6 12h12",
+            Self::Maximize => "M7 7h10v10H7z",
+            Self::Home => "M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z",
+            Self::Desktop => "M3 5h18v11H3zM9 20h6M12 16v4",
+            Self::Document => {
+                "M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v5h5"
+            }
+            Self::Download => "M12 4v11M7 11l5 5 5-5M5 20h14",
+            Self::Folder => {
+                "M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 9.7v7.8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"
+            }
+            Self::Image => "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4",
+            Self::Trash => "M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13",
         }
     }
 

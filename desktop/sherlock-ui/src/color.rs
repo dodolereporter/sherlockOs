@@ -151,6 +151,18 @@ pub const PRESSED: Color = Color::rgba(255, 255, 255, 0.12);
 /// interrupteurs allumés : la piste éteinte reprend la bordure d'un bouton secondaire.
 pub const TOGGLE_OFF: Color = Color::rgba(255, 255, 255, 0.18);
 pub const TOGGLE_OFF_HOVER: Color = Color::rgba(255, 255, 255, 0.26);
+/// Zone en retrait d'une barre d'outils : fil d'Ariane (planche Fichiers).
+pub const INSET: Color = Color::rgba(255, 255, 255, 0.05);
+/// Pastille des boutons de fenêtre.
+pub const CONTROLS: Color = Color::rgba(255, 255, 255, 0.06);
+/// Voile posé sur une fenêtre derrière une question qui attend une réponse.
+pub const SCRIM: Color = Color::rgba(3, 8, 18, 0.45);
+/// Fond d'une étiquette d'état : avertissement, réussite, neutre (état git de la planche
+/// Fichiers), et bordure d'une étiquette verte sans fond (branche git).
+pub const AMBER_SOFT: Color = Color::rgba(240, 196, 138, 0.18);
+pub const ACCENT_SOFT: Color = Color::rgba(133, 197, 149, 0.18);
+pub const NEUTRAL_SOFT: Color = Color::rgba(255, 255, 255, 0.08);
+pub const ACCENT_BORDER: Color = Color::rgba(133, 197, 149, 0.5);
 /// Fond d'un élément désactivé.
 pub const DISABLED: Color = Color::rgba(255, 255, 255, 0.05);
 /// Ombre des fenêtres et des panneaux.
@@ -166,6 +178,8 @@ pub const TEXT_PRIMARY: Color = Color::rgb(0xEE, 0xF2, 0xF7);
 pub const TEXT_SECONDARY: Color = Color::rgb(0xC5, 0xCE, 0xDB);
 /// Étiquettes, raccourcis, texte d'un élément désactivé.
 pub const TEXT_TERTIARY: Color = Color::rgb(0xA9, 0xB4, 0xC6);
+/// Texte d'un extrait de code ou d'un aperçu de fichier (planche Fichiers).
+pub const TEXT_CODE: Color = Color::rgb(0xDC, 0xE4, 0xEE);
 /// Numéros de ligne.
 pub const TEXT_LINE_NUMBER: Color = Color::rgb(0x84, 0x92, 0xA8);
 /// Texte posé sur le vert.
