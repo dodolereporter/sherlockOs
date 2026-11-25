@@ -31,7 +31,7 @@ use smithay::{
         calloop::{EventLoop, Interest, Mode as LoopMode, PostAction, generic::Generic},
         wayland_server::{Client, DisplayHandle, ListeningSocket},
     },
-    utils::{IsAlive, Logical, Rectangle},
+    utils::{IsAlive, Logical, Point, Rectangle},
     wayland::seat::WaylandFocus,
 };
 
@@ -52,8 +52,6 @@ pub(crate) struct Shell {
     listener: Option<smithay::reexports::calloop::RegistrationToken>,
     /// The workspaces and the active one.
     workspace_model: workspaces::Workspaces,
-    /// Workspace activated by a client of `ext-workspace-v1`, applied at its commit.
-    pending_workspace: Option<String>,
 }
 
 /// Workspace of a window, by id: the active one when the window is first seen.
@@ -174,6 +172,24 @@ impl State {
         }
     }
 
+    /// Sets the number of workspaces (at least one), numbered from 1. The windows of a removed
+    /// workspace go to the active one. Lot D-18w calls it with the setting; nothing does yet.
+    pub fn set_workspace_count(&mut self, count: usize) {
+        self.shell.workspace_model.set_count(count);
+        let minimized = self.shell.minimized.iter().map(|m| &m.window);
+        let windows: Vec<_> = self.space.elements().chain(minimized).cloned().collect();
+        let active = self.shell.workspace_model.active().to_owned();
+        for window in &windows {
+            if !self
+                .shell
+                .workspace_model
+                .contains(&self.workspace_of(window))
+            {
+                *self.window_workspace(window).0.borrow_mut() = active.clone();
+            }
+        }
+    }
+
     /// Id of the workspace `window` belongs to.
     pub fn workspace_of(&self, window: &Window) -> String {
         self.window_workspace(window).0.borrow().clone()
@@ -244,7 +260,14 @@ impl State {
             {
                 tracing::warn!("showing the X11 window: {err}");
             }
-            self.move_window(window, minimized.geometry.loc, false);
+            // Its screen went away meanwhile: centered on the pointer's, not off every screen.
+            let mut loc = minimized.geometry.loc;
+            if !self.space.outputs().any(|o| o.name() == minimized.output)
+                && let Some(area) = self.output_area()
+            {
+                loc = crate::layout::centered(area, minimized.geometry.size);
+            }
+            self.move_window(window, loc, false);
         }
         if self.space.elements().any(|w| w == window) {
             self.focus(Some(window.clone()));
@@ -273,16 +296,28 @@ impl State {
     /// Tells the clients of the shell what changed since the last call. Called after each loop
     /// iteration, before the replies are flushed.
     pub(crate) fn refresh_shell(&mut self) {
-        // A window destroyed, or withdrawn by its X11 client, while minimized is forgotten.
-        self.shell
-            .minimized
-            .retain(|m| m.window.alive() && m.window.x11_surface().is_none_or(|s| s.is_mapped()));
+        // A window destroyed, or withdrawn by its X11 client, while minimized is forgotten. A
+        // withdrawn X11 window loses `_NET_WM_STATE_HIDDEN`: smithay keeps it for the life of the
+        // surface, and the window mapped again would believe it is still minimized.
+        self.shell.minimized.retain(|m| {
+            let kept = m.window.alive() && m.window.x11_surface().is_none_or(|s| s.is_mapped());
+            if let (false, Some(surface)) = (kept, m.window.x11_surface())
+                && surface.alive()
+                && let Err(err) = surface.set_suspended(false)
+            {
+                tracing::warn!("showing the withdrawn X11 window: {err}");
+            }
+            kept
+        });
         self.shell.managers.retain(|m| m.alive());
         self.shell.workspaces.retain(|m| m.alive());
+        let icons = std::mem::take(&mut self.shell.icons);
+        self.shell.icons = icons
+            .into_iter()
+            .filter(|i| self.window_by_id(i.0).is_some())
+            .collect();
         if !self.shell.managers.is_empty() {
             let (windows, outputs) = self.snapshot();
-            let ids: Vec<u32> = windows.iter().map(|w| w.0).collect();
-            self.shell.icons.retain(|i| ids.contains(&i.0));
             let dh = self.display_handle.clone();
             for manager in &mut self.shell.managers {
                 manager.update(&dh, &windows, &outputs);
@@ -297,6 +332,14 @@ impl State {
         }
     }
 
+    /// Name and origin of a screen. Without any screen, an empty name and the origin of the
+    /// space: the window stays listed rather than being announced closed.
+    fn screen(&self, output: Option<smithay::output::Output>) -> (String, Point<i32, Logical>) {
+        let origin = output.as_ref().and_then(|o| self.space.output_geometry(o));
+        let name = output.map(|o| o.name()).unwrap_or_default();
+        (name, origin.map(|g| g.loc).unwrap_or_default())
+    }
+
     /// Every window the shell sees, and the state of every screen.
     fn snapshot(&self) -> (toplevels::Windows, toplevels::Outputs) {
         use toplevels::{OutputState, ToplevelState};
@@ -305,20 +348,19 @@ impl State {
             .elements()
             .filter(|w| !is_override_redirect(w) && window_data(w).shown.get())
             .filter_map(|w| {
-                let output = self.window_output(w)?;
-                let screen = self.space.output_geometry(&output)?;
+                let (name, screen) = self.screen(self.window_output(w));
                 let mut geometry = self.space.element_geometry(w)?;
-                geometry.loc -= screen.loc;
-                Some((w, output.name(), geometry, false))
+                geometry.loc -= screen;
+                Some((w, name, geometry, false))
             });
         // A minimized window whose screen went away is given the first one.
-        let minimized = self.shell.minimized.iter().filter_map(|m| {
-            let mut outputs = self.space.outputs();
+        let minimized = self.shell.minimized.iter().map(|m| {
             let output = self.space.outputs().find(|o| o.name() == m.output);
-            let output = output.or_else(|| outputs.next())?;
+            let output = output.or_else(|| self.space.outputs().next()).cloned();
+            let (name, screen) = self.screen(output);
             let mut geometry = m.geometry;
-            geometry.loc -= self.space.output_geometry(output)?.loc;
-            Some((&m.window, output.name(), geometry, true))
+            geometry.loc -= screen;
+            (&m.window, name, geometry, true)
         });
         let windows: Vec<_> = shown
             .chain(minimized)

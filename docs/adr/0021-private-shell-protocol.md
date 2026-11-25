@@ -94,7 +94,7 @@ socket from `WAYLAND_DISPLAY` (`shell_protocol::socket_from_env`).
 ## Consequences
 
 - Lot D-18w fills `shell::workspaces::Workspaces` and the workspace of each window
-  (`State::activate_workspace`, `State::move_to_workspace`), and hides the windows of the
+  (`State::set_workspace_count`, `State::activate_workspace`, `State::move_to_workspace`), and hides the windows of the
   other workspaces: the protocols follow without change. Only the windows of the active
   workspace count in the per screen state.
 - The bar (D-18b) and the dock (D-18c) open one more connection, to the shell socket, for

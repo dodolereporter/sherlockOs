@@ -90,7 +90,8 @@
     </description>
 
     <enum name="error">
-      <entry name="invalid_rectangle" value="0" summary="width or height is negative"/>
+      <entry name="invalid_rectangle" value="0"
+             summary="width or height is negative, or x + width or y + height overflows a 32-bit signed integer"/>
     </enum>
 
     <request name="destroy" type="destructor">
@@ -132,7 +133,9 @@
       <description summary="where the window goes when minimized">
         The rectangle of the dock icon that stands for this window, kept by the compositor for
         the minimize animation. A width or height of 0 removes it. It replaces the previous
-        one, and goes with the window, not with the client.
+        one, and goes with the window, not with the client. A negative width or height, or a
+        rectangle whose x + width or y + height does not fit in a 32-bit signed integer, is
+        the invalid_rectangle error.
       </description>
       <arg name="output" type="string" summary="wl_output name of the screen"/>
       <arg name="x" type="int"/>

@@ -249,7 +249,8 @@ act on the windows, through two protocols that only the shell programs reach (AD
 
 Next to its Wayland socket, the compositor opens a second one, the same name followed by
 `-shell` (`$XDG_RUNTIME_DIR/wayland-1-shell` for `wayland-1`; next to the given path with
-`listen_at`). Clients accepted there are marked as shell clients (`ClientState::shell`). Both
+`listen_at`, the suffix before an extension: `wayland-shell.sock` for `wayland.sock`, so that
+the two locks, named by replacing the extension, never collide). Clients accepted there are marked as shell clients (`ClientState::shell`). Both
 sockets offer every global; the globals of `sherlock_shell_v1` and `ext-workspace-v1` are only
 visible to shell clients (`GlobalDispatch::can_view`), and a client of the ordinary socket that
 binds them by name gets `wl_display.error` `invalid_object` from wayland-server, which
@@ -272,13 +273,15 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 | `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
-  then every screen, then `done`. A roundtrip after the bind brings it.
+  then every screen, then `done`, sent even without window nor screen. A roundtrip after the
+  bind brings it.
 - **Windows.** Wayland and X11 windows that show content, X11 menus aside, and the minimized
   ones. `id` is stable for the window's life, the same for every client, never given again
   while the compositor runs. `app_id` is the xdg-shell one, or the X11 class. `geometry` is
   the place and size without the shadow, relative to the screen of `output` (the one under the
   window's center), the target of an animation rather than its steps. A minimized window
-  keeps the screen and the geometry it had.
+  keeps the screen and the geometry it had. Without any screen, a window stays listed with an
+  empty screen name and its place in the space.
 - **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
@@ -292,25 +295,34 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   screens, compares them with what each bound manager was told, and sends the differences
   (only the properties that changed, `closed` for a window gone), then `done`. Nothing else in
   the compositor calls it; with no shell client bound, it reads nothing.
-- **Requests.** `activate` brings a minimized window back to its place, raises it and gives it
-  the keyboard (an anchored surface with an exclusive keyboard keeps it). `minimize` takes the
+- **Requests.** `activate` brings a minimized window back to its place (centered on the
+  pointer's screen if its own went away), raises it and gives it the keyboard (an anchored surface with an exclusive keyboard keeps it). `minimize` takes the
   window out of the space: it is no longer drawn nor hit, and if it was active, the window on
   top becomes active; nothing happens during a gesture. An X11 window gets
-  `_NET_WM_STATE_HIDDEN` while minimized. `close` sends `xdg_toplevel.close`, or
+  `_NET_WM_STATE_HIDDEN` while minimized, and loses it when it comes back, or when its
+  application withdraws it meanwhile (smithay keeps the state for the life of the surface: the
+  window mapped again would believe it is still minimized). `close` sends `xdg_toplevel.close`, or
   `WM_DELETE_WINDOW`. `set_rectangle` keeps the rectangle of the dock icon of a window,
   replaced by the next one and removed with a width or height of 0, for the minimize
-  animation of lot D-19 (`State::icon_rectangle`); a negative size is the protocol error
+  animation of lot D-19 (`State::icon_rectangle`), and forgotten with its window; a negative
+  size, or `x + width` or `y + height` past the 32-bit range, is the protocol error
   `invalid_rectangle`. Requests on a window that is gone do nothing.
 - **Minimize requested by the application.** Not honored yet (`xdg_toplevel.set_minimized`,
   `_NET_WM_STATE_HIDDEN`): until the dock can bring a window back (lot D-18c), a minimize
   button would lose the window.
+- **`WM_STATE` of a minimized X11 window.** It stays `NormalState`, where the ICCCM expects
+  `IconicState`. smithay 0.7 only sets `IconicState` through `X11Surface::set_mapped(false)`,
+  which also unmaps the frame: XWayland then drops the window's surface, which the compositor
+  reads as the application withdrawing it. To take up with D-18c, if X11 applications go on
+  drawing while minimized.
 
 ### Workspaces
 
 Workspaces are shared by every screen (ADR 0021): one active workspace for all of them. The
 compositor keeps them in `shell::workspaces::Workspaces` (list of id and name, active one) and
-each window's in its user data, through `State::workspaces`, `State::activate_workspace`,
-`State::workspace_of` and `State::move_to_workspace`. A window belongs to the workspace that
+each window's in its user data, through `State::workspaces`, `State::set_workspace_count`
+(numbered from 1, at least one; the windows of a removed workspace go to the active one),
+`State::activate_workspace`, `State::workspace_of` and `State::move_to_workspace`. A window belongs to the workspace that
 was active when the shell first saw it. For now the list holds a single workspace, `1`, so
 switching and moving change nothing; lot D-18w fills the model, hides the windows of the
 other workspaces and animates the switch, and the protocols follow without change.
@@ -318,9 +330,32 @@ other workspaces and animates the switch, and the protocols follow without chang
 Through `ext-workspace-v1`: one group, with `output_enter` for each of the client's
 `wl_output` objects of every screen (including those bound later, and `output_leave` when a
 screen goes); in it each workspace with its `id`, `name`, `coordinates` (its index), `state`
-(`active`) and the `activate` capability. `activate` is applied at the manager's `commit`, the
-last one winning. After a change of the model, the compositor sends the workspaces added,
+(`active`) and the `activate` capability. `activate` waits for the `commit` of the manager
+that announced that workspace, the last one winning: a client's commit never applies another
+client's requests. After a change of the model, the compositor sends the workspaces added,
 removed or changed, then `done`.
+
+### Follow-ups for D-18w and D-18c
+
+From the review of D-18a:
+
+- **Workspace of a new window.** It is set the first time the shell looks at the window, not
+  when the window is mapped: a window opened while no shell client is bound takes the
+  workspace active when one first looks. D-18w sets it at mapping.
+- **Minimized windows and the screens.** They are out of the space, so `rearrange` does not
+  reach them when the work area or the screens change; `activate` only recenters a window
+  whose screen went away.
+- **Commits of a minimized Wayland window.** They no longer go through `window.on_commit()`
+  nor `toplevel_commit`: a client that unmaps (null buffer) and maps again while minimized
+  does not get its initial configure before `activate`. Rare (toolkits destroy the role), to
+  keep in mind for D-18c.
+- **Cost of `snapshot`.** Without a shell client, nothing is read. With one, each loop
+  iteration (so at the pace of the pointer) allocates the title, `app_id`, screen and
+  workspace of every window and locks two mutexes per window: about O(windows × managers +
+  windows²). A dirty flag, or a comparison without allocation, can come later.
+- **Signals.** After a panic or a SIGTERM, neither socket nor its lock is removed (the `flock`
+  falls with the process, and the next start takes the place back). Stopping the loop on
+  SIGTERM and SIGINT through calloop's signals would clean them.
 
 ### Plugging in the shell
 
@@ -351,16 +386,21 @@ ordinary socket, and a shell program.
 - **Active window and dock.** Two windows; the shell client's own anchored surface (a dock
   with the keyboard on demand) is clicked: the window in front stays active. Minimized, the
   window behind becomes active.
-- **Errors.** A negative rectangle is `invalid_rectangle`, and the compositor goes on.
+- **Errors.** A negative rectangle, and one whose `x + width` or `y + height` overflows, is
+  `invalid_rectangle`, nothing is kept, and the compositor goes on.
+- **Without screen.** The first `done` comes even with no window and no screen.
 - **Screens.** A window moved to a second screen is on `virtual-2`, its geometry relative to
   it.
 - **Workspaces.** One group, which enters the client's `wl_output`, holding the active
   workspace `1` at `[0]`; a new screen joins the same group once its `wl_output` is bound;
   `activate` and `commit` on the active workspace change nothing. A window is on workspace
-  `1`; moving it to an unknown workspace changes nothing.
+  `1`; moving it to an unknown workspace changes nothing. With two workspaces and two shell
+  clients, the first one's `activate` waits for its own `commit`: the second one's commit
+  leaves workspace 1 active, then the first one's makes workspace 2 active for both.
 
-`tests/xwayland.rs` also checks that the real XWayland is not a shell client, and that the
-shell socket goes away with the compositor.
+`tests/xwayland.rs` also checks that the real XWayland is not a shell client, that the shell
+socket goes away with the compositor, and that an X11 window minimized by the shell, then
+withdrawn by its application and mapped again, is no longer hidden (`_NET_WM_STATE_HIDDEN`).
 
 ## Screens and scale
 

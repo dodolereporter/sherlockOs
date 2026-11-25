@@ -445,9 +445,16 @@ mod tests {
     impl Harness {
         /// One screen of 800 × 600, an application client and a shell client.
         fn start() -> Self {
+            Self::start_with(1)
+        }
+
+        /// `outputs` screens of 800 × 600, an application client and a shell client.
+        fn start_with(outputs: usize) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output((800, 600).into(), 1.0);
+            for _ in 0..outputs {
+                state.add_output((800, 600).into(), 1.0);
+            }
             let (server, app) = UnixStream::pair().unwrap();
             state.insert_client(server);
             let (server, shell) = UnixStream::pair().unwrap();
@@ -738,8 +745,9 @@ mod tests {
         });
     }
 
-    #[test]
-    fn a_negative_rectangle_is_a_protocol_error() {
+    /// The shell client sends `set_rectangle` with these values: it must end with
+    /// `invalid_rectangle`, and the compositor goes on.
+    fn refused_rectangle(x: i32, y: i32, width: i32, height: i32) {
         let mut h = Harness::start();
         h.bind_manager();
         h.open_window("Window");
@@ -747,10 +755,11 @@ mod tests {
             !h.shell.client.toplevels.is_empty()
         });
         let id = h.shell.client.toplevels[0].1.id.unwrap();
+        let window = h.only_window();
         h.shell
             .client
             .handle(id)
-            .set_rectangle("virtual-1".into(), 0, 0, -1, 10);
+            .set_rectangle("virtual-1".into(), x, y, width, height);
         for _ in 0..20 {
             h.turn();
         }
@@ -760,9 +769,108 @@ mod tests {
             error.code,
             sherlock_shell_toplevel_v1::Error::InvalidRectangle as u32
         );
+        assert!(
+            h.state.icon_rectangle(&window).is_none(),
+            "the rectangle was kept"
+        );
         // The compositor goes on: the application still has its window.
         h.turn();
         assert_eq!(h.state.space.elements().count(), 1);
+    }
+
+    #[test]
+    fn a_negative_rectangle_is_a_protocol_error() {
+        refused_rectangle(0, 0, -1, 10);
+    }
+
+    #[test]
+    fn a_rectangle_past_the_32_bit_range_is_a_protocol_error() {
+        refused_rectangle(i32::MAX, 0, 1, 10);
+        refused_rectangle(0, i32::MAX - 5, 10, 6);
+    }
+
+    #[test]
+    fn the_first_done_comes_even_without_screen_nor_window() {
+        let mut h = Harness::start_with(0);
+        h.bind_manager();
+        assert!(h.shell.client.toplevels.is_empty() && h.shell.client.outputs.is_empty());
+    }
+
+    #[test]
+    fn a_workspace_activation_waits_for_the_commit_of_its_own_client() {
+        let mut h = Harness::start();
+        h.state.set_workspace_count(2);
+        let first: ExtWorkspaceManagerV1 = h.shell.bind();
+        // A second shell client, with its own manager.
+        let (server, stream) = UnixStream::pair().unwrap();
+        h.state.insert_shell_client(server);
+        let mut other = Side::new(stream);
+        let turn = |h: &mut Harness, other: &mut Side| {
+            other.conn.flush().ok();
+            h.turn();
+            other.read();
+        };
+        for _ in 0..200 {
+            turn(&mut h, &mut other);
+            if h.shell.client.workspaces.len() == 2 && other.sees(WORKSPACES) {
+                break;
+            }
+        }
+        let second: ExtWorkspaceManagerV1 = other.bind();
+        for _ in 0..20 {
+            turn(&mut h, &mut other);
+        }
+        assert_eq!(other.client.workspaces.len(), 2);
+        assert_eq!(h.state.workspaces().active(), "1");
+
+        // The first client activates workspace 2 without committing; the second commits.
+        let two = &h
+            .shell
+            .client
+            .workspaces
+            .iter()
+            .find(|w| w.1.id == "2")
+            .unwrap()
+            .0;
+        two.activate();
+        // The activation reaches the compositor before the other client's commit.
+        for _ in 0..10 {
+            turn(&mut h, &mut other);
+        }
+        second.commit();
+        for _ in 0..10 {
+            turn(&mut h, &mut other);
+        }
+        assert_eq!(
+            h.state.workspaces().active(),
+            "1",
+            "another client's commit applied it"
+        );
+
+        // Its own commit applies it, and both clients see workspace 2 active.
+        first.commit();
+        for _ in 0..200 {
+            turn(&mut h, &mut other);
+            let active = |c: &Client| c.workspaces.iter().any(|w| w.1.id == "2" && w.1.active);
+            if active(&h.shell.client) && active(&other.client) {
+                break;
+            }
+        }
+        assert_eq!(h.state.workspaces().active(), "2");
+        assert!(
+            other
+                .client
+                .workspaces
+                .iter()
+                .any(|w| w.1.id == "2" && w.1.active)
+        );
+        assert!(
+            other
+                .client
+                .workspaces
+                .iter()
+                .any(|w| w.1.id == "1" && !w.1.active)
+        );
     }
 
     #[test]

@@ -11,11 +11,17 @@ use std::path::{Path, PathBuf};
 /// What the shell socket adds to the name of the session's Wayland socket.
 pub const SOCKET_SUFFIX: &str = "-shell";
 
-/// Path of the shell socket next to the Wayland socket at `socket`.
+/// Path of the shell socket next to the Wayland socket at `socket`. The suffix goes before an
+/// extension (`wayland.sock` gives `wayland-shell.sock`): wayland-server names the lock by
+/// replacing the extension, and both sockets must not share a lock.
 pub fn socket_path(socket: &Path) -> PathBuf {
-    let mut path = socket.as_os_str().to_owned();
-    path.push(SOCKET_SUFFIX);
-    PathBuf::from(path)
+    let mut name = socket.file_stem().unwrap_or_default().to_owned();
+    name.push(SOCKET_SUFFIX);
+    if let Some(extension) = socket.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    socket.with_file_name(name)
 }
 
 /// Path of the shell socket of the session that `WAYLAND_DISPLAY` names: a name relative to
@@ -95,5 +101,10 @@ mod tests {
             socket_path(Path::new("/run/user/1000/wayland-1")),
             PathBuf::from("/run/user/1000/wayland-1-shell")
         );
+        // The locks are the paths with the extension replaced by `lock`: never the same.
+        let socket = Path::new("/tmp/wayland.sock");
+        let shell = socket_path(socket);
+        assert_eq!(shell, PathBuf::from("/tmp/wayland-shell.sock"));
+        assert_ne!(shell.with_extension("lock"), socket.with_extension("lock"));
     }
 }

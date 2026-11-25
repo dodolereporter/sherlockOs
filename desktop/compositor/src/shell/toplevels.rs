@@ -44,6 +44,8 @@ pub(super) struct Manager {
     resource: SherlockShellManagerV1,
     toplevels: Vec<Toplevel>,
     outputs: Outputs,
+    /// The first `done` was sent.
+    told: bool,
 }
 
 struct Toplevel {
@@ -116,8 +118,10 @@ impl Manager {
             }
         }
         self.outputs = outputs.to_vec();
-        if changed {
+        // Always a first `done`, even with no window and no screen.
+        if changed || !self.told {
             self.resource.done();
+            self.told = true;
         }
     }
 }
@@ -163,6 +167,7 @@ impl GlobalDispatch<SherlockShellManagerV1, ()> for State {
             resource: data_init.init(resource, ()),
             toplevels: Vec::new(),
             outputs: Vec::new(),
+            told: false,
         };
         // Right away, so that a roundtrip after the bind brings the whole state.
         let (windows, outputs) = state.snapshot();
@@ -210,8 +215,15 @@ impl Dispatch<SherlockShellToplevelV1, u32> for State {
             height,
         } = request
         {
-            if width < 0 || height < 0 {
-                resource.post_error(Error::InvalidRectangle, "negative width or height");
+            if width < 0
+                || height < 0
+                || x.checked_add(width).is_none()
+                || y.checked_add(height).is_none()
+            {
+                resource.post_error(
+                    Error::InvalidRectangle,
+                    "negative width or height, or a rectangle past the 32-bit range",
+                );
                 return;
             }
             state.shell.icons.retain(|i| i.0 != *id);

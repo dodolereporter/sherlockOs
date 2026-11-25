@@ -39,20 +39,35 @@ pub struct Workspaces {
 }
 
 impl Default for Workspaces {
-    /// A single workspace, its number for id and name.
+    /// A single workspace.
     fn default() -> Self {
-        let first = String::from("1");
         Self {
-            list: vec![Workspace {
-                id: first.clone(),
-                name: first,
-            }],
+            list: numbered(1),
             active: 0,
         }
     }
 }
 
+/// `count` workspaces, at least one, each with its number for id and name.
+fn numbered(count: usize) -> Vec<Workspace> {
+    (1..=count.max(1))
+        .map(|n| Workspace {
+            id: n.to_string(),
+            name: n.to_string(),
+        })
+        .collect()
+}
+
 impl Workspaces {
+    /// Sets the number of workspaces. The active one stays if it still exists, the first one
+    /// becomes active otherwise.
+    pub(super) fn set_count(&mut self, count: usize) {
+        self.list = numbered(count);
+        if self.active >= self.list.len() {
+            self.active = 0;
+        }
+    }
+
     pub fn list(&self) -> &[Workspace] {
         &self.list
     }
@@ -86,6 +101,8 @@ pub(super) fn create_global(dh: &DisplayHandle) {
 /// entered, and each workspace with its index and active state as last sent.
 pub(super) struct Manager {
     resource: ExtWorkspaceManagerV1,
+    /// Workspace this client activated since its last commit: the commit applies it.
+    pending: Option<String>,
     group: Option<ExtWorkspaceGroupHandleV1>,
     entered: Vec<(WlOutput, Output)>,
     workspaces: Vec<(Workspace, ExtWorkspaceHandleV1, usize, bool)>,
@@ -163,11 +180,13 @@ impl Manager {
                 *known = (workspace.clone(), known.1.clone(), index, active);
                 continue;
             }
-            let Ok(handle) = client.create_resource::<ExtWorkspaceHandleV1, String, State>(
-                dh,
-                version,
-                workspace.id.clone(),
-            ) else {
+            let data = Handle {
+                id: workspace.id.clone(),
+                manager: self.resource.clone(),
+            };
+            let Ok(handle) =
+                client.create_resource::<ExtWorkspaceHandleV1, Handle, State>(dh, version, data)
+            else {
                 return;
             };
             self.resource.workspace(&handle);
@@ -185,6 +204,13 @@ impl Manager {
             self.resource.done();
         }
     }
+}
+
+/// What a workspace handle knows: its workspace, and the manager whose commit applies its
+/// requests.
+pub(super) struct Handle {
+    id: String,
+    manager: ExtWorkspaceManagerV1,
 }
 
 fn state(active: bool) -> ext_workspace_handle_v1::State {
@@ -206,6 +232,7 @@ impl GlobalDispatch<ExtWorkspaceManagerV1, ()> for State {
     ) {
         let mut manager = Manager {
             resource: data_init.init(resource, ()),
+            pending: None,
             group: None,
             entered: Vec::new(),
             workspaces: Vec::new(),
@@ -232,9 +259,14 @@ impl Dispatch<ExtWorkspaceManagerV1, ()> for State {
         _: &mut DataInit<'_, Self>,
     ) {
         match request {
-            // The requests since the last commit apply together: the last activation wins.
+            // The requests of this client since its last commit apply together: the last
+            // activation wins.
             ext_workspace_manager_v1::Request::Commit => {
-                if let Some(id) = state.shell.pending_workspace.take() {
+                let manager = state.shell.workspaces.iter_mut();
+                let pending = manager
+                    .filter(|m| &m.resource == resource)
+                    .find_map(|m| m.pending.take());
+                if let Some(id) = pending {
                     state.activate_workspace(&id);
                 }
             }
@@ -261,19 +293,25 @@ impl Dispatch<ExtWorkspaceGroupHandleV1, ()> for State {
     }
 }
 
-impl Dispatch<ExtWorkspaceHandleV1, String> for State {
+impl Dispatch<ExtWorkspaceHandleV1, Handle> for State {
     fn request(
         state: &mut Self,
         _: &Client,
         _: &ExtWorkspaceHandleV1,
         request: ext_workspace_handle_v1::Request,
-        id: &String,
+        handle: &Handle,
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        // Only `activate` is among the capabilities; it waits for the manager's commit.
-        if let ext_workspace_handle_v1::Request::Activate = request {
-            state.shell.pending_workspace = Some(id.clone());
+        // Only `activate` is among the capabilities; it waits for the commit of its manager.
+        if let ext_workspace_handle_v1::Request::Activate = request
+            && let Some(manager) = state
+                .shell
+                .workspaces
+                .iter_mut()
+                .find(|m| m.resource == handle.manager)
+        {
+            manager.pending = Some(handle.id.clone());
         }
     }
 }
@@ -291,5 +329,11 @@ mod tests {
         assert!(!model.activate("2"), "an unknown workspace was activated");
         assert!(model.activate("1"));
         assert_eq!(model.active(), "1");
+        model.set_count(3);
+        assert!(model.activate("3"));
+        model.set_count(2);
+        assert_eq!(model.active(), "1", "the first one becomes active");
+        model.set_count(0);
+        assert_eq!(model.list().len(), 1, "never without a workspace");
     }
 }
