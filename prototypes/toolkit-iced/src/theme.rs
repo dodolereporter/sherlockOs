@@ -1,8 +1,8 @@
-//! Valeurs du design pour ce prototype.
+//! Design values for this prototype.
 //!
-//! Dans le code durable, elles viendront de `desktop/sherlock-ui` (lot D-01). Ici, elles sont
-//! regroupées en un seul endroit et recopiées de `docs/design/planches/Main.dc.html` et
-//! `Menus.dc.html`. Le prototype Slint porte les mêmes valeurs dans `ui/barre.slint`.
+//! In lasting code, they will come from `desktop/sherlock-ui` (lot D-01). Here, they are
+//! grouped in one place and copied from `docs/design/planches/Main.dc.html` and
+//! `Menus.dc.html`. The Slint prototype carries the same values in `ui/bar.slint`.
 
 use iced::Color;
 
@@ -14,7 +14,7 @@ const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
     Color::from_rgba8(r, g, b, a)
 }
 
-// Couleurs
+// Colors
 pub const TEXT: Color = rgb(0xEE, 0xF2, 0xF7);
 pub const TEXT_2: Color = rgb(0xC5, 0xCE, 0xDB);
 pub const TEXT_3: Color = rgb(0xA9, 0xB4, 0xC6);
@@ -31,12 +31,12 @@ pub const DESKTOP_HOVER: Color = rgba(255, 255, 255, 0.12);
 pub const SELECTION: Color = rgba(91, 163, 208, 0.26);
 pub const SEPARATOR: Color = rgba(255, 255, 255, 0.10);
 
-// Typographie : Inter n'est pas installée sur le poste, les deux prototypes prennent Noto Sans.
+// Typography: Inter is not installed on the machine, both prototypes use Noto Sans.
 pub const FONT_FAMILY: &str = "Noto Sans";
 pub const FONT_SIZE: f32 = 13.0;
 pub const SHORTCUT_SIZE: f32 = 12.0;
 
-// Barre
+// Bar
 pub const BAR_HEIGHT: u32 = 36;
 pub const BAR_MARGIN_TOP: i32 = 10;
 pub const BAR_MARGIN_SIDE: i32 = 12;
@@ -59,7 +59,7 @@ pub const DESKTOP_RADIUS: f32 = 12.0;
 // Menus
 pub const MENU_W: u32 = 256;
 pub const SUBMENU_W: u32 = 190;
-/// Écart entre le bas de la barre et le haut du menu, et entre le menu et son sous-menu.
+/// Gap between the bottom of the bar and the top of the menu, and between the menu and its submenu.
 pub const MENU_GAP: f32 = 6.0;
 pub const SUBMENU_GAP: f32 = 4.0;
 pub const MENU_RADIUS: f32 = 12.0;
@@ -70,11 +70,11 @@ pub const MENU_ITEM_PAD_X: f32 = 10.0;
 pub const MENU_ITEM_GAP: f32 = 12.0;
 pub const SEPARATOR_MARGIN_Y: f32 = 4.0;
 pub const SEPARATOR_MARGIN_X: f32 = 8.0;
-/// Animation d'ouverture : fondu et glissé de 6 px, 180 ms.
+/// Opening animation: fade and 6 px slide, 180 ms.
 pub const MENU_ANIM_MS: u64 = 180;
 pub const MENU_SLIDE: f32 = 6.0;
 
-// Textes d'interface
+// Interface texts
 pub const APP_NAME: &str = "Éditeur";
 pub const MENU_LABEL: &str = "Fenêtre";
 pub const DESKTOPS: [&str; 3] = ["1 · Code", "2 · Web", "3 · Jeu"];
@@ -115,8 +115,8 @@ pub const MENU_ITEMS: [MenuItem; 5] = [
 pub const MENU_SEPARATOR_BEFORE: usize = 4;
 const SUBMENU_INDEX: usize = 3;
 
-/// Taille de la surface du menu : l'écart sous la barre, la bordure, la marge, cinq entrées
-/// et un séparateur.
+/// Size of the menu surface: the gap below the bar, the border, the padding, five entries
+/// and a separator.
 pub fn menu_size() -> (u32, u32) {
     let h =
         MENU_GAP + 2.0 + 2.0 * MENU_PADDING + 5.0 * MENU_ITEM_H + 1.0 + 2.0 * SEPARATOR_MARGIN_Y;
@@ -128,21 +128,21 @@ pub fn submenu_size() -> (u32, u32) {
     (SUBMENU_GAP as u32 + SUBMENU_W, h as u32)
 }
 
-/// Rectangle du bouton « Fenêtre » dans la barre. Les largeurs sont fixes, comme sur la
-/// planche Menus, ce qui permet de placer le menu sans relire la mise en page.
+/// Rectangle of the « Fenêtre » button in the bar. Widths are fixed, as on the Menus
+/// board, which makes it possible to place the menu without reading the layout again.
 pub fn menu_anchor_rect() -> (i32, i32, i32, i32) {
     let x = BAR_PAD_LEFT + SHERLOCK_W + LEFT_GAP + APP_NAME_W + LEFT_GAP;
     (x as i32, 0, MENU_BUTTON_W as i32, BAR_HEIGHT as i32)
 }
 
-/// Rectangle de l'entrée à sous-menu dans la surface du menu. Le sous-menu s'ouvre à droite,
-/// son bord haut aligné sur celui du menu moins sa marge.
+/// Rectangle of the submenu entry in the menu surface. The submenu opens on the right, its
+/// top edge aligned with that of the menu minus its padding.
 pub fn submenu_anchor_rect() -> (i32, i32, i32, i32) {
     let y = MENU_GAP + 1.0 + MENU_PADDING + SUBMENU_INDEX as f32 * MENU_ITEM_H - MENU_PADDING - 1.0;
     (0, y as i32, MENU_W as i32, MENU_ITEM_H as i32)
 }
 
-// Mode automatique pour les mesures : 4 s de repos, puis dix ouvertures du menu.
+// Automatic mode for measurements: 4 s idle, then ten openings of the menu.
 pub const AUTO_STEP_MS: u64 = 250;
 pub const AUTO_IDLE_STEPS: u32 = 16;
 pub const AUTO_CYCLES: u32 = 10;
@@ -153,7 +153,7 @@ const MONTHS: [&str; 12] = [
     "déc.",
 ];
 
-/// Heure et date au format de la planche : « 21:46 » et « mar. 24 nov. ».
+/// Time and date in the board's format: « 21:46 » and « mar. 24 nov. ».
 pub fn now_strings() -> (String, String) {
     use chrono::{Datelike, Local, Timelike};
     let now = Local::now();

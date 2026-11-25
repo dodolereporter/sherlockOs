@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Mesure un prototype de barre du lot D-00 (iced ou Slint), de l'extérieur.
+"""Measures a bar prototype of lot D-00 (iced or Slint), from the outside.
 
-Le script ne fait confiance à aucun chiffre donné par le prototype lui-même. Il lance le
-binaire avec WAYLAND_DEBUG=client et lit le journal des requêtes Wayland, qui a le même
-format pour les deux toolkits :
+The script trusts no figure given by the prototype itself. It starts the binary with
+WAYLAND_DEBUG=client and reads the log of Wayland requests, which has the same format for both
+toolkits:
 
-- démarrage : temps entre le lancement du processus et la première image de la barre
-  (premier `wl_surface.attach` sur la surface layer-shell), à l'horloge du script ;
-- repos : CPU consommé et images envoyées pendant 5 s, 2 s après la première image, puis
-  mémoire résidente (RSS) et proportionnelle (PSS) lues dans /proc ;
-- animation : en mode automatique (ESSAI_AUTO=1), le prototype ouvre le menu dix fois.
-  Pour chaque ouverture, on prend les images envoyées sur la surface du menu pendant les
-  180 ms qui suivent sa première image (la durée de l'animation), et on en tire la cadence
-  et le plus long écart entre deux images. Les horodatages sont ceux du journal Wayland.
+- startup: time between the process start and the first frame of the bar (first
+  `wl_surface.attach` on the layer-shell surface), on the script's clock;
+- idle: CPU used and frames sent during 5 s, 2 s after the first frame, then resident (RSS) and
+  proportional (PSS) memory read from /proc;
+- animation: in automatic mode (PROTOTYPE_AUTO=1), the prototype opens the menu ten times. For
+  each opening, take the frames sent on the menu surface during the 180 ms that follow its first
+  frame (the duration of the animation), and derive the frame rate and the longest gap between
+  two frames. Timestamps are those of the Wayland log.
 
-Usage : mesurer.py [--runs N] [--label NOM] [--avant COMMANDE] BINAIRE
-L'environnement (WAYLAND_DISPLAY, ICED_BACKEND, WGPU_POWER_PREF...) est transmis tel quel.
---avant lance une commande shell avant chaque essai, par exemple pour attendre que la
-carte graphique dédiée soit endormie.
+Usage: measure.py [--runs N] [--label NAME] [--before COMMAND] BINARY
+The environment (WAYLAND_DISPLAY, ICED_BACKEND, WGPU_POWER_PREF...) is passed as is.
+--before runs a shell command before each run, for instance to wait for the dedicated graphics
+card to fall asleep.
 """
 
 import argparse
@@ -56,9 +56,9 @@ def memory_kib(pid):
 
 
 def run_idle(binary):
-    """Démarrage et repos, sans mode automatique."""
+    """Startup and idle, without automatic mode."""
     env = dict(os.environ, WAYLAND_DEBUG="client")
-    env.pop("ESSAI_AUTO", None)
+    env.pop("PROTOTYPE_AUTO", None)
     start = time.monotonic()
     proc = subprocess.Popen([binary], env=env, stderr=subprocess.PIPE, text=True, errors="replace")
     state = {"bar": None, "first": None, "frames": []}
@@ -83,7 +83,7 @@ def run_idle(binary):
         time.sleep(0.005)
     if state["first"] is None:
         proc.kill()
-        raise RuntimeError("aucune image de la barre en 30 s")
+        raise RuntimeError("no frame of the bar in 30 s")
     startup_ms = (state["first"] - start) * 1000
     time.sleep(2)
     t0, c0, f0 = time.monotonic(), cpu_ticks(proc.pid), len(state["frames"])
@@ -105,11 +105,11 @@ def run_idle(binary):
 
 
 def run_anim(binary, anim_ms):
-    """Dix ouvertures du menu en mode automatique."""
-    env = dict(os.environ, WAYLAND_DEBUG="client", ESSAI_AUTO="1")
+    """Ten openings of the menu in automatic mode."""
+    env = dict(os.environ, WAYLAND_DEBUG="client", PROTOTYPE_AUTO="1")
     proc = subprocess.run([binary], env=env, stderr=subprocess.PIPE, text=True, errors="replace", timeout=90)
     surfaces = {}  # xdg_surface -> wl_surface
-    menus = []  # [(wl_surface du menu, [horodatages des images], fermé par le sous-menu)]
+    menus = []  # [(menu wl_surface, [frame timestamps], closed by the submenu)]
     current = None
     for line in proc.stderr.splitlines():
         ts = TS.match(line)
@@ -128,7 +128,7 @@ def run_anim(binary, anim_ms):
                 current = {"surface": surfaces.get(m.group(1)), "frames": []}
                 menus.append(current)
             else:
-                current = None  # le sous-menu s'ouvre : l'animation du menu est finie
+                current = None  # the submenu opens: the menu animation is over
             continue
         m = ATTACH.search(line)
         if m and current is not None and m.group(1) == current["surface"]:
@@ -160,19 +160,19 @@ def main():
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--label", default=None)
     parser.add_argument("--anim-ms", type=float, default=180.0)
-    parser.add_argument("--avant", default=None)
+    parser.add_argument("--before", default=None)
     args = parser.parse_args()
     binary = os.path.abspath(args.binary)
 
     idle, anim = [], []
     for i in range(args.runs):
-        if args.avant:
-            subprocess.run(args.avant, shell=True, check=False)
+        if args.before:
+            subprocess.run(args.before, shell=True, check=False)
         idle.append(run_idle(binary))
-        if args.avant:
-            subprocess.run(args.avant, shell=True, check=False)
+        if args.before:
+            subprocess.run(args.before, shell=True, check=False)
         anim.append(run_anim(binary, args.anim_ms))
-        print(f"essai {i + 1}/{args.runs} : {idle[-1]}", file=sys.stderr)
+        print(f"run {i + 1}/{args.runs}: {idle[-1]}", file=sys.stderr)
     opens = [o for a in anim for o in a["per_open"]]
     summary = {
         "label": args.label or os.path.basename(binary),

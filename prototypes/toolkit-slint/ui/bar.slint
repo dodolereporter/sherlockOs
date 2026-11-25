@@ -1,11 +1,11 @@
-// Prototype jetable du lot D-00 : la barre du haut en Slint.
+// Throwaway prototype of lot D-00: the top bar in Slint.
 //
-// Les valeurs du design sont regroupées dans `Theme`. Dans le code durable, elles viendront de
-// `desktop/sherlock-ui` (lot D-01). Elles sont recopiées de `docs/design/planches/Main.dc.html`
-// et `Menus.dc.html`, comme dans `essais/toolkit-iced/src/theme.rs`.
+// The design values are grouped in `Theme`. In lasting code, they will come from
+// `desktop/sherlock-ui` (lot D-01). They are copied from `docs/design/planches/Main.dc.html`
+// and `Menus.dc.html`, as in `prototypes/toolkit-iced/src/theme.rs`.
 
 export global Theme {
-    // Couleurs
+    // Colors
     out property <color> text: #EEF2F7;
     out property <color> text-2: #C5CEDB;
     out property <color> text-3: #A9B4C6;
@@ -22,12 +22,12 @@ export global Theme {
     out property <color> selection: rgba(91, 163, 208, 0.26);
     out property <color> separator: rgba(255, 255, 255, 0.10);
 
-    // Typographie : Inter n'est pas installée sur le poste, les deux prototypes prennent Noto Sans.
+    // Typography: Inter is not installed on the machine, both prototypes use Noto Sans.
     out property <string> font-family: "Noto Sans";
     out property <length> font-size: 13px;
     out property <length> shortcut-size: 12px;
 
-    // Barre
+    // Bar
     out property <length> bar-height: 36px;
     out property <length> bar-margin-top: 10px;
     out property <length> bar-margin-side: 12px;
@@ -59,11 +59,11 @@ export global Theme {
     out property <length> menu-item-pad-x: 10px;
     out property <length> separator-margin-y: 4px;
     out property <length> separator-margin-x: 8px;
-    // Animation d'ouverture : fondu et glissé de 6 px, 180 ms.
+    // Opening animation: fade and 6 px slide, 180 ms.
     out property <duration> menu-anim: 180ms;
     out property <length> menu-slide: 6px;
 
-    // Textes d'interface
+    // Interface texts
     out property <string> app-name: "Éditeur";
     out property <string> menu-label: "Fenêtre";
     out property <[string]> desktops: ["1 · Code", "2 · Web", "3 · Jeu"];
@@ -113,7 +113,7 @@ export component Bar inherits Window {
         border-width: 1px;
         border-color: Theme.bar-border;
 
-        // Le bouton Sherlock n'est qu'une pastille ici : la mascotte n'est pas l'objet de l'essai.
+        // The Sherlock button is only a dot here: the mascot is not what this prototype tests.
         Rectangle {
             x: Theme.bar-pad-left;
             width: Theme.sherlock-w;
@@ -152,7 +152,7 @@ export component Bar inherits Window {
             }
         }
 
-        // Les bureaux sont centrés sur la barre, indépendamment des côtés.
+        // The workspaces are centered on the bar, regardless of the sides.
         desktops := HorizontalLayout {
             x: (parent.width - self.width) / 2;
             width: self.preferred-width;
@@ -229,7 +229,7 @@ component MenuEntry inherits Rectangle {
 }
 
 export component Menu inherits Window {
-    // Passe à vrai à l'ouverture : déclenche le fondu et le glissé.
+    // Turns true on opening: triggers the fade and the slide.
     in property <bool> shown;
     in property <bool> submenu-open;
     callback activated(int);
@@ -246,7 +246,7 @@ export component Menu inherits Window {
         opacity: root.shown ? 1 : 0;
         animate y, opacity {
             duration: Theme.menu-anim;
-            // Équivalent de la courbe « ease out cubic » du prototype iced.
+            // Equivalent of the « ease out cubic » curve of the iced prototype.
             easing: cubic-bezier(0.33, 1, 0.68, 1);
         }
         background: Theme.menu-glass;

@@ -1,56 +1,58 @@
-# Essai D-00 : la barre en Slint
+# Prototype D-00: the bar in Slint
 
-Prototype jetable du lot D-00, jumeau de `essais/toolkit-iced` : même barre de 36 px ancrée en
-haut de l'écran par layer-shell, même horloge, mêmes trois bureaux, même menu « Fenêtre » de
-cinq entrées avec le sous-menu « Déplacer vers le bureau », même animation d'ouverture.
+Throwaway prototype of lot D-00, twin of `prototypes/toolkit-iced`: the same 36 px bar anchored
+at the top of the screen by layer-shell, the same clock, the same three workspaces, the same
+« Fenêtre » menu of five entries with the « Déplacer vers le bureau » submenu, the same opening
+animation.
 
-Slint ne sait pas créer de surface layer-shell. Le prototype branche donc Slint sur Wayland par
-son API publique `slint::platform` :
+Slint cannot create a layer-shell surface. The prototype therefore plugs Slint into Wayland
+through its public `slint::platform` API:
 
-- `ui/barre.slint` décrit la barre, le menu et le sous-menu, avec toutes les valeurs du design
-  dans le global `Theme` ;
-- `src/wayland.rs` crée la surface layer-shell et les `xdg_popup` avec smithay-client-toolkit,
-  transmet le pointeur à Slint et copie le rendu logiciel de Slint dans des tampons `wl_shm` ;
-- `src/main.rs` crée les composants et relie leurs rappels à la boucle Wayland.
+- `ui/bar.slint` describes the bar, the menu and the submenu, with every design value in the
+  `Theme` global;
+- `src/wayland.rs` creates the layer-shell surface and the `xdg_popup`s with
+  smithay-client-toolkit, forwards the pointer to Slint and copies Slint's software rendering
+  into `wl_shm` buffers;
+- `src/main.rs` creates the components and connects their callbacks to the Wayland loop.
 
-Limites de ce pont, qu'un shell durable devrait combler : échelle fixée à 1 (pas de
-`wp_fractional_scale`), pas de clavier, pas de curseur personnalisé, rendu logiciel seulement,
-pas d'accessibilité branchée.
+Limits of this bridge, which a lasting shell would have to fill: scale fixed at 1 (no
+`wp_fractional_scale`), no keyboard, no custom cursor, software rendering only, no
+accessibility wired.
 
-## Lancer
+## Running
 
-Dans une session Wayland dont le compositeur gère `zwlr_layer_shell_v1` (KDE Plasma, sway,
-Hyprland, niri...) :
+In a Wayland session whose compositor supports `zwlr_layer_shell_v1` (KDE Plasma, sway,
+Hyprland, niri...):
 
 ```sh
-cd essais/toolkit-slint
+cd prototypes/toolkit-slint
 cargo run --release
 ```
 
-Sans session Wayland, un KWin imbriqué dans une fenêtre suffit :
+Without a Wayland session, a KWin nested in a window is enough:
 
 ```sh
-kwin_wayland --x11-display :0 --socket wayland-essai --width 1440 --height 900 &
-WAYLAND_DISPLAY=wayland-essai cargo run --release
+kwin_wayland --x11-display :0 --socket wayland-prototype --width 1440 --height 900 &
+WAYLAND_DISPLAY=wayland-prototype cargo run --release
 ```
 
-Avec `ESSAI_AUTO=1`, la barre suit le même scénario que le prototype iced : 4 s de repos,
-puis dix ouvertures du menu, puis elle quitte.
+With `PROTOTYPE_AUTO=1`, the bar follows the same scenario as the iced prototype: 4 s idle, then
+ten openings of the menu, then it quits.
 
-## Mesurer
+## Measuring
 
-Le script de mesure est partagé avec le prototype iced :
+The measurement script is shared with the iced prototype:
 
 ```sh
 cargo build --release
-python3 ../toolkit-iced/mesurer.py --runs 5 target/release/toolkit-slint
+python3 ../toolkit-iced/measure.py --runs 5 target/release/toolkit-slint
 ```
 
-## Dépendances
+## Dependencies
 
-| Crate | Version | Pourquoi |
+| Crate | Version | Why |
 | --- | --- | --- |
-| `slint` | 1.19.1 | Le toolkit évalué, sans backend : seulement le moteur de rendu logiciel et les polices du système |
-| `slint-build` | 1.19.1 | Compile `ui/barre.slint` en Rust au moment du build |
-| `smithay-client-toolkit` | 0.21.1 | Surface layer-shell, popups, pointeur et tampons partagés, ce que Slint ne fait pas lui-même |
-| `chrono` | 0.4.42 | Heure locale de l'horloge |
+| `slint` | 1.19.1 | The toolkit under evaluation, without a backend: only the software renderer and the system fonts |
+| `slint-build` | 1.19.1 | Compiles `ui/bar.slint` to Rust at build time |
+| `smithay-client-toolkit` | 0.21.1 | Layer-shell surface, popups, pointer and shared buffers, which Slint does not do itself |
+| `chrono` | 0.4.42 | Local time of the clock |

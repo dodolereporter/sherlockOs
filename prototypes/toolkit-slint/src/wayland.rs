@@ -1,8 +1,8 @@
-//! Le pont entre Slint et Wayland : surface layer-shell de la barre, popups du menu,
-//! pointeur, rappels d'image et tampons `wl_shm`.
+//! The bridge between Slint and Wayland: layer-shell surface of the bar, menu popups,
+//! pointer, frame callbacks and `wl_shm` buffers.
 //!
-//! L'échelle est fixée à 1 : la mise à l'échelle fractionnaire demanderait de brancher
-//! `wp_fractional_scale` et `wp_viewporter`, ce que iced_layershell fait déjà de son côté.
+//! The scale is fixed at 1: fractional scaling would require wiring
+//! `wp_fractional_scale` and `wp_viewporter`, which iced_layershell already does on its side.
 
 use std::error::Error;
 use std::rc::Rc;
@@ -39,10 +39,10 @@ use smithay_client_toolkit::{delegate_dispatch2, delegate_registry, registry_han
 
 use crate::{Command, Commands, Theme, Ui};
 
-/// Bouton gauche de la souris, dans la numérotation du noyau (BTN_LEFT).
+/// Left mouse button, in the kernel numbering (BTN_LEFT).
 const BTN_LEFT: u32 = 0x110;
 
-/// Une surface Wayland et la fenêtre Slint qui la dessine.
+/// A Wayland surface and the Slint window that draws it.
 struct Target {
     window: Rc<MinimalSoftwareWindow>,
     size: (u32, u32),
@@ -73,7 +73,7 @@ impl Target {
         self.configured && self.window.window().has_active_animations()
     }
 
-    /// Dessine la fenêtre si Slint le demande et si le compositeur attend une image.
+    /// Draws the window if Slint asks for it and if the compositor expects a frame.
     fn render(
         &mut self,
         surface: &wl_surface::WlSurface,
@@ -102,7 +102,7 @@ impl Target {
             width as i32 * 4,
             wl_shm::Format::Argb8888,
         )?;
-        // wl_shm attend de l'ARGB prémultiplié, rangé en mémoire en petit-boutiste : B, G, R, A.
+        // wl_shm expects premultiplied ARGB, stored in memory as little-endian: B, G, R, A.
         let (canvas, _) = canvas.as_chunks_mut::<4>();
         for (dst, p) in canvas.iter_mut().zip(pixels.iter()) {
             *dst = [p.blue, p.green, p.red, p.alpha];
@@ -135,7 +135,7 @@ pub struct App {
     submenu: Option<PopupSurface>,
     seat: Option<wl_seat::WlSeat>,
     pointer: Option<wl_pointer::WlPointer>,
-    /// Numéro du dernier clic : le compositeur l'exige pour qu'un menu capture le pointeur.
+    /// Serial of the last click: the compositor requires it for a menu to grab the pointer.
     last_press_serial: Option<u32>,
     ui: Ui,
     commands: Commands,
@@ -155,15 +155,20 @@ pub fn run(ui: Ui, commands: Commands) -> Result<(), Box<dyn Error>> {
     let theme = ui.bar.global::<Theme>();
     let bar_height = theme.get_bar_height() as u32;
     let surface = compositor.create_surface(&qh);
-    let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("essai-barre-slint"), None);
+    let layer = layer_shell.create_layer_surface(
+        &qh,
+        surface,
+        Layer::Top,
+        Some("prototype-bar-slint"),
+        None,
+    );
     layer.set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
     layer.set_size(0, bar_height);
     layer.set_exclusive_zone(bar_height as i32);
     let side = theme.get_bar_margin_side() as i32;
     layer.set_margin(theme.get_bar_margin_top() as i32, side, 0, side);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    // Premier commit sans tampon : le compositeur répond par la taille de la barre.
+    // First commit without a buffer: the compositor answers with the size of the bar.
     layer.commit();
 
     let pool = SlotPool::new(1440 * bar_height as usize * 4, &shm)?;
@@ -202,8 +207,8 @@ pub fn run(ui: Ui, commands: Commands) -> Result<(), Box<dyn Error>> {
             return Ok(());
         }
         app.render_all(&qh)?;
-        // Au repos, la boucle dort jusqu'au prochain minuteur de Slint (l'horloge, chaque
-        // seconde). Pendant une animation, les rappels d'image du compositeur la réveillent.
+        // When idle, the loop sleeps until the next Slint timer (the clock, every second).
+        // During an animation, the compositor's frame callbacks wake it up.
         let timeout = if app.animating() {
             Some(Duration::from_millis(4))
         } else {
@@ -214,8 +219,8 @@ pub fn run(ui: Ui, commands: Commands) -> Result<(), Box<dyn Error>> {
 }
 
 impl App {
-    /// Slint n'anime pas une propriété lue pour la première fois : sans ce rendu à blanc au
-    /// démarrage, la première ouverture du menu apparaît d'un coup, sans fondu.
+    /// Slint does not animate a property read for the first time: without this blank render at
+    /// startup, the first opening of the menu appears at once, without a fade.
     fn prerender_popups(&self) {
         let (menu_size, _) = self.menu_geometry();
         let (submenu_size, _) = self.submenu_geometry();
@@ -290,8 +295,8 @@ impl App {
         Ok(positioner)
     }
 
-    /// Les tailles et les positions se calculent à partir de `Theme`, la même source que
-    /// l'interface Slint.
+    /// Sizes and positions are computed from `Theme`, the same source as the Slint
+    /// interface.
     fn menu_geometry(&self) -> ((u32, u32), (i32, i32, i32, i32)) {
         let t = self.ui.bar.global::<Theme>();
         let height = t.get_menu_gap()
@@ -320,7 +325,7 @@ impl App {
         let t = self.ui.bar.global::<Theme>();
         let height = 2.0 + 2.0 * t.get_menu_padding() + 3.0 * t.get_menu_item_h();
         let width = t.get_submenu_gap() + t.get_submenu_w();
-        // L'entrée à sous-menu est la quatrième : le sous-menu s'aligne sur elle.
+        // The submenu entry is the fourth one: the submenu aligns with it.
         let y = t.get_menu_gap() + 3.0 * t.get_menu_item_h();
         (
             (width as u32, height as u32),
@@ -353,8 +358,8 @@ impl App {
         if parent.is_none() {
             self.layer.get_popup(popup.xdg_popup());
         }
-        // Sans clic (mode automatique), pas de capture : le menu ne se fermera pas en
-        // cliquant ailleurs, mais il s'ouvre quand même.
+        // Without a click (automatic mode), no grab: the menu will not close on a click
+        // elsewhere, but it opens all the same.
         if let (Some(seat), Some(serial)) = (&self.seat, self.last_press_serial) {
             popup.xdg_popup().grab(seat, serial);
         }
@@ -409,7 +414,7 @@ impl App {
     }
 
     fn close_menus(&mut self) {
-        // Le sous-menu se détruit avant son parent, comme l'exige xdg_popup.
+        // The submenu is destroyed before its parent, as xdg_popup requires.
         self.close_submenu();
         if self.menu.take().is_some() {
             self.ui.menu.set_shown(false);
@@ -525,12 +530,12 @@ impl PopupHandler for App {
     }
 
     fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Popup) {
-        // Clic hors du menu : le compositeur retire la capture, on ferme tout.
+        // Click outside the menu: the compositor removes the grab, close everything.
         self.commands.borrow_mut().push_back(Command::CloseMenus);
     }
 }
 
-/// Exigé par `XdgShell::bind`, qui gère aussi les fenêtres ordinaires. La barre n'en crée aucune.
+/// Required by `XdgShell::bind`, which also handles ordinary windows. The bar creates none.
 impl WindowHandler for App {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {}
     fn configure(

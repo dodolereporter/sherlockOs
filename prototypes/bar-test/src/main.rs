@@ -3,7 +3,7 @@
 //! bar. Not the real bar (lot D-20): colors and texts are written here on purpose.
 //!
 //! `cargo run --release` inside the compositor, for example:
-//! `compositeur --imbrique --ecrans 2 essais/bar-test/target/release/bar-test`.
+//! `compositor --nested --outputs 2 prototypes/bar-test/target/release/bar-test`.
 //! With `BAR_TEST_MENU=1`, the menu of the first bar opens by itself, for screenshots.
 
 use iced::widget::{button, column, container, row, space, text};

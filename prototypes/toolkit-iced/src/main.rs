@@ -1,9 +1,9 @@
-//! Prototype jetable du lot D-00 : la barre du haut en iced, ancrée par layer-shell.
+//! Throwaway prototype of lot D-00: the top bar in iced, anchored by layer-shell.
 //!
-//! Même cahier des charges que `essais/toolkit-slint` : barre de 36 px, horloge, trois
-//! bureaux dont un actif, et un bouton « Fenêtre » qui ouvre un menu de cinq entrées
-//! dont une a un sous-menu. Le menu et le sous-menu sont de vrais `xdg_popup` imbriqués,
-//! rattachés à la surface layer-shell de la barre.
+//! Same requirements as `prototypes/toolkit-slint`: a 36 px bar, a clock, three
+//! workspaces of which one is active, and a « Fenêtre » button that opens a menu of five
+//! entries, one of which has a submenu. The menu and the submenu are real nested
+//! `xdg_popup`s, attached to the layer-shell surface of the bar.
 
 mod theme;
 
@@ -25,7 +25,7 @@ use iced_layershell::to_layer_message;
 use theme as t;
 
 fn main() -> Result<(), iced_layershell::Error> {
-    // La barre n'a aucun champ de saisie : inutile de lancer le fil du presse-papiers.
+    // The bar has no input field: no need to start the clipboard thread.
     iced_layershell::disable_clipboard();
 
     daemon(Bar::new, Bar::namespace, Bar::update, Bar::view)
@@ -42,7 +42,7 @@ fn main() -> Result<(), iced_layershell::Error> {
                 exclusive_zone: t::BAR_HEIGHT as i32,
                 anchor: Anchor::Top | Anchor::Left | Anchor::Right,
                 layer: Layer::Top,
-                // haut, droite, bas, gauche
+                // top, right, bottom, left
                 margin: (t::BAR_MARGIN_TOP, t::BAR_MARGIN_SIDE, 0, t::BAR_MARGIN_SIDE),
                 keyboard_interactivity: KeyboardInteractivity::None,
                 start_mode: StartMode::Active,
@@ -53,8 +53,8 @@ fn main() -> Result<(), iced_layershell::Error> {
         .run()
 }
 
-/// L'identifiant de la surface de la barre est choisi par iced_layershell : on le retient au
-/// premier affichage pour y rattacher le menu.
+/// The id of the bar surface is chosen by iced_layershell: it is kept on the first
+/// display to attach the menu to it.
 static BAR_ID: OnceLock<Id> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,7 @@ enum Popup {
     SubMenu,
 }
 
-/// Mode automatique, qui sert aux mesures (variable `ESSAI_AUTO`).
+/// Automatic mode, used for measurements (`PROTOTYPE_AUTO` variable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Auto {
     Off,
@@ -99,7 +99,7 @@ enum Message {
 impl Bar {
     fn new() -> (Self, Task<Message>) {
         let (clock, date) = t::now_strings();
-        let auto = match std::env::var_os("ESSAI_AUTO") {
+        let auto = match std::env::var_os("PROTOTYPE_AUTO") {
             Some(_) => Auto::Running {
                 remaining: t::AUTO_CYCLES,
                 step: 0,
@@ -122,7 +122,7 @@ impl Bar {
     }
 
     fn namespace() -> String {
-        String::from("essai-barre-iced")
+        String::from("prototype-bar-iced")
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -130,7 +130,7 @@ impl Bar {
             time::every(Duration::from_secs(1)).map(|_| Message::Tick),
             window::close_events().map(Message::PopupClosed),
         ];
-        // On ne demande des images que pendant l'animation : au repos, rien ne se redessine.
+        // Frames are only requested during the animation: when idle, nothing is redrawn.
         if self.menu.is_some() && self.menu_anim.is_animating(self.now) {
             subs.push(window::frames().map(Message::Frame));
         }
@@ -171,7 +171,7 @@ impl Bar {
                 self.close_menus()
             }
             Message::PopupClosed(id) => {
-                // Le compositeur ferme le menu quand on clique ailleurs (popup_done).
+                // The compositor closes the menu on a click elsewhere (popup_done).
                 if self.menu == Some(id) {
                     self.menu = None;
                     if let Some(sub) = self.submenu.take() {
@@ -219,7 +219,7 @@ impl Bar {
 
     fn close_menus(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
-        // Le sous-menu se ferme avant son parent, comme l'exige xdg_popup.
+        // The submenu closes before its parent, as xdg_popup requires.
         if let Some(id) = self.submenu.take() {
             tasks.push(window::close(id));
         }
@@ -239,8 +239,8 @@ impl Bar {
         }
     }
 
-    /// Mode automatique, par pas de 250 ms : 4 s de repos, puis des cycles de 2 s où le menu
-    /// s'ouvre, le sous-menu s'ouvre 750 ms plus tard, et tout se ferme à 1,25 s.
+    /// Automatic mode, in steps of 250 ms: 4 s idle, then 2 s cycles where the menu opens,
+    /// the submenu opens 750 ms later, and everything closes at 1.25 s.
     fn auto_step(&mut self) -> Task<Message> {
         let Auto::Running { remaining, step } = self.auto else {
             return Task::none();
@@ -277,7 +277,7 @@ impl Bar {
     }
 
     fn view_bar(&self) -> Element<'_, Message> {
-        // Le bouton Sherlock n'est qu'une pastille ici : la mascotte n'est pas l'objet de l'essai.
+        // The Sherlock button is only a dot here: the mascot is not what this prototype tests.
         let sherlock = container(space())
             .width(t::SHERLOCK_W)
             .height(t::SHERLOCK_H)
@@ -359,7 +359,7 @@ impl Bar {
                     .right(t::BAR_PAD_RIGHT),
             );
 
-        // Les bureaux sont centrés sur la barre, indépendamment des côtés.
+        // The workspaces are centered on the bar, regardless of the sides.
         let center = container(desktops).center(Length::Fill);
 
         container(stack![sides, center])
@@ -378,7 +378,7 @@ impl Bar {
     }
 
     fn view_menu(&self) -> Element<'_, Message> {
-        // Progression de l'animation d'ouverture, de 0 à 1.
+        // Progress of the opening animation, from 0 to 1.
         let p: f32 = self.menu_anim.interpolate(0.0, 1.0, self.now);
         let mut entries: Vec<Element<'_, Message>> = Vec::new();
         for (i, item) in t::MENU_ITEMS.iter().enumerate() {
@@ -407,7 +407,7 @@ impl Bar {
             .width(Length::Fill)
             .padding(t::MENU_PADDING)
             .style(move |_| menu_style(p));
-        // Le menu glisse de quelques pixels vers le bas en apparaissant.
+        // The menu slides down a few pixels as it appears.
         let slide = t::MENU_SLIDE * (1.0 - p);
         column![space().height(t::MENU_GAP - slide), panel].into()
     }

@@ -1,10 +1,10 @@
-//! Prototype jetable du lot D-00 : la barre du haut en Slint, ancrée par layer-shell.
+//! Throwaway prototype of lot D-00: the top bar in Slint, anchored by layer-shell.
 //!
-//! Slint ne sait pas créer de surface layer-shell : son backend winit ne connaît que les
-//! fenêtres ordinaires. Ce prototype branche donc Slint sur Wayland lui-même, par l'API
-//! publique `slint::platform` : smithay-client-toolkit crée la surface layer-shell et les
-//! `xdg_popup` imbriqués du menu, et le moteur de rendu logiciel de Slint dessine dans des
-//! tampons `wl_shm`. C'est le travail qu'un shell en Slint devrait reprendre et entretenir.
+//! Slint cannot create a layer-shell surface: its winit backend only knows ordinary windows.
+//! This prototype therefore plugs Slint into Wayland itself, through the public
+//! `slint::platform` API: smithay-client-toolkit creates the layer-shell surface and the
+//! nested `xdg_popup`s of the menu, and Slint's software renderer draws into `wl_shm`
+//! buffers. That is the work a shell in Slint would have to take over and maintain.
 
 slint::include_modules!();
 
@@ -20,8 +20,8 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, PlatformError, Timer, TimerMode};
 
-/// Ce que l'interface demande à la boucle Wayland. Les rappels de Slint ne touchent jamais
-/// directement aux surfaces : ils déposent une commande, traitée au tour de boucle suivant.
+/// What the interface asks of the Wayland loop. Slint callbacks never touch the surfaces
+/// directly: they drop off a command, handled on the next turn of the loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     ToggleMenu,
@@ -34,8 +34,8 @@ pub enum Command {
 
 pub type Commands = Rc<RefCell<VecDeque<Command>>>;
 
-/// Plateforme Slint minimale : chaque composant reçoit une fenêtre à rendu logiciel. La boucle
-/// Wayland la rattache ensuite à une surface layer-shell ou à un popup.
+/// Minimal Slint platform: each component gets a software-rendered window. The Wayland loop
+/// then attaches it to a layer-shell surface or to a popup.
 struct WaylandPlatform {
     last_created: Rc<RefCell<Option<Rc<MinimalSoftwareWindow>>>>,
 }
@@ -48,7 +48,7 @@ impl Platform for WaylandPlatform {
     }
 }
 
-/// Les trois composants Slint et la fenêtre logicielle de chacun.
+/// The three Slint components and the software window of each.
 pub struct Ui {
     pub bar: Bar,
     pub menu: Menu,
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let _auto = std::env::var_os("ESSAI_AUTO").map(|_| start_auto(commands.clone()));
+    let _auto = std::env::var_os("PROTOTYPE_AUTO").map(|_| start_auto(commands.clone()));
 
     let ui = Ui {
         bar,
@@ -127,9 +127,9 @@ fn wire_callbacks(bar: &Bar, menu: &Menu, submenu: &SubMenu, commands: &Commands
     });
 }
 
-/// Mode automatique pour les mesures, au même rythme que le prototype iced : par pas de
-/// 250 ms, 4 s de repos, puis dix cycles de 2 s où le menu s'ouvre, le sous-menu s'ouvre
-/// 750 ms plus tard, et tout se ferme à 1,25 s.
+/// Automatic mode for measurements, at the same pace as the iced prototype: in steps of
+/// 250 ms, 4 s idle, then ten 2 s cycles where the menu opens, the submenu opens 750 ms
+/// later, and everything closes at 1.25 s.
 fn start_auto(commands: Commands) -> Timer {
     const IDLE_STEPS: u32 = 16;
     const CYCLES: u32 = 10;
@@ -162,7 +162,7 @@ const MONTHS: [&str; 12] = [
     "déc.",
 ];
 
-/// Heure et date au format de la planche : « 21:46 » et « mar. 24 nov. ».
+/// Time and date in the board's format: « 21:46 » and « mar. 24 nov. ».
 fn now_strings() -> (String, String) {
     use chrono::{Datelike, Local, Timelike};
     let now = Local::now();

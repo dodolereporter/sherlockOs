@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# Prototype jetable : son propre workspace, hors du workspace principal.
+# Throwaway prototype: its own workspace, outside the main one.
 [workspace]
 
 [dependencies]
