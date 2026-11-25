@@ -1,0 +1,1174 @@
+{
+ "type": "a{oa{sa{sv}}}",
+ "data": [
+  {
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p3": {
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+     },
+     "Size": {
+      "type": "t",
+      "data": 16000000000
+     }
+    },
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       51,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 16000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "other"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "swap"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Swapspace": {}
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p1": {
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": [
+       [
+        47,
+        98,
+        111,
+        111,
+        116,
+        47,
+        101,
+        102,
+        105,
+        0
+       ]
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+     },
+     "Size": {
+      "type": "t",
+      "data": 1000000000
+     }
+    },
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       49,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 1000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "vfat"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": true
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1": {
+    "org.freedesktop.UDisks2.PartitionTable": {
+     "Type": {
+      "type": "s",
+      "data": "gpt"
+     }
+    },
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 512000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": ""
+     },
+     "IdType": {
+      "type": "s",
+      "data": ""
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p2": {
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": [
+       [
+        47,
+        0
+       ]
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 480000000000
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "0fc63daf-8483-4772-8e79-3d69d8477de4"
+     },
+     "Size": {
+      "type": "t",
+      "data": 480000000000
+     }
+    },
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       50,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 480000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ext4"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/loop0": {
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": [
+       [
+        47,
+        115,
+        110,
+        97,
+        112,
+        47,
+        101,
+        120,
+        101,
+        109,
+        112,
+        108,
+        101,
+        47,
+        49,
+        0
+       ]
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       108,
+       111,
+       111,
+       112,
+       48,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 50000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "squashfs"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/zram0": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       122,
+       114,
+       97,
+       109,
+       48,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 8000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "other"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "swap"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "zram0"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": true
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Swapspace": {}
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p4": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       52,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 120000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ext4"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "Données"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": [
+       [
+        47,
+        109,
+        101,
+        100,
+        105,
+        97,
+        47,
+        117,
+        116,
+        105,
+        108,
+        105,
+        115,
+        97,
+        116,
+        101,
+        117,
+        114,
+        47,
+        68,
+        111,
+        110,
+        110,
+        195,
+        169,
+        101,
+        115,
+        0
+       ]
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/drives/SanDisk_Cruzer": {
+    "org.freedesktop.UDisks2.Drive": {
+     "Vendor": {
+      "type": "s",
+      "data": "SanDisk"
+     },
+     "Model": {
+      "type": "s",
+      "data": "Cruzer Blade"
+     },
+     "Media": {
+      "type": "s",
+      "data": "thumb"
+     },
+     "MediaCompatibility": {
+      "type": "as",
+      "data": [
+       "thumb"
+      ]
+     },
+     "MediaRemovable": {
+      "type": "b",
+      "data": true
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     },
+     "ConnectionBus": {
+      "type": "s",
+      "data": "usb"
+     },
+     "Removable": {
+      "type": "b",
+      "data": true
+     },
+     "Ejectable": {
+      "type": "b",
+      "data": true
+     },
+     "CanPowerOff": {
+      "type": "b",
+      "data": true
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/sda1": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       115,
+       100,
+       97,
+       49,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 16000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/SanDisk_Cruzer"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "vfat"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "CLE_USB"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": false
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/drives/SD_Card": {
+    "org.freedesktop.UDisks2.Drive": {
+     "Vendor": {
+      "type": "s",
+      "data": ""
+     },
+     "Model": {
+      "type": "s",
+      "data": "SL32G"
+     },
+     "Media": {
+      "type": "s",
+      "data": "flash_sd"
+     },
+     "MediaCompatibility": {
+      "type": "as",
+      "data": [
+       "flash_sd"
+      ]
+     },
+     "MediaRemovable": {
+      "type": "b",
+      "data": true
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     },
+     "ConnectionBus": {
+      "type": "s",
+      "data": "sdio"
+     },
+     "Removable": {
+      "type": "b",
+      "data": true
+     },
+     "Ejectable": {
+      "type": "b",
+      "data": true
+     },
+     "CanPowerOff": {
+      "type": "b",
+      "data": true
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/mmcblk0p1": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       109,
+       109,
+       99,
+       98,
+       108,
+       107,
+       48,
+       112,
+       49,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 32000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/SD_Card"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "exfat"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": false
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/drives/USB_Disk": {
+    "org.freedesktop.UDisks2.Drive": {
+     "Vendor": {
+      "type": "s",
+      "data": ""
+     },
+     "Model": {
+      "type": "s",
+      "data": ""
+     },
+     "Media": {
+      "type": "s",
+      "data": ""
+     },
+     "MediaCompatibility": {
+      "type": "as",
+      "data": []
+     },
+     "MediaRemovable": {
+      "type": "b",
+      "data": false
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     },
+     "ConnectionBus": {
+      "type": "s",
+      "data": "usb"
+     },
+     "Removable": {
+      "type": "b",
+      "data": true
+     },
+     "Ejectable": {
+      "type": "b",
+      "data": true
+     },
+     "CanPowerOff": {
+      "type": "b",
+      "data": true
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/sdb1": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       115,
+       100,
+       98,
+       49,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 64000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/USB_Disk"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "crypto"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "crypto_LUKS"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": false
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Encrypted": {}
+   },
+   "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000": {
+    "org.freedesktop.UDisks2.Drive": {
+     "Vendor": {
+      "type": "s",
+      "data": ""
+     },
+     "Model": {
+      "type": "s",
+      "data": "ACME SSD 512"
+     },
+     "Media": {
+      "type": "s",
+      "data": ""
+     },
+     "MediaCompatibility": {
+      "type": "as",
+      "data": []
+     },
+     "MediaRemovable": {
+      "type": "b",
+      "data": false
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     },
+     "ConnectionBus": {
+      "type": "s",
+      "data": ""
+     },
+     "Removable": {
+      "type": "b",
+      "data": false
+     },
+     "Ejectable": {
+      "type": "b",
+      "data": false
+     },
+     "CanPowerOff": {
+      "type": "b",
+      "data": false
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p5": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       53,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 200000000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ntfs"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "Windows"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
+     },
+     "Size": {
+      "type": "t",
+      "data": 200000000000
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p6": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       54,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 800000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "ntfs"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": "Recovery"
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "de94bba4-06d1-4d40-a16a-bfd50179d6ac"
+     },
+     "Size": {
+      "type": "t",
+      "data": 800000000
+     }
+    }
+   },
+   "/org/freedesktop/UDisks2/block_devices/nvme0n1p7": {
+    "org.freedesktop.UDisks2.Block": {
+     "Device": {
+      "type": "ay",
+      "data": [
+       47,
+       100,
+       101,
+       118,
+       47,
+       110,
+       118,
+       109,
+       101,
+       48,
+       110,
+       49,
+       112,
+       55,
+       0
+      ]
+     },
+     "Size": {
+      "type": "t",
+      "data": 300000000
+     },
+     "Drive": {
+      "type": "o",
+      "data": "/org/freedesktop/UDisks2/drives/ACME_SSD_512_SN0000000000"
+     },
+     "IdUsage": {
+      "type": "s",
+      "data": "filesystem"
+     },
+     "IdType": {
+      "type": "s",
+      "data": "vfat"
+     },
+     "IdLabel": {
+      "type": "s",
+      "data": ""
+     },
+     "CryptoBackingDevice": {
+      "type": "o",
+      "data": "/"
+     },
+     "HintSystem": {
+      "type": "b",
+      "data": true
+     },
+     "HintIgnore": {
+      "type": "b",
+      "data": false
+     },
+     "HintName": {
+      "type": "s",
+      "data": ""
+     }
+    },
+    "org.freedesktop.UDisks2.Filesystem": {
+     "MountPoints": {
+      "type": "aay",
+      "data": []
+     },
+     "Size": {
+      "type": "t",
+      "data": 0
+     }
+    },
+    "org.freedesktop.UDisks2.Partition": {
+     "Type": {
+      "type": "s",
+      "data": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+     },
+     "Size": {
+      "type": "t",
+      "data": 300000000
+     }
+    }
+   }
+  }
+ ]
+}

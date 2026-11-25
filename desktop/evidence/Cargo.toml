@@ -1,0 +1,48 @@
+[package]
+name = "evidence"
+description = "Evidence, the file manager of the desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Shell toolkit (ADR 0014). The rendering functions come from sherlock-ui; `thread-pool` is
+# named here because copies and git status run off the interface thread.
+# `image-without-codecs` enables the image widget of the preview, without the dozens of formats
+# pulled by the `image` feature: only PNG and JPEG are decoded (`image` dependency below).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "image-without-codecs",
+    "thread-pool",
+] }
+# Image preview decoders, PNG and JPEG only. Version pulled by iced 0.14.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# Local time (localtime_r) for the dates of the listing and the trash. Already pulled by iced
+# and winit: only the declaration is new.
+libc = "=0.2.191"
+# Installed applications, file types and default applications (workspace crate).
+mime-apps = { path = "../mime-apps" }
+sherlock-ui = { path = "../sherlock-ui" }
+# UDisks2 on the system D-Bus: disks, USB keys, cards, mount, unmount, eject. Pure Rust, no
+# libdbus. Only its default pair of features is kept, named explicitly: the blocking API (the
+# watcher runs on its own thread) and its own small async-io executor (no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+# Headless rendering for the capture and the mouse tests, like the D-01 gallery.
+iced_test = "=0.14.0"
+# Runs the application's tasks in the test scenarios, without a window. Already pulled by
+# iced: only the declarations are new.
+iced_runtime = "=0.14.0"
+futures = "=0.3.34"
+# Reads the UDisks2 objects recorded with `busctl --json` for the device tests. Same version
+# as sherlockd.
+serde_json = "=1.0.154"
+
+[lints]
+workspace = true
