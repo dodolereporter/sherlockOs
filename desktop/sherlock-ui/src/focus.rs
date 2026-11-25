@@ -110,6 +110,10 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
     }
 
     fn diff(&self, tree: &mut Tree) {
+        // Un composant qui devient désactivé pendant qu'il a le focus le perd.
+        if self.on_activate.is_none() {
+            tree.state.downcast_mut::<State>().focused = false;
+        }
         tree.diff_children(std::slice::from_ref(&self.content));
     }
 
@@ -135,8 +139,11 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        let state = tree.state.downcast_mut::<State>();
         if self.on_activate.is_some() {
-            operation.focusable(None, layout.bounds(), tree.state.downcast_mut::<State>());
+            operation.focusable(None, layout.bounds(), state);
+        } else {
+            state.focused = false;
         }
         self.content
             .as_widget_mut()
@@ -158,10 +165,14 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
         match event {
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key: Key::Named(Named::Enter | Named::Space),
+                repeat,
                 ..
             }) if state.focused => {
                 if let Some(message) = &self.on_activate {
-                    shell.publish(message.clone());
+                    // Une touche gardée enfoncée n'active qu'une fois.
+                    if !repeat {
+                        shell.publish(message.clone());
+                    }
                     shell.capture_event();
                     return;
                 }
