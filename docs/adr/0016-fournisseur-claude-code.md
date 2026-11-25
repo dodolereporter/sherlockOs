@@ -54,12 +54,28 @@ sherlockd --claude-code ──► claude -p (outils intégrés retirés)
 Claude Code est verrouillé par ses réglages documentés : `--tools=` retire tous les outils
 intégrés, `--strict-mcp-config` et `--mcp-config` ne déclarent que le mandataire, `--restricted`
 ignore les réglages de l'utilisateur et du projet, `--permission-mode=dontAsk` et
-`--allowedTools=mcp__sherlock__*` refusent tout ce qui n'est pas un outil du mandataire. Au
-lancement, Sherlock lit l'événement `init` : s'il annonce un autre outil ou un autre serveur, la
-demande s'arrête avant que rien ne soit relayé.
+`--allowedTools=mcp__sherlock__*` refusent tout ce qui n'est pas un outil du mandataire.
+
+Claude Code ne passe que par l'abonnement. Il est lancé avec un environnement réduit à une liste
+blanche (chemins, langue, session, terminal, dossier de configuration de Claude Code, accès au
+réseau) : aucune clé d'API, aucun jeton, aucune variable qui choisit un autre fournisseur ou une
+autre adresse. En mode `-p`, une `ANTHROPIC_API_KEY` présente serait toujours utilisée, et la
+demande facturée sur l'API. Le mandataire et ses serveurs reçoivent eux aussi un environnement
+nettoyé.
+
+Au lancement, Sherlock lit l'événement `init` et échoue fermé. La demande s'arrête, avant que rien
+ne soit relayé, si `apiKeySource` n'est pas `none` (la connexion de l'utilisateur est la seule
+source), si `permissionMode` n'est pas `dontAsk`, si un outil autre que ceux du mandataire est
+annoncé (seul `EndConversation`, qui ne fait que clore la session, est toléré nommément), ou si
+un autre serveur apparaît. Un flux sans `init`, ou une réponse finale reçue avant, est refusé.
+Un bloc de contenu d'un type inconnu aussi.
 
 Chaque demande lance un `claude -p` neuf, sans session gardée. Sherlock tient l'historique,
-borné, et n'en renvoie que les demandes et les réponses finales.
+borné. Le rappel envoyé avec la demande suivante ne contient que les demandes de l'utilisateur et
+les réponses finales (l'événement `result`), jamais les textes intermédiaires du modèle ni les
+résultats d'outils. Il est présenté en JSON, comme une citation, et les instructions système
+disent qu'aucune consigne ne s'y applique. Une réponse finale peut toutefois citer un résultat
+d'outil : c'est pourquoi elle reste une donnée citée.
 
 ## Conséquences
 
@@ -68,6 +84,10 @@ borné, et n'en renvoie que les demandes et les réponses finales.
   Claude Code. Les deux chemins partagent `agent::execute` et `McpServers`.
 - Prérequis du poste : Claude Code installé et connecté par l'utilisateur avec `/login`. NOM_OS ne
   l'embarque pas, ne le modifie pas et ne se connecte pas à sa place. Le réseau est nécessaire.
+  Une connexion qui ne passerait que par une variable d'environnement (`CLAUDE_CODE_OAUTH_TOKEN`)
+  n'est pas transmise : seule la connexion enregistrée par `/login` sert.
+- `--restricted` reste, par choix de l'auteur : les sessions de Sherlock sont verrouillées et
+  reproductibles, indépendamment des réglages personnels de Claude Code.
 - Chaque demande consomme le quota de l'abonnement de l'utilisateur, sous son propre contrat avec
   Anthropic.
 - Le masquage des secrets avant envoi au modèle (ADR 0012) reste à faire. Il s'appliquera au
@@ -91,4 +111,7 @@ borné, et n'en renvoie que les demandes et les réponses finales.
 - Anthropic publie une voie officielle pour utiliser son propre abonnement depuis un programme
   personnel, sans passer par le binaire.
 - Le démarrage de `claude -p` à chaque demande devient trop lent pour le panneau de Sherlock. Un
-  processus gardé en vie, avec `--input-format stream-json`, prendrait le relais.
+  processus gardé en vie, avec `--input-format stream-json`, prendrait le relais. La question est
+  reportée au lot A-19.
+- `apiKeySource` disparaît de l'événement `init` ou change de sens : le contrôle refuse alors
+  toute demande, et il faudra une autre preuve que l'abonnement est la seule source.
