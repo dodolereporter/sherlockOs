@@ -21,6 +21,17 @@ pub enum Kind {
     Window(String),
 }
 
+/// What an icon stands for, by identity rather than by place: the place of an icon changes
+/// when windows open and close.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Sherlock,
+    /// A desktop file id.
+    App(String),
+    /// An `app_id` without desktop entry.
+    Window(String),
+}
+
 /// How an icon is drawn.
 #[derive(Debug, Clone)]
 pub enum Glyph {
@@ -50,6 +61,14 @@ impl Item {
             name: String::from(dock::text::SHERLOCK),
             glyph: Glyph::Sherlock,
             pinned: true,
+        }
+    }
+
+    pub fn target(&self) -> Target {
+        match &self.kind {
+            Kind::Sherlock => Target::Sherlock,
+            Kind::App(entry) => Target::App(entry.id.clone()),
+            Kind::Window(app_id) => Target::Window(app_id.clone()),
         }
     }
 

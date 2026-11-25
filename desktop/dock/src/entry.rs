@@ -12,6 +12,8 @@ const ENTRY: &str = "Desktop Entry";
 pub struct DesktopEntry {
     /// Desktop file id: the file name without `.desktop`, such as `org.kde.konsole`.
     pub id: String,
+    /// The `.desktop` file, for `%k`.
+    pub file: PathBuf,
     pub name: String,
     /// `Icon`: a theme icon name or an absolute path.
     pub icon: Option<String>,
@@ -21,8 +23,13 @@ pub struct DesktopEntry {
     pub categories: Vec<String>,
     /// `StartupWMClass`: the class or `app_id` its windows carry.
     pub wm_class: Option<String>,
-    /// Hidden from menus (`NoDisplay`) or deleted (`Hidden`).
-    pub hidden: bool,
+    /// Hidden from menus (`NoDisplay`): still an application, never picked by default.
+    pub no_display: bool,
+    /// Deleted (`Hidden`): as if the file did not exist. Such an entry masks the same id in the
+    /// directories that come after (that is how a user removes a system application).
+    pub deleted: bool,
+    /// `TryExec`: a program that must exist for the entry to count.
+    pub try_exec: Option<String>,
     /// The « new window » action, when the application declares one.
     pub new_window: Option<Action>,
 }
@@ -35,8 +42,10 @@ pub struct Action {
 }
 
 impl DesktopEntry {
-    /// Reads a desktop entry. `None` if it is not an application.
-    pub fn parse(id: &str, text: &str) -> Option<Self> {
+    /// Reads the desktop entry `file`, whose content is `text`. `None` if it is not an
+    /// application.
+    pub fn parse(id: &str, file: &Path, text: &str) -> Option<Self> {
+        let path = file;
         let file = KeyFile::parse(text);
         if file.get(ENTRY, "Type").as_deref() != Some("Application") {
             return None;
@@ -51,6 +60,7 @@ impl DesktopEntry {
             });
         Some(Self {
             id: id.to_owned(),
+            file: path.to_path_buf(),
             name: file
                 .localized(ENTRY, "Name")
                 .unwrap_or_else(|| id.to_owned()),
@@ -59,9 +69,16 @@ impl DesktopEntry {
             path: file.get(ENTRY, "Path").filter(|p| !p.is_empty()),
             categories: file.list(ENTRY, "Categories"),
             wm_class: file.get(ENTRY, "StartupWMClass").filter(|c| !c.is_empty()),
-            hidden: file.flag(ENTRY, "NoDisplay") || file.flag(ENTRY, "Hidden"),
+            no_display: file.flag(ENTRY, "NoDisplay"),
+            deleted: file.flag(ENTRY, "Hidden"),
+            try_exec: file.get(ENTRY, "TryExec").filter(|t| !t.is_empty()),
             new_window,
         })
+    }
+
+    /// Whether the entry counts: not deleted, and its `TryExec` program exists.
+    pub fn usable(&self) -> bool {
+        !self.deleted && self.try_exec.as_deref().is_none_or(is_executable)
     }
 
     /// Whether a window with this `app_id` (Wayland) or class (X11) belongs to the application:
@@ -88,8 +105,9 @@ fn is_new_window(action: &str) -> bool {
 
 /// Splits an `Exec` value into a program and its arguments, as the Desktop Entry specification
 /// says: double quotes group, a backslash escapes in them, field codes are dropped (`%f`, `%U`…)
-/// or replaced (`%c` by the name, `%i` by `--icon` and the icon, `%%` by `%`). No shell.
-pub fn command_line(exec: &str, name: &str, icon: Option<&str>) -> Vec<String> {
+/// or replaced (`%c` by the name, `%i` by `--icon` and the icon, `%k` by the entry's file, `%%`
+/// by `%`). No shell.
+pub fn command_line(exec: &str, name: &str, icon: Option<&str>, file: &Path) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
     let mut quoted = false;
@@ -132,7 +150,7 @@ pub fn command_line(exec: &str, name: &str, icon: Option<&str>) -> Vec<String> {
             }
             "%c" => args.push(name.to_owned()),
             _ => {
-                let expanded = expand_codes(&word, name);
+                let expanded = expand_codes(&word, name, file);
                 // A word made only of dropped field codes disappears.
                 if !(expanded.is_empty() && word.starts_with('%')) {
                     args.push(expanded);
@@ -143,7 +161,7 @@ pub fn command_line(exec: &str, name: &str, icon: Option<&str>) -> Vec<String> {
     args
 }
 
-fn expand_codes(word: &str, name: &str) -> String {
+fn expand_codes(word: &str, name: &str, file: &Path) -> String {
     let mut out = String::new();
     let mut chars = word.chars();
     while let Some(c) = chars.next() {
@@ -154,6 +172,7 @@ fn expand_codes(word: &str, name: &str) -> String {
         match chars.next() {
             Some('%') => out.push('%'),
             Some('c') => out.push_str(name),
+            Some('k') => out.push_str(&file.to_string_lossy()),
             // Files, URLs and deprecated codes: the dock opens nothing.
             Some(_) | None => {}
         }
@@ -179,8 +198,23 @@ pub fn data_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
+/// A program name or path that can be run: an executable file, looked up in `PATH` when the
+/// name has no slash.
+pub fn is_executable(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let runnable = |path: &Path| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return runnable(Path::new(program));
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| runnable(&dir.join(program))))
+}
+
 /// The installed applications found in `<dir>/applications` of each data directory. When the
-/// same id is in several directories, the first one wins.
+/// same id is in several directories, the first one wins, even when it is deleted (`Hidden`)
+/// or its `TryExec` program is missing: then the application is not there at all.
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub entries: Vec<DesktopEntry>,
@@ -190,6 +224,7 @@ impl Catalog {
     /// Reads the applications of `data_dirs`. Unreadable files are skipped.
     pub fn load(data_dirs: &[PathBuf]) -> Self {
         let mut entries: Vec<DesktopEntry> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for dir in data_dirs {
             let Ok(files) = std::fs::read_dir(dir.join("applications")) else {
                 continue;
@@ -200,13 +235,17 @@ impl Catalog {
                 let Some(id) = desktop_id(&path) else {
                     continue;
                 };
-                if entries.iter().any(|e| e.id == id) {
+                if seen.contains(&id) {
                     continue;
                 }
-                if let Some(entry) = std::fs::read_to_string(&path)
+                let Some(entry) = std::fs::read_to_string(&path)
                     .ok()
-                    .and_then(|text| DesktopEntry::parse(&id, &text))
-                {
+                    .and_then(|text| DesktopEntry::parse(&id, &path, &text))
+                else {
+                    continue;
+                };
+                seen.insert(id);
+                if entry.usable() {
                     entries.push(entry);
                 }
             }
@@ -246,7 +285,7 @@ mod tests {
         let action = term.new_window.as_ref().expect("new window action");
         assert_eq!(action.id, "NewWindow");
         assert_eq!(action.exec, "example-terminal --new-window");
-        assert!(!term.hidden);
+        assert!(!term.no_display);
         assert!(term.owns("terminal") && term.owns("org.example.terminal"));
         assert!(!term.owns("browser"));
 
@@ -258,9 +297,16 @@ mod tests {
             "only a private window is declared"
         );
         assert!(browser.owns("ExampleBrowser"), "StartupWMClass");
-        // Not an application, and hidden ones are still read but marked.
+        // Not an application; hidden from menus but there; deleted (`Hidden`), or whose
+        // `TryExec` is missing: not there at all.
         assert!(catalog.get("example-link").is_none());
-        assert!(catalog.get("example-hidden").is_some_and(|e| e.hidden));
+        assert!(catalog.get("example-hidden").is_some_and(|e| e.no_display));
+        assert!(catalog.get("example-deleted").is_none());
+        assert!(catalog.get("example-tryexec").is_none());
+        // A deleted entry masks the same id further down the data directories.
+        let masked = Catalog::load(&[fixtures().join("data-masking"), fixtures().join("data")]);
+        assert!(masked.get("example-browser").is_none());
+        assert!(masked.get("org.example.Files").is_some());
     }
 
     #[test]
@@ -269,15 +315,20 @@ mod tests {
             r#"example --title "Mon %c" %U --x="a \"b\"" %%"#,
             "App",
             None,
+            Path::new("/a/b.desktop"),
         );
         assert_eq!(line, ["example", "--title", "Mon App", "--x=a \"b\"", "%"]);
-        let line = command_line("app %i %f", "App", Some("app-icon"));
+        let line = command_line("app %i %f", "App", Some("app-icon"), Path::new("b.desktop"));
         assert_eq!(line, ["app", "--icon", "app-icon"]);
+        // `%k` is the entry's own file.
+        let line = command_line("app --entry=%k", "App", None, Path::new("/a/b.desktop"));
+        assert_eq!(line, ["app", "--entry=/a/b.desktop"]);
         // Flatpak's forwarding markers are passed on: flatpak reads them.
         let line = command_line(
             "flatpak run --file-forwarding org.ex.App @@u %u @@",
             "",
             None,
+            Path::new("org.ex.App.desktop"),
         );
         assert_eq!(line.last().map(String::as_str), Some("@@"));
         assert_eq!(line.len(), 6);

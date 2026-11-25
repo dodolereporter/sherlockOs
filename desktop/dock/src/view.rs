@@ -119,7 +119,10 @@ impl Dock {
         let Some(menu) = &self.menu else {
             return space().into();
         };
-        let name = self.items.get(menu.item).map_or("", |i| i.name.as_str());
+        let index = self.index_of(&menu.target);
+        let name = index
+            .and_then(|i| self.items.get(i))
+            .map_or("", |i| i.name.as_str());
         let mut header = row![
             ui::body(name).font(typography::UI_SEMIBOLD),
             space::horizontal()
@@ -127,7 +130,7 @@ impl Dock {
         .align_y(Alignment::Center)
         .height(dock::MENU_HEADER_HEIGHT)
         .padding([0.0, metrics::MENU_ITEM_PADDING]);
-        if let Some((count, _)) = self.open_windows(menu.item)
+        if let Some((count, _)) = index.and_then(|i| self.open_windows(i))
             && count > 0
         {
             let count = text(dock::text::windows(count))

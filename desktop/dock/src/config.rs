@@ -49,7 +49,7 @@ const ROLES: [Role; 5] = [
 /// type (`mimeapps`), else a preferred one, else the first one of its category. Only what is
 /// installed and shown in menus; an application fills one role at most.
 pub fn defaults(catalog: &Catalog, mimeapps: &KeyFile) -> Vec<String> {
-    let usable = |id: &str| catalog.get(id).filter(|e| !e.hidden);
+    let usable = |id: &str| catalog.get(id).filter(|e| !e.no_display);
     let mut pinned: Vec<String> = Vec::new();
     for role in &ROLES {
         let from_mime = role
@@ -63,7 +63,7 @@ pub fn defaults(catalog: &Catalog, mimeapps: &KeyFile) -> Vec<String> {
                 catalog
                     .entries
                     .iter()
-                    .find(|e| !e.hidden && e.categories.iter().any(|c| c == category))
+                    .find(|e| !e.no_display && e.categories.iter().any(|c| c == category))
             })
         };
         let chosen: Option<&DesktopEntry> = from_mime.or_else(preferred).or_else(by_category);

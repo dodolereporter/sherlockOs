@@ -31,7 +31,7 @@ pub fn command_line(app: &DesktopEntry, what: What) -> Option<Vec<String>> {
         What::App => app.exec.as_deref()?,
         What::NewWindow => app.new_window.as_ref()?.exec.as_str(),
     };
-    let line = entry::command_line(exec, &app.name, app.icon.as_deref());
+    let line = entry::command_line(exec, &app.name, app.icon.as_deref(), &app.file);
     (!line.is_empty()).then_some(line)
 }
 
@@ -77,7 +77,8 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Sample\nExec={exec}\nActions=new-window;\n\
              [Desktop Action new-window]\nExec={exec} --new\n"
         );
-        DesktopEntry::parse("sample", &text).expect("application")
+        DesktopEntry::parse("sample", std::path::Path::new("sample.desktop"), &text)
+            .expect("application")
     }
 
     #[test]

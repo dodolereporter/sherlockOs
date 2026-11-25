@@ -13,12 +13,15 @@ use dock_config::DockConfig;
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
 
-/// Events that may change the file: written, moved in or out, created, deleted.
+/// Events that may change the file: written, moved in or out, created, deleted; and the end of
+/// the watched directory itself.
 const MASK: u32 = libc::IN_CLOSE_WRITE
     | libc::IN_MOVED_TO
     | libc::IN_MOVED_FROM
     | libc::IN_CREATE
-    | libc::IN_DELETE;
+    | libc::IN_DELETE
+    | libc::IN_DELETE_SELF
+    | libc::IN_MOVE_SELF;
 
 /// Editors write in several steps: the events of a burst give one reload.
 const SETTLE: Duration = Duration::from_millis(50);
@@ -48,36 +51,64 @@ fn run(path: &Path, sender: &mpsc::UnboundedSender<Box<DockConfig>>) -> io::Resu
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(io::Error::other("no directory or file name"));
     };
-    let mut last = load(path).ok();
-    loop {
-        if !dir.exists() {
-            let (Some(parent), Some(dir_name)) = (dir.parent(), dir.file_name()) else {
-                return Err(io::Error::other("no parent directory"));
-            };
-            let parent = Inotify::new(parent)?;
-            while !dir.exists() {
-                parent.wait(dir_name)?;
-            }
+    // Nothing read yet: the first state goes to the dock too, so that a change between its
+    // own reading at startup and this thread is not missed.
+    let mut last = None;
+    // Sends the file's state when it changed; `false` once the dock is gone.
+    let send = |last: &mut Option<DockConfig>| {
+        if let Ok(config) = load(path)
+            && last.as_ref() != Some(&config)
+        {
+            tracing::info!(path = %path.display(), "configuration read");
+            *last = Some(config.clone());
+            return sender.unbounded_send(Box::new(config)).is_ok();
         }
+        true
+    };
+    loop {
+        // Also when the folder is missing: an absent file is the default configuration.
+        if !send(&mut last) {
+            return Ok(());
+        }
+        wait_for_dir(dir)?;
         // Watched from here on: nothing that comes after is missed, and what came before is
         // read just below.
         let watcher = Inotify::new(dir)?;
         loop {
-            if let Ok(config) = load(path)
-                && last.as_ref() != Some(&config)
-            {
-                tracing::info!(path = %path.display(), "configuration reloaded");
-                last = Some(config.clone());
-                if sender.unbounded_send(Box::new(config)).is_err() {
-                    return Ok(());
-                }
+            if !send(&mut last) {
+                return Ok(());
             }
             if !watcher.wait(name)? {
+                // The folder went away: wait for it to come back.
                 break;
             }
             std::thread::sleep(SETTLE);
         }
     }
+}
+
+/// Blocks until `dir` exists. While it does not, watches its closest existing ancestor for the
+/// next missing folder on the way, as many levels up as needed.
+fn wait_for_dir(dir: &Path) -> io::Result<()> {
+    while !dir.exists() {
+        let Some((ancestor, next)) = dir
+            .ancestors()
+            .zip(dir.ancestors().skip(1))
+            .find(|(_, parent)| parent.exists())
+            .and_then(|(child, parent)| Some((parent, child.file_name()?)))
+        else {
+            return Err(io::Error::other(
+                "no existing folder above the configuration",
+            ));
+        };
+        let watcher = Inotify::new(ancestor)?;
+        // Created between the check above and the watch: go on at once.
+        if ancestor.join(next).exists() {
+            continue;
+        }
+        let _ = watcher.wait(next)?;
+    }
+    Ok(())
 }
 
 /// Reads the file and logs what it ignores.
@@ -137,13 +168,18 @@ impl Inotify {
                 }
                 return Err(error);
             };
+            // The whole buffer: a deleted directory sends the deletion of its files and its own
+            // end in the same read, and the end must not be missed.
+            let (mut gone, mut named) = (false, false);
             for (mask, event) in events(&buffer[..read]) {
-                if mask & GONE != 0 {
-                    return Ok(false);
-                }
-                if event == name.as_bytes() {
-                    return Ok(true);
-                }
+                gone |= mask & GONE != 0;
+                named |= event == name.as_bytes();
+            }
+            if gone {
+                return Ok(false);
+            }
+            if named {
+                return Ok(true);
             }
         }
     }
@@ -186,23 +222,37 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_file_is_reloaded() {
-        let dir = std::env::temp_dir().join(format!("dock-watch-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        // `dir/dock` does not exist yet: the watcher waits for it.
-        std::fs::create_dir_all(&dir).expect("directory");
-        let path = dir.join("dock/dock.conf");
+    fn the_configuration_is_followed_through_deletions() {
+        let root = std::env::temp_dir().join(format!("dock-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("directory");
+        // Two missing levels: `config/dock`. The watcher climbs to `root`.
+        let path = root.join("config/dock/dock.conf");
         let mut stream = watch(path.clone());
-        std::thread::sleep(Duration::from_millis(100));
-        let mut config = DockConfig::default();
-        config.position = Position::Left;
-        config.save(&path).expect("saved");
-        let changed = iced::futures::executor::block_on(stream.next()).expect("reloaded");
-        assert_eq!(changed.position, Position::Left);
+        let mut next = || iced::futures::executor::block_on(stream.next()).expect("read");
+        assert_eq!(*next(), DockConfig::default(), "the first state goes out");
+
+        let save = |position| {
+            let mut config = DockConfig::default();
+            config.position = position;
+            config.save(&path).expect("saved");
+        };
+        save(Position::Left);
+        assert_eq!(next().position, Position::Left);
         // Replaced by a rename, as editors do.
-        std::fs::write(dir.join("dock/new"), "[Dock]\nIconSize=40\n").expect("written");
-        std::fs::rename(dir.join("dock/new"), &path).expect("renamed");
-        let changed = iced::futures::executor::block_on(stream.next()).expect("reloaded");
-        assert_eq!(changed.icon_size, 40.0);
+        let dir = root.join("config/dock");
+        std::fs::write(dir.join("new"), "[Dock]\nIconSize=40\n").expect("written");
+        std::fs::rename(dir.join("new"), &path).expect("renamed");
+        assert_eq!(next().icon_size, 40.0);
+        // The file deleted: back to the defaults.
+        std::fs::remove_file(&path).expect("deleted");
+        assert_eq!(*next(), DockConfig::default());
+        // The folder deleted with its file, then made again: still followed.
+        save(Position::Right);
+        assert_eq!(next().position, Position::Right);
+        std::fs::remove_dir_all(root.join("config")).expect("folder deleted");
+        assert_eq!(*next(), DockConfig::default());
+        save(Position::Top);
+        assert_eq!(next().position, Position::Top);
     }
 }

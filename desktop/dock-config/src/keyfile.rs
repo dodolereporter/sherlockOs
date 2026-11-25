@@ -1,42 +1,66 @@
 //! Key files, the format of desktop entries, icon themes and the dock configuration: groups
-//! of `key=value` lines. Comments are not kept when a file is written back.
+//! of `key=value` lines. Comments and blank lines are kept when a file is written back, and
+//! values are escaped on writing: a value can never add a line of its own.
 
 /// Languages tried for a localized key, before the key without language: the interface is in
 /// French.
 const LANGUAGES: [&str; 2] = ["fr_FR", "fr"];
 
+/// A line of a group: a key and its value as written (escapes kept), or a line kept as it is
+/// (comment, blank line, anything that is not `key=value`).
+#[derive(Debug, Clone, PartialEq)]
+enum Line {
+    Pair(String, String),
+    Other(String),
+}
+
 /// A key file: groups of `key=value` lines.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct KeyFile {
-    groups: Vec<(String, Vec<(String, String)>)>,
+    /// Lines before the first group.
+    preamble: Vec<String>,
+    groups: Vec<(String, Vec<Line>)>,
 }
 
 impl KeyFile {
-    /// Reads a key file. Comments, blank lines and lines outside a group are skipped.
+    /// Reads a key file. Comments, blank lines and other lines are kept for writing back.
     pub fn parse(text: &str) -> Self {
-        let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
-        for line in text.lines().map(str::trim) {
-            if line.is_empty() || line.starts_with('#') {
+        let mut file = Self::default();
+        for original in text.lines() {
+            let line = original.trim();
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                file.groups.push((name.to_owned(), Vec::new()));
                 continue;
             }
-            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                groups.push((name.to_owned(), Vec::new()));
-            } else if let (Some((key, value)), Some((_, entries))) =
-                (line.split_once('='), groups.last_mut())
-            {
-                entries.push((key.trim().to_owned(), value.trim().to_owned()));
+            let pair = (!line.starts_with('#'))
+                .then(|| line.split_once('='))
+                .flatten()
+                .map(|(key, value)| Line::Pair(key.trim().to_owned(), value.trim().to_owned()));
+            match file.groups.last_mut() {
+                Some((_, lines)) => {
+                    lines.push(pair.unwrap_or_else(|| Line::Other(original.to_owned())));
+                }
+                None => file.preamble.push(original.to_owned()),
             }
         }
-        Self { groups }
+        file
+    }
+
+    fn pairs(&self, group: &str) -> impl Iterator<Item = (&str, &str)> {
+        self.groups
+            .iter()
+            .filter(move |(name, _)| name == group)
+            .take(1)
+            .flat_map(|(_, lines)| lines)
+            .filter_map(|line| match line {
+                Line::Pair(key, value) => Some((key.as_str(), value.as_str())),
+                Line::Other(_) => None,
+            })
     }
 
     /// Raw value of `key` in `group`, escapes kept. The first one wins.
     fn raw(&self, group: &str, key: &str) -> Option<&str> {
-        let (_, entries) = self.groups.iter().find(|(name, _)| name == group)?;
-        entries
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| v.as_str())
+        self.pairs(group).find(|(k, _)| *k == key).map(|(_, v)| v)
     }
 
     /// String value of `key` in `group`, escapes (`\s`, `\n`, `\t`, `\r`, `\\`) resolved.
@@ -75,8 +99,9 @@ impl KeyFile {
         self.raw(group, key) == Some("true")
     }
 
-    /// Sets `key` in `group`, adding the group if needed.
-    pub fn set(&mut self, group: &str, key: &str, value: String) {
+    /// Sets `key` in `group` to `value`, escaped, adding the group if needed. A line break in
+    /// `value` is written `\n`: it cannot start a line of its own.
+    pub fn set(&mut self, group: &str, key: &str, value: &str) {
         let index = match self.groups.iter().position(|(name, _)| name == group) {
             Some(index) => index,
             None => {
@@ -84,24 +109,61 @@ impl KeyFile {
                 self.groups.len() - 1
             }
         };
-        let entries = &mut self.groups[index].1;
-        match entries.iter_mut().find(|(k, _)| k == key) {
-            Some(entry) => entry.1 = value,
-            None => entries.push((key.to_owned(), value)),
+        let escaped = escape(value);
+        let lines = &mut self.groups[index].1;
+        let existing = lines
+            .iter_mut()
+            .find(|line| matches!(line, Line::Pair(k, _) if k == key));
+        match existing {
+            Some(line) => *line = Line::Pair(key.to_owned(), escaped),
+            None => {
+                // After the last pair, before the blank lines that end the group.
+                let at = lines
+                    .iter()
+                    .rposition(|l| matches!(l, Line::Pair(..)))
+                    .map_or(0, |i| i + 1);
+                lines.insert(at, Line::Pair(key.to_owned(), escaped));
+            }
         }
     }
 
-    /// Writes the file back, group after group.
+    /// Writes the file back: its lines in their order, the values set since in place.
     pub fn to_text(&self) -> String {
         let mut text = String::new();
-        for (name, entries) in &self.groups {
+        for line in &self.preamble {
+            text.push_str(line);
+            text.push('\n');
+        }
+        for (name, lines) in &self.groups {
             text.push_str(&format!("[{name}]\n"));
-            for (key, value) in entries {
-                text.push_str(&format!("{key}={value}\n"));
+            for line in lines {
+                match line {
+                    Line::Pair(key, value) => text.push_str(&format!("{key}={value}\n")),
+                    Line::Other(other) => {
+                        text.push_str(other);
+                        text.push('\n');
+                    }
+                }
             }
         }
         text
     }
+}
+
+/// Escapes a value for writing: backslash, line breaks, tabs, and a leading space.
+fn escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for (i, c) in value.chars().enumerate() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ' ' if i == 0 => out.push_str("\\s"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn unescape(value: &str) -> String {
@@ -144,10 +206,32 @@ mod tests {
 
     #[test]
     fn a_key_file_writes_back_what_it_read() {
-        let mut file = KeyFile::parse("# comment\n[Dock]\nPinned=a;b;\n");
-        file.set("Dock", "Pinned", String::from("a;"));
-        file.set("Dock", "IconTheme", String::from("hicolor"));
-        assert_eq!(file.to_text(), "[Dock]\nPinned=a;\nIconTheme=hicolor\n");
+        let text = "# Written by hand.\n[Dock]\n# Left to right.\nPinned=a;b;\n\n[Other]\nX=y\n";
+        let mut file = KeyFile::parse(text);
+        assert_eq!(file.to_text(), text, "comments and blank lines kept");
+        file.set("Dock", "Pinned", "a;");
+        file.set("Dock", "IconTheme", "hicolor");
+        assert_eq!(
+            file.to_text(),
+            "# Written by hand.\n[Dock]\n# Left to right.\nPinned=a;\nIconTheme=hicolor\n\n\
+             [Other]\nX=y\n"
+        );
         assert_eq!(KeyFile::parse(&file.to_text()), file);
+    }
+
+    #[test]
+    fn a_value_cannot_add_a_line() {
+        let mut file = KeyFile::default();
+        file.set("Dock", "IconTheme", "evil\n[Dock]\nPosition=left");
+        file.set("Dock", "Comment", " lead\\tab\t");
+        let text = file.to_text();
+        assert_eq!(text.lines().count(), 3, "{text}");
+        let read = KeyFile::parse(&text);
+        assert_eq!(
+            read.get("Dock", "IconTheme").as_deref(),
+            Some("evil\n[Dock]\nPosition=left")
+        );
+        assert_eq!(read.get("Dock", "Position"), None);
+        assert_eq!(read.get("Dock", "Comment").as_deref(), Some(" lead\\tab\t"));
     }
 }

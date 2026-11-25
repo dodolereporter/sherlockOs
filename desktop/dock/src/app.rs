@@ -18,7 +18,7 @@ use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION};
 
 use crate::entry::Catalog;
 use crate::icons::IconLookup;
-use crate::items::{Builder, Glyph, Item};
+use crate::items::{Builder, Glyph, Item, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key};
@@ -28,7 +28,8 @@ use crate::windows::{self, Click, Control, Request, Windows};
 #[derive(Debug, Clone)]
 pub(crate) struct OpenMenu {
     pub(crate) id: Id,
-    pub(crate) item: usize,
+    /// The icon the menu belongs to, by identity.
+    pub(crate) target: Target,
     pub(crate) entries: Vec<(Entry, bool)>,
     pub(crate) cursor: Option<usize>,
 }
@@ -305,7 +306,11 @@ impl Dock {
         let now = self.now;
         self.pointer = point;
         let layout = self.layout(now);
-        let inside = point.filter(|p| layout.contains(*p));
+        // The pointer comes in over the bar or an icon; once in, it stays in over the whole
+        // band of the magnified dock, gaps between grown icons included.
+        let hovering = self.hovering;
+        let inside =
+            point.filter(|p| layout.contains(*p) || (hovering && layout.hover_band().contains(*p)));
         let count = self.items.len();
         let ratio = inside.map(|p| layout.ratio(p));
         for (size, target) in self
@@ -524,17 +529,30 @@ impl Dock {
         // rendering).
         let bar = layout.bar;
         let gap = dock::MENU_GAP;
+        // Past the icon too when it grew beyond the bar.
         let (point, toward) = match self.geometry.position {
-            Edge::Bottom => (Point::new(icon.center_x(), bar.y - gap), PopupAnchor::Top),
+            Edge::Bottom => (
+                Point::new(icon.center_x(), bar.y.min(icon.y) - gap),
+                PopupAnchor::Top,
+            ),
             Edge::Top => (
-                Point::new(icon.center_x(), bar.y + bar.height + gap),
+                Point::new(
+                    icon.center_x(),
+                    (bar.y + bar.height).max(icon.y + icon.height) + gap,
+                ),
                 PopupAnchor::Bottom,
             ),
             Edge::Left => (
-                Point::new(bar.x + bar.width + gap, icon.center_y()),
+                Point::new(
+                    (bar.x + bar.width).max(icon.x + icon.width) + gap,
+                    icon.center_y(),
+                ),
                 PopupAnchor::Right,
             ),
-            Edge::Right => (Point::new(bar.x - gap, icon.center_y()), PopupAnchor::Left),
+            Edge::Right => (
+                Point::new(bar.x.min(icon.x) - gap, icon.center_y()),
+                PopupAnchor::Left,
+            ),
         };
         let gravity = match toward {
             PopupAnchor::Top => PopupGravity::Top,
@@ -553,11 +571,16 @@ impl Dock {
         let id = Id::unique();
         self.menu = Some(OpenMenu {
             id,
-            item: index,
+            target: self.items[index].target(),
             entries,
             cursor: None,
         });
         Task::batch([close, Task::done(Message::NewPopUp { settings, id })])
+    }
+
+    /// The place of the icon of `target`, if it is still in the dock.
+    pub(crate) fn index_of(&self, target: &Target) -> Option<usize> {
+        self.items.iter().position(|item| item.target() == *target)
     }
 
     fn close_menu(&mut self) -> Task<Message> {
@@ -568,10 +591,18 @@ impl Dock {
     }
 
     fn pick(&mut self, entry: Entry) -> Task<Message> {
-        let Some(index) = self.menu.as_ref().map(|m| m.item) else {
+        let Some(target) = self.menu.as_ref().map(|m| m.target.clone()) else {
             return Task::none();
         };
         let close = self.close_menu();
+        // The icons may have moved since the menu opened: find the application again.
+        let Some(index) = self.index_of(&target) else {
+            tracing::info!(
+                ?target,
+                "the application left the dock while its menu was open"
+            );
+            return close;
+        };
         let task = match entry {
             Entry::Open => {
                 self.activate(index, What::App);

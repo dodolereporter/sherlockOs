@@ -272,6 +272,30 @@ impl Layout {
         ((along - start) / length).clamp(0.0, 1.0)
     }
 
+    /// The band a hovered dock keeps the pointer in: along the bar as it is drawn, from the
+    /// screen edge to the top of the tallest icon. The gaps between grown icons are in it, so
+    /// the magnification does not drop when the pointer crosses one.
+    pub fn hover_band(&self) -> Rectangle {
+        let (start, length) = self.along;
+        let tallest = self
+            .icons
+            .iter()
+            .map(|icon| icon.width.max(icon.height))
+            .fold(0.0, f32::max);
+        let depth = self
+            .geometry
+            .bar_thickness()
+            .max(self.geometry.inset() + tallest);
+        to_surface(
+            self.geometry.position,
+            self.surface,
+            start,
+            0.0,
+            length,
+            depth,
+        )
+    }
+
     /// Whether `point` is over the dock: the bar, or an icon that grew past it.
     pub fn contains(&self, point: Point) -> bool {
         self.bar.contains(point) || self.icon_at(point).is_some()
@@ -550,6 +574,35 @@ mod tests {
         // The dot between the icon and the edge.
         let dot = grown.dot(3).expect("dot");
         assert_eq!((dot.x, dot.width), (4.0, 5.0));
+    }
+
+    #[test]
+    fn the_gap_between_grown_icons_keeps_the_hover() {
+        let geometry = Geometry::default();
+        let surface = Size::new(900.0, 132.0);
+        let sizes = geometry.targets(Some(0.5), 5);
+        let layout = Layout::new(geometry, surface, &sizes, None);
+        // Above the bar, in the gap between the grown middle icon and its left neighbour.
+        let (left, middle) = (layout.icons[1], layout.icons[2]);
+        let gap = Point::new(left.x + left.width + 4.0, middle.y + 20.0);
+        assert!(
+            gap.y < layout.bar.y && gap.y > left.y,
+            "above the bar, beside both icons"
+        );
+        assert!(!layout.contains(gap), "on neither icon nor the bar");
+        assert_eq!(layout.icon_at(gap), None, "a click there picks nothing");
+        assert!(layout.hover_band().contains(gap), "but the hover holds");
+        // Above the tallest icon, or past the ends of the bar: out.
+        assert!(
+            !layout
+                .hover_band()
+                .contains(Point::new(gap.x, middle.y - 2.0))
+        );
+        assert!(
+            !layout
+                .hover_band()
+                .contains(Point::new(layout.bar.x - 2.0, 100.0))
+        );
     }
 
     #[test]

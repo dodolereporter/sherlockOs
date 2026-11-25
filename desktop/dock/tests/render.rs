@@ -312,3 +312,61 @@ fn a_click_brings_forward_or_minimizes_an_open_application() {
     dock.click(0);
     assert_eq!(recorder.requests().len(), 2);
 }
+
+#[test]
+fn crossing_the_gap_between_grown_icons_keeps_the_magnification() {
+    let recorder = Recorder::default();
+    let mut sources = sources(DockConfig::default());
+    sources.control = Arc::new(recorder.clone());
+    let mut dock = Dock::new(sources);
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let at = |dock: &Dock, s: u64| dock.layout(Duration::from_secs(s));
+    let _ = dock.hover(Some(at(&dock, 0).icons[2].center()), Duration::ZERO);
+    dock.frame(Duration::from_secs(1));
+    // Along the top of the grown icons, into the gap between Sherlock and the terminal.
+    let layout = at(&dock, 1);
+    let (left, middle) = (layout.icons[1], layout.icons[2]);
+    let gap = Point::new(left.x + left.width + 4.0, middle.y + 20.0);
+    assert!(gap.y < layout.bar.y && layout.icon_at(gap).is_none());
+    let _ = dock.hover(Some(gap), Duration::from_secs(1));
+    dock.frame(Duration::from_secs(3));
+    assert!(at(&dock, 3).icons[2].width > 70.0, "still magnified");
+    // A click in the gap starts nothing and asks nothing.
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Left)));
+    assert!(recorder.requests().is_empty());
+    // Leaving the band lets everything come back to rest.
+    let _ = dock.hover(Some(Point::new(gap.x, 1.0)), Duration::from_secs(3));
+    dock.frame(Duration::from_secs(5));
+    assert_eq!(at(&dock, 5).icons[2].width, 52.0);
+}
+
+#[test]
+fn the_menu_follows_its_application_when_the_icons_move() {
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let point = dock.layout(Duration::ZERO).icons[1].center();
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    assert!(dock.menu_open());
+    // The pinned order changes while the menu is open: the terminal moves to the first place,
+    // the files take its old one.
+    let mut config = DockConfig::default();
+    config.pinned = Some(
+        [
+            "org.example.Terminal",
+            "org.example.Files",
+            "example-editor",
+            "example-browser",
+        ]
+        .map(String::from)
+        .to_vec(),
+    );
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert!(dock.menu_open(), "same size: the menu stays");
+    let _ = dock.update(Message::MenuPick(dock::menu::Entry::Unpin));
+    // The terminal went, not the application now at its old place.
+    assert_eq!(
+        dock.pinned,
+        ["org.example.Files", "example-editor", "example-browser"]
+    );
+}

@@ -123,8 +123,12 @@ d = p × n − (i + 0.5)
 k = 1 + (1.7 − 1) × exp(−d² / (2 × 1.2²))
 ```
 
-The label goes to the closest icon, `floor(p × n)`. The pointer is over the dock when it is over
-the bar or over an icon grown past it; elsewhere every icon heads back to 52.
+The label goes to the closest icon, `floor(p × n)`. The pointer comes over the dock over
+the bar or over an icon grown past it. Once over it, it stays over it in the whole hover band:
+along the bar as drawn, from the screen edge to the top of the tallest icon
+(`Layout::hover_band`). So the magnification holds when the pointer runs along the top of the
+grown icons and crosses the gap between two of them; a click in that gap picks no icon. Out of
+the band, every icon heads back to 52.
 
 Each icon side is a `motion::Animation` led by `dock::SPRING` (stiffness 1740, damping 52.6,
 damping ratio 0.63). The board's `cubic-bezier(0.2, 0.9, 0.3, 1.25)` over 150 ms peaks about
@@ -162,9 +166,13 @@ and once when it settles.
 
 The dock reads the desktop entries of `$XDG_DATA_HOME/applications` and of each
 `$XDG_DATA_DIRS/applications` (the first file of an id wins). `entry.rs` reads only what the
-dock needs: `Name` (French first), `Icon`, `Exec`, `Path`, `Categories`, `StartupWMClass`,
-`NoDisplay`, `Hidden`, and the « new window » action (`Actions`, an id written `new-window`,
-`NewWindow` or `new-empty-window`).
+dock needs: `Name` (French first), `Icon`, `Exec`, `TryExec`, `Path`, `Categories`,
+`StartupWMClass`, `NoDisplay`, `Hidden`, and the « new window » action (`Actions`, an id
+written `new-window`, `NewWindow` or `new-empty-window`). An entry with `Hidden=true` is
+deleted, as the specification says: it is not there at all, and it masks the same id in the
+folders that come after (that is how a user removes a system application). So is an entry
+whose `TryExec` program is missing. `NoDisplay=true` keeps the application, but the defaults
+never pick it.
 
 The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
 neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
@@ -213,16 +221,27 @@ Position=bottom
 
 Words are read without regard to case. A value that cannot be read or is out of its bounds is
 ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
-and the default is used: a bad file never stops the dock. An unknown key is kept when the dock
-writes the file; comments are not. `AutoHide` is read and kept, but the dock does not hide yet
+and the default is used: a bad file never stops the dock. Unknown keys, comments and blank lines are
+kept when the dock writes the file, and values are escaped (`\n`, `\\`, a leading space as
+`\s`): a value can never add a line of its own. `AutoHide` is read and kept, but the dock does not hide yet
 (batch D-21b).
 
-**Live reload.** The dock watches the file's directory with inotify (one blocking thread, no
-polling), and its parent while the directory does not exist. A file written in place or
-replaced by a rename, as editors and `DockConfig::save` do, is read again 50 ms after the last
-event: icon size, magnification, edge and pinned list apply at once, the surface takes its new
-size, anchor, margin and exclusive zone. `DockConfig::save` writes a temporary file then
-renames it, so that a reader never sees half a file.
+**Live reload.** The dock watches the file's folder with inotify (one blocking thread, no
+polling). It reads the whole inotify buffer at each wake: a folder deleted with its file sends
+both events at once. While the folder is missing, the dock watches its closest existing
+ancestor, as many levels up as needed, for the next missing folder, and reads the defaults
+meanwhile (an absent file is the default configuration). A file written in place, replaced by
+a rename (as editors and `DockConfig::save` do), deleted, or deleted with its folder then
+made again, is read again 50 ms after the last event: icon size, magnification, edge and
+pinned list apply at once, the surface takes its new size, anchor, margin and exclusive zone.
+The watcher sends its first reading to the dock too, so that a change between the dock's own
+reading at startup and the watcher's start is not missed.
+
+**Writing.** `DockConfig::save` writes a temporary file of its own in the same folder (process
+id and a counter: the dock and Control Room may write at the same time), flushes it to the
+disk, renames it over the old file and flushes the folder: a reader sees the old or the new
+file, never half of one, and two writers never mix. When `dock.conf` is a symbolic link (a
+dotfiles folder), its target is written and the link kept.
 
 `Pinned` lists desktop file ids (`.desktop` accepted). Sherlock is not in it: it is always in
 the middle (as many applications on its left as on its right, one more on the left for an odd
@@ -266,8 +285,13 @@ connection of its own, on a thread; `Recorder` is the fake one for tests. Our co
 give this through a protocol of its own (batch D-18): another implementation of the same
 traits. Enter on the ringed icon does the same as a click.
 
+To check with D-18: with real windows, the keyboard the dock takes on a click (`OnDemand`) might
+take the active state from the application in front, and a second click would then bring it
+forward instead of minimizing it. If so, the dock will keep the last active application,
+ignoring its own surface.
+
 Starting the application: its `Exec` split as the Desktop Entry specification says
-(quotes, escapes, field codes dropped, `%c` and `%i` replaced), without a shell, in its `Path`
+(quotes, escapes, field codes dropped, `%c`, `%i` and `%k`, the entry's own file, replaced), without a shell, in its `Path`
 if it has one. Unlike the bar's monitoring commands, an application must outlive the dock: it
 gets its own process group (a Ctrl+C on the dock's group spares it), no death signal, and a
 thread reaps it. A test checks that `;` in a command is not run by a shell. `gtk-launch` was not
@@ -327,9 +351,13 @@ the clicks of the dock on them (the one behind brought forward, the active one m
 ## Menu of an icon
 
 A right click opens the menu of the icon under the pointer, as an `xdg_popup` attached to the
-dock surface, centered above the icon and 12 above the bar (Menus board: 240 wide). The gap is
+dock surface, centered on the icon and 12 away from the bar, or from the icon when it grew past the bar
+(Menus board: 240 wide). The gap is
 not part of the popup surface: it would be drawn black over the magnified icons. The compositor
-closes it on a click elsewhere.
+closes it on a click elsewhere. The menu remembers its application by identity (desktop file
+id, or `app_id`), not by the place of its icon: when windows open or close, or the
+configuration changes, while it is open, its entries still act on the same application, and do
+nothing if it left the dock.
 
 | Entry | Enabled when |
 | --- | --- |
@@ -448,6 +476,16 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Open applications**: after the separator, with their entry or their `app_id`, glyphs looked
   up once; « Garder dans le dock » and « Retirer du dock » move an open application across the
   separator; a new configuration moves and resizes the dock.
+- **Hover band**: a point above the bar in the gap between two grown icons keeps the hover and
+  picks no icon; crossing it keeps the magnification, leaving the band lets it go.
+- **Menu identity**: the pinned order changes while a menu is open; « Retirer du dock »
+  removes the application of the menu, not the one now at its place.
+- **Writing the file**: comments kept, a value with a line break escaped, unique temporary
+  files with saves from four threads at once, a symbolic link kept and its target written.
+- **Watching**: the file saved, replaced by a rename, deleted, then its folder deleted and made
+  again, two missing folder levels at the start.
+- **Desktop entries**: `%k`, `Hidden` (deleted, and masking the same id further down),
+  missing `TryExec`.
 - **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
   the longest magnified bar up to the label while hovered, on the bottom and right edges;
   rounding to whole pixels never shrinks it.

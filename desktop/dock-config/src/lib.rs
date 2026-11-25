@@ -20,8 +20,9 @@
 pub mod keyfile;
 
 use std::fmt;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sherlock_ui::{dock, metrics};
 
@@ -220,13 +221,13 @@ impl DockConfig {
             file.set(
                 GROUP,
                 PINNED,
-                pinned.iter().map(|id| format!("{id};")).collect(),
+                &pinned.iter().map(|id| format!("{id};")).collect::<String>(),
             );
         }
         let defaults = Self::default();
         let mut put = |key: &str, value: String, default: String| {
             if file.get(GROUP, key).is_some() || value != default {
-                file.set(GROUP, key, value);
+                file.set(GROUP, key, &value);
             }
         };
         put(
@@ -255,21 +256,64 @@ impl DockConfig {
             defaults.position.key().to_owned(),
         );
         if let Some(theme) = &self.icon_theme {
-            file.set(GROUP, ICON_THEME, theme.clone());
+            file.set(GROUP, ICON_THEME, theme);
         }
         file.to_text()
     }
 
-    /// Writes the file at `path`, creating its directory. The text goes to a temporary file
-    /// first, then replaces the old one: a reader never sees half a file.
+    /// Writes the file at `path`, creating its directory. The text goes to a temporary file of
+    /// its own (process id and a counter: the dock and the settings application may write at
+    /// the same time), flushed to the disk, then renamed over the old one, and the directory is
+    /// flushed too: a reader never sees half a file, and a crash leaves the old or the new one.
+    /// When `path` is a symbolic link, its target is written and the link kept.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+        let target = resolve_links(path)?;
+        let dir = match target.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        std::fs::create_dir_all(&dir)?;
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let count = SAVES.fetch_add(1, Ordering::Relaxed);
+        let temporary = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
+        let written = (|| {
+            let mut file = std::fs::File::create(&temporary)?;
+            file.write_all(self.to_text().as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, &target)
+        })();
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
         }
-        let temporary = path.with_extension("conf.tmp");
-        std::fs::write(&temporary, self.to_text())?;
-        std::fs::rename(&temporary, path)
+        written?;
+        std::fs::File::open(&dir)?.sync_all()
     }
+}
+
+/// Saves made by this process, for unique temporary names.
+static SAVES: AtomicU64 = AtomicU64::new(0);
+
+/// The file a chain of symbolic links ends at (40 links at most, like the kernel), or `path`
+/// itself when it is not a link. A missing target is fine: it will be created.
+fn resolve_links(path: &Path) -> io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::read_link(&current) {
+            Ok(link) => {
+                current = match current.parent() {
+                    Some(dir) if link.is_relative() => dir.join(link),
+                    _ => link,
+                };
+            }
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(current),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(current),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::other("too many levels of symbolic links"))
 }
 
 /// A number of `key` within `bounds`, or `default` and a problem.
@@ -438,6 +482,65 @@ mod tests {
         let path = dir.join("dock/dock.conf");
         config.save(&path).expect("written");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
-        assert!(!path.with_extension("conf.tmp").exists());
+        let left: Vec<_> = std::fs::read_dir(dir.join("dock"))
+            .expect("listed")
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .collect();
+        assert_eq!(
+            left,
+            [std::ffi::OsString::from("dock.conf")],
+            "no temporary file left"
+        );
+    }
+
+    #[test]
+    fn a_link_is_kept_and_its_target_written() {
+        let dir = std::env::temp_dir().join(format!("dock-config-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).expect("directory");
+        std::fs::create_dir_all(dir.join("dock")).expect("directory");
+        let path = dir.join("dock/dock.conf");
+        std::os::unix::fs::symlink("../dotfiles/dock.conf", &path).expect("link");
+        let config = DockConfig {
+            position: Position::Top,
+            ..DockConfig::default()
+        };
+        config.save(&path).expect("written");
+        assert!(std::fs::symlink_metadata(&path).expect("link").is_symlink());
+        let target = std::fs::read_to_string(dir.join("dotfiles/dock.conf")).expect("target");
+        assert_eq!(target, "[Dock]\nPosition=top\n");
+    }
+
+    #[test]
+    fn saves_at_the_same_time_do_not_mix() {
+        let dir = std::env::temp_dir().join(format!("dock-config-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dock/dock.conf");
+        let writers: Vec<_> = Position::ALL
+            .into_iter()
+            .map(|position| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let config = DockConfig {
+                        position,
+                        ..DockConfig::default()
+                    };
+                    for _ in 0..20 {
+                        config.save(&path).expect("written");
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().expect("writer");
+        }
+        // One whole file from one of them, never a mix, and no temporary file left.
+        let (config, problems) = DockConfig::load(&path).expect("read");
+        assert!(problems.is_empty());
+        assert!(Position::ALL.contains(&config.position));
+        assert_eq!(
+            std::fs::read_dir(dir.join("dock")).expect("listed").count(),
+            1
+        );
     }
 }
