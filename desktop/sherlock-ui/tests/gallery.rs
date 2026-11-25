@@ -13,7 +13,7 @@ use iced::{Element, Event, Pixels, Settings, Size, mouse};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use iced_test::simulator;
 use sherlock_ui::component::{self as ui, Trailing};
-use sherlock_ui::{metrics, theme, typography};
+use sherlock_ui::{color, metrics, theme, typography};
 use view::{Gallery, Message};
 
 /// Height that shows the whole gallery at once, logos included.
@@ -28,30 +28,40 @@ fn settings() -> Settings {
     }
 }
 
-/// Captures the whole gallery, submenu open, into `target/tmp/gallery-tiny-skia.png`, at
-/// scale 2. It is compared by eye with the design boards: see docs/sherlock-ui.md.
+/// Captures the whole gallery, submenu open, in each theme: into
+/// `target/tmp/gallery-tiny-skia.png` and `gallery-light-tiny-skia.png`, at scale 2. They are
+/// compared by eye with the design boards: see docs/sherlock-ui.md.
 #[test]
-fn the_gallery_renders_headless() {
-    let mut gallery = Gallery::new();
-    let _ = gallery.update(Message::Submenu);
-    // The gallery listens to Tab: the subscription builds without a window.
-    let _ = gallery.subscription();
-    let (width, _) = metrics::REFERENCE_SCREEN;
-    let mut ui = simulator::Simulator::with_size(settings(), (width, FULL_HEIGHT), gallery.view());
-    let snapshot = ui
-        .snapshot(&theme::theme())
-        .expect("snapshot of the gallery");
+fn the_gallery_renders_headless_in_both_themes() {
+    for (which, name) in [
+        (color::Theme::Dark, "gallery"),
+        (color::Theme::Light, "gallery-light"),
+    ] {
+        color::set_active(which);
+        let mut gallery = Gallery::new();
+        let _ = gallery.update(Message::Submenu);
+        // The gallery listens to Tab and to the appearance file: the subscription builds
+        // without a window.
+        let _ = gallery.subscription();
+        let (width, _) = metrics::REFERENCE_SCREEN;
+        let mut ui =
+            simulator::Simulator::with_size(settings(), (width, FULL_HEIGHT), gallery.view());
+        let snapshot = ui
+            .snapshot(&theme::theme())
+            .expect("snapshot of the gallery");
 
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gallery.png");
-    let written = path.with_file_name("gallery-tiny-skia.png");
-    let _ = std::fs::remove_file(&written);
-    assert!(snapshot.matches_image(&path).expect("writing the snapshot"));
-    let size = std::fs::metadata(&written).expect("snapshot written").len();
-    assert!(
-        size > 100_000,
-        "snapshot too small for a gallery: {size} bytes"
-    );
-    println!("snapshot: {}", written.display());
+        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
+        let written = path.with_file_name(format!("{name}-tiny-skia.png"));
+        let _ = std::fs::remove_file(&written);
+        assert!(snapshot.matches_image(&path).expect("writing the snapshot"));
+        let size = std::fs::metadata(&written).expect("snapshot written").len();
+        assert!(
+            size > 100_000,
+            "snapshot too small for a gallery: {size} bytes"
+        );
+        println!("snapshot: {}", written.display());
+    }
+    color::set_active(color::Theme::Dark);
 }
 
 #[test]

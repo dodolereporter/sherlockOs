@@ -20,6 +20,11 @@ smithay = { version = "=0.7.0", default-features = false, features = [
 # Colors and sizes of the snap preview and of the grab band. Only the tokens: without the
 # `iced` feature, the compositor does not build the shell toolkit.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
+# Wallpaper setting, shared with Control Room (workspace crate).
+desktop-config = { path = "../desktop-config" }
+# Wallpaper decoders, PNG (the variants) and JPEG (an image chosen by the user) only. Same
+# version as evidence.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.

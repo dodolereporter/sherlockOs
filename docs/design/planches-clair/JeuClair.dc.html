@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Mode jeu, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+@keyframes respire {
+0%, 100% { transform: scale(1, 1) }
+50% { transform: scale(1.025, 0.975) }
+}
+@keyframes cherche {
+0%, 100% { transform: rotate(-2.5deg) }
+50% { transform: rotate(2.5deg) }
+}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #E7EDF4; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+
+<header style="position: absolute; left: 48px; right: 48px; top: 24px; height: 48px; display: flex; align-items: center; justify-content: space-between">
+<div style="display: flex; align-items: center; gap: 20px">
+<a href="Main.dc.html" style="display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px 0 12px; border-radius: 12px; background: rgba(20,35,59,0.08); color: #14233B; text-decoration: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M14 6l-6 6 6 6"></path></svg>Bureau</a>
+<nav aria-label="Sections" style="display: flex; align-items: center; gap: 4px">
+<a href="#bibliotheque" aria-current="page" style="display: flex; align-items: center; height: 44px; padding: 0 16px; border-radius: 12px; background: #F4EBE3; color: #14233B; font-weight: 600; text-decoration: none">Bibliothèque</a>
+<a href="#recents" style="display: flex; align-items: center; height: 44px; padding: 0 16px; border-radius: 12px; color: #46566F; text-decoration: none">Récents</a>
+<a href="#favoris" style="display: flex; align-items: center; height: 44px; padding: 0 16px; border-radius: 12px; color: #46566F; text-decoration: none">Favoris</a>
+<a href="#manettes" style="display: flex; align-items: center; height: 44px; padding: 0 16px; border-radius: 12px; color: #46566F; text-decoration: none">Manettes</a>
+</nav>
+</div>
+<div style="display: flex; align-items: center; gap: 16px">
+<span style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px; border-radius: 16px; background: rgba(133,197,149,0.16); color: #2E7D4F; font-weight: 600"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span>Mode jeu actif</span>
+<span style="font-weight: 600">21:46</span>
+</div>
+</header>
+
+<section aria-label="Reprendre" style="position: absolute; left: 48px; top: 96px; width: 880px; height: 388px; box-sizing: border-box; overflow: hidden; border-radius: 24px; background: #D4E0EC">
+<div aria-hidden="true" style="position: absolute; left: 520px; top: -90px; width: 460px; height: 460px; border-radius: 50%; background: #F4EBE3"></div>
+<div aria-hidden="true" style="position: absolute; left: 470px; top: 150px; width: 330px; height: 330px; border-radius: 50%; background: #326D93"></div>
+<div aria-hidden="true" style="position: absolute; left: 640px; top: 210px; width: 300px; height: 300px; box-sizing: border-box; border-radius: 50%; border: 22px solid #85C595"></div>
+<div aria-hidden="true" style="position: absolute; left: 486px; top: -40px; width: 28px; height: 520px; background: #E9EEF4; transform: rotate(18deg)"></div>
+<div style="position: absolute; left: 40px; bottom: 36px; width: 380px; display: flex; flex-direction: column; gap: 14px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #46566F">Reprendre</span>
+<h1 style="margin: 0; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 40px; line-height: 1.05; font-weight: 600; letter-spacing: -0.01em">[Ton dernier jeu]</h1>
+<div style="display: flex; gap: 8px; font-size: 12.5px">
+<span style="padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.72)">Proton</span>
+<span style="padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.72)">Carte NVIDIA</span>
+<span style="padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.72)">Manette prête</span>
+</div>
+<div style="display: flex; gap: 10px; margin-top: 6px">
+<button style="display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 28px 0 22px; border: 0; border-radius: 14px; background: #85C595; color: #0B1220; font-size: 17px; font-weight: 600"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: #0B1220"><path d="M7 4.5v15l13-7.5z"></path></svg>Jouer</button>
+<button style="height: 52px; padding: 0 22px; border: 0; border-radius: 14px; background: rgba(255,255,255,0.72); color: #14233B; font-size: 15px">Options</button>
+</div>
+</div>
+</section>
+
+<aside aria-label="Réglages du mode jeu" style="position: absolute; left: 952px; top: 96px; width: 440px; height: 388px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; padding: 20px; border-radius: 24px; background: #FFFFFF; border: 1px solid rgba(20,35,59,0.09)">
+<h2 style="margin: 0 0 8px; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 20px; font-weight: 600">Pendant que tu joues</h2>
+<div style="display: flex; align-items: center; justify-content: space-between; height: 48px; border-top: 1px solid rgba(20,35,59,0.07)"><span>Notifications</span><span style="color: #2E7D4F; font-weight: 600">Coupées</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; height: 48px; border-top: 1px solid rgba(20,35,59,0.07)"><span>Conteneurs</span><span style="color: #2E7D4F; font-weight: 600">3 en pause</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; height: 48px; border-top: 1px solid rgba(20,35,59,0.07)"><span>Bacs à sable</span><span style="color: #2E7D4F; font-weight: 600">2 figés</span></div>
+<div style="display: flex; align-items: center; justify-content: space-between; height: 56px; border-top: 1px solid rgba(20,35,59,0.07)">
+<span>Carte graphique</span>
+<div role="group" aria-label="Carte graphique" style="display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: rgba(20,35,59,0.08); font-size: 13px">
+<button aria-pressed="false" style="height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: #46566F">AMD intégrée</button>
+<button aria-pressed="true" style="height: 32px; padding: 0 12px; border: 0; border-radius: 8px; background: #F4EBE3; color: #14233B; font-weight: 600">NVIDIA dédiée</button>
+</div>
+</div>
+<div style="margin-top: auto; display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px; border-radius: 14px; background: #F4EBE3; color: #14233B">
+<img src="/_blob/f1ffff9bc58dac215d9dfcd8ae6adf75" alt="Sherlock, content" style="flex: none; width: 50px; height: 66px; object-fit: contain; transform-origin: 50% 100%; animation: respire 3s ease-in-out infinite">
+<p style="margin: 0; font-size: 13px; line-height: 1.4">Je reste discret. Si un jeu refuse de se lancer, appelle-moi avec <strong>Super + Espace</strong> et je regarde les logs.</p>
+</div>
+</aside>
+
+<section id="bibliotheque" aria-label="Bibliothèque" style="position: absolute; left: 48px; right: 48px; top: 512px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<h2 style="margin: 0; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 20px; font-weight: 600">Bibliothèque</h2>
+<span style="color: #5C6B82; font-size: 13px">Tes jeux Steam apparaissent ici, natifs ou via Proton</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px">
+
+<a href="#jeu-1" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #326D93; box-shadow: 0 0 0 3px #85C595"><div style="position: absolute; left: -40px; top: 70px; width: 200px; height: 200px; border-radius: 50%; background: #E9EEF4"></div><div style="position: absolute; left: 110px; top: 24px; width: 70px; height: 70px; border-radius: 50%; background: #F0C48A"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 1]</span><span style="font-size: 12px; color: #46566F">Proton</span></div>
+</a>
+
+<a href="#jeu-2" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #F4EBE3"><div style="position: absolute; left: 30px; top: 40px; width: 150px; height: 150px; box-sizing: border-box; border-radius: 50%; border: 26px solid #326D93"></div><div style="position: absolute; left: 0; top: 150px; width: 100%; height: 40px; background: #85C595"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 2]</span><span style="font-size: 12px; color: #46566F">Natif</span></div>
+</a>
+
+<a href="#jeu-3" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #C8D8E9"><div style="position: absolute; left: 24px; top: 24px; width: 64px; height: 142px; border-radius: 32px; background: #85C595"></div><div style="position: absolute; left: 104px; top: 60px; width: 64px; height: 106px; border-radius: 32px; background: #F4EBE3"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 3]</span><span style="font-size: 12px; color: #46566F">Proton</span></div>
+</a>
+
+<a href="#jeu-4" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #F0C48A"><div style="position: absolute; left: 60px; top: -30px; width: 190px; height: 190px; border-radius: 50%; background: #14233B"></div><div style="position: absolute; left: 20px; top: 120px; width: 90px; height: 90px; border-radius: 50%; background: #F4EBE3"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 4]</span><span style="font-size: 12px; color: #46566F">Proton</span></div>
+</a>
+
+<a href="#jeu-5" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #2F7A52"><div style="position: absolute; left: -20px; top: 96px; width: 260px; height: 26px; background: #F4EBE3; transform: rotate(-24deg)"></div><div style="position: absolute; left: 120px; top: 110px; width: 110px; height: 110px; border-radius: 50%; background: #E9EEF4"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 5]</span><span style="font-size: 12px; color: #46566F">Natif</span></div>
+</a>
+
+<a href="#jeu-6" style="display: flex; flex-direction: column; gap: 10px; color: #14233B; text-decoration: none">
+<div aria-hidden="true" style="position: relative; height: 190px; overflow: hidden; border-radius: 16px; background: #14233B; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.14)"><div style="position: absolute; left: 36px; top: 36px; width: 118px; height: 118px; box-sizing: border-box; border-radius: 28px; border: 18px solid #5BA3D0; transform: rotate(45deg)"></div></div>
+<div style="display: flex; align-items: center; justify-content: space-between"><span style="font-weight: 600">[Jeu 6]</span><span style="font-size: 12px; color: #46566F">Proton</span></div>
+</a>
+
+</div>
+</section>
+
+<footer style="position: absolute; left: 48px; right: 48px; bottom: 28px; display: flex; align-items: center; gap: 22px; color: #46566F; font-size: 13px">
+<span style="display: flex; align-items: center; gap: 8px"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #F4EBE3; color: #14233B; font-weight: 600; font-size: 12px">A</span>Lancer</span>
+<span style="display: flex; align-items: center; gap: 8px"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: rgba(20,35,59,0.14); color: #14233B; font-weight: 600; font-size: 12px">X</span>Options</span>
+<span style="display: flex; align-items: center; gap: 8px"><span aria-hidden="true" style="display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: rgba(20,35,59,0.14); color: #14233B; font-weight: 600; font-size: 12px">Y</span>Appeler Sherlock</span>
+<span style="margin-left: auto">Le dock se masque en mode jeu</span>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

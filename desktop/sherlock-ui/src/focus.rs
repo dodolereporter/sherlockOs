@@ -12,7 +12,7 @@ use iced::keyboard::{self, Key, key::Named};
 use iced::{Background, Element, Event, Length, Rectangle, Renderer, Size, Task, Theme, Vector};
 use iced::{border, widget};
 
-use crate::{color, metrics};
+use crate::metrics;
 
 /// Direction of the focus move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +236,7 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
                 b.size().expand([2.0 * gap, 2.0 * gap]),
             );
             let edge = border::width(metrics::FOCUS_RING_WIDTH)
-                .color(color::FOCUS_RING)
+                .color(crate::theme::palette(theme).focus_ring)
                 .rounded(self.radius + gap);
             let quad = Quad {
                 bounds,

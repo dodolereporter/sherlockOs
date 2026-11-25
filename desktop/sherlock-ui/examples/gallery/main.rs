@@ -14,7 +14,7 @@ fn main() -> iced::Result {
     let (width, height) = metrics::REFERENCE_SCREEN;
     let app = iced::application(Gallery::new, Gallery::update, Gallery::view)
         .title("Galerie de sherlock-ui")
-        .theme(theme::theme())
+        .theme(|_: &Gallery| theme::theme())
         .subscription(Gallery::subscription)
         .default_font(typography::UI)
         .window_size((width, height));

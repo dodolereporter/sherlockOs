@@ -18,7 +18,7 @@ use iced::{
     border,
 };
 
-use crate::color::{self, Color};
+use crate::color::{Color, Palette};
 use crate::metrics;
 
 /// How high a surface floats, which sets its shadow.
@@ -33,26 +33,31 @@ pub enum Elevation {
 }
 
 impl Elevation {
-    /// The design board's shadow, drawn on the GPU.
-    pub fn blurred(self) -> Option<Shadow> {
-        let (color, offset, blur) = match self {
+    /// Vertical offset and blur of the design board's shadow.
+    fn geometry(self) -> Option<(f32, f32)> {
+        match self {
+            Self::Flat => None,
+            Self::Menu => Some((metrics::MENU_SHADOW_OFFSET, metrics::MENU_SHADOW_BLUR)),
+            Self::Panel => Some((metrics::SHADOW_OFFSET, metrics::SHADOW_BLUR)),
+        }
+    }
+
+    /// The design board's shadow, drawn on the GPU, in the colour of the theme's `palette`.
+    pub fn blurred(self, palette: &Palette) -> Option<Shadow> {
+        let color = match self {
             Self::Flat => return None,
-            Self::Menu => (
-                color::MENU_SHADOW,
-                metrics::MENU_SHADOW_OFFSET,
-                metrics::MENU_SHADOW_BLUR,
-            ),
-            Self::Panel => (color::SHADOW, metrics::SHADOW_OFFSET, metrics::SHADOW_BLUR),
+            Self::Menu => palette.menu_shadow,
+            Self::Panel => palette.shadow,
         };
-        Some(Shadow {
+        self.geometry().map(|(offset, blur)| Shadow {
             color: color.into(),
             offset: Vector::new(0.0, offset),
             blur_radius: blur,
         })
     }
 
-    /// Steps of (vertical offset, spread, opacity of `color::SHADOW_BASE`) of the crisp
-    /// shadow drawn in software.
+    /// Steps of (vertical offset, spread, opacity) of the crisp shadow drawn in software. Each
+    /// opacity is scaled by that of the theme's `shadow_base`.
     pub fn crisp(self) -> &'static [(f32, f32, f32)] {
         match self {
             Self::Flat => &[],
@@ -64,12 +69,13 @@ impl Elevation {
     /// Room the blurred shadow takes around the surface, for a surface of its own (a popup)
     /// that must hold it: the blur on every side, moved down by the offset.
     pub fn margins(self) -> Padding {
-        self.blurred().map_or(Padding::ZERO, |shadow| Padding {
-            top: (shadow.blur_radius - shadow.offset.y).max(0.0),
-            right: shadow.blur_radius,
-            bottom: shadow.blur_radius + shadow.offset.y,
-            left: shadow.blur_radius,
-        })
+        self.geometry()
+            .map_or(Padding::ZERO, |(offset, blur)| Padding {
+                top: (blur - offset).max(0.0),
+                right: blur,
+                bottom: blur + offset,
+                left: blur,
+            })
     }
 }
 
@@ -202,9 +208,10 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
     ) {
         let bounds = layout.bounds();
         let gpu = is_gpu(renderer);
+        let palette = crate::theme::palette(theme);
         DRAWN.store(if gpu { GPU } else { SOFTWARE }, Ordering::Relaxed);
         if gpu {
-            if let Some(shadow) = self.elevation.blurred() {
+            if let Some(shadow) = self.elevation.blurred(palette) {
                 // A transparent quad that only casts the shadow; the content covers it.
                 let quad = Quad {
                     bounds,
@@ -231,8 +238,8 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
                     ..Quad::default()
                 };
                 let fill = Color {
-                    a: alpha,
-                    ..color::SHADOW_BASE
+                    a: alpha * palette.shadow_base.a,
+                    ..palette.shadow_base
                 };
                 iced::advanced::Renderer::fill_quad(renderer, quad, Background::Color(fill.into()));
             }
@@ -269,5 +276,33 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
 impl<'a, Message: 'a> From<Shadowed<'a, Message>> for Element<'a, Message> {
     fn from(widget: Shadowed<'a, Message>) -> Self {
         Element::new(widget)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_blurred_shadow_follows_the_theme() {
+        let color = |elevation: Elevation, palette| elevation.blurred(palette).map(|s| s.color);
+        assert_eq!(
+            color(Elevation::Menu, &Palette::DARK),
+            Some(Palette::DARK.menu_shadow.into())
+        );
+        // A menu drawn on the GPU in the light theme gets the light theme's shadow.
+        assert_eq!(
+            color(Elevation::Menu, &Palette::LIGHT),
+            Some(Palette::LIGHT.menu_shadow.into())
+        );
+        assert_eq!(
+            color(Elevation::Panel, &Palette::LIGHT),
+            Some(Palette::LIGHT.shadow.into())
+        );
+        assert_ne!(
+            color(Elevation::Menu, &Palette::DARK),
+            color(Elevation::Menu, &Palette::LIGHT)
+        );
+        assert_eq!(color(Elevation::Flat, &Palette::DARK), None);
     }
 }

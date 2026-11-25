@@ -116,8 +116,9 @@ fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::
     if forced || !enabled {
         return None;
     }
-    let rest = style(&Theme::Dark, button::Status::Active).background;
-    match style(&Theme::Dark, button::Status::Hovered).background {
+    let theme = theme::theme();
+    let rest = style(&theme, button::Status::Active).background;
+    match style(&theme, button::Status::Hovered).background {
         Some(iced::Background::Color(c)) if rest.is_none() => Some(c),
         _ => None,
     }
@@ -133,7 +134,7 @@ pub fn description<'a>(content: impl text::IntoFragment<'a>) -> Text<'a> {
     text(content)
         .font(typography::UI)
         .size(typography::DESCRIPTION_SIZE)
-        .color(color::TEXT_SECONDARY)
+        .color(color::palette().text_secondary)
 }
 
 /// Page title, in Space Grotesk.
@@ -149,7 +150,7 @@ pub fn section_label<'a>(content: &str) -> Text<'a> {
         .font(typography::UI_SEMIBOLD)
         .size(typography::SECTION_LABEL_SIZE)
         .line_height(text::LineHeight::Relative(typography::LINE_HEIGHT))
-        .color(color::TEXT_TERTIARY)
+        .color(color::palette().text_tertiary)
 }
 
 /// The SVG document of an icon, built once and for all: a view that draws hundreds of them
@@ -235,9 +236,9 @@ pub fn toolbar_button<'a, Message: Clone + 'a>(
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let tint = if on_press.is_some() {
-        color::TEXT_PRIMARY
+        color::palette().text_primary
     } else {
-        color::TEXT_TERTIARY
+        color::palette().text_tertiary
     };
     let content = container(icon(glyph, metrics::ICON_SIZE, tint)).center(Length::Fill);
     let mut control = Control::new(
@@ -278,7 +279,7 @@ pub fn search_field<'a, Message: Clone + 'a>(
     let glass = container(icon(
         Icon::Search,
         metrics::ICON_SIZE_SMALL,
-        color::TEXT_TERTIARY,
+        color::palette().text_tertiary,
     ))
     .padding(Padding {
         left: metrics::FIELD_PADDING,
@@ -320,9 +321,9 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let tint = if on_press.is_some() {
-        color::TEXT_SECONDARY
+        color::palette().text_secondary
     } else {
-        color::TEXT_TERTIARY
+        color::palette().text_tertiary
     };
     let content = container(icon(glyph, metrics::ICON_SIZE, tint)).center(Length::Fill);
     let mut control = Control::new(
@@ -397,15 +398,20 @@ pub fn menu_item_with<'a, Message: Clone + 'a>(
         Trailing::Shortcut(keys) => text(keys)
             .font(typography::UI)
             .size(typography::SMALL_SIZE)
-            .color(color::TEXT_TERTIARY)
+            .color(color::palette().text_tertiary)
             .into(),
         Trailing::Submenu => icon(
             Icon::Chevron,
             metrics::ICON_SIZE_SMALL,
-            color::TEXT_SECONDARY,
+            color::palette().text_secondary,
         )
         .into(),
-        Trailing::Checked => icon(Icon::Check, metrics::ICON_SIZE_SMALL, color::ACCENT).into(),
+        Trailing::Checked => icon(
+            Icon::Check,
+            metrics::ICON_SIZE_SMALL,
+            color::palette().accent_text,
+        )
+        .into(),
     };
     let start: Element<'a, Message> = match leading {
         Some(leading) => row![leading, body(label).wrapping(text::Wrapping::None)]
@@ -503,7 +509,7 @@ pub fn setting_row<'a, Message: Clone + 'a>(
     let help = text(help)
         .font(typography::UI)
         .size(typography::SMALL_SIZE)
-        .color(color::TEXT_SECONDARY);
+        .color(color::palette().text_secondary);
     row![
         column![body(label).font(typography::UI_MEDIUM), help],
         space::horizontal(),
@@ -560,9 +566,9 @@ pub fn nav_item<'a, Message: Clone + 'a>(
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let tint = if active {
-        color::TEXT_PRIMARY
+        color::palette().text_primary
     } else {
-        color::TEXT_SECONDARY
+        color::palette().text_secondary
     };
     let font = if active {
         typography::UI_SEMIBOLD
@@ -579,7 +585,7 @@ pub fn nav_item<'a, Message: Clone + 'a>(
     if let Some(count) = count {
         line = line
             .push(space::horizontal())
-            .push(body(count).color(color::TEXT_TERTIARY));
+            .push(body(count).color(color::palette().text_tertiary));
     }
     let mut control = Control::new(
         line,
@@ -661,8 +667,12 @@ pub fn window_controls<'a, Message: Clone + 'a>(
         .zip(labels)
         .zip(on_press)
         .map(|((glyph, label), message)| {
-            let content = container(icon(glyph, metrics::ICON_SIZE_SMALL, color::TEXT_SECONDARY))
-                .center(Length::Fill);
+            let content = container(icon(
+                glyph,
+                metrics::ICON_SIZE_SMALL,
+                color::palette().text_secondary,
+            ))
+            .center(Length::Fill);
             let mut control = Control::new(
                 content,
                 theme::window_button,
@@ -720,7 +730,11 @@ pub fn column_header<'a, Message: Clone + 'a>(
         } else {
             Icon::SortDown
         };
-        line = line.push(icon(glyph, metrics::ICON_SIZE_TINY, color::TEXT_TERTIARY));
+        line = line.push(icon(
+            glyph,
+            metrics::ICON_SIZE_TINY,
+            color::palette().text_tertiary,
+        ));
     }
     let mut control = Control::new(line, theme::column_header, on_press, 0.0);
     control.button = control.button.padding(0);
@@ -738,11 +752,12 @@ pub enum CodeRole {
 }
 
 impl CodeRole {
-    pub const fn color(self) -> Color {
+    /// Its colour in the active theme.
+    pub fn color(self) -> Color {
         match self {
-            Self::Plain => color::TEXT_CODE,
-            Self::Keyword => color::BLUE_LIGHT,
-            Self::Comment => color::TEXT_LINE_NUMBER,
+            Self::Plain => color::palette().text_code,
+            Self::Keyword => color::palette().blue_light,
+            Self::Comment => color::palette().text_line_number,
         }
     }
 }
@@ -849,7 +864,7 @@ pub fn menu_header<'a, Message: 'a>(
     let subtitle = text(subtitle)
         .font(typography::UI)
         .size(typography::SMALL_SIZE)
-        .color(color::TEXT_SECONDARY);
+        .color(color::palette().text_secondary);
     let (top, side, bottom) = metrics::MENU_HEADER_PADDING;
     row![
         avatar,

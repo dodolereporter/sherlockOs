@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Menu de démarrage, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #EEF2F6; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.4">
+<div aria-hidden="true" style="position: absolute; left: -320px; top: 420px; width: 1100px; height: 1100px; border-radius: 50%; background: #E2E9F1"></div>
+<div aria-hidden="true" style="position: absolute; left: 900px; top: -480px; width: 960px; height: 960px; border-radius: 50%; background: #D9E3EE"></div>
+<img src="/_blob/16a817327778fb99b1a30342b0a01682" alt="Sherlock" style="position: absolute; left: 190px; top: 270px; width: 200px; height: 300px; object-fit: contain">
+<div style="position: absolute; left: 480px; top: 170px; width: 700px; display: flex; flex-direction: column; gap: 22px">
+<h1 style="margin: 0; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 34px; line-height: 1.1; font-weight: 600">Que veux-tu démarrer ?</h1>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
+<li style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 20px; border-radius: 14px; background: #F4EBE3; color: #14233B"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 600">[NOM DE L'OS]</span><span style="font-size: 12.5px; color: #2B3A54">Démarrage normal</span></span><span style="padding: 3px 9px; border-radius: 7px; background: rgba(20,35,59,0.10); font-size: 12px; font-weight: 600">Entrée</span></li>
+<li style="display: flex; align-items: center; height: 60px; padding: 0 20px; border-radius: 14px; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.1)"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 500">[NOM DE L'OS], mode jeu</span><span style="font-size: 12.5px; color: #46566F">Ouvre directement la bibliothèque</span></span></li>
+<li style="display: flex; align-items: center; height: 60px; padding: 0 20px; border-radius: 14px; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.1)"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 500">[NOM DE L'OS], console de secours</span><span style="font-size: 12.5px; color: #46566F">Sans interface graphique, pour réparer</span></span></li>
+<li style="display: flex; align-items: center; height: 60px; padding: 0 20px; border-radius: 14px; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.1)"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 500">[NOM DE L'OS], noyau précédent</span><span style="font-size: 12.5px; color: #46566F">Si la dernière mise à jour pose problème</span></span></li>
+<li style="display: flex; align-items: center; height: 60px; padding: 0 20px; border-radius: 14px; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.1)"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 500">Debian</span><span style="font-size: 12.5px; color: #46566F">Ton système actuel</span></span></li>
+<li style="display: flex; align-items: center; height: 60px; padding: 0 20px; border-radius: 14px; box-shadow: inset 0 0 0 1px rgba(20,35,59,0.1)"><span style="display: flex; flex-direction: column"><span style="font-size: 17px; font-weight: 500">Réglages du firmware</span><span style="font-size: 12.5px; color: #46566F">UEFI de la carte mère</span></span></li>
+</ul>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div aria-hidden="true" style="height: 6px; border-radius: 3px; background: rgba(20,35,59,0.12); overflow: hidden"><div style="width: 62%; height: 100%; border-radius: 3px; background: #85C595"></div></div>
+<div style="display: flex; justify-content: space-between; font-size: 13px; color: #46566F"><span>Démarrage automatique dans 4 secondes</span><span>Flèches pour choisir, E pour modifier, C pour la ligne de commande</span></div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

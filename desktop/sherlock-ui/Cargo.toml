@@ -49,6 +49,8 @@ iced_test = "=0.14.0"
 # Windowless interface to run the focus operations in, for the keyboard test. Already pulled
 # in by iced: only the declaration is new.
 iced_runtime = "=0.14.0"
+# The gallery follows the theme of the appearance file, like the shell programs.
+appearance-config = { path = "../appearance-config" }
 
 [[example]]
 name = "gallery"
