@@ -88,6 +88,17 @@ jobs:
       - name: just test-builder
         run: just test-builder
 
+      # The full build of the toolchain is too long for the CI: only its scripts are tested.
+      # See docs/system-build.md.
+      - name: just test-toolchain
+        run: just test-toolchain
+
+      # The build image has no shellcheck; the runner image does.
+      - name: shellcheck of the toolchain scripts
+        run: |
+          shellcheck --version
+          shellcheck -s bash -S warning distro/bootstrap/*.sh distro/bootstrap/steps/*.sh
+
       - name: just test-boot
         run: just test-boot
 

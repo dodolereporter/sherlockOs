@@ -12,7 +12,7 @@ from the image. A build that works on your machine therefore works on someone el
 | `just` | Runs the recipes of the `justfile` |
 | Linux x86_64 | The target is x86_64 (ADR 0001). The launch script assumes bash and the basic GNU tools |
 | Network | Building the image downloads its packages from `snapshot.debian.org` |
-| Disk | About 930 MB for the image, measured on its first build, plus the source cache |
+| Disk | About 930 MB for the image, measured on its first build, plus the source cache, plus what is built in it (see below) |
 
 KVM is optional. If `/dev/kvm` exists and your user can open it, it is passed to the container and
 QEMU uses it. Otherwise QEMU emulates the processor, much more slowly.
@@ -38,6 +38,13 @@ just in-builder bash -c 'cd "$SOURCE_CACHE" && ls'
 
 `just in-builder` rebuilds the image by itself when it is missing or when the `Dockerfile` has
 changed since the last build. It compares a fingerprint set as a label on the image.
+
+## What is built in it
+
+| Command | What it builds | Page |
+| --- | --- | --- |
+| `just toolchain` | The cross toolchain and the temporary tools of the system, in `distro/bootstrap/output/` | `docs/system-build.md` |
+| `just witness` | The witness image of the boot bench, in `distro/tests/output/` | `docs/boot-tests.md` |
 
 ## Inside the container
 

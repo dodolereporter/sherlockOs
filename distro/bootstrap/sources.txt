@@ -1,0 +1,34 @@
+# Sources of the cross toolchain and the temporary tools (Linux From Scratch 13.1, chapters 5
+# and 6). One line per archive: name, version, SHA-256, https URL of the upstream project.
+#
+# The versions are those of LFS 13.1, systemd edition (1 September 2026), built and tested
+# together by the book. Each SHA-256 was computed on an archive whose MD5 matched the book and,
+# when the project signs its releases, whose signature was checked. See docs/system-build.md.
+#
+# The steps name the sources by the first column. The archive keeps the file name of the URL in
+# the source cache.
+
+binutils           2.47    154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz
+gcc                16.2.0  e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz
+gmp                6.3.0   a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+mpfr               4.2.2   b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01 https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz
+mpc                1.4.1   91204cd32f164bd3b7c992d4a6a8ce6519511aadab30f78b6982d0bf8d73e931 https://ftp.gnu.org/gnu/mpc/mpc-1.4.1.tar.xz
+linux              7.1.8   ff01dcb449279d5b4cfccdb01fee639cf5ff1803f1749a77844dd33915422c49 https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.1.8.tar.xz
+glibc              2.44    37f600f2bef3c5e8300147059568b2a2e40a7ad6ccc65ce942556d49429cc667 https://ftp.gnu.org/gnu/glibc/glibc-2.44.tar.xz
+glibc-fhs-patch    1       643552db030e2f2d7ffde4f558e0f5f83d3fabf34a2e0e56ebdb49750ac27b0d https://www.linuxfromscratch.org/patches/lfs/13.1/glibc-fhs-1.patch
+glibc-fixes-patch  1       500567ff0a22e295bfe3b55e9b397796f71a19f01e1ff7fb29c9189482ee1809 https://www.linuxfromscratch.org/patches/lfs/13.1/glibc-2.44-upstream_fixes-1.patch
+m4                 1.4.21  f25c6ab51548a73a75558742fb031e0625d6485fe5f9155949d6486a2408ab66 https://ftp.gnu.org/gnu/m4/m4-1.4.21.tar.xz
+ncurses            6.6     355b4cbbed880b0381a04c46617b7656e362585d52e9cf84a67e2009b749ff11 https://invisible-mirror.net/archives/ncurses/ncurses-6.6.tar.gz
+bash               5.3     0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz
+coreutils          9.11    394024eda0a5955217ceda9cd1201e65dc8fa3aa29c2951135a49521d57c3cc3 https://ftp.gnu.org/gnu/coreutils/coreutils-9.11.tar.xz
+diffutils          3.12    7c8b7f9fc8609141fdea9cece85249d308624391ff61dedaf528fcb337727dfd https://ftp.gnu.org/gnu/diffutils/diffutils-3.12.tar.xz
+file               5.48    ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283 https://astron.com/pub/file/file-5.48.tar.gz
+findutils          4.11.0  bfd19cb06cc71f3352d567e90284d8cdac02ac89774bbeadf0b533b0c11432fd https://ftp.gnu.org/gnu/findutils/findutils-4.11.0.tar.xz
+gawk               5.4.1   07f6f7342b7febe4313fc2c2542ad93d64fe20ad8717200109f105a826f5fd37 https://ftp.gnu.org/gnu/gawk/gawk-5.4.1.tar.xz
+grep               3.12    2649b27c0e90e632eadcd757be06c6e9a4f48d941de51e7c0f83ff76408a07b9 https://ftp.gnu.org/gnu/grep/grep-3.12.tar.xz
+gzip               1.14    01a7b881bd220bfdf615f97b8718f80bdfd3f6add385b993dcf6efd14e8c0ac6 https://ftp.gnu.org/gnu/gzip/gzip-1.14.tar.xz
+make               4.4.1   dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3 https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+patch              2.8     f87cee69eec2b4fcbf60a396b030ad6aa3415f192aa5f7ee84cad5e11f7f5ae3 https://ftp.gnu.org/gnu/patch/patch-2.8.tar.xz
+sed                4.10    b8e72182b2ec96a3574e2998c47b7aaa64cc20ce000d8e9ac313cc07cecf28c7 https://ftp.gnu.org/gnu/sed/sed-4.10.tar.xz
+tar                1.35    4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16 https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz
+xz                 5.8.3   fff1ffcf2b0da84d308a14de513a1aa23d4e9aa3464d17e64b9714bfdd0bbfb6 https://github.com/tukaani-project/xz/releases/download/v5.8.3/xz-5.8.3.tar.xz

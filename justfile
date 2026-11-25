@@ -65,3 +65,19 @@ test-boot image="distro/tests/output/witness.img":
 test-bench:
     {{ quote(just_executable()) }} witness silent
     distro/builder/builder.sh run distro/tests/test-bench.sh
+
+# Parallel compile jobs of the toolchain build: 4, unless TOOLCHAIN_JOBS is set
+toolchain_jobs := env("TOOLCHAIN_JOBS", "4")
+
+# Builds the cross toolchain and temporary tools in the container (up to a step if given), then checks it
+toolchain step="":
+    distro/builder/builder.sh run env TOOLCHAIN_JOBS={{ toolchain_jobs }} distro/bootstrap/build.sh {{ quote(step) }}
+    if [[ -z {{ quote(step) }} ]]; then distro/builder/builder.sh run distro/bootstrap/check.sh; fi
+
+# Deletes the output of the toolchain build; the downloaded sources stay in the cache
+toolchain-clean:
+    distro/builder/builder.sh run distro/bootstrap/build.sh clean
+
+# Quick test of the toolchain scripts: manifest, syntax, resuming, without download nor compiling
+test-toolchain:
+    distro/builder/builder.sh run distro/bootstrap/test.sh

@@ -1,0 +1,5 @@
+# shellcheck settings of the bootstrap scripts.
+source-path=SCRIPTDIR
+# The steps run under errexit, set by build.sh, which shellcheck cannot see from a step file:
+# a failing cd or pushd already stops the step.
+disable=SC2164
