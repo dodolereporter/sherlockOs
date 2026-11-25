@@ -223,6 +223,7 @@ dependencies = [
 name = "compositeur"
 version = "0.0.0"
 dependencies = [
+ "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
  "tracing",

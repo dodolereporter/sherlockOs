@@ -100,6 +100,7 @@ Tout se développe et se teste sur Debian, dans une fenêtre puis en session ré
 | D-13 | XWayland | D-10 | Une application X11 s'affiche et échange le presse-papiers |
 | D-14 | Session réelle : DRM, libseat, changement de console | D-11 | Le compositeur démarre depuis une console sur ta machine |
 | D-15 | Synchronisation explicite et affichage direct en plein écran | D-14 | Le protocole est annoncé et un client plein écran évite la composition |
+| D-17 | Prise en main des fenêtres : bande de saisie autour des fenêtres, curseurs, calage contre les bords de l'écran, touche des gestes + flèches | D-10 | Chaque bord et chaque coin se saisit sans viser au pixel, et une fenêtre lâchée contre un bord se cale |
 | D-20 | Barre du haut | D-01, D-12 | Conforme au canvas, horloge et bureaux actifs |
 | D-21 | Dock avec grossissement | D-01, D-12 | Conforme au canvas, fluide à 60 images par seconde |
 | D-22 | Lanceur et recherche | D-01 | Une application se lance au clavier en moins de trois touches |
