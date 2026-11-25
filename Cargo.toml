@@ -10,6 +10,8 @@ members = [
     "desktop/evidence",
     "desktop/launcher",
     "desktop/mime-apps",
+    "desktop/notifications",
+    "desktop/notifications-config",
     "desktop/sherlock-ui",
     "sherlock/sherlockd",
 ]

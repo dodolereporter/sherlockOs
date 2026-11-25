@@ -1,0 +1,14 @@
+[package]
+name = "notifications-config"
+description = "The notifications settings file (Do not disturb), shared by the daemon, the panels and the settings application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The key file reader and writer of the desktop, and `config_home` (workspace crate).
+dock-config = { path = "../dock-config" }
+
+[lints]
+workspace = true

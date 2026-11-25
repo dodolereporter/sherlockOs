@@ -14,6 +14,7 @@ pub mod launcher;
 pub mod logo;
 pub mod metrics;
 pub mod motion;
+pub mod notifications;
 pub mod strings;
 pub mod texts;
 pub mod typography;
