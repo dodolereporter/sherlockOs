@@ -102,6 +102,10 @@ zone 0: the compositor places it below the area the bar reserves (its margin of 
 12 from the right edge (the bar's side margin). The surface reaches the screen edge so that a
 bubble slides out there. It takes no keyboard, and its input region is the bubbles alone: clicks
 between or beside them reach the window below. It exists only while a bubble shows.
+Its height is the stack's, plus 16 below (`notifications::STACK_SLACK`) so that a spring
+passing its target never squeezes the last bubble, and plus 480 (`MEASURE_ROOM`) while a new
+bubble is being laid out out of sight: in a surface of the stack's height, it would be measured
+squeezed. It shrinks back once everything settled.
 
 **Stack.** The newest on top, 8 apart (the board's gap), four at most
 (`notifications::MAX_VISIBLE`); the others wait, in the order they came, and show as room

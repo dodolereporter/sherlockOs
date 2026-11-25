@@ -280,9 +280,18 @@ impl Notifications {
         let Some(id) = self.surface else {
             return Task::none();
         };
-        let needed = layout::surface_height(self.bubbles.iter().filter_map(|b| {
+        let waiting = self
+            .bubbles
+            .iter()
+            .any(|b| b.height.is_none() && !b.leaving);
+        let room = if waiting {
+            ui::MEASURE_ROOM
+        } else {
+            ui::STACK_SLACK
+        };
+        let needed = layout::surface_height(self.bubbles.iter().map(|b| {
             let top = b.top.value(now).max(b.top.target()) as f32;
-            Some((top, b.height?))
+            (top, b.height.unwrap_or(0.0) + room)
         }));
         let mut tasks = Vec::new();
         if needed > self.height || (settled && needed < self.height) {

@@ -36,6 +36,12 @@ pub const BUTTON_PADDING: f32 = 12.0;
 pub const BUTTON_GAP: f32 = 6.0;
 pub const BUTTONS_TOP: f32 = 2.0;
 
+/// Room the surface keeps below the stack, so that a spring passing its target never squeezes
+/// the last bubble; and room it gives a new bubble to be laid out in, out of sight, before its
+/// height is known: more than the tallest bubble (title, 300 characters of body, buttons).
+pub const STACK_SLACK: f32 = 2.0 * GAP;
+pub const MEASURE_ROOM: f32 = 480.0;
+
 // Behavior.
 
 /// Bubbles shown at once; the others wait their turn. A choice of D-23: four bubbles of three
@@ -85,13 +91,13 @@ mod styles {
         }
     }
 
-    /// Tile of an application without an icon, with its initial.
-    pub fn tile(theme: &Theme) -> container::Style {
-        let p = theme::palette(theme);
+    /// Tile of an application without an icon, with its initial: the same in both themes,
+    /// as the launcher's tiles.
+    pub fn tile(_: &Theme) -> container::Style {
         container::Style {
-            background: Some(Background::Color(p.blue_bright.into())),
+            background: Some(Background::Color(crate::color::BLUE_BRIGHT.into())),
             border: border::rounded(TILE_RADIUS),
-            text_color: Some(p.deepest.into()),
+            text_color: Some(crate::color::DEEPEST.into()),
             ..container::Style::default()
         }
     }
@@ -133,8 +139,8 @@ mod tests {
                 }
                 assert!(palette.text_on_accent.contrast(palette.accent) >= 4.5);
             }
-            assert!(palette.deepest.contrast(palette.blue_bright) >= 4.5);
         }
+        assert!(crate::color::DEEPEST.contrast(crate::color::BLUE_BRIGHT) >= 4.5);
     }
 
     #[test]
