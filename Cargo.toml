@@ -8,6 +8,7 @@ members = [
     "desktop/dock",
     "desktop/dock-config",
     "desktop/evidence",
+    "desktop/launcher",
     "desktop/mime-apps",
     "desktop/sherlock-ui",
     "sherlock/sherlockd",

@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Kiosk helper
+Exec=kiosk-helper
+NoDisplay=true
