@@ -6,24 +6,18 @@ use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{PopupKind, Window},
-    input::{
-        Seat, SeatHandler, SeatState,
-        pointer::{CursorImageStatus, Focus, GrabStartData},
-    },
+    input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
+        wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
         wayland_server::{
-            Client, Resource,
+            Client,
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat, wl_surface::WlSurface},
         },
     },
     utils::Serial,
     wayland::{
         buffer::BufferHandler,
-        compositor::{
-            CompositorClientState, CompositorHandler, CompositorState, get_parent,
-            is_sync_subsurface,
-        },
+        compositor::{self, CompositorClientState, CompositorHandler, CompositorState},
         output::OutputHandler,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -32,12 +26,7 @@ use smithay::{
     },
 };
 
-use crate::{
-    ClientState, State,
-    input::{GrabKind, WindowGrab},
-    layout::{self, Edges},
-    window_data,
-};
+use crate::{ClientState, State, layout, window_data};
 
 impl CompositorHandler for State {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -45,7 +34,7 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        // Tous nos clients passent par `insert_client` ; l'état vide ne sert qu'à ne jamais paniquer.
+        // Tous nos clients passent par `insert_client` ; l'état vide évite seulement de paniquer.
         static EMPTY: OnceLock<CompositorClientState> = OnceLock::new();
         match client.get_data::<ClientState>() {
             Some(data) => &data.compositor_state,
@@ -55,9 +44,9 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
-        if !is_sync_subsurface(surface) {
+        if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
-            while let Some(parent) = get_parent(&root) {
+            while let Some(parent) = compositor::get_parent(&root) {
                 root = parent;
             }
             if let Some(window) = self.window_for(&root) {
@@ -88,40 +77,38 @@ impl State {
         }
         let data = window_data(&window);
         let size = window.geometry().size;
+        let filled = toplevel.with_pending_state(|s| {
+            s.states.contains(XdgState::Maximized) || s.states.contains(XdgState::Fullscreen)
+        });
 
-        // Premier contenu : on centre la fenêtre, sauf si elle a déjà demandé tout l'écran,
-        // et on lui donne le clavier.
+        // Premier contenu : on centre la fenêtre (sauf si elle prend tout l'écran) et on lui
+        // donne le clavier.
         if !data.shown.get() && size.w > 0 && size.h > 0 {
             data.shown.set(true);
-            let filled = toplevel.with_pending_state(|s| {
-                s.states.contains(xdg_toplevel::State::Maximized)
-                    || s.states.contains(xdg_toplevel::State::Fullscreen)
-            });
             if let (false, Some(area)) = (filled, self.output_area()) {
-                self.space
-                    .map_element(window.clone(), layout::centered(area, size), false);
+                let loc = layout::centered(area, size);
+                self.space.map_element(window.clone(), loc, false);
             }
             self.focus(Some(window));
             return;
         }
 
-        // Redimensionnement par le haut ou la gauche : on recale la fenêtre sur sa nouvelle taille.
+        // Redimensionnement par le haut ou la gauche : le bord opposé reste en place.
         if let Some((edges, initial, done)) = data.resize.get() {
             if done {
                 data.resize.set(None);
             }
-            if edges.top || edges.left {
-                let loc = layout::anchored(initial, edges, size);
-                self.space.map_element(window, loc, false);
-            }
+            let loc = layout::anchored(initial, edges, size);
+            self.space.map_element(window, loc, false);
         }
     }
 
-    /// Agrandit la fenêtre ou la passe en plein écran : elle prend tout l'écran.
-    fn fill(
+    /// Fait entrer la fenêtre dans l'état `mode` (agrandie ou plein écran), ou l'en fait sortir.
+    fn set_filled(
         &mut self,
         surface: &ToplevelSurface,
-        mode: xdg_toplevel::State,
+        mode: XdgState,
+        on: bool,
         output: Option<WlOutput>,
     ) {
         let (Some(window), Some(area)) =
@@ -130,36 +117,25 @@ impl State {
             return;
         };
         let data = window_data(&window);
-        if data.restore.get().is_none() {
-            data.restore.set(self.space.element_geometry(&window));
-        }
-        surface.with_pending_state(|s| {
-            s.states.set(mode);
-            s.size = Some(area.size);
-            if mode == xdg_toplevel::State::Fullscreen {
+        let still_filled = surface.with_pending_state(|s| {
+            if on {
+                s.states.set(mode);
+            } else {
+                s.states.unset(mode);
+            }
+            if mode == XdgState::Fullscreen {
                 s.fullscreen_output = output;
             }
+            s.states.contains(XdgState::Maximized) || s.states.contains(XdgState::Fullscreen)
         });
-        self.space.map_element(window, area.loc, true);
-        if surface.is_initial_configure_sent() {
-            surface.send_pending_configure();
-        }
-    }
-
-    /// Quitte l'agrandissement ou le plein écran, et rend sa géométrie à la fenêtre.
-    fn unfill(&mut self, surface: &ToplevelSurface, mode: xdg_toplevel::State) {
-        let Some(window) = self.window_for(surface.wl_surface()) else {
-            return;
-        };
-        let still_filled = surface.with_pending_state(|s| {
-            s.states.unset(mode);
-            if mode == xdg_toplevel::State::Fullscreen {
-                s.fullscreen_output = None;
+        if still_filled {
+            if data.restore.get().is_none() {
+                data.restore.set(self.space.element_geometry(&window));
             }
-            s.states.contains(xdg_toplevel::State::Maximized)
-                || s.states.contains(xdg_toplevel::State::Fullscreen)
-        });
-        if !still_filled && let Some(restore) = window_data(&window).restore.take() {
+            surface.with_pending_state(|s| s.size = Some(area.size));
+            self.space.map_element(window, area.loc, true);
+        } else if let Some(restore) = data.restore.take() {
+            // Taille nulle : la fenêtre n'avait pas encore de contenu, le client choisit.
             let size = (restore.size.w > 0 && restore.size.h > 0).then_some(restore.size);
             surface.with_pending_state(|s| s.size = size);
             self.space.map_element(window, restore.loc, true);
@@ -167,72 +143,6 @@ impl State {
         if surface.is_initial_configure_sent() {
             surface.send_pending_configure();
         }
-    }
-
-    /// Lance un geste demandé par le client (barre de titre ou bord dessinés par lui).
-    fn client_grab(
-        &mut self,
-        surface: &ToplevelSurface,
-        seat: &wl_seat::WlSeat,
-        serial: Serial,
-        edges: Option<Edges>,
-    ) {
-        let Some(seat) = Seat::<State>::from_resource(seat) else {
-            return;
-        };
-        let Some(pointer) = seat.get_pointer() else {
-            return;
-        };
-        let Some(window) = self.window_for(surface.wl_surface()) else {
-            return;
-        };
-        // Le client n'a droit au geste que si son bouton est encore enfoncé sur lui.
-        if !pointer.has_grab(serial) {
-            return;
-        }
-        let Some(start) = pointer.grab_start_data() else {
-            return;
-        };
-        let same_client = start
-            .focus
-            .as_ref()
-            .is_some_and(|(focus, _)| focus.id().same_client_as(&surface.wl_surface().id()));
-        if !same_client {
-            return;
-        }
-        let start = GrabStartData {
-            focus: None,
-            ..start
-        };
-        if let Some(grab) = self.start_grab(start, window, edges) {
-            pointer.set_grab(self, grab, serial, Focus::Clear);
-        }
-    }
-
-    /// Prépare le geste de déplacement (`edges` vide) ou de redimensionnement d'une fenêtre.
-    pub(crate) fn start_grab(
-        &mut self,
-        start: GrabStartData<State>,
-        window: Window,
-        edges: Option<Edges>,
-    ) -> Option<WindowGrab> {
-        let rect = self.space.element_geometry(&window)?;
-        let kind = match edges {
-            None => GrabKind::Move { initial: rect.loc },
-            Some(edges) => {
-                window_data(&window).resize.set(Some((edges, rect, false)));
-                GrabKind::Resize {
-                    edges,
-                    initial: rect,
-                    last: rect.size,
-                }
-            }
-        };
-        Some(WindowGrab {
-            start,
-            window,
-            kind,
-        })
     }
 }
 
@@ -242,6 +152,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        // Posée pour de bon à son premier contenu, quand sa taille est connue.
         let loc = self.output_area().map(|a| a.loc).unwrap_or_default();
         self.space
             .map_element(Window::new_wayland_window(surface), loc, false);
@@ -252,12 +163,6 @@ impl XdgShellHandler for State {
             self.space.unmap_elem(&window);
             let next = self.space.elements().next_back().cloned();
             self.focus(next);
-        }
-    }
-
-    fn title_changed(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.window_for(surface.wl_surface()) {
-            tracing::debug!(titre = ?State::title(&window), "nouveau titre");
         }
     }
 
@@ -281,38 +186,23 @@ impl XdgShellHandler for State {
     }
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        // Les menus se ferment quand le client le décide : pas de saisie exclusive pour l'instant.
-    }
-
-    fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
-        self.client_grab(&surface, &seat, serial, None);
-    }
-
-    fn resize_request(
-        &mut self,
-        surface: ToplevelSurface,
-        seat: wl_seat::WlSeat,
-        serial: Serial,
-        edges: xdg_toplevel::ResizeEdge,
-    ) {
-        let edges = Edges::from_xdg_bits(edges as u32);
-        self.client_grab(&surface, &seat, serial, Some(edges));
+        // Pas de saisie exclusive pour les menus : ils se ferment quand le client le décide.
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        self.fill(&surface, xdg_toplevel::State::Maximized, None);
+        self.set_filled(&surface, XdgState::Maximized, true, None);
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        self.unfill(&surface, xdg_toplevel::State::Maximized);
+        self.set_filled(&surface, XdgState::Maximized, false, None);
     }
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
-        self.fill(&surface, xdg_toplevel::State::Fullscreen, output);
+        self.set_filled(&surface, XdgState::Fullscreen, true, output);
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        self.unfill(&surface, xdg_toplevel::State::Fullscreen);
+        self.set_filled(&surface, XdgState::Fullscreen, false, None);
     }
 }
 
@@ -326,8 +216,6 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
-
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
 }
 
 impl BufferHandler for State {
