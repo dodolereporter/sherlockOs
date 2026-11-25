@@ -242,10 +242,18 @@ pub fn tooltip(theme: &Theme) -> container::Style {
     }
 }
 
-/// Séparateur de menu et trait entre deux lignes.
-pub fn divider(_: &Theme) -> container::Style {
+/// Séparateur entre deux groupes d'entrées d'un menu.
+pub fn separator(_: &Theme) -> container::Style {
     container::Style {
         background: background(color::BORDER),
+        ..container::Style::default()
+    }
+}
+
+/// Trait entre deux lignes d'une carte (planche Réglages).
+pub fn divider(_: &Theme) -> container::Style {
+    container::Style {
+        background: background(color::DIVIDER),
         ..container::Style::default()
     }
 }
@@ -288,6 +296,8 @@ mod tests {
             ("panneau latéral", color::SIDEBAR),
             ("carte", color::CARD),
             ("écran système", color::SYSTEM_SCREEN),
+            ("zone de code", color::DEEPEST),
+            ("bloc du terminal", color::TERMINAL_BLOCK),
         ] {
             all.push((name.to_owned(), c));
         }
@@ -379,6 +389,41 @@ mod tests {
                 ("étiquette de section", color::TEXT_TERTIARY),
             ] {
                 check(&mut failures, name, text, None, &on);
+            }
+        }
+        // Code : numéros de ligne, mots-clés et messages, sur les fonds de code et l'éditeur.
+        for on in surfaces_where(|n| ["zone de code", "bloc du terminal", "fenêtre"].contains(&n))
+        {
+            for (name, text) in [
+                ("numéro de ligne", color::TEXT_LINE_NUMBER),
+                ("mot-clé bleu", color::BLUE_BRIGHT),
+                ("mot-clé bleu clair", color::BLUE_LIGHT),
+                ("réussite", color::ACCENT),
+                ("avertissement", color::AMBER),
+                ("erreur", color::SALMON),
+            ] {
+                check(&mut failures, name, text, None, &on);
+            }
+        }
+        // Listes : ligne sélectionnée dans une fenêtre, un panneau latéral ou une carte, et
+        // entrée active d'une navigation sur le panneau latéral.
+        for on in surfaces_where(|n| ["fenêtre", "panneau latéral", "carte"].contains(&n)) {
+            for (name, text) in [
+                ("texte principal", color::TEXT_PRIMARY),
+                ("texte secondaire", color::TEXT_SECONDARY),
+                ("texte tertiaire", color::TEXT_TERTIARY),
+            ] {
+                let what = format!("{name} sur ligne sélectionnée");
+                check(&mut failures, &what, text, Some(color::SELECTED_ROW), &on);
+            }
+        }
+        for on in surfaces_where(|n| n == "panneau latéral") {
+            for (name, text) in [
+                ("texte principal", color::TEXT_PRIMARY),
+                ("texte secondaire", color::TEXT_SECONDARY),
+            ] {
+                let what = format!("{name} sur entrée active");
+                check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
             }
         }
         // Textes sur les fonds opaques qui leur sont réservés.
