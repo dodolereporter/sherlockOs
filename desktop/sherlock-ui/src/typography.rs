@@ -32,11 +32,19 @@ pub const TITLE_LARGE_SIZE: f32 = 44.0;
 /// Code et terminal, de 12 à 12,5, sur un interligne de 20.
 pub const CODE_SIZE: f32 = 12.5;
 pub const CODE_LINE_HEIGHT: f32 = 20.0;
+/// Code in a narrow panel: file preview, branch badge.
+pub const CODE_SMALL_SIZE: f32 = 12.0;
+/// Column headers of a listing and status badges, uppercase for the former.
+pub const COLUMN_HEADER_SIZE: f32 = 11.5;
+pub const BADGE_SIZE: f32 = 11.5;
 /// Étiquette de section, de 11 à 11,5, en majuscules.
 pub const SECTION_LABEL_SIZE: f32 = 11.0;
 /// Interlettrage de l'étiquette de section, en part de la taille. iced 0.14 ne sait pas
 /// l'appliquer : voir l'écart connu dans `docs/sherlock-ui.md`.
 pub const SECTION_LABEL_TRACKING: f32 = 0.06;
+/// Average advance of a character of Inter at the interface size, to estimate how much of
+/// a name fits in a column without shaping it.
+pub const UI_CHAR_WIDTH: f32 = 7.2;
 /// Interligne du texte courant, en part de la taille.
 pub const LINE_HEIGHT: f32 = 1.4;
 
@@ -76,6 +84,7 @@ mod fonts {
 const _: () = {
     assert!(TITLE_SMALL_SIZE >= 17.0 && TITLE_LARGE_SIZE <= 44.0);
     assert!(CODE_SIZE >= 12.0 && CODE_SIZE <= 12.5);
+    assert!(CODE_SMALL_SIZE >= 12.0 && CODE_SMALL_SIZE <= CODE_SIZE);
     assert!(SECTION_LABEL_SIZE >= 11.0 && SECTION_LABEL_SIZE <= 11.5);
     assert!(SYSTEM_SIZE >= 14.0 && SYSTEM_SIZE <= 15.0);
 };

@@ -161,8 +161,23 @@ pub const PRESSED: Color = Color::rgba(255, 255, 255, 0.12);
 /// interrupteurs allumés : la piste éteinte reprend la bordure d'un bouton secondaire.
 pub const TOGGLE_OFF: Color = Color::rgba(255, 255, 255, 0.18);
 pub const TOGGLE_OFF_HOVER: Color = Color::rgba(255, 255, 255, 0.26);
+/// Inset area of a toolbar: the breadcrumb (Evidence mock-up).
+pub const INSET: Color = Color::rgba(255, 255, 255, 0.05);
+/// Pill behind the window buttons.
+pub const CONTROLS: Color = Color::rgba(255, 255, 255, 0.06);
+/// Veil laid over a window behind a question awaiting an answer.
+pub const SCRIM: Color = Color::rgba(3, 8, 18, 0.45);
+/// Background of a status badge: warning, success, neutral (git status in the Evidence
+/// mock-up), and border of a green badge without background (git branch).
+pub const AMBER_SOFT: Color = Color::rgba(240, 196, 138, 0.18);
+pub const ACCENT_SOFT: Color = Color::rgba(133, 197, 149, 0.18);
+pub const NEUTRAL_SOFT: Color = Color::rgba(255, 255, 255, 0.08);
+pub const ACCENT_BORDER: Color = Color::rgba(133, 197, 149, 0.5);
 /// Fond d'un élément désactivé.
 pub const DISABLED: Color = Color::rgba(255, 255, 255, 0.05);
+/// Colour of the crisp shadows of floating surfaces (`surface::Shadowed`), the same blue
+/// black as `SHADOW` and `MENU_SHADOW`; each step of the shadow sets its own opacity.
+pub const SHADOW_BASE: Color = Color::rgb(3, 8, 18);
 /// Ombre des fenêtres et des panneaux.
 pub const SHADOW: Color = Color::rgba(3, 8, 18, 0.55);
 /// Ombre des menus.
@@ -176,6 +191,8 @@ pub const TEXT_PRIMARY: Color = Color::rgb(0xEE, 0xF2, 0xF7);
 pub const TEXT_SECONDARY: Color = Color::rgb(0xC5, 0xCE, 0xDB);
 /// Étiquettes, raccourcis, texte d'un élément désactivé.
 pub const TEXT_TERTIARY: Color = Color::rgb(0xA9, 0xB4, 0xC6);
+/// Text of a code snippet or of a file preview (Evidence mock-up).
+pub const TEXT_CODE: Color = Color::rgb(0xDC, 0xE4, 0xEE);
 /// Numéros de ligne.
 pub const TEXT_LINE_NUMBER: Color = Color::rgb(0x84, 0x92, 0xA8);
 /// Texte posé sur le vert.
