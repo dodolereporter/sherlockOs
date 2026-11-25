@@ -185,6 +185,11 @@ pub const OPEN_SCALE: f64 = 0.92;
 /// the 110 to 150 ms range.
 pub const FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
 
+/// Fade of the whole desktop from one theme to the other (`color::ThemeFade`). A choice of
+/// D-05b: the 0.25 s of the cross-fades between two animations of Sherlock
+/// (`docs/contexte.md`), longer than a hover, since every surface changes at once.
+pub const THEME_FADE: Duration = Duration::from_millis(250);
+
 /// Frame rate the desktop must hold, animations included (`docs/contexte.md`).
 pub const FRAME_RATE: u32 = 60;
 

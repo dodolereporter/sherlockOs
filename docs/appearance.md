@@ -60,6 +60,9 @@ with its light one; D-05c links the active theme to the wallpaper.
 | `TimeOfDay::next_after(epoch)` | The next instant with that local time, from `mktime`: right across a change of daylight saving time |
 | `epoch_now` | Seconds since 1970, from the real-time clock |
 | `follow(path, on_event)` | Calls `on_event` with the theme, then at every change; `Event::Problem` and `Event::Error` report what went wrong |
+| `follow_themes(path, on_theme)` | `follow` for a program that only wants the themes: problems and errors go to the log (`tracing`) |
+| `theme_now(path)` | The theme of the file now, read once: what a program makes active before its first frame |
+| `local(epoch)` | Broken-down local time (`struct tm`) of an instant, the time zone read again first; the top bar's clock uses it |
 | `path` | Path of the file |
 
 `follow` runs one thread, which waits with `poll` on two descriptors:
@@ -79,8 +82,11 @@ with its light one; D-05c links the active theme to the wallpaper.
 No polling. The thread stops the next time it reports something after `on_event` returned
 `false`.
 
-A program wires it like the sherlock-ui gallery does (`examples/gallery/view.rs`): a
-subscription whose stream receives the themes, and `color::set_active(theme)` in `update`.
+A program wires it like the top bar, Evidence and the dock do: `color::set_active(theme_now(..))`
+before its first frame, so that a light session never starts on a dark frame, then a
+subscription whose stream receives the themes of `follow_themes`, given to a `color::ThemeFade` in `update`, which fades
+the palette shown over `motion::THEME_FADE` (see "Following the theme" in
+`docs/sherlock-ui.md`). The sherlock-ui gallery switches at once with `color::set_active`.
 
 ## Limits
 
@@ -90,8 +96,18 @@ subscription whose stream receives the themes, and `color::set_active(theme)` in
 - The crate does not write the file yet: Control Room will need it, with the unknown keys kept,
   as `dock-config` does. A shared `config-watch` crate will take the inotify part of this crate
   and of the dock, in a lot of its own.
-- The top bar still reads the time with `date` (`desktop/bar/src/source/clock.rs`): to move to
-  `localtime_r` in D-05b.
+- Moving an ancestor of the folder is not seen, for instance `mv ~/.config ~/.config.old` then
+  a new `~/.config/appearance/`: the folder itself is neither deleted nor moved, so the kernel
+  sends no `IN_MOVE_SELF`, and the watch follows the old inode. The program sees the new file at
+  its next start. The shared `config-watch` crate may treat it.
+- A switch time inside the hour that the clocks skip or repeat comes late, on those two nights
+  only: in Paris, 02:30 does not exist on the last Sunday of March and `mktime` places it at
+  03:30 (up to 59 minutes late for 02:59); it exists twice on the last Sunday of October and
+  `mktime` takes the second one (an hour late). Times outside 02:00 to 02:59 are not touched.
+- When the watch cannot be set up (`EMFILE` past `max_user_instances`, `ENOSPC`, `EACCES`), it is
+  tried again only at the next wake-up of the thread. In the `dark` and `light` modes the timer
+  is disarmed, so the file is not followed again until the clock changes: the program logs the
+  error, and its next start reads the file.
 
 ## Tests
 
@@ -102,7 +118,8 @@ subscription whose stream receives the themes, and `color::set_active(theme)` in
   light night at its bounds (21:59:59, 22:00, 05:59:59, 06:00);
 - the next switch as an instant of the local clock, and across daylight saving time in a child
   process with `TZ=Europe/Paris`: on 28 March 2026 at 20:00, 07:00 comes 10 hours later; on
-  24 October 2026, 12 hours later;
+  24 October 2026, 12 hours later. Run straight by `--include-ignored` without that zone, the
+  child test says it is skipped and passes;
 - the timer: an instant already passed (after a suspend) fires at once, a disarmed timer does
   not. `ECANCELED` needs a change of the system clock, so it is not tested;
 - inotify: every event of a read counts (a deleted directory, a moved one, lost events); a file

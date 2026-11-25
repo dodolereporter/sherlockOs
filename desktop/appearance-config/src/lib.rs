@@ -1,7 +1,7 @@
 //! The appearance settings file, `$XDG_CONFIG_HOME/appearance/appearance.conf`: the theme, and
 //! the hours of the automatic mode. Every program reads it the same way and follows it live
 //! (`follow`); the settings application (Control Room, D-26) will write it. Depends on the
-//! tokens of sherlock-ui and on `libc` only.
+//! tokens of sherlock-ui, on `libc` and on `tracing`.
 //!
 //! ```text
 //! [Appearance]
@@ -20,7 +20,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use sherlock_ui::color::Theme;
-pub use watch::{Event, follow};
+pub use watch::{Event, follow, follow_themes};
 
 const GROUP: &str = "Appearance";
 const THEME: &str = "Theme";
@@ -129,10 +129,11 @@ pub fn epoch_now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// Broken-down local time of `epoch`. The time zone is read again first: glibc's `mktime`
-/// runs `tzset` (POSIX requires it), which notices a new `/etc/localtime`; `localtime_r` alone
-/// would keep the zone it read first.
-fn local(epoch: i64) -> io::Result<libc::tm> {
+/// Broken-down local time of `epoch`, in seconds since 1970. The time zone is read again
+/// first: glibc's `mktime` runs `tzset` (POSIX requires it), which notices a new
+/// `/etc/localtime`; `localtime_r` alone would keep the zone it read first. The top bar reads
+/// its clock with it too.
+pub fn local(epoch: i64) -> io::Result<libc::tm> {
     let time = libc::time_t::try_from(epoch).map_err(io::Error::other)?;
     // SAFETY: `tm` is plain data; zeroed, then filled by the calls below.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -270,6 +271,31 @@ fn read_time(key: &'static str, value: &str, slot: &mut TimeOfDay, problems: &mu
     }
 }
 
+/// The theme of the file at `path` now, read once: a program makes it active before its first
+/// frame, then follows the file (`follow_themes`), so that a light session never shows a dark
+/// frame at start. What cannot be read gives the default and goes to the log.
+pub fn theme_now(path: &Path) -> Theme {
+    let config = match AppearanceConfig::load(path) {
+        Ok((config, problems)) => {
+            for problem in problems {
+                tracing::warn!(%problem, "appearance file");
+            }
+            config
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "cannot read the appearance file");
+            AppearanceConfig::default()
+        }
+    };
+    match TimeOfDay::at(epoch_now()) {
+        Ok(now) => config.theme_at(now).0,
+        Err(error) => {
+            tracing::warn!(%error, "no local time: the default theme");
+            Theme::default()
+        }
+    }
+}
+
 /// Path of the file: `$XDG_CONFIG_HOME/appearance/appearance.conf`, `~/.config` by default.
 pub fn path() -> Option<PathBuf> {
     let home = std::env::var_os("XDG_CONFIG_HOME")
@@ -384,6 +410,18 @@ mod tests {
     }
 
     #[test]
+    fn the_theme_of_a_file_is_read_before_the_first_frame() {
+        let dir = std::env::temp_dir().join(format!("appearance-now-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("appearance.conf");
+        std::fs::write(&file, "[Appearance]\nTheme=light\n").unwrap();
+        assert_eq!(theme_now(&file), Theme::Light);
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(theme_now(&file), Theme::Dark, "no file: the default");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_next_switch_is_an_instant_of_the_local_clock() {
         let now = epoch_now();
         let local = TimeOfDay::at(now).unwrap();
@@ -425,6 +463,11 @@ mod tests {
     #[test]
     #[ignore = "run by the_next_switch_follows_daylight_saving_time, with TZ=Europe/Paris"]
     fn daylight_saving_time_in_paris() {
+        // Run straight, by `--include-ignored`, it would read the zone of the machine.
+        if std::env::var("TZ").as_deref() != Ok("Europe/Paris") {
+            println!("skipped: needs TZ=Europe/Paris, which its parent test gives");
+            return;
+        }
         let seven = at(7, 0, 0);
         // Saturday 28 March 2026, 20:00 in Paris (19:00 UTC). The clocks go forward that
         // night: 07:00 comes 10 hours later, at 05:00 UTC.

@@ -35,7 +35,7 @@ fn vline<'a>() -> Element<'a, Message> {
 /// Secondary text of a cell, with a fixed width.
 fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
     ui::body(content)
-        .color(color::TEXT_SECONDARY)
+        .color(color::palette().text_secondary)
         .wrapping(text::Wrapping::None)
         .width(width)
         .into()
@@ -44,7 +44,7 @@ fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
 /// Secondary text of a cell, without a copy.
 fn cell_ref(content: &str, width: f32) -> Element<'_, Message> {
     ui::body(content)
-        .color(color::TEXT_SECONDARY)
+        .color(color::palette().text_secondary)
         .wrapping(text::Wrapping::None)
         .width(width)
         .into()
@@ -136,7 +136,7 @@ impl App {
         let line = row![
             badge,
             ui::body(t::APP_NAME).font(typography::UI_SEMIBOLD),
-            ui::body(self.location_name()).color(color::TEXT_TERTIARY),
+            ui::body(self.location_name()).color(color::palette().text_tertiary),
             space::horizontal(),
             controls,
         ]
@@ -175,7 +175,13 @@ impl App {
         if folded {
             crumbs.drain(1..crumbs.len() + 1 - metrics::BREADCRUMB_MAX);
         }
-        let chevron = || ui::icon(Icon::Chevron, metrics::ICON_SIZE_TINY, color::TEXT_TERTIARY);
+        let chevron = || {
+            ui::icon(
+                Icon::Chevron,
+                metrics::ICON_SIZE_TINY,
+                color::palette().text_tertiary,
+            )
+        };
         let mut trail = Row::new()
             .spacing(metrics::BREADCRUMB_GAP)
             .align_y(Alignment::Center);
@@ -186,7 +192,7 @@ impl App {
             }
             if folded && i == 1 {
                 trail = trail
-                    .push(ui::body(t::FOLDED).color(color::TEXT_TERTIARY))
+                    .push(ui::body(t::FOLDED).color(color::palette().text_tertiary))
                     .push(chevron());
             }
             let current = i + 1 == count;
@@ -395,7 +401,7 @@ impl App {
             .on_press(Message::Blank)
             .on_right_press(Message::RightClick(None));
         let content: Element<'_, Message> = if reveal < 1.0 {
-            stack![content, veil(color::WINDOW, 1.0 - reveal)].into()
+            stack![content, veil(color::palette().window, 1.0 - reveal)].into()
         } else {
             content.into()
         };
@@ -473,8 +479,8 @@ impl App {
         // A single selection is drawn by the gliding highlight.
         let painted = selected && self.selection.len() > 1;
         let tint = match entry.kind {
-            Kind::Folder => color::BLUE_LIGHT,
-            _ => color::TEXT_SECONDARY,
+            Kind::Folder => color::palette().blue_light,
+            _ => color::palette().text_secondary,
         };
         let name: Element<'a, Message> = match &self.renaming {
             Some((index, value)) if *index == i => {
@@ -524,7 +530,7 @@ impl App {
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
             .style(theme::list_row(painted));
-        let line = hoverable(line, color::HOVER, metrics::LIST_ROW_RADIUS).key(i as u64);
+        let line = hoverable(line, color::palette().hover, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))
             .on_double_click(Message::DoubleClick(i))
@@ -542,7 +548,7 @@ impl App {
                 let tile = container(ui::icon(
                     entry.icon(),
                     metrics::PREVIEW_TILE_ICON,
-                    color::DEEPEST,
+                    theme::PREVIEW_TILE_ICON,
                 ))
                 .center(metrics::PREVIEW_TILE)
                 .style(theme::preview_tile);
@@ -562,7 +568,7 @@ impl App {
                         .font(typography::UI_SEMIBOLD)
                         .size(typography::CARD_TITLE_SIZE)
                         .wrapping(text::Wrapping::None),
-                    ui::body(subtitle).color(color::TEXT_SECONDARY),
+                    ui::body(subtitle).color(color::palette().text_secondary),
                 ];
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
@@ -575,7 +581,7 @@ impl App {
                 // The preview fades in: a veil of the panel background that fades away.
                 let reveal = self.preview_fade.as_ref().map_or(1.0, |f| f.value(now));
                 let body: Element<'_, Message> = if reveal < 1.0 {
-                    stack![body, veil(color::SIDEBAR, 1.0 - reveal)].into()
+                    stack![body, veil(color::palette().sidebar, 1.0 - reveal)].into()
                 } else {
                     body
                 };
@@ -622,7 +628,7 @@ impl App {
             Some(
                 column![
                     ui::section_label(label),
-                    ui::body(value).color(color::TEXT_SECONDARY)
+                    ui::body(value).color(color::palette().text_secondary)
                 ]
                 .into(),
             )
@@ -634,11 +640,11 @@ impl App {
 
     fn status_bar(&self) -> Element<'_, Message> {
         let (left, tint) = match &self.notice {
-            Some(notice) if notice.error => (notice.text.clone(), color::SALMON),
-            Some(notice) => (notice.text.clone(), color::TEXT_TERTIARY),
+            Some(notice) if notice.error => (notice.text.clone(), color::palette().salmon_text),
+            Some(notice) => (notice.text.clone(), color::palette().text_tertiary),
             None => (
                 t::status(self.entries.len(), self.selection.len()),
-                color::TEXT_TERTIARY,
+                color::palette().text_tertiary,
             ),
         };
         let small = |content: String, tint| {
@@ -650,7 +656,7 @@ impl App {
         let line = row![
             small(left, tint),
             space::horizontal(),
-            small(t::HINT.into(), color::TEXT_TERTIARY),
+            small(t::HINT.into(), color::palette().text_tertiary),
         ]
         .align_y(Alignment::Center);
         container(line)

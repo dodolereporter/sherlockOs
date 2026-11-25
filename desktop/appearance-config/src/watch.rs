@@ -59,6 +59,25 @@ pub fn follow(
         .map(|_| ())
 }
 
+/// `follow`, for a program that only wants the themes: `on_theme` gets each one, and the
+/// problems of the file and the errors go to the log.
+pub fn follow_themes(
+    path: PathBuf,
+    mut on_theme: impl FnMut(Theme) -> bool + Send + 'static,
+) -> io::Result<()> {
+    follow(path, move |event| match event {
+        Event::Theme(theme) => on_theme(theme),
+        Event::Problem(problem) => {
+            tracing::warn!(%problem, "appearance file");
+            true
+        }
+        Event::Error(error) => {
+            tracing::warn!(%error, "appearance file");
+            true
+        }
+    })
+}
+
 fn run(path: &Path, timer: &Timer, mut on_event: impl FnMut(Event) -> bool) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         let _ = on_event(Event::Error(io::Error::other("no directory or file name")));
