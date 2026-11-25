@@ -9,12 +9,12 @@ use anyhow::{Context, bail};
 use serde_json::json;
 use sherlockd::agent::{Agent, AgentConfig};
 use sherlockd::faux::ScriptedProvider;
-use sherlockd::mcp::{McpClient, McpServers, ToolHost};
+use sherlockd::mcp::{McpClient, McpServers, ServerConfig, ToolHost};
 use sherlockd::modele::{Message, ModelReply, ModelRequest, ToolCall};
-use sherlockd::serveur_essai;
+use sherlockd::serveur_essai::{self, Mode};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage : sherlockd --essai | --serveur-essai [--plante-sur-appel]";
+const USAGE: &str = "usage : sherlockd --essai | --serveur-essai [cas]";
 
 fn main() -> anyhow::Result<()> {
     // Journaux sur la sortie d'erreur : la sortie standard porte le protocole MCP ou la conversation.
@@ -32,9 +32,10 @@ fn main() -> anyhow::Result<()> {
         .as_slice()
     {
         ["--essai"] => essai(),
-        ["--serveur-essai"] => serveur_essai::run(false).context("serveur d'essai"),
-        ["--serveur-essai", "--plante-sur-appel"] => {
-            serveur_essai::run(true).context("serveur d'essai")
+        ["--serveur-essai"] => serveur_essai::run(Mode::Normal).context("serveur d'essai"),
+        ["--serveur-essai", case] => {
+            let mode = Mode::from_arg(case).with_context(|| format!("cas inconnu : {case}"))?;
+            serveur_essai::run(mode).context("serveur d'essai")
         }
         _ => bail!("{USAGE}"),
     }
@@ -49,8 +50,11 @@ fn essai() -> anyhow::Result<()> {
     runtime.block_on(async {
         let exe = std::env::current_exe().context("chemin de sherlockd")?;
         let exe = exe.to_str().context("chemin de sherlockd illisible")?;
-        let timeout = Duration::from_secs(5);
-        let client = McpClient::spawn("essai", exe, &["--serveur-essai"], timeout).await?;
+        // Le serveur de test est l'un des nôtres : ses annotations sont crues (ADR 0015).
+        let config = ServerConfig::new("essai", exe, &["--serveur-essai"])
+            .timeout(Duration::from_secs(5))
+            .ours();
+        let client = McpClient::spawn(&config).await?;
         let mut servers = McpServers::new();
         servers.add(client).await.context("découverte des outils")?;
 
