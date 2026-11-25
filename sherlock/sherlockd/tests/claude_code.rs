@@ -1,6 +1,7 @@
 //! Claude Code provider, without ever calling Claude Code: recorded `stream-json` transcripts
 //! (identifiers removed), fake `claude` programs for errors and history.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -234,19 +235,30 @@ async fn lone_result_refused_by_fake_claude() {
 
 #[tokio::test]
 async fn timeout_claude_killed_and_reaped() {
-    // Fake logged-in Claude Code that never answers. `$0` is `fake`.
-    let script = "[ \"$1\" = auth ] && exit 0; exec sleep 30";
+    // Fake logged-in Claude Code that writes its process identifier to the file `$1`, then never
+    // answers: `exec` keeps that identifier for `sleep`. `$0` is `fake`. Whatever the timeout, the
+    // result is the same, since there is no answer to wait for. It is wide enough for `sh` to
+    // start and write the file under load, which a short one did not guarantee.
+    let pid_file = std::env::temp_dir().join(format!("sherlockd-timeout-{}", std::process::id()));
+    let script = "[ \"$2\" = auth ] && exit 0; echo $$ > \"$1\"; exec sleep 600";
     let mut config = ClaudeCodeConfig::new("/unused", "Tu es Sherlock.");
     config.program = "sh".into();
-    config.program_args = ["-c", script, "fake"].map(String::from).into();
+    let pid_path = pid_file.to_string_lossy().into_owned();
+    config.program_args = ["-c", script, "fake", pid_path.as_str()]
+        .map(String::from)
+        .into();
     config.workdir = None;
-    config.timeout = Duration::from_millis(300);
+    config.timeout = Duration::from_secs(5);
     let mut claude = ClaudeCode::new(config);
     let start = Instant::now();
     let error = claude.ask("Bonjour").await.unwrap_err();
     assert!(matches!(error, ClaudeCodeError::Timeout(_)), "{error}");
-    // Killed at once, without waiting for `sleep 30` to end.
-    assert!(start.elapsed() < Duration::from_secs(5));
+    // Neither process nor zombie: the fake was killed then reaped, without waiting for `sleep` to
+    // end. The bound on the duration only rules out that wait, with a wide margin for the load.
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    std::fs::remove_file(&pid_file).unwrap();
+    assert!(!Path::new(&format!("/proc/{}", pid.trim())).exists());
+    assert!(start.elapsed() < Duration::from_secs(60));
 }
 
 #[tokio::test]

@@ -71,24 +71,24 @@ merge a pull request whose CI is not green.
 
 | Command | What it does |
 | --- | --- |
-| `just verify` | `fmt-check`, then `lint`, then `test` |
+| `just verify` | `fmt-check`, then `check-language`, then `lint`, then `test` |
 | `just fmt-check` | `cargo fmt --all -- --check` |
 | `just fmt` | Applies the format |
 | `just lint` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | `just test` | `cargo test --workspace --all-features` |
 | `just build` | `cargo build --workspace` |
-| `just check-language` | Reports French left in development text (ADR 0017) |
+| `just check-language` | Reports French left in development text (ADR 0017), after its self-test |
 
 Build container: `just builder`, `just in-builder <command>`, `just test-builder`,
 `just test-builder-repro` (see `docs/build.md`). Boot bench: `just test-boot [image]`,
 `just witness`, `just test-bench` (see `docs/boot-tests.md`). The CI also runs the bench: `verify`
 and `test-boot` must both be green.
 
-Prerequisites of the machine: `rustup`, `just`, a C compiler used as linker (`gcc` and `libc6-dev`
-on Debian) and the compositor libraries (`libxkbcommon-dev` and `libwayland-dev` on Debian). The
-Rust version is read from `rust-toolchain.toml` and installs itself on the first `cargo`. Do not
-change it: it is also copied into `rust-version` of the root `Cargo.toml`, and both change
-together.
+Prerequisites of the machine: `rustup`, `just`, `python3` (for `check-language`), a C compiler
+used as linker (`gcc` and `libc6-dev` on Debian) and the compositor libraries (`libxkbcommon-dev`
+and `libwayland-dev` on Debian). The Rust version is read from `rust-toolchain.toml` and installs
+itself on the first `cargo`. Do not change it: it is also copied into `rust-version` of the root
+`Cargo.toml`, and both change together.
 
 ## Rust code
 

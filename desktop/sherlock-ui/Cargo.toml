@@ -10,11 +10,13 @@ publish.workspace = true
 # The shell programs want the components, so iced is on by default. The compositor, which
 # only reads the tokens, goes without it with `default-features = false`.
 default = ["iced"]
-iced = ["dep:iced"]
+iced = ["dep:iced", "dep:iced_renderer", "dep:wgpu"]
 
 [dependencies]
-# Shell toolkit (ADR 0014). Software rendering only: without the `wgpu` feature, tiny-skia is
-# the only renderer compiled, so no environment variable can wake the NVIDIA card.
+# Shell toolkit (ADR 0014). Two renderers (ADR 0018): wgpu on the AMD chip, chosen by
+# `gpu::Choice` before iced starts, and `tiny-skia` in software when there is no AMD chip or
+# when wgpu finds no adapter. `wgpu-bare` takes iced's wgpu renderer without wgpu's backends:
+# the `wgpu` dependency below enables Vulkan alone.
 # `svg` draws the icons and the logo, `web-colors` blends transparency like the design
 # boards, `crisp` snaps borders to pixels, `thread-pool` runs the tasks, `advanced` opens the
 # widget API for the keyboard focus that iced's buttons lack.
@@ -22,12 +24,23 @@ iced = ["dep:iced"]
 iced = { version = "=0.14.0", optional = true, default-features = false, features = [
     "advanced",
     "tiny-skia",
+    "wgpu-bare",
     "svg",
     "web-colors",
     "crisp",
     "thread-pool",
     "x11",
     "wayland",
+] }
+# The renderer iced picked at start-up, read when drawing a shadow (`surface`). Already pulled
+# in by iced: only the declaration is new.
+iced_renderer = { version = "=0.14.0", optional = true, default-features = false }
+# The version iced 0.14 pulls, with its Vulkan backend only: no OpenGL backend, so no EGL
+# vendor library (NVIDIA's comes first on Debian) can ever be loaded (ADR 0018).
+wgpu = { version = "=27.0.1", optional = true, default-features = false, features = [
+    "std",
+    "wgsl",
+    "vulkan",
 ] }
 
 [dev-dependencies]
@@ -46,6 +59,11 @@ required-features = ["iced"]
 [[test]]
 name = "gallery"
 required-features = ["iced"]
+
+# `apply` changes the process environment: one thread, so no libtest harness.
+[[test]]
+name = "gpu_apply"
+harness = false
 
 [lints]
 workspace = true

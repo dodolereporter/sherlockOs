@@ -876,7 +876,11 @@ On the reference laptop, the compositor must run on the AMD chip:
 - `__EGL_VENDOR_LIBRARY_FILENAMES` only lets libglvnd load Mesa's EGL: NVIDIA's, which takes
   priority on Debian (`10_nvidia.json`), is not even opened;
 - `cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status` must stay `suspended` before,
-  during and after (address of the NVIDIA card given by `lspci -D | grep -i nvidia`).
+  during and after. The address of the NVIDIA card is the device whose `vendor` is `0x10de`
+  and whose `class` starts with `0x03` (display):
+  `grep -l 0x10de /sys/bus/pci/devices/*/vendor | xargs -n1 dirname | while read d; do grep -q '^0x03' $d/class && echo ${d##*/}; done`.
+  Do not use `lspci`: it reads the PCI configuration space of every device, which wakes a
+  sleeping NVIDIA card (seen in lot D-02).
 
 Without `DRI_PRIME`, Mesa renders on the default chip, the one driving the screen: the AMD.
 `DRI_PRIME=0` is refused by Mesa (`Invalid value (0) for DRI_PRIME`): do not set it. The

@@ -410,7 +410,9 @@ fn window_renders_headless() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
     fs::create_dir_all(&dir).expect("captures folder");
     let path = dir.join("evidence.png");
-    let written = path.with_file_name("evidence-tiny-skia.png");
+    // Named after the renderer: `tiny-skia`, or `wgpu` with `ICED_TEST_BACKEND=wgpu`.
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = path.with_file_name(format!("evidence-{renderer}.png"));
     let _ = fs::remove_file(&written);
     assert!(snapshot.matches_image(&path).expect("writing the capture"));
     println!("capture: {}", written.display());

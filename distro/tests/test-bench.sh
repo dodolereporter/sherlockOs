@@ -20,6 +20,12 @@ capture() {
     bench_output="$("$@" 2>&1)" || code=$?
 }
 
+# 0. The detection of the BOOT-OK line, on logs written by hand: kernel messages in the middle of
+# the line tolerated, nothing else.
+capture python3 -I "$here/marker.py" --self-test
+printf '%s\n' "$bench_output" | sed 's/^/        | /'
+if [[ "$code" -eq 0 ]]; then pass "BOOT-OK detection: marker.py cases"; else fail "BOOT-OK detection: marker.py cases" "code $code"; fi
+
 # 1. An initramfs that does not write BOOT-OK: the bench waits for the whole timeout, returns 1
 # and shows the end of the serial port, where the line written by /init instead must appear.
 image="$output/witness-silent.img"

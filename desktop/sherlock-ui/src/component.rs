@@ -460,8 +460,8 @@ pub fn menu<'a, Message: 'a>(
         .style(theme::menu)
 }
 
-/// A menu floating over a window, over its crisp shadow (`surface::Shadowed`): context menus.
-/// A menu that fills its own surface (the bar's) uses `menu`.
+/// A menu floating over a window, over its shadow (`surface::Shadowed`): context menus.
+/// A menu that fills its own surface (the bar's) uses `menu`, and lays its shadow itself.
 pub fn floating_menu<'a, Message: 'a>(
     entries: impl IntoIterator<Item = Element<'a, Message>>,
     width: f32,
@@ -469,7 +469,7 @@ pub fn floating_menu<'a, Message: 'a>(
     crate::surface::shadowed(
         menu(entries, width),
         metrics::MENU_RADIUS,
-        &metrics::MENU_SHADOW_LAYERS,
+        crate::surface::Elevation::Menu,
     )
     .into()
 }
@@ -538,7 +538,7 @@ pub fn glass_panel<'a, Message: 'a>(
         .style(theme::glass)
 }
 
-/// A glass panel of the given width over its crisp shadow: dialogs.
+/// A glass panel of the given width over its shadow: dialogs.
 pub fn floating_panel<'a, Message: 'a>(
     content: impl Into<Element<'a, Message>>,
     width: f32,
@@ -546,7 +546,7 @@ pub fn floating_panel<'a, Message: 'a>(
     crate::surface::shadowed(
         glass_panel(content).width(width),
         metrics::PANEL_RADIUS,
-        &metrics::PANEL_SHADOW_LAYERS,
+        crate::surface::Elevation::Panel,
     )
     .into()
 }
