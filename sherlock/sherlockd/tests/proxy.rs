@@ -1,9 +1,9 @@
-//! Le mandataire en vrai processus, devant le serveur de test : ce que Claude Code verrait.
+//! The proxy as a real process, in front of the test server: what Claude Code would see.
 
 use std::process::Stdio;
 
 use serde_json::{Value, json};
-use sherlockd::serveur_essai::MARQUEUR_SANS_NIVEAU;
+use sherlockd::test_server::UNLEVELED_MARKER;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -15,7 +15,7 @@ fn call(id: u64, name: &str, arguments: Value) -> Value {
 }
 
 #[tokio::test]
-async fn relaie_la_lecture_et_refuse_le_reste() {
+async fn relays_read_and_refuses_the_rest() {
     let requests = [
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": { "protocolVersion": "2025-06-18", "capabilities": {} } }),
@@ -25,7 +25,7 @@ async fn relaie_la_lecture_et_refuse_le_reste() {
         call(4, "echo", json!({ "texte": "Bonjour" })),
     ];
     let mut child = Command::new(EXE)
-        .arg("--mandataire")
+        .arg("--proxy")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -41,7 +41,7 @@ async fn relaie_la_lecture_et_refuse_le_reste() {
     let output = child.wait_with_output().await.unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(!stdout.contains(MARQUEUR_SANS_NIVEAU));
+    assert!(!stdout.contains(UNLEVELED_MARKER));
     let replies: Vec<Value> = stdout
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -54,9 +54,9 @@ async fn relaie_la_lecture_et_refuse_le_reste() {
     assert_eq!(tools[1]["name"], "vider_corbeille");
     assert_eq!(tools[1]["annotations"]["destructiveHint"], true);
 
-    let refus = &replies[2]["result"];
-    assert_eq!(refus["isError"], true);
-    let text = refus["content"][0]["text"].as_str().unwrap();
+    let refusal = &replies[2]["result"];
+    assert_eq!(refusal["isError"], true);
+    let text = refusal["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("courtier d'accords absent"), "{text}");
 
     assert_eq!(replies[3]["result"]["content"][0]["text"], "Bonjour");

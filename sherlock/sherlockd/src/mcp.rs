@@ -1,9 +1,9 @@
-//! Client MCP minimal : JSON-RPC 2.0 sur l'entrée et la sortie standard d'un serveur.
+//! Minimal MCP client: JSON-RPC 2.0 over a server's standard input and output.
 //!
-//! Le strict nécessaire du protocole : `initialize`, `notifications/initialized`, `tools/list`
-//! et `tools/call`, un message JSON par ligne. Le serveur est un processus enfant. Tout ce qu'il
-//! envoie est une donnée externe : rien ne doit faire paniquer le client ni le faire grossir sans
-//! limite, et un doute sur un niveau se résout vers le plus restrictif.
+//! The bare minimum of the protocol: `initialize`, `notifications/initialized`, `tools/list`
+//! and `tools/call`, one JSON message per line. The server is a child process. Everything it
+//! sends is external data: nothing may make the client panic or grow without bound, and any
+//! doubt about a level resolves to the most restrictive one.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -17,32 +17,32 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-/// Version du protocole MCP demandée au serveur.
+/// MCP protocol version requested from the server.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// Taille maximale d'un message lu, fin de ligne comprise : 4 Mio. Au-delà, le serveur est perdu.
-/// Borne la mémoire face à un serveur hostile, en laissant de la place à un résultat d'outil
-/// volumineux mais légitime.
+/// Maximum size of a message read, line ending included: 4 MiB. Beyond it, the server is lost.
+/// Bounds memory against a hostile server, while leaving room for a large but legitimate tool
+/// result.
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
-/// Nombre maximal de pages de `tools/list`. Au-delà, la liste est refusée.
+/// Maximum number of `tools/list` pages. Beyond it, the list is refused.
 pub const MAX_TOOL_PAGES: usize = 16;
 
-/// Nombre maximal d'outils d'un serveur. Au-delà, la liste est refusée.
+/// Maximum number of tools of one server. Beyond it, the list is refused.
 pub const MAX_TOOLS_PER_SERVER: usize = 256;
 
-/// Délai laissé au serveur pour s'arrêter de lui-même, entrée fermée, avant `SIGKILL`.
+/// Time left to the server to stop on its own, input closed, before `SIGKILL`.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
-/// Délai par défaut d'une requête au serveur.
+/// Default timeout of a request to the server.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Longueur maximale d'un message de serveur recopié dans un journal.
+/// Maximum length of a server message copied into a log.
 const LOG_PREVIEW_BYTES: usize = 200;
 
-/// Variables d'environnement transmises aux processus lancés par `sherlockd` : chemins, identité
-/// de session, langue (`LC_*` aussi), terminal, niveau des journaux. Aucune clé, aucun jeton,
-/// aucune variable qui change la destination d'une requête : tout le reste est retiré.
+/// Environment variables passed to the processes started by `sherlockd`: paths, session
+/// identity, language (`LC_*` too), terminal, log level. No key, no token, no variable that
+/// changes where a request goes: everything else is removed.
 pub const ENV_ALLOWED: [&str; 16] = [
     "PATH",
     "HOME",
@@ -62,7 +62,7 @@ pub const ENV_ALLOWED: [&str; 16] = [
     "RUST_LOG",
 ];
 
-/// Garde, de `vars`, les variables de [`ENV_ALLOWED`], les `LC_*` et celles de `extra`.
+/// Keeps, from `vars`, the variables of [`ENV_ALLOWED`], the `LC_*` ones and those of `extra`.
 pub fn clean_env(
     vars: impl IntoIterator<Item = (OsString, OsString)>,
     extra: &[&str],
@@ -76,25 +76,25 @@ pub fn clean_env(
         .collect()
 }
 
-/// Niveau d'un outil, qui décide de la règle d'accord (contexte, « Les trois niveaux »).
+/// Level of a tool, which decides the consent rule (context, « Les trois niveaux »).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
-    /// Lit sans rien changer. Libre, journalisé.
+    /// Reads without changing anything. Free, logged.
     Read,
-    /// Change l'état du système. Accord de l'utilisateur.
+    /// Changes the system state. User consent.
     Action,
-    /// Efface ou détruit. Accord renforcé. C'est aussi le niveau de tout outil douteux.
+    /// Erases or destroys. Reinforced consent. Also the level of any doubtful tool.
     Destructive,
 }
 
 impl Level {
-    /// Lit le niveau dans les annotations standard de l'outil (ADR 0015).
+    /// Reads the level from the tool's standard annotations (ADR 0015).
     ///
-    /// `readOnlyHint: true` donne la lecture, `destructiveHint: false` l'action. Tout le reste est
-    /// destructif : absence d'annotations, valeur qui n'est pas un booléen, ou contradiction
-    /// (`readOnlyHint` et `destructiveHint` tous deux vrais).
+    /// `readOnlyHint: true` gives read, `destructiveHint: false` action. Everything else is
+    /// destructive: no annotations, a value that is not a boolean, or a contradiction
+    /// (`readOnlyHint` and `destructiveHint` both true).
     pub fn from_annotations(annotations: Option<&Value>) -> Self {
-        // `None` : absente ; `Some(None)` : présente mais pas un booléen.
+        // `None`: absent; `Some(None)`: present but not a boolean.
         let hint = |name| annotations.and_then(|a| a.get(name)).map(Value::as_bool);
         match (hint("readOnlyHint"), hint("destructiveHint")) {
             (Some(Some(true)), None | Some(Some(false))) => Self::Read,
@@ -105,7 +105,7 @@ impl Level {
 }
 
 impl Level {
-    /// Annotations standard qui redonnent ce niveau, pour exposer l'outil à un client MCP.
+    /// Standard annotations that give back this level, to expose the tool to an MCP client.
     pub fn annotations(self) -> Value {
         match self {
             Self::Read => json!({ "readOnlyHint": true }),
@@ -115,6 +115,7 @@ impl Level {
     }
 }
 
+// In French: the model reads the level in refusals, and the demo prints it.
 impl fmt::Display for Level {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -125,33 +126,33 @@ impl fmt::Display for Level {
     }
 }
 
-/// Confiance accordée aux annotations d'un serveur (ADR 0015).
+/// Trust granted to a server's annotations (ADR 0015).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Trust {
-    /// Serveur tiers : ses annotations sont ignorées, tous ses outils sont destructifs.
+    /// Third-party server: its annotations are ignored, all its tools are destructive.
     #[default]
     ThirdParty,
-    /// Serveur livré avec l'OS : ses annotations sont du code du projet, lues telles quelles.
+    /// Server shipped with the OS: its annotations are project code, read as they are.
     Ours,
 }
 
-/// Comment lancer un serveur MCP.
+/// How to start an MCP server.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// Nom du serveur, dans les journaux et les erreurs.
+    /// Server name, in logs and errors.
     pub name: String,
-    /// Programme à lancer.
+    /// Program to start.
     pub program: String,
-    /// Ses arguments.
+    /// Its arguments.
     pub args: Vec<String>,
-    /// Délai de chaque requête.
+    /// Timeout of each request.
     pub timeout: Duration,
-    /// Tiers par défaut : seule une marque explicite fait croire ses annotations.
+    /// Third party by default: only an explicit mark makes its annotations trusted.
     pub trust: Trust,
 }
 
 impl ServerConfig {
-    /// Un serveur tiers, avec le délai par défaut.
+    /// A third-party server, with the default timeout.
     pub fn new(name: &str, program: &str, args: &[&str]) -> Self {
         Self {
             name: name.to_owned(),
@@ -162,67 +163,68 @@ impl ServerConfig {
         }
     }
 
-    /// Marque le serveur comme l'un des nôtres.
+    /// Marks the server as one of ours.
     pub fn ours(mut self) -> Self {
         self.trust = Trust::Ours;
         self
     }
 
-    /// Change le délai des requêtes.
+    /// Changes the request timeout.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 }
 
-/// Un outil exposé par un serveur MCP.
+/// A tool exposed by an MCP server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolSpec {
-    /// Nom unique de l'outil.
+    /// Unique tool name.
     pub name: String,
-    /// Description destinée au modèle.
+    /// Description meant for the model.
     pub description: String,
-    /// Schéma JSON des arguments.
+    /// JSON schema of the arguments.
     pub input_schema: Value,
-    /// Niveau lu dans les annotations, ou destructif pour un serveur tiers.
+    /// Level read from the annotations, or destructive for a third-party server.
     pub level: Level,
 }
 
-/// Résultat d'un appel d'outil.
+/// Result of a tool call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutput {
-    /// Les blocs de texte du résultat, mis bout à bout.
+    /// The text blocks of the result, joined together.
     pub text: String,
-    /// Vrai si le serveur signale que l'outil a échoué.
+    /// True if the server reports that the tool failed.
     pub is_error: bool,
 }
 
-/// Erreur du client MCP.
+/// MCP client error. The messages are in French: an error of a tool call is returned to the
+/// model as its result.
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
-    /// Le programme du serveur n'a pas pu être lancé.
+    /// The server program could not be started.
     #[error("le serveur {server} ne se lance pas : {source}")]
     Spawn {
         server: String,
         source: std::io::Error,
     },
-    /// Le serveur a fermé sa sortie : il s'est arrêté ou a planté.
+    /// The server closed its output: it stopped or crashed.
     #[error("le serveur {0} s'est arrêté")]
     Closed(String),
-    /// Le serveur a été arrêté après une erreur, il ne reçoit plus rien.
+    /// The server was stopped after an error, it receives nothing anymore.
     #[error("le serveur {0} est perdu")]
     Lost(String),
-    /// Le serveur n'a pas répondu à temps.
+    /// The server did not answer in time.
     #[error("le serveur {server} n'a pas répondu à {method} en {delay:?}")]
     Timeout {
         server: String,
         method: String,
         delay: Duration,
     },
-    /// Le serveur a envoyé un message que le client refuse.
+    /// The server sent a message the client refuses.
     #[error("réponse invalide du serveur {server} : {detail}")]
     Protocol { server: String, detail: String },
-    /// Le serveur a répondu par une erreur JSON-RPC.
+    /// The server answered with a JSON-RPC error.
     #[error("le serveur {server} refuse {method} : {message} (code {code})")]
     Rpc {
         server: String,
@@ -230,13 +232,13 @@ pub enum McpError {
         code: i64,
         message: String,
     },
-    /// Un nom d'outil apparaît deux fois, dans un serveur ou entre deux serveurs.
+    /// A tool name appears twice, within one server or across two servers.
     #[error("l'outil {0} est exposé deux fois")]
     DuplicateTool(String),
-    /// Aucun serveur n'expose cet outil.
+    /// No server exposes this tool.
     #[error("outil inconnu : {0}")]
     UnknownTool(String),
-    /// Le niveau de l'outil exige un accord, et le courtier (lot A-11) n'existe pas encore.
+    /// The tool's level requires consent, and the broker (lot A-11) does not exist yet.
     #[error(
         "courtier d'accords absent : l'outil {tool} est de niveau {level}, \
          seuls les outils de lecture s'exécutent"
@@ -245,7 +247,7 @@ pub enum McpError {
 }
 
 impl McpError {
-    /// Vrai si, après cette erreur, l'échange avec le serveur n'est plus fiable.
+    /// True if, after this error, the exchange with the server is no longer reliable.
     fn loses_server(&self) -> bool {
         matches!(
             self,
@@ -284,10 +286,10 @@ struct Connection {
     stdout: BufReader<ChildStdout>,
 }
 
-/// Connexion à un serveur MCP lancé en processus enfant.
+/// Connection to an MCP server started as a child process.
 pub struct McpClient {
     name: String,
-    // `None` une fois le serveur perdu et arrêté.
+    // `None` once the server is lost and stopped.
     connection: Option<Connection>,
     next_id: u64,
     timeout: Duration,
@@ -295,7 +297,7 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    /// Lance le serveur et mène l'initialisation.
+    /// Starts the server and performs the initialization.
     pub async fn spawn(config: &ServerConfig) -> Result<Self, McpError> {
         let spawn_err = |source| McpError::Spawn {
             server: config.name.clone(),
@@ -303,12 +305,12 @@ impl McpClient {
         };
         let mut child = Command::new(&config.program)
             .args(&config.args)
-            // Un serveur ne reçoit ni clé ni jeton de la session.
+            // A server receives no key and no token from the session.
             .env_clear()
             .envs(clean_env(std::env::vars_os(), &[]))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Filet de sécurité si le client disparaît sans `shutdown`.
+            // Safety net if the client goes away without `shutdown`.
             .kill_on_drop(true)
             .spawn()
             .map_err(spawn_err)?;
@@ -333,12 +335,12 @@ impl McpClient {
         Ok(client)
     }
 
-    /// Nom du serveur, tel que donné au lancement.
+    /// Server name, as given at startup.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Identifiant du processus du serveur, `None` une fois le serveur arrêté et attendu.
+    /// Process identifier of the server, `None` once the server is stopped and reaped.
     pub fn pid(&self) -> Option<u32> {
         self.connection.as_ref().and_then(|c| c.child.id())
     }
@@ -358,7 +360,7 @@ impl McpClient {
             .await
     }
 
-    /// Liste les outils du serveur, page après page, dans la limite des plafonds.
+    /// Lists the server's tools, page after page, within the caps.
     pub async fn list_tools(&mut self) -> Result<Vec<ToolSpec>, McpError> {
         let mut tools = Vec::new();
         let mut names = HashSet::new();
@@ -397,8 +399,8 @@ impl McpClient {
         Err(self.protocol(format!("plus de {MAX_TOOL_PAGES} pages d'outils")))
     }
 
-    /// Appelle un outil et rend ses blocs de texte. Sans contrôle du niveau : seul
-    /// [`McpServers::call`], qui le vérifie, s'en sert.
+    /// Calls a tool and returns its text blocks. Without a level check: only
+    /// [`McpServers::call`], which checks it, uses it.
     pub(crate) async fn call_tool(
         &mut self,
         tool: &str,
@@ -423,8 +425,8 @@ impl McpClient {
         Ok(ToolOutput { text, is_error })
     }
 
-    /// Envoie une requête et attend sa réponse. Après un arrêt, un délai dépassé ou un message
-    /// refusé, l'échange n'est plus fiable : le serveur est arrêté.
+    /// Sends a request and waits for its response. After a stop, a timeout or a refused message,
+    /// the exchange is no longer reliable: the server is stopped.
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
         let id = self.next_id;
         self.next_id += 1;
@@ -446,7 +448,7 @@ impl McpClient {
         if let Err(error) = &result
             && error.loses_server()
         {
-            tracing::warn!(server = %self.name, %error, "serveur perdu, arrêt");
+            tracing::warn!(server = %self.name, %error, "server lost, stopping");
             self.shutdown().await;
         }
         result
@@ -458,12 +460,12 @@ impl McpClient {
             let message: Incoming = serde_json::from_slice(&line)
                 .map_err(|e| self.protocol(format!("JSON illisible : {e}")))?;
             match (message.id, message.method) {
-                // Requête du serveur : seul `ping` est connu, le reste est refusé.
+                // Request from the server: only `ping` is known, the rest is refused.
                 (Some(their_id), Some(their_method)) => {
                     let reply = if their_method == "ping" {
                         json!({ "jsonrpc": "2.0", "id": their_id, "result": {} })
                     } else {
-                        let error = json!({ "code": -32601, "message": "méthode inconnue" });
+                        let error = json!({ "code": -32601, "message": "unknown method" });
                         json!({ "jsonrpc": "2.0", "id": their_id, "error": error })
                     };
                     self.send(&reply).await?;
@@ -480,13 +482,13 @@ impl McpClient {
                         (None, None) => Err(self.protocol("réponse sans résultat".into())),
                     };
                 }
-                // Notification, ou réponse tardive à une requête abandonnée : ignorée.
-                _ => tracing::debug!(server = %self.name, "message ignoré : {}", preview(&line)),
+                // Notification, or late response to an abandoned request: ignored.
+                _ => tracing::debug!(server = %self.name, "message ignored: {}", preview(&line)),
             }
         }
     }
 
-    /// Lit une ligne d'au plus [`MAX_MESSAGE_BYTES`] octets.
+    /// Reads a line of at most [`MAX_MESSAGE_BYTES`] bytes.
     async fn read_message(&mut self) -> Result<Vec<u8>, McpError> {
         let connection = self.connection.as_mut();
         let connection = connection.ok_or_else(|| McpError::Lost(self.name.clone()))?;
@@ -499,7 +501,7 @@ impl McpClient {
             Ok(_) if line.len() as u64 >= limit => {
                 Err(self.protocol(format!("message de plus de {MAX_MESSAGE_BYTES} octets")))
             }
-            // Fin de flux, éventuellement au milieu d'une ligne.
+            // End of stream, possibly in the middle of a line.
             Ok(_) | Err(_) => Err(McpError::Closed(self.name.clone())),
         }
     }
@@ -518,8 +520,8 @@ impl McpClient {
             .map_err(|_| McpError::Closed(self.name.clone()))
     }
 
-    /// Arrête le serveur : entrée fermée pour un arrêt doux, `SIGKILL` après
-    /// [`SHUTDOWN_GRACE`], puis attente du processus pour ne pas laisser de zombie.
+    /// Stops the server: input closed for a graceful stop, `SIGKILL` after [`SHUTDOWN_GRACE`],
+    /// then waits for the process so as not to leave a zombie.
     pub async fn shutdown(&mut self) {
         let Some(Connection {
             mut child,
@@ -535,10 +537,10 @@ impl McpClient {
             return;
         }
         if let Err(error) = child.start_kill() {
-            tracing::warn!(server = %self.name, %error, "SIGKILL impossible");
+            tracing::warn!(server = %self.name, %error, "SIGKILL failed");
         }
         if let Err(error) = child.wait().await {
-            tracing::warn!(server = %self.name, %error, "attente du serveur impossible");
+            tracing::warn!(server = %self.name, %error, "waiting for the server failed");
         }
     }
 
@@ -550,7 +552,7 @@ impl McpClient {
     }
 }
 
-/// Début d'un message de serveur, caractères de contrôle échappés, pour un journal.
+/// Start of a server message, control characters escaped, for a log.
 fn preview(line: &[u8]) -> String {
     let end = line.len().min(LOG_PREVIEW_BYTES);
     let text = String::from_utf8_lossy(&line[..end]);
@@ -561,15 +563,15 @@ fn preview(line: &[u8]) -> String {
     preview
 }
 
-/// Ce qui exécute les outils pour l'agent : les serveurs MCP, ou un faux dans les tests.
+/// What executes tools for the agent: the MCP servers, or a fake in the tests.
 ///
-/// Une implémentation refuse elle-même tout outil qui n'est pas en lecture : l'agent le vérifie
-/// aussi, mais ne doit pas être le seul rempart.
+/// An implementation itself refuses any tool that is not read-level: the agent checks it too,
+/// but must not be the only safeguard.
 pub trait ToolHost {
-    /// Outils disponibles, avec leur niveau.
+    /// Available tools, with their level.
     fn tools(&self) -> &[ToolSpec];
 
-    /// Exécute un outil en lecture, refuse les autres.
+    /// Executes a read-level tool, refuses the others.
     fn call(
         &mut self,
         tool: &str,
@@ -577,7 +579,7 @@ pub trait ToolHost {
     ) -> impl Future<Output = Result<ToolOutput, McpError>> + Send;
 }
 
-/// Les serveurs MCP de la session, et l'outil que chacun expose.
+/// The session's MCP servers, and the tools each one exposes.
 #[derive(Default)]
 pub struct McpServers {
     servers: Vec<McpClient>,
@@ -586,12 +588,12 @@ pub struct McpServers {
 }
 
 impl McpServers {
-    /// Aucun serveur.
+    /// No server.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Ajoute un serveur initialisé et découvre ses outils. En cas d'erreur, le serveur est arrêté.
+    /// Adds an initialized server and discovers its tools. On error, the server is stopped.
     pub async fn add(&mut self, mut client: McpClient) -> Result<(), McpError> {
         let tools = match client.list_tools().await {
             Ok(tools) => tools,
@@ -614,7 +616,7 @@ impl McpServers {
         Ok(())
     }
 
-    /// Arrête tous les serveurs, chacun comme [`McpClient::shutdown`].
+    /// Stops every server, each like [`McpClient::shutdown`].
     pub async fn shutdown(&mut self) {
         for server in &mut self.servers {
             server.shutdown().await;
@@ -632,7 +634,7 @@ impl ToolHost for McpServers {
         let index = index.ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?;
         let level = self.tools[index].level;
         if level != Level::Read {
-            // En attendant le courtier (A-11), rien d'autre que la lecture ne part au serveur.
+            // Until the broker exists (A-11), nothing but read calls goes to the server.
             return Err(McpError::BrokerAbsent {
                 tool: tool.to_owned(),
                 level,
@@ -650,7 +652,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn niveau_lu_dans_les_annotations() {
+    fn level_read_from_annotations() {
         let level = |v: Value| Level::from_annotations(Some(&v));
         assert_eq!(level(json!({ "readOnlyHint": true })), Level::Read);
         assert_eq!(
@@ -670,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn dans_le_doute_destructif() {
+    fn destructive_when_in_doubt() {
         let level = |v: Value| Level::from_annotations(Some(&v));
         assert_eq!(Level::from_annotations(None), Level::Destructive);
         assert_eq!(level(json!(5)), Level::Destructive);
@@ -679,7 +681,7 @@ mod tests {
             level(json!({ "readOnlyHint": true, "destructiveHint": true })),
             Level::Destructive
         );
-        // Valeurs qui ne sont pas des booléens.
+        // Values that are not booleans.
         assert_eq!(level(json!({ "readOnlyHint": "oui" })), Level::Destructive);
         assert_eq!(level(json!({ "readOnlyHint": null })), Level::Destructive);
         assert_eq!(
@@ -693,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn environnement_sans_cle() {
+    fn environment_without_keys() {
         let vars = [
             "PATH",
             "HOME",
@@ -720,7 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn apercu_tronque_et_echappe() {
+    fn preview_truncated_and_escaped() {
         assert_eq!(preview(b"a\x1b\n"), "a\\u{1b}\\n");
         let long = vec![b'x'; 1000];
         assert_eq!(preview(&long).chars().count(), LOG_PREVIEW_BYTES + 1);

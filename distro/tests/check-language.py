@@ -83,6 +83,10 @@ FRENCH_WORDS = {
     "vient", "vite", "vitesse", "vue",
 }
 
+# Names that the user or the model sees, so French on purpose, quoted in English text:
+# a tool of the sherlockd test server and the keys of its recap.
+INTERFACE_NAMES = {"vider_corbeille", "demande", "reponse"}
+
 WORD = re.compile(r"[A-Za-zÀ-ÿœæŒÆ]+")
 IDENT_PART = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
 FRENCH_QUOTE = re.compile(r"«[^»]*»")
@@ -97,6 +101,8 @@ def french_words(text):
     found = []
     for token in re.findall(r"[A-Za-z0-9_]+", FRENCH_PATH.sub(" ", text)):
         for part in IDENT_PART.findall(token):
+            if token in INTERFACE_NAMES:
+                break
             if part.lower() in FRENCH_WORDS:
                 found.append(part.lower())
     return found
@@ -200,7 +206,9 @@ def check_file(path, report):
                 continue
             text = hash_comment(line) if fence else LINK_TARGET.sub("", line)
             why = prose_markers(INLINE_CODE.sub(" ", text))
-            words = french_words(" ".join(INLINE_CODE.findall(line)) if not fence else line)
+            # In code blocks, quoted arguments may be user input, in French.
+            code = re.sub(r'"[^"]*"|\'[^\']*\'', " ", line)
+            words = french_words(" ".join(INLINE_CODE.findall(line)) if not fence else code)
         else:
             # Scripts, configuration and CI are development text through and through.
             why = prose_markers(line)

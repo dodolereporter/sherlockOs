@@ -1,9 +1,10 @@
-//! Le mandataire : `sherlockd` sert lui-même un serveur MCP, placé devant les vrais (ADR 0016).
+//! The proxy: `sherlockd` itself serves an MCP server, placed in front of the real ones
+//! (ADR 0016).
 //!
-//! Claude Code ne voit que ce serveur. Il en reçoit la liste des outils des serveurs configurés,
-//! et chacun de ses appels passe par [`agent::execute`], puis par [`McpServers::call`] : mêmes
-//! niveaux, mêmes refus, mêmes traces que la boucle d'agent. Tout ce que le client envoie est une
-//! donnée externe, lue dans les mêmes bornes que les réponses d'un serveur.
+//! Claude Code sees only this server. It gets from it the tool list of the configured servers,
+//! and each of its calls goes through [`agent::execute`], then [`McpServers::call`]: same levels,
+//! same refusals, same traces as the agent loop. Everything the client sends is external data,
+//! read within the same bounds as a server's responses.
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -11,15 +12,15 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWr
 use crate::agent::{self, CallError};
 use crate::mcp::{MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ToolHost};
 
-/// Versions du protocole acceptées du client. Le mandataire n'utilise que `tools/list` et
-/// `tools/call`, identiques dans ces versions. Une autre demande reçoit [`PROTOCOL_VERSION`].
+/// Protocol versions accepted from the client. The proxy only uses `tools/list` and
+/// `tools/call`, identical in these versions. Any other request gets [`PROTOCOL_VERSION`].
 const SUPPORTED_VERSIONS: [&str; 3] = ["2025-11-25", PROTOCOL_VERSION, "2025-03-26"];
 
-/// Nombre maximal d'appels d'outils relayés pour une conversation : le plafond de la boucle
-/// d'agent, 8 tours de 8 appels. Au-delà, chaque appel reçoit un résultat en erreur.
+/// Maximum number of tool calls relayed for one conversation: the cap of the agent loop, 8 turns
+/// of 8 calls. Beyond it, each call gets an error result.
 pub const MAX_CALLS: usize = 64;
 
-/// Sert le client jusqu'à la fin de son entrée, ou jusqu'à un message trop long.
+/// Serves the client until the end of its input, or until a message is too long.
 pub async fn serve<R, W, H>(mut input: R, mut output: W, host: &mut H) -> std::io::Result<()>
 where
     R: AsyncBufRead + Unpin,
@@ -36,7 +37,7 @@ where
             .await?;
         if !line.ends_with(b"\n") {
             if line.len() as u64 >= limit {
-                tracing::warn!("message du client de plus de {MAX_MESSAGE_BYTES} octets, arrêt");
+                tracing::warn!("client message over {MAX_MESSAGE_BYTES} bytes, stopping");
             }
             return Ok(());
         }
@@ -50,10 +51,10 @@ where
     }
 }
 
-/// Réponse à un message du client, `None` pour une notification ou une réponse.
+/// Reply to a client message, `None` for a notification or a response.
 async fn answer<H: ToolHost>(line: &[u8], host: &mut H, calls: &mut usize) -> Option<Value> {
     let Ok(message) = serde_json::from_slice::<Value>(line) else {
-        let error = json!({ "code": -32700, "message": "JSON illisible" });
+        let error = json!({ "code": -32700, "message": "unreadable JSON" });
         return Some(json!({ "jsonrpc": "2.0", "id": null, "error": error }));
     };
     let id = message.get("id")?.clone();
@@ -83,21 +84,21 @@ async fn answer<H: ToolHost>(line: &[u8], host: &mut H, calls: &mut usize) -> Op
         }
         "tools/call" => call(host, &params, calls).await,
         _ => {
-            let error = json!({ "code": -32601, "message": "méthode inconnue" });
+            let error = json!({ "code": -32601, "message": "unknown method" });
             return Some(json!({ "jsonrpc": "2.0", "id": id, "error": error }));
         }
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
-/// Relaie un appel par [`agent::execute`]. Un refus ou un échec est rendu comme résultat en
-/// erreur : le modèle peut l'expliquer, et rien ne part au serveur.
+/// Relays a call through [`agent::execute`]. A refusal or a failure is returned as an error
+/// result: the model can explain it, and nothing goes to the server.
 async fn call<H: ToolHost>(host: &mut H, params: &Value, calls: &mut usize) -> Value {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     *calls += 1;
     let result = if *calls > MAX_CALLS {
-        tracing::warn!(tool, "appel refusé : plafond d'appels atteint");
+        tracing::warn!(tool, "call refused: call cap reached");
         Err(CallError::SessionCallLimit(MAX_CALLS))
     } else {
         agent::execute(host, tool, arguments).await
@@ -114,7 +115,7 @@ mod tests {
     use super::*;
     use crate::mcp::{Level, McpError, ToolOutput, ToolSpec};
 
-    /// Hôte qui compte les appels qu'il exécute.
+    /// Host that counts the calls it executes.
     struct CountingHost(Vec<ToolSpec>, usize);
 
     impl ToolHost for CountingHost {
@@ -163,19 +164,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuse_hors_lecture_sans_rien_executer() {
+    async fn refuses_non_read_without_executing() {
         let mut host = host();
         let replies = exchange(&mut host, &[call(1, "effacer"), call(2, "inconnu")]).await;
         for reply in &replies {
             assert_eq!(reply["result"]["isError"], true);
         }
-        let refus = replies[0]["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(refus.contains("courtier d'accords absent"), "{refus}");
+        let refusal = replies[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(refusal.contains("courtier d'accords absent"), "{refusal}");
         assert_eq!(host.1, 0);
     }
 
     #[tokio::test]
-    async fn plafond_d_appels_par_conversation() {
+    async fn call_cap_per_conversation() {
         let mut host = host();
         let requests: Vec<Value> = (0..MAX_CALLS as u64 + 2).map(|i| call(i, "lire")).collect();
         let replies = exchange(&mut host, &requests).await;
@@ -184,7 +185,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn liste_avec_le_niveau_et_ignore_les_notifications() {
+    async fn lists_with_level_and_ignores_notifications() {
         let mut host = host();
         let requests = [
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
@@ -201,7 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn message_geant_arrete_le_service() {
+    async fn giant_message_stops_service() {
         let mut host = host();
         let input = vec![b'a'; MAX_MESSAGE_BYTES + 10];
         let mut output = Vec::new();

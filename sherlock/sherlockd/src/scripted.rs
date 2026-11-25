@@ -1,42 +1,42 @@
-//! Faux fournisseur de modèle, piloté par un scénario, pour les tests et `--essai`.
+//! Fake model provider, driven by a script, for the tests and `--demo`.
 
 use std::collections::VecDeque;
 
-use crate::modele::{Message, ModelProvider, ModelReply, ModelRequest, ProviderError};
+use crate::model::{Message, ModelProvider, ModelReply, ModelRequest, ProviderError};
 
 type Step = Box<dyn FnMut(&ModelRequest<'_>) -> ModelReply + Send>;
 
-/// Une requête reçue par le faux modèle, gardée pour que les tests l'inspectent.
+/// A request received by the fake model, kept for the tests to inspect.
 #[derive(Debug, Clone)]
 pub struct RecordedRequest {
-    /// Instructions système reçues.
+    /// System instructions received.
     pub system: String,
-    /// Historique reçu.
+    /// History received.
     pub messages: Vec<Message>,
-    /// Noms des outils proposés.
+    /// Names of the offered tools.
     pub tools: Vec<String>,
 }
 
-/// Rend, tour après tour, les réponses de son scénario.
+/// Returns, turn after turn, the replies of its script.
 #[derive(Default)]
 pub struct ScriptedProvider {
     steps: VecDeque<Step>,
-    /// Toutes les requêtes reçues, dans l'ordre.
+    /// Every request received, in order.
     pub requests: Vec<RecordedRequest>,
 }
 
 impl ScriptedProvider {
-    /// Un scénario vide.
+    /// An empty script.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Ajoute une réponse fixe.
+    /// Adds a fixed reply.
     pub fn reply(self, reply: ModelReply) -> Self {
         self.then(move |_| reply.clone())
     }
 
-    /// Ajoute une réponse calculée à partir de la requête, par exemple du dernier résultat d'outil.
+    /// Adds a reply computed from the request, for example from the last tool result.
     pub fn then(
         mut self,
         step: impl FnMut(&ModelRequest<'_>) -> ModelReply + Send + 'static,
@@ -58,7 +58,7 @@ impl ModelProvider for ScriptedProvider {
     }
 }
 
-/// Texte du dernier résultat d'outil de l'historique, pour les scénarios qui le reprennent.
+/// Text of the last tool result in the history, for scripts that reuse it.
 pub fn last_tool_result(request: &ModelRequest<'_>) -> Option<String> {
     request.messages.iter().rev().find_map(|m| match m {
         Message::ToolResult { content, .. } => Some(content.clone()),
