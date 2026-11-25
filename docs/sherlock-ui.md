@@ -272,7 +272,7 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   without background, tertiary text, `DIVIDER` border. The toggle that is off has no board:
   white track at 18 %, light grey knob.
 - **Border of the secondary button**: 0.20 in the Reglages board, 0.18 in `docs/contexte.md` and in
-  the Panneaux and Fichiers boards. The token keeps 0.18: it is the value of the reference text
+  the « Panneaux » and « Fichiers » boards. The token keeps 0.18: it is the value of the reference text
   and of most boards.
 - **Stroke of the menu icons**: the Menus board draws the chevron at 2 and the check at 2.4.
   The token keeps 1.7 for every icon: `docs/contexte.md` sets a single range, from 1.6 to 1.7, and a
@@ -290,7 +290,7 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
 - **Tokens.** `metrics`: application window (`REFERENCE_WINDOW`, title bar paddings, app badge,
   window controls), toolbar, breadcrumb, branch chip, search field, status bar, sidebar and
   navigation entries, preview panel, code block, lists (`LIST_*`, column widths, overscan,
-  slide), badges, dialog, context menu and submenu widths (236 and 216, Fichiers board).
+  slide), badges, dialog, context menu and submenu widths (236 and 216, « Fichiers » board).
   `color`: `TEXT_CODE`, `INSET`, `CONTROLS`, `SCRIM`, `AMBER_SOFT`, `ACCENT_SOFT`,
   `NEUTRAL_SOFT`, `ACCENT_BORDER`. `typography`: `CODE_SMALL_SIZE`, `COLUMN_HEADER_SIZE`,
   `BADGE_SIZE`, `UI_CHAR_WIDTH` (to cut names without shaping them).

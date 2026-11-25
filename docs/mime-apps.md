@@ -2,7 +2,7 @@
 
 `desktop/mime-apps` answers three questions for the desktop: which applications are
 installed, what type a file is, and which application opens a type by default. Evidence uses
-it for "Ouvrir avec" and for opening files; the "Default applications" page of Control Room
+it for « Ouvrir avec » and for opening files; the "Default applications" page of Control Room
 (lot D-26) will reuse it. It depends on the standard library only, reads and writes plain
 files, and never runs `xdg-mime` or talks to D-Bus.
 

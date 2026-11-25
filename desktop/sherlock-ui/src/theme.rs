@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn the_design_board_selection_would_fail_the_shortcuts() {
         // The Menus board lays an open entry at 0.30 opacity. With a shortcut, the tertiary
-        // text would drop below 4.5: the token keeps the 0.26 of `contexte.md`.
+        // text would drop below 4.5: the token keeps the 0.26 of `docs/contexte.md`.
         let row =
             Color::rgba(91, 163, 208, 0.30).over(color::MENU_GLASS.over(color::DESKTOP_DISCS[2]));
         assert!(color::TEXT_TERTIARY.contrast(row) < 4.5);

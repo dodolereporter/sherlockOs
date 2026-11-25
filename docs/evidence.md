@@ -2,7 +2,7 @@
 
 Evidence is the file manager of the desktop (lot D-27). It browses folders, copies, moves,
 renames, sends to the trash and restores, previews files, shows the git state of each file,
-and lists disks, USB keys and cards. The planche `docs/design/planches/Fichiers.dc.html` is the
+and lists disks, USB keys and cards. The design board `docs/design/planches/Fichiers.dc.html` is the
 reference for its look. Its interface texts are French and live in `sherlock_ui::texts::evidence`.
 
 ```sh
@@ -29,7 +29,7 @@ renderer is several times slower (see Performance).
 | `clock` | Local time (`localtime_r`, `mktime`) | no |
 | `probe` | `--measure`: smoothness measurement | no |
 | `app` | State, messages, keyboard, commands, animations | yes |
-| `view` | The window, after the planche | yes |
+| `view` | The window, after the design board | yes |
 | `scenarios` | End-to-end tests driven by the keyboard, headless capture | tests |
 
 Installed applications, file types and default applications come from the workspace crate
@@ -49,7 +49,7 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 
 ## Safety
 
-- **Special files.** A named pipe, a socket or a device is listed as "Fichier spécial" and
+- **Special files.** A named pipe, a socket or a device is listed as « Fichier spécial » and
   never opened: the preview opens regular files only, checks the type again on the open
   descriptor, opens with `O_NONBLOCK`, and gives up after 2 s on its own thread. A copy
   recreates named pipes (`mkfifo`) without reading them, and leaves sockets and devices aside
@@ -87,9 +87,9 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Preview: header with tile, size and git state; first lines of a text file in JetBrains Mono
   with keywords and comments coloured (Dockerfile, Rust, TOML, shell, Python); PNG and JPEG
   images; date, kind and place for the rest. Buttons: Open, Copy path (Restore in the trash).
-- Context menu as on the planche. "Ouvrir avec" lists the installed applications that open the
+- Context menu as on the design board. « Ouvrir avec » lists the installed applications that open the
   file's type (from their `.desktop` files, with their icon, the default first and checked),
-  then "Terminal, dans ce dossier", "Autre application…" (a chooser of every application, with
+  then « Terminal, dans ce dossier », « Autre application… » (a chooser of every application, with
   a search), and the switch "Toujours ouvrir ce type ainsi". With the switch on, the chosen
   application becomes the default in `~/.config/mimeapps.list` (and in `kde-mimeapps.list`
   when that file already names a default for the type); opening a file then uses the default
@@ -173,7 +173,7 @@ the menu draws correctly. Two changes, for safety beyond this case:
 - the menu has no scale animation any more (and `Scaled` is gone from sherlock-ui);
 - menus and floating panels no longer use iced shadows at all: `sherlock_ui::surface::Shadowed`
   draws a crisp, light shadow as a few plain offset rounded rectangles (ordinary quads,
-  clipped and transformed like everything else), close to the planche's.
+  clipped and transformed like everything else), close to the design board's.
 
 Nothing blinks.
 
@@ -213,17 +213,17 @@ ADR 0014.
 `cargo test --release -p evidence frame_cost -- --ignored` writes the headless cost of a frame
 (view, layout, render) to `target/tmp/frame_cost.txt`.
 
-## Comparing with the planche
+## Comparing with the design board
 
-1. Render the planche once, from a copy of `docs/design/planches/Fichiers.dc.html` saved as
+1. Render the design board once, from a copy of `docs/design/planches/Fichiers.dc.html` saved as
    `board.html`: replace `/_blob/5a8a…` with `docs/design/images/sherlock-tete.png`, drop the
    `support.js` line, then
    `chromium --headless --disable-gpu --hide-scrollbars --window-size=1440,900 --screenshot=board.png board.html`.
    Crop the window: `(70, 64)` to `(1370, 740)`, 1300 × 676.
 2. `cargo test -p evidence window_renders_headless` (see `scenarios.rs`) writes
-   `target/tmp/evidence-tiny-skia.png`, at scale 2: the same folder as the planche (a git repo
+   `target/tmp/evidence-tiny-skia.png`, at scale 2: the same folder as the design board (a git repo
    with a modified `src`, a new `Dockerfile`, an ignored `target`), Dockerfile selected, menu
-   and submenu open where the planche has them. Scale it down to 1300 × 676.
+   and submenu open where the design board has them. Scale it down to 1300 × 676.
 3. Put the two side by side. The pair of this lot is in `docs/evidence/`.
 
 The context menu was also checked in a real window, in an isolated Xephyr (`Xephyr :7 -screen
@@ -233,24 +233,24 @@ fake applications, the pointer driven by XTest on `:7` only: `docs/evidence/menu
 two seconds later, pointer still).
 
 On the author's laptop: `cargo run --release -p evidence -- <a git project>`, then compare
-with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
+with the design board at 1440 × 900 (the window is 1300 × 676, as on the design board).
 
-## Gaps with the planche
+## Gaps with the design board
 
 - No grid or column views: list only.
 - No "Ask Sherlock" button, Sherlock bubble, "Build the image" or "Run in a sandbox"
   buttons, no Dev section (Docker volumes, sandboxes): out of this lot's scope.
-- "Ouvrir avec" is wider than the planche's submenu (280 instead of 216): application names
-  and the "always" switch. The planche's "Éditeur" entry is the list of installed
-  applications; its "Bac à sable" entry is out of scope.
-- The open submenu entry uses the selection token at 0.26 (the planche has 0.30; see
+- « Ouvrir avec » is wider than the design board's submenu (280 instead of 216): application names
+  and the "always" switch. The design board's « Éditeur » entry is the list of installed
+  applications; its « Bac à sable » entry is out of scope.
+- The open submenu entry uses the selection token at 0.26 (the design board has 0.30; see
   `docs/sherlock-ui.md`).
-- A selected row's git badge sits on the darkest background: the planche's veil would fall
+- A selected row's git badge sits on the darkest background: the design board's veil would fall
   under 4.5:1 contrast on the selection.
 - The search field has no clear button. Column header letter spacing is not supported by iced.
 - The sort arrow next to the sorted column is an addition, and so are Copier and Couper in
   the context menu.
-- The planche has no Devices section: its entries use the sidebar's style, with an eject
+- The design board has no Devices section: its entries use the sidebar's style, with an eject
   button in the style of sherlock-ui's icon buttons.
 - The context menu scales in but cannot fade (see Animations).
 
@@ -270,7 +270,7 @@ with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
 - Long names are cut from an estimated character width, not measured text.
 - Accessibility: iced 0.14 exposes nothing to screen readers (ADR 0014).
 - Left for later, from the second review: `type_of` (a walk over the `globs2` patterns, about
-  0.3 ms in a debug build) still runs in `update` when the "Ouvrir avec" submenu opens; moving a
+  0.3 ms in a debug build) still runs in `update` when the « Ouvrir avec » submenu opens; moving a
   folder across disks drops the sockets and devices it contains (with the "left aside"
   message); a dark trace of the menu shadow was seen under the menu in Xephyr.
 
@@ -295,7 +295,7 @@ user's; no test calls the real UDisks.
   an SD card and a LUKS disk in the same format).
 - `scenarios`: keyboard navigation, copy/cut/paste and conflicts, rename and new folder, trash
   with restore and confirmed emptying, context menu from the keyboard, devices through a fake
-  source, "Ouvrir avec" with fake applications and a default written to a temporary
+  source, « Ouvrir avec » with fake applications and a default written to a temporary
   `mimeapps.list`, and a headless capture of the window.
 - `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
   `sherlock_ui::component`: no hover on a disabled control.
@@ -308,14 +308,14 @@ On the author's laptop, Plasma X11:
 1. `cargo run --release -p evidence -- <a git project>`. Check the list, the git badges, the
    branch, the preview of a text file and of an image.
 2. Hover rows and buttons (150 ms fade), move with the arrows (the highlight glides), open a
-   folder (rows rise and fade in), right-click (the menu scales in), hover "Ouvrir avec".
+   folder (rows rise and fade in), right-click (the menu scales in), hover « Ouvrir avec ».
 3. In a scratch folder: copy, cut, paste, Ctrl+D, F2, Ctrl+Shift+N, Delete, then the trash:
    restore, then empty (the question appears; Escape cancels).
-4. Right-click a text file, hover "Ouvrir avec": the editors installed on the laptop are
+4. Right-click a text file, hover « Ouvrir avec »: the editors installed on the laptop are
    listed with their icon. Turn on "Toujours ouvrir ce type ainsi", pick one: it opens, and
    `~/.config/mimeapps.list` gains it under `[Default Applications]` (back the file up first;
    the other lines stay as they were). Enter on another file of the same type opens it with
-   that application. "Autre application…" lists every application, with a search.
+   that application. « Autre application… » lists every application, with a search.
 5. Plug in a USB key: it appears under Appareils. Click it: Plasma's polkit agent may ask for
    the password, then the key opens. Right-click: « Démonter », « Éjecter ». Click the eject button:
    the key disappears from the list and the status bar says it can be removed. With a file of
