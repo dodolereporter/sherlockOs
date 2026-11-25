@@ -67,6 +67,17 @@ impl Level {
     }
 }
 
+impl Level {
+    /// Annotations standard qui redonnent ce niveau, pour exposer l'outil à un client MCP.
+    pub fn annotations(self) -> Value {
+        match self {
+            Self::Read => json!({ "readOnlyHint": true }),
+            Self::Action => json!({ "readOnlyHint": false, "destructiveHint": false }),
+            Self::Destructive => json!({ "readOnlyHint": false, "destructiveHint": true }),
+        }
+    }
+}
+
 impl fmt::Display for Level {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -561,6 +572,13 @@ impl McpServers {
         self.tools.extend(tools);
         self.servers.push(client);
         Ok(())
+    }
+
+    /// Arrête tous les serveurs, chacun comme [`McpClient::shutdown`].
+    pub async fn shutdown(&mut self) {
+        for server in &mut self.servers {
+            server.shutdown().await;
+        }
     }
 }
 
