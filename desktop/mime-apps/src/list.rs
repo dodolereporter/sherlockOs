@@ -111,18 +111,71 @@ impl MimeApps {
     }
 }
 
-/// Makes `app` the default application for `mime` in `$XDG_CONFIG_HOME/mimeapps.list`, and
-/// adds the association. The application goes first in both lists; the others stay after it.
-pub fn set_default(dirs: &Dirs, mime: &str, app: &str) -> io::Result<()> {
+/// Makes `app` the default application for `mime`, in the user's configuration.
+///
+/// - In `$XDG_CONFIG_HOME/mimeapps.list`: `app` goes first under `[Default Applications]`
+///   and `[Added Associations]` (the others stay after it), and leaves
+///   `[Removed Associations]` for that type, where it would cancel the choice.
+/// - In `$XDG_CONFIG_HOME/<desktop>-mimeapps.list` for each current desktop
+///   (`kde-mimeapps.list` under Plasma), which is read first: an existing default for the
+///   type is updated the same way, otherwise it would hide the choice. A desktop file without
+///   an entry for the type is left alone, and none is created.
+pub fn set_default(dirs: &Dirs, desktops: &[String], mime: &str, app: &str) -> io::Result<()> {
+    for desktop in desktops {
+        let path = dirs.config_home.join(format!("{desktop}-mimeapps.list"));
+        let Some(text) = read_optional(&path)? else {
+            continue;
+        };
+        let has_default = parse(&text)
+            .iter()
+            .any(|(group, key, _)| group == DEFAULTS && key == mime);
+        if has_default {
+            let text = set_in(&text, DEFAULTS, mime, app);
+            let text = remove_from(&text, REMOVED, mime, app);
+            write_atomically(&path, &text)?;
+        }
+    }
     let path = dirs.config_home.join("mimeapps.list");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
-    };
+    let text = read_optional(&path)?.unwrap_or_default();
     let text = set_in(&text, DEFAULTS, mime, app);
     let text = set_in(&text, ADDED, mime, app);
+    let text = remove_from(&text, REMOVED, mime, app);
     write_atomically(&path, &text)
+}
+
+fn read_optional(path: &Path) -> io::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Takes `app` out of `group`'s entry for `mime`; an entry left empty goes away.
+fn remove_from(text: &str, group: &str, mime: &str, app: &str) -> String {
+    let mut current = String::new();
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            current = name.to_owned();
+        } else if current == group
+            && let Some((key, value)) = trimmed.split_once('=')
+            && key.trim() == mime
+        {
+            let ids: Vec<&str> = value
+                .split(';')
+                .map(str::trim)
+                .filter(|v| !v.is_empty() && *v != app)
+                .collect();
+            if !ids.is_empty() {
+                out.push(format!("{mime}={};", ids.join(";")));
+            }
+            continue;
+        }
+        out.push(line.to_owned());
+    }
+    out.join("\n") + "\n"
 }
 
 /// Puts `app` first in `group`'s entry for `mime`, creating the entry or the group.
@@ -169,9 +222,31 @@ fn set_in(text: &str, group: &str, mime: &str, app: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// Follows symbolic links to the file they name, even if it does not exist yet; gives up
+/// after 40 links, like the kernel.
+fn resolve_links(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::read_link(&current) {
+            Ok(target) => {
+                current = match current.parent() {
+                    Some(parent) if target.is_relative() => parent.join(target),
+                    _ => target,
+                };
+            }
+            Err(_) => return current,
+        }
+    }
+    current
+}
+
 /// Writes a file beside the target, flushes it to disk, then renames it over the target: a
 /// reader sees the old file or the new one, never half of one.
 fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+    // A list kept elsewhere and linked into the configuration (dotfiles in a repository)
+    // is written where it lives: the link stays a link.
+    let target = resolve_links(path);
+    let path = target.as_path();
     let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     std::fs::create_dir_all(dir)?;
     let temporary = dir.join(format!(".mimeapps.list.{}.tmp", std::process::id()));
@@ -204,8 +279,8 @@ mod tests {
     fn setting_a_default_keeps_everything_else() {
         let tmp = TempDir::new("set");
         tmp.write("config/mimeapps.list", EXISTING);
-        set_default(&tmp.dirs(), "text/plain", "code.desktop").expect("written");
-        set_default(&tmp.dirs(), "text/rust", "org.kde.kate.desktop").expect("written");
+        set_default(&tmp.dirs(), &[], "text/plain", "code.desktop").expect("written");
+        set_default(&tmp.dirs(), &[], "text/rust", "org.kde.kate.desktop").expect("written");
         let text = std::fs::read_to_string(tmp.path().join("config/mimeapps.list")).expect("read");
         assert_eq!(
             text,
@@ -226,7 +301,7 @@ mod tests {
     #[test]
     fn a_missing_file_is_created() {
         let tmp = TempDir::new("new");
-        set_default(&tmp.dirs(), "image/png", "gimp.desktop").expect("written");
+        set_default(&tmp.dirs(), &[], "image/png", "gimp.desktop").expect("written");
         let apps = MimeApps::load(&tmp.dirs(), &[]);
         assert_eq!(apps.defaults("image/png"), ["gimp.desktop"]);
         assert_eq!(apps.added("image/png"), ["gimp.desktop"]);
@@ -255,5 +330,60 @@ mod tests {
             ]
         );
         assert!(apps.is_removed("text/html", "code.desktop"));
+    }
+
+    #[test]
+    fn the_desktop_list_and_removed_associations_do_not_hide_the_choice() {
+        let tmp = TempDir::new("kde");
+        tmp.write(
+            "config/kde-mimeapps.list",
+            "[Default Applications]\ntext/plain=kwrite.desktop;\nimage/png=gwenview.desktop;\n",
+        );
+        tmp.write(
+            "config/mimeapps.list",
+            "[Removed Associations]\ntext/plain=code.desktop;other.desktop;\n",
+        );
+        let kde = ["kde".to_owned()];
+        set_default(&tmp.dirs(), &kde, "text/plain", "code.desktop").expect("written");
+        let apps = MimeApps::load(&tmp.dirs(), &kde);
+        assert_eq!(apps.defaults("text/plain")[0], "code.desktop");
+        assert!(!apps.is_removed("text/plain", "code.desktop"));
+        assert!(apps.is_removed("text/plain", "other.desktop"));
+        let desktop =
+            std::fs::read_to_string(tmp.path().join("config/kde-mimeapps.list")).expect("read");
+        assert_eq!(
+            desktop,
+            "[Default Applications]\ntext/plain=code.desktop;kwrite.desktop;\n\
+             image/png=gwenview.desktop;\n"
+        );
+        // A type the desktop file does not name: the desktop file is not touched.
+        set_default(&tmp.dirs(), &kde, "text/rust", "code.desktop").expect("written");
+        let after =
+            std::fs::read_to_string(tmp.path().join("config/kde-mimeapps.list")).expect("read");
+        assert_eq!(after, desktop);
+    }
+
+    #[test]
+    fn a_linked_list_is_written_where_it_lives() {
+        let tmp = TempDir::new("link");
+        tmp.write("dotfiles/mimeapps.list", "# kept in a repository\n");
+        std::fs::create_dir_all(tmp.path().join("config")).expect("folder");
+        std::os::unix::fs::symlink(
+            "../dotfiles/mimeapps.list",
+            tmp.path().join("config/mimeapps.list"),
+        )
+        .expect("link");
+        set_default(&tmp.dirs(), &[], "image/png", "gimp.desktop").expect("written");
+        let link = tmp.path().join("config/mimeapps.list");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        let target =
+            std::fs::read_to_string(tmp.path().join("dotfiles/mimeapps.list")).expect("read");
+        assert!(target.starts_with("# kept in a repository\n"));
+        assert!(target.contains("image/png=gimp.desktop;"));
     }
 }

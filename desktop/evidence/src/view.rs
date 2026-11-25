@@ -671,6 +671,7 @@ impl App {
         let factor = self
             .menu_scale
             .as_ref()
+            .filter(|_| !self.menu_settled)
             .map_or(1.0, |a| a.value(self.now()) as f32);
         let main = scaled(ui::menu(entries, metrics::CONTEXT_MENU_WIDTH), factor);
         let mut layers: Vec<Element<'_, Message>> =

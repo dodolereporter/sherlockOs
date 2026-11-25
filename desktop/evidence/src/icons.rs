@@ -50,7 +50,10 @@ pub fn find(name: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
 
 fn load(path: &Path) -> Option<AppIcon> {
     if path.extension().is_some_and(|e| e == "svg") {
-        return Some(AppIcon::Vector(svg::Handle::from_path(path)));
+        // Read here, off the interface thread; the 16 px rendering is left to the renderer.
+        return Some(AppIcon::Vector(svg::Handle::from_memory(
+            std::fs::read(path).ok()?,
+        )));
     }
     let picture = ::image::open(path)
         .ok()?

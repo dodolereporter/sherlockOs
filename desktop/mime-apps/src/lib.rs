@@ -6,6 +6,8 @@
 //! page of Control Room (D-26) will reuse it. It reads and writes plain files only: no
 //! D-Bus, no `xdg-mime` process. See `docs/mime-apps.md`.
 
+use std::ffi::OsString;
+
 pub mod dirs;
 pub mod entry;
 pub mod list;
@@ -24,6 +26,34 @@ pub struct Catalog {
     pub mime: MimeDb,
     pub applications: Vec<DesktopEntry>,
     pub associations: MimeApps,
+    /// How to run a program in a terminal (`Terminal=true` entries): the terminal and the
+    /// option that introduces the command. None: such entries are left out.
+    pub terminal: Option<Vec<OsString>>,
+}
+
+/// Terminals tried when `$TERMINAL` is not set, with the option that runs a command.
+const TERMINALS: [(&str, &str); 7] = [
+    ("x-terminal-emulator", "-e"),
+    ("konsole", "-e"),
+    ("gnome-terminal", "--"),
+    ("kitty", "-e"),
+    ("alacritty", "-e"),
+    ("foot", "-e"),
+    ("xterm", "-e"),
+];
+
+/// The terminal to run `Terminal=true` applications in: `$TERMINAL` when it names a program
+/// that exists, else the first installed of `TERMINALS`.
+pub fn pick_terminal(from_env: Option<&str>) -> Option<Vec<OsString>> {
+    if let Some(name) = from_env.map(str::trim).filter(|n| !n.is_empty())
+        && entry::is_executable(name)
+    {
+        return Some(vec![name.into(), "-e".into()]);
+    }
+    TERMINALS
+        .iter()
+        .find(|(name, _)| entry::is_executable(name))
+        .map(|(name, option)| vec![(*name).into(), (*option).into()])
 }
 
 /// Adds an application unless it is already there, by id or by name and command.
@@ -45,12 +75,38 @@ impl Catalog {
         let applications = read_applications(&dirs, locales);
         let mime = MimeDb::load(&dirs);
         let associations = MimeApps::load(&dirs, desktops);
-        Self {
+        let terminal = pick_terminal(std::env::var("TERMINAL").ok().as_deref());
+        let mut catalog = Self {
             dirs,
             mime,
             applications,
             associations,
+            terminal,
+        };
+        // Without a terminal, an application that needs one cannot be shown.
+        if catalog.terminal.is_none() {
+            catalog.applications.retain(|app| !app.terminal);
         }
+        catalog
+    }
+
+    /// The program and arguments that open `files` with `app`, inside a terminal when the
+    /// entry asks for one.
+    pub fn command(
+        &self,
+        app: &DesktopEntry,
+        files: &[std::path::PathBuf],
+    ) -> Option<(OsString, Vec<OsString>)> {
+        let (program, args) = app.command(files)?;
+        if !app.terminal {
+            return Some((program, args));
+        }
+        let mut terminal = self.terminal.clone()?.into_iter();
+        let launcher = terminal.next()?;
+        let mut all: Vec<OsString> = terminal.collect();
+        all.push(program);
+        all.extend(args);
+        Some((launcher, all))
     }
 
     /// The installed application with this desktop id.
@@ -229,11 +285,33 @@ mod tests {
     #[test]
     fn a_chosen_default_is_used_afterwards() {
         let tmp = fixture();
-        set_default(&tmp.dirs(), "text/rust", "org.kde.kate.desktop").expect("written");
+        set_default(&tmp.dirs(), &[], "text/rust", "org.kde.kate.desktop").expect("written");
         let catalog = Catalog::load(tmp.dirs(), &[], &[]);
         assert_eq!(
             catalog.default_for("text/rust").map(|a| a.id.as_str()),
             Some("org.kde.kate.desktop")
+        );
+    }
+
+    #[test]
+    fn terminal_applications_run_in_a_terminal() {
+        let tmp = fixture();
+        tmp.write(
+            "usr/share/applications/vim.desktop",
+            "[Desktop Entry]\nType=Application\nName=Vim\nExec=vim %F\nTerminal=true\nMimeType=text/plain;\n",
+        );
+        let mut catalog = Catalog::load(tmp.dirs(), &[], &[]);
+        catalog.terminal = pick_terminal(Some("sh"));
+        let vim = catalog.application("vim.desktop").cloned().expect("vim");
+        let file = std::path::PathBuf::from("/tmp/a.txt");
+        let (program, args) = catalog
+            .command(&vim, std::slice::from_ref(&file))
+            .expect("command");
+        assert_eq!(program, "sh");
+        assert_eq!(args, ["-e", "vim", "/tmp/a.txt"]);
+        assert_eq!(
+            pick_terminal(Some("/nonexistent/terminal")).is_some(),
+            pick_terminal(None).is_some()
         );
     }
 }

@@ -596,7 +596,10 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
         fs::create_dir_all(path.parent().expect("parent")).expect("folder");
         fs::write(path, content).expect("write");
     };
-    write("share/mime/globs2", "50:text/plain:*.txt\n");
+    write(
+        "share/mime/globs2",
+        "50:text/plain:*.txt\n50:text/markdown:*.md\n",
+    );
     // `true` stands in for the editors: opening runs it and nothing happens.
     for (id, name) in [("kate", "Kate"), ("code", "Visual Studio Code")] {
         write(
@@ -613,6 +616,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     let project = tmp.path().join("projet");
     fs::create_dir_all(&project).expect("folder");
     fs::write(project.join("notes.txt"), "notes").expect("write");
+    fs::write(project.join("readme.md"), "# readme").expect("write");
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: project,
@@ -656,7 +660,28 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
         Some("code.desktop")
     );
 
+    // The switch went back off with that choice: opening another type once writes nothing.
+    assert!(!bench.app.always);
+    bench.select("readme.md");
+    bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
+    bench.send(Message::Submenu(true));
+    assert!(!bench.app.always);
+    bench.send(Message::OpenWithApp("kate.desktop".into()));
+    let after = fs::read_to_string(xdg.config_home.join("mimeapps.list")).expect("mimeapps.list");
+    assert_eq!(
+        after, list,
+        "a choice without the switch must not touch mimeapps.list"
+    );
+    // Turning the switch on, then closing the menu, turns it off again.
+    bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
+    bench.send(Message::Submenu(true));
+    bench.send(Message::Run(crate::app::Command::ToggleAlways));
+    assert!(bench.app.always);
+    bench.press(Named::Escape);
+    assert!(!bench.app.always);
+
     // "Autre application…" opens the chooser of every application; Escape closes it.
+    bench.select("notes.txt");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
     bench.send(Message::Run(crate::app::Command::ChooseApp));
     assert!(bench.app.chooser.is_some());

@@ -25,7 +25,8 @@ let mime = catalog.mime.type_of(path, is_dir);   // "text/rust", "inode/director
 let apps = catalog.handlers(&mime);              // who opens it, the default first
 let default = catalog.default_for(&mime);
 let (program, args) = default?.command(&[path.to_path_buf()])?; // Exec expanded, no shell
-mime_apps::set_default(&catalog.dirs, &mime, &app.id)?;        // remember a choice
+let (program, args) = catalog.command(app, &files)?;          // in a terminal if needed
+mime_apps::set_default(&catalog.dirs, &desktops, &mime, &app.id)?; // remember a choice
 ```
 
 - `Dirs` holds the XDG directories (`config_home`, `config_dirs`, `data_home`, `data_dirs`).
@@ -41,12 +42,23 @@ mime_apps::set_default(&catalog.dirs, &mime, &app.id)?;        // remember a cho
   application" list.
 - `DesktopEntry::command(files)`: splits `Exec` with its quoting rules and expands the field
   codes (`%f %F %u %U %i %c %k %%`; deprecated codes are dropped).
-- `set_default(dirs, mime, app)`: in `$XDG_CONFIG_HOME/mimeapps.list`, puts `app` first for
-  `mime` under `[Default Applications]` and `[Added Associations]`, keeps the other
-  applications after it, and leaves every other section, entry, comment and blank line as it
-  was. The file is written beside the old one, flushed, then renamed over it: another program
-  reading it sees the old file or the new one, never half of one. The file's permissions are
-  kept.
+- `Catalog::command(app, files)`: the same, run inside a terminal when the entry says
+  `Terminal=true`. The terminal is `$TERMINAL` when it names an installed program, else the
+  first installed of `x-terminal-emulator`, `konsole`, `gnome-terminal` (with `--`), `kitty`,
+  `alacritty`, `foot`, `xterm` (with `-e`). Without any terminal, `Terminal=true` entries are
+  left out of the catalog.
+- `set_default(dirs, desktops, mime, app)`: in `$XDG_CONFIG_HOME/mimeapps.list`, puts `app`
+  first for `mime` under `[Default Applications]` and `[Added Associations]`, keeps the other
+  applications after it, and takes `app` out of `[Removed Associations]` for that type (it would
+  cancel the choice). Every other section, entry, comment and blank line stays as it was.
+  `<desktop>-mimeapps.list` files of the current desktops (`kde-mimeapps.list` under Plasma)
+  are read before `mimeapps.list`: when one already has a default for the type, that entry is
+  updated the same way, otherwise it would hide the choice; a desktop file without an entry for
+  the type is not touched, and none is created.
+- Writing: the file is written beside the old one, flushed, then renamed over it, so another
+  program reading it sees the old file or the new one, never half of one. Its permissions are
+  kept. When `mimeapps.list` is a symbolic link (dotfiles kept in a repository), the file it
+  points to is written, in its own folder, and the link stays.
 
 ## Order of the files
 
@@ -54,7 +66,9 @@ Reading merges, most important first: for `$XDG_CONFIG_HOME`, then each `$XDG_CO
 then `$XDG_DATA_HOME/applications` and each `$XDG_DATA_DIRS/applications`, the
 desktop-specific `<desktop>-mimeapps.list` before `mimeapps.list`. A desktop id found in a more
 important data directory hides the same id further down, even when that first entry is
-`Hidden=true` (how a user removes a system application).
+`Hidden=true` (how a user removes a system application). An entry whose `TryExec` program
+does not exist is left out. Folders under `applications/` are entered once each, by their real
+path: a loop of symbolic links lists nothing twice.
 
 ## Limits
 
@@ -62,7 +76,11 @@ important data directory hides the same id further down, even when that first en
   content sniffing (`magic`) is not done. An unknown name is `application/octet-stream`.
 - The `mimeinfo.cache` files are not read: applications are scanned directly, which also
   covers user entries that no cache lists.
-- `TryExec`, `OnlyShowIn` and `NotShowIn` are not checked yet.
+- `OnlyShowIn` and `NotShowIn` are not checked yet.
+- A field code glued inside an argument (`--file=%f`) goes through a lossy string: a file name
+  that is not UTF-8 is altered there (a lone `%f` keeps its bytes).
+- Patterns support `*`, `?` and plain `[abc]` sets, not ranges or negation; the shared MIME
+  database hardly uses them.
 - Icons are not part of this crate: Evidence looks them up in hicolor and pixmaps
   (`desktop/evidence/src/icons.rs`).
 
@@ -72,4 +90,6 @@ important data directory hides the same id further down, even when that first en
 names, hidden entries, user entries hiding system ones), `Exec` expansion with quotes and
 field codes, type detection (patterns, case, longest pattern), parent types, merging of
 several `mimeapps.list` files, writing a default that keeps everything else, creating a missing
-file, and handlers ordered with the default first.
+file, handlers ordered with the default first, a `kde-mimeapps.list` default updated and a
+removed association lifted, a linked `mimeapps.list` written through its link, `TryExec` and
+link loops, and `Terminal=true` entries run in a terminal.

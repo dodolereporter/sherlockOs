@@ -91,8 +91,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   file's type (from their `.desktop` files, with their icon, the default first and checked),
   then "Terminal, dans ce dossier", "Autre application…" (a chooser of every application, with
   a search), and the switch "Toujours ouvrir ce type ainsi". With the switch on, the chosen
-  application becomes the default in `~/.config/mimeapps.list`; opening a file then uses the
-  default application of its type (xdg-open when there is none). On the background: new folder,
+  application becomes the default in `~/.config/mimeapps.list` (and in `kde-mimeapps.list`
+  when that file already names a default for the type); opening a file then uses the default
+  application of its type (xdg-open when there is none). The switch applies to one choice
+  only: it goes back off after that choice, and when the menu or the chooser closes, so an
+  "open once with" never changes the defaults shared with the desktop. `Terminal=true`
+  applications open in the terminal (see `docs/mime-apps.md`). On the background: new folder,
   paste, hidden files. In the trash: restore, empty. On a device: open or mount, unmount, eject.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
@@ -243,6 +247,10 @@ with the planche at 1440 × 900 (the window is 1300 × 676, as on the planche).
   Applications with `Terminal=true` are started directly, not in a terminal.
 - Long names are cut from an estimated character width, not measured text.
 - Accessibility: iced 0.14 exposes nothing to screen readers (ADR 0014).
+- Left for later, from the second review: `type_of` (a walk over the `globs2` patterns, about
+  0.3 ms in a debug build) still runs in `update` when the "Ouvrir avec" submenu opens; moving a
+  folder across disks drops the sockets and devices it contains (with the "left aside"
+  message); a dark trace of the menu shadow was seen under the menu in Xephyr.
 
 ## Tests
 

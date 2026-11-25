@@ -329,6 +329,8 @@ pub struct App {
     /// Fade of the content of a folder that opens, and of the preview.
     pub(crate) content_fade: Option<Fade>,
     pub(crate) preview_fade: Option<Fade>,
+    /// The menu's scale animation is over and one last frame drew it at its exact size.
+    pub(crate) menu_settled: bool,
     /// Scale of the opening menu.
     pub(crate) menu_scale: Option<Animation>,
     /// Volumes of the sidebar, and the one whose menu is open.
@@ -390,6 +392,7 @@ impl App {
             content_fade: None,
             preview_fade: None,
             menu_scale: None,
+            menu_settled: false,
             volumes: Vec::new(),
             device_menu: None,
             available: Vec::new(),
@@ -469,7 +472,8 @@ impl App {
         };
         let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
         spring(&self.highlight, motion::GEOMETRY_PRECISION)
-            || spring(&self.menu_scale, motion::SCALE_PRECISION)
+            || (spring(&self.menu_scale, motion::SCALE_PRECISION)
+                || (self.menu_scale.is_some() && !self.menu_settled))
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
     }
@@ -480,6 +484,7 @@ impl App {
         self.content_fade = None;
         self.preview_fade = None;
         self.menu_scale = None;
+        self.menu_settled = true;
         if let Some(target) = self.highlight.as_ref().map(Animation::target) {
             self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, target, target, now));
         }
@@ -507,10 +512,15 @@ impl App {
         }
         if self.menu.is_none() {
             self.device_menu = None;
+            // Closing the menu (or the chooser) forgets the "always" switch.
+            if self.chooser.is_none() {
+                self.always = false;
+            }
         }
         // The menu opens by scaling.
         match (&self.menu, &self.menu_scale) {
             (Some(_), None) => {
+                self.menu_settled = false;
                 self.menu_scale = Some(Animation::new(
                     motion::OPEN_SPRING,
                     motion::OPEN_SCALE,
@@ -740,6 +750,15 @@ impl App {
         }
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
+        }
+        // Once the menu has reached its size, one more frame draws it unscaled: without it,
+        // the last scaled frame could stay on screen until the pointer moves.
+        if self
+            .menu_scale
+            .as_ref()
+            .is_some_and(|a| a.is_done(t, motion::SCALE_PRECISION))
+        {
+            self.menu_settled = true;
         }
         let Some(probe) = &mut self.probe else {
             return Task::none();
@@ -1204,17 +1223,21 @@ impl App {
         let Some(app) = catalog.application(id).cloned() else {
             return Task::none();
         };
-        let save = match (self.always, self.selected_type(), self.config.xdg.clone()) {
+        // "Always" applies to this one choice only: it goes back off at once, so that a
+        // later "open once with" never rewrites the defaults shared with the desktop.
+        let always = std::mem::replace(&mut self.always, false);
+        let save = match (always, self.selected_type(), self.config.xdg.clone()) {
             (true, Some(mime), Some(dirs)) => {
                 let id = app.id.clone();
+                let desktops = self.config.desktops.clone();
                 Task::perform(
-                    async move { mime_apps::set_default(&dirs, &mime, &id).is_ok() },
+                    async move { mime_apps::set_default(&dirs, &desktops, &mime, &id).is_ok() },
                     Message::DefaultSet,
                 )
             }
             _ => Task::none(),
         };
-        let launch = match app.command(&[entry.path]) {
+        let launch = match catalog.command(&app, &[entry.path]) {
             Some((program, args)) => {
                 let mut command = Process::new(program);
                 command.args(args);

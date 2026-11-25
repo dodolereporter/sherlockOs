@@ -21,6 +21,22 @@ pub struct DesktopEntry {
     /// Hidden from menus, but still able to open files.
     pub no_display: bool,
     pub terminal: bool,
+    /// Program that must exist for the entry to be shown (`TryExec`).
+    pub try_exec: Option<String>,
+}
+
+/// A program name or path that can be run: an executable file, found in `PATH` when the name
+/// has no slash.
+pub fn is_executable(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let runnable = |path: &Path| {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    if program.contains('/') {
+        return runnable(Path::new(program));
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| runnable(&dir.join(program))))
 }
 
 /// Reads the value of `key` in the `[Desktop Entry]` group, trying the locales first
@@ -101,17 +117,26 @@ pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<De
             .unwrap_or_default(),
         no_display: flag("NoDisplay"),
         terminal: flag("Terminal"),
+        try_exec: get("TryExec").map(unescape).filter(|t| !t.is_empty()),
     })
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+/// Collects the `.desktop` files under `dir`. A folder already seen (by its real path) is not
+/// entered again: a loop of symbolic links cannot list the same application twice.
+fn walk(root: &Path, dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(real) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if !seen.insert(real) {
+        return;
+    }
     let Ok(items) = std::fs::read_dir(dir) else {
         return;
     };
     for item in items.filter_map(Result::ok) {
         let path = item.path();
         if path.is_dir() {
-            walk(root, &path, out);
+            walk(root, &path, seen, out);
         } else if path.extension().is_some_and(|e| e == "desktop")
             && let Ok(relative) = path.strip_prefix(root)
         {
@@ -130,7 +155,7 @@ pub fn read_applications(dirs: &Dirs, locales: &[String]) -> Vec<DesktopEntry> {
     for data in dirs.data() {
         let root = data.join("applications");
         let mut files = Vec::new();
-        walk(&root, &root, &mut files);
+        walk(&root, &root, &mut HashSet::new(), &mut files);
         files.sort();
         for (id, path) in files {
             if !seen.insert(id.clone()) {
@@ -138,6 +163,7 @@ pub fn read_applications(dirs: &Dirs, locales: &[String]) -> Vec<DesktopEntry> {
             }
             if let Ok(text) = std::fs::read_to_string(&path)
                 && let Some(app) = parse(&id, &path, &text, locales)
+                && app.try_exec.as_deref().is_none_or(is_executable)
             {
                 apps.push(app);
             }
@@ -281,6 +307,7 @@ mod tests {
             mime_types: Vec::new(),
             no_display: false,
             terminal: false,
+            try_exec: None,
         };
         let files = [PathBuf::from("/tmp/a b.txt"), PathBuf::from("/tmp/c.txt")];
         let (program, args) = app.command(&files).expect("command");
@@ -321,5 +348,24 @@ mod tests {
         let apps = read_applications(&tmp.dirs(), &[]);
         let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, ["kde-org.kde.kate.desktop"]);
+    }
+
+    #[test]
+    fn missing_programs_and_link_loops_are_left_out() {
+        let tmp = TempDir::new("tryexec");
+        tmp.write(
+            "usr/share/applications/gone.desktop",
+            "[Desktop Entry]\nType=Application\nName=Gone\nExec=gone %F\nTryExec=/nonexistent/gone\n",
+        );
+        tmp.write(
+            "usr/share/applications/here.desktop",
+            "[Desktop Entry]\nType=Application\nName=Here\nExec=sh %F\nTryExec=sh\n",
+        );
+        let loop_dir = tmp.path().join("usr/share/applications/loop");
+        std::fs::create_dir_all(&loop_dir).expect("folder");
+        std::os::unix::fs::symlink("..", loop_dir.join("back")).expect("link");
+        let apps = read_applications(&tmp.dirs(), &[]);
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["here.desktop"]);
     }
 }

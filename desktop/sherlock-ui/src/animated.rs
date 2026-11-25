@@ -373,6 +373,19 @@ impl<Message> Widget<Message, Theme, Renderer> for Scaled<'_, Message> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        // At its full size the content is drawn as is, without a transformation.
+        if (self.factor - 1.0).abs() < f32::EPSILON {
+            self.content.as_widget().draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                layout,
+                cursor,
+                viewport,
+            );
+            return;
+        }
         let origin: Point = layout.bounds().position();
         let transformation = Transformation::translate(origin.x, origin.y)
             * Transformation::scale(self.factor)
