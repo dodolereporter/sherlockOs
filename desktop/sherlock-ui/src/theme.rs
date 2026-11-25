@@ -245,8 +245,8 @@ pub fn card(_: &Theme) -> container::Style {
 }
 
 /// Floating glass panel. The blur behind it is the compositor's job.
-/// Its shadow is drawn by `surface::Shadowed` (see `component::glass_panel`), never as an
-/// iced shadow: the software renderer paints those outside the redrawn area.
+/// Its shadow is drawn by `surface::Shadowed` (see `component::floating_panel`): blurred on the
+/// GPU, crisp in software, whose renderer paints iced shadows outside the redrawn area.
 pub fn glass(_: &Theme) -> container::Style {
     surface(
         color::GLASS,
@@ -257,8 +257,8 @@ pub fn glass(_: &Theme) -> container::Style {
 }
 
 /// Menu and submenu.
-/// Its shadow is drawn by `surface::Shadowed` (see `component::menu`), never as an iced
-/// shadow: the software renderer paints those outside the redrawn area.
+/// Its shadow is drawn by `surface::Shadowed` (see `component::floating_menu`): blurred on the
+/// GPU, crisp in software, whose renderer paints iced shadows outside the redrawn area.
 pub fn menu(_: &Theme) -> container::Style {
     surface(
         color::MENU_GLASS,

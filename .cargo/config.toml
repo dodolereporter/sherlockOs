@@ -1,0 +1,5 @@
+[env]
+# Headless tests render with tiny-skia, on every machine (ADR 0018). Without this, iced_test
+# tries wgpu first with the most powerful adapter, which wakes a dedicated NVIDIA card and
+# makes snapshots depend on the machine's GPU. `ICED_TEST_BACKEND=wgpu cargo test` overrides it.
+ICED_TEST_BACKEND = { value = "tiny-skia", force = false }

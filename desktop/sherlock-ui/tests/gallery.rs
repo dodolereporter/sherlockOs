@@ -137,10 +137,19 @@ fn send(ui: &mut Ui<'_>, events: &[Event], renderer: &mut iced::Renderer, out: &
     );
 }
 
+/// The software renderer: it draws without a screen, and tests stay in software (ADR 0018).
+fn software() -> Option<iced::Renderer> {
+    use iced::advanced::renderer::Headless;
+    iced::futures::executor::block_on(iced::Renderer::new(
+        typography::UI,
+        Pixels(typography::UI_SIZE),
+        Some("tiny-skia"),
+    ))
+}
+
 #[test]
 fn the_keyboard_walks_and_activates_the_components() {
-    // The software renderer, the only one compiled: it draws without a screen.
-    let mut renderer = iced::Renderer::new(typography::UI, Pixels(typography::UI_SIZE));
+    let mut renderer = software().expect("tiny-skia starts without a screen");
     let mut ui = build(view(true), Cache::default(), &mut renderer);
     let mut messages = Vec::new();
     let enter = press(Named::Enter, false);
@@ -173,7 +182,7 @@ fn the_keyboard_walks_and_activates_the_components() {
 
 #[test]
 fn a_disabled_component_loses_the_focus() {
-    let mut renderer = iced::Renderer::new(typography::UI, Pixels(typography::UI_SIZE));
+    let mut renderer = software().expect("tiny-skia starts without a screen");
     let mut messages = Vec::new();
     let enter = press(Named::Enter, false);
 

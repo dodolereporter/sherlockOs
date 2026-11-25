@@ -1,39 +1,117 @@
-//! A crisp drop shadow for floating surfaces (menus, dialogs).
+//! The drop shadow of floating surfaces (menus, dialogs), drawn for the renderer in use.
 //!
-//! iced 0.14's software renderer draws a quad's blurred shadow as a separate image, without
-//! the clip mask of the area being redrawn. When a frame redraws several damaged rectangles,
-//! that shadow is painted again over what the other rectangles already drew: a menu became a
-//! black block hiding its own entries, and cut the submenu beside it. `Shadowed` draws its
-//! shadow as a few plain, slightly larger and offset rounded rectangles instead: ordinary
-//! quads, clipped like everything else, and cheap.
+//! On the GPU (wgpu), the shadow is the design board's: one blurred quad shadow. iced 0.14's
+//! software renderer (tiny-skia) draws such a shadow as a separate image, without the clip mask
+//! of the area being redrawn: when a frame redraws several damaged rectangles, that shadow is
+//! painted again over what the other rectangles already drew, and a menu became a black block
+//! hiding its own entries. In software, `Shadowed` draws its shadow as a few plain, slightly
+//! larger and offset rounded rectangles instead: ordinary quads, clipped like everything else.
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{Clipboard, Shell, Widget, mouse, overlay};
-use iced::{Background, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, border};
+use iced::{
+    Background, Element, Event, Length, Padding, Rectangle, Renderer, Shadow, Size, Theme, Vector,
+    border,
+};
 
 use crate::color::{self, Color};
+use crate::metrics;
 
-/// Content drawn over a stepped, crisp shadow.
+/// How high a surface floats, which sets its shadow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Elevation {
+    /// No shadow: only tells which renderer draws (see `gpu_drawn`).
+    Flat,
+    /// Menus and submenus: `0 22px 54px rgba(3,8,18,0.6)`.
+    Menu,
+    /// Floating panels and dialogs: `0 28px 70px rgba(3,8,18,0.55)`.
+    Panel,
+}
+
+impl Elevation {
+    /// The design board's shadow, drawn on the GPU.
+    pub fn blurred(self) -> Option<Shadow> {
+        let (color, offset, blur) = match self {
+            Self::Flat => return None,
+            Self::Menu => (
+                color::MENU_SHADOW,
+                metrics::MENU_SHADOW_OFFSET,
+                metrics::MENU_SHADOW_BLUR,
+            ),
+            Self::Panel => (color::SHADOW, metrics::SHADOW_OFFSET, metrics::SHADOW_BLUR),
+        };
+        Some(Shadow {
+            color: color.into(),
+            offset: Vector::new(0.0, offset),
+            blur_radius: blur,
+        })
+    }
+
+    /// Steps of (vertical offset, spread, opacity of `color::SHADOW_BASE`) of the crisp
+    /// shadow drawn in software.
+    pub fn crisp(self) -> &'static [(f32, f32, f32)] {
+        match self {
+            Self::Flat => &[],
+            Self::Menu => &metrics::MENU_SHADOW_LAYERS,
+            Self::Panel => &metrics::PANEL_SHADOW_LAYERS,
+        }
+    }
+
+    /// Room the blurred shadow takes around the surface, for a surface of its own (a popup)
+    /// that must hold it: the blur on every side, moved down by the offset.
+    pub fn margins(self) -> Padding {
+        self.blurred().map_or(Padding::ZERO, |shadow| Padding {
+            top: (shadow.blur_radius - shadow.offset.y).max(0.0),
+            right: shadow.blur_radius,
+            bottom: shadow.blur_radius + shadow.offset.y,
+            left: shadow.blur_radius,
+        })
+    }
+}
+
+/// Content drawn over its shadow.
 pub struct Shadowed<'a, Message> {
     content: Element<'a, Message>,
     radius: f32,
-    layers: &'static [(f32, f32, f32)],
+    elevation: Elevation,
 }
 
-/// Lays the shadow `layers` (vertical offset, spread, opacity of `color::SHADOW_BASE`) under
-/// `content`, whose corners have radius `radius`.
+/// Lays the shadow of `elevation` under `content`, whose corners have radius `radius`.
 pub fn shadowed<'a, Message>(
     content: impl Into<Element<'a, Message>>,
     radius: f32,
-    layers: &'static [(f32, f32, f32)],
+    elevation: Elevation,
 ) -> Shadowed<'a, Message> {
     Shadowed {
         content: content.into(),
         radius,
-        layers,
+        elevation,
     }
+}
+
+/// Renderer seen by the last `Shadowed` drawn: unknown, GPU, software.
+static DRAWN: AtomicU8 = AtomicU8::new(0);
+const GPU: u8 = 1;
+const SOFTWARE: u8 = 2;
+
+/// Whether the GPU draws this program, as seen by the last `Shadowed` drawn; `None` before
+/// the first one. iced picks the renderer when it starts and falls back to software by
+/// itself: the program cannot know beforehand. A program that sizes a surface for a blurred
+/// shadow (the bar's menu) wraps its first surface in a `Flat` one to learn it.
+pub fn gpu_drawn() -> Option<bool> {
+    match DRAWN.load(Ordering::Relaxed) {
+        GPU => Some(true),
+        SOFTWARE => Some(false),
+        _ => None,
+    }
+}
+
+fn is_gpu(renderer: &Renderer) -> bool {
+    matches!(renderer, iced_renderer::fallback::Renderer::Primary(_))
 }
 
 impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
@@ -123,22 +201,41 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
         viewport: &Rectangle,
     ) {
         let bounds = layout.bounds();
-        for &(offset, spread, alpha) in self.layers {
-            let quad = Quad {
-                bounds: Rectangle {
-                    x: bounds.x - spread,
-                    y: bounds.y + offset - spread,
-                    width: bounds.width + 2.0 * spread,
-                    height: bounds.height + 2.0 * spread,
-                },
-                border: border::rounded(self.radius + spread),
-                ..Quad::default()
-            };
-            let fill = Color {
-                a: alpha,
-                ..color::SHADOW_BASE
-            };
-            iced::advanced::Renderer::fill_quad(renderer, quad, Background::Color(fill.into()));
+        let gpu = is_gpu(renderer);
+        DRAWN.store(if gpu { GPU } else { SOFTWARE }, Ordering::Relaxed);
+        if gpu {
+            if let Some(shadow) = self.elevation.blurred() {
+                // A transparent quad that only casts the shadow; the content covers it.
+                let quad = Quad {
+                    bounds,
+                    border: border::rounded(self.radius),
+                    shadow,
+                    ..Quad::default()
+                };
+                iced::advanced::Renderer::fill_quad(
+                    renderer,
+                    quad,
+                    Background::Color(iced::Color::TRANSPARENT),
+                );
+            }
+        } else {
+            for &(offset, spread, alpha) in self.elevation.crisp() {
+                let quad = Quad {
+                    bounds: Rectangle {
+                        x: bounds.x - spread,
+                        y: bounds.y + offset - spread,
+                        width: bounds.width + 2.0 * spread,
+                        height: bounds.height + 2.0 * spread,
+                    },
+                    border: border::rounded(self.radius + spread),
+                    ..Quad::default()
+                };
+                let fill = Color {
+                    a: alpha,
+                    ..color::SHADOW_BASE
+                };
+                iced::advanced::Renderer::fill_quad(renderer, quad, Background::Color(fill.into()));
+            }
         }
         self.content.as_widget().draw(
             &tree.children[0],

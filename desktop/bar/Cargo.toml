@@ -10,6 +10,7 @@ publish.workspace = true
 iced = { version = "=0.14.0", default-features = false, features = [
     "advanced",
     "tiny-skia",
+    "wgpu",
     "svg",
     "web-colors",
     "crisp",
