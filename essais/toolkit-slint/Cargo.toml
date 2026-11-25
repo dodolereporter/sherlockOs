@@ -1,0 +1,16 @@
+[package]
+name = "toolkit-slint"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Prototype jetable : son propre workspace, hors du workspace principal.
+[workspace]
+
+[dependencies]
+slint = { version = "=1.19.1", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts"] }
+smithay-client-toolkit = { version = "=0.21.1", default-features = false, features = ["calloop"] }
+chrono = { version = "=0.4.42", default-features = false, features = ["clock"] }
+
+[build-dependencies]
+slint-build = "=1.19.1"
