@@ -9,7 +9,7 @@ use iced::widget::container;
 use iced::window::Id;
 use iced::{Element, Event, Length, Point, keyboard};
 use iced_test::simulator::Simulator;
-use launcher::app::{self, Key, Launcher, Message};
+use launcher::app::{self, Launcher, Message};
 use launcher::apps::Apps;
 use launcher::source::{Action, Command, Source};
 use mime_apps::{DesktopEntry, Dirs};
@@ -47,13 +47,16 @@ fn recorded() -> (Launcher, Arc<Mutex<Vec<Command>>>) {
     let started = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&started);
     let spawn: app::Spawn = Arc::new(move |command: &Command| {
-        record.lock().expect("record").push(command.clone());
+        if let Ok(mut record) = record.lock() {
+            record.push(command.clone());
+        }
         Ok(1)
     });
     (Launcher::new(vec![Box::new(apps())], spawn), started)
 }
 
-fn key(named: keyboard::key::Named) -> Message {
+/// The message a key press gives, when the launcher acts on it.
+fn key(named: keyboard::key::Named) -> Option<Message> {
     let event = Event::Keyboard(keyboard::Event::KeyPressed {
         key: keyboard::Key::Named(named),
         modified_key: keyboard::Key::Named(named),
@@ -66,7 +69,7 @@ fn key(named: keyboard::key::Named) -> Message {
         repeat: false,
     });
     // The search field takes Escape: the launcher still sees it.
-    app::on_event(event, iced::event::Status::Captured, Id::unique()).expect("a launcher key")
+    app::on_event(event, iced::event::Status::Captured, Id::unique())
 }
 
 #[test]
@@ -143,7 +146,7 @@ fn kitty_starts_with_three_keys() {
     }
     assert_eq!(launcher.query, "ki");
     // Third key: Enter.
-    let _ = launcher.update(key(keyboard::key::Named::Enter));
+    let _ = launcher.update(key(keyboard::key::Named::Enter).expect("a launcher key"));
     let started = started.lock().expect("record");
     assert_eq!(started.len(), 1);
     assert_eq!(started[0].program, "kitty");
@@ -170,31 +173,40 @@ fn every_application_starts_with_two_letters_and_enter() {
 }
 
 #[test]
+fn only_the_launcher_keys_are_taken() {
+    assert!(key(keyboard::key::Named::Tab).is_none());
+    assert!(matches!(
+        key(keyboard::key::Named::Escape),
+        Some(Message::Key(app::Key::Escape))
+    ));
+}
+
+#[test]
 fn arrows_choose_and_escape_closes() {
     let (mut launcher, started) = recorded();
     let _ = launcher.update(Message::Query("e".into()));
     let count = launcher.hits().count();
     assert!(count > 2);
-    let _ = launcher.update(key(keyboard::key::Named::ArrowUp));
+    let _ = launcher.update(key(keyboard::key::Named::ArrowUp).expect("a launcher key"));
     assert_eq!(launcher.selected, 0, "the first stays first");
-    let _ = launcher.update(key(keyboard::key::Named::ArrowDown));
-    let _ = launcher.update(key(keyboard::key::Named::ArrowDown));
+    let _ = launcher.update(key(keyboard::key::Named::ArrowDown).expect("a launcher key"));
+    let _ = launcher.update(key(keyboard::key::Named::ArrowDown).expect("a launcher key"));
     assert_eq!(launcher.selected, 2);
     for _ in 0..count {
-        let _ = launcher.update(key(keyboard::key::Named::ArrowDown));
+        let _ = launcher.update(key(keyboard::key::Named::ArrowDown).expect("a launcher key"));
     }
     assert_eq!(launcher.selected, count - 1, "the last stays last");
     let chosen = launcher.hits().nth(count - 1).cloned().expect("hit");
-    let _ = launcher.update(key(keyboard::key::Named::Enter));
+    let _ = launcher.update(key(keyboard::key::Named::Enter).expect("a launcher key"));
     let Action::Start(command) = chosen.action;
     assert_eq!(started.lock().expect("record").as_slice(), [command]);
     // A new query brings the choice back to the first result.
     let (mut other, started) = recorded();
     let _ = other.update(Message::Query("e".into()));
-    let _ = other.update(key(keyboard::key::Named::ArrowDown));
+    let _ = other.update(key(keyboard::key::Named::ArrowDown).expect("a launcher key"));
     let _ = other.update(Message::Query("ed".into()));
     assert_eq!(other.selected, 0);
-    let _ = other.update(key(keyboard::key::Named::Escape));
+    let _ = other.update(key(keyboard::key::Named::Escape).expect("a launcher key"));
     assert!(other.closing);
     assert!(started.lock().expect("record").is_empty());
 }
@@ -285,26 +297,26 @@ fn on_desktop(element: Element<'_, Message>) -> Element<'_, Message> {
 }
 
 /// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its size in bytes.
-fn capture(launcher: &Launcher, name: &str) -> u64 {
+fn capture(launcher: &Launcher, name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let size = (look::WIDTH, launcher.height());
     let mut ui = Simulator::with_size(
         launcher::settings(),
         size,
         on_desktop(launcher.view_panel()),
     );
-    let snapshot = ui.snapshot(&theme::theme()).expect("snapshot");
+    let snapshot = ui.snapshot(&theme::theme())?;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
     let written = path.with_file_name(format!("{name}-tiny-skia.png"));
     let _ = std::fs::remove_file(&written);
-    snapshot.matches_image(&path).expect("written");
-    std::fs::metadata(&written).expect("screenshot").len()
+    snapshot.matches_image(&path)?;
+    Ok(std::fs::metadata(&written)?.len())
 }
 
 #[test]
 fn the_panel_renders_its_results() {
     let (mut launcher, _) = recorded();
     assert_eq!(launcher.height(), look::panel_height(0, 0));
-    assert!(capture(&launcher, "launcher-empty") > 2_000);
+    assert!(capture(&launcher, "launcher-empty").expect("screenshot written") > 2_000);
     let _ = launcher.update(Message::Query("te".into()));
     let rows = launcher.hits().count();
     assert!(rows > 1);
@@ -318,7 +330,7 @@ fn the_panel_renders_its_results() {
         assert!(ui.find(text).is_ok(), "{text} missing");
     }
     drop(ui);
-    assert!(capture(&launcher, "launcher-results") > 2_000);
+    assert!(capture(&launcher, "launcher-results").expect("screenshot written") > 2_000);
     let _ = launcher.update(Message::Query("zzz".into()));
     assert_eq!(launcher.height(), look::panel_height(0, 1));
     let mut ui = Simulator::with_size(
@@ -328,7 +340,7 @@ fn the_panel_renders_its_results() {
     );
     assert!(ui.find(texts::NOTHING).is_ok());
     drop(ui);
-    assert!(capture(&launcher, "launcher-nothing") > 2_000);
+    assert!(capture(&launcher, "launcher-nothing").expect("screenshot written") > 2_000);
     // The surface follows the panel, at the board's place.
     let surface = launcher::surface(launcher.height());
     assert_eq!(surface.margin.top, look::TOP as i32);
