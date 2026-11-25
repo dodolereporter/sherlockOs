@@ -1,0 +1,3 @@
+Volume: front-left: 36045 /  55% / -15.58 dB,   front-right: 36045 /  55% / -15.58 dB
+        balance 0.00
+Mute: no

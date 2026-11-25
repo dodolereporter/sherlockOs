@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "desktop/bar",
     "desktop/compositeur",
     "desktop/sherlock-ui",
     "sherlock/sherlockd",

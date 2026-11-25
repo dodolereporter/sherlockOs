@@ -258,6 +258,48 @@ pub fn divider(_: &Theme) -> container::Style {
     }
 }
 
+/// Top bar: glass of the Main design board, radius 12.
+pub fn top_bar(_: &Theme) -> container::Style {
+    surface(
+        color::TOP_BAR_GLASS,
+        color::TOP_BAR_BORDER,
+        metrics::TOP_BAR_RADIUS,
+        Shadow::default(),
+    )
+}
+
+/// Workspace chip: green when the workspace is active, veiled otherwise.
+pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let (fill, text) = match (active, status) {
+            (_, button::Status::Disabled) => (color::DISABLED, color::TEXT_TERTIARY),
+            (true, _) => (color::ACCENT, color::TEXT_ON_ACCENT),
+            (false, button::Status::Active) => (color::CHIP, color::TEXT_SECONDARY),
+            (false, _) => (color::CHIP_HOVER, color::TEXT_PRIMARY),
+        };
+        button_style(Some(fill), text, border::rounded(metrics::CHIP_RADIUS))
+    }
+}
+
+/// Sherlock button: the color logo straight on the bar glass, without a pill, so that its
+/// cream dot stays visible. Veiled on hover and press, and while its menu is open, like an open
+/// menu button of the Menus board.
+pub fn sherlock_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let fill = match (open, status) {
+            (true, _) => Some(color::TOP_BAR_BUTTON_OPEN),
+            (false, button::Status::Hovered) => Some(color::HOVER),
+            (false, button::Status::Pressed) => Some(color::PRESSED),
+            (false, _) => None,
+        };
+        button_style(
+            fill,
+            color::TEXT_PRIMARY,
+            border::rounded(metrics::SHERLOCK_BUTTON_RADIUS),
+        )
+    }
+}
+
 /// Fond d'écran du bureau.
 pub fn desktop(_: &Theme) -> container::Style {
     container::Style {
@@ -424,6 +466,43 @@ mod tests {
             ] {
                 let what = format!("{name} sur entrée active");
                 check(&mut failures, &what, text, Some(color::ACTIVE_ENTRY), &on);
+            }
+        }
+        // Top bar over the desktop and its discs: texts and workspace chips.
+        let desktops = std::iter::once(color::DESKTOP).chain(color::DESKTOP_DISCS);
+        for (i, d) in desktops.enumerate() {
+            let on = (
+                format!("top bar on desktop {i}"),
+                color::TOP_BAR_GLASS.over(d),
+            );
+            for (name, text) in [
+                ("top bar text", color::TEXT_PRIMARY),
+                ("top bar indicator", color::TEXT_SECONDARY),
+                ("low battery", color::AMBER),
+            ] {
+                check(&mut failures, name, text, None, &on);
+            }
+            // The green ring of the logo, a non-text element: 3 to 1 at least (WCAG 1.4.11),
+            // under every state of the Sherlock button.
+            for open in [true, false] {
+                for status in STATUSES {
+                    let s = sherlock_button(open)(&theme, status);
+                    let below = fill(&s).map_or(on.1, |f| f.over(on.1));
+                    let ratio = color::ACCENT.contrast(below);
+                    if ratio < 3.0 {
+                        failures.push(format!(
+                            "logo ring ({open}, {status:?}) on {}: {ratio:.2}",
+                            on.0
+                        ));
+                    }
+                }
+            }
+            for active in [true, false] {
+                for status in STATUSES {
+                    let s = chip(active)(&theme, status);
+                    let what = format!("workspace chip ({active}, {status:?})");
+                    check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
+                }
             }
         }
         // Textes sur les fonds opaques qui leur sont réservés.

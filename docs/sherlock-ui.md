@@ -9,7 +9,7 @@ l'apparence. Le toolkit est iced 0.14 en rendu logiciel (ADR 0014).
 
 | Étage | Modules | Dépend de |
 | --- | --- | --- |
-| Jetons | `color`, `metrics`, `motion`, `typography`, `icon`, `logo`, `window` | Rien |
+| Jetons | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window` | Rien |
 | iced | `theme`, `component`, `focus` | iced 0.14, derrière la fonction `iced` |
 
 La galerie n'est pas dans la bibliothèque : elle vit dans `examples/galerie/` et ses tests
@@ -38,6 +38,15 @@ Tous les jetons sont nommés par leur rôle, en anglais comme le reste du code.
   `GAP_SECTION`, `GAP_ROW`, `PAGE_PADDING`) et durées. Les gammes du design (bouton de 28 à 36,
   rayon de 8 à 10, trait d'icône de 1,6 à 1,7…) sont vérifiées à la compilation.
 - **`typography`** : familles, tailles, graisses, et les trois fichiers de police à charger.
+- **`strings`** (added by D-20): shared interface texts. Abbreviated days and months, short
+  date (« mar. 24 nov. »), time, percentage with the narrow no-break space, workspace label
+  (« 1 · Code ») and the Sherlock menu entries (`strings::top_bar`).
+- **Top bar** (D-20): `color::TOP_BAR_GLASS` and `TOP_BAR_BORDER` (Main board, slightly
+  lighter than `GLASS` and `BORDER`), `CHIP` and `CHIP_HOVER` for the workspace chips;
+  `metrics::TOP_BAR_*`, `SHERLOCK_*`, `CHIP_*`, `STATUS_*`, `MENU_AVATAR`,
+  `MENU_HEADER_PADDING`; `color::TOP_BAR_BUTTON_OPEN` (veil of an open bar button); icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`;
+  `color::TRANSPARENT` for the background of a shell surface, `metrics::EVENT_COALESCE_MS`
+  (150 ms) and `EVENT_COALESCE_MAX_MS` (500 ms) for merging bursts of system events.
 - **`window`** : bande de saisie et calage des fenêtres, posés par D-17 pour le compositeur.
 - **`metrics::DESKTOP_DISC_GEOMETRY`** : place et diamètre des trois disques du fond sur l'écran
   de référence (planche Main), ajoutés par D-11.
@@ -99,6 +108,10 @@ style par état dans `theme`, et son constructeur dans `component` :
 | Étiquette de section | `section_label` | Panneaux, Main |
 | Carte, panneau de verre | `card`, `glass_panel` | Réglages, Panneaux |
 | Textes | `body`, `description`, `title`, `icon` | Toutes |
+| Workspace chip (D-20) | `chip(label, active, message)` | Main |
+| Sherlock button, logo (D-20) | `sherlock_button(open, message)`, `logo`, `logo_square` | Main, Menus |
+| Top bar indicator (D-20) | `status(icon, value, tint)` | Main |
+| Menu header (D-20) | `menu_header(title, subtitle)` | Menus |
 
 Un composant sans message est désactivé. Les composants cliquables rendent un `Control`, qui
 devient un `Element` et accepte `status(..)` et `focus_ring()` pour imposer un état (galerie).
@@ -276,6 +289,9 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
 
 - Les composants animés : les ressorts et le fondu sont dans `motion` depuis D-11, à brancher
   sur les survols et les transitions des composants.
-- layer-shell : c'est le lot D-20. `iced_exwlshell` 0.21 n'a pas été essayé.
 - Le menu qui s'ouvre en `xdg_popup` : la galerie pose le sous-menu à côté du menu, comme la
-  planche. Le placement réel est celui de la barre (D-20).
+  planche.
+- (D-20) layer-shell and the real placement of a menu live in the bar: see `docs/bar.md`,
+  which also records what was learnt about `iced_exwlshell` 0.21. The bar components (`chip`,
+  `sherlock_button`, `status`, `menu_header`) are not in the gallery: the bar has its own
+  headless screenshot (`desktop/bar/tests/render.rs`).

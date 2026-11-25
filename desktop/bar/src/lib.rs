@@ -1,0 +1,80 @@
+//! Top bar of the desktop: a separate program, anchored at the top of the screen with
+//! layer-shell (ADR 0005), written with iced 0.14 and software rendering (ADR 0014). See
+//! `docs/bar.md`.
+
+pub mod app;
+pub mod menu;
+pub mod source;
+pub mod user;
+
+use iced::Settings;
+use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, Margin};
+use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
+use iced_exwlshell::shell::{ShellInfo, ShellType};
+use sherlock_ui::{color, metrics, theme, typography};
+
+use app::{Bar, Message};
+
+/// Name of the layer-shell surface, readable by the compositor.
+const NAMESPACE: &str = "bar";
+
+/// Surface settings: anchored to the top and both sides, 36 high, margins of the design
+/// board, exclusive zone of its height. The keyboard only comes when clicking into the bar.
+pub fn layer_settings() -> LayerShellSettings {
+    let side = metrics::TOP_BAR_MARGIN_SIDE as i32;
+    LayerShellSettings {
+        anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+        layer: Layer::Top,
+        size: LayerSize::fill_width(metrics::TOP_BAR_HEIGHT as u32),
+        exclusive_zone: metrics::TOP_BAR_HEIGHT as i32,
+        margin: Margin {
+            top: metrics::TOP_BAR_MARGIN_TOP as i32,
+            right: side,
+            bottom: 0,
+            left: side,
+        },
+        keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        start_mode: StartMode::Active,
+        ..LayerShellSettings::default()
+    }
+}
+
+/// iced settings: sherlock-ui fonts and interface text size.
+pub fn settings() -> Settings {
+    Settings {
+        fonts: typography::FONTS.map(std::borrow::Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: typography::UI_SIZE.into(),
+        ..Settings::default()
+    }
+}
+
+/// Runs the bar until the session ends.
+pub fn run() -> Result<(), iced_exwlshell::Error> {
+    // The bar has no text field: no need to start the clipboard thread.
+    iced_exwlshell::disable_clipboard();
+    let result = iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
+        .theme(|_: &Bar, _| Some(theme::theme()))
+        .style(|_, _| iced::theme::Style {
+            background_color: color::TRANSPARENT.into(),
+            text_color: color::TEXT_PRIMARY.into(),
+        })
+        .subscription(Bar::subscription)
+        .on_new_shell(|info: ShellInfo| {
+            (info.shell == ShellType::LayerShell).then_some(Message::Surface(info.window))
+        })
+        .settings(settings())
+        .wl_settings(ExWlSettings {
+            layer_settings: layer_settings(),
+            ..ExWlSettings::default()
+        })
+        .run();
+    // The monitoring commands would also die with the process (PR_SET_PDEATHSIG); stopping
+    // them here makes a normal exit or a dispatch error clean right away.
+    source::shutdown();
+    result
+}
+
+fn namespace() -> String {
+    String::from(NAMESPACE)
+}

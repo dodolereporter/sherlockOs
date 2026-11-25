@@ -22,6 +22,30 @@ pub const TOP_BAR_MARGIN_SIDE: f32 = 12.0;
 pub const TOP_BAR_MARGIN_TOP: f32 = 10.0;
 /// Rayon de la barre du haut.
 pub const TOP_BAR_RADIUS: f32 = 12.0;
+/// Inner padding of the top bar: left, right.
+pub const TOP_BAR_PADDING: (f32, f32) = (6.0, 10.0);
+/// Gap between the Sherlock button and the application name.
+pub const TOP_BAR_LEFT_GAP: f32 = 4.0;
+/// Sherlock button: width, height, radius, size of the logo symbol in it.
+pub const SHERLOCK_BUTTON: (f32, f32) = (30.0, 28.0);
+pub const SHERLOCK_BUTTON_RADIUS: f32 = 8.0;
+pub const SHERLOCK_GLYPH: f32 = 22.0;
+/// Active application name: left and right padding.
+pub const APP_NAME_PADDING: (f32, f32) = (8.0, 10.0);
+/// Workspace chip: height, side padding, radius, gap between two chips.
+pub const CHIP_HEIGHT: f32 = 24.0;
+pub const CHIP_PADDING: f32 = 12.0;
+pub const CHIP_RADIUS: f32 = 12.0;
+pub const CHIP_GAP: f32 = 4.0;
+/// Right-hand indicators: gap between two indicators, between an icon and its value.
+pub const STATUS_GAP: f32 = 14.0;
+pub const STATUS_ICON_GAP: f32 = 6.0;
+/// Gap between the bottom of the bar and a menu it opens (Menus board: 46 then 52).
+pub const TOP_BAR_MENU_GAP: f32 = 6.0;
+/// Sherlock menu header: side of the avatar (the logo in its square), top, side and bottom
+/// padding.
+pub const MENU_AVATAR: f32 = 40.0;
+pub const MENU_HEADER_PADDING: (f32, f32, f32) = (6.0, 8.0, 8.0);
 
 // Fenêtres et panneaux.
 
@@ -135,6 +159,11 @@ pub const PAGE_PADDING: (f32, f32) = (22.0, 28.0);
 pub const HOVER_MS: (u64, u64) = (110, 150);
 /// Grossissement du dock.
 pub const DOCK_TRANSITION_MS: u64 = 150;
+/// Window in which a burst of system events (volume slider, network changes) is merged into
+/// a single refresh of the shell.
+pub const EVENT_COALESCE_MS: u64 = 150;
+/// Longest such burst: a volume slider dragged for seconds still refreshes this often.
+pub const EVENT_COALESCE_MAX_MS: u64 = 500;
 
 // Cohérence des jetons, vérifiée à la compilation : un jeton hors de sa gamme ne compile pas.
 const _: () = {
@@ -143,6 +172,7 @@ const _: () = {
     assert!(BUTTON_COMPACT_RADIUS >= 8.0 && BUTTON_RADIUS <= 10.0);
     assert!(ICON_STROKE >= 1.6 && ICON_STROKE <= 1.7);
     assert!(HOVER_MS.0 <= HOVER_MS.1 && DOCK_TRANSITION_MS <= HOVER_MS.1);
+    assert!(EVENT_COALESCE_MS < EVENT_COALESCE_MAX_MS);
     // Le bouton rond de l'interrupteur fait 20 et tient deux fois dans sa piste.
     assert!(TOGGLE_HEIGHT - 2.0 * TOGGLE_INSET == 20.0);
     assert!(2.0 * (TOGGLE_HEIGHT - 2.0 * TOGGLE_INSET) < TOGGLE_WIDTH);
@@ -150,4 +180,7 @@ const _: () = {
     assert!(MENU_ITEM_RADIUS < MENU_RADIUS && MENU_ITEM_HEIGHT < BUTTON_HEIGHT);
     assert!(SUBMENU_WIDTH < MENU_WIDTH);
     assert!(ICON_SIZE_SMALL < ICON_SIZE && ICON_SIZE < ICON_GRID);
+    // The bar's elements fit in its height.
+    assert!(SHERLOCK_BUTTON.1 < TOP_BAR_HEIGHT && CHIP_HEIGHT < TOP_BAR_HEIGHT);
+    assert!(SHERLOCK_GLYPH < SHERLOCK_BUTTON.1);
 };

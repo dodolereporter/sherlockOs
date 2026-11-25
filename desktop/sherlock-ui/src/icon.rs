@@ -21,21 +21,36 @@ pub enum Icon {
     Network,
     /// Son activé.
     Sound,
+    /// Network disconnected.
+    NetworkOff,
+    /// Sound muted.
+    SoundMuted,
+    /// Battery.
+    Battery,
+    /// Battery charging.
+    BatteryCharging,
 }
 
 impl Icon {
     /// Toutes les icônes, pour les tests et la galerie.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
         Self::Close,
         Self::Network,
         Self::Sound,
+        Self::NetworkOff,
+        Self::SoundMuted,
+        Self::Battery,
+        Self::BatteryCharging,
     ];
 
     /// Tracé sur la grille de 24. Ceux du réseau, du son, de la recherche, du chevron et de la
     /// coche sont ceux des planches.
+    ///
+    /// The boards draw neither the battery, nor the network off, nor the muted sound: those
+    /// three follow the stroke of the others.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -47,6 +62,16 @@ impl Icon {
             }
             Self::Sound => {
                 "M4 10v4h3.5L12 18V6L7.5 10zM15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"
+            }
+            Self::NetworkOff => {
+                "M3 9.5a13 13 0 0 1 18 0M9.4 16.4a4 4 0 0 1 5.2 0M12 19.5h.01M4 4l16 16"
+            }
+            Self::SoundMuted => "M4 10v4h3.5L12 18V6L7.5 10zM16 9.5l5 5M21 9.5l-5 5",
+            Self::Battery => {
+                "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3"
+            }
+            Self::BatteryCharging => {
+                "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3M12 9l-2.5 3.5h3L10 16"
             }
         }
     }
