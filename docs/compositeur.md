@@ -9,8 +9,8 @@ animations à ressorts. Le lot D-13 y fait tourner les applications X11, par XWa
 presse-papiers dans les deux sens.
 
 Prérequis du poste, en plus de ceux de `CLAUDE.md` : le serveur `Xwayland` (paquet `xwayland`
-sur Debian, version 23.1 ou plus récente pour le protocole xwayland-shell). Sans lui, le
-compositeur démarre quand même, et seules les applications Wayland s'affichent.
+sur Debian). Essayé avec la version 24.1.6 de Debian 13 ; la CI installe celle d'Ubuntu 24.04. Sans
+lui, le compositeur démarre quand même, et seules les applications Wayland s'affichent.
 
 ## Architecture
 
