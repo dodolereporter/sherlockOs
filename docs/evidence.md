@@ -311,6 +311,15 @@ user's; no test calls the real UDisks.
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.
 
+## Installing
+
+`just install-evidence` builds Evidence in release and installs it for the user, without root:
+`~/.local/bin/evidence`, and `desktop/evidence/evidence.desktop` in
+`~/.local/share/applications` (or `$XDG_DATA_HOME/applications`) with that absolute path in
+`Exec`, so that it starts even when `~/.local/bin` is not in the `PATH` of the session. The dock
+then pins it in place of the file manager of another desktop (`docs/dock.md`), and the launcher
+lists it. The packages of the OS will install both in `/usr`.
+
 ## Manual procedure
 
 On the author's laptop, Plasma X11:

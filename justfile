@@ -31,6 +31,13 @@ build:
 wallpapers output="target/wallpapers":
     cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
 
+# Installs Evidence for the user, without root: its binary in ~/.local/bin and its desktop entry, which the dock pins and the launcher lists
+install-evidence:
+    cargo build --release -p evidence
+    install -D -m 755 target/release/evidence "$HOME/.local/bin/evidence"
+    sed "s|^Exec=evidence |Exec=$HOME/.local/bin/evidence |" desktop/evidence/evidence.desktop \
+        | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/evidence.desktop"
+
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
     python3 distro/tests/check-language.py --self-test

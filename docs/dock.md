@@ -249,10 +249,20 @@ count). An id that is not installed is skipped and logged. An empty `Pinned=` is
 Sherlock alone.
 
 Without `Pinned`, the dock fills five roles with what is installed and shown in menus: files,
-terminal, editor, browser, games. For each, the default application of its type in
+terminal, editor, browser, games. For each, our own application (Evidence, desktop file id
+`evidence`, for files), else the default application of its type in
 `$XDG_CONFIG_HOME/mimeapps.list` (`inode/directory`, `text/plain`, `x-scheme-handler/https`),
-else a preferred one (`evidence` for files, Konsole or GNOME's terminals, Steam), else the first
-one of its category (`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Nothing is
+else a preferred one (Konsole or GNOME's terminals, Steam), else the first one of its category
+(`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Evidence comes before
+`mimeapps`, which often gives folders to the file manager of another desktop.
+
+Evidence is pinned only when its desktop entry is installed in a data directory
+(`$XDG_DATA_HOME/applications`, then those of `$XDG_DATA_DIRS`); otherwise the files role falls
+back to another file manager, Nautilus on the author's laptop. `just install-evidence` builds it
+and installs it for the user, without root: the binary in `~/.local/bin`, and
+`desktop/evidence/evidence.desktop` in `~/.local/share/applications` with that absolute path in
+`Exec`. A dock that already wrote its `Pinned` list keeps it: « Garder dans le dock » on an open
+Evidence window adds it there. The OS packages will install both in `/usr`. Nothing is
 written until the list changes. « Retirer du dock » and « Garder dans le dock » write the file.
 
 ### Edges
