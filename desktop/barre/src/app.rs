@@ -290,3 +290,73 @@ fn on_key(event: keyboard::Event) -> Option<Message> {
         .map(Message::Focus)
         .or_else(|| menu::key(event).map(Message::MenuKey))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_menu() -> (Bar, Id) {
+        let id = Id::unique();
+        let bar = Bar {
+            menu: Some(id),
+            ..Bar::default()
+        };
+        (bar, id)
+    }
+
+    #[test]
+    fn les_fleches_et_tab_parcourent_le_menu() {
+        let (mut bar, _) = with_menu();
+        let _ = bar.update(Message::MenuKey(menu::Key::Next));
+        let _ = bar.update(Message::MenuKey(menu::Key::Next));
+        assert_eq!(bar.cursor, Some(1));
+        let _ = bar.update(Message::Focus(Direction::Previous));
+        assert_eq!(bar.cursor, Some(0));
+        let _ = bar.update(Message::MenuKey(menu::Key::Last));
+        assert_eq!(bar.cursor, Some(Action::ALL.len() - 1));
+    }
+
+    #[test]
+    fn entree_active_l_entree_surlignee_et_ferme_le_menu() {
+        let (mut bar, _) = with_menu();
+        let _ = bar.update(Message::Hover(4));
+        let _ = bar.update(Message::MenuKey(menu::Key::Activate));
+        assert!(!bar.menu_open());
+        assert_eq!(bar.cursor, None);
+    }
+
+    #[test]
+    fn echap_ferme_le_menu() {
+        let (mut bar, _) = with_menu();
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        assert!(!bar.menu_open());
+    }
+
+    #[test]
+    fn menu_ferme_les_touches_du_menu_ne_font_rien() {
+        let mut bar = Bar::default();
+        let _ = bar.update(Message::MenuKey(menu::Key::Next));
+        assert_eq!(bar.cursor, None);
+    }
+
+    #[test]
+    fn le_compositeur_peut_fermer_le_menu() {
+        let (mut bar, id) = with_menu();
+        let _ = bar.update(Message::Hover(2));
+        let _ = bar.update(Message::Closed(Id::unique()));
+        assert!(bar.menu_open());
+        let _ = bar.update(Message::Closed(id));
+        assert!(!bar.menu_open());
+        assert_eq!(bar.cursor, None);
+    }
+
+    #[test]
+    fn sans_surface_le_menu_ne_s_ouvre_pas() {
+        let mut bar = Bar::default();
+        let _ = bar.update(Message::ToggleMenu);
+        assert!(!bar.menu_open());
+        let _ = bar.update(Message::Surface(Id::unique()));
+        let _ = bar.update(Message::ToggleMenu);
+        assert!(bar.menu_open());
+    }
+}
