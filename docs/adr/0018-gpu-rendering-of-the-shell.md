@@ -25,7 +25,7 @@ own variables), read when the first surface is created.
 
 ## Decision
 
-The iced programs of the shell (bar, Evidence, and later the dock) render with wgpu on Vulkan,
+The iced programs of the shell (bar, Evidence, dock) render with wgpu on Vulkan,
 through Mesa's driver for the AMD chip that drives the screen, and that driver only. Every iced
 program of the workspace (the dock and the gallery included) decides at the very start of
 `main`, before any thread exists, with `sherlock_ui::gpu::Choice`; a test of sherlock-ui fails
@@ -103,12 +103,12 @@ hidden: with that variable it would load `libGLX_nvidia.so.0`. Hence `apply` uns
 - **Our compositor cannot show GPU clients yet.** It only offers `wl_shm` buffers: no
   `zwp_linux_dmabuf_v1`, no `wl_drm`. Mesa's Vulkan driver needs one of them to present on
   Wayland, so under our compositor the shell falls back to tiny-skia, opaque. Checked with our
-  compositor nested in the headless KWin: the bar chose Vulkan, found no adapter able to present,
-  and drew `wl_shm` XRGB8888 buffers with tiny-skia, without an error. The
-  compositor must offer `linux-dmabuf` (Smithay's `DmabufState`) for the GPU path, and for every
-  GPU application and game anyway. **Until it does, the gain of this ADR (60 frames per second
-  in Evidence, a translucent bar) only holds under Plasma (KWin).** That is a compositor lot; this lot does not touch the
-  compositor.
+  compositor nested in the headless KWin: the bar chose Vulkan, found no adapter able to
+  present, and drew `wl_shm` XRGB8888 buffers with tiny-skia, without an error. The compositor
+  must offer `linux-dmabuf` (Smithay's `DmabufState`) for the GPU path, and for every GPU
+  application and game anyway. **Until it does, the gain of this ADR (60 frames per second in
+  Evidence, a translucent bar) only holds under Plasma (KWin).** That is a compositor lot; this
+  lot does not touch the compositor.
 - Only AMD chips are tried. An Intel chip (`i915`, `xe`, manifest `intel_icd*.json`) would take
   the same path: a follow-up, once tested on a machine.
 - The dock (lot D-21) makes the choice, so it never wakes the NVIDIA card, and its launcher

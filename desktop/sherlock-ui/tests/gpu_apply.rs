@@ -12,6 +12,8 @@ fn main() {
     // SAFETY: no harness, so no other thread exists.
     unsafe {
         std::env::set_var("DRI_PRIME", "1");
+        std::env::set_var("__NV_PRIME_RENDER_OFFLOAD", "1");
+        std::env::set_var("VK_ADD_DRIVER_FILES", "/added.json");
         std::env::set_var("VK_DRIVER_FILES", "/before.json");
         std::env::remove_var("ICED_BACKEND");
     }
@@ -29,13 +31,27 @@ fn main() {
         Ok("wgpu,tiny-skia")
     );
     assert_eq!(std::env::var("VK_DRIVER_FILES").as_deref(), Ok(radv));
-    assert_eq!(std::env::var_os("DRI_PRIME"), None);
+    for name in [
+        "DRI_PRIME",
+        "__NV_PRIME_RENDER_OFFLOAD",
+        "VK_ADD_DRIVER_FILES",
+    ] {
+        assert_eq!(std::env::var_os(name), None, "{name}");
+    }
 
     // A program it starts gets the environment the process was started with.
     let mut command = Command::new("true");
     gpu::for_child(&mut command);
     let envs: Vec<_> = command.get_envs().collect();
     assert!(envs.contains(&(OsStr::new("DRI_PRIME"), Some(OsStr::new("1")))));
+    assert!(envs.contains(&(
+        OsStr::new("__NV_PRIME_RENDER_OFFLOAD"),
+        Some(OsStr::new("1"))
+    )));
+    assert!(envs.contains(&(
+        OsStr::new("VK_ADD_DRIVER_FILES"),
+        Some(OsStr::new("/added.json"))
+    )));
     assert!(envs.contains(&(
         OsStr::new("VK_DRIVER_FILES"),
         Some(OsStr::new("/before.json"))

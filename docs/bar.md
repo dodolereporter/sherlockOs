@@ -2,9 +2,9 @@
 
 `desktop/bar` is the desktop's top bar: a separate program, anchored at the top of the screen
 with layer-shell (ADR 0005), written with iced 0.14 (ADR 0014), rendered by the GPU of the AMD
-chip, or in software without one (ADR 0018). Batch D-20 builds it from the `Main.dc.html` design board and, for the Sherlock
-menu, `Menus.dc.html`. The crate, the binary and the layer-shell namespace are all `bar`. The
-texts it shows stay in French, from `sherlock-ui`.
+chip, or in software without one (ADR 0018). Batch D-20 builds it from the `Main.dc.html` design
+board and, for the Sherlock menu, `Menus.dc.html`. The crate, the binary and the layer-shell
+namespace are all `bar`. The texts it shows stay in French, from `sherlock-ui`.
 
 ![The bar in a nested KWin](../desktop/bar/screenshots/bar-kwin.png)
 

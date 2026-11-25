@@ -87,7 +87,10 @@ impl Choice {
     /// manifests found. The GPU is used only when a single AMD chip is bound to `amdgpu` and
     /// it is the one that drives the screen (`boot_vga`).
     pub fn choose(iced_backend: Option<&str>, chips: &[Chip], manifests: &[PathBuf]) -> Self {
-        let wants_wgpu = iced_backend.is_none_or(|b| b.split(',').any(|c| c.trim() == "wgpu"));
+        // Read like iced reads it: empty candidates are dropped, and an empty list is no
+        // choice at all (iced then tries wgpu first, on any adapter).
+        let iced_backend = iced_backend.filter(|b| b.split(',').any(|c| !c.is_empty()));
+        let wants_wgpu = iced_backend.is_none_or(|b| b.split(',').any(|c| c == "wgpu"));
         if !wants_wgpu {
             return Self::Inherited;
         }
@@ -356,9 +359,10 @@ mod tests {
         );
         assert_eq!(
             get(&variables, "VK_DRIVER_FILES"),
-            set(
-                "/usr/share/vulkan/icd.d/radeon_icd.json:/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
-            )
+            set(concat!(
+                "/usr/share/vulkan/icd.d/radeon_icd.json:",
+                "/usr/share/vulkan/icd.d/radeon_icd.x86_64.json"
+            ))
         );
         // What would bring another GPU back in is unset.
         for name in NEUTRALISED {
@@ -421,6 +425,30 @@ mod tests {
         let choice = Choice::choose(Some("tiny-skia"), &chips, &manifests());
         assert_eq!(choice, Choice::Inherited);
         assert!(choice.variables().is_empty());
+    }
+
+    #[test]
+    fn an_empty_iced_backend_is_no_choice() {
+        // iced drops empty candidates and falls back to wgpu first: so does the choice, which
+        // then restricts it to the AMD chip.
+        let chips = [chip(0x10de, "nvidia", false), chip(AMD, AMDGPU, true)];
+        for empty in ["", ",", ",,"] {
+            let choice = Choice::choose(Some(empty), &chips, &manifests());
+            assert!(
+                matches!(
+                    choice,
+                    Choice::Vulkan {
+                        user_backend: false,
+                        ..
+                    }
+                ),
+                "{empty:?}: {choice:?}"
+            );
+            assert_eq!(
+                get(&choice.variables(), "ICED_BACKEND"),
+                set("wgpu,tiny-skia")
+            );
+        }
     }
 
     #[test]
