@@ -128,7 +128,7 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         .theme(|_: &Dock, _| Some(theme::theme()))
         .style(|_, _| iced::theme::Style {
             background_color: color::TRANSPARENT.into(),
-            text_color: color::TEXT_PRIMARY.into(),
+            text_color: color::palette().text_primary.into(),
         })
         .subscription(Dock::subscription)
         .on_new_shell(|info: ShellInfo| {

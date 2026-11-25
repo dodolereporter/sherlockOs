@@ -19,6 +19,8 @@ iced = { version = "=0.14.0", default-features = false, features = [
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 dock-config = { path = "../dock-config" }
+# The theme of the appearance file, followed live (workspace crate).
+appearance-config = { path = "../appearance-config" }
 # inotify, to reload the configuration without polling: the version the bar already pins.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }

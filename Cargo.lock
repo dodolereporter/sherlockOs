@@ -823,6 +823,7 @@ dependencies = [
 name = "dock"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "dock-config",
  "iced",
  "iced_exwlshell",

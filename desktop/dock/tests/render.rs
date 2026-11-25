@@ -14,7 +14,62 @@ use iced::window::Id;
 use iced::{Element, Event, Length, Point, mouse};
 use iced_test::simulator::Simulator;
 use sherlock_ui::theme;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
+
+use sherlock_ui::color::{self, Palette, Theme};
+
+/// A capture sets the active theme: one at a time.
+static THEME: Mutex<()> = Mutex::new(());
+
+/// Makes `which` the active theme until the guard is dropped; no other capture runs meanwhile.
+fn in_theme(which: Theme) -> MutexGuard<'static, ()> {
+    let guard = THEME.lock().unwrap_or_else(PoisonError::into_inner);
+    color::set_active(which);
+    guard
+}
+
+/// The dock at rest, hovered over Sherlock, and an icon's menu in the light theme:
+/// `dock-rest-light`, `dock-hover-light`, `dock-menu-light`, compared with DockClair and
+/// MenusClair.
+#[test]
+fn the_dock_renders_in_the_light_theme() {
+    let _theme = in_theme(Theme::Light);
+    let dock = sample();
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-rest-light").expect("screenshot written") > 2_000);
+    let dock = hovered(icon_center(&sample(), 2));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-hover-light").expect("screenshot written") > 2_000);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Pointer(Pointer::Moved(icon_center(&dock, 1))));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    let (width, height) = dock::menu::surface_size(&dock::menu::entries(dock.abilities(1)));
+    let size = (width as f32, height as f32);
+    let ui = Simulator::with_size(dock::settings(), size, on_desktop(dock.view_menu()));
+    assert!(capture(ui, "dock-menu-light").expect("screenshot written") > 2_000);
+    color::set_active(Theme::Dark);
+}
+
+#[test]
+fn a_new_theme_fades_the_dock() {
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Theme(Theme::Dark));
+    assert!(!dock.theme.running());
+    let start = Instant::now();
+    let _ = dock.update(Message::Theme(Theme::Light));
+    assert!(dock.animating(), "frames are asked for the fade");
+    let fade = sherlock_ui::motion::THEME_FADE;
+    let _ = dock.update(Message::Frame(start + fade / 3));
+    assert_ne!(color::palette(), &Palette::DARK);
+    assert_ne!(color::palette(), &Palette::LIGHT);
+    let _ = dock.update(Message::Frame(start + fade * 2));
+    assert!(!dock.theme.running());
+    assert_eq!(color::palette(), &Palette::LIGHT);
+    color::set_active(Theme::Dark);
+}
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -98,6 +153,7 @@ fn capture(mut ui: Simulator<'_, Message>, name: &str) -> Result<u64, Box<dyn st
 
 #[test]
 fn the_dock_renders_at_rest() {
+    let _theme = in_theme(Theme::Dark);
     let dock = sample();
     assert_eq!(dock.items.len(), 5);
     assert_eq!(dock.items[2].name, "Sherlock", "Sherlock in the middle");
@@ -108,6 +164,7 @@ fn the_dock_renders_at_rest() {
 
 #[test]
 fn the_dock_renders_magnified_with_its_label() {
+    let _theme = in_theme(Theme::Dark);
     let rest = sample();
     let dock = hovered(icon_center(&rest, 2));
     let layout = dock.layout(Duration::from_secs(2));
@@ -140,6 +197,7 @@ fn the_pointer_is_tracked_over_the_surface() {
 
 #[test]
 fn the_menu_of_an_icon_renders_its_entries() {
+    let _theme = in_theme(Theme::Dark);
     let mut dock = sample();
     let _ = dock.update(Message::Surface(Id::unique()));
     let point = icon_center(&dock, 1);
@@ -234,6 +292,7 @@ fn an_open_application_can_be_kept_and_unpinned_again() {
 
 #[test]
 fn the_dock_renders_with_an_open_application_after_the_separator() {
+    let _theme = in_theme(Theme::Dark);
     let mut dock = sample();
     let _ = dock.unpin(1);
     let layout = dock.layout(Duration::ZERO);
@@ -273,6 +332,7 @@ fn a_new_configuration_moves_and_resizes_the_dock() {
 
 #[test]
 fn the_dock_renders_on_the_left_edge() {
+    let _theme = in_theme(Theme::Dark);
     let mut config = DockConfig::default();
     config.position = Position::Left;
     let rest = with_config(config.clone());

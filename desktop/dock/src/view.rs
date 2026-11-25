@@ -135,7 +135,7 @@ impl Dock {
         {
             let count = text(dock::text::windows(count))
                 .size(typography::SMALL_SIZE)
-                .color(color::TEXT_SECONDARY);
+                .color(color::palette().text_secondary);
             header = header.push(count);
         }
         let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
