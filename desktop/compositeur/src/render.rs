@@ -115,20 +115,11 @@ impl Scene {
         }
         let output_size = output.size.to_physical(1);
         for window in state.space.elements().rev() {
-            let Some(geometry) = state.space.element_geometry(window) else {
+            let Some(mut visual) = state.window_visual(window, now) else {
                 continue;
             };
-            // Sans contenu, une fenêtre n'a rien à montrer, pas même son ombre.
-            if geometry.size.is_empty() {
-                continue;
-            }
-            let geometry = Rectangle::new(geometry.loc - output.loc, geometry.size);
-            let visual = {
-                let mut motion = window_data(window).motion.borrow_mut();
-                let visual = motion.frame(now, geometry);
-                animating |= motion.is_animating();
-                visual
-            };
+            visual.rect.loc -= output.loc.to_f64();
+            animating |= window_data(window).motion.borrow().is_animating();
             self.push_window(renderer, &mut elements, window, visual, output_size);
         }
         let discs = desktop_discs(output.size);
@@ -178,8 +169,9 @@ impl Scene {
                 .map(SceneElement::Popup),
             );
         }
-        // Une fenêtre en plein écran n'a ni coins, ni bordure, ni ombre.
-        let decorated = !is_fullscreen(window);
+        // Une fenêtre en plein écran n'a ni coins, ni bordure, ni ombre. Elle les garde tant
+        // qu'elle glisse vers l'écran entier, pour qu'ils ne disparaissent pas avant.
+        let decorated = !is_fullscreen(window) || visual.moving;
         let radius = if decorated {
             corner_radius(rect.size)
         } else {

@@ -17,7 +17,7 @@ use std::{
     fmt,
     os::unix::net::UnixStream,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use smithay::{
@@ -268,6 +268,17 @@ impl State {
                 toplevel.send_pending_configure();
             }
         }
+    }
+
+    /// Géométrie et opacité à dessiner pour `window` à l'instant `now`, compté depuis le
+    /// démarrage, dans les coordonnées de l'espace. Fait avancer ses animations. `None` pour
+    /// une fenêtre sans contenu, qui n'a rien à montrer, pas même son ombre.
+    pub fn window_visual(&self, window: &Window, now: Duration) -> Option<anim::Visual> {
+        let geometry = self.space.element_geometry(window)?;
+        if geometry.size.is_empty() {
+            return None;
+        }
+        Some(window_data(window).motion.borrow_mut().frame(now, geometry))
     }
 
     /// Ménage après chaque tour de boucle : fenêtres mortes, popups, envoi aux clients.

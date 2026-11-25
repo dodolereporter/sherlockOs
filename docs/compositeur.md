@@ -140,7 +140,8 @@ sous-surfaces comme pour la surface principale, à n'importe quelle échelle. Le
 retourne l'image (`Flipped180`) ; `clip_in_frame` applique la même transformation au rectangle de
 découpe. Ce que le client dessine hors de sa géométrie (ombres côté client de GTK) est coupé :
 c'est le compositeur qui dessine l'ombre. Une fenêtre en plein écran n'a ni coins, ni bordure,
-ni ombre. Une fenêtre agrandie ou calée les garde.
+ni ombre : elle les garde pendant qu'elle glisse vers l'écran entier et les perd à l'arrivée,
+quand elle couvre déjà l'écran. Une fenêtre agrandie ou calée les garde.
 
 **Ombre.** Comme `box-shadow` : le rectangle de la fenêtre, décalé de 28 vers le bas, flouté par
 une gaussienne d'écart type 35 (la moitié du flou, comme le font les navigateurs). L'élément
@@ -181,15 +182,19 @@ compositeur et le shell partagent les mêmes ressorts :
 
 - **Ouverture.** À sa première image, la fenêtre grandit de 0,92 à 1 autour de son centre et
   passe de transparente à opaque. Son ombre et sa bordure suivent.
-- **Calage et retour.** `rearrange` (calage, agrandissement, plein écran, retour) et le premier
-  mouvement d'un déplacement qui rend sa taille d'avant à une fenêtre calée appellent
-  `animate_next_change`. Le prochain changement de géométrie part alors de la dernière géométrie
-  dessinée, sur quatre ressorts : position et taille. La cible suit la géométrie réelle : la
-  position change tout de suite, la taille quand le client répond, et le ressort reprend sa
-  course sans à-coup. Pendant l'animation, le tampon du client est étiré dans le rectangle
-  animé (`RescaleRenderElement`). Une fois posé, il est dessiné à l'échelle 1.
-- **Glisser et redimensionner.** Les autres changements ne sont pas animés : la fenêtre suit le
-  pointeur sans délai.
+- **Calage et retour.** `rearrange` (calage, agrandissement, plein écran, retour) appelle
+  `animate_next_change`. Le drapeau ne vaut que pour l'image suivante, où il est consommé dans
+  tous les cas : si la géométrie y a changé, elle part de la dernière géométrie dessinée sur
+  quatre ressorts, position et taille ; sinon rien ne s'anime. Une animation déjà en cours
+  change simplement de cible. La cible suit ensuite la géométrie réelle : la position change
+  tout de suite, la taille quand le client répond, et le ressort reprend sa course sans
+  à-coup. Pendant l'animation, le tampon du client est étiré dans le rectangle animé
+  (`RescaleRenderElement`). Une fois posé, il est dessiné à l'échelle 1. Limite : un calage qui
+  ne change que la taille, la position restant la même, n'est pas animé.
+- **Glisser et redimensionner.** Ils ne sont jamais animés : le début d'un geste arrête toute
+  animation de géométrie (`WindowMotion::follow`), et la fenêtre suit le pointeur sans délai.
+  Une fenêtre calée ou agrandie qu'on détache en la glissant reprend sa taille d'avant d'un
+  coup, sous le pointeur, comme avant ce lot.
 - **Aperçu du calage.** Il apparaît en grandissant de 0,92 à 1 et en fondu, glisse d'une zone à
   l'autre, et s'efface à sa dernière place.
 
@@ -247,7 +252,7 @@ un calage animé, avec ses dix ombres et ses dix découpes. Elle dure une dizain
 
 ```sh
 cargo build --release -p compositeur --bin compositeur --example scene
-DRI_PRIME=0 __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
+__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json \
   target/release/compositeur --imbrique --mesurer target/release/examples/scene
 ```
 
@@ -260,8 +265,9 @@ Sur le portable de référence, le compositeur doit tourner sur la puce AMD :
 - `cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status` doit rester `suspended` avant,
   pendant et après (adresse de la carte NVIDIA donnée par `lspci -D | grep -i nvidia`).
 
-Mesa refuse `DRI_PRIME=0` avec un avertissement (`Invalid value (0) for DRI_PRIME`) et garde la
-puce par défaut, celle de l'écran : l'AMD. Le journal du moteur fait foi.
+Sans `DRI_PRIME`, Mesa rend sur la puce par défaut, celle de l'écran : l'AMD. `DRI_PRIME=0` est
+refusé par Mesa (`Invalid value (0) for DRI_PRIME`) : ne pas le mettre. Le journal du moteur
+fait foi.
 
 Sous Plasma X11, Mesa cale la présentation de la fenêtre hôte sur l'écran du portable : la
 cadence plafonne à sa fréquence, et le temps de rendu compte aussi l'attente de l'image
@@ -280,22 +286,28 @@ rythme de l'écran du portable. Les chiffres mesurés sont dans la demande de fu
 1. Ouvrir `docs/design/planches/Main.dc.html` dans Chromium, fenêtre de 1440 par 900, ou en
    tirer une capture :
    `chromium --headless --disable-gpu --hide-scrollbars --window-size=1440,900 --screenshot=planche.png docs/design/planches/Main.dc.html`.
-2. Lancer le compositeur avec une seule fenêtre de la taille de l'éditeur de la planche, et
-   mettre la fenêtre hôte à 1440 par 900 :
+2. Lancer le compositeur sans commande, mettre sa fenêtre hôte à 1440 par 900, puis seulement
+   ouvrir la fenêtre de la taille de l'éditeur de la planche (836 × 652). Le compositeur centre
+   une fenêtre à son premier contenu, sur l'écran qu'il a à ce moment : l'ordre compte. Le nom
+   de la socket est dans le journal (`compositeur prêt socket="wayland-1"`).
 
    ```sh
-   cargo build -p compositeur --example scene
-   cargo run -p compositeur -- --imbrique target/debug/examples/scene planche &
+   cargo build -p compositeur --bin compositeur --example scene
+   target/debug/compositeur --imbrique &
    wmctrl -r Smithay -e 0,-1,-1,1440,900
+   WAYLAND_DISPLAY=wayland-1 target/debug/examples/scene planche &
    import -window "$(xwininfo -name Smithay | awk '/Window id/ {print $4}')" compositeur.png
    ```
 
+   Vérifier que la capture fait 1440 par 900. Pour un hôte de L par H, la fenêtre est en
+   ((L - 836) / 2, (H - 652) / 2) : son coin bas gauche est en ((L - 836) / 2, (H + 652) / 2).
+
 3. Comparer :
    - le fond et les disques, au pixel près : mêmes places, mêmes couleurs ;
-   - le coin bas gauche de la fenêtre : (36, 716) sur la planche, (302, 776) dans le compositeur,
-     qui centre ses fenêtres. Les deux coins sont sur le disque `#132A49`. Recadrer 160 par 160
-     autour de chacun et poser les deux côte à côte : rayon, bordure claire de 1 px, ombre
-     décalée vers le bas qui s'éteint en 70 px.
+   - le coin bas gauche de la fenêtre : (36, 716) sur la planche, (302, 776) dans le compositeur
+     à 1440 par 900. Les deux coins sont sur le disque `#132A49`. Recadrer autour de chacun et
+     poser les deux côte à côte : rayon, bordure claire de 1 px (`(39, 47, 61)` sur le corps de
+     la fenêtre dans les deux), ombre décalée vers le bas qui s'éteint en 70 px.
 
 ## Tester
 
@@ -308,7 +320,7 @@ just verifier
 | `src/layout.rs` | Centrage, déplacement, redimensionnement par chaque bord, coin opposé fixe pendant tout le geste, tailles minimale et maximale du client. Bande de saisie : chaque côté, chaque coin, plus large aux coins, rien à l'intérieur, fenêtre étroite. Calage : bords haut, gauche et droit, quatre coins, géométrie de chaque zone, retour à la taille d'avant sous le pointeur |
 | `sherlock-ui/src/color.rs` | Couleurs prémultipliées par leur opacité |
 | `sherlock-ui/src/motion.rs` | Ressorts : convergence vers la cible, dépassement léger et borné (entre 0,5 et 4 %), temps de réponse (90 % en moins de 150 ms, posé en moins de 300 ms), changement de cible sans saut de valeur ni de vitesse, pas de dépassement pour un ressort critique ou sur-amorti. Fondu : durée d'un survol, reprise sans saut |
-| `src/anim.rs` | Ouverture centrée qui part d'une opacité nulle. Calage animé de la position puis de la taille, glisser suivi sans délai avant et après. Aperçu qui apparaît, glisse et s'efface |
+| `src/anim.rs` | Ouverture centrée qui part d'une opacité nulle. Calage animé de la position puis de la taille, glisser suivi sans délai avant et après. Drapeau consommé même sans changement ou pendant une animation, arrêt par un geste. Aperçu qui apparaît, glisse et s'efface |
 | `src/render.rs` | Disques à leur place de la planche sur 1440 par 900, ronds sur un autre écran. Dimensions de l'ombre de la fenêtre de la planche. Rayon des coins, réduit pour une petite fenêtre. Découpe retournée avec l'image |
 | `src/stats.rs` | Cadence, images en retard, bilan des images animées |
 | `tests/sans_ecran.rs` | Sans écran ni backend, voir ci-dessous |
@@ -336,6 +348,11 @@ Les tests de `tests/sans_ecran.rs` :
 - **Raccourcis.** Super + flèches cale à gauche, agrandit, rend la taille d'avant. Le client,
   qui a un clavier, reçoit Super mais jamais l'appui ni le relâchement des flèches
   interceptées. Super + Maj + gauche lui arrive et ne cale rien.
+- **Ce qui est dessiné suit les gestes.** `State::window_visual` donne la géométrie dessinée à
+  un instant choisi, sans rendu. Agrandie puis rendue pendant l'animation, la fenêtre glissée
+  ensuite est dessinée sous le pointeur à chaque image. Calée à gauche deux fois de suite, puis
+  redimensionnée par sa bande, elle est dessinée à sa nouvelle taille. Calée puis détachée en
+  la glissant vite, elle reste sous le pointeur.
 
 Le test d'intégration fait tourner le compositeur et le client dans le même fil, sur une paire de
 sockets Unix : il ne dépend ni d'un écran, ni de `XDG_RUNTIME_DIR`. Il charge `libwayland-client`

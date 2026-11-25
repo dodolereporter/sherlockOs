@@ -13,6 +13,8 @@ pub type RectF = Rectangle<f64, Logical>;
 pub struct Visual {
     pub rect: RectF,
     pub opacity: f32,
+    /// La géométrie glisse encore vers sa place réelle.
+    pub moving: bool,
 }
 
 /// `rect` mis à l'échelle `scale` autour de son centre.
@@ -82,9 +84,17 @@ pub struct WindowMotion {
 }
 
 impl WindowMotion {
-    /// Le prochain changement de géométrie sera animé : calage, agrandissement, retour.
+    /// Le prochain changement de géométrie sera animé : calage, agrandissement, retour. Le
+    /// drapeau ne vaut que pour l'image suivante : la géométrie y a déjà changé, ou ne
+    /// changera pas.
     pub fn animate_next_change(&mut self) {
         self.animate_next = true;
+    }
+
+    /// Arrête l'animation de géométrie : un geste commence, la fenêtre suit le pointeur.
+    pub fn follow(&mut self) {
+        self.geometry = None;
+        self.animate_next = false;
     }
 
     /// Ce qu'il faut dessiner à l'instant `now` pour une fenêtre dont la géométrie réelle est
@@ -98,14 +108,15 @@ impl WindowMotion {
                 Fade::new(0.0, 1.0, now, motion::FADE),
             ));
         }
+        // Le drapeau est consommé à chaque image, qu'une animation parte ou non : sinon le
+        // glisser ou le redimensionnement suivant serait animé.
+        let animate = std::mem::take(&mut self.animate_next);
         match (&mut self.geometry, self.last) {
             (Some(geometry), _) => geometry.retarget(now, target),
-            (None, Some(last)) if self.animate_next && last != target => {
+            (None, Some(last)) if animate && last != target => {
                 self.geometry = Some(AnimatedRect::new(motion::SNAP_SPRING, last, target, now));
-                self.animate_next = false;
             }
             // Jamais dessinée : rien d'où partir, elle apparaîtra à sa place.
-            (None, None) => self.animate_next = false,
             _ => {}
         }
         let rect = match self.geometry {
@@ -131,6 +142,7 @@ impl WindowMotion {
         Visual {
             rect: scaled(rect, scale),
             opacity,
+            moving: self.geometry.is_some(),
         }
     }
 
@@ -182,6 +194,7 @@ impl PreviewMotion {
         Some(Visual {
             rect: rect.value(now),
             opacity: fade.value(now),
+            moving: false,
         })
     }
 }
@@ -241,6 +254,34 @@ mod tests {
         assert!(!motion.is_animating());
         // Le calage fini, le glisser suivant n'est plus animé.
         assert_eq!(motion.frame(ms(2010), floating).rect, floating.to_f64());
+    }
+
+    #[test]
+    fn le_drapeau_ne_vaut_que_pour_l_image_suivante() {
+        let (left, right) = (rect(0, 0, 400, 600), rect(400, 0, 400, 600));
+        // Calage sans changement : la fenêtre est déjà à gauche.
+        let mut motion = WindowMotion::default();
+        motion.frame(ms(0), left);
+        motion.frame(ms(1000), left);
+        motion.animate_next_change();
+        motion.frame(ms(1010), left);
+        assert_eq!(motion.frame(ms(1020), right).rect, right.to_f64());
+        // Calage pendant un calage : la cible change, le drapeau tombe aussi.
+        let mut motion = WindowMotion::default();
+        motion.frame(ms(0), left);
+        motion.frame(ms(1000), left);
+        motion.animate_next_change();
+        motion.frame(ms(1010), right);
+        motion.animate_next_change();
+        motion.frame(ms(1050), left);
+        motion.frame(ms(2000), left);
+        assert_eq!(motion.frame(ms(2010), right).rect, right.to_f64());
+        // Un geste arrête l'animation en cours.
+        motion.animate_next_change();
+        motion.frame(ms(2020), left);
+        assert!(motion.frame(ms(2030), left).moving);
+        motion.follow();
+        assert_eq!(motion.frame(ms(2040), right).rect, right.to_f64());
     }
 
     #[test]

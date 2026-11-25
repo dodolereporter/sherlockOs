@@ -9,7 +9,7 @@ l'apparence. Le toolkit est iced 0.14 en rendu logiciel (ADR 0014).
 
 | Étage | Modules | Dépend de |
 | --- | --- | --- |
-| Jetons | `color`, `metrics`, `typography`, `icon`, `logo`, `window` | Rien |
+| Jetons | `color`, `metrics`, `motion`, `typography`, `icon`, `logo`, `window` | Rien |
 | iced | `theme`, `component`, `focus` | iced 0.14, derrière la fonction `iced` |
 
 La galerie n'est pas dans la bibliothèque : elle vit dans `examples/galerie/` et ses tests
@@ -39,6 +39,38 @@ Tous les jetons sont nommés par leur rôle, en anglais comme le reste du code.
   rayon de 8 à 10, trait d'icône de 1,6 à 1,7…) sont vérifiées à la compilation.
 - **`typography`** : familles, tailles, graisses, et les trois fichiers de police à charger.
 - **`window`** : bande de saisie et calage des fenêtres, posés par D-17 pour le compositeur.
+- **`metrics::DESKTOP_DISC_GEOMETRY`** : place et diamètre des trois disques du fond sur l'écran
+  de référence (planche Main), ajoutés par D-11.
+
+## Mouvement
+
+Le module `motion`, ajouté par D-11, porte la physique des animations : du calcul pur, sans
+iced, que le compositeur utilise déjà et que le shell reprendra. Le temps est une `Duration`
+comptée depuis une origine choisie par l'appelant : une animation se calcule à n'importe quel
+instant, sans état qui avance image par image.
+
+| Type | Rôle |
+| --- | --- |
+| `Spring` | Ressort amorti de masse 1 : raideur (`stiffness`) et amortissement (`damping`). `damping_ratio` donne le taux d'amortissement. `solve(écart, vitesse, t)` rend l'écart et la vitesse au bout de `t` secondes, par la solution exacte (sous-critique, critique ou sur-critique) |
+| `Animation` | Une valeur menée par un `Spring` de `from` vers `to`. `value(now)`, `target()`, `is_done(now, précision)`. `retarget(now, to)` change de cible en gardant valeur et vitesse : rien ne saute |
+| `Fade` | Fondu sur une durée fixe, départ vif et arrivée douce (cubique). `value(now)`, `is_done(now)`. `retarget(now, to, durée)` repart de la valeur courante, pour la part du trajet qui reste |
+
+| Jeton | Valeur | Usage |
+| --- | --- | --- |
+| `SNAP_SPRING` | raideur 500, amortissement 33,5 (taux 0,75, dépassement de 3 %) | Calage, agrandissement, retour d'une fenêtre |
+| `OPEN_SPRING` | raideur 450, amortissement 34 (taux 0,80, dépassement de 2 %) | Échelle d'une fenêtre à l'ouverture |
+| `PREVIEW_SPRING` | raideur 700, amortissement 42 (taux 0,79) | Aperçu du calage |
+| `OPEN_SCALE` | 0,92 | Échelle d'une fenêtre au début de son ouverture, et de l'aperçu qui apparaît |
+| `FADE` | 150 ms, le haut de `metrics::HOVER_MS` | Fondu d'ouverture, d'apparition et d'effacement |
+| `FRAME_RATE` | 60 | Cadence à tenir, animations comprises (`contexte.md`) |
+| `GEOMETRY_PRECISION` | 0,5 px | Écart sous lequel une géométrie animée est posée |
+| `SCALE_PRECISION` | 0,001 | Écart sous lequel une échelle animée est posée |
+
+`contexte.md` ne donne que « ressorts » et « léger dépassement » : les raideurs et les
+amortissements sont des choix de D-11, à revoir avec le design. Les tests de `motion` les
+tiennent : dépassement entre 0,5 et 4 %, 90 % du trajet en moins de 150 ms, posé à 1 % près en
+moins de 300 ms, fondu dans la gamme d'un survol. Leur usage dans le compositeur est décrit dans
+`docs/compositeur.md`, section Animations.
 
 ## Polices
 
@@ -232,8 +264,9 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
 - **Trait des icônes de menu** : la planche Menus dessine le chevron à 2 et la coche à 2,4. Le
   jeton garde 1,7 pour toutes les icônes : `contexte.md` fixe une seule gamme, de 1,6 à 1,7, et
   un trait commun garde les icônes homogènes. À 14 px, la différence tient en un tiers de pixel.
-- **Animations** : iced change d'état d'un coup. Les survols de 110 à 150 ms et les ressorts ne
-  sont pas faits (voir ci-dessous).
+- **Animations** : iced change d'état d'un coup. Les ressorts et le fondu existent dans
+  `motion` (D-11), mais les composants iced ne s'en servent pas encore : les survols de 110 à
+  150 ms ne sont pas faits.
 - **Accessibilité** : iced 0.14 n'expose rien aux lecteurs d'écran. Le libellé d'une icône seule
   est obligatoire dans l'API et s'affiche en bulle au survol, en attendant AccessKit (ADR 0014).
 - **Rendu du texte** : cosmic-text lisse en niveaux de gris, sans lissage sous-pixel ; la graisse
@@ -241,9 +274,8 @@ regardée. Une comparaison au pixel près ferait échouer la CI au moindre chang
 
 ## Ce que le lot ne fait pas
 
-- Les ressorts et le fondu d'opacité réutilisables que l'ADR 0014 attend de `sherlock-ui` : ils
-  viennent avec le lot D-11. Le module de ressort, du calcul pur sans iced, ira dans
-  `sherlock-ui` pour que le compositeur et le shell partagent la même physique.
+- Les composants animés : les ressorts et le fondu sont dans `motion` depuis D-11, à brancher
+  sur les survols et les transitions des composants.
 - layer-shell : c'est le lot D-20. `iced_exwlshell` 0.21 n'a pas été essayé.
 - Le menu qui s'ouvre en `xdg_popup` : la galerie pose le sous-menu à côté du menu, comme la
   planche. Le placement réel est celui de la barre (D-20).
