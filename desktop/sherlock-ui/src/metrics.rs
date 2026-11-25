@@ -94,7 +94,9 @@ pub const PREVIEW_TILE_RADIUS: f32 = 11.0;
 pub const PREVIEW_TILE_ICON: f32 = 22.0;
 /// Aperçu d'un texte : lignes et colonnes montrées au plus. Au-delà, le panneau coupe.
 pub const PREVIEW_LINES: usize = 18;
-pub const PREVIEW_COLUMNS: usize = 120;
+/// The preview panel holds 33 characters of JetBrains Mono at 12 px (0.6 em each) inside
+/// its padding and the code block's.
+pub const PREVIEW_COLUMNS: usize = 33;
 /// Écart entre deux boutons empilés.
 pub const BUTTON_STACK_GAP: f32 = 8.0;
 /// Extrait de code : marges verticale et horizontale, rayon.

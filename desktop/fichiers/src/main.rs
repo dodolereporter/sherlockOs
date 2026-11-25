@@ -11,7 +11,7 @@ fn main() -> iced::Result {
     // La fenêtre dessine sa barre de titre, comme sous le compositeur du projet.
     let app = iced::application(|| App::new(Config::from_env()), App::update, App::view)
         .title(App::title)
-        .theme(theme::theme())
+        .theme(theme::window_theme())
         .subscription(App::subscription)
         .default_font(typography::UI)
         .decorations(false)

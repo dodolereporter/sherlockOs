@@ -21,6 +21,23 @@ pub fn theme() -> Theme {
     )
 }
 
+/// The theme of an application window: its background is the opaque window body, cleared
+/// by the renderer itself instead of drawn as a quad. With the software renderer, a quad as
+/// large as the window is filled again for every damaged rectangle of every frame.
+pub fn window_theme() -> Theme {
+    Theme::custom(
+        "Sherlock, fenêtre",
+        theme::Palette {
+            background: color::WINDOW.into(),
+            text: color::TEXT_PRIMARY.into(),
+            primary: color::ACCENT.into(),
+            success: color::ACCENT.into(),
+            warning: color::AMBER.into(),
+            danger: color::SALMON.into(),
+        },
+    )
+}
+
 fn background(c: Color) -> Option<Background> {
     Some(Background::Color(c.into()))
 }

@@ -699,9 +699,10 @@ pub fn code_block<'a, Message: 'a>(lines: &'a [Vec<(String, CodeRole)>]) -> Cont
             .into()
     });
     let (vertical, horizontal) = metrics::CODE_BLOCK_PADDING;
+    // No clip: the caller cuts the lines to the width (`metrics::PREVIEW_COLUMNS`), since a
+    // clip costs the software renderer a full mask on every frame.
     container(iced::widget::Column::with_children(lines))
         .padding([vertical, horizontal])
         .width(Length::Fill)
-        .clip(true)
         .style(theme::code_block)
 }

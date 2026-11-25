@@ -48,6 +48,16 @@ fn cell_ref(content: &str, width: f32) -> Element<'_, Message> {
         .into()
 }
 
+/// Cuts a text to `max` characters, with an ellipsis.
+fn elide(text: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    match text.char_indices().nth(max.saturating_sub(1)) {
+        Some((cut, _)) if text.chars().count() > max => {
+            std::borrow::Cow::Owned(format!("{}{}", &text[..cut], t::FOLDED))
+        }
+        _ => std::borrow::Cow::Borrowed(text),
+    }
+}
+
 /// Voile d'une couleur de fond, pour les fondus.
 fn veil<'a>(fill: color::Color, alpha: f32) -> Element<'a, Message> {
     let fill = color::Color { a: alpha, ..fill };
@@ -90,7 +100,6 @@ impl App {
             container(page)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .style(theme::window)
                 .into(),
         ];
         if let Some(menu) = &self.menu {
@@ -326,6 +335,8 @@ impl App {
         let total = self.entries.len();
         let (offset, _) = self.scroll;
         let visible = self.size.height;
+        // Only the visible rows (plus a margin) are built, between two spacers that hold the
+        // place of the others: a folder of 5,000 files puts a few dozen widgets in the tree.
         let first = ((offset - metrics::LIST_TOP_GAP) / row_height)
             .floor()
             .max(0.0) as usize;
@@ -334,13 +345,16 @@ impl App {
         let last = last.min(total);
         let before = metrics::LIST_TOP_GAP + first as f32 * row_height + slide;
         let after = (total - last) as f32 * row_height;
-        let rows = (first..last).map(|i| self.row(i, &self.entries[i]));
+        let name_chars = self.name_chars();
         let rows = Column::new()
             .push(space().height(before))
-            .extend(rows)
+            .extend((first..last).map(|i| self.row(i, &self.entries[i], name_chars)))
             .push(space().height(after))
             .width(Length::Fill);
-        // Le surlignage d'une sélection seule glisse d'une ligne à l'autre, sous les lignes.
+        // A single selection is drawn by a highlight that glides under the rows. It is the
+        // first layer of the stack, which sets the stack size, so it spans the whole list.
+        // Every other layer of a stack, and every clipped container, costs the software
+        // renderer a full clip mask: the rows are one layer, and nothing in them clips.
         match &self.highlight {
             Some(highlight) if self.selection.len() == 1 => {
                 let y = highlight.value(now) as f32 + slide;
@@ -348,7 +362,6 @@ impl App {
                     .width(Length::Fill)
                     .height(row_height)
                     .style(theme::list_row(true));
-                // Le premier calque d'une pile en fixe la taille : il couvre toute la liste.
                 let height = before + (total - first) as f32 * row_height;
                 let layer = column![space().height(y.max(0.0)), bar]
                     .width(Length::Fill)
@@ -359,7 +372,26 @@ impl App {
         }
     }
 
-    fn row<'a>(&'a self, i: usize, entry: &'a Entry) -> Element<'a, Message> {
+    /// Characters of a name that fit in the name column, estimated from the window width:
+    /// a longer name is cut with an ellipsis rather than clipped, which would cost a mask.
+    fn name_chars(&self) -> usize {
+        let preview = if self.show_preview {
+            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
+        } else {
+            0.0
+        };
+        let fixed: f32 = metrics::LIST_COLUMNS.iter().sum::<f32>()
+            + 4.0 * metrics::LIST_COLUMN_GAP
+            + 2.0 * (metrics::LIST_PADDING + metrics::LIST_ROW_PADDING)
+            + metrics::LIST_ICON
+            + metrics::GAP_ICON
+            + metrics::SIDEBAR_WIDTH
+            + metrics::BORDER_WIDTH
+            + preview;
+        ((self.size.width - fixed) / typography::UI_CHAR_WIDTH).max(4.0) as usize
+    }
+
+    fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
         let selected = self.selection.contains(&i);
         // Une sélection seule est dessinée par le surlignage qui glisse.
         let painted = selected && self.selection.len() > 1;
@@ -374,7 +406,7 @@ impl App {
                     .on_submit(Message::RenameSubmit)
                     .into()
             }
-            _ => ui::body(entry.name.as_str())
+            _ => ui::body(elide(&entry.name, name_chars))
                 .font(typography::UI_MEDIUM)
                 .wrapping(text::Wrapping::None)
                 .into(),
@@ -382,8 +414,7 @@ impl App {
         let name = row![ui::icon(entry.icon(), metrics::LIST_ICON, tint), name]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center)
-            .width(Length::Fill)
-            .clip(true);
+            .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
             (Some(origin), _) => cell(self.origin_label(origin), w_last),
@@ -436,14 +467,20 @@ impl App {
                     Some(status) => t::in_git(&entry.labels.size, git_badge(status).0),
                     None => entry.labels.size.clone(),
                 };
+                // Names are cut rather than clipped: a clip costs the renderer a mask.
+                let room = metrics::PREVIEW_WIDTH
+                    - 2.0 * metrics::PREVIEW_PADDING
+                    - metrics::PREVIEW_TILE
+                    - metrics::PREVIEW_GAP;
+                let scale = typography::CARD_TITLE_SIZE / typography::UI_SIZE;
+                let chars = (room / (typography::UI_CHAR_WIDTH * scale)) as usize;
                 let title = column![
-                    ui::body(entry.name.as_str())
+                    ui::body(elide(&entry.name, chars))
                         .font(typography::UI_SEMIBOLD)
                         .size(typography::CARD_TITLE_SIZE)
                         .wrapping(text::Wrapping::None),
                     ui::body(subtitle).color(color::TEXT_SECONDARY),
-                ]
-                .clip(true);
+                ];
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
                     .align_y(Alignment::Center);
@@ -475,7 +512,6 @@ impl App {
             .width(metrics::PREVIEW_WIDTH)
             .height(Length::Fill)
             .padding(metrics::PREVIEW_PADDING)
-            .clip(true)
             .style(theme::sidebar)
             .into()
     }

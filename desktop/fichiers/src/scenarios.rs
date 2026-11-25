@@ -393,7 +393,7 @@ fn la_fenetre_se_rend_sans_ecran() {
         ..Settings::default()
     };
     let mut ui = simulator::Simulator::with_size(settings.clone(), (width, height), app.view());
-    let snapshot = ui.snapshot(&theme::theme()).expect("capture");
+    let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
     // Comme `CARGO_TARGET_TMPDIR`, que Cargo ne donne qu'aux tests d'intégration.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
     fs::create_dir_all(&dir).expect("dossier des captures");
@@ -420,4 +420,64 @@ fn la_fenetre_se_rend_sans_ecran() {
         ),
         "{messages:?}"
     );
+}
+
+/// Cost of one frame with 5,000 entries: view, layout, then software rendering. Run with
+/// `cargo test --release -p fichiers frame_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "mesure, pas un test"]
+fn frame_cost() {
+    use std::time::Instant;
+    let tmp = TempDir::new("cout");
+    let dir = tmp.path().join("grand");
+    fs::create_dir_all(&dir).expect("dossier");
+    for i in 0..5000 {
+        fs::write(dir.join(format!("fichier-{i:05}.txt")), "x").expect("écriture");
+    }
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: dir.clone(),
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+    };
+    let (mut app, task) = App::new(config);
+    drain(&mut app, task);
+    app.settle();
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let (width, height) = metrics::REFERENCE_WINDOW;
+    {
+        let mut warm =
+            simulator::Simulator::with_size(settings.clone(), (width, height), app.view());
+        let _ = warm.snapshot(&theme::window_theme());
+    }
+    let mut report = String::new();
+    for offset in [0.0, 24.0, 48.0, 4000.0] {
+        app.scroll.0 = offset;
+        let t0 = Instant::now();
+        let view = app.view();
+        let t1 = Instant::now();
+        let mut ui = simulator::Simulator::with_size(settings.clone(), (width, height), view);
+        let t2 = Instant::now();
+        let _ = ui.snapshot(&theme::window_theme()).expect("capture");
+        let t3 = Instant::now();
+        drop(ui);
+        let line = format!(
+            "offset {offset}: view {:?}, layout {:?}, render {:?}\n",
+            t1 - t0,
+            t2 - t1,
+            t3 - t2
+        );
+        print!("{line}");
+        report.push_str(&line);
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+    fs::create_dir_all(&dir).expect("dossier");
+    fs::write(dir.join("frame_cost.txt"), report).expect("écriture");
+    if false {}
 }

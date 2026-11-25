@@ -42,6 +42,9 @@ pub const SECTION_LABEL_SIZE: f32 = 11.0;
 /// Interlettrage de l'étiquette de section, en part de la taille. iced 0.14 ne sait pas
 /// l'appliquer : voir l'écart connu dans `docs/sherlock-ui.md`.
 pub const SECTION_LABEL_TRACKING: f32 = 0.06;
+/// Average advance of a character of Inter at the interface size, to estimate how much of
+/// a name fits in a column without shaping it.
+pub const UI_CHAR_WIDTH: f32 = 7.2;
 /// Interligne du texte courant, en part de la taille.
 pub const LINE_HEIGHT: f32 = 1.4;
 
