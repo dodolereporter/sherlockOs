@@ -1,10 +1,11 @@
 //! Réponses aux protocoles : wl_compositor, wl_shm, wl_seat, wl_output et xdg-shell.
 
-use std::sync::OnceLock;
+use std::{cell::Cell, sync::OnceLock};
 
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    delegate_compositor, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_cursor_shape, delegate_output, delegate_seat, delegate_shm,
+    delegate_xdg_shell,
     desktop::{PopupKind, Window},
     input::{Seat, SeatHandler, SeatState, pointer::CursorImageStatus},
     reexports::{
@@ -20,16 +21,18 @@ use smithay::{
         compositor::{self, CompositorClientState, CompositorHandler, CompositorState},
         output::OutputHandler,
         shell::xdg::{
-            PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+            PopupSurface, PositionerState, ToplevelState, ToplevelSurface, XdgShellHandler,
+            XdgShellState,
         },
         shm::{ShmHandler, ShmState},
+        tablet_manager::TabletSeatHandler,
     },
 };
 
 use crate::{
     ClientState, State,
     input::GestureSource,
-    layout::{self, Edges},
+    layout::{self, Edges, Zone},
     window_data,
 };
 
@@ -130,7 +133,10 @@ impl State {
                 .as_ref()
                 .is_some_and(|(focus, _)| focus.id().same_client_as(&surface.wl_surface().id()))
         });
-        let window = self.window_for(surface.wl_surface());
+        // Une fenêtre en plein écran ne bouge pas : le client garde son appui.
+        let window = self
+            .window_for(surface.wl_surface())
+            .filter(|w| !is_fullscreen(w));
         let (Some(pointer), Some(start), Some(window), true, false) =
             (pointer, start, window, same_client, self.gesture_active())
         else {
@@ -144,47 +150,71 @@ impl State {
         self.pointer_motion(pointer.current_location(), time);
     }
 
-    /// Fait entrer la fenêtre dans l'état `mode` (agrandie ou plein écran), ou l'en fait sortir.
-    fn set_filled(
+    /// Change l'état d'une fenêtre (agrandie, plein écran, calée dans une zone) puis la pose :
+    /// sur tout l'écran, dans sa zone, ou à sa place d'avant. Cette place est gardée quand la
+    /// fenêtre quitte l'état flottant, et rendue quand elle y revient.
+    pub(crate) fn rearrange(
         &mut self,
-        surface: &ToplevelSurface,
-        mode: XdgState,
-        on: bool,
-        output: Option<WlOutput>,
+        window: &Window,
+        change: impl FnOnce(&mut ToplevelState, &Cell<Option<Zone>>),
     ) {
-        let (Some(window), Some(area)) =
-            (self.window_for(surface.wl_surface()), self.output_area())
-        else {
+        let (Some(toplevel), Some(area)) = (window.toplevel(), self.output_area()) else {
             return;
         };
-        let data = window_data(&window);
-        let still_filled = surface.with_pending_state(|s| {
-            if on {
-                s.states.set(mode);
-            } else {
-                s.states.unset(mode);
+        let data = window_data(window);
+        let target = toplevel.with_pending_state(|s| {
+            change(s, &data.zone);
+            let filled =
+                s.states.contains(XdgState::Maximized) || s.states.contains(XdgState::Fullscreen);
+            match (filled, data.zone.get()) {
+                (true, _) => Some(area),
+                (false, zone) => zone.map(|zone| zone.geometry(area)),
             }
-            if mode == XdgState::Fullscreen {
-                s.fullscreen_output = output;
-            }
-            s.states.contains(XdgState::Maximized) || s.states.contains(XdgState::Fullscreen)
         });
-        if still_filled {
+        if let Some(rect) = target {
             if data.restore.get().is_none() {
-                data.restore.set(self.space.element_geometry(&window));
+                data.restore.set(self.space.element_geometry(window));
             }
-            surface.with_pending_state(|s| s.size = Some(area.size));
-            self.space.map_element(window, area.loc, true);
+            toplevel.with_pending_state(|s| s.size = Some(rect.size));
+            self.space.map_element(window.clone(), rect.loc, true);
         } else if let Some(restore) = data.restore.take() {
             // Taille nulle : la fenêtre n'avait pas encore de contenu, le client choisit.
             let size = (restore.size.w > 0 && restore.size.h > 0).then_some(restore.size);
-            surface.with_pending_state(|s| s.size = size);
-            self.space.map_element(window, restore.loc, true);
+            toplevel.with_pending_state(|s| s.size = size);
+            self.space.map_element(window.clone(), restore.loc, true);
         }
-        if surface.is_initial_configure_sent() {
-            surface.send_pending_configure();
+        if toplevel.is_initial_configure_sent() {
+            toplevel.send_pending_configure();
         }
     }
+
+    /// Cale la fenêtre dans `zone`, ou lui rend sa place d'avant. Sans effet en plein écran.
+    pub(crate) fn snap(&mut self, window: &Window, zone: Option<Zone>) {
+        if is_fullscreen(window) {
+            return;
+        }
+        self.rearrange(window, |s, current| {
+            s.states.unset(XdgState::Maximized);
+            current.set(None);
+            match zone {
+                Some(Zone::Maximized) => {
+                    s.states.set(XdgState::Maximized);
+                }
+                other => current.set(other),
+            }
+        });
+    }
+
+    fn surface_window(&self, surface: &ToplevelSurface) -> Option<Window> {
+        self.window_for(surface.wl_surface())
+    }
+}
+
+/// La fenêtre est en plein écran, ou va l'être.
+pub(crate) fn is_fullscreen(window: &Window) -> bool {
+    window
+        .toplevel()
+        .is_some_and(|t| t.with_pending_state(|s| s.states.contains(XdgState::Fullscreen)))
 }
 
 impl XdgShellHandler for State {
@@ -248,19 +278,38 @@ impl XdgShellHandler for State {
     }
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        self.set_filled(&surface, XdgState::Maximized, true, None);
+        if let Some(window) = self.surface_window(&surface) {
+            self.rearrange(&window, |s, _| {
+                s.states.set(XdgState::Maximized);
+            });
+        }
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        self.set_filled(&surface, XdgState::Maximized, false, None);
+        if let Some(window) = self.surface_window(&surface) {
+            self.rearrange(&window, |s, zone| {
+                s.states.unset(XdgState::Maximized);
+                zone.set(None);
+            });
+        }
     }
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
-        self.set_filled(&surface, XdgState::Fullscreen, true, output);
+        if let Some(window) = self.surface_window(&surface) {
+            self.rearrange(&window, |s, _| {
+                s.states.set(XdgState::Fullscreen);
+                s.fullscreen_output = output;
+            });
+        }
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        self.set_filled(&surface, XdgState::Fullscreen, false, None);
+        if let Some(window) = self.surface_window(&surface) {
+            self.rearrange(&window, |s, _| {
+                s.states.unset(XdgState::Fullscreen);
+                s.fullscreen_output = None;
+            });
+        }
     }
 }
 
@@ -273,8 +322,14 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
 
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_status = image;
+    }
 }
+
+// Exigé par le protocole des formes de curseur, qui accepte aussi les stylets. Sans tablette
+// annoncée, aucun client n'en a.
+impl TabletSeatHandler for State {}
 
 impl BufferHandler for State {
     fn buffer_destroyed(&mut self, _buffer: &WlBuffer) {}
@@ -293,3 +348,4 @@ delegate_shm!(State);
 delegate_seat!(State);
 delegate_output!(State);
 delegate_xdg_shell!(State);
+delegate_cursor_shape!(State);

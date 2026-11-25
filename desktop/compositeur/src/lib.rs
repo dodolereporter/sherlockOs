@@ -11,8 +11,12 @@ pub mod winit;
 use std::{cell::Cell, ffi::OsString, fmt, os::unix::net::UnixStream, sync::Arc, time::Instant};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    input::{Seat, SeatState, keyboard::XkbConfig},
+    desktop::{PopupManager, Space, Window},
+    input::{
+        Seat, SeatState,
+        keyboard::{Keycode, XkbConfig},
+        pointer::CursorImageStatus,
+    },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
@@ -24,16 +28,17 @@ use smithay::{
             protocol::wl_surface::WlSurface,
         },
     },
-    utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size, Transform},
+    utils::{Logical, Physical, Rectangle, SERIAL_COUNTER, Size, Transform},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        cursor_shape::CursorShapeManagerState,
         shell::xdg::{XdgShellState, XdgToplevelSurfaceData},
         shm::ShmState,
         socket::ListeningSocketSource,
     },
 };
 
-use crate::layout::Resize;
+use crate::layout::{Resize, Zone};
 
 /// Ce qui empêche le compositeur de démarrer.
 #[derive(thiserror::Error)]
@@ -71,9 +76,14 @@ pub struct State {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
     shm_state: ShmState,
+    _cursor_shape_state: CursorShapeManagerState,
     seat_state: SeatState<State>,
     popups: PopupManager,
     gesture: Option<input::Gesture>,
+    /// Curseur demandé par le client qui a le pointeur.
+    cursor_status: CursorImageStatus,
+    /// Touches d'un raccourci : leur relâchement ne va pas au client, qui n'a pas vu l'appui.
+    intercepted_keys: Vec<Keycode>,
     /// Le compositeur tourne dans une fenêtre d'une autre session (`--imbrique`).
     nested: bool,
 }
@@ -83,8 +93,11 @@ pub struct State {
 struct WindowData {
     /// La fenêtre a reçu son premier contenu et a été placée.
     shown: Cell<bool>,
-    /// Géométrie à retrouver en quittant l'agrandissement ou le plein écran.
+    /// Géométrie à retrouver en quittant l'agrandissement, le plein écran ou une zone.
     restore: Cell<Option<Rectangle<i32, Logical>>>,
+    /// Moitié ou quart de l'écran où la fenêtre est calée. L'agrandissement, lui, est un état
+    /// xdg-shell que le client connaît.
+    zone: Cell<Option<Zone>>,
     /// Redimensionnement en cours, gardé jusqu'au dernier envoi du client.
     resize: Cell<Option<Resize>>,
 }
@@ -136,11 +149,15 @@ impl State {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
             shm_state: ShmState::new::<Self>(&dh, vec![]),
+            // Les clients qui le connaissent nomment leur curseur au lieu d'en dessiner un.
+            _cursor_shape_state: CursorShapeManagerState::new::<Self>(&dh),
             seat_state,
             seat,
             space: Space::default(),
             popups: PopupManager::default(),
             gesture: None,
+            cursor_status: CursorImageStatus::default_named(),
+            intercepted_keys: Vec::new(),
             nested: false,
             loop_signal: event_loop.get_signal(),
             start_time: Instant::now(),
@@ -234,17 +251,6 @@ impl State {
                 toplevel.send_pending_configure();
             }
         }
-    }
-
-    /// Surface sous le pointeur, avec la position de son origine.
-    pub fn surface_under(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let (window, location) = self.space.element_under(pos)?;
-        window
-            .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
-            .map(|(surface, p)| (surface, (p + location).to_f64()))
     }
 
     /// Ménage après chaque tour de boucle : fenêtres mortes, popups, envoi aux clients.

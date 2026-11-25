@@ -1,4 +1,4 @@
-//! Disposition des fenêtres : où les poser, comment les déplacer et les redimensionner.
+//! Disposition des fenêtres : où les poser, comment les déplacer, les redimensionner et les caler.
 //!
 //! Du calcul pur sur des rectangles, sans Wayland ni rendu, pour se tester seul.
 
@@ -34,6 +34,130 @@ impl Edges {
             right: pointer.x >= center.x,
         }
     }
+}
+
+/// Bords saisis dans la bande qui entoure une fenêtre, à l'extérieur de sa géométrie `window`.
+///
+/// La bande fait `band` pixels le long des côtés. Aux coins, elle s'élargit à `corner` pixels,
+/// en diagonale hors de la fenêtre comme le long des côtés : un appui près d'un coin tire le coin.
+pub fn border_edges(
+    window: Rectangle<i32, Logical>,
+    pointer: Point<f64, Logical>,
+    band: i32,
+    corner: i32,
+) -> Option<Edges> {
+    let (x0, y0) = (f64::from(window.loc.x), f64::from(window.loc.y));
+    let (w, h) = (f64::from(window.size.w), f64::from(window.size.h));
+    let (x1, y1) = (x0 + w, y0 + h);
+    // Distance hors de la fenêtre sur chaque axe, nulle en face d'elle.
+    let dx = (x0 - pointer.x).max(pointer.x - x1).max(0.0);
+    let dy = (y0 - pointer.y).max(pointer.y - y1).max(0.0);
+    let inside = (x0..x1).contains(&pointer.x) && (y0..y1).contains(&pointer.y);
+    let reach = if dx > 0.0 && dy > 0.0 { corner } else { band };
+    if inside || dx.max(dy) > f64::from(reach) {
+        return None;
+    }
+    // Une fenêtre étroite partage ses côtés entre les deux coins.
+    let (kx, ky) = (
+        f64::from(corner).min(w / 2.0),
+        f64::from(corner).min(h / 2.0),
+    );
+    let left = pointer.x < x0 + kx;
+    let top = pointer.y < y0 + ky;
+    Some(Edges {
+        top,
+        bottom: !top && pointer.y >= y1 - ky,
+        left,
+        right: !left && pointer.x >= x1 - kx,
+    })
+}
+
+/// Zone de l'écran où caler une fenêtre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    /// Tout l'écran : la fenêtre est agrandie.
+    Maximized,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Zone {
+    /// Zone visée par une fenêtre lâchée avec le pointeur en `pointer` : contre le bord haut,
+    /// gauche ou droit de l'écran (à moins de `edge` pixels), ou dans un coin (à moins de
+    /// `corner` pixels de ce coin, le long d'un bord). Le bord bas seul ne cale rien.
+    pub fn under(
+        area: Rectangle<i32, Logical>,
+        pointer: Point<f64, Logical>,
+        edge: i32,
+        corner: i32,
+    ) -> Option<Self> {
+        let x = pointer.x - f64::from(area.loc.x);
+        let y = pointer.y - f64::from(area.loc.y);
+        let (w, h) = (f64::from(area.size.w), f64::from(area.size.h));
+        let near = |limit: i32| {
+            let limit = f64::from(limit);
+            (x < limit, x >= w - limit, y < limit, y >= h - limit)
+        };
+        let (left, right, top, bottom) = near(edge);
+        let (c_left, c_right, c_top, c_bottom) = near(corner);
+        Some(if (left && c_top) || (top && c_left) {
+            Self::TopLeft
+        } else if (right && c_top) || (top && c_right) {
+            Self::TopRight
+        } else if (left && c_bottom) || (bottom && c_left) {
+            Self::BottomLeft
+        } else if (right && c_bottom) || (bottom && c_right) {
+            Self::BottomRight
+        } else if top {
+            Self::Maximized
+        } else if left {
+            Self::Left
+        } else if right {
+            Self::Right
+        } else {
+            return None;
+        })
+    }
+
+    /// Rectangle que prend une fenêtre calée dans cette zone de `area`. Un pixel impair va à
+    /// droite ou en bas.
+    pub fn geometry(self, area: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+        let Point { x, y, .. } = area.loc;
+        let Size { w, h, .. } = area.size;
+        let (half_w, half_h) = (w / 2, h / 2);
+        let (loc, size) = match self {
+            Self::Maximized => ((x, y), (w, h)),
+            Self::Left => ((x, y), (half_w, h)),
+            Self::Right => ((x + half_w, y), (w - half_w, h)),
+            Self::TopLeft => ((x, y), (half_w, half_h)),
+            Self::TopRight => ((x + half_w, y), (w - half_w, half_h)),
+            Self::BottomLeft => ((x, y + half_h), (half_w, h - half_h)),
+            Self::BottomRight => ((x + half_w, y + half_h), (w - half_w, h - half_h)),
+        };
+        Rectangle::new(loc.into(), size.into())
+    }
+}
+
+/// Position d'une fenêtre qu'on détache de sa zone en la déplaçant : elle reprend la taille
+/// `size` sous le pointeur, saisie à la même proportion de sa largeur et à la même distance de
+/// son bord haut (dans la limite de sa nouvelle hauteur).
+pub fn unsnapped(
+    current: Rectangle<i32, Logical>,
+    size: Size<i32, Logical>,
+    pointer: Point<f64, Logical>,
+) -> Point<i32, Logical> {
+    let ratio = if current.size.w > 0 {
+        ((pointer.x - f64::from(current.loc.x)) / f64::from(current.size.w)).clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    let from_top = (pointer.y - f64::from(current.loc.y)).clamp(0.0, f64::from(size.h.max(0)));
+    Point::<f64, Logical>::from((pointer.x - ratio * f64::from(size.w), pointer.y - from_top))
+        .to_i32_round()
 }
 
 /// Position qui centre une fenêtre dans la zone, sans que son coin haut gauche en sorte.
@@ -246,6 +370,137 @@ mod tests {
             (0, 0).into(),
         );
         assert_eq!(size, (210, 100).into());
+    }
+
+    fn edges(top: bool, bottom: bool, left: bool, right: bool) -> Option<Edges> {
+        Some(Edges {
+            top,
+            bottom,
+            left,
+            right,
+        })
+    }
+
+    #[test]
+    fn la_bande_autour_de_la_fenetre_tire_chaque_bord() {
+        let window = rect(100, 100, 200, 100);
+        let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
+        assert_eq!(at(95.0, 150.0), edges(false, false, true, false), "gauche");
+        assert_eq!(at(305.0, 150.0), edges(false, false, false, true), "droite");
+        assert_eq!(at(200.0, 93.0), edges(true, false, false, false), "haut");
+        assert_eq!(at(200.0, 200.0), edges(false, true, false, false), "bas");
+        // Le long d'un côté, près d'un coin : c'est le coin.
+        assert_eq!(
+            at(95.0, 110.0),
+            edges(true, false, true, false),
+            "haut gauche"
+        );
+        assert_eq!(
+            at(290.0, 95.0),
+            edges(true, false, false, true),
+            "haut droit"
+        );
+        assert_eq!(
+            at(95.0, 190.0),
+            edges(false, true, true, false),
+            "bas gauche"
+        );
+        assert_eq!(
+            at(304.0, 199.0),
+            edges(false, true, false, true),
+            "bas droit"
+        );
+    }
+
+    #[test]
+    fn la_bande_est_plus_large_aux_coins() {
+        let window = rect(100, 100, 200, 100);
+        let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
+        // 15 pixels hors de la fenêtre : trop loin sur un côté, encore pris en diagonale.
+        assert_eq!(at(85.0, 150.0), None);
+        assert_eq!(at(85.0, 85.0), edges(true, false, true, false));
+        assert_eq!(at(315.0, 215.0), edges(false, true, false, true));
+        assert_eq!(at(79.0, 79.0), None);
+    }
+
+    #[test]
+    fn la_bande_ne_couvre_pas_l_interieur() {
+        let window = rect(100, 100, 200, 100);
+        let at = |x: f64, y: f64| border_edges(window, (x, y).into(), 8, 20);
+        assert_eq!(at(100.0, 100.0), None);
+        assert_eq!(at(299.5, 199.5), None);
+        assert_eq!(at(200.0, 150.0), None);
+        assert_eq!(at(400.0, 150.0), None);
+    }
+
+    #[test]
+    fn une_fenetre_etroite_partage_ses_cotes_entre_les_coins() {
+        let window = rect(0, 0, 30, 30);
+        let right = border_edges(window, (20.0, -3.0).into(), 8, 20);
+        assert_eq!(right, edges(true, false, false, true));
+    }
+
+    fn zone(x: f64, y: f64) -> Option<Zone> {
+        Zone::under(rect(0, 0, 1440, 900), (x, y).into(), 8, 64)
+    }
+
+    #[test]
+    fn lachee_contre_un_bord_la_fenetre_se_cale() {
+        assert_eq!(zone(700.0, 0.0), Some(Zone::Maximized));
+        assert_eq!(zone(700.0, 7.5), Some(Zone::Maximized));
+        assert_eq!(zone(0.0, 450.0), Some(Zone::Left));
+        assert_eq!(zone(1439.0, 450.0), Some(Zone::Right));
+        // Le pointeur peut sortir de l'écran pendant le geste : ça compte comme le bord.
+        assert_eq!(zone(-20.0, 450.0), Some(Zone::Left));
+        assert_eq!(zone(700.0, 450.0), None);
+        assert_eq!(zone(700.0, 8.0), None);
+        assert_eq!(zone(700.0, 899.0), None, "le bord bas seul ne cale rien");
+    }
+
+    #[test]
+    fn lachee_dans_un_coin_la_fenetre_prend_un_quart() {
+        assert_eq!(zone(0.0, 0.0), Some(Zone::TopLeft));
+        assert_eq!(
+            zone(3.0, 60.0),
+            Some(Zone::TopLeft),
+            "le long du bord gauche"
+        );
+        assert_eq!(zone(60.0, 3.0), Some(Zone::TopLeft), "le long du bord haut");
+        assert_eq!(zone(1439.0, 10.0), Some(Zone::TopRight));
+        assert_eq!(zone(2.0, 899.0), Some(Zone::BottomLeft));
+        assert_eq!(zone(1400.0, 899.0), Some(Zone::BottomRight));
+        assert_eq!(zone(3.0, 70.0), Some(Zone::Left), "hors du coin");
+    }
+
+    #[test]
+    fn geometrie_de_chaque_zone() {
+        let area = rect(10, 20, 1001, 801);
+        let cases = [
+            (Zone::Maximized, rect(10, 20, 1001, 801)),
+            (Zone::Left, rect(10, 20, 500, 801)),
+            (Zone::Right, rect(510, 20, 501, 801)),
+            (Zone::TopLeft, rect(10, 20, 500, 400)),
+            (Zone::TopRight, rect(510, 20, 501, 400)),
+            (Zone::BottomLeft, rect(10, 420, 500, 401)),
+            (Zone::BottomRight, rect(510, 420, 501, 401)),
+        ];
+        for (zone, expected) in cases {
+            assert_eq!(zone.geometry(area), expected, "{zone:?}");
+        }
+    }
+
+    #[test]
+    fn detachee_la_fenetre_reprend_sa_taille_sous_le_pointeur() {
+        let maximized = rect(0, 0, 1440, 900);
+        // Saisie aux trois quarts de la largeur, à 12 pixels du haut.
+        let loc = unsnapped(maximized, (400, 300).into(), (1080.0, 12.0).into());
+        assert_eq!(loc, (780, 0).into());
+        // Le pointeur reste aux trois quarts de la fenêtre rendue à sa taille.
+        assert_eq!(f64::from(1080 - loc.x) / 400.0, 0.75);
+        // Saisie plus bas que la nouvelle hauteur : le pointeur reste dans la fenêtre.
+        let half = rect(720, 0, 720, 900);
+        let loc = unsnapped(half, (400, 300).into(), (900.0, 800.0).into());
+        assert_eq!(loc, (800, 500).into());
     }
 
     #[test]
