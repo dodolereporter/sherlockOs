@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Labo, l'environnement de dev, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+@keyframes respire {
+0%, 100% { transform: scale(1, 1) }
+50% { transform: scale(1.025, 0.975) }
+}
+@keyframes cherche {
+0%, 100% { transform: rotate(-2.5deg) }
+50% { transform: rotate(2.5deg) }
+}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #E9EEF4; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 13px; line-height: 1.4">
+
+<div aria-hidden="true" style="position: absolute; left: -260px; top: 340px; width: 1100px; height: 1100px; border-radius: 50%; background: #DDE6F0"></div>
+<div aria-hidden="true" style="position: absolute; left: 860px; top: -420px; width: 900px; height: 900px; border-radius: 50%; background: #D4E0EC"></div>
+<div aria-hidden="true" style="position: absolute; left: 980px; top: 520px; width: 520px; height: 520px; border-radius: 50%; background: #C8D8E9"></div>
+
+<header style="position: absolute; left: 12px; right: 12px; top: 10px; height: 36px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 10px 0 6px; border-radius: 12px; background: rgba(255,255,255,0.78); backdrop-filter: blur(24px) saturate(140%); border: 1px solid rgba(20,35,59,0.09)">
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Ouvrir Sherlock" style="display: flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: #F4EBE3"><img src="/_blob/5a8a7b7276da27a1a4cc419bd21d291a" alt="" style="width: 24px; height: 20px; object-fit: contain"></button>
+<span style="padding: 0 10px 0 8px; font-weight: 600">Labo</span>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Projet</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Bac à sable</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Conteneurs</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Fenêtre</button>
+</div>
+<div style="display: flex; align-items: center; gap: 14px; color: #46566F">
+<span>3 conteneurs</span>
+<span>2 bacs à sable</span>
+<span>mar. 24 nov.</span>
+<span style="color: #14233B; font-weight: 600">21:46</span>
+</div>
+</header>
+
+<section aria-label="Labo" style="position: absolute; left: 60px; top: 64px; width: 1320px; height: 680px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: #FFFFFF; border: 1px solid rgba(20,35,59,0.1); box-shadow: 0 28px 70px rgba(20,35,59,0.182)">
+<div style="flex: none; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 14px; background: #F3F5F9; border-bottom: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; align-items: center; gap: 10px">
+<span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 5px; background: #2F7A52"></span>
+<span style="font-weight: 600">Labo</span>
+<span style="color: #5C6B82">Tout pour développer, déjà en place</span>
+</div>
+<div style="display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: rgba(20,35,59,0.06)">
+<button aria-label="Réduire" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M6 12h12"></path></svg></button>
+<button aria-label="Agrandir" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linejoin: round"><path d="M7 7h10v10H7z"></path></svg></button>
+<button aria-label="Fermer" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+
+<div style="flex: 1; min-height: 0; display: flex">
+<nav aria-label="Sections du Labo" style="flex: none; width: 208px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; background: #F6F8FB; border-right: 1px solid rgba(20,35,59,0.07)">
+<a href="#projets" style="display: flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 9px; color: #46566F; text-decoration: none">Projets</a>
+<a href="#bacs" aria-current="page" style="display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 12px; border-radius: 9px; background: rgba(133,197,149,0.16); color: #14233B; font-weight: 600; text-decoration: none">Bacs à sable<span style="font-weight: 500; color: #2E7D4F">3</span></a>
+<a href="#conteneurs" style="display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 12px; border-radius: 9px; color: #46566F; text-decoration: none">Conteneurs<span style="color: #5C6B82">4</span></a>
+<a href="#outils" style="display: flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 9px; color: #46566F; text-decoration: none">Outils</a>
+<a href="#modeles" style="display: flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 9px; color: #46566F; text-decoration: none">Modèles de projet</a>
+<a href="#bases" style="display: flex; align-items: center; height: 34px; padding: 0 12px; border-radius: 9px; color: #46566F; text-decoration: none">Bases de données</a>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 4px; padding: 12px; border-radius: 12px; background: rgba(91,163,208,0.14); border: 1px solid rgba(91,163,208,0.35)">
+<span style="display: flex; align-items: center; gap: 7px; font-weight: 600"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span>Docker natif</span>
+<span style="font-size: 12px; color: #46566F">Le moteur démarre avec le système. Rien à installer.</span>
+</div>
+</nav>
+
+<main style="flex: 1; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px; padding: 22px 24px">
+<div style="flex: none; display: flex; align-items: flex-end; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<h1 style="margin: 0; font-family: 'Space Grotesk', Inter, sans-serif; font-size: 26px; line-height: 1.15; font-weight: 600">Bacs à sable</h1>
+<p style="margin: 0; font-size: 14px; color: #46566F">Un espace jetable pour essayer du code sans toucher au système.</p>
+</div>
+<button style="height: 36px; padding: 0 16px; border: 0; border-radius: 10px; background: #85C595; color: #0B1220; font-weight: 600">Nouveau bac à sable</button>
+</div>
+
+<div style="flex: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<article style="box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 212px; padding: 16px; border-radius: 14px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<h2 style="margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 500">essai-smithay</h2>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span>En cours</span>
+</div>
+<p style="margin: 0; color: #46566F">Une copie du projet compositeur, pour tester une idée.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px">
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">Rust stable</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">Réseau ouvert</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">Fichiers : copie jetable</span>
+</div>
+<div style="margin-top: auto; display: flex; gap: 6px">
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: rgba(20,35,59,0.12); color: #14233B; font-weight: 500">Terminal</button>
+<button style="height: 30px; padding: 0 12px; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Figer</button>
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: #B23A2A">Jeter</button>
+</div>
+</article>
+
+<article style="box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 212px; padding: 16px; border-radius: 14px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<h2 style="margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 500">revue-api-spring</h2>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span>En cours</span>
+</div>
+<p style="margin: 0; color: #46566F">La branche de quelqu'un d'autre, isolée de ta machine.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px">
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">Java 21</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">Réseau limité au projet</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(20,35,59,0.08)">3 conteneurs liés</span>
+</div>
+<div style="margin-top: auto; display: flex; gap: 6px">
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: rgba(20,35,59,0.12); color: #14233B; font-weight: 500">Terminal</button>
+<button style="height: 30px; padding: 0 12px; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Figer</button>
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: #B23A2A">Jeter</button>
+</div>
+</article>
+
+<article style="box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; height: 212px; padding: 16px; border-radius: 14px; background: #F3F6FA; border: 1px solid rgba(240,196,138,0.45)">
+<div style="display: flex; align-items: center; justify-content: space-between">
+<h2 style="margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 14px; font-weight: 500">script-inconnu</h2>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #46566F"><span aria-hidden="true" style="width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; border: 2px solid #7A889D"></span>À l'arrêt</span>
+</div>
+<p style="margin: 0; color: #46566F">Un script téléchargé, à lancer sans prendre de risque.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px">
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(240,196,138,0.16); color: #9A6412">Réseau coupé</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(240,196,138,0.16); color: #9A6412">Aucun accès à tes fichiers</span>
+<span style="padding: 3px 9px; border-radius: 8px; background: rgba(240,196,138,0.16); color: #9A6412">Détruit à la fermeture</span>
+</div>
+<div style="margin-top: auto; display: flex; gap: 6px">
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: #85C595; color: #0B1220; font-weight: 600">Lancer</button>
+<button style="height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: #B23A2A">Jeter</button>
+</div>
+</article>
+</div>
+
+<div style="flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px">
+<section aria-label="Outils prêts à l'emploi" style="display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 11.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: #5C6B82">Outils prêts à l'emploi</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)"><span style="font-size: 15px; font-weight: 600">Rust</span><span style="color: #46566F">Canal stable</span><span style="margin-top: auto; font-size: 12px; color: #2E7D4F">Installé</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)"><span style="font-size: 15px; font-weight: 600">Java</span><span style="color: #46566F">Version 21</span><span style="margin-top: auto; font-size: 12px; color: #2E7D4F">Installé</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)"><span style="font-size: 15px; font-weight: 600">Node.js</span><span style="color: #46566F">Version 22</span><span style="margin-top: auto; font-size: 12px; color: #2E7D4F">Installé</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)"><span style="font-size: 15px; font-weight: 600">Python</span><span style="color: #46566F">Version 3</span><span style="margin-top: auto; font-size: 12px; color: #2E7D4F">Installé</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)"><span style="font-size: 15px; font-weight: 600">Docker</span><span style="color: #46566F">Moteur et Compose</span><span style="margin-top: auto; font-size: 12px; color: #2E7D4F">Intégré au système</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; height: 96px; box-sizing: border-box; padding: 14px; border-radius: 12px; background: none; border: 1px dashed rgba(20,35,59,0.16)"><span style="font-size: 15px; font-weight: 600">Go</span><span style="color: #46566F">Pas encore installé</span><button style="margin-top: auto; align-self: flex-start; height: 24px; padding: 0 10px; border: 1px solid rgba(20,35,59,0.16); border-radius: 7px; background: none; color: #14233B; font-size: 12px">Ajouter</button></div>
+</div>
+</section>
+
+<section aria-label="Nouveau projet" style="display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 11.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: #5C6B82">Nouveau projet</h2>
+<div style="display: flex; flex-direction: column; border-radius: 12px; background: #F3F6FA; border: 1px solid rgba(20,35,59,0.09)">
+<a href="#spring" style="display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; color: #14233B; text-decoration: none">Service Spring Boot<span style="color: #5C6B82">Créer</span></a>
+<a href="#next" style="display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; border-top: 1px solid rgba(20,35,59,0.07); color: #14233B; text-decoration: none">App Next.js<span style="color: #5C6B82">Créer</span></a>
+<a href="#rust" style="display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; border-top: 1px solid rgba(20,35,59,0.07); color: #14233B; text-decoration: none">Outil Rust en ligne de commande<span style="color: #5C6B82">Créer</span></a>
+<a href="#compose" style="display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 14px; border-top: 1px solid rgba(20,35,59,0.07); color: #14233B; text-decoration: none">Compose : API, base et proxy<span style="color: #5C6B82">Créer</span></a>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 8px 14px 8px 8px; border-radius: 12px; background: #F4EBE3; color: #14233B">
+<img src="/_blob/f1ffff9bc58dac215d9dfcd8ae6adf75" alt="Sherlock, content" style="flex: none; width: 42px; height: 56px; object-fit: contain; transform-origin: 50% 100%; animation: respire 3s ease-in-out infinite">
+<p style="margin: 0; font-size: 12.5px; line-height: 1.4">Sherlock peut essayer une commande dans un bac à sable avant de l'appliquer au système.</p>
+</div>
+</section>
+</div>
+</main>
+</div>
+</section>
+
+<div style="position: absolute; left: 340px; bottom: 0; width: 760px; height: 150px">
+<dc-import name="DockClair" integre="oui" hint-size="760px,150px"></dc-import>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

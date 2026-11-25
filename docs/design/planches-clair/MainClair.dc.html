@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Bureau, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+@keyframes respire {
+0%, 100% { transform: scale(1, 1) }
+50% { transform: scale(1.025, 0.975) }
+}
+@keyframes cherche {
+0%, 100% { transform: rotate(-2.5deg) }
+50% { transform: rotate(2.5deg) }
+}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #E9EEF4; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 13px; line-height: 1.4">
+
+<div aria-hidden="true" style="position: absolute; left: -260px; top: 340px; width: 1100px; height: 1100px; border-radius: 50%; background: #DDE6F0"></div>
+<div aria-hidden="true" style="position: absolute; left: 860px; top: -420px; width: 900px; height: 900px; border-radius: 50%; background: #D4E0EC"></div>
+<div aria-hidden="true" style="position: absolute; left: 980px; top: 520px; width: 520px; height: 520px; border-radius: 50%; background: #C8D8E9"></div>
+<div aria-hidden="true" style="position: absolute; left: 300px; top: -330px; width: 760px; height: 760px; box-sizing: border-box; border-radius: 50%; border: 2px solid rgba(133,197,149,0.35)"></div>
+
+<header style="position: absolute; left: 12px; right: 12px; top: 10px; height: 36px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 10px 0 6px; border-radius: 12px; background: rgba(255,255,255,0.78); backdrop-filter: blur(24px) saturate(140%); border: 1px solid rgba(20,35,59,0.09)">
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Ouvrir ou fermer Sherlock" onClick="{{ basculeSherlock }}" style="display: flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: #F4EBE3"><img src="/_blob/5a8a7b7276da27a1a4cc419bd21d291a" alt="" style="width: 24px; height: 20px; object-fit: contain"></button>
+<span style="padding: 0 10px 0 8px; font-weight: 600">Éditeur</span>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Fichier</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Édition</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Affichage</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Exécuter</button>
+<button style="height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: #46566F">Fenêtre</button>
+</div>
+<nav aria-label="Bureaux" style="position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 4px">
+<button aria-current="true" style="height: 24px; padding: 0 12px; border: 0; border-radius: 12px; background: {{accent}}; color: #0B1220; font-weight: 600">1 · Code</button>
+<button style="height: 24px; padding: 0 12px; border: 0; border-radius: 12px; background: rgba(20,35,59,0.07); color: #46566F">2 · Web</button>
+<button style="height: 24px; padding: 0 12px; border: 0; border-radius: 12px; background: rgba(20,35,59,0.07); color: #46566F">3 · Jeu</button>
+</nav>
+<div style="display: flex; align-items: center; gap: 14px; color: #46566F">
+<span style="display: flex; align-items: center; gap: 6px"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M12 3l8 4.2v9.6L12 21l-8-4.2V7.2zM4 7.2l8 4.2 8-4.2M12 11.4V21"></path></svg>3 conteneurs</span>
+<span style="display: flex; align-items: center; gap: 6px"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M9 3h6M10 3v6.2L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.2V3M7.5 14.5h9"></path></svg>2 bacs à sable</span>
+<svg role="img" aria-label="Réseau connecté" viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M3 9.5a13 13 0 0 1 18 0M6.2 13a8.5 8.5 0 0 1 11.6 0M9.4 16.4a4 4 0 0 1 5.2 0M12 19.5h.01"></path></svg>
+<svg role="img" aria-label="Son activé" viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M4 10v4h3.5L12 18V6L7.5 10zM15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"></path></svg>
+<span>mar. 24 nov.</span>
+<span style="color: #14233B; font-weight: 600">21:46</span>
+</div>
+</header>
+
+<section aria-label="Éditeur de code" style="position: absolute; left: 36px; top: 64px; width: 836px; height: 652px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: #FFFFFF; border: 1px solid rgba(20,35,59,0.1); box-shadow: 0 28px 70px rgba(20,35,59,0.182)">
+<div style="flex: none; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 14px; background: #F3F5F9; border-bottom: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; align-items: center; gap: 10px">
+<span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 5px; background: #3E7FA8"></span>
+<span style="font-weight: 600">compositeur</span>
+<span style="color: #5C6B82">dock.rs</span>
+</div>
+<div style="display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: rgba(20,35,59,0.06)">
+<button aria-label="Réduire" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M6 12h12"></path></svg></button>
+<button aria-label="Agrandir" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linejoin: round"><path d="M7 7h10v10H7z"></path></svg></button>
+<button aria-label="Fermer" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+<div style="flex: 1; min-height: 0; display: flex">
+<aside aria-label="Fichiers du projet" style="flex: none; width: 190px; box-sizing: border-box; padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; background: #F6F8FB; border-right: 1px solid rgba(20,35,59,0.07)">
+<div style="padding: 0 8px 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5C6B82">Projet</div>
+<div style="padding: 5px 8px; color: #46566F">src</div>
+<div style="padding: 5px 8px 5px 24px; color: #46566F">main.rs</div>
+<div style="padding: 5px 8px 5px 24px; border-radius: 7px; background: rgba(91,163,208,0.18); color: #14233B; font-weight: 500">dock.rs</div>
+<div style="padding: 5px 8px 5px 24px; color: #46566F">fenetres.rs</div>
+<div style="padding: 5px 8px 5px 24px; color: #46566F">entrees.rs</div>
+<div style="padding: 5px 8px 5px 24px; color: #46566F">rendu</div>
+<div style="padding: 5px 8px 5px 40px; color: #46566F">flou.frag</div>
+<div style="padding: 5px 8px 5px 40px; color: #46566F">ombres.frag</div>
+<div style="padding: 5px 8px; color: #46566F">Cargo.toml</div>
+<div style="padding: 5px 8px; color: #46566F">Dockerfile</div>
+</aside>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<div style="flex: none; height: 36px; display: flex; align-items: stretch; gap: 0; border-bottom: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; align-items: center; padding: 0 16px; border-bottom: 2px solid {{accent}}; color: #14233B; font-weight: 500">dock.rs</div>
+<div style="display: flex; align-items: center; padding: 0 16px; color: #5C6B82">flou.frag</div>
+<div style="display: flex; align-items: center; padding: 0 16px; color: #5C6B82">Cargo.toml</div>
+</div>
+<div style="flex: 1; min-height: 0; box-sizing: border-box; padding: 12px 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 20px; color: #1E2B40">
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">1</span><span style="color: #7A889D">/// Grossit les icônes proches du pointeur.</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">2</span><span><span style="color: #1F64A0">pub fn</span> <span style="color: #2E7D4F">echelle</span>(distance: <span style="color: #7A4E12">f32</span>) -&gt; <span style="color: #7A4E12">f32</span> &#123;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">3</span><span style="padding-left: 30px"><span style="color: #1F64A0">const</span> MAX: <span style="color: #7A4E12">f32</span> = <span style="color: #9A6412">1.55</span>;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">4</span><span style="padding-left: 30px"><span style="color: #1F64A0">const</span> PORTEE: <span style="color: #7A4E12">f32</span> = <span style="color: #9A6412">1.25</span>;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">5</span><span style="padding-left: 30px"><span style="color: #1F64A0">let</span> d = distance / PORTEE;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">6</span><span style="padding-left: 30px"><span style="color: #9A6412">1.0</span> + (MAX - <span style="color: #9A6412">1.0</span>) * (-d * d / <span style="color: #9A6412">2.0</span>).<span style="color: #2E7D4F">exp</span>()</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">7</span><span>&#125;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">8</span><span></span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">9</span><span><span style="color: #1F64A0">impl</span> <span style="color: #7A4E12">Dock</span> &#123;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">10</span><span style="padding-left: 30px"><span style="color: #1F64A0">pub fn</span> <span style="color: #2E7D4F">disposer</span>(&amp;<span style="color: #1F64A0">mut self</span>, pointeur: <span style="color: #7A4E12">Option</span>&lt;<span style="color: #7A4E12">f32</span>&gt;) &#123;</span></div>
+<div style="display: flex; background: rgba(20,35,59,0.04)"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #14233B">11</span><span style="padding-left: 60px"><span style="color: #1F64A0">for</span> (i, icone) <span style="color: #1F64A0">in self</span>.icones.<span style="color: #2E7D4F">iter_mut</span>().<span style="color: #2E7D4F">enumerate</span>() &#123;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">12</span><span style="padding-left: 90px"><span style="color: #1F64A0">let</span> cible = <span style="color: #1F64A0">match</span> pointeur &#123;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">13</span><span style="padding-left: 120px"><span style="color: #7A4E12">Some</span>(x) =&gt; <span style="color: #2E7D4F">echelle</span>(x - i <span style="color: #1F64A0">as</span> <span style="color: #7A4E12">f32</span> - <span style="color: #9A6412">0.5</span>),</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">14</span><span style="padding-left: 120px"><span style="color: #7A4E12">None</span> =&gt; <span style="color: #9A6412">1.0</span>,</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">15</span><span style="padding-left: 90px">&#125;;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">16</span><span style="padding-left: 90px">icone.ressort.<span style="color: #2E7D4F">viser</span>(cible);</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">17</span><span style="padding-left: 60px">&#125;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">18</span><span style="padding-left: 30px">&#125;</span></div>
+<div style="display: flex"><span style="flex: none; width: 44px; padding-right: 16px; box-sizing: border-box; text-align: right; color: #7A889D">19</span><span>&#125;</span></div>
+</div>
+<div style="flex: none; height: 152px; box-sizing: border-box; display: flex; flex-direction: column; background: #F6F8FB; border-top: 1px solid rgba(20,35,59,0.09)">
+<div style="flex: none; height: 32px; display: flex; align-items: center; gap: 18px; padding: 0 16px; font-size: 12px">
+<span style="color: #14233B; font-weight: 600">Terminal</span>
+<span style="color: #5C6B82">Problèmes</span>
+<span style="color: #5C6B82">Conteneurs</span>
+<span style="color: #5C6B82">Bac à sable</span>
+</div>
+<div style="flex: 1; padding: 2px 16px 0; display: flex; flex-direction: column; gap: 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 20px; color: #46566F">
+<div><span style="color: #2E7D4F">dodo</span> <span style="color: #1F64A0">~/compositeur</span> $ cargo run --release -- --imbrique</div>
+<div style="padding-left: 24px"><span style="color: #2E7D4F">Compiling</span> compositeur v0.1.0</div>
+<div style="padding-left: 24px"><span style="color: #2E7D4F">Finished</span> profil release</div>
+<div style="padding-left: 24px"><span style="color: #2E7D4F">Running</span> target/release/compositeur --imbrique</div>
+<div>dock : 9 icônes, ressorts actifs</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Conteneurs" style="position: absolute; left: 892px; top: 64px; width: 512px; height: 372px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: rgba(255,255,255,0.82); backdrop-filter: blur(24px) saturate(140%); border: 1px solid rgba(20,35,59,0.1); box-shadow: 0 28px 70px rgba(20,35,59,0.165)">
+<div style="flex: none; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 14px; border-bottom: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; align-items: center; gap: 10px">
+<span aria-hidden="true" style="width: 18px; height: 18px; border-radius: 5px; background: #1F4A6B; border: 1px solid rgba(20,35,59,0.16); box-sizing: border-box"></span>
+<span style="font-weight: 600">Conteneurs</span>
+<span style="color: #5C6B82">Docker intégré au système</span>
+</div>
+<div style="display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: rgba(20,35,59,0.06)">
+<button aria-label="Réduire" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M6 12h12"></path></svg></button>
+<button aria-label="Agrandir" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linejoin: round"><path d="M7 7h10v10H7z"></path></svg></button>
+<button aria-label="Fermer" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: none"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+</div>
+<div style="flex: none; height: 44px; display: flex; align-items: center; gap: 6px; padding: 0 14px">
+<button aria-current="true" style="height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: rgba(20,35,59,0.14); color: #14233B; font-weight: 600">Conteneurs</button>
+<button style="height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: none; color: #46566F">Images</button>
+<button style="height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: none; color: #46566F">Volumes</button>
+<button style="height: 26px; padding: 0 12px; border: 0; border-radius: 13px; background: none; color: #46566F">Réseaux</button>
+</div>
+<div style="flex: 1; display: flex; flex-direction: column; padding: 0 14px">
+<div style="display: grid; grid-template-columns: 1fr 86px 96px 84px; align-items: center; column-gap: 10px; height: 56px; border-top: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; flex-direction: column"><span style="font-weight: 600">api-spring</span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: #5C6B82">eclipse-temurin:21</span></div>
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #46566F">:8080</span>
+<span style="display: flex; align-items: center; gap: 7px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: {{accent}}"></span>En marche</span>
+<button style="height: 28px; padding: 0; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Arrêter</button>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 86px 96px 84px; align-items: center; column-gap: 10px; height: 56px; border-top: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; flex-direction: column"><span style="font-weight: 600">postgres</span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: #5C6B82">postgres:17</span></div>
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #46566F">:5432</span>
+<span style="display: flex; align-items: center; gap: 7px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: {{accent}}"></span>En marche</span>
+<button style="height: 28px; padding: 0; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Arrêter</button>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 86px 96px 84px; align-items: center; column-gap: 10px; height: 56px; border-top: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; flex-direction: column"><span style="font-weight: 600">traefik</span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: #5C6B82">traefik:v3</span></div>
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #46566F">:80 :443</span>
+<span style="display: flex; align-items: center; gap: 7px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: {{accent}}"></span>En marche</span>
+<button style="height: 28px; padding: 0; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Arrêter</button>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 86px 96px 84px; align-items: center; column-gap: 10px; height: 56px; border-top: 1px solid rgba(20,35,59,0.07)">
+<div style="display: flex; flex-direction: column"><span style="font-weight: 600">front-next</span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: #5C6B82">node:22</span></div>
+<span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: #46566F">:3000</span>
+<span style="display: flex; align-items: center; gap: 7px; color: #5C6B82"><span aria-hidden="true" style="width: 8px; height: 8px; box-sizing: border-box; border-radius: 50%; border: 2px solid #7A889D"></span>Arrêté</span>
+<button style="height: 28px; padding: 0; border: 1px solid rgba(20,35,59,0.16); border-radius: 8px; background: none; color: #14233B">Démarrer</button>
+</div>
+</div>
+<div style="flex: none; height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-top: 1px solid rgba(20,35,59,0.07)">
+<button style="height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: {{accent}}; color: #0B1220; font-weight: 600">Nouveau conteneur</button>
+<button style="height: 32px; padding: 0 14px; border: 1px solid rgba(20,35,59,0.16); border-radius: 9px; background: none; color: #14233B">Ouvrir dans un bac à sable</button>
+</div>
+</section>
+
+<sc-if value="{{ sherlockOuvert }}" hint-placeholder-val="{{ true }}">
+<section aria-label="Sherlock" style="position: absolute; left: 892px; top: 456px; width: 512px; height: 260px; box-sizing: border-box; display: flex; flex-direction: column; border-radius: 16px; background: rgba(255,255,255,0.82); backdrop-filter: blur(24px) saturate(140%); border: 1px solid rgba(20,35,59,0.1); box-shadow: 0 28px 70px rgba(20,35,59,0.165)">
+<div style="flex: none; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 14px">
+<div style="display: flex; align-items: center; gap: 8px"><span style="font-family: 'Space Grotesk', Inter, sans-serif; font-size: 15px; font-weight: 600">Sherlock</span><span style="color: #5C6B82">a remarqué quelque chose</span></div>
+<button aria-label="Fermer Sherlock" onClick="{{ basculeSherlock }}" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 24px; padding: 0; border: 0; border-radius: 7px; background: rgba(20,35,59,0.06)"><svg aria-hidden="true" viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round"><path d="M7 7l10 10M17 7L7 17"></path></svg></button>
+</div>
+<div style="flex: 1; display: flex; align-items: flex-start; gap: 14px; padding: 4px 16px 0 12px">
+<img src="/_blob/c2a7ff899d17e97f55b53460c95a8516" alt="Sherlock tient sa loupe" style="flex: none; width: 96px; height: 127px; object-fit: contain; transform-origin: 50% 100%; animation: cherche 3.2s ease-in-out infinite">
+<div style="flex: 1; display: flex; flex-direction: column; gap: 12px">
+<p style="margin: 0; padding: 12px 14px; border-radius: 4px 14px 14px 14px; background: #F4EBE3; color: #14233B; font-size: 14px; line-height: 1.45">Le conteneur <strong>front-next</strong> est arrêté, alors que ton API tourne. Je le relance pour que tu puisses tester ?</p>
+<div style="display: flex; gap: 8px">
+<button style="height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: {{accent}}; color: #0B1220; font-weight: 600">Relancer</button>
+<button style="height: 32px; padding: 0 14px; border: 1px solid rgba(20,35,59,0.16); border-radius: 9px; background: none; color: #14233B">Voir les logs</button>
+<button style="height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: none; color: #46566F">Plus tard</button>
+</div>
+</div>
+</div>
+<div style="flex: none; display: flex; align-items: center; gap: 10px; height: 40px; margin: 0 12px 12px; padding: 0 12px; border-radius: 11px; background: rgba(20,35,59,0.07); border: 1px solid rgba(20,35,59,0.08)">
+<label for="demande-bureau" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%)">Demander à Sherlock</label>
+<input id="demande-bureau" type="text" placeholder="Demande quelque chose à Sherlock" style="flex: 1; min-width: 0; height: 30px; padding: 0; border: 0; outline: none; background: none; color: #14233B; font: inherit">
+<span style="flex: none; padding: 2px 7px; border-radius: 6px; background: rgba(20,35,59,0.1); font-size: 11.5px; color: #46566F">Super + Espace</span>
+</div>
+</section>
+</sc-if>
+
+<div style="position: absolute; left: 340px; bottom: 0; width: 760px; height: 150px">
+<dc-import name="DockClair" integre="oui" hint-size="760px,150px"></dc-import>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#85C595","options":["#85C595","#5BA3D0","#F0C48A"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+const st = this.state || {};
+const ouvert = st.sherlockOuvert !== false;
+return {
+accent: this.props.accent ?? '#85C595',
+sherlockOuvert: ouvert,
+basculeSherlock: () => this.setState({ sherlockOuvert: !ouvert })
+};
+}
+}
+</script>
+</body>
+</html>

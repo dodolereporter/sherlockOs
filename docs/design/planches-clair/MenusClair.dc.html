@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Menus et sous-menus, thème clair</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Space+Grotesk:wght@500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; box-sizing: border-box; overflow: hidden; background: #E9EEF4; color: #14233B; font-family: Inter, system-ui, sans-serif; font-size: 13px; line-height: 1.4">
+<div aria-hidden="true" style="position: absolute; left: -260px; top: 340px; width: 1100px; height: 1100px; border-radius: 50%; background: #DDE6F0"></div>
+<div aria-hidden="true" style="position: absolute; left: 860px; top: -420px; width: 900px; height: 900px; border-radius: 50%; background: #D4E0EC"></div>
+<div aria-hidden="true" style="position: absolute; left: 980px; top: 520px; width: 520px; height: 520px; border-radius: 50%; background: #C8D8E9"></div>
+<header style="position: absolute; left: 12px; right: 12px; top: 10px; height: 36px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 10px 0 6px; border-radius: 12px; background: rgba(255,255,255,0.78); backdrop-filter: blur(24px) saturate(140%); border: 1px solid rgba(20,35,59,0.09)">
+<div style="display: flex; align-items: center; gap: 4px">
+<button aria-label="Menu Sherlock" style="display: flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: #F4EBE3; box-shadow: 0 0 0 2px #85C595"><img src="/_blob/5a8a7b7276da27a1a4cc419bd21d291a" alt="" style="width: 24px; height: 20px; object-fit: contain"></button>
+<span style="width: 70px; box-sizing: border-box; padding: 0 0 0 8px; font-weight: 600">Éditeur</span>
+<button style="width: 62px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: #46566F">Fichier</button>
+<button style="width: 62px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: #46566F">Édition</button>
+<button style="width: 78px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: #46566F">Affichage</button>
+<button style="width: 74px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; color: #46566F">Exécuter</button>
+<button style="width: 70px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: rgba(20,35,59,0.14); color: #14233B">Fenêtre</button>
+</div>
+<div style="display: flex; align-items: center; gap: 14px; color: #46566F">
+<svg role="img" aria-label="Réseau connecté" viewBox="0 0 24 24" style="flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M3 9.5a13 13 0 0 1 18 0M6.2 13a8.5 8.5 0 0 1 11.6 0M9.4 16.4a4 4 0 0 1 5.2 0M12 19.5h.01"></path></svg>
+<svg role="img" aria-label="Son activé" viewBox="0 0 24 24" style="flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round"><path d="M4 10v4h3.5L12 18V6L7.5 10zM15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"></path></svg>
+<span>mar. 24 nov.</span>
+<span style="color: #14233B; font-weight: 600">21:46</span>
+</div>
+</header>
+<div role="menu" aria-label="Menu Sherlock" style="position: absolute; left: 18px; top: 52px; width: 256px; box-sizing: border-box; padding: 6px; display: flex; flex-direction: column; background: rgba(255,255,255,0.97); backdrop-filter: blur(28px) saturate(150%); border: 1px solid rgba(20,35,59,0.14); border-radius: 12px; box-shadow: 0 22px 54px rgba(20,35,59,0.198)">
+<div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px"><span aria-hidden="true" style="display: flex; align-items: flex-end; justify-content: center; width: 40px; height: 40px; border-radius: 11px; background: #F4EBE3; overflow: hidden"><img src="/_blob/5a8a7b7276da27a1a4cc419bd21d291a" alt="" style="width: 36px; height: 32px; object-fit: contain"></span><div style="display: flex; flex-direction: column"><span style="font-weight: 600">Dodo</span><span style="font-size: 12px; color: #46566F">Session ouverte</span></div></div>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>À propos de cet ordinateur</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Réglages</span><span style="color: #5C6B82; font-size: 12px">Super+,</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Mises à jour</span><span style="padding: 0 7px; border-radius: 9px; background: #85C595; color: #0B1220; font-size: 11.5px; font-weight: 600">3</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Passer en mode jeu</span><span style="color: #5C6B82; font-size: 12px">Super+G</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Verrouiller</span><span style="color: #5C6B82; font-size: 12px">Super+L</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Fermer la session</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Éteindre</span><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M9 6l6 6-6 6"></path></svg></button>
+</div>
+<div role="menu" aria-label="Menu Fenêtre" style="position: absolute; left: 418px; top: 52px; width: 256px; box-sizing: border-box; padding: 6px; display: flex; flex-direction: column; background: rgba(255,255,255,0.97); backdrop-filter: blur(28px) saturate(150%); border: 1px solid rgba(20,35,59,0.14); border-radius: 12px; box-shadow: 0 22px 54px rgba(20,35,59,0.198)">
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Réduire</span><span style="color: #5C6B82; font-size: 12px">Super+M</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Agrandir</span><span style="color: #5C6B82; font-size: 12px">Super+Haut</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Moitié gauche</span><span style="color: #5C6B82; font-size: 12px">Super+Gauche</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Moitié droite</span><span style="color: #5C6B82; font-size: 12px">Super+Droite</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: rgba(91,163,208,0.30); color: #14233B; text-align: left"><span>Déplacer vers le bureau</span><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M9 6l6 6-6 6"></path></svg></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Toujours au premier plan</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Fermer la fenêtre</span><span style="color: #5C6B82; font-size: 12px">Super+Q</span></button>
+</div>
+<div role="menu" aria-label="Déplacer vers le bureau" style="position: absolute; left: 678px; top: 181px; width: 190px; box-sizing: border-box; padding: 6px; display: flex; flex-direction: column; background: rgba(255,255,255,0.97); backdrop-filter: blur(28px) saturate(150%); border: 1px solid rgba(20,35,59,0.14); border-radius: 12px; box-shadow: 0 22px 54px rgba(20,35,59,0.198)">
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>1 · Code</span><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #2E7D4F; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>2 · Web</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>3 · Jeu</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Nouveau bureau</span></button>
+</div>
+<div role="menu" aria-label="Menu du bureau" style="position: absolute; left: 1040px; top: 300px; width: 240px; box-sizing: border-box; padding: 6px; display: flex; flex-direction: column; background: rgba(255,255,255,0.97); backdrop-filter: blur(28px) saturate(150%); border: 1px solid rgba(20,35,59,0.14); border-radius: 12px; box-shadow: 0 22px 54px rgba(20,35,59,0.198)">
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Nouveau dossier</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Nouveau fichier</span><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #46566F; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round"><path d="M9 6l6 6-6 6"></path></svg></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Ranger les fenêtres</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Ouvrir un terminal ici</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Demander à Sherlock</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Changer le fond d'écran</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Réglages d'affichage</span></button>
+</div>
+<div role="menu" aria-label="Menu du dock" style="position: absolute; left: 690px; bottom: 96px; width: 240px; box-sizing: border-box; padding: 6px; display: flex; flex-direction: column; background: rgba(255,255,255,0.97); backdrop-filter: blur(28px) saturate(150%); border: 1px solid rgba(20,35,59,0.14); border-radius: 12px; box-shadow: 0 22px 54px rgba(20,35,59,0.198)">
+<div style="display: flex; align-items: baseline; justify-content: space-between; padding: 6px 10px 6px"><span style="font-weight: 600">Conteneurs</span><span style="font-size: 12px; color: #46566F">3 en marche</span></div>
+<button role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px">api-spring</span></button>
+<button role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px">postgres</span></button>
+<button role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #85C595"></span><span style="font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px">traefik</span></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Tout mettre en pause</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Nouvelle fenêtre</span></button>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Garder dans le dock</span><svg aria-hidden="true" viewBox="0 0 24 24" style="flex: none; width: 14px; height: 14px; fill: none; stroke: #2E7D4F; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></button>
+<div aria-hidden="true" style="height: 1px; margin: 4px 8px; background: rgba(20,35,59,0.1)"></div>
+<button role="menuitem" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; height: 30px; box-sizing: border-box; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: #14233B; text-align: left"><span>Quitter</span><span style="color: #5C6B82; font-size: 12px">Super+Q</span></button>
+</div>
+<div style="position: absolute; left: 340px; bottom: 0; width: 760px; height: 150px">
+<dc-import name="DockClair" integre="oui" hint-size="760px,150px"></dc-import>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>
