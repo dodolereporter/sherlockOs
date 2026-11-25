@@ -2,12 +2,18 @@
 //! screen: which variant to load, which part of it to draw, and where.
 //!
 //! ```text
-//! # An image (PNG or JPEG), or a folder of variants named <width>x<height>.png.
-//! path = /usr/share/nom-os/wallpapers/first-clue
-//! # cover, contain or center.
+//! # A wallpaper of the collection, by id: first-clue by default.
+//! wallpaper = first-clue
+//! # true (default): in the other theme, its pendant if it has one.
+//! follow-theme = true
+//! # Or an image of your own (PNG or JPEG), or a folder of variants named
+//! # <width>x<height>.png: it comes before `wallpaper`.
+//! path = /home/me/Images/wall.png
+//! # cover (default), contain or center.
 //! mode = cover
 //! ```
 
+use sherlock_ui::wallpapers::{self, ThemeVariant};
 use std::{
     ffi::OsString,
     fmt, fs, io,
@@ -70,14 +76,55 @@ impl fmt::Display for Mode {
     }
 }
 
-/// The wallpaper setting. Without `path`, the default wallpaper of the collection.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// The wallpaper setting. By default, the default pair of the collection, following the theme.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    /// An image or a folder of variants of the user's: comes before `wallpaper`.
     pub path: Option<PathBuf>,
+    /// Id of a wallpaper of the collection; `wallpapers::DEFAULT` without one.
+    pub wallpaper: Option<String>,
+    /// The wallpaper changes with the theme, to its pendant when it has one.
+    pub follow_theme: bool,
     pub mode: Mode,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            path: None,
+            wallpaper: None,
+            follow_theme: true,
+            mode: Mode::default(),
+        }
+    }
+}
+
+/// What a setting shows in a theme.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Choice {
+    /// The user's image or folder of variants.
+    Path(PathBuf),
+    /// A wallpaper installed in the data folders, by id (see `find`).
+    Installed(String),
+}
+
 impl Config {
+    /// What to show in the theme `variant`: the user's path, or else the chosen wallpaper (the
+    /// default one without a choice), replaced by its pendant in that theme when it follows
+    /// the theme and has one.
+    pub fn choice(&self, variant: ThemeVariant) -> Choice {
+        if let Some(path) = &self.path {
+            return Choice::Path(path.clone());
+        }
+        let id = self.wallpaper.as_deref().unwrap_or(wallpapers::DEFAULT);
+        let id = if self.follow_theme {
+            wallpapers::for_theme(id, variant)
+        } else {
+            id
+        };
+        Choice::Installed(id.to_owned())
+    }
+
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values are
     /// refused, so that a typo does not go unnoticed.
     pub fn parse(text: &str) -> Result<Self, Error> {
@@ -98,6 +145,13 @@ impl Config {
             match key.trim() {
                 "path" if value.is_empty() => config.path = None,
                 "path" => config.path = Some(value.into()),
+                "wallpaper" if value.is_empty() => config.wallpaper = None,
+                "wallpaper" => config.wallpaper = Some(value.into()),
+                "follow-theme" => {
+                    config.follow_theme = value
+                        .parse()
+                        .map_err(|_| error(format!("expected true or false, not {value:?}")))?;
+                }
                 "mode" => config.mode = value.parse().map_err(error)?,
                 key => return Err(error(format!("unknown key {key:?}"))),
             }
@@ -121,6 +175,10 @@ impl Config {
 impl fmt::Display for Config {
     /// The file as Control Room writes it: `parse` reads it back.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(wallpaper) = &self.wallpaper {
+            writeln!(f, "wallpaper = {wallpaper}")?;
+        }
+        writeln!(f, "follow-theme = {}", self.follow_theme)?;
         if let Some(path) = &self.path {
             writeln!(f, "path = {}", path.display())?;
         }
@@ -268,7 +326,42 @@ mod tests {
         assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
         // Empty: the default wallpaper, in cover.
         assert_eq!(Config::parse("").unwrap(), Config::default());
-        assert_eq!(Config::default().to_string(), "mode = cover\n");
+        assert_eq!(
+            Config::default().to_string(),
+            "follow-theme = true\nmode = cover\n"
+        );
+        let config = Config::parse("wallpaper = ring\nfollow-theme = false\n").unwrap();
+        assert_eq!(config.wallpaper.as_deref(), Some("ring"));
+        assert!(!config.follow_theme);
+        assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
+    }
+
+    #[test]
+    fn the_choice_follows_the_theme_variant() {
+        use ThemeVariant::{Dark, Light};
+        let installed = |id: &str| Choice::Installed(id.into());
+        // By default: the default pair.
+        let config = Config::default();
+        assert_eq!(config.choice(Dark), installed("first-clue"));
+        assert_eq!(config.choice(Light), installed("first-clue-light"));
+        // Without following the theme, the chosen one stays.
+        let fixed = Config {
+            follow_theme: false,
+            ..Config::default()
+        };
+        assert_eq!(fixed.choice(Light), installed("first-clue"));
+        // A wallpaper without a pendant stays itself in both themes.
+        let ring = Config {
+            wallpaper: Some("ring".into()),
+            ..Config::default()
+        };
+        assert_eq!(ring.choice(Light), installed("ring"));
+        // The user's path comes first, whatever the theme.
+        let own = Config {
+            path: Some("/walls/mine.png".into()),
+            ..ring
+        };
+        assert_eq!(own.choice(Light), Choice::Path("/walls/mine.png".into()));
     }
 
     #[test]
@@ -277,6 +370,10 @@ mod tests {
         assert!(matches!(err, Error::Line { line: 2, .. }), "{err}");
         assert!(matches!(
             Config::parse("size = 3"),
+            Err(Error::Line { line: 1, .. })
+        ));
+        assert!(matches!(
+            Config::parse("follow-theme = yes"),
             Err(Error::Line { line: 1, .. })
         ));
         assert!(matches!(

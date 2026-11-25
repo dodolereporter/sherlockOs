@@ -4,12 +4,14 @@
 # "Wallpapers" in docs/compositor.md for the measurements); a JPEG source is copied as is,
 # since encoding it again would only lose quality. Needs ImageMagick 7 (`magick`).
 #
-#   assets/wallpapers/import.sh <folder of the collection> [ring image]
+#   assets/wallpapers/import.sh <folder of a collection> [ring image]
 #
-# Run it again when the author provides new versions (4K), then commit the new originals.
+# The folder is one of the author's collections, dark or light: the wallpapers found in it are
+# imported, the others left as they are. Run it again when the author provides new versions
+# (4K), then commit the new originals.
 set -euo pipefail
 
-source_dir=${1:?usage: import.sh <folder of the collection> [ring image]}
+source_dir=${1:?usage: import.sh <folder of a collection> [ring image]}
 ring=${2:-}
 here=$(dirname "$0")
 
@@ -22,6 +24,13 @@ pairs=(
     "02-Les-enquetes-de-Sherlock/La-piste-sous-la-pluie rain-trail"
     "02-Les-enquetes-de-Sherlock/La-page-disparue missing-page"
     "02-Les-enquetes-de-Sherlock/Le-dernier-train last-train"
+    "00-Par-defaut/Premier-indice first-clue-light"
+    "01-Emblemes/Porcelaine porcelain"
+    "01-Emblemes/Lagon lagoon"
+    "01-Emblemes/Papier-plie folded-paper"
+    "02-Enquetes/La-serre greenhouse"
+    "02-Enquetes/L-observatoire observatory"
+    "02-Enquetes/La-barque rowboat"
 )
 
 store() {
@@ -33,15 +42,19 @@ store() {
     echo "$id.jpg $(stat -c %s "$here/$id.jpg") bytes"
 }
 
+imported=0
 for pair in "${pairs[@]}"; do
     read -r name id <<<"$pair"
     found=$(compgen -G "$source_dir/$name.*" | head -n 1 || true)
-    if [[ -z $found ]]; then
-        echo "missing: $source_dir/$name.*" >&2
-        exit 1
+    if [[ -n $found ]]; then
+        store "$found" "$id"
+        imported=$((imported + 1))
     fi
-    store "$found" "$id"
 done
+if ((imported == 0)); then
+    echo "no known wallpaper in $source_dir" >&2
+    exit 1
+fi
 if [[ -n $ring ]]; then
     store "$ring" ring
 fi

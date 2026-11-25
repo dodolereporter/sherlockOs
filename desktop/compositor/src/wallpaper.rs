@@ -11,7 +11,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use desktop_config::wallpaper::{self as config, Config, Mode, Variant};
+use desktop_config::wallpaper::{self as config, Choice, Config, Mode, Variant};
+use sherlock_ui::wallpapers::ThemeVariant;
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -64,6 +65,9 @@ pub struct Wallpaper {
     file: Option<PathBuf>,
     stamp: Option<(SystemTime, u64)>,
     data_dirs: Vec<PathBuf>,
+    /// Theme the wallpaper follows. Dark until the theme setting (lot D-05) is plugged in
+    /// (lot D-05c), through `set_theme`.
+    theme: ThemeVariant,
     pub mode: Mode,
     source: Source,
     /// Changes with every new setting: textures and images of the previous one are dropped.
@@ -106,6 +110,14 @@ impl Wallpaper {
         Ok(wallpaper)
     }
 
+    /// The desktop changes theme: a wallpaper that follows it changes to its pendant.
+    pub fn set_theme(&mut self, theme: ThemeVariant) {
+        if theme != self.theme {
+            self.theme = theme;
+            self.reload();
+        }
+    }
+
     /// Reads the settings file again if it changed, appeared or went away.
     pub fn check(&mut self) {
         let stamp = self.file.as_deref().and_then(stamp);
@@ -126,7 +138,7 @@ impl Wallpaper {
             None => Config::default(),
         };
         self.mode = setting.mode;
-        self.source = resolve(setting.path, &self.data_dirs);
+        self.source = resolve(setting.choice(self.theme), &self.data_dirs);
         self.generation += 1;
         self.decoded.clear();
         self.loading.clear();
@@ -192,15 +204,15 @@ fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
-/// Where the images of a setting are: its path, a folder of variants or an image, or else the
-/// default wallpaper installed in `data_dirs`.
-fn resolve(path: Option<PathBuf>, data_dirs: &[PathBuf]) -> Source {
-    let path = match path {
-        Some(path) => path,
-        None => match config::find(sherlock_ui::wallpapers::DEFAULT, data_dirs) {
+/// Where the images of a choice are: the user's path, a folder of variants or an image, or the
+/// folder of a wallpaper installed in `data_dirs`.
+fn resolve(choice: Choice, data_dirs: &[PathBuf]) -> Source {
+    let path = match choice {
+        Choice::Path(path) => path,
+        Choice::Installed(id) => match config::find(&id, data_dirs) {
             Some(dir) => dir,
             None => {
-                tracing::info!("wallpaper: the default wallpaper is not installed");
+                tracing::info!("wallpaper: {id} is not installed");
                 return Source::Board;
             }
         },
@@ -383,6 +395,16 @@ mod tests {
             w.image_for((2880, 1800).into()),
             Some(wallpaper.join("3840x2160.png"))
         );
+        // In the light theme, its pendant, once installed.
+        let light = dir.join("wallpapers/first-clue-light");
+        fs::create_dir_all(&light).unwrap();
+        fs::write(light.join("1920x1080.png"), b"").unwrap();
+        w.set_theme(ThemeVariant::Light);
+        let image = w.image_for((1440, 900).into());
+        assert_eq!(image, Some(light.join("1920x1080.png")));
+        w.set_theme(ThemeVariant::Dark);
+        let image = w.image_for((1440, 900).into());
+        assert_eq!(image, Some(wallpaper.join("1920x1080.png")));
         fs::remove_dir_all(&dir).unwrap();
     }
 
