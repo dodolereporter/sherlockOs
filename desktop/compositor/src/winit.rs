@@ -176,22 +176,8 @@ fn render(
         let (renderer, mut framebuffer) = backend.bind()?;
         // Counted after `bind`, which may wait for a buffer of the host window to be released.
         let started = Instant::now();
-        let mut animating = false;
-        let mut screens = Vec::new();
-        // Each screen's wallpaper, by its size in pixels: a texture per variant, uploaded once.
-        textures.update(renderer, &mut state.wallpaper);
-        let mut used = Vec::new();
-        for (output, view) in state.views() {
-            let image = state.wallpaper.image_for(view.frame.size);
-            let wallpaper = image.as_deref().and_then(|path| textures.get(path));
-            let screen = (&output, &view);
-            let (elements, moving) =
-                scene.elements(renderer, state, screen, preview, wallpaper, now);
-            animating |= moving;
-            screens.push((view.frame, elements));
-            used.extend(image);
-        }
-        textures.retain(&used);
+        let views = state.views();
+        let (screens, animating) = scene.screens(renderer, state, textures, &views, preview, now);
         // GLES draws upside down: the frame is flipped to make up for it. Redrawn in full every
         // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
@@ -199,10 +185,10 @@ fn render(
             color::DESKTOP.premultiplied().into(),
             &[Rectangle::from_size(size)],
         )?;
-        for (slice, elements) in &screens {
+        for ((_, view), elements) in views.iter().zip(&screens) {
             for element in elements.iter().rev() {
                 let dst = element.geometry(Scale::from(1.0));
-                let Some(visible) = dst.intersection(*slice) else {
+                let Some(visible) = dst.intersection(view.frame) else {
                     continue;
                 };
                 let damage = [Rectangle::new(visible.loc - dst.loc, visible.size)];

@@ -31,6 +31,11 @@ build:
 wallpapers output="target/wallpapers":
     cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
 
+# Builds the session (compositor, bar, dock), then prints the sudo commands that install it for the login screen, without running them
+install-session:
+    cargo build --release -p compositor -p bar -p dock
+    desktop/compositor/session/install.sh "$PWD"
+
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
     python3 distro/tests/check-language.py --self-test

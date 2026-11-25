@@ -108,9 +108,26 @@ enum Shortcut {
     Snap(Zone),
     /// Down arrow: restores the previous place.
     Restore,
+    /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
+    SwitchVt(i32),
+    /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
+    /// nothing else answers.
+    Quit,
 }
 
 impl Shortcut {
+    /// Keys of the session, which never reach a client. xkb turns Ctrl + Alt + Fn into
+    /// `XF86Switch_VT_n`.
+    fn for_session(nested: bool, m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let vt = sym.raw().wrapping_sub(Keysym::XF86_Switch_VT_1.raw());
+        match sym {
+            _ if nested => None,
+            Keysym::BackSpace | Keysym::Terminate_Server if m.ctrl && m.alt => Some(Self::Quit),
+            _ if vt < 12 => Some(Self::SwitchVt(vt as i32 + 1)),
+            _ => None,
+        }
+    }
+
     fn for_key(sym: Keysym) -> Option<Self> {
         match sym {
             Keysym::Up => Some(Self::ToggleMaximized),
@@ -429,6 +446,10 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            if let Some(shortcut) = Shortcut::for_session(state.nested, mods, sym.modified_sym()) {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             match Shortcut::for_key(sym.modified_sym()) {
                 Some(shortcut) if gesture_modifier_alone(state.nested, mods) => {
                     state.intercepted_keys.push(key);
@@ -443,6 +464,21 @@ impl State {
     }
 
     fn run_shortcut(&mut self, shortcut: Shortcut) {
+        match shortcut {
+            Shortcut::SwitchVt(vt) => {
+                tracing::info!(vt, "switching console");
+                if let Some(switch) = self.switch_vt.as_mut() {
+                    switch(vt);
+                }
+                return;
+            }
+            Shortcut::Quit => {
+                tracing::info!("Ctrl + Alt + Backspace: the compositor stops");
+                self.loop_signal.stop();
+                return;
+            }
+            _ => {}
+        }
         let Some(window) = self.focused_window() else {
             return;
         };
@@ -450,8 +486,8 @@ impl State {
         let maximized = is_maximized(&window);
         let zone = match shortcut {
             Shortcut::ToggleMaximized if !maximized => Some(Zone::Maximized),
-            Shortcut::ToggleMaximized | Shortcut::Restore => None,
             Shortcut::Snap(zone) => Some(zone),
+            _ => None,
         };
         self.snap(&window, zone, None);
     }
@@ -614,5 +650,44 @@ impl State {
         }
         pointer.button(self, &event);
         pointer.frame(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mods(ctrl: bool, alt: bool) -> ModifiersState {
+        ModifiersState {
+            ctrl,
+            alt,
+            ..ModifiersState::default()
+        }
+    }
+
+    #[test]
+    fn session_keys_switch_console_and_quit() {
+        let ctrl_alt = mods(true, true);
+        let key = |sym| Shortcut::for_session(false, &ctrl_alt, sym);
+        assert!(matches!(
+            key(Keysym::XF86_Switch_VT_1),
+            Some(Shortcut::SwitchVt(1))
+        ));
+        assert!(matches!(
+            key(Keysym::XF86_Switch_VT_12),
+            Some(Shortcut::SwitchVt(12))
+        ));
+        assert!(matches!(key(Keysym::BackSpace), Some(Shortcut::Quit)));
+        assert!(matches!(
+            key(Keysym::Terminate_Server),
+            Some(Shortcut::Quit)
+        ));
+        // Backspace alone, or with Ctrl only, goes to the client; so do other keys.
+        let ctrl = mods(true, false);
+        assert!(Shortcut::for_session(false, &ctrl, Keysym::BackSpace).is_none());
+        assert!(key(Keysym::F1).is_none());
+        // In nested mode, the host session keeps its consoles, and closing the window stops.
+        assert!(Shortcut::for_session(true, &ctrl_alt, Keysym::BackSpace).is_none());
+        assert!(Shortcut::for_session(true, &ctrl_alt, Keysym::XF86_Switch_VT_2).is_none());
     }
 }

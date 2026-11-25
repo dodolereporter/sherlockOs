@@ -1,8 +1,11 @@
 //! Wayland compositor of the desktop.
 //!
-//! `compositor --nested [--measure] [command [arguments…]]` opens the compositor in a window of
-//! the current session, starts XWayland, then launches the command, giving it its Wayland
-//! socket (`WAYLAND_DISPLAY`) and its X11 display (`DISPLAY`).
+//! `compositor [command [arguments…]]`, from a text console or the login screen, is the real
+//! session: the screens, keyboard, mouse and touchpad of the machine (lot D-14). It refuses to
+//! start inside another graphical session.
+//! `compositor --nested [command [arguments…]]` opens the compositor in a window of the
+//! current session instead. Either way it starts XWayland, then launches the command, giving it
+//! its Wayland socket (`WAYLAND_DISPLAY`) and its X11 display (`DISPLAY`).
 //! `--measure` logs the frame rate and frame render time every second, then a summary at the
 //! end. The session then stops with the command.
 //! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
@@ -13,11 +16,20 @@ use std::{
     process::Command,
 };
 
-use compositor::{Error, State, stats::FrameStats};
+use compositor::{Error, State, mesa, options::Options, stats::FrameStats, udev};
 use smithay::reexports::calloop::{EventLoop, LoopSignal};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Error> {
+    let options = Options::parse(std::env::args_os().skip(1))?;
+    options.check_environment(|key| std::env::var_os(key))?;
+    if !options.nested {
+        // The real session renders with Mesa only, and so do the programs it launches: NVIDIA's
+        // EGL library is never loaded (it comes first on Debian), so that the card stays asleep.
+        // SAFETY: no thread exists yet: only the arguments and the environment have been read.
+        unsafe { mesa::restrict_egl_to_mesa() };
+    }
+
     // Log level from RUST_LOG (for example `RUST_LOG=compositor=debug`), info otherwise.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
@@ -25,77 +37,53 @@ fn main() -> Result<(), Error> {
         .with_writer(std::io::stderr)
         .init();
 
-    let mut args = std::env::args_os().skip(1);
-    // Only the windowed backend exists for now; the real session comes with lot D-14.
-    if args.next().as_deref() != Some(OsStr::new("--nested")) {
-        return Err(Error::Usage);
-    }
-    let mut command: Vec<_> = args.collect();
-    let (mut measure, mut screens, mut scales) = (false, 1, Vec::new());
-    loop {
-        match command.first().and_then(|a| a.to_str()) {
-            Some("--measure") => measure = true,
-            Some("--outputs") => screens = option(&mut command, 1..=4)?,
-            Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
-            _ => break,
-        }
-        command.remove(0);
-    }
-    // Missing scales repeat the last one given, or 1.
-    let scales: Vec<f64> = (0..screens)
-        .map(|i| scales.get(i).or(scales.last()).copied().unwrap_or(1.0))
-        .collect();
-
     let mut event_loop = EventLoop::try_new()?;
     let mut state = State::new(&event_loop)?;
-    if measure {
+    if options.measure {
         state.frame_stats = Some(FrameStats::default());
     }
     let socket = state.listen(&event_loop)?;
-    compositor::winit::init(&event_loop, &mut state, &scales)?;
+    // The real session's devices are released before the seat when leaving, whatever happens.
+    let session = if options.nested {
+        compositor::winit::init(&event_loop, &mut state, &options.scales)?;
+        None
+    } else {
+        Some(udev::init(&event_loop, &mut state, &options)?)
+    };
     tracing::info!(socket = ?socket, "compositor ready");
 
     // When measuring, the session stops with the command, which is the measured scene.
-    let signal = measure.then(|| state.loop_signal.clone());
+    let signal = options.measure.then(|| state.loop_signal.clone());
     // XWayland starts with the compositor, and the command once it is ready: it may be an X11
     // application. Without Xwayland on the machine, only Wayland applications show up.
     let launch = {
-        let (command, socket, signal) = (command.clone(), socket.clone(), signal.clone());
+        let (command, socket, signal) = (options.command.clone(), socket.clone(), signal.clone());
         move |_: &mut State, display: Option<u32>| {
             if let Err(err) = spawn(&command, &socket, display, signal) {
                 tracing::warn!("{err}");
             }
         }
     };
-    if let Err(err) = state.start_xwayland(&event_loop, launch) {
+    let xwayland = if options.xwayland() {
+        state.start_xwayland(&event_loop, launch)
+    } else {
+        Err(Error::NoXwayland)
+    };
+    if let Err(err) = xwayland {
         tracing::warn!("no X11 applications: {err}");
-        spawn(&command, &socket, None, signal)?;
+        spawn(&options.command, &socket, None, signal)?;
     }
 
     event_loop.run(None, &mut state, State::refresh)?;
     state.shutdown();
+    if let Some(session) = session {
+        session.close(&mut state);
+    }
     if let Some(stats) = &state.frame_stats {
         tracing::info!("summary, all frames: {}", stats.all);
         tracing::info!("summary, animated frames: {}", stats.animated);
     }
     Ok(())
-}
-
-/// Value of the option in front of `args`, which is removed with it, the option itself being
-/// left for the caller. A decimal comma is read as a point.
-fn option<T: std::str::FromStr + PartialOrd>(
-    args: &mut Vec<OsString>,
-    range: std::ops::RangeInclusive<T>,
-) -> Result<T, Error> {
-    if args.len() < 2 {
-        return Err(Error::Usage);
-    }
-    let value = args.remove(1);
-    let value = value.to_str().map(|v| v.replace(',', "."));
-    value
-        .and_then(|v| v.parse().ok())
-        .filter(|v| range.contains(v))
-        .ok_or(Error::Usage)
 }
 
 /// Launches the command, if there is one, with the compositor's Wayland socket and its X11
