@@ -27,16 +27,29 @@ fn custom(name: &'static str, p: &Palette, background: Color) -> Theme {
     )
 }
 
-/// The desktop theme of `which`, built once: a view asks for it for every control.
-pub fn theme_for(which: color::Theme) -> Theme {
-    static THEMES: OnceLock<[Theme; 2]> = OnceLock::new();
+/// The iced themes of each theme, built once: a view asks for them for every control. The
+/// desktop one, then the window one.
+fn themes(which: color::Theme) -> &'static (Theme, Theme) {
+    static THEMES: OnceLock<[(Theme, Theme); 2]> = OnceLock::new();
     let [dark, light] = THEMES.get_or_init(|| {
-        color::Theme::ALL.map(|t| custom("Sherlock", t.palette(), t.palette().desktop))
+        color::Theme::ALL.map(|t| {
+            let p = t.palette();
+            let (desktop, window) = match t {
+                color::Theme::Dark => ("Sherlock", "Sherlock, fenêtre"),
+                color::Theme::Light => ("Sherlock clair", "Sherlock clair, fenêtre"),
+            };
+            (custom(desktop, p, p.desktop), custom(window, p, p.window))
+        })
     });
     match which {
-        color::Theme::Dark => dark.clone(),
-        color::Theme::Light => light.clone(),
+        color::Theme::Dark => dark,
+        color::Theme::Light => light,
     }
+}
+
+/// The desktop theme of `which`.
+pub fn theme_for(which: color::Theme) -> Theme {
+    themes(which).0.clone()
 }
 
 /// The desktop theme, in the active theme. iced widgets without a style of their own take
@@ -45,20 +58,22 @@ pub fn theme() -> Theme {
     theme_for(color::active())
 }
 
-/// The theme of an application window: its background is the opaque window body, cleared
-/// by the renderer itself instead of drawn as a quad. With the software renderer, a quad as
-/// large as the window is filled again for every damaged rectangle of every frame.
+/// The theme of an application window, in the active theme: its background is the opaque
+/// window body, cleared by the renderer itself instead of drawn as a quad. With the software
+/// renderer, a quad as large as the window is filled again for every damaged rectangle of
+/// every frame.
 pub fn window_theme() -> Theme {
-    let p = color::palette();
-    custom("Sherlock, fenêtre", p, p.window)
+    themes(color::active()).1.clone()
 }
 
-/// The palette an iced theme was built on: the light palette for a light background.
+/// The palette an iced theme was built on, known by its text color, which is exact and
+/// differs between the two palettes (a transparent background would say nothing). A theme
+/// that is not ours gets the dark palette.
 pub fn palette(theme: &Theme) -> &'static Palette {
-    if theme.extended_palette().is_dark {
-        &Palette::DARK
-    } else {
+    if theme.palette().text == iced::Color::from(Palette::LIGHT.text_primary) {
         &Palette::LIGHT
+    } else {
+        &Palette::DARK
     }
 }
 
@@ -753,6 +768,13 @@ mod tests {
             }
             check(&mut failures, "git branch", p.accent_text, None, &inset);
         }
+        // The keyboard focus ring, a non-text element, around a component on any background.
+        for on in surfaces(p) {
+            let ratio = p.focus_ring.contrast(on.1);
+            if ratio < 3.0 {
+                failures.push((format!("focus ring on {}", on.0), p.focus_ring, ratio));
+            }
+        }
         let code = (String::from("code snippet"), p.deepest);
         check(&mut failures, "code text", p.text_code, None, &code);
         let tile = (String::from("tile"), p.blue_bright);
@@ -804,6 +826,49 @@ mod tests {
         let menu = (String::from("menu"), p.menu_glass.over(p.desktop));
         check(&mut failures, "icon tooltip", p.text_primary, None, &menu);
         failures
+    }
+
+    #[test]
+    fn each_iced_theme_gives_back_its_palette() {
+        for which in color::Theme::ALL {
+            assert_eq!(palette(&theme_for(which)), which.palette());
+            assert_eq!(palette(&themes(which).1), which.palette());
+        }
+        // A theme that is not ours, even a light one.
+        assert_eq!(palette(&Theme::Light), &Palette::DARK);
+    }
+
+    #[test]
+    fn green_and_amber_texts_stay_off_a_light_selected_row() {
+        // No component lays a colored text on a selected row: badges move to the darkest
+        // background there (`Tone::colors`). In the light theme, the green and the amber would
+        // drop below 4.5 to 1 (4.06 and 3.90 on a card): a component that needs them there must
+        // do the same, or the author must choose darker values.
+        for which in color::Theme::ALL {
+            let p = which.palette();
+            let rows: Vec<Color> = surfaces(p)
+                .into_iter()
+                .filter(|(n, _)| {
+                    ["window", "sidebar", "card"].contains(&n.as_str()) || n.contains(" on desktop")
+                })
+                .map(|(_, c)| p.selected_row.over(c))
+                .collect();
+            let lowest = |text: Color| {
+                rows.iter()
+                    .map(|row| text.contrast(*row))
+                    .fold(f32::MAX, f32::min)
+            };
+            for (name, text) in [("salmon", p.salmon_text), ("keyword", p.blue_light)] {
+                assert!(lowest(text) >= 4.5, "{which:?} {name}: {:.2}", lowest(text));
+            }
+            for (name, text) in [("green", p.accent_text), ("amber", p.amber_text)] {
+                let ratio = lowest(text);
+                match which {
+                    color::Theme::Dark => assert!(ratio >= 4.5, "{name}: {ratio:.2}"),
+                    color::Theme::Light => assert!(ratio < 4.5, "{name} passes now: {ratio:.2}"),
+                }
+            }
+        }
     }
 
     #[test]

@@ -349,7 +349,7 @@ it. Its test writes `gallery-tiny-skia.png` and `gallery-light-tiny-skia.png`.
 
 To compare: the light « Réglages » board, rendered with chromium as `docs/evidence.md` describes.
 
-![Light Réglages board](sherlock-ui/board-reglages-light.png)
+![Light « Réglages » board](sherlock-ui/board-reglages-light.png)
 
 Live switch, checked in a private Xephyr with a temporary `XDG_CONFIG_HOME`: the gallery starts
 with `Theme=dark`, follows `Theme=light` written in place, then `Theme=auto` replaced by a
@@ -371,10 +371,18 @@ Choices the table does not make:
 ### Contrasts of the light table
 
 The contrast test runs on both palettes and requires 4.5 to 1 for every text, 3 to 1 for the
-logo ring and the tile icon. With the values of the table, five text colors of the light theme
+logo ring, the tile icon and the focus ring. Other non-text elements are not checked: the track
+of an off toggle reads at 1.37 to 1 in light and 1.75 in dark, its knob carries the state. With the values of the table, five text colors of the light theme
 stayed below 4.5 on some backgrounds; the author chose darker values, listed in
 `docs/appearance.md`. The color logo of the bar takes the icon green `#2E7D4F` for its ring in
 the light theme (`logo_ring`): the fill green reads at 1.4 to 1 on the light bar.
+
+Two light colors fail on a selected row: the green and the amber of texts (4.06 and 3.90 on a
+card). No component lays them there, since badges move to the darkest background on a selected
+row; a test keeps the gap visible.
+
+The cream bubbles of Sherlock read at 1.01 to 1 on the light desktop: no bubble component
+exists yet, to settle in D-05b or the lot of the bubble (a border or a shadow, for the author).
 
 ## What the lot does not do
 

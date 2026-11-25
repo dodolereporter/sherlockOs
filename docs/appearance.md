@@ -55,31 +55,56 @@ with its light one; D-05c links the active theme to the wallpaper.
 | Item | Role |
 | --- | --- |
 | `AppearanceConfig::parse`, `load` | The settings and the problems of a text, of a file |
-| `AppearanceConfig::theme_at(now)` | The theme at `now`, and how long until the automatic mode switches (`None` for `dark` and `light`) |
-| `TimeOfDay::now` | Local time, from `date`: the standard library does not know the time zone |
+| `AppearanceConfig::theme_at(now)` | The theme at the time of day `now`, and the time of day of the next switch (`None` for `dark` and `light`) |
+| `TimeOfDay::at(epoch)` | Local time of day of an instant, from `localtime_r` |
+| `TimeOfDay::next_after(epoch)` | The next instant with that local time, from `mktime`: right across a change of daylight saving time |
+| `epoch_now` | Seconds since 1970, from the real-time clock |
 | `follow(path, on_event)` | Calls `on_event` with the theme, then at every change; `Event::Problem` and `Event::Error` report what went wrong |
 | `path` | Path of the file |
 
-`follow` runs two threads. One waits on inotify, on the directory of the file (or on its parent
-until the directory exists), so that a file replaced by a rename is seen. The other reloads the
-file when told, then sleeps until the next switch of the automatic mode or the next edit. No
-polling. Both stop once `on_event` returns `false`.
+`follow` runs one thread, which waits with `poll` on two descriptors:
+
+- **inotify**, on the directory of the file, so that a file replaced by a rename is seen. A
+  read is taken in full: a deleted directory sends the deletion of its file and its own end
+  together. When the directory is deleted or moved (`IN_DELETE_SELF`, `IN_MOVE_SELF`,
+  `IN_IGNORED`), or events were lost (`IN_Q_OVERFLOW`), the watch starts again. While the
+  directory is missing, the closest existing ancestor is watched, as many levels up as needed,
+  and the file reads as absent: the default theme.
+- **a timerfd on `CLOCK_REALTIME`**, armed on the absolute instant of the next switch
+  (`TFD_TIMER_ABSTIME`). It counts real time: a switch that passed during a suspend fires on
+  wake-up. With `TFD_TIMER_CANCEL_ON_SET`, a change of the clock (`timedatectl`, NTP at start)
+  wakes the thread with `ECANCELED`. Either way, the thread reads the time again and arms the
+  next switch. The time zone is read again each time (glibc's `mktime` runs `tzset`).
+
+No polling. The thread stops the next time it reports something after `on_event` returned
+`false`.
 
 A program wires it like the sherlock-ui gallery does (`examples/gallery/view.rs`): a
 subscription whose stream receives the themes, and `color::set_active(theme)` in `update`.
 
 ## Limits
 
-- The timer counts monotonic time: after a suspend that runs past a switch time, the theme
-  changes at the next edit or the next switch. A change of time zone or of daylight saving time
-  is seen at the next wake-up as well.
 - Fixed hours only: sunrise and sunset would need a position (ADR 0019).
+- A change of time zone alone does not cancel the timer: it is seen at the next wake-up (edit,
+  switch or change of the clock).
 - The crate does not write the file yet: Control Room will need it, with the unknown keys kept,
-  as `dock-config` does.
+  as `dock-config` does. A shared `config-watch` crate will take the inotify part of this crate
+  and of the dock, in a lot of its own.
+- The top bar still reads the time with `date` (`desktop/bar/src/source/clock.rs`): to move to
+  `localtime_r` in D-05b.
 
 ## Tests
 
-`cargo test -p appearance-config`: reading, defaults and problems; the automatic mode at its
-bounds (06:59:59, 07:00, 18:59:59, 19:00) and across midnight, with a light span that holds
-midnight; a file created in a directory that did not exist, then replaced by a rename, changes
-the theme live.
+`cargo test -p appearance-config`, without sleeping:
+
+- reading, defaults and problems; `+7:00` and other signs refused;
+- the automatic mode at its bounds (06:59:59, 07:00, 18:59:59, 19:00), across midnight, and a
+  light night at its bounds (21:59:59, 22:00, 05:59:59, 06:00);
+- the next switch as an instant of the local clock, and across daylight saving time in a child
+  process with `TZ=Europe/Paris`: on 28 March 2026 at 20:00, 07:00 comes 10 hours later; on
+  24 October 2026, 12 hours later;
+- the timer: an instant already passed (after a suspend) fires at once, a disarmed timer does
+  not. `ECANCELED` needs a change of the system clock, so it is not tested;
+- inotify: every event of a read counts (a deleted directory, a moved one, lost events); a file
+  created two missing levels down, replaced by a rename, its folder deleted then made again,
+  moved away then made again: the theme follows each time.

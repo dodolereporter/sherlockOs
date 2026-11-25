@@ -1,7 +1,7 @@
 //! The appearance settings file, `$XDG_CONFIG_HOME/appearance/appearance.conf`: the theme, and
 //! the hours of the automatic mode. Every program reads it the same way and follows it live
-//! (`follow`); the settings application (Control Room, D-26) will write it. Standard library
-//! only, besides the tokens of sherlock-ui.
+//! (`follow`); the settings application (Control Room, D-26) will write it. Depends on the
+//! tokens of sherlock-ui and on `libc` only.
 //!
 //! ```text
 //! [Appearance]
@@ -18,7 +18,6 @@ mod watch;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 pub use sherlock_ui::color::Theme;
 pub use watch::{Event, follow};
@@ -27,8 +26,6 @@ const GROUP: &str = "Appearance";
 const THEME: &str = "Theme";
 const LIGHT_FROM: &str = "AutoLightFrom";
 const DARK_FROM: &str = "AutoDarkFrom";
-
-const DAY: u32 = 24 * 60 * 60;
 
 /// The theme chosen in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,7 +66,12 @@ impl TimeOfDay {
 
     /// Reads `HH:MM` or `HH:MM:SS`.
     pub fn parse(text: &str) -> Option<Self> {
-        let mut fields = text.trim().split(':').map(|f| f.parse::<u32>().ok());
+        // Digits only: `u32::from_str` would also take a sign.
+        let digits = |f: &str| (1..=2).contains(&f.len()) && f.bytes().all(|b| b.is_ascii_digit());
+        let mut fields = text
+            .trim()
+            .split(':')
+            .map(|f| f.parse::<u32>().ok().filter(|_| digits(f)));
         let (hour, minute) = (fields.next()??, fields.next()??);
         let second = fields.next().unwrap_or(Some(0))?;
         if fields.next().is_some() {
@@ -78,15 +80,71 @@ impl TimeOfDay {
         Self::new(hour, minute, second)
     }
 
-    /// The time of day now, from the `date` command: the standard library does not know the
-    /// time zone.
-    pub fn now() -> io::Result<Self> {
-        let output = std::process::Command::new("date")
-            .arg("+%H:%M:%S")
-            .output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        Self::parse(&text).ok_or_else(|| io::Error::other(format!("date gave « {text} »")))
+    /// The local time of day at `epoch` (seconds since 1970), in the time zone of the system
+    /// as it is now.
+    pub fn at(epoch: i64) -> io::Result<Self> {
+        let tm = local(epoch)?;
+        let field = |v: libc::c_int| u32::try_from(v).unwrap_or(0);
+        Self::new(
+            field(tm.tm_hour),
+            field(tm.tm_min),
+            field(tm.tm_sec).min(59),
+        )
+        .ok_or_else(|| io::Error::other("local time out of a day"))
     }
+
+    /// The first instant after `epoch` whose local time is `self`, in seconds since 1970.
+    /// `mktime` places it in the right day across a change of daylight saving time.
+    pub fn next_after(self, epoch: i64) -> io::Result<i64> {
+        let mut day = local(epoch)?;
+        for _ in 0..2 {
+            let mut tm = day;
+            (tm.tm_hour, tm.tm_min, tm.tm_sec) = (
+                (self.0 / 3600) as libc::c_int,
+                (self.0 / 60 % 60) as libc::c_int,
+                (self.0 % 60) as libc::c_int,
+            );
+            // Unknown: `mktime` finds whether daylight saving time applies at that hour.
+            tm.tm_isdst = -1;
+            // `time_t` is 64 bits on the target, x86-64 (ADR 0001).
+            // SAFETY: `tm` is a valid, initialized `struct tm` that we own.
+            let instant: i64 = unsafe { libc::mktime(&mut tm) };
+            if instant == -1 {
+                return Err(io::Error::other("mktime cannot place the local time"));
+            }
+            if instant > epoch {
+                return Ok(instant);
+            }
+            // Already passed today: the same time tomorrow, `mktime` normalizes the day.
+            day.tm_mday += 1;
+        }
+        Err(io::Error::other("no next local time"))
+    }
+}
+
+/// Seconds since 1970, from the real-time clock.
+pub fn epoch_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// Broken-down local time of `epoch`. The time zone is read again first: glibc's `mktime`
+/// runs `tzset` (POSIX requires it), which notices a new `/etc/localtime`; `localtime_r` alone
+/// would keep the zone it read first.
+fn local(epoch: i64) -> io::Result<libc::tm> {
+    let time = libc::time_t::try_from(epoch).map_err(io::Error::other)?;
+    // SAFETY: `tm` is plain data; zeroed, then filled by the calls below.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_mday = 1;
+    tm.tm_year = 70;
+    // SAFETY: `tm` is a valid `struct tm` that we own; the result is not needed.
+    unsafe { libc::mktime(&mut tm) };
+    // SAFETY: both pointers are valid for the call: `time` is read, `tm` written.
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(tm)
 }
 
 impl fmt::Display for TimeOfDay {
@@ -177,9 +235,9 @@ impl AppearanceConfig {
         }
     }
 
-    /// The theme at `now`, and how long it holds before the automatic mode switches; `None`
-    /// when it never switches by itself.
-    pub fn theme_at(&self, now: TimeOfDay) -> (Theme, Option<Duration>) {
+    /// The theme at `now`, and the time of day of the next switch of the automatic mode;
+    /// `None` when it never switches by itself.
+    pub fn theme_at(&self, now: TimeOfDay) -> (Theme, Option<TimeOfDay>) {
         let (light, dark, now) = (self.light_from.0, self.dark_from.0, now.0);
         let is_light = if light < dark {
             (light..dark).contains(&now)
@@ -189,11 +247,10 @@ impl AppearanceConfig {
         let (theme, next) = match (self.mode, is_light) {
             (Mode::Dark, _) => return (Theme::Dark, None),
             (Mode::Light, _) => return (Theme::Light, None),
-            (Mode::Auto, true) => (Theme::Light, dark),
-            (Mode::Auto, false) => (Theme::Dark, light),
+            (Mode::Auto, true) => (Theme::Light, self.dark_from),
+            (Mode::Auto, false) => (Theme::Dark, self.light_from),
         };
-        let wait = (next + DAY - now) % DAY;
-        (theme, Some(Duration::from_secs(u64::from(wait))))
+        (theme, Some(next))
     }
 }
 
@@ -283,54 +340,101 @@ mod tests {
     #[test]
     fn the_automatic_mode_switches_at_its_bounds() {
         let config = auto("07:00", "19:00");
-        let hours = |h: u64| Some(Duration::from_secs(h * 3600));
-        assert_eq!(config.theme_at(at(7, 0, 0)), (Theme::Light, hours(12)));
-        assert_eq!(
-            config.theme_at(at(6, 59, 59)),
-            (Theme::Dark, Some(Duration::from_secs(1)))
-        );
-        assert_eq!(config.theme_at(at(19, 0, 0)), (Theme::Dark, hours(12)));
-        assert_eq!(
-            config.theme_at(at(18, 59, 59)),
-            (Theme::Light, Some(Duration::from_secs(1)))
-        );
+        let (seven, nineteen) = (Some(at(7, 0, 0)), Some(at(19, 0, 0)));
+        assert_eq!(config.theme_at(at(7, 0, 0)), (Theme::Light, nineteen));
+        assert_eq!(config.theme_at(at(6, 59, 59)), (Theme::Dark, seven));
+        assert_eq!(config.theme_at(at(19, 0, 0)), (Theme::Dark, seven));
+        assert_eq!(config.theme_at(at(18, 59, 59)), (Theme::Light, nineteen));
     }
 
     #[test]
     fn the_automatic_mode_crosses_midnight() {
-        // Dark evenings: the wait runs over midnight.
         let config = auto("07:00", "19:00");
-        assert_eq!(
-            config.theme_at(at(23, 59, 59)),
-            (Theme::Dark, Some(Duration::from_secs(7 * 3600 + 1)))
-        );
-        assert_eq!(
-            config.theme_at(at(0, 0, 0)),
-            (Theme::Dark, Some(Duration::from_secs(7 * 3600)))
-        );
+        let seven = Some(at(7, 0, 0));
+        assert_eq!(config.theme_at(at(23, 59, 59)), (Theme::Dark, seven));
+        assert_eq!(config.theme_at(at(0, 0, 0)), (Theme::Dark, seven));
         // A light night, for whoever works at night: the light span holds midnight.
         let night = auto("22:00", "06:00");
-        assert_eq!(
-            night.theme_at(at(23, 0, 0)),
-            (Theme::Light, Some(Duration::from_secs(7 * 3600)))
-        );
-        assert_eq!(
-            night.theme_at(at(0, 0, 0)),
-            (Theme::Light, Some(Duration::from_secs(6 * 3600)))
-        );
-        assert_eq!(
-            night.theme_at(at(6, 0, 0)),
-            (Theme::Dark, Some(Duration::from_secs(16 * 3600)))
-        );
+        let (six, ten) = (Some(at(6, 0, 0)), Some(at(22, 0, 0)));
+        assert_eq!(night.theme_at(at(21, 59, 59)), (Theme::Dark, ten));
+        assert_eq!(night.theme_at(at(22, 0, 0)), (Theme::Light, six));
+        assert_eq!(night.theme_at(at(0, 0, 0)), (Theme::Light, six));
+        assert_eq!(night.theme_at(at(5, 59, 59)), (Theme::Light, six));
+        assert_eq!(night.theme_at(at(6, 0, 0)), (Theme::Dark, ten));
     }
 
     #[test]
     fn times_of_day_are_read_strictly() {
         assert_eq!(TimeOfDay::parse("07:05"), Some(at(7, 5, 0)));
+        assert_eq!(TimeOfDay::parse("7:05"), Some(at(7, 5, 0)));
         assert_eq!(TimeOfDay::parse(" 23:59:59\n"), Some(at(23, 59, 59)));
-        for bad in ["24:00", "7", "07:60", "07:00:00:00", "", "aa:bb"] {
+        for bad in [
+            "24:00",
+            "7",
+            "07:60",
+            "07:00:00:00",
+            "",
+            "aa:bb",
+            "+7:00",
+            "07:+5",
+            "007:00",
+        ] {
             assert_eq!(TimeOfDay::parse(bad), None, "{bad}");
         }
-        assert!(TimeOfDay::now().is_ok());
+    }
+
+    #[test]
+    fn the_next_switch_is_an_instant_of_the_local_clock() {
+        let now = epoch_now();
+        let local = TimeOfDay::at(now).unwrap();
+        // The same time of day: tomorrow, about a day later.
+        let next = local.next_after(now).unwrap();
+        assert!(
+            (now + 22 * 3600..=now + 26 * 3600).contains(&next),
+            "{now} {next}"
+        );
+        // One minute later, unless midnight falls in between: today.
+        if local.0 < 24 * 3600 - 60 {
+            let soon = TimeOfDay(local.0 + 60).next_after(now).unwrap();
+            assert!((now + 59..=now + 61).contains(&soon), "{now} {soon}");
+        }
+    }
+
+    /// Runs `test` in a new process of this test binary, with `TZ=Europe/Paris`: changing the
+    /// environment of the running process would race with the other tests.
+    fn in_paris(test: &str) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--ignored"])
+            .env("TZ", "Europe/Paris")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{test} with TZ=Europe/Paris:\n{text}"
+        );
+        // A misspelt name would run nothing and succeed.
+        assert!(text.contains("1 passed"), "{text}");
+    }
+
+    #[test]
+    fn the_next_switch_follows_daylight_saving_time() {
+        in_paris("tests::daylight_saving_time_in_paris");
+    }
+
+    #[test]
+    #[ignore = "run by the_next_switch_follows_daylight_saving_time, with TZ=Europe/Paris"]
+    fn daylight_saving_time_in_paris() {
+        let seven = at(7, 0, 0);
+        // Saturday 28 March 2026, 20:00 in Paris (19:00 UTC). The clocks go forward that
+        // night: 07:00 comes 10 hours later, at 05:00 UTC.
+        let evening = 1_774_724_400;
+        assert_eq!(TimeOfDay::at(evening).unwrap(), at(20, 0, 0));
+        assert_eq!(seven.next_after(evening).unwrap(), 1_774_760_400);
+        // Saturday 24 October 2026, 20:00 in Paris (18:00 UTC). The clocks go back that night:
+        // 07:00 comes 12 hours later, at 06:00 UTC.
+        let evening = 1_792_864_800;
+        assert_eq!(TimeOfDay::at(evening).unwrap(), at(20, 0, 0));
+        assert_eq!(seven.next_after(evening).unwrap(), 1_792_908_000);
     }
 }

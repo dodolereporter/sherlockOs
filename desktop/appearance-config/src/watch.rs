@@ -1,29 +1,34 @@
-//! Following the theme live, without polling: inotify on the directory of the file, so that a
-//! file replaced by a rename (as most editors do) is seen too, and a timer that wakes up at
-//! the next switch of the automatic mode.
+//! Following the theme live, without polling. One thread waits with `poll` on two descriptors:
+//!
+//! - inotify, on the directory of the file, so that a file replaced by a rename (as most
+//!   editors do) is seen too; while the directory is missing, on its closest existing ancestor;
+//! - a timerfd on the real-time clock, armed on the absolute instant of the next switch of the
+//!   automatic mode. It fires on wake-up when the instant passed during a suspend, and a change
+//!   of the clock cancels it (`ECANCELED`): either way, the thread computes the theme again.
 
-use std::ffi::{CString, OsStr, c_char, c_int};
+use std::ffi::{CString, OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::{FromRawFd, OwnedFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-use crate::{AppearanceConfig, Problem, Theme, TimeOfDay};
+use crate::{AppearanceConfig, Problem, Theme, TimeOfDay, epoch_now};
 
-// The two inotify calls of the C library, declared here: the crate uses the standard library
-// only. Values from `<sys/inotify.h>`.
-unsafe extern "C" {
-    fn inotify_init1(flags: c_int) -> c_int;
-    fn inotify_add_watch(fd: c_int, path: *const c_char, mask: u32) -> c_int;
-}
-const IN_CLOEXEC: c_int = 0o2_000_000;
-/// Events that may change the file: written, moved in or out, created, deleted.
-const MASK: u32 = 0x008 | 0x040 | 0x080 | 0x100 | 0x200;
-/// The directory itself went away: deleted, moved, watch removed.
-const GONE: u32 = 0x400 | 0x800 | 0x8000;
+/// Events that may change the file: written, moved in or out, created, deleted; and the end of
+/// the watched directory itself.
+const MASK: u32 = libc::IN_CLOSE_WRITE
+    | libc::IN_MOVED_TO
+    | libc::IN_MOVED_FROM
+    | libc::IN_CREATE
+    | libc::IN_DELETE
+    | libc::IN_DELETE_SELF
+    | libc::IN_MOVE_SELF;
+
+/// The watched directory went away (deleted, moved, its watch removed), or events were lost.
+const GONE: u32 =
+    libc::IN_DELETE_SELF | libc::IN_MOVE_SELF | libc::IN_IGNORED | libc::IN_Q_OVERFLOW;
 
 /// Editors write in several steps: the events of a burst give one reload.
 const SETTLE: Duration = Duration::from_millis(50);
@@ -35,168 +40,231 @@ pub enum Event {
     Theme(Theme),
     /// A value of the file was ignored.
     Problem(Problem),
-    /// The file or the clock cannot be read, or the file can no longer be watched.
+    /// The file, the local time or the timer cannot be read, or the file cannot be watched.
     Error(io::Error),
 }
 
 /// Calls `on_event` with the theme of the file at `path`, then each time it changes: the file
-/// is edited, or the automatic mode reaches its switch time. Runs on two threads of its own,
-/// which stop once `on_event` returns `false`. Fails only when no thread can start.
+/// is edited, or the automatic mode reaches its switch time. Runs on a thread of its own, which
+/// stops the next time it reports something after `on_event` returned `false`. Fails only when
+/// the timer or the thread cannot be created.
 pub fn follow(
     path: PathBuf,
-    mut on_event: impl FnMut(Event) -> bool + Send + 'static,
+    on_event: impl FnMut(Event) -> bool + Send + 'static,
 ) -> io::Result<()> {
-    let (wake, woken) = mpsc::channel();
-    let watched = path.clone();
-    let watcher = std::thread::Builder::new()
-        .name(String::from("watch-appearance"))
-        .spawn(move || {
-            let error = watch(&watched, &wake).err();
-            let _ = wake.send(error);
-        });
-    let mut watching = watcher.is_ok();
+    let timer = Timer::new()?;
     std::thread::Builder::new()
         .name(String::from("follow-appearance"))
-        .spawn(move || {
-            let mut last = None;
-            let mut reload = true;
-            let mut config = AppearanceConfig::default();
-            loop {
-                if reload {
-                    match AppearanceConfig::load(&path) {
-                        Ok((read, problems)) => {
-                            config = read;
-                            for problem in problems {
-                                if !on_event(Event::Problem(problem)) {
-                                    return;
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            if !on_event(Event::Error(error)) {
-                                return;
-                            }
-                        }
-                    }
-                }
-                // Without the clock, the automatic mode keeps the theme it has.
-                let (theme, wait) = match TimeOfDay::now() {
-                    Ok(now) => config.theme_at(now),
-                    Err(error) => {
-                        if !on_event(Event::Error(error)) {
-                            return;
-                        }
-                        (last.unwrap_or_default(), None)
-                    }
-                };
-                if last != Some(theme) {
-                    last = Some(theme);
-                    if !on_event(Event::Theme(theme)) {
-                        return;
-                    }
-                }
-                let signal = match (wait, watching) {
-                    (Some(wait), true) => woken.recv_timeout(wait),
-                    (None, true) => woken.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                    (Some(wait), false) => {
-                        std::thread::sleep(wait);
-                        Err(RecvTimeoutError::Timeout)
-                    }
-                    (None, false) => return,
-                };
-                reload = match signal {
-                    Ok(None) => true,
-                    Ok(Some(error)) => {
-                        watching = false;
-                        if !on_event(Event::Error(error)) {
-                            return;
-                        }
-                        false
-                    }
-                    Err(RecvTimeoutError::Timeout) => false,
-                    Err(RecvTimeoutError::Disconnected) => {
-                        watching = false;
-                        false
-                    }
-                };
-            }
-        })
+        .spawn(move || run(&path, &timer, on_event))
         .map(|_| ())
 }
 
-/// Sends `None` each time the file may have changed, until the receiver is dropped (`Ok`) or
-/// inotify fails. A missing directory is waited for in its parent.
-fn watch(path: &Path, wake: &Sender<Option<io::Error>>) -> io::Result<()> {
+fn run(path: &Path, timer: &Timer, mut on_event: impl FnMut(Event) -> bool) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(io::Error::other("no directory or file name"));
+        let _ = on_event(Event::Error(io::Error::other("no directory or file name")));
+        return;
     };
+    let mut watch: Option<Watch> = None;
+    let mut config = AppearanceConfig::default();
+    let mut reload = true;
+    let mut last = None;
     loop {
-        if !dir.exists() {
-            let (Some(parent), Some(dir_name)) = (dir.parent(), dir.file_name()) else {
-                return Err(io::Error::other("no parent directory"));
-            };
-            let mut parent = Inotify::new(parent)?;
-            while !dir.exists() {
-                parent.wait(dir_name)?;
+        if watch.is_none() {
+            match Watch::new(dir, name) {
+                // Watched from here on: the reload below sees what came before.
+                Ok(new) => (watch, reload) = (Some(new), true),
+                Err(error) => {
+                    if !on_event(Event::Error(error)) {
+                        return;
+                    }
+                }
             }
         }
-        let mut watcher = Inotify::new(dir)?;
-        // Watched from here on: the reload that follows sees what came before.
-        if wake.send(None).is_err() {
-            return Ok(());
+        if reload {
+            reload = false;
+            match AppearanceConfig::load(path) {
+                Ok((read, problems)) => {
+                    config = read;
+                    for problem in problems {
+                        if !on_event(Event::Problem(problem)) {
+                            return;
+                        }
+                    }
+                }
+                Err(error) => {
+                    if !on_event(Event::Error(error)) {
+                        return;
+                    }
+                }
+            }
         }
-        while watcher.wait(name)? {
-            std::thread::sleep(SETTLE);
-            if wake.send(None).is_err() {
-                return Ok(());
+        let now = epoch_now();
+        let (theme, deadline) = match TimeOfDay::at(now) {
+            Ok(time) => {
+                let (theme, next) = config.theme_at(time);
+                (theme, next.map(|at| at.next_after(now)).transpose())
+            }
+            // Without the local time, the theme stays as it is.
+            Err(error) => (last.unwrap_or_default(), Err(error)),
+        };
+        if last != Some(theme) {
+            last = Some(theme);
+            if !on_event(Event::Theme(theme)) {
+                return;
+            }
+        }
+        if let Err(error) = deadline.and_then(|at| timer.arm(at))
+            && !on_event(Event::Error(error))
+        {
+            return;
+        }
+        match wait(watch.as_mut(), timer) {
+            Ok(Wake::Clock | Wake::Nothing) => {}
+            Ok(Wake::File) => {
+                std::thread::sleep(SETTLE);
+                reload = true;
+            }
+            Ok(Wake::Rewatch) => watch = None,
+            Err(error) => {
+                watch = None;
+                if !on_event(Event::Error(error)) {
+                    return;
+                }
             }
         }
     }
 }
 
-/// An inotify instance watching one directory.
-struct Inotify {
-    file: File,
+/// Why the thread woke up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wake {
+    /// The switch time came, or the clock changed.
+    Clock,
+    /// The file may have changed.
+    File,
+    /// The watched directory went away, the missing one appeared, or events were lost.
+    Rewatch,
+    /// Events about other files.
+    Nothing,
 }
 
-impl Inotify {
-    fn new(dir: &Path) -> io::Result<Self> {
-        // SAFETY: inotify_init1 takes flags only and returns a new descriptor or -1.
-        let raw = unsafe { inotify_init1(IN_CLOEXEC) };
-        if raw < 0 {
-            return Err(io::Error::last_os_error());
+/// Blocks until the timer or inotify has something.
+fn wait(watch: Option<&mut Watch>, timer: &Timer) -> io::Result<Wake> {
+    let fd = |raw| libc::pollfd {
+        fd: raw,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // A negative descriptor is ignored by `poll`: without a watch, the timer only.
+    let watched = watch.as_ref().map_or(-1, |w| w.inotify.as_raw_fd());
+    let mut fds = [fd(timer.file.as_raw_fd()), fd(watched)];
+    loop {
+        // SAFETY: `fds` is a valid array of two `pollfd` that outlives the call.
+        if unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) } >= 0 {
+            break;
         }
-        // SAFETY: `raw` is a descriptor we just opened and own alone; `OwnedFd` closes it.
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-        let file = File::from(fd);
-        let dir = CString::new(dir.as_os_str().as_bytes()).map_err(io::Error::other)?;
-        // SAFETY: the descriptor is open and `dir` a NUL-terminated string that outlives the
-        // call.
-        if unsafe { inotify_add_watch(raw, dir.as_ptr(), MASK) } < 0 {
-            return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
         }
-        Ok(Self { file })
     }
+    if fds[0].revents != 0 {
+        timer.clear()?;
+        return Ok(Wake::Clock);
+    }
+    match watch {
+        Some(watch) if fds[1].revents != 0 => watch.read(),
+        _ => Ok(Wake::Nothing),
+    }
+}
 
-    /// Blocks until an event comes for `name`: `true`; or until the directory goes: `false`.
-    fn wait(&mut self, name: &OsStr) -> io::Result<bool> {
-        let mut buffer = [0u8; 4096];
+/// What inotify watches: the directory of the file (`target` is then the file), or, while that
+/// directory is missing, its closest existing ancestor (`target` is the next missing folder).
+struct Watch {
+    inotify: File,
+    target: OsString,
+    on_dir: bool,
+}
+
+impl Watch {
+    fn new(dir: &Path, file: &OsStr) -> io::Result<Self> {
         loop {
-            let read = match self.file.read(&mut buffer) {
-                Ok(read) => read,
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            let (watched, target, on_dir) = if dir.exists() {
+                (dir, file, true)
+            } else {
+                let Some((parent, child)) = dir
+                    .ancestors()
+                    .zip(dir.ancestors().skip(1))
+                    .find(|(_, parent)| parent.exists())
+                    .and_then(|(child, parent)| Some((parent, child.file_name()?)))
+                else {
+                    return Err(io::Error::other("no existing folder above the file"));
+                };
+                (parent, child, false)
+            };
+            let inotify = match inotify(watched) {
+                Ok(inotify) => inotify,
+                // Removed between the check and the watch: look again.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
-            for (mask, event) in events(&buffer[..read]) {
-                if mask & GONE != 0 {
-                    return Ok(false);
-                }
-                if event == name.as_bytes() {
-                    return Ok(true);
-                }
+            // The missing folder was created between the check and the watch: watch it.
+            if !on_dir && watched.join(target).exists() {
+                continue;
+            }
+            return Ok(Self {
+                inotify,
+                target: target.to_owned(),
+                on_dir,
+            });
+        }
+    }
+
+    /// Reads the pending events, all of them.
+    fn read(&mut self) -> io::Result<Wake> {
+        let mut buffer = [0u8; 4096];
+        loop {
+            match self.inotify.read(&mut buffer) {
+                Ok(read) => return Ok(classify(&buffer[..read], &self.target, self.on_dir)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
             }
         }
     }
+}
+
+/// What a buffer of events means, read in full: a deleted directory sends the deletion of its
+/// files and its own end in the same read, and the end must not be missed.
+fn classify(bytes: &[u8], target: &OsStr, on_dir: bool) -> Wake {
+    let (mut gone, mut named) = (false, false);
+    for (mask, name) in events(bytes) {
+        gone |= mask & GONE != 0;
+        named |= name == target.as_bytes();
+    }
+    if gone || (named && !on_dir) {
+        Wake::Rewatch
+    } else if named {
+        Wake::File
+    } else {
+        Wake::Nothing
+    }
+}
+
+/// A new inotify instance watching the directory `dir`.
+fn inotify(dir: &Path) -> io::Result<File> {
+    // SAFETY: inotify_init1 takes flags only and returns a new descriptor or -1.
+    let raw = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `raw` is a descriptor we just opened and own alone; `File` closes it.
+    let file = File::from(unsafe { OwnedFd::from_raw_fd(raw) });
+    let dir = CString::new(dir.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    // SAFETY: the descriptor is open and `dir` a NUL-terminated string that outlives the call.
+    if unsafe { libc::inotify_add_watch(raw, dir.as_ptr(), MASK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(file)
 }
 
 /// The mask and file name of each inotify event in `bytes`: a header (`wd`, `mask`, `cookie`,
@@ -217,29 +285,142 @@ fn events(bytes: &[u8]) -> impl Iterator<Item = (u32, &[u8])> {
     })
 }
 
+/// A timer on the real-time clock.
+struct Timer {
+    file: File,
+}
+
+impl Timer {
+    fn new() -> io::Result<Self> {
+        let flags = libc::TFD_CLOEXEC | libc::TFD_NONBLOCK;
+        // SAFETY: timerfd_create takes a clock and flags, and returns a new descriptor or -1.
+        let raw = unsafe { libc::timerfd_create(libc::CLOCK_REALTIME, flags) };
+        if raw < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `raw` is a descriptor we just opened and own alone; `File` closes it.
+        let file = File::from(unsafe { OwnedFd::from_raw_fd(raw) });
+        Ok(Self { file })
+    }
+
+    /// Fires at `at` (seconds since 1970), or disarms with `None`. Armed, a change of the
+    /// real-time clock cancels it.
+    fn arm(&self, at: Option<i64>) -> io::Result<()> {
+        // SAFETY: `itimerspec` is plain data; all zeroes is a disarmed timer.
+        let mut spec: libc::itimerspec = unsafe { std::mem::zeroed() };
+        let mut flags = 0;
+        if let Some(at) = at {
+            spec.it_value.tv_sec = libc::time_t::try_from(at).map_err(io::Error::other)?;
+            flags = libc::TFD_TIMER_ABSTIME | libc::TFD_TIMER_CANCEL_ON_SET;
+        }
+        let fd = self.file.as_raw_fd();
+        // SAFETY: `fd` is our open timerfd and `spec` is valid; no old value is asked for.
+        if unsafe { libc::timerfd_settime(fd, flags, &spec, std::ptr::null_mut()) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Takes the expiry out of the descriptor. `ECANCELED` means the clock changed: like an
+    /// expiry, the theme is computed again.
+    fn clear(&self) -> io::Result<()> {
+        let mut count = [0u8; 8];
+        match (&self.file).read(&mut count) {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error.raw_os_error() == Some(libc::ECANCELED)
+                    || error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
-    #[test]
-    fn event_names_are_read_from_the_buffer() {
-        let mut bytes = Vec::new();
-        for name in [&b"appearance.conf\0"[..], &b"other\0\0\0"[..]] {
-            bytes.extend_from_slice(&[0u8; 12]);
-            bytes.extend_from_slice(&(name.len() as u32).to_ne_bytes());
-            bytes.extend_from_slice(name);
-        }
-        let found: Vec<&[u8]> = events(&bytes).map(|(_, name)| name).collect();
-        assert_eq!(found, [&b"appearance.conf"[..], &b"other"[..]]);
+    /// One inotify event, as the kernel writes it: the name padded with NULs.
+    fn event(mask: u32, name: &[u8]) -> Vec<u8> {
+        let padded = name.len().div_ceil(16) * 16;
+        let mut bytes = vec![0u8; 4];
+        bytes.extend_from_slice(&mask.to_ne_bytes());
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes.extend_from_slice(&(padded as u32).to_ne_bytes());
+        bytes.extend_from_slice(name);
+        bytes.resize(16 + padded, 0);
+        bytes
     }
 
     #[test]
-    fn an_edited_file_changes_the_theme_live() {
+    fn every_event_of_a_read_counts() {
+        let file = OsStr::new("appearance.conf");
+        let both = [event(0, b"appearance.conf"), event(0, b"x")].concat();
+        let names: Vec<&[u8]> = events(&both).map(|(_, name)| name).collect();
+        assert_eq!(names, [&b"appearance.conf"[..], &b"x"[..]]);
+        // A deleted directory: its file, then its own end, in the same read.
+        let deleted = [
+            event(libc::IN_DELETE, b"appearance.conf"),
+            event(libc::IN_DELETE_SELF, b""),
+            event(libc::IN_IGNORED, b""),
+        ]
+        .concat();
+        assert_eq!(classify(&deleted, file, true), Wake::Rewatch);
+        let moved = event(libc::IN_MOVE_SELF, b"");
+        assert_eq!(classify(&moved, file, true), Wake::Rewatch);
+        let lost = event(libc::IN_Q_OVERFLOW, b"");
+        assert_eq!(classify(&lost, file, true), Wake::Rewatch);
+        let written = [
+            event(libc::IN_CREATE, b"other"),
+            event(libc::IN_CLOSE_WRITE, b"appearance.conf"),
+        ]
+        .concat();
+        assert_eq!(classify(&written, file, true), Wake::File);
+        let other = event(libc::IN_CLOSE_WRITE, b"other");
+        assert_eq!(classify(&other, file, true), Wake::Nothing);
+        // Waiting in an ancestor: the missing folder appears.
+        let folder = OsStr::new("appearance");
+        let created = event(libc::IN_CREATE, b"appearance");
+        assert_eq!(classify(&created, folder, false), Wake::Rewatch);
+    }
+
+    /// Whether `file` has something to read within `timeout` milliseconds.
+    fn ready(file: &File, timeout: i32) -> bool {
+        let mut fds = [libc::pollfd {
+            fd: file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        }];
+        // SAFETY: `fds` is a valid array of one `pollfd`.
+        unsafe { libc::poll(fds.as_mut_ptr(), 1, timeout) == 1 }
+    }
+
+    #[test]
+    fn a_switch_time_already_passed_fires_at_once() {
+        // As after a suspend: the instant passed while the machine slept.
+        let timer = Timer::new().unwrap();
+        timer.arm(Some(epoch_now() - 60)).unwrap();
+        assert!(ready(&timer.file, 1000));
+        timer.clear().unwrap();
+        assert!(!ready(&timer.file, 0));
+        // Far ahead, or disarmed: nothing.
+        timer.arm(Some(epoch_now() + 3600)).unwrap();
+        assert!(!ready(&timer.file, 0));
+        timer.arm(None).unwrap();
+        assert!(!ready(&timer.file, 0));
+    }
+
+    #[test]
+    fn the_theme_follows_the_file_and_its_folder() {
         let dir = std::env::temp_dir().join(format!("appearance-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        // `dir/appearance` does not exist yet: the watcher waits for it.
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("appearance/appearance.conf");
+        // `config/appearance` does not exist yet: two missing levels.
+        let folder = dir.join("config/appearance");
+        let path = folder.join("appearance.conf");
         let (sender, themes) = mpsc::channel();
         follow(path.clone(), move |event| match event {
             Event::Theme(theme) => sender.send(theme).is_ok(),
@@ -247,16 +428,30 @@ mod tests {
         })
         .unwrap();
         let next = || themes.recv_timeout(Duration::from_secs(5)).unwrap();
+        let write = |theme: &str| {
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(&path, format!("[Appearance]\nTheme={theme}\n")).unwrap();
+        };
         assert_eq!(next(), Theme::Dark);
-        std::thread::sleep(Duration::from_millis(100));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "[Appearance]\nTheme=light\n").unwrap();
+        write("light");
         assert_eq!(next(), Theme::Light);
         // Replaced by a rename, as editors do.
-        let new = dir.join("appearance/new");
+        let new = folder.join("new");
         std::fs::write(&new, "[Appearance]\nTheme=dark\n").unwrap();
         std::fs::rename(&new, &path).unwrap();
         assert_eq!(next(), Theme::Dark);
+        write("light");
+        assert_eq!(next(), Theme::Light);
+        // The folder deleted: the default theme, then the folder made again.
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(next(), Theme::Dark);
+        write("light");
+        assert_eq!(next(), Theme::Light);
+        // The folder moved away: the default theme, then a new folder.
+        std::fs::rename(&folder, dir.join("config/old")).unwrap();
+        assert_eq!(next(), Theme::Dark);
+        write("light");
+        assert_eq!(next(), Theme::Light);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -100,142 +100,201 @@ impl From<iced::Color> for Color {
 // Backgrounds.
 
 /// Desktop wallpaper.
+/// Dark value only: use `palette()`.
 pub const DESKTOP: Color = Color::rgb(0x0E, 0x1A, 0x2E);
 /// The three large discs of the wallpaper, from darkest to lightest.
+/// Dark value only: use `palette()`.
 pub const DESKTOP_DISCS: [Color; 3] = [
     Color::rgb(0x13, 0x2A, 0x49),
     Color::rgb(0x16, 0x31, 0x4F),
     Color::rgb(0x1B, 0x3F, 0x63),
 ];
 /// Background of the system screens: login, boot, installer.
+/// Dark value only: use `palette()`.
 pub const SYSTEM_SCREEN: Color = Color::rgb(0x0A, 0x14, 0x24);
 /// Darkest background: terminal, code areas. Also used as text on the green.
+/// Dark value only: use `palette()`.
 pub const DEEPEST: Color = Color::rgb(0x0B, 0x12, 0x20);
 /// Body of opaque windows.
+/// Dark value only: use `palette()`.
 pub const WINDOW: Color = Color::rgb(0x0F, 0x18, 0x28);
 /// Title bar of windows.
+/// Dark value only: use `palette()`.
 pub const TITLE_BAR: Color = Color::rgb(0x13, 0x1E, 0x32);
 /// Side panel: navigation on the left, preview on the right.
+/// Dark value only: use `palette()`.
 pub const SIDEBAR: Color = Color::rgb(0x11, 0x1B, 0x2E);
 /// Card inside a window.
+/// Dark value only: use `palette()`.
 pub const CARD: Color = Color::rgb(0x15, 0x22, 0x38);
 /// Command block of the terminal.
+/// Dark value only: use `palette()`.
 pub const TERMINAL_BLOCK: Color = Color::rgb(0x10, 0x1B, 0x2E);
 
 // Glass. The blur is the compositor's business: here, only the tint.
 
 /// Floating panels (24 px blur).
+/// Dark value only: use `palette()`.
 pub const GLASS: Color = Color::rgba(16, 26, 44, 0.82);
 /// Menus and submenus (28 px blur).
+/// Dark value only: use `palette()`.
 pub const MENU_GLASS: Color = Color::rgba(22, 34, 56, 0.96);
 /// Dock (30 px blur).
+/// Dark value only: use `palette()`.
 pub const DOCK_GLASS: Color = Color::rgba(244, 235, 227, 0.17);
 /// Top bar (24 px blur). The Main design board makes it slightly lighter than `GLASS`.
+/// Dark value only: use `palette()`.
 pub const TOP_BAR_GLASS: Color = Color::rgba(16, 26, 44, 0.78);
 
 // Lines and veils.
 
 /// Border of a glass panel and of a window, menu separator.
+/// Dark value only: use `palette()`.
 pub const BORDER: Color = Color::rgba(255, 255, 255, 0.10);
 /// Border of a menu (Menus design board).
+/// Dark value only: use `palette()`.
 pub const MENU_BORDER: Color = Color::rgba(255, 255, 255, 0.14);
 /// Border of a card (« Réglages » design board).
+/// Dark value only: use `palette()`.
 pub const CARD_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
 /// Border of the top bar (Main design board).
+/// Dark value only: use `palette()`.
 pub const TOP_BAR_BORDER: Color = Color::rgba(255, 255, 255, 0.09);
 /// Chip of an inactive workspace in the top bar, at rest then hovered.
+/// Dark value only: use `palette()`.
 pub const CHIP: Color = Color::rgba(255, 255, 255, 0.07);
+/// Dark value only: use `palette()`.
 pub const CHIP_HOVER: Color = Color::rgba(255, 255, 255, 0.12);
 /// Veil of a top bar button whose menu is open (the open « Fenêtre » button of the Menus
 /// board).
+/// Dark value only: use `palette()`.
 pub const TOP_BAR_BUTTON_OPEN: Color = Color::rgba(255, 255, 255, 0.14);
 /// Border of the dock.
+/// Dark value only: use `palette()`.
 pub const DOCK_BORDER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Border of a secondary button.
+/// Dark value only: use `palette()`.
 pub const SECONDARY_BORDER: Color = Color::rgba(255, 255, 255, 0.18);
 /// Line between two rows of a card, bottom of the title bar.
+/// Dark value only: use `palette()`.
 pub const DIVIDER: Color = Color::rgba(255, 255, 255, 0.07);
 /// Background of a text field.
+/// Dark value only: use `palette()`.
 pub const FIELD: Color = Color::rgba(255, 255, 255, 0.07);
 /// Hover veil on an element without background.
+/// Dark value only: use `palette()`.
 pub const HOVER: Color = Color::rgba(255, 255, 255, 0.07);
 /// Press veil on an element without background.
+/// Dark value only: use `palette()`.
 pub const PRESSED: Color = Color::rgba(255, 255, 255, 0.12);
 /// Track of a toggle that is off, at rest and hovered. The design boards only show toggles
 /// that are on: the off track reuses the border of a secondary button.
+/// Dark value only: use `palette()`.
 pub const TOGGLE_OFF: Color = Color::rgba(255, 255, 255, 0.18);
+/// Dark value only: use `palette()`.
 pub const TOGGLE_OFF_HOVER: Color = Color::rgba(255, 255, 255, 0.26);
 /// Inset area of a toolbar: the breadcrumb (Evidence mock-up).
+/// Dark value only: use `palette()`.
 pub const INSET: Color = Color::rgba(255, 255, 255, 0.05);
 /// Pill behind the window buttons.
+/// Dark value only: use `palette()`.
 pub const CONTROLS: Color = Color::rgba(255, 255, 255, 0.06);
 /// Veil laid over a window behind a question awaiting an answer.
+/// Dark value only: use `palette()`.
 pub const SCRIM: Color = Color::rgba(3, 8, 18, 0.45);
 /// Background of a status badge: warning, success, neutral (git status in the Evidence
 /// mock-up), and border of a green badge without background (git branch).
+/// Dark value only: use `palette()`.
 pub const AMBER_SOFT: Color = Color::rgba(240, 196, 138, 0.18);
+/// Dark value only: use `palette()`.
 pub const ACCENT_SOFT: Color = Color::rgba(133, 197, 149, 0.18);
+/// Dark value only: use `palette()`.
 pub const NEUTRAL_SOFT: Color = Color::rgba(255, 255, 255, 0.08);
+/// Dark value only: use `palette()`.
 pub const ACCENT_BORDER: Color = Color::rgba(133, 197, 149, 0.5);
 /// Background of a disabled element.
+/// Dark value only: use `palette()`.
 pub const DISABLED: Color = Color::rgba(255, 255, 255, 0.05);
 /// Colour of the crisp shadows of floating surfaces (`surface::Shadowed`), the same blue
 /// black as `SHADOW` and `MENU_SHADOW`; each step of the shadow sets its own opacity.
+/// Dark value only: use `palette()`.
 pub const SHADOW_BASE: Color = Color::rgb(3, 8, 18);
 /// Shadow of windows and panels.
+/// Dark value only: use `palette()`.
 pub const SHADOW: Color = Color::rgba(3, 8, 18, 0.55);
 /// Shadow of menus.
+/// Dark value only: use `palette()`.
 pub const MENU_SHADOW: Color = Color::rgba(3, 8, 18, 0.6);
 
 // Texts.
 
 /// Titles and content.
+/// Dark value only: use `palette()`.
 pub const TEXT_PRIMARY: Color = Color::rgb(0xEE, 0xF2, 0xF7);
 /// Descriptions, values.
+/// Dark value only: use `palette()`.
 pub const TEXT_SECONDARY: Color = Color::rgb(0xC5, 0xCE, 0xDB);
 /// Labels, shortcuts, text of a disabled element.
+/// Dark value only: use `palette()`.
 pub const TEXT_TERTIARY: Color = Color::rgb(0xA9, 0xB4, 0xC6);
 /// Text of a code snippet or of a file preview (Evidence mock-up).
+/// Dark value only: use `palette()`.
 pub const TEXT_CODE: Color = Color::rgb(0xDC, 0xE4, 0xEE);
 /// Line numbers.
+/// Dark value only: use `palette()`.
 pub const TEXT_LINE_NUMBER: Color = Color::rgb(0x84, 0x92, 0xA8);
 /// Text laid on the green.
+/// Dark value only: use `palette()`.
 pub const TEXT_ON_ACCENT: Color = DEEPEST;
 /// Text laid on the cream.
+/// Dark value only: use `palette()`.
 pub const TEXT_ON_CREAM: Color = Color::rgb(0x14, 0x23, 0x3B);
 
 // Accents.
 
 /// Green of the scarf: main action, active state, success.
+/// Dark value only: use `palette()`.
 pub const ACCENT: Color = Color::rgb(0x85, 0xC5, 0x95);
 /// Hovered green.
+/// Dark value only: use `palette()`.
 pub const ACCENT_HOVER: Color = ACCENT.mix(TEXT_PRIMARY, 0.18);
 /// Pressed green.
+/// Dark value only: use `palette()`.
 pub const ACCENT_PRESSED: Color = ACCENT.mix(DEEPEST, 0.14);
 /// Blue of icons and folders, the darkest.
+/// Dark value only: use `palette()`.
 pub const BLUE_DARK: Color = Color::rgb(0x2B, 0x5F, 0x86);
 /// Blue of icons and folders.
+/// Dark value only: use `palette()`.
 pub const BLUE: Color = Color::rgb(0x32, 0x6D, 0x93);
 /// Blue of the selection and of code keywords.
+/// Dark value only: use `palette()`.
 pub const BLUE_BRIGHT: Color = Color::rgb(0x5B, 0xA3, 0xD0);
 /// Light blue of code keywords.
+/// Dark value only: use `palette()`.
 pub const BLUE_LIGHT: Color = Color::rgb(0x8F, 0xC1, 0xE8);
 /// What comes from Sherlock or from the trust system.
+/// Dark value only: use `palette()`.
 pub const CREAM: Color = Color::rgb(0xF4, 0xEB, 0xE3);
 /// Awaiting a consent, warning.
+/// Dark value only: use `palette()`.
 pub const AMBER: Color = Color::rgb(0xF0, 0xC4, 0x8A);
 /// Error, destructive action.
+/// Dark value only: use `palette()`.
 pub const SALMON: Color = Color::rgb(0xF6, 0xB5, 0xA6);
 
 /// Fully transparent: the background of a shell surface that draws its own shapes.
 pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0.0);
 
 /// Selected row of a list or of a menu, hovered menu entry.
+/// Dark value only: use `palette()`.
 pub const SELECTED_ROW: Color = Color::rgba(91, 163, 208, 0.26);
 /// Background of the active entry of a navigation.
+/// Dark value only: use `palette()`.
 pub const ACTIVE_ENTRY: Color = Color::rgba(133, 197, 149, 0.16);
 /// Keyboard focus ring. The design boards show none: light blue, visible on every background
 /// and distinct from the green of the active state.
+/// Dark value only: use `palette()`.
 pub const FOCUS_RING: Color = BLUE_LIGHT;
 
 /// The two themes. They share sizes and spacings: only the palette changes
@@ -281,7 +340,8 @@ pub fn palette() -> &'static Palette {
 }
 
 /// Every color of a theme, named by its role. The module constants above are the dark values,
-/// kept for the programs that do not follow the theme yet (lots D-05b and D-05c).
+/// kept for the programs that do not follow the theme yet (lots D-05b and D-05c): new code
+/// reads `palette()`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub desktop: Color,
@@ -754,6 +814,59 @@ mod tests {
             assert_eq!((rgb(d), rgb(l)), (rgb(dark[0]), rgb(light[0])));
             assert!((l.a - d.a * 0.33).abs() < 1e-6, "{l:?}");
         }
+    }
+
+    #[test]
+    fn every_row_of_the_table_is_checked() {
+        // The rows read by `every_token_has_the_value_of_the_light_theme_table`: a row added
+        // to the table later must be added there too.
+        let checked = [
+            "Fond du bureau",
+            "Disques du fond d'écran",
+            "Fond des écrans système",
+            "Disques des écrans système",
+            "Fond du mode jeu",
+            "Terminal, zones de code",
+            "Fenêtre",
+            "Barre de titre",
+            "Panneau latéral",
+            "Carte",
+            "Bloc du terminal, carte de l'installeur",
+            "Verre des panneaux",
+            "Verre des menus",
+            "Verre du dock",
+            "Teintes et bordures légères",
+            "Ombres",
+            "Texte principal",
+            "Texte secondaire",
+            "Texte tertiaire",
+            "Numéros de ligne, texte fantôme",
+            "Texte du code",
+            "Mots-clés du code, dossiers",
+            "Types dans le code",
+            "Vert, quand il colore du texte ou une icône",
+            "Ambre, quand il colore du texte",
+            "Saumon, quand il colore du texte",
+        ];
+        let rows: Vec<&str> = TABLE
+            .lines()
+            .filter(|l| l.starts_with("| ") && !l.starts_with("| ---") && !l.starts_with("| Rôle"))
+            .filter_map(|l| l.split('|').nth(1).map(str::trim))
+            .collect();
+        assert_eq!(rows, checked);
+    }
+
+    #[test]
+    fn the_rings_take_colors_of_the_table() {
+        let (d, l) = (&Palette::DARK, &Palette::LIGHT);
+        // Focus ring: the keyword blue of each theme, the light one being the dark variant.
+        assert_eq!(d.focus_ring, row("Mots-clés du code, dossiers").0[0]);
+        assert_eq!(l.focus_ring, row("Mots-clés du code, dossiers").1[0]);
+        // Logo ring: the green fill in dark; in light, the icon green as the table gives it,
+        // before the author darkened the green of texts.
+        assert_eq!(d.logo_ring, d.accent);
+        let green = "Vert, quand il colore du texte ou une icône";
+        assert_eq!(l.logo_ring, row(green).1[0]);
     }
 
     #[test]
