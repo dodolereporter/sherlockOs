@@ -7,7 +7,7 @@ handle: grab band, cursors, snapping against the screen edges. Lot D-11 gives it
 boards: desktop background, rounded corners, border, shadow, and spring animations. Lot D-13
 runs X11 applications in it, through XWayland, with the clipboard both ways. Lot D-12 adds
 anchored surfaces (layer-shell) for the bar, the dock and the panels, several screens, and
-fractional scaling.
+fractional scaling. Lot D-04 draws the wallpaper.
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -27,7 +27,9 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement |
-| `src/render.rs` | Rendering: background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/render.rs` | Rendering: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
+| `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants` |
 | `src/shaders/` | The three GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag` |
 | `src/anim.rs` | Motion of windows and of the preview: springs applied to rectangles. Pure computation |
 | `src/stats.rs` | Frame statistics for `--measure` |
@@ -350,7 +352,7 @@ front to back, as Smithay expects them:
 3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
    scaled), its border, its clipped content, its shadow;
 4. anchored surfaces of the bottom and background layers;
-5. the three background discs;
+5. the wallpaper, or without one the three background discs (see "Wallpapers");
 6. the desktop color, which fills the rest.
 
 **Screens and scale (lot D-12).** Each screen has its own list of elements, built in pixels of
@@ -465,6 +467,138 @@ drawn in the previous frame.
   Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
+
+## Wallpapers
+
+The wallpapers of the collection are in `assets/wallpapers/`, one original per wallpaper, named
+by its id. Their names as the interface shows them, their category and their tone (light or
+dark) are in `sherlock_ui::wallpapers`, the index that Control Room's picker (lot D-26) will
+read. The default one is `first-clue`, « Le premier indice ».
+
+| Id | Name | Category | Tone | Original |
+| --- | --- | --- | --- | --- |
+| `first-clue` | Le premier indice | Par défaut | Dark | 1672 × 941 |
+| `ring` | L'anneau | Emblème | Dark | 3840 × 2160 |
+| `jade-relief` | Relief de jade | Emblème | Dark | 1672 × 941 |
+| `aurora` | Aurore polaire | Emblème | Dark | 1672 × 941 |
+| `paper-eclipse` | Éclipse de papier | Emblème | Light | 1672 × 941 |
+| `rain-trail` | La piste sous la pluie | Les enquêtes de Sherlock | Dark | 1672 × 941 |
+| `missing-page` | La page disparue | Les enquêtes de Sherlock | Dark | 1672 × 941 |
+| `last-train` | Le dernier train | Les enquêtes de Sherlock | Dark | 1672 × 941 |
+
+**Why `assets/` at the root.** The originals are data, not code: no crate compiles them in
+(`include_bytes!` would put 5 MB in every binary that reads the index). The image factory
+(distro) and the variant generator read them from there, and `sherlock-ui` stays a library of
+code.
+
+**Storage of the originals.** One original per wallpaper, never the variants. The author's
+images are PNG; they are stored as JPEG quality 95 without chroma subsampling (4:4:4), which is
+three to five times lighter than lossless WebP for the same look. Measured with ImageMagick
+7.1.1 (libjpeg-turbo 2.1.5, libwebp 1.5.0), in bytes:
+
+| Id | PNG of the author | Lossless WebP | JPEG 95, 4:4:4 | PSNR of the JPEG |
+| --- | ---: | ---: | ---: | ---: |
+| `first-clue` | 1 557 618 | 973 164 | 206 577 | 48.5 dB |
+| `jade-relief` | 2 125 863 | 1 404 736 | 415 234 | 45.3 dB |
+| `aurora` | 1 666 937 | 1 153 590 | 306 778 | 47.6 dB |
+| `paper-eclipse` | 2 510 471 | 1 643 796 | 530 777 | 43.5 dB |
+| `rain-trail` | 2 432 252 | 1 810 506 | 733 322 | 42.3 dB |
+| `missing-page` | 2 702 563 | 1 827 410 | 700 332 | 42.7 dB |
+| `last-train` | 2 806 238 | 2 007 668 | 809 464 | 41.2 dB |
+| `ring` (JPEG source) | | 2 768 312 | 1 261 945 (copied as is) | |
+| Total | 15 801 942 | 13 589 178 | 4 964 429 | |
+
+Above 40 dB, the difference does not show; a crop of the dark gradient under the ring of
+`first-clue`, contrast stretched 3.3 times, shows the same grain in the PNG and in the JPEG.
+A JPEG source (the ring) is copied without being encoded again, which would only lose
+quality. Keeping JPEG also lets the compositor and the generator decode the originals with
+the PNG and JPEG codecs only. `assets/wallpapers/import.sh <collection> [ring]` imports the
+author's collection again, for instance when the 4K versions come.
+
+**Variants.** `just wallpapers [folder]` (default `target/wallpapers`) runs
+`wallpaper-variants` (crate `desktop-config`, feature `variants`), which writes for each
+original `<folder>/<id>/1920x1080.png`, `2560x1440.png` and `3840x2160.png`:
+
+- the middle of the original cut to 16:9, as `cover` shows it;
+- resized with Lanczos 3, in floating point;
+- brought back to 8 bits with a triangular dither of one step (seeded noise): the rounding
+  error becomes a fine grain instead of steps in the dark gradients, and the result is the
+  same byte for byte from one run to the next.
+
+The variants are not versioned: the image factory will generate them and install them in
+`/usr/share/nom-os/wallpapers/` (lot of the session on our base). On the reference laptop,
+the eight wallpapers take 2 minutes and 120 MB (1.9, 3.1 and 6.6 MB for `first-clue`); the
+dithered grain keeps PNG from compressing them much, which is also why they are generated and
+not stored. Generating them at the first launch would cost the same 9 to 20 seconds per wallpaper
+at the start of the session; at build time, it costs nothing in the session.
+
+With 1672 × 941 originals, the 2560 and 3840 variants are enlargements: sharp in the sense of
+"not enlarged again by the GPU", but no more detailed than the original. The 4K originals the
+author will provide fix that; the ring is already 4K.
+
+### Setting
+
+`$XDG_CONFIG_HOME/nom-os/wallpaper.conf` (`~/.config/nom-os/…` by default). `nom-os` stands for
+the name of the OS, not chosen yet: it is written once, in `desktop_config::DIR`.
+
+```text
+# An image (PNG or JPEG), or a folder of variants named <width>x<height>.png.
+path = /usr/share/nom-os/wallpapers/ring
+# cover (default), contain or center.
+mode = cover
+```
+
+- Without `path`, or without the file: the default wallpaper, looked for in
+  `$XDG_DATA_HOME/nom-os/wallpapers/first-clue` then in each `$XDG_DATA_DIRS`.
+- `cover` fills the screen, centered, and cuts what overflows. `contain` shows the whole image,
+  centered, with the desktop color in the bands. `center` puts one image pixel on one screen
+  pixel, centered.
+- The file is checked every 2 seconds (one `stat`, modification time and length): when it
+  changes, it is read again and the wallpaper changes, without restarting.
+- A wrong line (unknown key or mode) is logged with its number, and the default setting
+  applies. A missing image, a folder without variants or an image that does not decode is
+  logged, and the background of the board shows: color and discs. Never a crash.
+
+### Rendering
+
+- **Variant.** Each screen takes the variant made for its size in pixels, that is its size
+  in points times its scale: the smallest one that `cover` (or `contain`) does not enlarge,
+  or else the largest. 1440 × 900 at scale 1 takes 1920 × 1080; the same screen at scale 2
+  (2880 × 1800) takes 3840 × 2160.
+- **Placement.** Computed in the pixels of the screen's slice of the frame, so the scale is
+  already in it: a screen at 1 and a screen at 2 of the same size in pixels show exactly the
+  same part of the image.
+- **Loading.** The image is decoded on a thread of its own (a 4K PNG takes a while): the
+  frames go on, with the board's background until it is ready. It is then uploaded once as a
+  texture, shared by the screens that use the same variant, and drawn every frame as one
+  textured rectangle. A texture that no screen uses any more is freed; a new setting drops
+  them all.
+- **Cost at rest.** Nothing more than one textured rectangle per screen in place of the three
+  discs, and one `stat` every 2 seconds.
+- **Blur (lot D-11b).** The wallpaper is an element of the same list as the rest of the scene,
+  drawn first into the same frame: whatever the blur reads behind a glass surface
+  (`Scene::push_backdrop`) contains it, as it contains the windows.
+
+Screenshots, in Xephyr, with `scene small`, from the variants of `just wallpapers`:
+
+| Screen | Screenshot |
+| --- | --- |
+| 16:9, 1920 × 1080, scale 1 | ![16:9](../desktop/compositor/screenshots/wallpaper-16x9.jpg) |
+| 16:10, 1440 × 900, scale 1 | ![16:10](../desktop/compositor/screenshots/wallpaper-16x10.jpg) |
+| 16:10, 2880 × 1800, scale 2 | ![Scale 2](../desktop/compositor/screenshots/wallpaper-scale-2.jpg) |
+| Two screens of 1440 × 900, scales 1 and 2 | ![Two screens](../desktop/compositor/screenshots/wallpaper-two-screens.jpg) |
+
+To try it, with the variants in a test folder:
+
+```sh
+just wallpapers
+mkdir -p /tmp/wallpaper-test/share/nom-os
+ln -s "$PWD/target/wallpapers" /tmp/wallpaper-test/share/nom-os/wallpapers
+XDG_DATA_HOME=/tmp/wallpaper-test/share cargo run -p compositor -- --nested
+```
+
+Then write `path = …/target/wallpapers/ring` and `mode = contain` in
+`~/.config/nom-os/wallpaper.conf`: the wallpaper changes within 2 seconds.
 
 ## Running
 
@@ -639,6 +773,9 @@ just verify
 | `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. Preview that appears, slides and fades out |
 | `src/render.rs` | Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/stats.rs` | Frame rate, late frames, summary of animated frames |
+| `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
+| `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible) |
+| `sherlock-ui/src/wallpapers.rs` | Every wallpaper of the index has its original, unique ids, a single light one |
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 

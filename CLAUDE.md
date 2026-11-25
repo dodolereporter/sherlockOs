@@ -35,6 +35,7 @@ current ones. Briefs may be written in French; what you produce follows this rul
 | `docs/adr/` | Decision records, starting from `docs/adr/0000-modele.md` |
 | `docs/design/` | Boards and pictures of Sherlock. Visual reference, do not modify it |
 | `prototypes/` | Throwaway prototypes, outside the main workspace |
+| `assets/` | Data shipped with the desktop: the wallpaper originals (`assets/wallpapers/`) |
 
 At the root: the workspace `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`,
 `.editorconfig`, `justfile`.
