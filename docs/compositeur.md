@@ -47,6 +47,9 @@ commande lancée avec la socket du compositeur dans `WAYLAND_DISPLAY`. Pour un t
 cargo run -p compositeur -- --imbrique env QT_QPA_PLATFORM=wayland konsole --separate
 ```
 
+Les journaux s'affichent sur la sortie d'erreur, au niveau `info` par défaut. `RUST_LOG` le règle,
+par exemple `RUST_LOG=compositeur=debug,smithay=warn`. Le nom de la socket apparaît au démarrage.
+
 `QT_QPA_PLATFORM=wayland` force Konsole à parler Wayland : dans une session X11, Qt choisirait X11
 et s'ouvrirait hors du compositeur. `--separate` évite que la commande rejoigne une Konsole déjà
 ouverte.

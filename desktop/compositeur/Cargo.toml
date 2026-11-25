@@ -17,6 +17,11 @@ smithay = { version = "=0.7.0", default-features = false, features = [
 ] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
+# Affiche les journaux sur la sortie d'erreur, niveau réglé par RUST_LOG.
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
 
 [dev-dependencies]
 # Client Wayland du test d'intégration : les mêmes crates que celles que smithay

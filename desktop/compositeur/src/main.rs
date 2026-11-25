@@ -7,8 +7,16 @@ use std::{ffi::OsStr, process::Command};
 
 use compositeur::{Error, State};
 use smithay::reexports::calloop::EventLoop;
+use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Error> {
+    // Niveau des journaux par RUST_LOG (par exemple `RUST_LOG=compositeur=debug`), info sinon.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+
     let mut args = std::env::args_os().skip(1);
     // Seul le backend fenêtré existe pour l'instant ; la session réelle vient au lot D-14.
     if args.next().as_deref() != Some(OsStr::new("--imbrique")) {
