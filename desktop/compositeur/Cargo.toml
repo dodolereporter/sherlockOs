@@ -15,8 +15,9 @@ smithay = { version = "=0.7.0", default-features = false, features = [
     "desktop",
     "wayland_frontend",
 ] }
-# Couleurs et tailles de l'aperçu de calage et de la bande de saisie.
-sherlock-ui = { path = "../sherlock-ui" }
+# Couleurs et tailles de l'aperçu de calage et de la bande de saisie. Les jetons seuls :
+# sans la fonction `iced`, le compositeur ne compile pas le toolkit du shell.
+sherlock-ui = { path = "../sherlock-ui", default-features = false }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Affiche les journaux sur la sortie d'erreur, niveau réglé par RUST_LOG.

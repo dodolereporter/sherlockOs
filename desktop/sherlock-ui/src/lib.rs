@@ -1,8 +1,20 @@
 //! Bibliothèque visuelle du desktop.
 //!
-//! Seul endroit où s'écrivent les couleurs, les tailles et les textes d'interface.
-//! Le lot D-01 la remplit à partir du design. D'ici là, elle ne porte que les quelques valeurs
-//! dont le compositeur a déjà besoin.
+//! Seul endroit où s'écrivent les couleurs, les tailles et les textes d'interface. Les jetons
+//! (`color`, `metrics`, `typography`, `icon`, `logo`, `window`) ne dépendent de rien. Le thème
+//! et les composants iced sont derrière la fonction `iced`, active par défaut. La galerie vit
+//! dans `examples/galerie`. Voir `docs/sherlock-ui.md`.
 
 pub mod color;
+pub mod icon;
+pub mod logo;
+pub mod metrics;
+pub mod typography;
 pub mod window;
+
+#[cfg(feature = "iced")]
+pub mod component;
+#[cfg(feature = "iced")]
+pub mod focus;
+#[cfg(feature = "iced")]
+pub mod theme;
