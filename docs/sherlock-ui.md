@@ -324,6 +324,55 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   button, the toolbar button, the destructive menu entry and the navigation entries, and its
   snapshot is now 2,400 pixels high.
 
+## Light theme (D-05a)
+
+`color::Palette` holds every color of a theme by role; `Palette::DARK` and `Palette::LIGHT`
+take the values of `docs/design/THEME-CLAIR.md` (decision: ADR 0018). The table gives the
+backgrounds and texts; its rules give the rest: a white veil or border becomes
+`rgba(20,35,59,A)`, capped at 0.16; a shadow keeps a third of its opacity; the fills of the
+green, amber, salmon, cream and blues do not change, nor the selection, the active entry and
+the soft badges, as in the light boards. Where a vivid color colors a text, the palette has a
+role of its own: `accent_text`, `amber_text`, `salmon_text`.
+
+A program sets its theme with `color::set_active` and returns `theme::theme()` from its iced
+`theme` function. The styles read the palette of the iced theme they are given
+(`theme::palette`), the constructors of `component` read `color::palette()`: no component
+tests the theme. The module constants of `color` stay, with the dark values, for the programs
+that do not follow the theme yet (D-05b, D-05c). The file and the automatic mode are in
+`docs/appearance.md`.
+
+The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch
+it. Its test writes `gallery-tiny-skia.png` and `gallery-light-tiny-skia.png`.
+
+![Gallery, dark theme](sherlock-ui/gallery-dark.png)
+![Gallery, light theme](sherlock-ui/gallery-light.png)
+
+Choices the table does not make:
+
+| Role | Light value | Why |
+| --- | --- | --- |
+| `focus_ring` | `#1F64A0` | The light blue `#8FC1E8` reads at 1.9 to 1 on white: the dark variant of the table |
+| Knob of a toggle that is on | `#F6F8FB` (`deepest`) | As in the light « Réglages » board |
+| `toggle_off_hover` | `rgba(20,35,59,0.16)` | 0.26 capped at 0.16: same as at rest, the hover no longer shows |
+| `shadow_base` | `rgba(20,35,59,0.33)` | Its opacity scales each step: `surface::Shadowed` still replaces it (D-05b, after D-02) |
+
+### Contrasts of the light table
+
+The contrast test runs on both palettes. The dark one passes everywhere. In the light one,
+some colors of the table stay below 4.5 to 1 (3 to 1 for the logo ring) on some backgrounds;
+the test holds each just under its lowest measured contrast, so that nothing gets worse, and a
+second test checks that these floors are the measured ones. The author decides; nothing is
+changed in the table.
+
+| Color | Lowest | Where | Darkest proposal reaching 4.5 |
+| --- | --- | --- | --- |
+| Tertiary text `#5C6B82` | 3.73 | Straight on the lightest desktop disc (section label, disabled text); 3.98 on a selected row of a card; 4.22 for a menu shortcut on the selected row | `#4F5E75` |
+| Line numbers `#7A889D` | 3.38 | On the code area, 3.60 on a window | `#657388` |
+| Salmon text `#B23A2A` | 3.60 | Destructive button hovered, on the lightest disc | `#92352D` |
+| Amber text `#9A6412` | 4.26 | Warning badge on the title bar | `#936114` |
+| Green text `#2E7D4F` | 4.15 | Success badge on the title bar, git branch on the breadcrumb (4.22) | `#2C764D` |
+| Logo ring `#85C595` (not text, 3 to 1) | 1.41 | Sherlock button of the top bar | The icon green `#2E7D4F` reaches 4.65 |
+
 ## What the lot does not do
 
 - Animated components: the springs and the fade are in `motion` since D-11, to be wired to the

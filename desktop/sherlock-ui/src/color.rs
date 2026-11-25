@@ -1,4 +1,8 @@
-//! Theme colors, named by role. Values from `docs/contexte.md` and the design boards.
+//! Theme colors, named by role. Values from `docs/contexte.md`, `docs/design/THEME-CLAIR.md`
+//! and the design boards. A program sets the active theme (`set_active`), and every color is
+//! read from its palette (`palette`): no component looks at the theme itself.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// An sRGB color, with its opacity between 0 and 1.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,6 +238,295 @@ pub const ACTIVE_ENTRY: Color = Color::rgba(133, 197, 149, 0.16);
 /// and distinct from the green of the active state.
 pub const FOCUS_RING: Color = BLUE_LIGHT;
 
+/// The two themes. They share sizes and spacings: only the palette changes
+/// (`docs/design/THEME-CLAIR.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub const ALL: [Self; 2] = [Self::Dark, Self::Light];
+
+    pub const fn palette(self) -> &'static Palette {
+        match self {
+            Self::Dark => &Palette::DARK,
+            Self::Light => &Palette::LIGHT,
+        }
+    }
+}
+
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Makes `theme` the active theme of the program. The program then redraws: the iced theme
+/// (`theme::theme`) and every component follow it.
+pub fn set_active(theme: Theme) {
+    ACTIVE.store(theme == Theme::Light, Ordering::Relaxed);
+}
+
+/// The active theme, dark until the program sets one.
+pub fn active() -> Theme {
+    if ACTIVE.load(Ordering::Relaxed) {
+        Theme::Light
+    } else {
+        Theme::Dark
+    }
+}
+
+/// The palette of the active theme.
+pub fn palette() -> &'static Palette {
+    active().palette()
+}
+
+/// Every color of a theme, named by its role. The module constants above are the dark values,
+/// kept for the programs that do not follow the theme yet (lots D-05b and D-05c).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Palette {
+    pub desktop: Color,
+    pub desktop_discs: [Color; 3],
+    pub system_screen: Color,
+    /// Discs of the system screens (login, boot, installer).
+    pub system_discs: [Color; 3],
+    /// Background of the game mode.
+    pub game: Color,
+    /// Code areas, the knob of a toggle that is on.
+    pub deepest: Color,
+    pub window: Color,
+    pub title_bar: Color,
+    pub sidebar: Color,
+    pub card: Color,
+    pub terminal_block: Color,
+    pub glass: Color,
+    pub menu_glass: Color,
+    pub dock_glass: Color,
+    pub top_bar_glass: Color,
+    pub border: Color,
+    pub menu_border: Color,
+    pub card_border: Color,
+    pub top_bar_border: Color,
+    pub chip: Color,
+    pub chip_hover: Color,
+    pub top_bar_button_open: Color,
+    pub dock_border: Color,
+    pub secondary_border: Color,
+    pub divider: Color,
+    pub field: Color,
+    pub hover: Color,
+    pub pressed: Color,
+    pub toggle_off: Color,
+    pub toggle_off_hover: Color,
+    pub inset: Color,
+    pub controls: Color,
+    pub scrim: Color,
+    pub amber_soft: Color,
+    pub accent_soft: Color,
+    pub neutral_soft: Color,
+    pub accent_border: Color,
+    pub disabled: Color,
+    /// Colour of the crisp shadow steps. Its opacity scales the opacity of every step.
+    pub shadow_base: Color,
+    pub shadow: Color,
+    pub menu_shadow: Color,
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub text_tertiary: Color,
+    pub text_code: Color,
+    /// Types in code.
+    pub text_code_type: Color,
+    pub text_line_number: Color,
+    pub text_on_accent: Color,
+    pub text_on_cream: Color,
+    /// The green as a fill: buttons, toggles, progress bars, chips.
+    pub accent: Color,
+    /// The green when it colours a text or an icon.
+    pub accent_text: Color,
+    pub accent_hover: Color,
+    pub accent_pressed: Color,
+    pub blue_dark: Color,
+    pub blue: Color,
+    pub blue_bright: Color,
+    /// Code keywords and folders.
+    pub blue_light: Color,
+    pub cream: Color,
+    /// The amber as a fill, then when it colours a text.
+    pub amber: Color,
+    pub amber_text: Color,
+    /// The salmon as a fill, then when it colours a text.
+    pub salmon: Color,
+    pub salmon_text: Color,
+    pub selected_row: Color,
+    pub active_entry: Color,
+    pub focus_ring: Color,
+}
+
+/// Tint and light border of the light theme: the night blue of the text on cream.
+const fn navy(a: f32) -> Color {
+    Color::rgba(20, 35, 59, a)
+}
+
+/// Glass of the light theme.
+const fn white(a: f32) -> Color {
+    Color::rgba(255, 255, 255, a)
+}
+
+impl Palette {
+    pub const DARK: Self = Self {
+        desktop: DESKTOP,
+        desktop_discs: DESKTOP_DISCS,
+        system_screen: SYSTEM_SCREEN,
+        system_discs: [
+            Color::rgb(0x0F, 0x20, 0x38),
+            Color::rgb(0x11, 0x26, 0x3E),
+            Color::rgb(0x14, 0x30, 0x4C),
+        ],
+        game: Color::rgb(0x08, 0x0F, 0x1C),
+        deepest: DEEPEST,
+        window: WINDOW,
+        title_bar: TITLE_BAR,
+        sidebar: SIDEBAR,
+        card: CARD,
+        terminal_block: TERMINAL_BLOCK,
+        glass: GLASS,
+        menu_glass: MENU_GLASS,
+        dock_glass: DOCK_GLASS,
+        top_bar_glass: TOP_BAR_GLASS,
+        border: BORDER,
+        menu_border: MENU_BORDER,
+        card_border: CARD_BORDER,
+        top_bar_border: TOP_BAR_BORDER,
+        chip: CHIP,
+        chip_hover: CHIP_HOVER,
+        top_bar_button_open: TOP_BAR_BUTTON_OPEN,
+        dock_border: DOCK_BORDER,
+        secondary_border: SECONDARY_BORDER,
+        divider: DIVIDER,
+        field: FIELD,
+        hover: HOVER,
+        pressed: PRESSED,
+        toggle_off: TOGGLE_OFF,
+        toggle_off_hover: TOGGLE_OFF_HOVER,
+        inset: INSET,
+        controls: CONTROLS,
+        scrim: SCRIM,
+        amber_soft: AMBER_SOFT,
+        accent_soft: ACCENT_SOFT,
+        neutral_soft: NEUTRAL_SOFT,
+        accent_border: ACCENT_BORDER,
+        disabled: DISABLED,
+        shadow_base: SHADOW_BASE,
+        shadow: SHADOW,
+        menu_shadow: MENU_SHADOW,
+        text_primary: TEXT_PRIMARY,
+        text_secondary: TEXT_SECONDARY,
+        text_tertiary: TEXT_TERTIARY,
+        text_code: TEXT_CODE,
+        text_code_type: Color::rgb(0xE9, 0xDC, 0xC9),
+        text_line_number: TEXT_LINE_NUMBER,
+        text_on_accent: TEXT_ON_ACCENT,
+        text_on_cream: TEXT_ON_CREAM,
+        accent: ACCENT,
+        accent_text: ACCENT,
+        accent_hover: ACCENT_HOVER,
+        accent_pressed: ACCENT_PRESSED,
+        blue_dark: BLUE_DARK,
+        blue: BLUE,
+        blue_bright: BLUE_BRIGHT,
+        blue_light: BLUE_LIGHT,
+        cream: CREAM,
+        amber: AMBER,
+        amber_text: AMBER,
+        salmon: SALMON,
+        salmon_text: SALMON,
+        selected_row: SELECTED_ROW,
+        active_entry: ACTIVE_ENTRY,
+        focus_ring: FOCUS_RING,
+    };
+
+    /// Values of `docs/design/THEME-CLAIR.md`. Its rules give the veils and the shadows: a
+    /// white veil becomes night blue at the same opacity, capped at 0.16; a shadow keeps a
+    /// third of its opacity (× 0.33). The fills of the green, amber, salmon, cream and blues,
+    /// the selection and the soft badges do not change, as in the light boards.
+    pub const LIGHT: Self = Self {
+        desktop: Color::rgb(0xE9, 0xEE, 0xF4),
+        desktop_discs: [
+            Color::rgb(0xDD, 0xE6, 0xF0),
+            Color::rgb(0xD4, 0xE0, 0xEC),
+            Color::rgb(0xC8, 0xD8, 0xE9),
+        ],
+        system_screen: Color::rgb(0xEE, 0xF2, 0xF6),
+        system_discs: [
+            Color::rgb(0xE2, 0xE9, 0xF1),
+            Color::rgb(0xD9, 0xE3, 0xEE),
+            Color::rgb(0xD0, 0xDD, 0xEA),
+        ],
+        game: Color::rgb(0xE7, 0xED, 0xF4),
+        deepest: Color::rgb(0xF6, 0xF8, 0xFB),
+        window: Color::rgb(0xFF, 0xFF, 0xFF),
+        title_bar: Color::rgb(0xF3, 0xF5, 0xF9),
+        sidebar: Color::rgb(0xF6, 0xF8, 0xFB),
+        card: Color::rgb(0xF3, 0xF6, 0xFA),
+        terminal_block: Color::rgb(0xFF, 0xFF, 0xFF),
+        glass: white(0.82),
+        menu_glass: white(0.97),
+        dock_glass: white(0.62),
+        top_bar_glass: white(0.78),
+        border: navy(0.10),
+        menu_border: navy(0.14),
+        card_border: navy(0.09),
+        top_bar_border: navy(0.09),
+        chip: navy(0.07),
+        chip_hover: navy(0.12),
+        top_bar_button_open: navy(0.14),
+        dock_border: navy(0.16),
+        secondary_border: navy(0.16),
+        divider: navy(0.07),
+        field: navy(0.07),
+        hover: navy(0.07),
+        pressed: navy(0.12),
+        toggle_off: navy(0.16),
+        toggle_off_hover: navy(0.16),
+        inset: navy(0.05),
+        controls: navy(0.06),
+        scrim: navy(0.45 * 0.33),
+        amber_soft: AMBER_SOFT,
+        accent_soft: ACCENT_SOFT,
+        neutral_soft: navy(0.08),
+        accent_border: ACCENT_BORDER,
+        disabled: navy(0.05),
+        shadow_base: navy(0.33),
+        shadow: navy(0.55 * 0.33),
+        menu_shadow: navy(0.6 * 0.33),
+        text_primary: Color::rgb(0x14, 0x23, 0x3B),
+        text_secondary: Color::rgb(0x46, 0x56, 0x6F),
+        text_tertiary: Color::rgb(0x5C, 0x6B, 0x82),
+        text_code: Color::rgb(0x1E, 0x2B, 0x40),
+        text_code_type: Color::rgb(0x7A, 0x4E, 0x12),
+        text_line_number: Color::rgb(0x7A, 0x88, 0x9D),
+        text_on_accent: TEXT_ON_ACCENT,
+        text_on_cream: TEXT_ON_CREAM,
+        accent: ACCENT,
+        accent_text: Color::rgb(0x2E, 0x7D, 0x4F),
+        accent_hover: ACCENT_HOVER,
+        accent_pressed: ACCENT_PRESSED,
+        blue_dark: BLUE_DARK,
+        blue: BLUE,
+        blue_bright: BLUE_BRIGHT,
+        blue_light: Color::rgb(0x1F, 0x64, 0xA0),
+        cream: CREAM,
+        amber: AMBER,
+        amber_text: Color::rgb(0x9A, 0x64, 0x12),
+        salmon: SALMON,
+        salmon_text: Color::rgb(0xB2, 0x3A, 0x2A),
+        selected_row: SELECTED_ROW,
+        active_entry: ACTIVE_ENTRY,
+        // The light blue of the dark theme reads at 1.9 to 1 on white: the focus ring takes
+        // the dark variant of the table, that of the keywords.
+        focus_ring: Color::rgb(0x1F, 0x64, 0xA0),
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +557,192 @@ mod tests {
         let laid = Color::rgba(255, 255, 255, 0.5).over(Color::rgb(0, 0, 0));
         assert_eq!(laid, Color::rgb(128, 128, 128));
         assert_eq!(GLASS.over(DESKTOP).a, 1.0);
+    }
+
+    /// The palette table of the light theme design, as the author wrote it.
+    const TABLE: &str = include_str!("../../../docs/design/THEME-CLAIR.md");
+
+    /// Colors of a table cell, `#RRGGBB` or `rgba(r,g,b,a)`; an opacity written as a formula
+    /// (`A`) is read as 1.
+    fn colors_in(cell: &str) -> Vec<Color> {
+        let mut found = Vec::new();
+        for (i, _) in cell.match_indices('#') {
+            let hex = |at: usize| u8::from_str_radix(&cell[i + at..i + at + 2], 16).unwrap();
+            found.push(Color::rgb(hex(1), hex(3), hex(5)));
+        }
+        for (i, _) in cell.match_indices("rgba(") {
+            let end = i + cell[i..].find(')').unwrap();
+            let parts: Vec<&str> = cell[i + 5..end].split(',').map(str::trim).collect();
+            let channel = |k: usize| parts[k].parse::<u8>().unwrap();
+            let a = parts[3].parse::<f32>().unwrap_or(1.0);
+            found.push(Color::rgba(channel(0), channel(1), channel(2), a));
+        }
+        found
+    }
+
+    /// Dark then light colors of the row of `role`.
+    fn row(role: &str) -> (Vec<Color>, Vec<Color>) {
+        let line = TABLE
+            .lines()
+            .find(|l| l.starts_with(&format!("| {role} |")))
+            .unwrap_or_else(|| panic!("no row « {role} »"));
+        let cells: Vec<&str> = line.split('|').collect();
+        (colors_in(cells[2]), colors_in(cells[3]))
+    }
+
+    fn rgb(c: Color) -> (u8, u8, u8) {
+        (c.r, c.g, c.b)
+    }
+
+    #[test]
+    fn every_token_has_the_value_of_the_light_theme_table() {
+        let (d, l) = (&Palette::DARK, &Palette::LIGHT);
+        let exact: [(&str, &[Color], &[Color]); 23] = [
+            ("Fond du bureau", &[d.desktop], &[l.desktop]),
+            (
+                "Disques du fond d'écran",
+                &d.desktop_discs,
+                &l.desktop_discs,
+            ),
+            (
+                "Fond des écrans système",
+                &[d.system_screen],
+                &[l.system_screen],
+            ),
+            (
+                "Disques des écrans système",
+                &d.system_discs,
+                &l.system_discs,
+            ),
+            ("Fond du mode jeu", &[d.game], &[l.game]),
+            ("Terminal, zones de code", &[d.deepest], &[l.deepest]),
+            ("Fenêtre", &[d.window], &[l.window]),
+            ("Barre de titre", &[d.title_bar], &[l.title_bar]),
+            ("Panneau latéral", &[d.sidebar], &[l.sidebar]),
+            ("Carte", &[d.card], &[l.card]),
+            (
+                "Bloc du terminal, carte de l'installeur",
+                &[d.terminal_block],
+                &[l.terminal_block],
+            ),
+            ("Verre des menus", &[d.menu_glass], &[l.menu_glass]),
+            ("Verre du dock", &[d.dock_glass], &[l.dock_glass]),
+            ("Texte principal", &[d.text_primary], &[l.text_primary]),
+            ("Texte secondaire", &[d.text_secondary], &[l.text_secondary]),
+            ("Texte tertiaire", &[d.text_tertiary], &[l.text_tertiary]),
+            (
+                "Numéros de ligne, texte fantôme",
+                &[d.text_line_number],
+                &[l.text_line_number],
+            ),
+            ("Texte du code", &[d.text_code], &[l.text_code]),
+            (
+                "Mots-clés du code, dossiers",
+                &[d.blue_light],
+                &[l.blue_light],
+            ),
+            (
+                "Types dans le code",
+                &[d.text_code_type],
+                &[l.text_code_type],
+            ),
+            (
+                "Vert, quand il colore du texte ou une icône",
+                &[d.accent_text],
+                &[l.accent_text],
+            ),
+            (
+                "Ambre, quand il colore du texte",
+                &[d.amber_text],
+                &[l.amber_text],
+            ),
+            (
+                "Saumon, quand il colore du texte",
+                &[d.salmon_text],
+                &[l.salmon_text],
+            ),
+        ];
+        for (role, dark, light) in exact {
+            assert_eq!(row(role), (dark.to_vec(), light.to_vec()), "{role}");
+        }
+        // Rows given as a rule: same tint, the opacity follows the dark one.
+        let (dark, light) = row("Verre des panneaux");
+        for (d, l) in [(d.glass, l.glass), (d.top_bar_glass, l.top_bar_glass)] {
+            assert_eq!((rgb(d), rgb(l)), (rgb(dark[0]), rgb(light[0])));
+            assert_eq!(l.a, d.a);
+        }
+        let (dark, light) = row("Teintes et bordures légères");
+        for (d, l) in [
+            (d.border, l.border),
+            (d.menu_border, l.menu_border),
+            (d.card_border, l.card_border),
+            (d.top_bar_border, l.top_bar_border),
+            (d.chip, l.chip),
+            (d.chip_hover, l.chip_hover),
+            (d.top_bar_button_open, l.top_bar_button_open),
+            (d.dock_border, l.dock_border),
+            (d.secondary_border, l.secondary_border),
+            (d.divider, l.divider),
+            (d.field, l.field),
+            (d.hover, l.hover),
+            (d.pressed, l.pressed),
+            (d.toggle_off, l.toggle_off),
+            (d.toggle_off_hover, l.toggle_off_hover),
+            (d.inset, l.inset),
+            (d.controls, l.controls),
+            (d.neutral_soft, l.neutral_soft),
+            (d.disabled, l.disabled),
+        ] {
+            assert_eq!((rgb(d), rgb(l)), (rgb(dark[0]), rgb(light[0])));
+            // « opacité plafonnée à 0,16 ».
+            assert_eq!(l.a, d.a.min(0.16), "{d:?}");
+        }
+        let (dark, light) = row("Ombres");
+        for (d, l) in [
+            (d.shadow, l.shadow),
+            (d.menu_shadow, l.menu_shadow),
+            (d.scrim, l.scrim),
+            (d.shadow_base, l.shadow_base),
+        ] {
+            assert_eq!((rgb(d), rgb(l)), (rgb(dark[0]), rgb(light[0])));
+            assert!((l.a - d.a * 0.33).abs() < 1e-6, "{l:?}");
+        }
+    }
+
+    #[test]
+    fn fills_of_sherlock_and_of_the_accents_do_not_change() {
+        let (d, l) = (&Palette::DARK, &Palette::LIGHT);
+        for (name, dark, light) in [
+            ("accent", d.accent, l.accent),
+            ("accent hover", d.accent_hover, l.accent_hover),
+            ("accent pressed", d.accent_pressed, l.accent_pressed),
+            ("amber", d.amber, l.amber),
+            ("salmon", d.salmon, l.salmon),
+            ("cream", d.cream, l.cream),
+            ("text on cream", d.text_on_cream, l.text_on_cream),
+            ("text on accent", d.text_on_accent, l.text_on_accent),
+            ("blue dark", d.blue_dark, l.blue_dark),
+            ("blue", d.blue, l.blue),
+            ("blue bright", d.blue_bright, l.blue_bright),
+            ("selected row", d.selected_row, l.selected_row),
+            ("active entry", d.active_entry, l.active_entry),
+            ("amber soft", d.amber_soft, l.amber_soft),
+            ("accent soft", d.accent_soft, l.accent_soft),
+            ("accent border", d.accent_border, l.accent_border),
+        ] {
+            assert_eq!(dark, light, "{name}");
+        }
+        assert_eq!(d.text_on_accent, Color::rgb(0x0B, 0x12, 0x20));
+        assert_eq!(d.text_on_cream, Color::rgb(0x14, 0x23, 0x3B));
+    }
+
+    #[test]
+    fn the_active_theme_gives_its_palette() {
+        assert_eq!(active(), Theme::Dark);
+        set_active(Theme::Light);
+        assert_eq!(palette(), &Palette::LIGHT);
+        set_active(Theme::Dark);
+        assert_eq!(palette(), &Palette::DARK);
     }
 
     #[test]
