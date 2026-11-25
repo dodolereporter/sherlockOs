@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kate
+GenericName=Advanced Text Editor
+GenericName[fr]=Éditeur de texte avancé
+Keywords=text;editor;code;
+Keywords[fr]=texte;éditeur;code;
+Exec=kate -b %U

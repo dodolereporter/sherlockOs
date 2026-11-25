@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Konsole
+GenericName=Terminal
+Keywords=terminal;console;script;run;execute;command;
+Exec=konsole

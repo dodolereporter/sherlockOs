@@ -40,6 +40,11 @@ mime_apps::set_default(&catalog.dirs, &desktops, &mime, &app.id)?; // remember a
   out. No duplicates, by desktop id or by name and command.
 - `Catalog::choosable()`: every application not hidden from menus, by name, for a "choose an
   application" list.
+- `DesktopEntry` holds the id, the file, `Name`, `GenericName` and `Keywords` (all three
+  localized), `Exec`, `Path` (`working_dir`), `Icon`, `MimeType`, `NoDisplay`, `Terminal` and
+  `TryExec`. String values are unescaped (`\s`, `\n`…); in lists (`Keywords`, `MimeType`),
+  `\;` is a semicolon inside an item. The launcher (`docs/launcher.md`) searches the name,
+  generic name and keywords.
 - `DesktopEntry::command(files)`: splits `Exec` with its quoting rules and expands the field
   codes (`%f %F %u %U %i %c %k %%`; deprecated codes are dropped).
 - `Catalog::command(app, files)`: the same, run inside a terminal when the entry says
