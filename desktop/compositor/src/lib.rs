@@ -12,6 +12,7 @@ mod input;
 pub mod keyboard;
 mod layer;
 pub mod layout;
+pub mod mesa;
 pub mod options;
 pub mod output;
 pub mod render;
@@ -74,11 +75,20 @@ use crate::{
 #[derive(thiserror::Error)]
 pub enum Error {
     #[error(
-        "usage: compositor [--nested [--outputs N]] [--measure] [--scale S]… [command [arguments…]]"
+        "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
+         [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
     Session(String),
+    #[error(
+        "a graphical session already runs here (DISPLAY or WAYLAND_DISPLAY is set): the real \
+         session starts from a text console or the login screen; use --nested to open the \
+         compositor in a window"
+    )]
+    InSession,
+    #[error("XWayland is off in the real session, unless --xwayland is given")]
+    NoXwayland,
     #[error("cannot create the Wayland display: {0}")]
     Display(#[from] smithay::reexports::wayland_server::backend::InitError),
     #[error("cannot open the Wayland socket: {0}")]

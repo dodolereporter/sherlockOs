@@ -1,8 +1,8 @@
 //! Command line of the compositor.
 //!
-//! `compositor [--nested [--outputs N]] [--measure] [--scale S]… [command [arguments…]]`.
+//! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
-//! the login screen.
+//! the login screen, never inside another graphical session.
 
 use std::ffi::OsString;
 
@@ -15,6 +15,8 @@ pub struct Options {
     pub nested: bool,
     /// Frame statistics in the log, and the session stops with the command.
     pub measure: bool,
+    /// `--xwayland`: X11 applications in the real session too (see `Options::xwayland`).
+    pub xwayland: bool,
     /// Scale of each screen, in order; missing ones repeat the last one given, or 1. In nested
     /// mode, one per screen of the window (`--outputs`).
     pub scales: Vec<f64>,
@@ -30,10 +32,11 @@ impl Options {
         if nested {
             command.remove(0);
         }
-        let (mut measure, mut screens, mut scales) = (false, None, Vec::new());
+        let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
         loop {
             match command.first().and_then(|a| a.to_str()) {
                 Some("--measure") => measure = true,
+                Some("--xwayland") => xwayland = true,
                 Some("--outputs") if nested => screens = Some(option(&mut command, 1..=4)?),
                 Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
                 Some("--outputs" | "--nested") => return Err(Error::Usage),
@@ -50,9 +53,28 @@ impl Options {
         Ok(Self {
             nested,
             measure,
+            xwayland,
             scales,
             command,
         })
+    }
+
+    /// XWayland starts: always in nested mode, only with `--xwayland` in the real session.
+    /// Xwayland 24 opens the NVIDIA card even when it draws in software (see "Real session" in
+    /// `docs/compositor.md`), and the card must stay asleep.
+    pub fn xwayland(&self) -> bool {
+        self.nested || self.xwayland
+    }
+
+    /// The real session takes the screens and the input devices of the seat: it refuses to
+    /// start inside another graphical session (`DISPLAY` or `WAYLAND_DISPLAY` set), where it
+    /// would fight that session for them.
+    pub fn check_environment(&self, var: impl Fn(&str) -> Option<OsString>) -> Result<(), Error> {
+        let set = |key: &str| var(key).is_some_and(|v| !v.is_empty());
+        if self.nested || !(set("DISPLAY") || set("WAYLAND_DISPLAY")) {
+            return Ok(());
+        }
+        Err(Error::InSession)
     }
 
     /// Scale of the screen number `i`, from 0.
@@ -121,6 +143,41 @@ mod tests {
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
+    }
+
+    #[test]
+    fn the_real_session_refuses_to_start_inside_another() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| OsString::from(v))
+            }
+        };
+        let real = parse(&["konsole"]).unwrap();
+        // From a text console or the login screen: neither variable.
+        assert!(real.check_environment(env(&[("HOME", "/home/me")])).is_ok());
+        assert!(real.check_environment(env(&[("DISPLAY", "")])).is_ok());
+        // Inside Plasma, X11 or Wayland.
+        for inside in [
+            &[("DISPLAY", ":0")][..],
+            &[("WAYLAND_DISPLAY", "wayland-0")],
+        ] {
+            let refused = real.check_environment(env(inside));
+            assert!(matches!(refused, Err(Error::InSession)), "{inside:?}");
+            assert!(refused.unwrap_err().to_string().contains("--nested"));
+        }
+        // Nested mode is made for that.
+        let nested = parse(&["--nested"]).unwrap();
+        assert!(nested.check_environment(env(&[("DISPLAY", ":0")])).is_ok());
+    }
+
+    #[test]
+    fn xwayland_is_asked_for_in_the_real_session() {
+        assert!(!parse(&["konsole"]).unwrap().xwayland());
+        assert!(parse(&["--xwayland", "konsole"]).unwrap().xwayland());
+        assert!(parse(&["--nested"]).unwrap().xwayland());
     }
 
     #[test]

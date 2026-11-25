@@ -13,8 +13,6 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    ffi::OsString,
-    path::{Path, PathBuf},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -46,7 +44,7 @@ use smithay::{
     output::{Mode, Output, OutputModeSource, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
-            EventLoop, LoopHandle,
+            EventLoop, LoopHandle, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
         drm::control::{Device as _, ModeTypeFlags, connector, crtc},
@@ -67,50 +65,8 @@ use crate::{
     wallpaper::{Textures, Wallpaper},
 };
 
-/// libglvnd's variable: the EGL vendor libraries it may load.
-pub const EGL_VENDORS: &str = "__EGL_VENDOR_LIBRARY_FILENAMES";
-
-/// Folders of libglvnd's EGL vendor files.
-const GLVND_DIRS: [&str; 2] = ["/etc/glvnd/egl_vendor.d", "/usr/share/glvnd/egl_vendor.d"];
-
 /// Frame period when nothing changed on a screen: its next frame is tried after it.
 const IDLE: Duration = Duration::from_millis(16);
-
-/// Lets libglvnd load Mesa's EGL only, unless the user set `__EGL_VENDOR_LIBRARY_FILENAMES`.
-/// On Debian NVIDIA's comes first (`10_nvidia.json`), and loading it may wake the card.
-/// Returns the value the variable had, for the commands the compositor launches.
-///
-/// # Safety
-///
-/// Changes the process environment: the process must have a single thread.
-pub unsafe fn restrict_egl_to_mesa() -> Option<OsString> {
-    let previous = std::env::var_os(EGL_VENDORS);
-    let dirs = GLVND_DIRS.map(Path::new);
-    if previous.is_none()
-        && let Some(mesa) = mesa_vendor(&dirs)
-    {
-        // SAFETY: the caller guarantees that the process has a single thread.
-        unsafe { std::env::set_var(EGL_VENDORS, mesa) };
-    }
-    previous
-}
-
-/// Mesa's EGL vendor file (`50_mesa.json`) in the first of `dirs` that has one.
-fn mesa_vendor(dirs: &[&Path]) -> Option<PathBuf> {
-    dirs.iter().find_map(|dir| {
-        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-            .ok()?
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        files.sort();
-        files.into_iter().find(|path| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.contains("mesa") && n.ends_with(".json"))
-        })
-    })
-}
 
 /// The pointer moved by `delta` from `from`: kept on the screens (`areas`, side by side).
 pub fn clamp_pointer(
@@ -157,29 +113,60 @@ struct Head {
     queued: bool,
 }
 
+/// Fields are dropped in this order: the screens and the card (which gives the console its
+/// display state back) before the seat.
 struct Backend {
-    session: LibSeatSession,
-    libinput: Libinput,
-    device: DrmDevice,
-    /// Device number of the card, as udev names it.
-    device_id: Dev,
-    gbm: GbmDevice<DrmDeviceFd>,
-    renderer: GlesRenderer,
+    heads: HashMap<crtc::Handle, Head>,
     scene: Scene,
     textures: Textures,
-    preview: PreviewMotion,
     cursors: Cursors,
-    heads: HashMap<crtc::Handle, Head>,
+    renderer: GlesRenderer,
+    device: DrmDevice,
+    gbm: GbmDevice<DrmDeviceFd>,
+    libinput: Libinput,
+    session: LibSeatSession,
+    /// Device number of the card, as udev names it.
+    device_id: Dev,
+    preview: PreviewMotion,
     options: Options,
+    /// Frames that failed in a row: only some of them are logged.
+    failures: u64,
+}
+
+/// The real session, to close when leaving the loop.
+pub struct RealSession {
+    backend: Rc<RefCell<Backend>>,
+    handle: LoopHandle<'static, State>,
+    sources: Vec<RegistrationToken>,
+}
+
+impl RealSession {
+    /// Releases the screens and the card, then the seat: the console gets back its display
+    /// state while the compositor is still allowed to set it. Smithay's loop is never freed
+    /// (its X11 window manager keeps a handle to it), so its sources are removed here.
+    pub fn close(self, state: &mut State) {
+        for token in self.sources {
+            self.handle.remove(token);
+        }
+        state.switch_vt = None;
+        match Rc::try_unwrap(self.backend) {
+            Ok(backend) => drop(backend.into_inner()),
+            Err(backend) => {
+                tracing::warn!("the real session is still in use: its screens are released");
+                backend.borrow_mut().heads.clear();
+            }
+        }
+    }
 }
 
 /// Opens the session and the card, creates one screen per connector with a screen, and plugs
-/// input, screen changes, frames and console switches into the loop.
+/// input, screen changes, frames and console switches into the loop. Fails if no screen can be
+/// driven.
 pub fn init(
     event_loop: &EventLoop<'static, State>,
     state: &mut State,
     options: &Options,
-) -> Result<(), Error> {
+) -> Result<RealSession, Error> {
     let fail = |what: &str, err: &dyn std::fmt::Display| Error::Session(format!("{what}: {err}"));
     let (session, notifier) = LibSeatSession::new().map_err(|e| fail("libseat", &e))?;
     let path = card::primary().map_err(Error::Session)?;
@@ -233,27 +220,40 @@ pub fn init(
     }));
 
     let backend = Rc::new(RefCell::new(Backend {
-        session,
-        libinput: libinput.clone(),
-        device,
-        device_id,
-        gbm,
-        renderer,
+        heads: HashMap::new(),
         scene,
         textures: Textures::default(),
-        preview: PreviewMotion::default(),
         cursors: Cursors::load(),
-        heads: HashMap::new(),
+        renderer,
+        device,
+        gbm,
+        libinput: libinput.clone(),
+        session,
+        device_id,
+        preview: PreviewMotion::default(),
         options: options.clone(),
+        failures: 0,
     }));
     backend.borrow_mut().scan(state);
-    insert_sources(&event_loop.handle(), &backend, notifier, drm_events, udev)?;
+    if backend.borrow().heads.is_empty() {
+        // The card's screens were switched off when it was opened: better leave than stay dark.
+        return Err(Error::Session(format!(
+            "no screen driven on {}: none plugged in, or none could be lit (see the log)",
+            path.display()
+        )));
+    }
+    let handle = event_loop.handle();
+    let mut sources = insert_sources(&handle, &backend, notifier, drm_events, udev)?;
     let input = LibinputInputBackend::new(libinput);
-    event_loop
-        .handle()
+    let token = handle
         .insert_source(input, |event, _, state| input_event(event, state))
         .map_err(|e| e.error)?;
-    Ok(())
+    sources.push(token);
+    Ok(RealSession {
+        backend,
+        handle,
+        sources,
+    })
 }
 
 fn insert_sources(
@@ -262,44 +262,41 @@ fn insert_sources(
     notifier: smithay::backend::session::libseat::LibSeatSessionNotifier,
     drm_events: smithay::backend::drm::DrmDeviceNotifier,
     udev: UdevBackend,
-) -> Result<(), Error> {
+) -> Result<Vec<RegistrationToken>, Error> {
     let b = backend.clone();
-    handle
-        .insert_source(notifier, move |event, _, state| match event {
-            SessionEvent::PauseSession => b.borrow_mut().pause(state),
-            SessionEvent::ActivateSession => b.borrow_mut().activate(state),
-        })
-        .map_err(|e| e.error)?;
+    let session = handle.insert_source(notifier, move |event, _, state| match event {
+        SessionEvent::PauseSession => b.borrow_mut().pause(state),
+        SessionEvent::ActivateSession => b.borrow_mut().activate(state),
+    });
     let b = backend.clone();
-    handle
-        .insert_source(drm_events, move |event, _, state| match event {
-            DrmEvent::VBlank(crtc) => b.borrow_mut().frame_done(state, crtc),
-            DrmEvent::Error(err) => tracing::warn!("DRM: {err}"),
-        })
-        .map_err(|e| e.error)?;
+    let drm = handle.insert_source(drm_events, move |event, _, state| match event {
+        DrmEvent::VBlank(crtc) => b.borrow_mut().frame_done(state, crtc),
+        DrmEvent::Error(err) => tracing::warn!("DRM: {err}"),
+    });
     let b = backend.clone();
-    handle
-        .insert_source(udev, move |event, _, state| match event {
-            UdevEvent::Changed { device_id } if device_id == b.borrow().device_id => {
-                b.borrow_mut().scan(state);
-            }
-            UdevEvent::Removed { device_id } if device_id == b.borrow().device_id => {
-                tracing::error!("the card is gone");
-                state.loop_signal.stop();
-            }
-            // Other cards are never opened.
-            other => tracing::debug!(?other, "udev"),
-        })
-        .map_err(|e| e.error)?;
+    let udev = handle.insert_source(udev, move |event, _, state| match event {
+        UdevEvent::Changed { device_id } if device_id == b.borrow().device_id => {
+            b.borrow_mut().scan(state);
+        }
+        UdevEvent::Removed { device_id } if device_id == b.borrow().device_id => {
+            tracing::error!("the card is gone");
+            state.loop_signal.stop();
+        }
+        // Other cards are never opened.
+        other => tracing::debug!(?other, "udev"),
+    });
     // Screens whose last frame changed nothing are drawn again a little later.
     let b = backend.clone();
-    handle
-        .insert_source(Timer::from_duration(IDLE), move |_, _, state| {
-            b.borrow_mut().render_all(state);
-            TimeoutAction::ToDuration(IDLE)
-        })
-        .map_err(|e| e.error)?;
-    Ok(())
+    let timer = handle.insert_source(Timer::from_duration(IDLE), move |_, _, state| {
+        b.borrow_mut().render_all(state);
+        TimeoutAction::ToDuration(IDLE)
+    });
+    Ok(vec![
+        session.map_err(|e| e.error)?,
+        drm.map_err(|e| e.error)?,
+        udev.map_err(|e| e.error)?,
+        timer.map_err(|e| e.error)?,
+    ])
 }
 
 fn input_event(event: InputEvent<LibinputInputBackend>, state: &mut State) {
@@ -543,13 +540,31 @@ impl Backend {
         let frame =
             head.compositor
                 .render_frame(&mut self.renderer, &elements, clear, FrameFlags::empty());
-        match frame {
+        let failure = match frame {
             Ok(frame) if !frame.is_empty => match head.compositor.queue_frame(()) {
-                Ok(()) => head.queued = true,
-                Err(err) => tracing::warn!("DRM: {err}"),
+                Ok(()) => {
+                    head.queued = true;
+                    None
+                }
+                Err(err) => Some(format!("DRM: {err}")),
             },
-            Ok(_) => {}
-            Err(err) => tracing::warn!("render: {err}"),
+            Ok(_) => None,
+            Err(err) => Some(format!("render: {err}")),
+        };
+        match failure {
+            // A failure that repeats on every frame is logged at the 1st, 2nd, 4th, 8th… time,
+            // not 60 times a second.
+            Some(err) => {
+                self.failures += 1;
+                if self.failures.is_power_of_two() {
+                    tracing::warn!(failures = self.failures, "{err}");
+                }
+            }
+            None if self.failures > 0 => {
+                tracing::info!(failures = self.failures, "frames drawn again");
+                self.failures = 0;
+            }
+            None => {}
         }
         if let Some(stats) = state.frame_stats.as_mut()
             && let Some(period) = stats.record(now, started.elapsed(), animating)
@@ -606,23 +621,5 @@ mod tests {
         );
         // Without a screen, it does not move.
         assert_eq!(clamp_pointer(at(5.0, 5.0), at(1.0, 1.0), &[]), at(5.0, 5.0));
-    }
-
-    #[test]
-    fn mesa_is_the_only_egl_vendor() {
-        let root = std::env::temp_dir().join(format!("compositor-egl-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let (etc, share) = (root.join("etc"), root.join("share"));
-        std::fs::create_dir_all(&etc).unwrap();
-        std::fs::create_dir_all(&share).unwrap();
-        for file in ["10_nvidia.json", "50_mesa.json"] {
-            std::fs::write(share.join(file), "{}").unwrap();
-        }
-        let found = mesa_vendor(&[&etc, &share, &root.join("missing")]);
-        assert_eq!(found, Some(share.join("50_mesa.json")));
-        // Without Mesa's, nothing is restricted.
-        std::fs::remove_file(share.join("50_mesa.json")).unwrap();
-        assert_eq!(mesa_vendor(&[&etc, &share]), None);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

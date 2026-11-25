@@ -1,7 +1,8 @@
 //! Wayland compositor of the desktop.
 //!
 //! `compositor [command [arguments…]]`, from a text console or the login screen, is the real
-//! session: the screens, keyboard, mouse and touchpad of the machine (lot D-14).
+//! session: the screens, keyboard, mouse and touchpad of the machine (lot D-14). It refuses to
+//! start inside another graphical session.
 //! `compositor --nested [command [arguments…]]` opens the compositor in a window of the
 //! current session instead. Either way it starts XWayland, then launches the command, giving it
 //! its Wayland socket (`WAYLAND_DISPLAY`) and its X11 display (`DISPLAY`).
@@ -15,19 +16,19 @@ use std::{
     process::Command,
 };
 
-use compositor::{Error, State, options::Options, stats::FrameStats, udev};
+use compositor::{Error, State, mesa, options::Options, stats::FrameStats, udev};
 use smithay::reexports::calloop::{EventLoop, LoopSignal};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
-    // The real session renders with Mesa only: NVIDIA's EGL library is never loaded (it comes
-    // first on Debian), so that the NVIDIA card stays asleep. The launched command gets the
-    // variable back as it was.
-    let egl = (!options.nested).then(|| {
-        // SAFETY: no thread exists yet: only the arguments have been read.
-        unsafe { udev::restrict_egl_to_mesa() }
-    });
+    options.check_environment(|key| std::env::var_os(key))?;
+    if !options.nested {
+        // The real session renders with Mesa only, and so do the programs it launches: NVIDIA's
+        // EGL library is never loaded (it comes first on Debian), so that the card stays asleep.
+        // SAFETY: no thread exists yet: only the arguments and the environment have been read.
+        unsafe { mesa::restrict_egl_to_mesa() };
+    }
 
     // Log level from RUST_LOG (for example `RUST_LOG=compositor=debug`), info otherwise.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -42,11 +43,13 @@ fn main() -> Result<(), Error> {
         state.frame_stats = Some(FrameStats::default());
     }
     let socket = state.listen(&event_loop)?;
-    if options.nested {
+    // The real session's devices are released before the seat when leaving, whatever happens.
+    let session = if options.nested {
         compositor::winit::init(&event_loop, &mut state, &options.scales)?;
+        None
     } else {
-        udev::init(&event_loop, &mut state, &options)?;
-    }
+        Some(udev::init(&event_loop, &mut state, &options)?)
+    };
     tracing::info!(socket = ?socket, "compositor ready");
 
     // When measuring, the session stops with the command, which is the measured scene.
@@ -54,21 +57,28 @@ fn main() -> Result<(), Error> {
     // XWayland starts with the compositor, and the command once it is ready: it may be an X11
     // application. Without Xwayland on the machine, only Wayland applications show up.
     let launch = {
-        let (command, socket) = (options.command.clone(), socket.clone());
-        let (signal, egl) = (signal.clone(), egl.clone());
+        let (command, socket, signal) = (options.command.clone(), socket.clone(), signal.clone());
         move |_: &mut State, display: Option<u32>| {
-            if let Err(err) = spawn(&command, &socket, display, signal, egl) {
+            if let Err(err) = spawn(&command, &socket, display, signal) {
                 tracing::warn!("{err}");
             }
         }
     };
-    if let Err(err) = state.start_xwayland(&event_loop, launch) {
+    let xwayland = if options.xwayland() {
+        state.start_xwayland(&event_loop, launch)
+    } else {
+        Err(Error::NoXwayland)
+    };
+    if let Err(err) = xwayland {
         tracing::warn!("no X11 applications: {err}");
-        spawn(&options.command, &socket, None, signal, egl)?;
+        spawn(&options.command, &socket, None, signal)?;
     }
 
     event_loop.run(None, &mut state, State::refresh)?;
     state.shutdown();
+    if let Some(session) = session {
+        session.close(&mut state);
+    }
     if let Some(stats) = &state.frame_stats {
         tracing::info!("summary, all frames: {}", stats.all);
         tracing::info!("summary, animated frames: {}", stats.animated);
@@ -79,14 +89,12 @@ fn main() -> Result<(), Error> {
 /// Launches the command, if there is one, with the compositor's Wayland socket and its X11
 /// display. Both go through the child's environment only: ours keeps the host session's. Without
 /// an X11 display, the child does not inherit the host's, where its X11 windows would open
-/// outside the compositor. `egl`: in the real session, the value `__EGL_VENDOR_LIBRARY_FILENAMES`
-/// had before the compositor restricted it, given back to the child.
+/// outside the compositor.
 fn spawn(
     command: &[OsString],
     socket: &OsStr,
     display: Option<u32>,
     signal: Option<LoopSignal>,
-    egl: Option<Option<OsString>>,
 ) -> Result<(), Error> {
     let Some((program, arguments)) = command.split_first() else {
         return Ok(());
@@ -96,11 +104,6 @@ fn spawn(
     match display {
         Some(n) => child.env("DISPLAY", format!(":{n}")),
         None => child.env_remove("DISPLAY"),
-    };
-    match egl {
-        Some(Some(value)) => child.env(udev::EGL_VENDORS, value),
-        Some(None) => child.env_remove(udev::EGL_VENDORS),
-        None => &mut child,
     };
     let mut child = child.spawn()?;
     // A thread waits for the command to end, so that it does not stay a zombie.
