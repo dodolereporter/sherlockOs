@@ -101,10 +101,7 @@ pub enum McpError {
     },
     /// Le serveur a envoyé un message que le client ne comprend pas.
     #[error("réponse invalide du serveur {server} : {detail}")]
-    Protocol {
-        server: String,
-        detail: String,
-    },
+    Protocol { server: String, detail: String },
     /// Le serveur a répondu par une erreur JSON-RPC.
     #[error("le serveur {server} refuse {method} : {message} (code {code})")]
     Rpc {
