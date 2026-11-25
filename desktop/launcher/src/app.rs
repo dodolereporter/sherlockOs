@@ -1,18 +1,22 @@
 //! Launcher state, messages, update and view.
 
+use std::ffi::OsString;
+use std::path::Path;
 use std::sync::Arc;
 
 use iced::keyboard::{self, key::Named};
-use iced::widget::{Space, button, column, container, operation, row, text, text_input};
+use iced::widget::{Space, button, column, container, operation, row, svg, text, text_input};
 use iced::window::Id;
 use iced::{Alignment, Element, Event, Length, Subscription, Task, event};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::icon::Icon;
-use sherlock_ui::launcher::{self as look, text as texts};
+use sherlock_ui::launcher::{self as look, Glyph, text as texts};
+use sherlock_ui::logo::Logo;
 use sherlock_ui::{color, metrics, typography};
 
-use crate::source::{self, Action, Command, Hit, Section, Source};
+use crate::source::{self, Action, Command, Hit, Section, Source, Tile};
+use crate::system::{NoSession, Session};
 
 /// Id of the search field, to give it the keyboard.
 pub const QUERY: &str = "query";
@@ -34,14 +38,44 @@ pub enum Message {
     Key(Key),
     /// A result clicked, by its place in the list.
     Pick(usize),
+    /// A source has more to say (the files, once walked): search again.
+    Refresh,
 }
 
 /// What starts a program: `launch::spawn`, or a recorder in tests.
 pub type Spawn = Arc<dyn Fn(&Command) -> Result<u32, crate::launch::LaunchError> + Send + Sync>;
 
+/// How the calculator's result is copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Clipboard {
+    /// `wl-copy`: it keeps offering the text once the launcher is closed, so the launcher
+    /// closes as after any start.
+    WlCopy(OsString),
+    /// iced's clipboard: a Wayland selection lives as long as its program, so the launcher
+    /// stays open, the result marked « Copié », until Escape.
+    Toolkit,
+}
+
+impl Clipboard {
+    /// `wl-copy` when it is installed.
+    pub fn detect() -> Self {
+        if mime_apps::entry::is_executable("wl-copy") {
+            Self::WlCopy("wl-copy".into())
+        } else {
+            Self::Toolkit
+        }
+    }
+}
+
 pub struct Launcher {
     sources: Vec<Box<dyn Source>>,
     spawn: Spawn,
+    session: Arc<dyn Session>,
+    clipboard: Clipboard,
+    /// The result waiting for its second Enter (« Redémarrer », « Éteindre »).
+    pub armed: Option<usize>,
+    /// The result just copied with iced's clipboard.
+    pub copied: Option<usize>,
     pub query: String,
     pub sections: Vec<Section>,
     /// The chosen result, in the order of the list, sections one after the other.
@@ -56,12 +90,27 @@ impl Launcher {
         Self {
             sources,
             spawn,
+            session: Arc::new(NoSession),
+            clipboard: Clipboard::Toolkit,
+            armed: None,
+            copied: None,
             query: String::new(),
             sections: Vec::new(),
             selected: 0,
             surface: None,
             closing: false,
         }
+    }
+
+    /// Runs the system commands with `session`; without one, they are refused.
+    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = session;
+        self
+    }
+
+    pub fn with_clipboard(mut self, clipboard: Clipboard) -> Self {
+        self.clipboard = clipboard;
+        self
     }
 
     /// Every result, in the order of the list.
@@ -90,23 +139,45 @@ impl Launcher {
                 return operation::focus(QUERY);
             }
             Message::Query(query) => {
-                let before = self.height();
-                self.sections = source::search(&self.sources, &query, look::MAX_RESULTS);
                 self.query = query;
                 self.selected = 0;
-                if self.height() != before {
-                    return self.resize();
-                }
+                return self.search();
+            }
+            Message::Refresh => {
+                let task = self.search();
+                self.selected = self.selected.min(self.hits().count().saturating_sub(1));
+                return task;
             }
             Message::Key(Key::Down) => {
                 let last = self.hits().count().saturating_sub(1);
                 self.selected = (self.selected + 1).min(last);
+                self.armed = None;
             }
-            Message::Key(Key::Up) => self.selected = self.selected.saturating_sub(1),
+            Message::Key(Key::Up) => {
+                self.selected = self.selected.saturating_sub(1);
+                self.armed = None;
+            }
             Message::Key(Key::Enter) => return self.choose(self.selected),
             Message::Key(Key::Escape) => return self.close(),
             Message::Pick(index) => return self.choose(index),
             _ => {}
+        }
+        Task::none()
+    }
+
+    /// Asks the sources again for the query; the panel follows the number of rows.
+    fn search(&mut self) -> Task<Message> {
+        let before = self.height();
+        self.sections = source::search(
+            &self.sources,
+            &self.query,
+            look::SECTION_RESULTS,
+            look::MAX_RESULTS,
+        );
+        self.armed = None;
+        self.copied = None;
+        if self.height() != before {
+            return self.resize();
         }
         Task::none()
     }
@@ -116,16 +187,57 @@ impl Launcher {
         iced::exit()
     }
 
-    /// Runs result `index`; the launcher closes once the program started.
+    /// Runs result `index`; the launcher closes once it is done.
     fn choose(&mut self, index: usize) -> Task<Message> {
         // A second Enter, or Enter then a click, before the exit is handled starts nothing.
         if self.closing {
             return Task::none();
         }
-        let Some(Action::Start(command)) = self.hits().nth(index).map(|h| h.action.clone()) else {
+        let Some(action) = self.hits().nth(index).map(|h| h.action.clone()) else {
             return Task::none();
         };
-        match (self.spawn)(&command) {
+        match action {
+            Action::Start(command) => self.start(&command),
+            Action::Copy(value) => self.copy(index, value),
+            Action::Session(power) if power.needs_confirmation() && self.armed != Some(index) => {
+                self.armed = Some(index);
+                Task::none()
+            }
+            Action::Session(power) => match self.session.run(power) {
+                Ok(()) => {
+                    tracing::info!(?power, "session command");
+                    self.close()
+                }
+                Err(error) => {
+                    tracing::error!(%error, "cannot run the session command");
+                    self.armed = None;
+                    Task::none()
+                }
+            },
+            Action::Disabled => Task::none(),
+        }
+    }
+
+    fn copy(&mut self, index: usize, value: String) -> Task<Message> {
+        match &self.clipboard {
+            Clipboard::WlCopy(program) => {
+                // `--`: the value is never read as an option.
+                let command = Command {
+                    program: program.clone(),
+                    args: vec!["--".into(), value.into()],
+                    dir: None,
+                };
+                self.start(&command)
+            }
+            Clipboard::Toolkit => {
+                self.copied = Some(index);
+                iced::clipboard::write(value)
+            }
+        }
+    }
+
+    fn start(&mut self, command: &Command) -> Task<Message> {
+        match (self.spawn)(command) {
             Ok(pid) => {
                 tracing::info!(program = ?command.program, pid, "started");
                 self.close()
@@ -208,43 +320,141 @@ impl Launcher {
             .into()
     }
 
+    /// The line under a result: its own, or what its first Enter or copy did.
+    fn subtitle<'a>(&self, hit: &'a Hit, index: usize) -> Option<&'a str> {
+        if self.armed == Some(index) {
+            Some(texts::CONFIRM)
+        } else if self.copied == Some(index) {
+            Some(texts::COPIED)
+        } else {
+            hit.subtitle.as_deref()
+        }
+    }
+
     fn view_hit<'a>(&self, hit: &'a Hit, index: usize) -> Element<'a, Message> {
         let selected = index == self.selected;
-        let initial = hit
-            .title
-            .chars()
-            .next()
-            .and_then(|c| c.to_uppercase().next())
-            .unwrap_or('?');
-        let tile = container(
-            text(initial.to_string())
-                .font(typography::UI_SEMIBOLD)
-                .size(look::TILE_LETTER_SIZE),
-        )
-        .center(look::TILE)
-        .style(look::tile);
-        let mut words = column![ui::body(hit.title.as_str()).font(typography::UI_MEDIUM)];
-        if let Some(subtitle) = &hit.subtitle {
+        let sherlock = hit.tile == Tile::Sherlock;
+        let colors = look::Colors::of(color::palette());
+        let (title_font, title_color, line_color) = if sherlock {
+            (
+                typography::UI_SEMIBOLD,
+                colors.sherlock_title,
+                colors.sherlock_line,
+            )
+        } else {
+            let p = color::palette();
+            (typography::UI_MEDIUM, p.text_primary, p.text_secondary)
+        };
+        let mut words = column![
+            ui::body(hit.title.as_str())
+                .font(title_font)
+                .color(title_color)
+        ];
+        if let Some(subtitle) = self.subtitle(hit, index) {
             words = words.push(
-                text(subtitle.as_str())
+                text(subtitle)
                     .size(typography::SMALL_SIZE)
-                    .color(color::palette().text_secondary),
+                    .color(line_color),
             );
         }
-        let mut line = row![tile, words, Space::new().width(Length::Fill)]
-            .spacing(look::GAP)
-            .align_y(Alignment::Center);
-        if selected {
+        let mut line = row![
+            tile(&hit.tile, &hit.title),
+            words,
+            Space::new().width(Length::Fill)
+        ]
+        .spacing(look::GAP)
+        .align_y(Alignment::Center);
+        if selected && hit.action != Action::Disabled {
             line = line.push(key_cap(texts::ENTER, true));
         }
-        button(line)
+        let row = button(line)
             .on_press(Message::Pick(index))
             .width(Length::Fill)
             .height(look::ROW_HEIGHT)
-            .padding([0.0, look::ROW_PADDING])
-            .style(look::row(selected))
-            .into()
+            .padding([0.0, look::ROW_PADDING]);
+        if sherlock {
+            row.style(look::sherlock_row(selected)).into()
+        } else {
+            row.style(look::row(selected)).into()
+        }
     }
+}
+
+/// The tile left of a result: an application's icon or initial, a glyph, or Sherlock.
+fn tile<'a>(tile: &Tile, title: &str) -> Element<'a, Message> {
+    match tile {
+        Tile::App(Some(path)) => svg(icon_handle(path))
+            .width(look::APP_ICON)
+            .height(look::APP_ICON)
+            .into(),
+        Tile::App(None) => {
+            let initial = title
+                .chars()
+                .next()
+                .and_then(|c| c.to_uppercase().next())
+                .unwrap_or('?');
+            container(
+                text(initial.to_string())
+                    .font(typography::UI_SEMIBOLD)
+                    .size(look::TILE_LETTER_SIZE),
+            )
+            .center(look::TILE)
+            .style(look::tile)
+            .into()
+        }
+        Tile::Glyph(glyph) => {
+            let stroke = look::Colors::of(color::palette()).glyph_tile(*glyph).1;
+            container(
+                svg(glyph_handle(*glyph))
+                    .width(look::TILE_GLYPH)
+                    .height(look::TILE_GLYPH)
+                    .style(move |_, _| svg::Style {
+                        color: Some(stroke.into()),
+                    }),
+            )
+            .center(look::TILE)
+            .style(look::glyph_tile(*glyph))
+            .into()
+        }
+        Tile::Sherlock => container(ui::logo(Logo::Color, look::TILE))
+            .center(look::TILE)
+            .into(),
+    }
+}
+
+/// The SVG of a glyph, built once.
+fn glyph_handle(glyph: Glyph) -> svg::Handle {
+    static HANDLES: std::sync::OnceLock<Vec<svg::Handle>> = std::sync::OnceLock::new();
+    let all = HANDLES.get_or_init(|| {
+        Glyph::ALL
+            .iter()
+            .map(|g| svg::Handle::from_memory(g.svg().into_bytes()))
+            .collect()
+    });
+    Glyph::ALL
+        .iter()
+        .position(|g| *g == glyph)
+        .and_then(|i| all.get(i))
+        .cloned()
+        .unwrap_or_else(|| svg::Handle::from_memory(glyph.svg().into_bytes()))
+}
+
+/// An SVG icon as it is; a PNG inside a small SVG, which the SVG renderer reads by path, as
+/// the dock does: iced's `image` feature would bring its own decoders.
+fn icon_handle(path: &Path) -> svg::Handle {
+    if path.extension().is_some_and(|e| e == "svg") {
+        return svg::Handle::from_path(path);
+    }
+    let href = path
+        .to_string_lossy()
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;");
+    let document = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
+    );
+    svg::Handle::from_memory(document.into_bytes())
 }
 
 /// A key name in its cap, on the search row or on the selected result (`in_row`).

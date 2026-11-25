@@ -1,0 +1,11 @@
+[Icon Theme]
+Name=Hicolor
+Comment=Neutral fixture of the launcher tests
+Directories=scalable/apps
+
+[scalable/apps]
+Size=128
+MinSize=1
+MaxSize=512
+Context=Applications
+Type=Scalable

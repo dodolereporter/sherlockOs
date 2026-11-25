@@ -4,8 +4,8 @@
 /// Scores of a term found in a text, best first.
 const EXACT: u32 = 1000;
 const PREFIX: u32 = 900;
-const WORD: u32 = 800;
-const SUBSTRING: u32 = 600;
+pub const WORD: u32 = 800;
+pub const SUBSTRING: u32 = 600;
 /// The letters of the term in order, apart: lose `GAP` per letter skipped, `FUZZY_FLOOR` at
 /// least, and win `WORD_START` when the first one starts a word.
 const FUZZY: u32 = 400;
@@ -139,6 +139,12 @@ impl Haystack {
     /// found. The generic name and the keywords count when a term starts one of their words,
     /// never for scattered letters. `None` when a term is found nowhere, or without terms.
     pub fn score(&self, terms: &[String]) -> Option<u32> {
+        self.score_from(terms, 0)
+    }
+
+    /// Same as `score`, a term counting in the name only from `floor` up: `SUBSTRING` leaves
+    /// out scattered letters, `WORD` keeps only the starts of words.
+    pub fn score_from(&self, terms: &[String], floor: u32) -> Option<u32> {
         if terms.is_empty() {
             return None;
         }
@@ -157,10 +163,8 @@ impl Haystack {
                 .iter()
                 .filter_map(|k| by_words(k, KEYWORD_PENALTY))
                 .max();
-            let best = [score(term, &self.name), generic, keyword]
-                .into_iter()
-                .flatten()
-                .max()?;
+            let name = score(term, &self.name).filter(|s| *s >= floor);
+            let best = [name, generic, keyword].into_iter().flatten().max()?;
             Some(total + best)
         })
     }
@@ -207,5 +211,11 @@ mod tests {
         assert!(firefox.score(&terms("fire web")).is_some());
         assert!(firefox.score(&terms("fire mail")).is_none());
         assert!(firefox.score(&[]).is_none());
+        // A floor leaves out the weaker places in the name.
+        assert!(firefox.score_from(&terms("ffx"), SUBSTRING).is_none());
+        assert!(firefox.score_from(&terms("refo"), SUBSTRING).is_some());
+        assert!(firefox.score_from(&terms("refo"), WORD).is_none());
+        assert!(firefox.score_from(&terms("fox"), WORD).is_none());
+        assert!(firefox.score_from(&terms("fire"), WORD).is_some());
     }
 }
