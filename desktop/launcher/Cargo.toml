@@ -1,0 +1,39 @@
+[package]
+name = "launcher"
+description = "Application launcher of the desktop, a layer-shell overlay opened on demand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The theme of the appearance file, read once at start (workspace crate).
+appearance-config = { path = "../appearance-config" }
+# The same as the bar and the dock (docs/bar.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# `kill`, to close the launcher already open: the version the bar and the dock already pin.
+libc = "=0.2.191"
+# The installed applications (workspace crate).
+mime-apps = { path = "../mime-apps" }
+sherlock-ui = { path = "../sherlock-ui" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
+
+[lints]
+workspace = true

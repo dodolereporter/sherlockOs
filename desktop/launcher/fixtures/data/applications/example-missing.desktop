@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Kilo missing
+Exec=kilo
+TryExec=/nonexistent/kilo
