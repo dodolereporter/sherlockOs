@@ -246,6 +246,11 @@ impl State {
         };
         let size = (!restore.size.is_empty()).then_some(restore.size);
         if let Some(size) = size {
+            // Le retour à la taille d'avant s'anime, puis la fenêtre suit le pointeur.
+            window_data(&gesture.window)
+                .motion
+                .borrow_mut()
+                .animate_next_change();
             let loc = layout::unsnapped(gesture.initial, size, gesture.start);
             gesture.initial = Rectangle::new(loc, size);
             self.space.map_element(gesture.window.clone(), loc, true);

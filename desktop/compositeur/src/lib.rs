@@ -3,12 +3,22 @@
 //! La bibliothèque porte l'état et la logique, le binaire choisit le backend.
 //! Architecture et tests : `docs/compositeur.md`.
 
+pub mod anim;
 mod handlers;
 mod input;
 pub mod layout;
+pub mod render;
+pub mod stats;
 pub mod winit;
 
-use std::{cell::Cell, ffi::OsString, fmt, os::unix::net::UnixStream, sync::Arc, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::OsString,
+    fmt,
+    os::unix::net::UnixStream,
+    sync::Arc,
+    time::Instant,
+};
 
 use smithay::{
     desktop::{PopupManager, Space, Window},
@@ -43,7 +53,7 @@ use crate::layout::{Resize, Zone};
 /// Ce qui empêche le compositeur de démarrer.
 #[derive(thiserror::Error)]
 pub enum Error {
-    #[error("usage : compositeur --imbrique [commande [arguments…]]")]
+    #[error("usage : compositeur --imbrique [--mesurer] [commande [arguments…]]")]
     Usage,
     #[error("impossible de créer l'affichage Wayland : {0}")]
     Display(#[from] smithay::reexports::wayland_server::backend::InitError),
@@ -55,6 +65,8 @@ pub enum Error {
     Keyboard(#[from] smithay::input::keyboard::Error),
     #[error("backend fenêtré : {0}")]
     Winit(#[from] smithay::backend::winit::Error),
+    #[error("programmes du rendu : {0}")]
+    Render(#[from] smithay::backend::renderer::gles::GlesError),
     #[error("impossible de lancer la commande : {0}")]
     Spawn(#[from] std::io::Error),
 }
@@ -86,6 +98,8 @@ pub struct State {
     intercepted_keys: Vec<Keycode>,
     /// Le compositeur tourne dans une fenêtre d'une autre session (`--imbrique`).
     nested: bool,
+    /// Statistiques des images, avec `--mesurer`.
+    pub frame_stats: Option<stats::FrameStats>,
 }
 
 /// Données qu'on accroche à chaque fenêtre.
@@ -100,6 +114,8 @@ struct WindowData {
     zone: Cell<Option<Zone>>,
     /// Redimensionnement en cours, gardé jusqu'au dernier envoi du client.
     resize: Cell<Option<Resize>>,
+    /// Ouverture et changements de géométrie animés.
+    motion: RefCell<anim::WindowMotion>,
 }
 
 fn window_data(window: &Window) -> &WindowData {
@@ -159,6 +175,7 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
+            frame_stats: None,
             loop_signal: event_loop.get_signal(),
             start_time: Instant::now(),
             display_handle: dh,
