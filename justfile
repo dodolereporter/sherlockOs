@@ -27,8 +27,9 @@ test:
 build:
     cargo build --workspace
 
-# Reports French left in development text (ADR 0017)
+# Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
+    python3 distro/tests/check-language.py --self-test
     python3 distro/tests/check-language.py {{ paths }}
 
 # Builds the image of the build container of the distribution

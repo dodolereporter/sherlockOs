@@ -74,7 +74,10 @@ just test        # tests only
 ```
 
 `just check-language` runs `distro/tests/check-language.py`, which reports French left in
-development text (ADR 0017). It is not part of `just verify` yet.
+development text (ADR 0017), after its own test cases (`--self-test`). It skips Rust string
+literals, interface labels quoted « … » in docs and Rust comments, and data files. A French name
+kept on purpose in a script or configuration file is announced by a comment containing
+`check-language: allow-next-line` on the line above. It is not part of `just verify` yet.
 
 ## Reading a failure
 

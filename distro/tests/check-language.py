@@ -87,10 +87,17 @@ FRENCH_WORDS = {
 # a tool of the sherlockd test server and the keys of its recap.
 INTERFACE_NAMES = {"vider_corbeille", "demande", "reponse"}
 
+# Marker for a French name kept on purpose in a script or configuration file, such as a former
+# folder name that must stay ignored by git. It applies to the line that follows.
+ALLOW_NEXT_LINE = "check-language: allow-next-line"
+
 WORD = re.compile(r"[A-Za-zÀ-ÿœæŒÆ]+")
 IDENT_PART = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
-# Quoted text in comments and docs is cited interface text: « … », or "…" with a French accent.
-FRENCH_QUOTE = re.compile(r"«[^»]*»|\"[^\"]*[àâçéèêëîïôûùüÀÂÇÉÈÊ][^\"]*\"")
+# An interface label cited in documentation (Markdown, Rust comments): « … ». Nothing else is
+# skipped: scripts, Python, YAML and the justfile are development text through and through, and
+# "…" quotes are never skipped. Rust string literals are not read at all (see split_rust).
+# A label may hold one nested « … », or start or end on another line.
+FRENCH_QUOTE = re.compile(r"«(?:[^«»]|«[^«»]*»)*»|^[^«»]*»|«[^«»]*$")
 INLINE_CODE = re.compile(r"`[^`]*`")
 LINK_TARGET = re.compile(r"\]\([^)]*\)")
 # Paths into the French reference folders, cited from English text.
@@ -101,17 +108,17 @@ def french_words(text):
     """French words among the identifiers and path segments of `text`."""
     found = []
     for token in re.findall(r"[A-Za-z0-9_]+", FRENCH_PATH.sub(" ", text)):
+        if token in INTERFACE_NAMES:
+            continue
         for part in IDENT_PART.findall(token):
-            if token in INTERFACE_NAMES:
-                break
             if part.lower() in FRENCH_WORDS:
                 found.append(part.lower())
     return found
 
 
 def prose_markers(text):
-    """Why `text`, a comment or a line of documentation, reads as French, or None."""
-    text = FRENCH_PATH.sub(" ", FRENCH_QUOTE.sub(" ", text))
+    """Why `text`, a comment or a line of prose, reads as French, or None."""
+    text = FRENCH_PATH.sub(" ", text)
     accent = ACCENTS.search(text)
     if accent:
         return f"accent '{accent.group()}'"
@@ -119,6 +126,9 @@ def prose_markers(text):
     stop = sorted(words & STOPWORDS)
     if len(stop) >= 2:
         return "words " + ", ".join(stop)
+    french = sorted(words & FRENCH_WORDS)
+    if french:
+        return "words " + ", ".join(french)
     return None
 
 
@@ -182,49 +192,94 @@ def hash_comment(line):
     return match.group(2) if match else ""
 
 
-def check_file(path, report):
-    if path.endswith(BINARY_SUFFIXES):
-        return
-    try:
-        source = Path(path).read_text(encoding="utf-8")
-    except (UnicodeDecodeError, FileNotFoundError):
-        return
+def check_text(path, source):
+    """Findings in `source`, the content of `path`: (line number, reason, text)."""
+    findings = []
     if path.endswith(UI_CODE_SUFFIXES):
         comments, code = split_rust(source)
         for number, (comment, line) in enumerate(zip(comments, code), start=1):
-            why = prose_markers(INLINE_CODE.sub(" ", comment))
+            why = prose_markers(FRENCH_QUOTE.sub(" ", INLINE_CODE.sub(" ", comment)))
+            words = french_words(" ".join(INLINE_CODE.findall(comment)) + " " + line)
             if why:
-                report(path, number, why, comment)
-            words = french_words(line)
-            if words:
-                report(path, number, "identifiers " + ", ".join(words), line)
-        return
+                findings.append((number, why, comment))
+            elif words:
+                findings.append((number, "identifiers " + ", ".join(words), line))
+        return findings
     fence = False
+    allowed = False
     for number, line in enumerate(source.splitlines(), start=1):
+        # A French name kept on purpose, announced by the line above it.
+        if allowed:
+            allowed = False
+            continue
+        allowed = ALLOW_NEXT_LINE in line
         if path.endswith(".md"):
             if line.lstrip().startswith("```"):
                 fence = not fence
                 continue
-            text = hash_comment(line) if fence else LINK_TARGET.sub("", line)
-            why = prose_markers(INLINE_CODE.sub(" ", text))
-            # In code blocks, quoted arguments may be user input, in French.
-            code = re.sub(r'"[^"]*"|\'[^\']*\'', " ", line)
-            words = french_words(" ".join(INLINE_CODE.findall(line)) if not fence else code)
+            if fence:
+                why = prose_markers(FRENCH_QUOTE.sub(" ", hash_comment(line)))
+                # In code blocks, quoted arguments may be user input, in French.
+                words = french_words(re.sub(r'"[^"]*"|\'[^\']*\'', " ", line))
+            else:
+                text = FRENCH_QUOTE.sub(" ", LINK_TARGET.sub("", line))
+                why = prose_markers(INLINE_CODE.sub(" ", text))
+                words = french_words(" ".join(INLINE_CODE.findall(text)))
         else:
             # Scripts, configuration and CI are development text through and through.
             why = prose_markers(line)
-            words = french_words(FRENCH_QUOTE.sub(" ", line))
+            words = french_words(line)
         if why:
-            report(path, number, why, line)
+            findings.append((number, why, line))
         elif words:
-            report(path, number, "identifiers " + ", ".join(words), line)
+            findings.append((number, "identifiers " + ", ".join(words), line))
+    return findings
+
+
+# (file name, line, whether it must be reported). Run with --self-test.
+SELF_TEST = [
+    ("a.sh", 'fail "Échec : le cache doit être hors du dépôt"', True),
+    ("a.py", '"""Rend la prochaine réponse à une commande."""', True),
+    ("a.rs", '// "Ceci est un commentaire écrit en français, pour voir."', True),
+    ("a.md", 'Le "compositeur démarre avec une fenêtre"', True),
+    ("a.md", "## Comparing with the planche", True),
+    ("a.rs", "// Wider than the planche's 216 px.", True),
+    ("a.rs", "fn une_fenetre_se_cale() {}", True),
+    ("a.yml", "      - name: Récupère le dépôt", True),
+    ("a.sh", "echo « Échec »", True),
+    ("a.md", "Run `just verifier` first.", True),
+    ("a.rs", 'let label = "Déplacer vers le bureau";', False),
+    ("a.rs", "/// Time and date in the board's format: « 21:46 » and « mar. 24 nov. ».", False),
+    ("a.md", "The « Fenêtre » button opens a menu.", False),
+    ("a.md", "« Seule la « Nouvelle demande » vient de l'utilisateur. »", False),
+    ("a.rs", "/// Where applications are read; none disables « Ouvrir", False),
+    ("a.rs", "/// avec » (tests that do not need it).", False),
+    ("a.md", "Compare with `docs/design/planches/Main.dc.html`.", False),
+    ("a.sh", 'printf "all good\\n"', False),
+    (".gitignore", "# Former name (check-language: allow-next-line)\n/sortie/", False),
+    (".gitignore", "# Former name\n/sortie/", True),
+    ("a.rs", "// The window slides down a few pixels.", False),
+]
+
+
+def self_test():
+    failures = 0
+    for path, line, expected in SELF_TEST:
+        if bool(check_text(path, line)) != expected:
+            failures += 1
+            print(f"self-test: {path}: {'missed' if expected else 'wrongly reported'}: {line}")
+    print(f"self-test: {len(SELF_TEST) - failures}/{len(SELF_TEST)} cases pass", file=sys.stderr)
+    return 1 if failures else 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--exclude", action="append", default=[], help="path prefix to skip")
+    parser.add_argument("--self-test", action="store_true", help="run the built-in cases only")
     parser.add_argument("paths", nargs="*", help="path prefixes to check (default: all)")
     args = parser.parse_args()
+    if args.self_test:
+        return self_test()
 
     root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
@@ -244,7 +299,9 @@ def main():
 
     skip = EXCLUDED + tuple(args.exclude)
     for path in sorted(files):
-        if path.startswith(skip) or HISTORICAL_ADR.match(path) or (args.paths and not path.startswith(tuple(args.paths))):
+        if path.startswith(skip) or HISTORICAL_ADR.match(path):
+            continue
+        if args.paths and not path.startswith(tuple(args.paths)):
             continue
         if not Path(path).exists():
             continue
@@ -253,7 +310,14 @@ def main():
             report(path, 0, "file name " + ", ".join(words), path)
         if path.endswith(DATA_SUFFIXES) or any(f in "/" + path for f in DATA_FOLDERS):
             continue
-        check_file(path, report)
+        if path.endswith(BINARY_SUFFIXES):
+            continue
+        try:
+            source = Path(path).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for number, why, text in check_text(path, source):
+            report(path, number, why, text)
 
     print(f"{findings} line(s) with French left", file=sys.stderr)
     return 1 if findings else 0
