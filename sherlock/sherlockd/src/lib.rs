@@ -1,19 +1,19 @@
-//! Démon de Sherlock : conversation, appels au modèle, enchaînement des outils.
+//! Sherlock daemon: conversation, model calls, tool chaining.
 //!
-//! - [`modele`] : l'interface du fournisseur de modèle et l'emplacement de sa clé.
-//! - [`faux`] : un faux fournisseur piloté par un scénario.
-//! - [`mcp`] : le client MCP sur stdio et le niveau des outils.
-//! - [`agent`] : la boucle d'agent et ses règles de sécurité.
-//! - [`mandataire`] : `sherlockd` en serveur MCP, devant les serveurs de Sherlock.
-//! - [`claude_code`] : le fournisseur qui confie la conversation à Claude Code.
-//! - [`serveur_essai`] : un serveur MCP de test, sans effet sur le système.
+//! - [`model`]: the model provider interface and where its key lives.
+//! - [`scripted`]: a fake provider driven by a script.
+//! - [`mcp`]: the MCP client over stdio and tool levels.
+//! - [`agent`]: the agent loop and its safety rules.
+//! - [`proxy`]: `sherlockd` as an MCP server, in front of Sherlock's servers.
+//! - [`claude_code`]: the provider that hands the conversation to Claude Code.
+//! - [`test_server`]: a test MCP server, with no effect on the system.
 //!
-//! Architecture et règles : `docs/sherlockd.md`.
+//! Architecture and rules: `docs/sherlockd.md`.
 
 pub mod agent;
 pub mod claude_code;
-pub mod faux;
-pub mod mandataire;
 pub mod mcp;
-pub mod modele;
-pub mod serveur_essai;
+pub mod model;
+pub mod proxy;
+pub mod scripted;
+pub mod test_server;

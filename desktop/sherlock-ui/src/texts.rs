@@ -81,7 +81,7 @@ pub fn size(bytes: u64) -> String {
     }
 }
 
-/// Content of a folder: "vide", "1 élément", "6 éléments".
+/// Content of a folder: « vide », « 1 élément », « 6 éléments ».
 pub fn items(count: usize) -> String {
     match count {
         0 => String::from("vide"),
@@ -222,7 +222,7 @@ pub mod evidence {
         ("mp3", "Son"),
         ("ttf", "Police"),
     ];
-    /// Kind of a file with an unknown extension: "Fichier XYZ".
+    /// Kind of a file with an unknown extension: « Fichier XYZ ».
     pub fn kind_from_extension(extension: &str) -> String {
         format!("{KIND_FILE} {}", extension.to_uppercase())
     }
@@ -233,7 +233,7 @@ pub mod evidence {
     pub const DEFAULT_APP: &str = "Application par défaut";
     pub const TERMINAL_HERE: &str = "Terminal, dans ce dossier";
     pub const OTHER_APP: &str = "Autre application…";
-    /// In the "Ouvrir avec" submenu: the switch that makes the chosen application the default.
+    /// In the « Ouvrir avec » submenu: the switch that makes the chosen application the default.
     pub const ALWAYS_SHORT: &str = "Toujours ouvrir ce type ainsi";
     /// The same switch in the chooser of every application.
     pub const ALWAYS: &str = "Toujours ouvrir ce type de fichier avec cette application";

@@ -1,10 +1,10 @@
-"""Client QMP minimal pour le banc de boot (distro/tests/boot.sh).
+"""Minimal QMP client for the boot bench (distro/tests/boot.sh).
 
-    qmp.py <socket> screendump <fichier.png>   capture la sortie graphique en PNG
-    qmp.py <socket> quit                       arrête QEMU
+    qmp.py <socket> screendump <file.png>   captures the graphical output as PNG
+    qmp.py <socket> quit                    stops QEMU
 
-Code 0 si QEMU a accepté la commande, 1 sinon. Bibliothèque standard seule : le conteneur de
-build n'a que python3.
+Code 0 if QEMU accepted the command, 1 otherwise. Standard library only: the build container
+only has python3.
 """
 
 import json
@@ -12,54 +12,54 @@ import socket
 import sys
 
 
-def lire_reponse(flux):
-    """Rend la prochaine réponse à une commande, en sautant les événements asynchrones."""
-    for ligne in flux:
-        message = json.loads(ligne)
+def read_reply(stream):
+    """Returns the next reply to a command, skipping asynchronous events."""
+    for line in stream:
+        message = json.loads(line)
         if "return" in message or "error" in message:
             return message
-    raise ConnectionError("QEMU a fermé la connexion QMP")
+    raise ConnectionError("QEMU closed the QMP connection")
 
 
-def envoyer(connexion, flux, commande, arguments=None):
-    requete = {"execute": commande}
+def send(connection, stream, command, arguments=None):
+    request = {"execute": command}
     if arguments:
-        requete["arguments"] = arguments
-    connexion.sendall(json.dumps(requete).encode() + b"\n")
-    if commande == "quit":
-        # QEMU peut fermer la connexion avant d'avoir répondu.
+        request["arguments"] = arguments
+    connection.sendall(json.dumps(request).encode() + b"\n")
+    if command == "quit":
+        # QEMU may close the connection before replying.
         try:
-            return lire_reponse(flux)
+            return read_reply(stream)
         except (ConnectionError, OSError):
             return {"return": {}}
-    return lire_reponse(flux)
+    return read_reply(stream)
 
 
 def main(argv):
     if len(argv) < 3 or argv[2] not in ("screendump", "quit"):
-        sys.stderr.write("usage : qmp.py <socket> screendump <fichier.png> | quit\n")
+        sys.stderr.write("usage: qmp.py <socket> screendump <file.png> | quit\n")
         return 2
-    chemin, commande = argv[1], argv[2]
+    path, command = argv[1], argv[2]
     arguments = None
-    if commande == "screendump":
+    if command == "screendump":
         if len(argv) != 4:
-            sys.stderr.write("usage : qmp.py <socket> screendump <fichier.png>\n")
+            sys.stderr.write("usage: qmp.py <socket> screendump <file.png>\n")
             return 2
         arguments = {"filename": argv[3], "format": "png"}
 
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connexion:
-            connexion.settimeout(10)
-            connexion.connect(chemin)
-            flux = connexion.makefile("r", encoding="utf-8")
-            json.loads(flux.readline())  # message d'accueil de QEMU
-            for etape, args in (("qmp_capabilities", None), (commande, arguments)):
-                reponse = envoyer(connexion, flux, etape, args)
-                if "error" in reponse:
-                    sys.stderr.write(f"qmp : {etape} refusé : {reponse['error'].get('desc')}\n")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(10)
+            connection.connect(path)
+            stream = connection.makefile("r", encoding="utf-8")
+            json.loads(stream.readline())  # QEMU greeting
+            for step, args in (("qmp_capabilities", None), (command, arguments)):
+                reply = send(connection, stream, step, args)
+                if "error" in reply:
+                    sys.stderr.write(f"qmp: {step} refused: {reply['error'].get('desc')}\n")
                     return 1
-    except (OSError, ValueError) as erreur:
-        sys.stderr.write(f"qmp : {erreur}\n")
+    except (OSError, ValueError) as error:
+        sys.stderr.write(f"qmp: {error}\n")
         return 1
     return 0
 

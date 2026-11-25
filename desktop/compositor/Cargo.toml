@@ -1,0 +1,44 @@
+[package]
+name = "compositor"
+description = "Wayland compositor of the desktop, written with Smithay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Only the features in use: windowed backend (winit, with GLES rendering), Wayland server,
+# desktop tools (Space, Window) and XWayland with its X11 window manager (X11Wm, lot D-13).
+# The rest (DRM, libinput…) will come with their lots. Layer-shell, fractional scale,
+# viewporter and xdg-output (lot D-12) come with `wayland_frontend`.
+smithay = { version = "=0.7.0", default-features = false, features = [
+    "backend_winit",
+    "desktop",
+    "wayland_frontend",
+    "xwayland",
+] }
+# Colors and sizes of the snap preview and of the grab band. Only the tokens: without the
+# `iced` feature, the compositor does not build the shell toolkit.
+sherlock-ui = { path = "../sherlock-ui", default-features = false }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+# Prints the logs on standard error, level set by RUST_LOG.
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+# Wayland client of the integration test: the same crates that smithay already pulls for
+# its winit backend.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+# Client side of layer-shell, for the anchored surface of the integration test: the version
+# that smithay already pulls for the server side.
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+# X11 client of the XWayland integration test: the version that smithay already pulls for
+# its X11 window manager.
+x11rb = "=0.13.2"
+
+[lints]
+workspace = true

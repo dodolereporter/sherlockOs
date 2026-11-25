@@ -1,4 +1,4 @@
-# Les tests ont le droit de paniquer : unwrap, expect et dbg y restent permis.
+# Tests may panic: unwrap, expect and dbg stay allowed there.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-dbg-in-tests = true

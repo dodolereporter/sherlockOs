@@ -723,7 +723,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     bench.press(Named::Escape);
     assert!(!bench.app.always);
 
-    // "Autre application…" opens the chooser of every application; Escape closes it.
+    // « Autre application… » opens the chooser of every application; Escape closes it.
     bench.select("notes.txt");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
     bench.send(Message::Run(crate::app::Command::ChooseApp));

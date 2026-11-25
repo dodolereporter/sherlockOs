@@ -48,8 +48,8 @@ pub struct Config {
     pub devices: Option<Arc<dyn DeviceSource>>,
     /// Follow UDisks2 signals so that devices appear and disappear by themselves.
     pub watch_devices: bool,
-    /// Where applications and associations are read and written; none disables "Ouvrir
-    /// avec" (tests that do not need it).
+    /// Where applications and associations are read and written; none disables « Ouvrir
+    /// avec » (tests that do not need it).
     pub xdg: Option<mime_apps::Dirs>,
     /// Current desktop names, lower case (`XDG_CURRENT_DESKTOP`), and locales to try for
     /// application names.
@@ -128,7 +128,7 @@ pub enum Command {
     Refresh,
     TogglePreview,
     SelectAll,
-    /// "Autre application…": the chooser of every application.
+    /// « Autre application… »: the chooser of every application.
     ChooseApp,
     /// "Always open this type with the chosen application", on or off.
     ToggleAlways,
@@ -148,9 +148,9 @@ pub enum MenuItem {
         danger: bool,
         checked: bool,
     },
-    /// Opens the "Ouvrir avec" submenu.
+    /// Opens the « Ouvrir avec » submenu.
     OpenWith,
-    /// An application of the "Ouvrir avec" submenu, by its place in `App::open_with`.
+    /// An application of the « Ouvrir avec » submenu, by its place in `App::open_with`.
     App(usize),
     /// Planned, not available yet.
     Disabled(&'static str),
@@ -338,7 +338,7 @@ pub struct App {
     empty_ids: Vec<String>,
     /// Installed applications, file types and associations.
     pub(crate) catalog: Option<Arc<mime_apps::Catalog>>,
-    /// Applications of the open "Ouvrir avec" submenu, the default first.
+    /// Applications of the open « Ouvrir avec » submenu, the default first.
     pub(crate) open_with: Vec<mime_apps::DesktopEntry>,
     /// "Always open this type with the chosen application".
     pub(crate) always: bool,
@@ -1114,7 +1114,7 @@ impl App {
         }
     }
 
-    /// Entries of the "Ouvrir avec" submenu: the applications that open the selected file's
+    /// Entries of the « Ouvrir avec » submenu: the applications that open the selected file's
     /// type, the default first and checked, then a terminal here, the chooser of every
     /// application, and the "always" switch.
     pub fn submenu_items(&self) -> Vec<MenuItem> {
@@ -1156,7 +1156,7 @@ impl App {
         )
     }
 
-    /// Fills the "Ouvrir avec" submenu for the selection, at most eight applications.
+    /// Fills the « Ouvrir avec » submenu for the selection, at most eight applications.
     fn prepare_open_with(&mut self) {
         self.open_with = match (self.selected_type(), &self.catalog) {
             (Some(mime), Some(catalog)) => catalog

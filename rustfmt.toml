@@ -1,4 +1,4 @@
-# Options stables uniquement, pour que rustfmt ne dépende pas de nightly.
+# Stable options only, so that rustfmt does not depend on nightly.
 edition = "2024"
 max_width = 100
 newline_style = "Unix"

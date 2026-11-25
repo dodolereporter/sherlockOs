@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "desktop/bar",
-    "desktop/compositeur",
+    "desktop/compositor",
     "desktop/dock",
     "desktop/dock-config",
     "desktop/evidence",
@@ -15,21 +15,21 @@ members = [
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.100.0"
-# La licence n'est pas encore choisie : rien ne se publie sur crates.io.
+# The license is not chosen yet: nothing is published on crates.io.
 publish = false
 
 [workspace.lints.rust]
-# Un bloc unsafe à l'intérieur d'une fonction unsafe doit rester explicite.
+# An unsafe block inside an unsafe function must stay explicit.
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-# Pas de unwrap ni de expect hors des tests (voir clippy.toml).
+# No unwrap nor expect outside tests (see clippy.toml).
 unwrap_used = "deny"
 expect_used = "deny"
-# Tout unsafe porte un commentaire SAFETY qui le justifie.
+# Every unsafe carries a SAFETY comment that justifies it.
 undocumented_unsafe_blocks = "deny"
 missing_safety_doc = "deny"
-# Le code livré journalise avec tracing, jamais sur la sortie standard.
+# Shipped code logs with tracing, never on the standard output.
 print_stdout = "deny"
 print_stderr = "deny"
 dbg_macro = "deny"

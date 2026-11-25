@@ -1,5 +1,5 @@
-# CI Rust : marque en échec toute demande de fusion qui ne passe pas `just verifier`.
-# Ce qui est vérifié et comment le lancer en local : docs/ci.md.
+# CI Rust: fails any pull request that does not pass `just verify`.
+# What is checked and how to run it locally: docs/ci.md.
 name: CI Rust
 
 on:
@@ -7,12 +7,12 @@ on:
   push:
     branches: [main]
 
-# Le jeton ne sert qu'à lire le dépôt.
+# The token only reads the repository.
 permissions:
   contents: read
 
-# Un nouveau commit sur une demande de fusion annule l'exécution en cours.
-# Sur main, chaque commit va au bout.
+# A new commit on a pull request cancels the run in progress.
+# On main, every commit runs to the end.
 concurrency:
   group: ci-rust-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -22,47 +22,47 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  verifier:
-    name: verifier
+  verify:
+    name: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Récupère le dépôt
+      - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Sans argument, rustup installe la version et les composants écrits dans
-      # rust-toolchain.toml. Aucune version n'est écrite ici.
-      - name: Installe Rust depuis rust-toolchain.toml
+      # Without an argument, rustup installs the version and the components written in
+      # rust-toolchain.toml. No version is written here.
+      - name: Install Rust from rust-toolchain.toml
         run: |
           rustup toolchain install
           rustc --version
           cargo clippy --version
           cargo fmt --version
 
-      # Le compositeur (smithay) se lie à libxkbcommon, et son test d'intégration charge
-      # libwayland-client. L'image ubuntu-24.04 n'a pas leurs paquets de développement.
-      # xwayland fournit le binaire Xwayland que lance le test d'intégration de XWayland, et
-      # libegl1 la libEGL.so.1 sans laquelle il s'arrête au démarrage : libepoxy la charge à
-      # l'exécution, et le paquet xwayland ne la tire pas.
-      # Garder cette liste alignée sur les prérequis de CLAUDE.md et docs/ci.md.
-      - name: Installe les bibliothèques système
+      # The compositor (smithay) links to libxkbcommon, and its integration test loads
+      # libwayland-client. The ubuntu-24.04 image lacks their development packages.
+      # xwayland provides the Xwayland binary that the XWayland integration test starts, and
+      # libegl1 the libEGL.so.1 without which it stops at startup: libepoxy loads it at run
+      # time, and the xwayland package does not pull it in.
+      # Keep this list in line with the prerequisites of CLAUDE.md and docs/ci.md.
+      - name: Install the system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev xwayland libegl1
 
-      - name: Installe just
+      - name: Install just
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: just@1.59.0
 
-      # Après l'installation de Rust : la clé du cache contient la version de rustc.
-      # Seule main enregistre le cache, les demandes de fusion le relisent.
+      # After installing Rust: the cache key contains the rustc version.
+      # Only main saves the cache, pull requests read it back.
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: just verifier
-        run: just verifier
+      - name: just verify
+        run: just verify
