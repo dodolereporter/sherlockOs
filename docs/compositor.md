@@ -258,7 +258,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 | Object | Requests | Events |
 | --- | --- | --- |
 | `sherlock_shell_manager_v1` | `destroy` | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
-| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `geometry`, `closed` |
+| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`. A roundtrip after the bind brings it.
@@ -273,8 +273,10 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
 - **Screens.** `output` gives, for each screen by its `wl_output` name, `maximized` and
-  `fullscreen` when such a window, not minimized, is on it: what the bar of lot D-18b reacts
-  to.
+  `fullscreen` when such a window, not minimized and on the active workspace, is on it: what
+  the bar of lot D-18b reacts to.
+- **Workspace of a window.** `workspace` gives the id of its workspace, the one
+  `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it, an unknown id is ignored.
 - **Changes.** After each loop iteration, `State::refresh_shell` reads the windows and the
   screens, compares them with what each bound manager was told, and sends the differences
   (only the properties that changed, `closed` for a window gone), then `done`. Nothing else in
@@ -294,17 +296,26 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 ### Workspaces
 
-The compositor has one workspace per screen for now. Through `ext-workspace-v1`, each screen
-is a group (`output_enter` for each of the client's `wl_output` objects of that screen,
-including those bound later), holding one workspace named `1`, at coordinates `[0]`,
-`active`, with the `activate` capability. `activate` and `commit` change nothing: that
-workspace is already active. A new screen brings its group; a screen gone removes it.
-Switching between several workspaces is a lot of its own.
+Workspaces are shared by every screen (ADR 0021): one active workspace for all of them. The
+compositor keeps them in `shell::workspaces::Workspaces` (list of id and name, active one) and
+each window's in its user data, through `State::workspaces`, `State::activate_workspace`,
+`State::workspace_of` and `State::move_to_workspace`. A window belongs to the workspace that
+was active when the shell first saw it. For now the list holds a single workspace, `1`, so
+switching and moving change nothing; lot D-18w fills the model, hides the windows of the
+other workspaces and animates the switch, and the protocols follow without change.
+
+Through `ext-workspace-v1`: one group, with `output_enter` for each of the client's
+`wl_output` objects of every screen (including those bound later, and `output_leave` when a
+screen goes); in it each workspace with its `id`, `name`, `coordinates` (its index), `state`
+(`active`) and the `activate` capability. `activate` is applied at the manager's `commit`, the
+last one winning. After a change of the model, the compositor sends the workspaces added,
+removed or changed, then `done`.
 
 ### Plugging in the shell
 
 - **Bar (D-18b).** Its workspaces source binds `ext_workspace_manager_v1` on the shell socket
-  and keeps the group of its screen; its active application is the window with `activated`;
+  and shows the group of its screen (today the only one), a click sends `activate` and
+  `commit`; its active application is the window with `activated`;
   its shape follows the `output` state of its screen.
 - **Dock (D-18c).** `windows::Source` and `windows::Control` get an implementation over
   `sherlock_shell_v1`, next to `Wlr`: `Windows` from the toplevels (`app_id`, `activated`),
@@ -332,8 +343,10 @@ ordinary socket, and a shell program.
 - **Errors.** A negative rectangle is `invalid_rectangle`, and the compositor goes on.
 - **Screens.** A window moved to a second screen is on `virtual-2`, its geometry relative to
   it.
-- **Workspaces.** One group per screen, which enters the client's `wl_output`, holding the
-  active workspace `1` at `[0]`; a new screen brings a second group.
+- **Workspaces.** One group, which enters the client's `wl_output`, holding the active
+  workspace `1` at `[0]`; a new screen joins the same group once its `wl_output` is bound;
+  `activate` and `commit` on the active workspace change nothing. A window is on workspace
+  `1`; moving it to an unknown workspace changes nothing.
 
 `tests/xwayland.rs` also checks that the real XWayland is not a shell client, and that the
 shell socket goes away with the compositor.

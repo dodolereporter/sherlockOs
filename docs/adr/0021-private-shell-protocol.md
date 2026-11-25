@@ -15,7 +15,13 @@ compositor publishes nothing. They need, from the compositor:
 - for the dock, a way to give the rectangle of the icon of each window, which the compositor
   keeps for the minimize animation of lot D-19;
 - for the bar, per screen, whether a maximized or fullscreen window is on it (lot D-18b), and
-  the workspaces.
+  the workspaces: their list, the active one, and a request to switch;
+- the workspace of each window, and a request to move a window to another workspace.
+
+The compositor has no workspaces yet. Lot D-18w, right after this one, brings a fixed number
+of them (3 by default, a setting), each window on one workspace, a sliding switch, Super + 1
+to 9 to switch and Super + Shift + 1 to 9 to send a window, a click in the bar, and later
+three-finger gestures. The protocols must model all of it now.
 
 No standard protocol carries all of it. `zwlr_foreign_toplevel_manager_v1`, which the dock
 already speaks, has neither the geometry nor the snapped state nor anything per screen.
@@ -38,8 +44,20 @@ own.
   `minimize`, `close`, `set_rectangle`), the state of each screen (`output`,
   `output_removed`), and ends each batch with `done`. A compatible change bumps the interface
   version; an incompatible one makes `sherlock_shell_v2`.
-- **Workspaces.** Through the standard `ext-workspace-v1`, one group per screen, served by
-  the compositor itself (smithay 0.7 has no implementation).
+- **Workspaces.** Through the standard `ext-workspace-v1`, served by the compositor itself
+  (smithay 0.7 has no implementation): the list (`id`, `name`, `coordinates`), the active
+  one (`state`), and switching (`activate`, applied at `commit`). What `ext-workspace-v1`
+  does not carry goes in `sherlock_shell_v1`, naming the workspace by its `ext-workspace-v1`
+  id: the `workspace` event of each window and the `move_to_workspace` request.
+- **Workspaces shared by every screen.** One group holds every screen, and one workspace is
+  active on all of them at once, as GNOME does by default. Reasons: Super + 1 to 9 then name
+  one workspace without depending on where the pointer or the keyboard is; a window dragged
+  to another screen keeps its workspace; a fixed number of workspaces is the same list on
+  every screen; the reference laptop has one screen most of the time. Per screen workspaces
+  (macOS, niri) remain possible as a setting: `ext-workspace-v1` then gives one group per
+  screen, which a bar that shows the group of its own screen already handles, and nothing
+  in `sherlock_shell_v1` changes. Until D-18w, the model holds a single workspace, `1`,
+  holding every window.
 - **Screens by name.** Screens are named by their `wl_output` name, rectangles are relative
   to the screen. The shell programs talk to these protocols on a connection of their own,
   where the `wl_output` objects of their surfaces do not exist.
@@ -75,6 +93,10 @@ socket from `WAYLAND_DISPLAY` (`shell_protocol::socket_from_env`).
 
 ## Consequences
 
+- Lot D-18w fills `shell::workspaces::Workspaces` and the workspace of each window
+  (`State::activate_workspace`, `State::move_to_workspace`), and hides the windows of the
+  other workspaces: the protocols follow without change. Only the windows of the active
+  workspace count in the per screen state.
 - The bar (D-18b) and the dock (D-18c) open one more connection, to the shell socket, for
   these protocols. The dock's `windows::Source` and `windows::Control` get an implementation
   over `sherlock_shell_v1`; activation needs no seat.
