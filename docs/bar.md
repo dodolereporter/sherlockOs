@@ -126,7 +126,7 @@ subscription. It only sends a state when it changed: the bar does not redraw for
 
 | Source | Read | Watch | Parsing tested on |
 | --- | --- | --- | --- |
-| `SystemClock` | `date "+%u %d %m %H %M"`, once a minute | The thread looks at the clock every 5 s at most, to catch up after a suspend | Handwritten outputs |
+| `SystemClock` | `localtime_r`, once a minute | The thread looks at the clock every 5 s at most, to catch up after a suspend | Fields of a C `struct tm` |
 | `UPower` | `upower -i /org/freedesktop/UPower/devices/DisplayDevice` | `upower --monitor` | `fixtures/upower-*.txt` |
 | `NetworkManager` | `nmcli -t -f TYPE,STATE,CONNECTION device` | `nmcli monitor` | `fixtures/nmcli-*.txt` |
 | `Pactl` | `pactl get-sink-volume` and `get-sink-mute` on `@DEFAULT_SINK@` | `pactl subscribe`, lines about an output or the server | `fixtures/pactl-*.txt` |
@@ -159,10 +159,11 @@ add no dependency, and can be tested on recorded outputs. Their watch mode repor
 nothing polls. Sound is not on D-Bus with PipeWire anyway. If the OS does not ship these
 commands, a D-Bus source will implement the same trait.
 
-**Why `date` for the clock.** The standard library does not know the time zone, and the brief
-does not allow `chrono`. `date` runs once a minute; time zones being offset by whole minutes,
-the local minute changes at the same time as the UTC minute, which the thread watches without
-running anything.
+**The clock reads the C library.** The standard library does not know the time zone, and the
+brief does not allow `chrono`. Since D-05b the clock calls `localtime_r` (`libc`, already
+pinned), once a minute, instead of starting `date`: `mktime` first re-reads the time zone, as in
+`appearance-config`. Time zones being offset by whole minutes, the local minute changes at the
+same time as the UTC minute, which the thread watches without reading anything.
 
 The OS network service is not chosen yet (batch S-13): `NetworkManager` is the source of the
 development machine, another one will replace it if needed.
@@ -268,8 +269,20 @@ Comparing with the design boards, by eye or on the screenshots:
 - Open `Menus.dc.html`: menu 256 wide at (18, 52), padding 6, header with an avatar of 40
   (the logo in its square), separators, chevron on « Éteindre ».
 - Pixel measurements: `cargo test -p bar --test render` writes `target/tmp/bar-tiny-skia.png`
-  and `target/tmp/sherlock-menu-tiny-skia.png`, at scale 2, from fake sources (the date and
-  time of the board).
+  and `target/tmp/sherlock-menu-tiny-skia.png`, then `bar-light-tiny-skia.png` and
+  `sherlock-menu-light-tiny-skia.png` in the light theme, at scale 2, from fake sources (the
+  date and time of the board). Compare the light ones with `MainClair.dc.html` and
+  `MenusClair.dc.html`.
+
+## Theme
+
+The bar follows the appearance file live (`docs/appearance.md`) and fades from one theme to the
+other (`color::ThemeFade`, see "Following the theme" in `docs/sherlock-ui.md`). In the light
+theme the logo of the Sherlock button takes a dark green ring and a night blue dot, which show
+on the light glass.
+
+![The bar in the light theme](../desktop/bar/screenshots/bar-light.png)
+![The Sherlock menu in the light theme](../desktop/bar/screenshots/menu-light.png)
 
 Screenshots and test input never go to the author's session (`:0`). Run the nested KWin
 inside a Xephyr display started for the test, and work on that display only:
@@ -287,8 +300,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 
 `just verify` runs everything, without a screen:
 
-- **Clock**: parsing of `date`'s output, date and time of the board (« mar. 24 nov. »,
-  « 21:46 »), leading zeros, rejected outputs; formats of `sherlock_ui::strings`.
+- **Clock**: fields of a `struct tm` to the date and time of the board (« mar. 24 nov. »,
+  « 21:46 »), Sunday, leading zeros, fields out of range; the local time of a known instant;
+  formats of `sherlock_ui::strings`.
+- **Theme**: `Theme=light` written in a temporary appearance file reaches the bar, which fades
+  to the light palette over the frames, without restarting.
 - **Battery, network, sound**: parsing of the recorded and rewritten outputs in `fixtures/`.
 - **Sources**: `watch` only sends changes; `Fixed` yields its state once.
 - **Placeholder workspaces** and **user name**.

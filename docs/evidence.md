@@ -311,6 +311,15 @@ user's; no test calls the real UDisks.
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.
 
+## Theme
+
+Evidence follows the appearance file live and fades from one theme to the other (D-05b, see
+"Following the theme" in `docs/sherlock-ui.md`): its iced theme is `window_theme()`, read again
+at every redraw, and its view reads `color::palette()`. The capture test also writes
+`target/tmp/evidence-light-tiny-skia.png`, to compare with `FichiersClair.dc.html`.
+
+![Evidence in the light theme](evidence/evidence-light.png)
+
 ## Installing
 
 `just install-evidence` builds Evidence in release and installs it for the user, without root:
