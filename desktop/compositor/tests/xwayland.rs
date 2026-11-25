@@ -21,7 +21,7 @@ mod tests {
         backend::input::{ButtonState, KeyState},
         desktop::Window,
         input::keyboard::Keycode,
-        reexports::calloop::EventLoop,
+        reexports::{calloop::EventLoop, wayland_server::Resource as _},
         utils::{Logical, Rectangle},
         wayland::{
             seat::WaylandFocus,
@@ -313,6 +313,8 @@ mod tests {
         let (wayland, wayland_lock) = wayland_socket();
         state.listen_at(wayland.clone(), &event_loop).unwrap();
         assert!(wayland.exists() && wayland_lock.exists());
+        let shell = shell_protocol::socket_path(&wayland);
+        assert!(shell.exists(), "no shell socket");
         // The startup result: `Some(None)` if XWayland failed. Its messages are on the test's
         // standard error.
         let started = Rc::new(Cell::new(None));
@@ -350,6 +352,9 @@ mod tests {
             s.focused_window().as_ref() == Some(&window)
         });
         assert!(h.state.window_visual(&window, Duration::ZERO).is_some());
+        // XWayland is an ordinary client: the shell's globals are not offered to it (ADR 0021).
+        let xwayland = window.wl_surface().unwrap().client().unwrap();
+        assert!(!State::is_shell_client(&xwayland));
 
         // The menu is at the place it chose, without taking the keyboard.
         h.run_until("the X11 menu", |s| {
@@ -446,6 +451,6 @@ mod tests {
         // lock go away too, although the X11Wm source keeps the event loop alive.
         h.state.shutdown();
         h.run_until("the socket removed", |_| !Path::new(&socket).exists());
-        assert!(!wayland.exists() && !wayland_lock.exists());
+        assert!(!wayland.exists() && !wayland_lock.exists() && !shell.exists());
     }
 }

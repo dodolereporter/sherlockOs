@@ -137,6 +137,11 @@ impl State {
         }
     }
 
+    /// Whether `client` sees the globals of the shell: it connected through the shell socket.
+    pub fn is_shell_client(client: &Client) -> bool {
+        is_shell_client(client)
+    }
+
     /// Rectangle of the dock icon that the shell gave for `window`: screen name and rectangle
     /// on that screen. For the minimize animation (lot D-19).
     pub fn icon_rectangle(&self, window: &Window) -> Option<(String, Rectangle<i32, Logical>)> {
