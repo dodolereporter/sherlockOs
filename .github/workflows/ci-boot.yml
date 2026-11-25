@@ -1,0 +1,107 @@
+# CI boot : construit l'image témoin dans le conteneur de build et la boote dans QEMU.
+# Marque en échec toute demande de fusion dont l'image ne boote pas en 90 secondes.
+# Ce qui est vérifié et comment le lancer en local : docs/tests-boot.md.
+name: CI boot
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Le jeton ne sert qu'à lire le dépôt. Le cache et les artefacts ont leur propre jeton.
+permissions:
+  contents: read
+
+# Un nouveau commit sur une demande de fusion annule l'exécution en cours.
+# Sur main, chaque commit va au bout.
+concurrency:
+  group: ci-boot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-boot:
+    name: test-boot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Archive de l'image de build, hors du dépôt.
+      ARCHIVE_BUILDER: /tmp/sherlockos-builder.tar.zst
+    steps:
+      - name: Récupère le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Installe just
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just@1.59.0
+
+      # /dev/kvm existe sur les machines GitHub, mais seul le groupe kvm peut l'ouvrir.
+      # builder.sh ne passe KVM au conteneur que si l'utilisateur peut l'ouvrir.
+      - name: Ouvre KVM à l'utilisateur, s'il existe
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "pas de /dev/kvm : QEMU émulera le processeur"
+          fi
+
+      # L'image de build est gardée en cache, compressée, sous une clé tirée du Dockerfile et
+      # de l'uid : c'est ce qui fait son empreinte dans builder.sh. Une image restaurée porte la
+      # bonne empreinte, et builder.sh ne la reconstruit pas.
+      - name: Clé du cache de l'image de build
+        id: cle
+        run: echo "cle=builder-${{ hashFiles('distro/builder/Dockerfile') }}-uid$(id -u)" >>"$GITHUB_OUTPUT"
+
+      - name: Restaure l'image de build
+        id: cache-builder
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.ARCHIVE_BUILDER }}
+          key: ${{ steps.cle.outputs.cle }}
+
+      - name: Charge l'image de build restaurée
+        if: steps.cache-builder.outputs.cache-hit == 'true'
+        run: zstd -dc "$ARCHIVE_BUILDER" | docker load
+
+      - name: Construit l'image de build
+        if: steps.cache-builder.outputs.cache-hit != 'true'
+        run: just builder
+
+      # Comme pour le cache Cargo, seule main enregistre ; les demandes de fusion relisent.
+      - name: Prépare l'image de build pour le cache
+        if: steps.cache-builder.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        run: docker save sherlockos-builder:local | zstd -T0 -3 -q -o "$ARCHIVE_BUILDER"
+
+      - name: Enregistre l'image de build
+        if: steps.cache-builder.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.ARCHIVE_BUILDER }}
+          key: ${{ steps.cle.outputs.cle }}
+
+      - name: just tester-builder
+        run: just tester-builder
+
+      - name: just test-boot
+        run: just test-boot
+
+      - name: just tester-banc
+        run: just tester-banc
+
+      # Captures d'écran et journaux série, publiés même en cas d'échec pour comprendre pourquoi.
+      - name: Publie les captures d'écran
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: captures-boot
+          path: |
+            distro/tests/sortie/boot-*/capture.png
+            distro/tests/sortie/boot-*/serie.log
+          if-no-files-found: warn
+          retention-days: 30
