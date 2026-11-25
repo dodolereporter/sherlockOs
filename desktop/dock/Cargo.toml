@@ -1,0 +1,40 @@
+[package]
+name = "dock"
+description = "Dock of the desktop, anchored at the bottom with layer-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The same as the bar (docs/bar.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+sherlock-ui = { path = "../sherlock-ui" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+# Client side of `zwlr_foreign_toplevel_manager_v1`, for the open windows: the versions that
+# iced_exwlshell and smithay already pull.
+wayland-client = "=0.31.15"
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
+# A fake compositor for the window list test: the server side that smithay already pulls.
+wayland-server = "=0.31.14"
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client", "server"] }
+
+[lints]
+workspace = true

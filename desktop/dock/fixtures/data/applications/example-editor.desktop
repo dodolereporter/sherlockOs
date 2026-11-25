@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Editor
+Name[fr]=Éditeur
+Exec=example-editor %F
+Icon=example-editor
+Categories=Utility;TextEditor;
