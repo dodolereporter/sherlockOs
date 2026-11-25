@@ -37,7 +37,9 @@ empreinte comme les autres. Une demande de fusion n'est verte que si `verifier` 
 - **Bibliothèques système.** `libxkbcommon-dev` et `libwayland-dev`, installées par `apt-get` à
   chaque exécution, car la machine de CI est neuve à chaque fois. Le compositeur (smithay) se lie à
   libxkbcommon, et son test d'intégration charge libwayland-client. `xwayland` fournit le binaire
-  `Xwayland`, que le test d'intégration de XWayland (`tests/xwayland.rs`) lance. Toute bibliothèque
+  `Xwayland`, que le test d'intégration de XWayland (`tests/xwayland.rs`) lance, et `libegl1`
+  la `libEGL.so.1` sans laquelle Xwayland s'arrête au démarrage : libepoxy la charge à
+  l'exécution, et le paquet `xwayland` ne la tire pas. Toute bibliothèque
   système ajoutée ici l'est aussi aux prérequis du poste.
 - **just.** Installé par `taiki-e/install-action`, version 1.59.0, épinglée dans le workflow.
 - **Cache Cargo.** `Swatinem/rust-cache` garde le registre Cargo et le dossier `target`. Sa clé
