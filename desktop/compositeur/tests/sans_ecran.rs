@@ -13,14 +13,15 @@ mod tests {
     };
 
     use compositeur::State;
+    use smithay::reexports::wayland_server::Resource as _;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
-        utils::{Logical, Point, Rectangle, Transform},
+        utils::{Logical, Point, Rectangle},
     };
     use wayland_client::{
-        Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop,
+        Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, delegate_noop,
         protocol::{
             wl_buffer::WlBuffer,
             wl_callback::{self, WlCallback},
@@ -34,10 +35,18 @@ mod tests {
             wl_surface::WlSurface,
         },
     };
+    use wayland_protocols::wp::fractional_scale::v1::client::{
+        wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+        wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+    };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
+    };
+    use wayland_protocols_wlr::layer_shell::v1::client::{
+        zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
+        zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
     };
 
     /// Ce que le client a reçu.
@@ -52,6 +61,51 @@ mod tests {
         keys: Vec<(u32, bool)>,
         /// Le compositeur a répondu au dernier `wl_display.sync`.
         synced: bool,
+        /// Each configure of the anchored surface: width, height.
+        layer_configures: Vec<(u32, u32)>,
+        /// Last scale announced by `wp_fractional_scale_v1`, in 120ths.
+        preferred_scale: Option<u32>,
+        /// Anchored surfaces closed by the compositor.
+        layer_closed: usize,
+    }
+
+    impl Dispatch<ZwlrLayerSurfaceV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            surface: &ZwlrLayerSurfaceV1,
+            event: zwlr_layer_surface_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } = event
+            {
+                surface.ack_configure(serial);
+                client.layer_configures.push((width, height));
+            }
+            if let zwlr_layer_surface_v1::Event::Closed = event {
+                client.layer_closed += 1;
+            }
+        }
+    }
+
+    impl Dispatch<WpFractionalScaleV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WpFractionalScaleV1,
+            event: wp_fractional_scale_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+                client.preferred_scale = Some(scale);
+            }
+        }
     }
 
     impl Dispatch<WlPointer, ()> for Client {
@@ -182,6 +236,8 @@ mod tests {
     delegate_noop!(Client: ignore WlShm);
     delegate_noop!(Client: WlShmPool);
     delegate_noop!(Client: ignore WlBuffer);
+    delegate_noop!(Client: ZwlrLayerShellV1);
+    delegate_noop!(Client: WpFractionalScaleManagerV1);
 
     /// Mémoire partagée pour un tampon de `size` octets, sans fichier qui reste sur le disque.
     /// Les tests tournent en parallèle : chacun a son nom de fichier.
@@ -232,9 +288,14 @@ mod tests {
 
     impl Harness {
         fn start() -> Self {
+            Self::start_scaled(1.0)
+        }
+
+        /// One screen of 800 × 600 pixels at `scale`.
+        fn start_scaled(scale: f64) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output((800, 600).into(), Transform::Normal);
+            state.add_output((800, 600).into(), scale);
             let (server_side, client_side) = UnixStream::pair().unwrap();
             state.insert_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
@@ -774,5 +835,542 @@ mod tests {
             h.assert_follows(3001 + i as u64, "détachée");
         }
         h.release();
+    }
+
+    /// What the client asks for an anchored surface.
+    #[derive(Clone, Copy)]
+    struct Spec {
+        layer: Layer,
+        anchor: Anchor,
+        size: (u32, u32),
+        zone: i32,
+        /// Top, right, bottom, left.
+        margin: (i32, i32, i32, i32),
+        keyboard: KeyboardInteractivity,
+    }
+
+    /// The bar: anchored at the top and both sides, 36 high with margins of 10 at the top and
+    /// 12 on the sides, an exclusive zone of 36, the keyboard on demand.
+    const BAR: Spec = Spec {
+        layer: Layer::Top,
+        anchor: Anchor::Top.union(Anchor::Left).union(Anchor::Right),
+        size: (0, 36),
+        zone: 36,
+        margin: (10, 12, 0, 12),
+        keyboard: KeyboardInteractivity::OnDemand,
+    };
+
+    /// An anchored surface of the client, with what it needs to draw again.
+    struct Anchored {
+        surface: WlSurface,
+        layer: ZwlrLayerSurfaceV1,
+        shm: WlShm,
+        _file: Option<File>,
+    }
+
+    impl Anchored {
+        /// Draws at the size of the last configure.
+        fn draw(&mut self, h: &mut Harness) {
+            let qh = h.queue.handle();
+            let (w, ht) = *h.client.layer_configures.last().unwrap();
+            let (w, ht) = (w as i32, ht as i32);
+            let file = shm_file((w * ht * 4) as u64);
+            let pool = self.shm.create_pool(file.as_fd(), w * ht * 4, &qh, ());
+            let buffer = pool.create_buffer(0, w, ht, w * 4, Format::Argb8888, &qh, ());
+            self.surface.attach(Some(&buffer), 0, 0);
+            self.surface.commit();
+            self._file = Some(file);
+            settle(h);
+        }
+    }
+
+    /// A few turns of the loop, for everything sent to be handled.
+    fn settle(h: &mut Harness) {
+        for _ in 0..5 {
+            h.run_until("un tour", |_, _| true);
+        }
+    }
+
+    /// The client creates an anchored surface and commits it. Once configured, it draws it;
+    /// a surface closed by the compositor stays without content.
+    fn anchor(h: &mut Harness, spec: Spec) -> Anchored {
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "zwlr_layer_shell_v1")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let layer_shell: ZwlrLayerShellV1 = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let layer =
+            layer_shell.get_layer_surface(&surface, None, spec.layer, "essai".into(), &qh, ());
+        layer.set_size(spec.size.0, spec.size.1);
+        layer.set_anchor(spec.anchor);
+        layer.set_exclusive_zone(spec.zone);
+        let (top, right, bottom, left) = spec.margin;
+        layer.set_margin(top, right, bottom, left);
+        layer.set_keyboard_interactivity(spec.keyboard);
+        surface.commit();
+        let (configured, closed) = (h.client.layer_configures.len(), h.client.layer_closed);
+        h.run_until("la réponse à la surface ancrée", |c, _| {
+            c.layer_configures.len() > configured || c.layer_closed > closed
+        });
+        let mut anchored = Anchored {
+            surface,
+            layer,
+            shm: h.bind(&registry),
+            _file: None,
+        };
+        if h.client.layer_closed == closed {
+            anchored.draw(h);
+        }
+        anchored
+    }
+
+    /// The client creates the bar and draws it. Returns its surface.
+    fn show_bar(h: &mut Harness) -> Anchored {
+        let bar = anchor(h, BAR);
+        assert_eq!(
+            h.client.layer_configures,
+            vec![(776, 36)],
+            "toute la largeur, moins les marges"
+        );
+        h.run_until("la zone exclusive", |_, s| {
+            s.output_area() != Some(rect(0, 0, 800, 600))
+        });
+        bar
+    }
+
+    #[test]
+    fn une_barre_ancree_en_haut_reduit_la_zone_d_agrandissement() {
+        let mut h = Harness::start();
+        h.show_window();
+        h.shortcut(KEY_UP);
+        let states = h.wait_size("l'agrandissement", 800, 600);
+        assert!(states.contains(&XdgState::Maximized));
+
+        let bar = show_bar(&mut h);
+        // 10 of margin and 36 of bar at the top.
+        assert_eq!(h.state.output_area(), Some(rect(0, 46, 800, 554)));
+        let states = h.wait_size("l'agrandissement sous la barre", 800, 554);
+        assert!(states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((0, 46).into()));
+
+        // Back to its size, then snapped to the left: the bar stays uncovered.
+        h.shortcut(KEY_DOWN);
+        h.wait_size("la taille d'avant", 100, 80);
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, 554);
+        assert_eq!(location(&h.state), Some((0, 46).into()));
+
+        // A click on the bar gives it the keyboard: it asked for it on demand.
+        h.press(100.0, 20.0);
+        h.release();
+        let focus = h.state.keyboard_focus().expect("le clavier à la barre");
+        assert_eq!(focus.id().protocol_id(), bar.surface.id().protocol_id());
+    }
+
+    #[test]
+    fn avec_deux_ecrans_une_fenetre_se_cale_sur_le_second() {
+        let mut h = Harness::start();
+        h.state.add_output((800, 600).into(), 1.0);
+        h.show_window();
+        // The pointer on the second screen: its work area receives new windows.
+        h.state.pointer_motion((1200.0, 300.0).into(), 1);
+        assert_eq!(h.state.output_area(), Some(rect(800, 0, 800, 600)));
+
+        // Gesture key + drag the window to the right edge of the second screen.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 2);
+        h.state.pointer_motion((400.0, 300.0).into(), 3);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+        h.state.pointer_motion((1597.0, 300.0).into(), 5);
+        assert_eq!(h.state.snap_preview(), Some(rect(1200, 0, 400, 600)));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 7);
+        h.wait_size("la moitié droite du second écran", 400, 600);
+        assert_eq!(location(&h.state), Some((1200, 0).into()));
+
+        // Maximized by the shortcut, it stays on the second screen.
+        h.shortcut(KEY_UP);
+        h.wait_size("l'agrandissement", 800, 600);
+        assert_eq!(location(&h.state), Some((800, 0).into()));
+    }
+
+    #[test]
+    fn l_echelle_fractionnaire_est_annoncee() {
+        // 800 × 600 pixels at 1.5: 533 × 400 points.
+        let mut h = Harness::start_scaled(1.5);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals
+                .iter()
+                .any(|g| g.1 == "wp_fractional_scale_manager_v1")
+        });
+        for global in ["wp_viewporter", "zxdg_output_manager_v1"] {
+            assert!(
+                h.client.globals.iter().any(|g| g.1 == global),
+                "{global} annoncé"
+            );
+        }
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 533, 400)));
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let manager: WpFractionalScaleManagerV1 = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let _scale = manager.get_fractional_scale(&surface, &qh, ());
+        let _toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("l'échelle de l'écran", |c, _| c.preferred_scale.is_some());
+        assert_eq!(h.client.preferred_scale, Some(180), "1,5 en 120es");
+    }
+
+    /// The window is maximized, and its last configure is `w` × `h`.
+    fn assert_maximized(h: &mut Harness, what: &str, w: i32, ht: i32) {
+        let states = h.wait_size(what, w, ht);
+        assert!(states.contains(&XdgState::Maximized), "{what}");
+    }
+
+    /// The protocol id of the surface that has the keyboard.
+    fn keyboard_id(h: &Harness) -> Option<u32> {
+        h.state.keyboard_focus().map(|f| f.id().protocol_id())
+    }
+
+    #[test]
+    fn les_zones_exclusives_s_empilent_puis_se_rendent() {
+        let mut h = Harness::start();
+        h.show_window();
+        h.shortcut(KEY_UP);
+        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        let first = anchor(&mut h, BAR);
+        let second = anchor(&mut h, BAR);
+        let dock = Spec {
+            layer: Layer::Bottom,
+            anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
+            size: (0, 76),
+            zone: 76,
+            margin: (0, 0, 0, 0),
+            keyboard: KeyboardInteractivity::None,
+        };
+        let dock = anchor(&mut h, dock);
+        // Two bars of 10 + 36 at the top, a dock of 76 at the bottom.
+        assert_eq!(h.state.output_area(), Some(rect(0, 92, 800, 432)));
+        assert_maximized(
+            &mut h,
+            "sous les deux barres et au-dessus du dock",
+            800,
+            432,
+        );
+        // A zone of -1 does not move the others (the surface ignores them).
+        let ignoring = anchor(&mut h, Spec { zone: -1, ..BAR });
+        assert_eq!(h.state.output_area(), Some(rect(0, 92, 800, 432)));
+        second.layer.destroy();
+        assert_maximized(&mut h, "la seconde barre fermée", 800, 478);
+        assert_eq!(h.state.output_area(), Some(rect(0, 46, 800, 478)));
+        for anchored in [first, dock, ignoring] {
+            anchored.layer.destroy();
+        }
+        assert_maximized(&mut h, "tout fermé", 800, 600);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+    }
+
+    #[test]
+    fn une_zone_exclusive_trop_grande_est_refusee() {
+        let mut h = Harness::start();
+        h.show_window();
+        h.shortcut(KEY_UP);
+        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        let refused = [
+            // Larger than the screen.
+            Spec {
+                zone: 100_000,
+                margin: (0, 0, 0, 0),
+                ..BAR
+            },
+            // i32::MAX with a margin: smithay would overflow.
+            Spec {
+                zone: i32::MAX,
+                ..BAR
+            },
+            // A margin far larger than the screen.
+            Spec {
+                margin: (i32::MAX, 0, 0, i32::MIN),
+                ..BAR
+            },
+        ];
+        for (i, spec) in refused.into_iter().enumerate() {
+            anchor(&mut h, spec);
+            assert_eq!(h.client.layer_closed, i + 1, "surface {i} fermée");
+            assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+        }
+        assert_eq!(
+            h.last_configure().1,
+            600,
+            "la fenêtre agrandie n'a pas bougé"
+        );
+        // The compositor still works: snapped left, the window takes the whole height.
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, 600);
+    }
+
+    #[test]
+    fn des_zones_qui_couvrent_l_ecran_laissent_une_zone_minimale() {
+        let mut h = Harness::start();
+        h.show_window();
+        let top = Spec {
+            size: (0, 300),
+            zone: 300,
+            margin: (0, 0, 0, 0),
+            ..BAR
+        };
+        let bottom = Spec {
+            anchor: Anchor::Bottom | Anchor::Left | Anchor::Right,
+            ..top
+        };
+        anchor(&mut h, top);
+        anchor(&mut h, bottom);
+        // The zones take the whole height: the work area keeps the minimum of sherlock-ui,
+        // inside the screen.
+        let (w, ht) = sherlock_ui::window::MIN_WORK_AREA;
+        assert_eq!(h.state.output_area(), Some(rect(0, 300, 800, ht)));
+        assert!(w <= 800);
+        // One more pixel of exclusive zone does not fit: refused.
+        anchor(
+            &mut h,
+            Spec {
+                size: (0, 1),
+                zone: 1,
+                ..top
+            },
+        );
+        assert_eq!(h.client.layer_closed, 1);
+        h.shortcut(KEY_UP);
+        assert_maximized(&mut h, "l'agrandissement dans la zone minimale", 800, ht);
+        h.shortcut(KEY_LEFT);
+        h.wait_size("la moitié gauche", 400, ht);
+    }
+
+    #[test]
+    fn une_barre_demappee_rend_sa_zone_et_le_clavier() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        h.shortcut(KEY_UP);
+        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        let mut bar = show_bar(&mut h);
+        assert_maximized(&mut h, "sous la barre", 800, 554);
+        h.press(100.0, 20.0);
+        h.release();
+        assert_eq!(keyboard_id(&h), Some(bar.surface.id().protocol_id()));
+
+        // A null buffer unmaps the bar: its zone and the keyboard come back.
+        bar.surface.attach(None, 0, 0);
+        bar.surface.commit();
+        assert_maximized(&mut h, "la barre démappée", 800, 600);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+        assert_eq!(keyboard_id(&h), Some(shown.surface.id().protocol_id()));
+
+        // Committed again, it gets a new configure, then shows again.
+        bar.surface.commit();
+        h.run_until("la nouvelle configuration", |c, _| {
+            c.layer_configures.len() == 2
+        });
+        bar.draw(&mut h);
+        assert_maximized(&mut h, "de nouveau sous la barre", 800, 554);
+    }
+
+    #[test]
+    fn une_surface_au_clavier_exclusif_le_garde() {
+        let mut h = Harness::start();
+        h.show_window();
+        let panel = Spec {
+            layer: Layer::Overlay,
+            anchor: Anchor::Top | Anchor::Left,
+            size: (1, 1),
+            zone: 0,
+            margin: (0, 0, 0, 0),
+            keyboard: KeyboardInteractivity::Exclusive,
+        };
+        let panel = anchor(&mut h, panel);
+        let id = Some(panel.surface.id().protocol_id());
+        assert_eq!(keyboard_id(&h), id, "dès son premier contenu");
+        h.press(400.0, 300.0);
+        h.release();
+        assert_eq!(keyboard_id(&h), id, "même après un clic sur la fenêtre");
+        panel.layer.destroy();
+        settle(&mut h);
+        assert_ne!(keyboard_id(&h), id, "rendu en partant");
+    }
+
+    #[test]
+    fn le_client_de_la_barre_part_et_rend_sa_zone() {
+        let mut h = Harness::start();
+        h.show_window();
+        h.shortcut(KEY_UP);
+        assert_maximized(&mut h, "l'agrandissement", 800, 600);
+        // A second client, the bar, driven by hand.
+        let (server_side, client_side) = UnixStream::pair().unwrap();
+        h.state.insert_client(server_side);
+        let conn = Connection::from_socket(client_side).unwrap();
+        let mut queue: EventQueue<Client> = conn.new_event_queue();
+        let mut bar_client = Client::default();
+        let qh = queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        let mut step = |h: &mut Harness, client: &mut Client| {
+            for _ in 0..10 {
+                conn.flush().unwrap();
+                h.event_loop
+                    .dispatch(Some(Duration::from_millis(5)), &mut h.state)
+                    .unwrap();
+                h.state.refresh();
+                if let Some(guard) = queue.prepare_read() {
+                    let _ = guard.read();
+                }
+                queue.dispatch_pending(client).unwrap();
+            }
+        };
+        step(&mut h, &mut bar_client);
+        let global = |name: &str| {
+            let g = bar_client.globals.iter().find(|g| g.1 == name).unwrap();
+            (g.0, g.2)
+        };
+        let ((c, cv), (m, mv), (l, lv)) = (
+            global("wl_compositor"),
+            global("wl_shm"),
+            global("zwlr_layer_shell_v1"),
+        );
+        let compositor: WlCompositor = registry.bind(c, cv.min(5), &qh, ());
+        let shm: WlShm = registry.bind(m, mv.min(1), &qh, ());
+        let layer_shell: ZwlrLayerShellV1 = registry.bind(l, lv.min(4), &qh, ());
+        let surface = compositor.create_surface(&qh, ());
+        let bar = layer_shell.get_layer_surface(&surface, None, Layer::Top, "b".into(), &qh, ());
+        bar.set_size(0, 36);
+        bar.set_anchor(Anchor::Top | Anchor::Left | Anchor::Right);
+        bar.set_exclusive_zone(36);
+        surface.commit();
+        step(&mut h, &mut bar_client);
+        let file = shm_file(800 * 36 * 4);
+        let pool = shm.create_pool(file.as_fd(), 800 * 36 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 800, 36, 800 * 4, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        step(&mut h, &mut bar_client);
+        assert_maximized(&mut h, "sous la barre de l'autre client", 800, 564);
+        // The bar's client goes away without a word.
+        drop(step);
+        drop((
+            queue,
+            registry,
+            compositor,
+            shm,
+            layer_shell,
+            surface,
+            bar,
+            pool,
+            buffer,
+        ));
+        drop(conn);
+        assert_maximized(&mut h, "le client de la barre parti", 800, 600);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+    }
+
+    #[test]
+    fn deux_ecrans_d_echelles_differentes_recoivent_le_pointeur() {
+        let event_loop = EventLoop::<State>::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((720, 900).into(), 1.0);
+        state.add_output((720, 900).into(), 2.0);
+        state.resize_frame((1440, 900).into());
+        let at = |x: f64, y: f64| state.frame_to_space((x, y).into());
+        assert_eq!(at(719.0, 10.0), Some((719.0, 10.0).into()));
+        // The second screen starts at 720 in the space, at half the pixels.
+        assert_eq!(at(720.0, 10.0), Some((720.0, 5.0).into()));
+        assert_eq!(at(1439.0, 899.0), Some((1079.5, 449.5).into()));
+    }
+
+    #[test]
+    fn une_taille_au_dela_de_2_31_est_une_erreur_du_client() {
+        let mut h = Harness::start();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "zwlr_layer_shell_v1")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let layer_shell: ZwlrLayerShellV1 = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let layer = layer_shell.get_layer_surface(&surface, None, Layer::Top, "x".into(), &qh, ());
+        // smithay would read it as a negative height, and assert against it.
+        layer.set_size(100, u32::MAX);
+        layer.set_anchor(Anchor::Top);
+        surface.commit();
+        // The client ends in a protocol error; the compositor goes on.
+        for _ in 0..10 {
+            let _ = h.conn.flush();
+            h.event_loop
+                .dispatch(Some(Duration::from_millis(5)), &mut h.state)
+                .unwrap();
+            h.state.refresh();
+            if let Some(guard) = h.queue.prepare_read() {
+                let _ = guard.read();
+            }
+            let _ = h.queue.dispatch_pending(&mut h.client);
+        }
+        let error = h.conn.protocol_error().expect("une erreur de protocole");
+        assert_eq!(error.object_interface, "zwlr_layer_surface_v1");
+        assert_eq!(error.code, 1, "invalid_size");
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+    }
+
+    /// A client maximizes its window before its first content, then the bar arrives on the
+    /// screen under the pointer, then the client draws: the window ends up under the bar, at
+    /// (`x`, 46), whatever the order.
+    fn maximized_before_the_bar(h: &mut Harness, x: i32) {
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("les globales", |c, _| {
+            c.globals.iter().any(|g| g.1 == "xdg_wm_base")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        toplevel.set_maximized();
+        surface.commit();
+        assert_maximized(h, "l'agrandissement avant tout contenu", 800, 600);
+        anchor(h, BAR);
+        assert_maximized(h, "sous la barre, toujours sans contenu", 800, 554);
+        let file = shm_file(800 * 554 * 4);
+        let pool = shm.create_pool(file.as_fd(), 800 * 554 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 800, 554, 800 * 4, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        h.run_until("le premier contenu sous la barre", |_, s| {
+            let window = s.space.elements().next();
+            window.and_then(|w| s.space.element_geometry(w)) == Some(rect(x, 46, 800, 554))
+        });
+    }
+
+    #[test]
+    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle() {
+        let mut h = Harness::start();
+        maximized_before_the_bar(&mut h, 0);
+    }
+
+    #[test]
+    fn une_fenetre_agrandie_avant_la_barre_passe_sous_elle_sur_le_second_ecran() {
+        let mut h = Harness::start();
+        h.state.add_output((800, 600).into(), 1.0);
+        h.state.pointer_motion((1200.0, 300.0).into(), 1);
+        maximized_before_the_bar(&mut h, 800);
+        // The first screen has no bar: its work area is whole.
+        h.state.pointer_motion((400.0, 300.0).into(), 2);
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
     }
 }

@@ -6,7 +6,8 @@ il tourne en fenêtre dans une session existante, sans effet visuel. Le lot D-17
 faciles à prendre en main : bande de saisie, curseurs, calage contre les bords de l'écran. Le lot
 D-11 lui donne l'apparence des planches : fond du bureau, coins arrondis, bordure, ombre, et
 animations à ressorts. Le lot D-13 y fait tourner les applications X11, par XWayland, avec le
-presse-papiers dans les deux sens.
+presse-papiers dans les deux sens. Lot D-12 adds anchored surfaces (layer-shell) for the bar,
+the dock and the panels, several screens, and fractional scaling.
 
 Prérequis du poste, en plus de ceux de `CLAUDE.md` : le serveur `Xwayland` (paquet `xwayland`
 sur Debian). Essayé avec la version 24.1.6 de Debian 13 ; la CI installe celle d'Ubuntu 24.04. Sans
@@ -16,19 +17,22 @@ lui, le compositeur démarre quand même, et seules les applications Wayland s'a
 
 | Fichier | Rôle |
 | --- | --- |
-| `src/main.rs` | Lit les options (`--imbrique`, `--mesurer`), crée la boucle d'événements, démarre XWayland, lance la commande donnée |
+| `src/main.rs` | Lit les options (`--imbrique`, `--mesurer`, `--ecrans`, `--echelle`), crée la boucle d'événements, démarre XWayland, lance la commande donnée |
 | `src/lib.rs` | `State` : affichage Wayland, protocoles, siège, `Space` des fenêtres. Socket, écran, focus |
 | `src/handlers.rs` | Réponses aux protocoles : `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, formes de curseur, presse-papiers et sélection primaire. Pose d'une fenêtre selon son état (`rearrange`), qu'elle soit Wayland ou X11 |
+| `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
+| `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/xwayland.rs` | XWayland : démarrage et arrêt, gestionnaire de fenêtres X11 (`X11Wm`), association des surfaces, presse-papiers vu de X11 |
 | `src/focus.rs` | Cible du clavier : surface Wayland ou fenêtre X11 |
 | `src/input.rs` | Clavier et souris : focus au clic, gestes, calage, raccourcis, forme du curseur |
 | `src/layout.rs` | Disposition : placer, déplacer, redimensionner, bande de saisie, zones de calage, retour à la taille d'avant. Du calcul pur, sans Wayland ni rendu |
-| `src/winit.rs` | Backend fenêtré : la fenêtre hôte, son écran virtuel, son curseur. Lance le rendu de chaque image et sa mesure |
+| `src/winit.rs` | Backend fenêtré : la fenêtre hôte, ses écrans virtuels côte à côte, son curseur. Lance le rendu de chaque image et sa mesure |
 | `src/render.rs` | Rendu : fond et disques, ombres, contenu découpé en rectangle arrondi, bordures, aperçu du calage |
 | `src/shaders/` | Les trois programmes GLSL du rendu : `shape.frag`, `shadow.frag`, `clip.frag` |
 | `src/anim.rs` | Mouvements des fenêtres et de l'aperçu : ressorts appliqués aux rectangles. Du calcul pur |
 | `src/stats.rs` | Statistiques des images pour `--mesurer` |
-| `examples/scene.rs` | Client de test : la scène de mesure, et une fenêtre pour comparer à la planche |
+| `examples/scene.rs` | Client de test : la scène de mesure, et une fenêtre pour comparer à la planche (`planche`), maximized from the start (`agrandie`) or small enough for scale 2 (`petite`) |
+| `../../essais/bar-test` | Test bar of lot D-12, out of the workspace: 36 px, anchored at the top of every screen, with a menu |
 
 Les couleurs, les tailles, les durées et les ressorts viennent de `sherlock-ui` (modules `color`,
 `metrics`, `motion` et `window`), sans sa fonction `iced`.
@@ -44,7 +48,8 @@ La logique de disposition vit dans `layout.rs` et ne connaît que des rectangles
 
 Comportement :
 
-- Une nouvelle fenêtre est centrée sur l'écran à son premier contenu et reçoit le clavier.
+- Une nouvelle fenêtre est centrée à son premier contenu et reçoit le clavier. With several
+  screens, it is centered in the work area of the screen under the pointer.
 - Un clic sur une fenêtre lui donne le clavier et la passe au premier plan.
 - La touche des gestes est Super en session réelle (lot D-14), et Alt en mode imbriqué
   (`--imbrique`) : la session hôte garde Super pour elle (sous Plasma, les actions des fenêtres
@@ -95,6 +100,12 @@ Caler :
   compositeur oublie l'interception.
 - L'agrandissement est l'état `maximized` de xdg-shell, que le client connaît. Une moitié ou un
   quart n'est qu'une taille imposée : les états `tiled` ne sont pas envoyés.
+- Zones are taken from the work area of a screen: what the exclusive zones of anchored surfaces
+  leave (see below). A maximized or snapped window never covers the bar or the dock; a
+  fullscreen one covers the whole screen. Dropped by a drag, a window snaps on the screen under
+  the pointer, against that screen's edges. A shortcut or a client request acts on the window's
+  screen, the one under its center. Along the edge that two screens share, both edges snap:
+  dragging a window from one screen to the other shows the preview of each side in turn.
 
 Curseurs :
 
@@ -106,6 +117,150 @@ Curseurs :
   Ailleurs, c'est la flèche.
 - En mode imbriqué, c'est le curseur de la fenêtre hôte qui change de forme, avec le thème de la
   session hôte. La session réelle (lot D-14) devra dessiner le curseur elle-même.
+
+## Anchored surfaces (layer-shell)
+
+The bar, the dock, the launcher and the notifications are separate programs (ADR 0005). They
+anchor themselves to a screen edge with `zwlr_layer_shell_v1` (version 4 in smithay 0.7). Each
+screen has a layer map (smithay's `LayerMap`) that places its surfaces from their anchors,
+size and margins, and computes the work area.
+
+- **Screen.** A surface goes to the screen it names, or else to the screen under the pointer.
+  It is placed and receives its first configure at its first commit, and again on every
+  commit, which is when its anchors, size, margins or exclusive zone may change.
+- **Layers.** Background and bottom surfaces are drawn under the windows, top and overlay ones
+  above them, the snap preview between the top surfaces and the windows. The pointer follows
+  the same order. Anchored surfaces are drawn as they are: no rounded corners, border or
+  shadow, which are the client's business (the bar draws its own glass).
+- **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
+  taken from the work area. Windows are centered, maximized and snapped inside it. When it
+  changes (the bar starts, stops or resizes), maximized, fullscreen and snapped windows of that
+  screen take the new work area, Wayland or X11, including those that do not have their first
+  content yet (a window maximized at startup, before the bar arrives). A bar of 36 with a top margin of 10 leaves the area from y = 46. The work
+  area always stays inside the screen and is never smaller than `window::MIN_WORK_AREA` of
+  sherlock-ui (320 × 240, or the screen if smaller): zones that cover the whole screen leave
+  that minimum at their edge, never a negative or empty area.
+- **Checks.** Client values are checked before smithay places anything, so that no geometry
+  can overflow. A size beyond 2^31 (`set_size`) is a protocol error (`invalid_size`), sent
+  before smithay reads it, which would otherwise assert against a negative size. At each
+  commit, the surfaces of the screen are refused (`closed` and a warning in the log, the
+  surface leaves the layer map before it is placed) when a margin is larger than the screen, or
+  when the exclusive zones with their margins, summed along each axis, are larger than the
+  screen: a zone of 100 000, or `i32::MAX` with a margin, is refused, and the third panel that
+  no longer fits too.
+- **Null buffer.** A surface that commits a null buffer is unmapped: its exclusive zone and the
+  keyboard come back, as when it is closed. Its next commit maps it again on the same screen,
+  with a new configure.
+- **Keyboard.** `none`: never. `on_demand`: a click on the surface gives it the keyboard, a
+  click on a window takes it back. `exclusive`, on the top or overlay layer: the surface takes
+  the keyboard as soon as it shows something, and keeps it while it is there; clicks on
+  windows still raise them, without the keyboard. When it leaves or gives up the keyboard, the
+  window that had it gets it back.
+- **Menus.** An `xdg_popup` attached to an anchored surface (`zwlr_layer_surface_v1.get_popup`,
+  the menus of the bar) is drawn and hit in front of it, nested popups included. It is kept
+  inside its screen (flip, slide, resize of `xdg_positioner`). A menu that asks for a grab
+  (`xdg_popup.grab`) is closed (`popup_done`, the whole chain) by a press on a surface of
+  another client, or on the desktop; the press still goes through. Presses on the client's own
+  surfaces go to it, which closes its menu itself. The serial of the grab is not checked:
+  iced opens its menus on release, with the serial of the press. The menu does not take the
+  keyboard: Escape and arrow keys go to the surface that has it.
+- **Blur.** `Scene::push_backdrop` is the place where the blur behind glass surfaces comes, with
+  lot D-11b: it is called for each anchored surface, behind it, with its rectangle in the
+  frame. It draws nothing yet: a translucent surface shows a sharp desktop behind it.
+
+### Security notes
+
+Not settled by lot D-12, which runs nested only. What its review established, to carry into
+the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
+
+- **The `zwlr_layer_shell_v1` global is open to every Wayland client**, Flatpak ones included:
+  nothing filters it.
+- **Keyboard theft.** An overlay surface with an `exclusive` keyboard keeps it as long as it
+  exists, even a 1 × 1 surface, and even after a click on a window (the test
+  `une_surface_au_clavier_exclusif_le_garde` checks the protocol's behavior). Any client can
+  thus capture all typing with an almost invisible surface. The compositor's shortcuts are
+  still intercepted before the client, but they act on `focused_window()`, which is `None`
+  while an anchored surface has the keyboard: the gesture key + arrows then do nothing.
+- **Clicks.** An overlay surface anchored to the four edges is in front of everything, drawn
+  and hit first: it receives every click.
+- **To reserve to the compositor:**
+  - a layer above the overlay one, for the consent window (ADR 0011) and the lock screen,
+    drawn by the compositor itself and hit before `layer_hit`;
+  - a forced keyboard focus that comes before `exclusive_layer()`;
+  - a filter on the layer-shell global, kept for the shell programs that the session starts;
+  - `ext-session-lock` for D-25, rather than an overlay surface.
+
+### Layer-shell toolkit of the shell (answer to ADR 0014)
+
+ADR 0014 asked which iced layer-shell crate the shell keeps. Answer: **`iced_exwlshell` 0.21.4**
+(waycrate, MIT), the crate formerly published as `iced_layershell` (0.19.1, used by the D-00
+prototype). The bar of lot D-20 pins it (`=0.21.4`), with iced `=0.14.0` and tiny-skia, and so
+does the test bar `essais/bar-test`, used to try this lot.
+
+What was checked in our compositor with the test bar: a bar on every screen
+(`StartMode::AllScreens`, with `daemon`), anchors, margins and exclusive zone, the keyboard on
+demand, a menu in an `xdg_popup` attached to the bar and closed by a click elsewhere, and the
+fractional scale (the bar draws at 1.25, 1.5 and 2 through `wp_fractional_scale_v1` and
+`wp_viewporter`).
+
+Limits to keep in mind:
+
+- Small project, which renamed itself and broke its API between 0.19 and 0.21 (October 2026).
+  The version is pinned; a new version is a lot of its own.
+- `application` refuses `StartMode::AllScreens`: a program with one surface per screen must use
+  `daemon`, and its message type `#[to_layer_message(multi)]`.
+- No accessibility (iced 0.14 has none), as ADR 0014 says.
+- iced redraws on every message: one frame per message, even when nothing changes.
+- The menus are views written by hand; the crate only creates and places the popup.
+- **In software rendering (tiny-skia), surfaces are opaque.** iced presents through softbuffer
+  0.4.8, whose Wayland backend only creates `XRGB8888` buffers: the transparent pixels of the
+  bar (outside its rounded corners, behind the translucent glass) come out black, in any
+  compositor. The floating bar of the board, with its 10 px gap and its glass, needs either
+  a buffer with alpha (a softbuffer that offers `ARGB8888`, or iced's wgpu renderer on the AMD
+  chip) or a square bar. To decide with lot D-20; not checked further here.
+
+## Screens and scale
+
+In nested mode, `--ecrans N` (1 to 4) splits the host window into N screens side by side, each
+with its own `wl_output`, its own work area and its own layer map. `--echelle E` sets the scale
+of the screens (`1`, `1.25`, `1.5`, `2`; a decimal comma works too); given several times, the
+first applies to the first screen, the second to the second, and missing ones repeat the last.
+Each screen gets an equal slice of the window, in pixels; its size in the space is that slice
+divided by its scale. In the space, screens sit side by side from (0, 0), in order.
+
+- **Windows.** A new window, Wayland or X11, is centered on the screen under the pointer. Snap
+  zones are those of the screen under the pointer (see « Caler »). A window across two screens
+  is drawn on both, at each screen's scale. Its shadow is drawn on its own screen only (the
+  one under its center): a maximized window casts none on the next screen.
+- **Scale announced to clients.** `wl_output` gives the scale rounded up (2 for 1.25 or 1.5).
+  `wp_fractional_scale_v1` gives the exact scale, in 120ths, for each surface, from the screen
+  under its center: clients that know it (Qt 6, GTK 4, iced through `iced_exwlshell`) draw at
+  that scale and give the size in points with `wp_viewporter`. `wl_surface.preferred_buffer_scale`
+  (version 6) gives the rounded scale. Every surface is told again when it changes screen.
+- **xdg-output.** `zxdg_output_manager_v1` gives each screen's place and size in points: XWayland
+  and toolkits read them. X11 applications are not scaled by XWayland: they draw at scale 1 and
+  are enlarged, so they are blurry at 1.5 or 2.
+- **Rendering.** Each screen draws into its slice of the frame, at its scale (see « Rendu »).
+- **Pointer.** The host window gives a point of the whole frame; the screen whose slice holds it
+  turns it into a point of the space.
+
+Screenshots, taken in nested mode on the reference laptop with the test bar (its menu opened by
+`BAR_TEST_MENU=1`) and `scene petite`, in a host window of 1440 × 900:
+
+| Scale | Screenshot |
+| --- | --- |
+| 1 | ![Scale 1](../desktop/compositeur/screenshots/scale-1.png) |
+| 1.5 | ![Scale 1.5](../desktop/compositeur/screenshots/scale-1.5.png) |
+| 2 | ![Scale 2](../desktop/compositeur/screenshots/scale-2.png) |
+| Two screens, 1 and 2, `scene agrandie` maximized on the second (in Xephyr, 1280 × 800): no shadow on the first | ![Two screens](../desktop/compositeur/screenshots/two-screens.png) |
+
+The black corners around the bar and its menu are the test bar's own: iced draws with
+tiny-skia through softbuffer 0.4.8, whose Wayland backend only uses `XRGB8888` buffers, so the
+surface is opaque and its transparent pixels come out black (see the layer-shell toolkit
+limits above).
+
+The session on the real machine (lot D-14) will have one output per connector: `State` already
+knows several screens, only `winit.rs` lays them out in one window.
 
 ## XWayland
 
@@ -192,11 +347,26 @@ Chaque image est redessinée en entier avec le moteur GLES de Smithay (`GlesRend
 seul fil du compositeur. `render::Scene` compile trois programmes au démarrage et pose les
 éléments de l'avant vers l'arrière, comme Smithay les attend :
 
-1. l'aperçu du calage : rectangle arrondi vert translucide, bordure verte de 2 px ;
-2. pour chaque fenêtre, de la plus haute à la plus basse : ses menus (`xdg_popup`, ni découpés
+1. anchored surfaces of the overlay and top layers, each with its menus in front;
+2. l'aperçu du calage : rectangle arrondi vert translucide, bordure verte de 2 px ;
+3. pour chaque fenêtre, de la plus haute à la plus basse : ses menus (`xdg_popup`, ni découpés
    ni mis à l'échelle), sa bordure, son contenu découpé, son ombre ;
-3. les trois disques du fond ;
-4. la couleur du bureau, qui remplit le reste.
+4. anchored surfaces of the bottom and background layers;
+5. les trois disques du fond ;
+6. la couleur du bureau, qui remplit le reste.
+
+**Screens and scale (lot D-12).** Each screen has its own list of elements, built in pixels of
+the frame by its `View`: its area of the space, its slice of the frame, its scale. Rectangles are
+converted corner by corner, so that touching rectangles still touch. Radii, border widths,
+shadow offset and blur, and the snap preview border are multiplied by the scale: at 1.5, a
+window has a radius of 24 pixels, a border of 1.5 and a shadow offset by 42 and blurred over 105,
+exactly the 1.5× of the board. Client surfaces are built at scale 1 from their origin, then
+scaled around it (`RescaleRenderElement`), with the animation's stretch when there is one: a
+client that draws at the screen's scale is drawn pixel for pixel. The compositor draws the
+frame itself rather than through smithay's `OutputDamageTracker`: it clears the frame, then
+draws each screen's elements from back to front, each one limited to its screen's slice (the
+damage given to `draw`). The frame is drawn at scale 1: the elements' « logical » coordinates
+are frame pixels.
 
 | Programme | Sorte | Ce qu'il dessine |
 | --- | --- | --- |
@@ -290,7 +460,8 @@ qui était dessiné à l'image d'avant.
 ### Ce que le rendu ne fait pas encore
 
 - **Flou** derrière les surfaces vitrées (dual Kawase, rayons de 24, 28 et 30 px) : reporté,
-  le lot dépassait déjà sa taille. Il demande un rendu hors écran de ce qui est derrière la
+  le lot dépassait déjà sa taille. Its place for anchored surfaces is ready
+  (`Scene::push_backdrop`, lot D-12). Il demande un rendu hors écran de ce qui est derrière la
   surface, à résolution réduite, puis des passes de flou ; l'aperçu du calage en serait le
   premier client.
 - **Fermeture animée.** Quand le client détruit sa fenêtre, son tampon disparaît avec elle.
@@ -319,6 +490,15 @@ par exemple `RUST_LOG=compositeur=debug,smithay=warn`. Le nom de la socket appar
 Au niveau `debug`, chaque geste écrit son début et sa fin, avec son type (bords tirés, ou aucun
 pour un déplacement) et sa source (touche des gestes ou demande du client). Une demande du client
 refusée l'est aussi.
+
+Two screens, the second one at scale 2, with the test bar on both (built beforehand, see
+`essais/bar-test`):
+
+```sh
+(cd essais/bar-test && cargo build --release)
+cargo run -p compositeur -- --imbrique --ecrans 2 --echelle 1 --echelle 2 \
+  essais/bar-test/target/release/bar-test
+```
 
 `QT_QPA_PLATFORM=wayland` force Konsole à parler Wayland : dans une session X11, Qt choisirait X11,
 et Konsole passerait par XWayland. `--separate` évite que la commande rejoigne une Konsole déjà
@@ -464,7 +644,7 @@ just verifier
 | `sherlock-ui/src/color.rs` | Couleurs prémultipliées par leur opacité |
 | `sherlock-ui/src/motion.rs` | Ressorts : convergence vers la cible, dépassement léger et borné (entre 0,5 et 4 %), temps de réponse (90 % en moins de 150 ms, posé en moins de 300 ms), changement de cible sans saut de valeur ni de vitesse, pas de dépassement pour un ressort critique ou sur-amorti. Fondu : durée d'un survol, reprise sans saut |
 | `src/anim.rs` | Ouverture centrée qui part d'une opacité nulle. Calage animé de la position puis de la taille, glisser suivi sans délai avant et après. Drapeau consommé même sans changement ou pendant une animation, arrêt par un geste. Aperçu qui apparaît, glisse et s'efface |
-| `src/render.rs` | Disques à leur place de la planche sur 1440 par 900, ronds sur un autre écran. Dimensions de l'ombre de la fenêtre de la planche. Rayon des coins, réduit pour une petite fenêtre. Découpe retournée avec l'image |
+| `src/render.rs` | Disques à leur place de la planche sur 1440 par 900, ronds sur un autre écran. Dimensions de l'ombre de la fenêtre de la planche, at scale 1 and 1.5. Rayon des coins, réduit pour une petite fenêtre. Découpe retournée avec l'image. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/stats.rs` | Cadence, images en retard, bilan des images animées |
 | `tests/sans_ecran.rs` | Sans écran ni backend, voir ci-dessous |
 | `tests/xwayland.rs` | XWayland et un client X11, sans écran ni backend, voir ci-dessous |
@@ -492,6 +672,41 @@ Les tests de `tests/sans_ecran.rs` :
 - **Raccourcis.** Super + flèches cale à gauche, agrandit, rend la taille d'avant. Le client,
   qui a un clavier, reçoit Super mais jamais l'appui ni le relâchement des flèches
   interceptées. Super + Maj + gauche lui arrive et ne cale rien.
+- **Bar anchored at the top.** A maximized window; a client creates a layer-shell surface
+  anchored at the top and both sides, 36 high, margins of 10 and 12, exclusive zone of 36. It
+  receives a configure of 776 × 36, draws, and the work area becomes (0, 46, 800, 554): the
+  maximized window is configured at 800 × 554 in (0, 46). Snapped left, it takes 400 × 554 in
+  (0, 46). A click on the bar gives it the keyboard (on demand).
+- **Exclusive zones stacked.** Two bars at the top and a dock of 76 at the bottom: work area
+  (0, 92, 800, 432), and the maximized window follows. A surface with a zone of -1 changes
+  nothing. Closing the second bar gives (0, 46, 800, 478), closing them all the whole screen.
+- **Zones too large.** A zone of 100 000, `i32::MAX` with a margin of 10, a margin of
+  `i32::MAX`: each surface is closed, the work area stays whole, the maximized window does not
+  move and snapping still works. A size beyond 2^31 ends the client with `invalid_size`, and
+  the compositor goes on.
+- **Zones that cover the screen.** 300 at the top and 300 at the bottom on 600: the work area
+  is the minimum of sherlock-ui, (0, 300, 800, 240), where maximizing and snapping happen. One
+  more pixel of zone is refused.
+- **Null buffer.** The bar, with the keyboard, commits a null buffer: the maximized window
+  takes 800 × 600 again and the keyboard goes back to it. Committed again, the bar gets a new
+  configure, draws, and the window goes back under it.
+- **Maximized before the bar.** A window maximized before its first content receives
+  800 × 600; the bar arrives; the window, still without content, receives 800 × 554, and its
+  first content lands in (0, 46). The same on the second of two screens, in (800, 46), the
+  first screen keeping its whole work area.
+- **Exclusive keyboard.** An overlay surface of 1 × 1 with an exclusive keyboard takes it at
+  its first content and keeps it after a click on the window, until it is destroyed.
+- **The bar's client goes away.** A second client shows a bar, then disconnects: its zone comes
+  back to the maximized window.
+- **Two screens.** A second screen of 800 × 600 to the right. With the pointer on it, its work
+  area is the one for new windows. The window, dragged with the gesture key to the right edge
+  of the second screen, is shown the right half of that screen in the preview and takes it
+  (400 × 600 in (1200, 0)); maximized by the shortcut, it fills the second screen.
+- **Fractional scale.** A screen of 800 × 600 pixels at 1.5 is 533 × 400 in the space.
+  `wp_fractional_scale_manager_v1`, `wp_viewporter` and `zxdg_output_manager_v1` are announced,
+  and a new window's surface receives a preferred scale of 180 (1.5 in 120ths). With a screen
+  at 1 and one at 2 sharing a frame of 1440 pixels, the pixel (720, 10) is the point
+  (720, 5) of the space and (1439, 899) the point (1079.5, 449.5).
 - **Ce qui est dessiné suit les gestes.** `State::window_visual` donne la géométrie dessinée à
   un instant choisi, sans rendu. Agrandie puis rendue pendant l'animation, la fenêtre glissée
   ensuite est dessinée sous le pointeur à chaque image. Calée à gauche deux fois de suite, puis
@@ -625,3 +840,29 @@ CLIPBOARD avec Maj + Inser et le clic du milieu : sans lui, xterm ne connaît qu
 10. **Arrêt.** Ferme la fenêtre du compositeur. `ls /tmp/.X11-unix/` ne montre plus la socket
     `X<N>` du journal, `ls $XDG_RUNTIME_DIR` ne montre plus `wayland-N` ni `wayland-N.lock`, et
     `pgrep Xwayland` ne trouve plus rien.
+
+### Anchored surfaces, screens and scale (lot D-12)
+
+Build the test bar once (`(cd essais/bar-test && cargo build --release)`), then:
+
+```sh
+cargo run -p compositeur -- --imbrique --ecrans 2 --echelle 1 --echelle 2 \
+  sh -c 'essais/bar-test/target/release/bar-test & exec env QT_QPA_PLATFORM=wayland konsole --separate'
+```
+
+1. **Bar on both screens.** The window is split in two screens. Each one has the test bar at
+   the top, 10 from the top and 12 from the sides, opaque with black corners (iced in software
+   rendering, see the layer-shell toolkit limits), « écran 1 » on the left, « écran 2 » on the
+   right. The one on the right is twice as big and as sharp.
+2. **Maximize under the bar.** Alt + flèche haut on Konsole: it fills its screen below the bar,
+   without covering it. Alt + flèche gauche: the left half, below the bar too. Drag it to the
+   top edge of the other screen: maximized on that screen, below its bar.
+3. **Menu of the bar.** Click « Menu » on a bar: a menu opens below the button, above Konsole.
+   Click on Konsole: the menu closes, and Konsole gets the click. Open it again and click on
+   the desktop: it closes.
+4. **Keyboard.** Click on the bar, then type: nothing reaches Konsole. Click on Konsole: typing
+   goes to it again.
+5. **Scale.** Relaunch with `--echelle 1.25`, then `--echelle 1.5`, with a single screen: the
+   bar, Konsole's corners, border and shadow keep their proportions and stay sharp.
+6. **X11.** From Konsole, `xterm &`: it opens centered on the screen under the pointer; Alt +
+   flèche haut maximizes it below the bar of that screen.

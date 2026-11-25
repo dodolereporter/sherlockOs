@@ -31,3 +31,8 @@ pub const SNAP_PREVIEW_BORDER_WIDTH: i32 = 2;
 /// Distance que le pointeur doit parcourir avant qu'un déplacement bouge la fenêtre : un simple
 /// clic ne la décale pas, et ne la détache pas de sa zone.
 pub const DRAG_THRESHOLD: i32 = 4;
+
+/// Smallest work area that anchored surfaces leave to windows on a screen, in logical pixels
+/// (lot D-12): however large their exclusive zones, a maximized window gets at least this much,
+/// unless the screen itself is smaller. A choice of the lot, to review with the design.
+pub const MIN_WORK_AREA: (i32, i32) = (320, 240);
