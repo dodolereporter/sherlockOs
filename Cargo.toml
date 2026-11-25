@@ -11,6 +11,7 @@ members = [
     "desktop/launcher",
     "desktop/mime-apps",
     "desktop/sherlock-ui",
+    "desktop/shell-protocol",
     "sherlock/sherlockd",
 ]
 
