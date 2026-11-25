@@ -5,6 +5,8 @@
 //! socket Wayland (`WAYLAND_DISPLAY`) et son affichage X11 (`DISPLAY`).
 //! `--mesurer` journalise chaque seconde la cadence et le temps de rendu des images, puis un
 //! bilan à la fin. La session s'arrête alors avec la commande.
+//! `--ecrans N` splits the window into N screens side by side. `--echelle E` sets the scale of
+//! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -29,10 +31,20 @@ fn main() -> Result<(), Error> {
         return Err(Error::Usage);
     }
     let mut command: Vec<_> = args.collect();
-    let measure = command.first().map(|a| a.as_os_str()) == Some(OsStr::new("--mesurer"));
-    if measure {
+    let (mut measure, mut screens, mut scales) = (false, 1, Vec::new());
+    loop {
+        match command.first().and_then(|a| a.to_str()) {
+            Some("--mesurer") => measure = true,
+            Some("--ecrans") => screens = option(&mut command, 1..=4)?,
+            Some("--echelle") => scales.push(option(&mut command, 0.5..=4.0)?),
+            _ => break,
+        }
         command.remove(0);
     }
+    // Missing scales repeat the last one given, or 1.
+    let scales: Vec<f64> = (0..screens)
+        .map(|i| scales.get(i).or(scales.last()).copied().unwrap_or(1.0))
+        .collect();
 
     let mut event_loop = EventLoop::try_new()?;
     let mut state = State::new(&event_loop)?;
@@ -40,7 +52,7 @@ fn main() -> Result<(), Error> {
         state.frame_stats = Some(FrameStats::default());
     }
     let socket = state.listen(&event_loop)?;
-    compositeur::winit::init(&event_loop, &mut state)?;
+    compositeur::winit::init(&event_loop, &mut state, &scales)?;
     tracing::info!(socket = ?socket, "compositeur prêt");
 
     // En mesure, la session s'arrête avec la commande, qui est la scène mesurée.
@@ -68,6 +80,23 @@ fn main() -> Result<(), Error> {
         tracing::info!("bilan, images animées : {}", stats.animated);
     }
     Ok(())
+}
+
+/// Value of the option in front of `args`, which is removed with it, the option itself being
+/// left for the caller. A decimal comma is read as a point.
+fn option<T: std::str::FromStr + PartialOrd>(
+    args: &mut Vec<OsString>,
+    range: std::ops::RangeInclusive<T>,
+) -> Result<T, Error> {
+    if args.len() < 2 {
+        return Err(Error::Usage);
+    }
+    let value = args.remove(1);
+    let value = value.to_str().map(|v| v.replace(',', "."));
+    value
+        .and_then(|v| v.parse().ok())
+        .filter(|v| range.contains(v))
+        .ok_or(Error::Usage)
 }
 
 /// Lance la commande, s'il y en a une, avec la socket Wayland du compositeur et son affichage

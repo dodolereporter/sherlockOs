@@ -16,12 +16,16 @@ use smithay::{
         keyboard::{FilterResult, Keycode, Keysym, ModifiersState},
         pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent},
     },
+    output::Output,
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
-        wayland_server::protocol::wl_surface::WlSurface,
+        wayland_server::{Resource, protocol::wl_surface::WlSurface},
     },
-    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size},
-    wayland::{compositor::with_states, shell::xdg::SurfaceCachedState},
+    utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size},
+    wayland::{
+        compositor::with_states,
+        shell::{wlr_layer::Layer, xdg::SurfaceCachedState},
+    },
 };
 
 use crate::{
@@ -80,8 +84,8 @@ pub(crate) struct Gesture {
     /// Place flottante de la fenêtre au début du déplacement : celle qu'elle retrouvera si on
     /// la cale. Une taille nulle laisse le client choisir.
     floating: Rectangle<i32, Logical>,
-    /// Zone où la fenêtre déplacée sera calée si on la lâche maintenant.
-    zone: Option<Zone>,
+    /// Zone où la fenêtre déplacée sera calée si on la lâche maintenant, et son écran.
+    zone: Option<(Zone, Output)>,
 }
 
 /// Ce qui est sous le pointeur.
@@ -90,6 +94,9 @@ pub(crate) enum Hit {
     Surface(Window, WlSurface, Point<f64, Logical>),
     /// La bande de saisie autour d'une fenêtre, et les bords qu'elle tire.
     Border(Window, Edges),
+    /// An anchored surface (or one of its menus or subsurfaces): its main surface, the surface
+    /// hit and the position of its origin.
+    Layer(WlSurface, WlSurface, Point<f64, Logical>),
 }
 
 /// Raccourci du compositeur : touche des gestes et une flèche.
@@ -236,9 +243,12 @@ impl State {
             }
             let loc = layout::moved(gesture.initial.loc, gesture.start, pointer);
             self.move_window(&gesture.window, loc, true);
-            gesture.zone = self
-                .output_area()
-                .and_then(|a| Zone::under(a, pointer, ui::SNAP_EDGE, ui::SNAP_CORNER));
+            // The screen under the pointer: its edges snap, its work area receives the window.
+            gesture.zone = self.space.output_under(pointer).next().and_then(|output| {
+                let area = self.space.output_geometry(output)?;
+                let zone = Zone::under(area, pointer, ui::SNAP_EDGE, ui::SNAP_CORNER)?;
+                Some((zone, output.clone()))
+            });
             return;
         };
         let (min, max) = size_limits(&gesture.window);
@@ -302,10 +312,10 @@ impl State {
         } = gesture;
         tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "fin du geste");
         let Some(edges) = edges else {
-            if let Some(zone) = zone {
+            if let Some((zone, output)) = zone {
                 // Lâchée contre un bord : calée. Elle retrouvera sa place d'avant le glisser.
                 window_data(&window).restore.set(Some(floating));
-                self.snap(&window, Some(zone));
+                self.snap(&window, Some(zone), Some(output));
             }
             return;
         };
@@ -340,8 +350,8 @@ impl State {
 
     /// Rectangle où la fenêtre déplacée sera calée si on la lâche maintenant, pour l'aperçu.
     pub fn snap_preview(&self) -> Option<Rectangle<i32, Logical>> {
-        let zone = self.gesture.as_ref()?.zone?;
-        Some(zone.geometry(self.output_area()?))
+        let (zone, output) = self.gesture.as_ref()?.zone.as_ref()?;
+        Some(zone.geometry(self.work_area(output)?))
     }
 
     /// Forme du curseur, `None` pour le cacher. Pendant un geste et au-dessus de la bande de
@@ -354,15 +364,24 @@ impl State {
         let location = self.seat.get_pointer()?.current_location();
         match (self.hit(location), &self.cursor_status) {
             (Some(Hit::Border(_, edges)), _) => Some(resize_cursor(edges)),
-            (Some(Hit::Surface(..)), CursorImageStatus::Named(icon)) => Some(*icon),
-            (Some(Hit::Surface(..)), CursorImageStatus::Hidden) => None,
+            (Some(Hit::Surface(..) | Hit::Layer(..)), CursorImageStatus::Named(icon)) => {
+                Some(*icon)
+            }
+            (Some(Hit::Surface(..) | Hit::Layer(..)), CursorImageStatus::Hidden) => None,
             _ => Some(CursorIcon::Default),
         }
     }
 
     /// Ce qui est sous le pointeur en `pos`. La bande d'une fenêtre passe devant les fenêtres
-    /// qu'elle recouvre, pas devant celles qui sont au-dessus d'elle.
+    /// qu'elle recouvre, pas devant celles qui sont au-dessus d'elle. Overlay and top anchored
+    /// surfaces come before the windows, bottom and background ones after.
     pub(crate) fn hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
+        self.layer_hit(pos, &[Layer::Overlay, Layer::Top])
+            .or_else(|| self.window_hit(pos))
+            .or_else(|| self.layer_hit(pos, &[Layer::Bottom, Layer::Background]))
+    }
+
+    fn window_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
         let under = self.space.element_under(pos);
         for window in self.space.elements().rev() {
             if let Some((top, loc)) = under
@@ -433,7 +452,7 @@ impl State {
             Shortcut::ToggleMaximized | Shortcut::Restore => None,
             Shortcut::Snap(zone) => Some(zone),
         };
-        self.snap(&window, zone);
+        self.snap(&window, zone, None);
     }
 
     /// Traite un événement d'entrée venu du backend.
@@ -443,10 +462,13 @@ impl State {
                 self.keyboard_key(event.key_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerMotionAbsolute { event } => {
-                let Some(area) = self.output_area() else {
+                // The backend gives a point of the whole frame, where each screen has its slice.
+                let size = self.frame_size();
+                let p = event.position_transformed((size.w, size.h).into());
+                let Some(pos) = self.frame_to_space(Point::<f64, Physical>::from((p.x, p.y)))
+                else {
                     return;
                 };
-                let pos = event.position_transformed(area.size) + area.loc.to_f64();
                 self.pointer_motion(pos, event.time_msec());
             }
             InputEvent::PointerButton { event } => {
@@ -485,7 +507,9 @@ impl State {
             None
         } else {
             match self.hit(location) {
-                Some(Hit::Surface(_, surface, origin)) => Some((surface, origin)),
+                Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin)) => {
+                    Some((surface, origin))
+                }
                 _ => None,
             }
         };
@@ -535,8 +559,26 @@ impl State {
         }
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
             let hit = self.hit(location);
+            // An open menu closes on a click on another client; the click still goes through.
+            if let Some(grab) = &self.popup_grab {
+                let same_client = match &hit {
+                    Some(Hit::Surface(_, surface, _) | Hit::Layer(_, surface, _)) => {
+                        surface.id().same_client_as(&grab.root.id())
+                    }
+                    _ => false,
+                };
+                if !same_client {
+                    self.dismiss_popups();
+                }
+            }
             let window = match &hit {
                 Some(Hit::Surface(window, ..) | Hit::Border(window, _)) => Some(window.clone()),
+                Some(Hit::Layer(layer, ..)) => {
+                    self.click_layer(layer);
+                    pointer.button(self, &event);
+                    pointer.frame(self);
+                    return;
+                }
                 None => None,
             };
             // Un clic dans un menu X11 va au menu : le clavier reste à sa fenêtre.

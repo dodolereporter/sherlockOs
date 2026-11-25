@@ -142,6 +142,31 @@ impl Zone {
     }
 }
 
+/// Work area of `screen` from the zone that anchored surfaces leave (`zone`, in the same
+/// coordinates). Kept inside the screen, and never smaller than `min` on each axis (or the
+/// screen, if smaller): exclusive zones that cover the screen leave a usable area at their
+/// edge, never a negative or empty one. Saturating: the zone comes from clients.
+pub fn work_area(
+    screen: Rectangle<i32, Logical>,
+    zone: Rectangle<i32, Logical>,
+    min: (i32, i32),
+) -> Rectangle<i32, Logical> {
+    let axis = |start: i32, len: i32, z_start: i32, z_len: i32, min: i32| {
+        let end = start.saturating_add(len.max(0));
+        let min = min.clamp(0, end - start);
+        let z_start = z_start.clamp(start, end);
+        let z_end = z_start.saturating_add(z_len).clamp(z_start, end);
+        if z_end - z_start >= min {
+            (z_start, z_end - z_start)
+        } else {
+            (z_start.min(end - min), min)
+        }
+    };
+    let (x, w) = axis(screen.loc.x, screen.size.w, zone.loc.x, zone.size.w, min.0);
+    let (y, h) = axis(screen.loc.y, screen.size.h, zone.loc.y, zone.size.h, min.1);
+    Rectangle::new((x, y).into(), (w, h).into())
+}
+
 /// Position d'une fenêtre qu'on détache de sa zone en la déplaçant : elle reprend la taille
 /// `size` sous le pointeur, saisie à la même proportion de sa largeur et à la même distance de
 /// son bord haut (dans la limite de sa nouvelle hauteur).
@@ -243,6 +268,43 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn la_zone_de_travail_reste_dans_l_ecran_et_jamais_vide() {
+        let screen = rect(800, 0, 800, 600);
+        let min = (320, 240);
+        // smithay builds the zone field by field: it can be negative, which `Size::new`
+        // refuses.
+        let raw = |x, y, w, h| {
+            let mut zone = rect(0, 0, 0, 0);
+            (zone.loc.x, zone.loc.y, zone.size.w, zone.size.h) = (x, y, w, h);
+            zone
+        };
+        // A bar of 46 at the top: the rest of the screen.
+        assert_eq!(
+            work_area(screen, rect(800, 46, 800, 554), min),
+            rect(800, 46, 800, 554)
+        );
+        // Zones larger than the screen: a negative zone becomes the minimum, at its edge,
+        // inside the screen.
+        assert_eq!(
+            work_area(screen, raw(800, 100_000, 800, -99_400), min),
+            rect(800, 360, 800, 240)
+        );
+        assert_eq!(
+            work_area(screen, rect(800, 0, 800, 0), min),
+            rect(800, 0, 800, 240)
+        );
+        assert_eq!(
+            work_area(screen, raw(i32::MAX, i32::MIN, i32::MAX, i32::MIN), min),
+            rect(1280, 0, 320, 240)
+        );
+        // A screen smaller than the minimum: the whole screen.
+        assert_eq!(
+            work_area(rect(0, 0, 200, 100), rect(0, 50, 200, 0), min),
+            rect(0, 0, 200, 100)
+        );
     }
 
     #[test]

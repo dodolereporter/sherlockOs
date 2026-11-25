@@ -22,7 +22,7 @@ mod tests {
         desktop::Window,
         input::keyboard::Keycode,
         reexports::calloop::EventLoop,
-        utils::{Logical, Rectangle, Transform},
+        utils::{Logical, Rectangle},
         wayland::{
             seat::WaylandFocus,
             selection::{
@@ -301,7 +301,7 @@ mod tests {
     fn une_application_x11_se_gere_comme_une_fenetre_wayland() {
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
-        state.add_output((800, 600).into(), Transform::Normal);
+        state.add_output((800, 600).into(), 1.0);
         let (wayland, wayland_lock) = wayland_socket();
         state.listen_at(wayland.clone(), &event_loop).unwrap();
         assert!(wayland.exists() && wayland_lock.exists());

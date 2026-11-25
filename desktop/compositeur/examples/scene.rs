@@ -10,6 +10,9 @@
 //!
 //! `scene planche` n'ouvre qu'une fenêtre, de la taille de l'éditeur de la planche Main
 //! (836 × 652), et la garde 20 secondes : de quoi comparer les coins, la bordure et l'ombre.
+//! `scene agrandie` does the same with the window maximized from the start: to see that it stays
+//! below the bar (lot D-12). `scene petite` opens a 400 × 260 window, which fits on a screen at
+//! scale 2: to look at corners, border and shadow at every scale.
 
 use std::{
     error::Error,
@@ -44,6 +47,7 @@ const TOGGLES: u32 = 12;
 const TOGGLE_EVERY: Duration = Duration::from_millis(700);
 /// Fenêtre de l'éditeur de code de la planche Main, et durée pendant laquelle elle reste.
 const PLATE_WINDOW: (i32, i32) = (836, 652);
+const SMALL_WINDOW: (i32, i32) = (400, 260);
 const PLATE_HOLD: Duration = Duration::from_secs(20);
 /// Valeur de l'état `maximized` dans une configuration xdg_toplevel.
 const MAXIMIZED: u32 = 1;
@@ -218,7 +222,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (Some(compositor), Some(wm_base)) = (app.compositor.clone(), app.wm_base.clone()) else {
         return Err("le compositeur n'annonce pas wl_compositor et xdg_wm_base".into());
     };
-    let plate = std::env::args().nth(1).as_deref() == Some("planche");
+    let mode = std::env::args().nth(1);
+    let maximized = mode.as_deref() == Some("agrandie");
+    let small = mode.as_deref() == Some("petite");
+    let plate = maximized || small || mode.as_deref() == Some("planche");
     let count = if plate { 1 } else { WINDOWS };
     // Des fenêtres de plus en plus petites, centrées l'une sur l'autre par le compositeur.
     for index in 0..count {
@@ -227,8 +234,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let toplevel = wm_base
             .get_xdg_surface(&surface, &qh, index)
             .get_toplevel(&qh, index);
+        if maximized {
+            toplevel.set_maximized();
+        }
         surface.commit();
-        let default = if plate {
+        let default = if small {
+            SMALL_WINDOW
+        } else if plate {
             PLATE_WINDOW
         } else {
             (960 - 48 * step, 640 - 32 * step)
