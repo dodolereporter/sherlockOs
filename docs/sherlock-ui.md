@@ -3,13 +3,13 @@
 `desktop/sherlock-ui` is the visual library of the desktop: the only place where colors, sizes,
 fonts and interface texts are written. Lot D-01 fills it from the Visual identity section of
 `docs/contexte.md` and from the design boards, which are authoritative for the appearance. The
-toolkit is iced 0.14 with software rendering (ADR 0014).
+toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 0018).
 
 ## Two layers
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -17,8 +17,34 @@ The shell programs compile neither it nor its sample texts.
 
 The `iced` feature is on by default, because every shell program wants it. The compositor,
 which only reads tokens, turns it off with `default-features = false` and does not compile
-iced. iced is compiled with the tiny-skia renderer only: without the `wgpu` feature, no
-environment variable can pick the GPU or wake the NVIDIA card.
+iced. iced is compiled with both renderers, wgpu and tiny-skia: see Renderer.
+
+## Renderer (D-02)
+
+A program chooses its renderer first thing in `main`, before any thread exists (ADR 0018):
+
+```rust
+let renderer = sherlock_ui::gpu::Choice::detect();
+// SAFETY: first statement of `main`, no other thread exists yet.
+unsafe { renderer.apply() };
+```
+
+`Choice::detect` reads `/sys/class/drm` (never `lspci`, which wakes a sleeping card) and the
+Vulkan loader's folders. With an AMD chip bound to `amdgpu` and Mesa's Vulkan manifest
+(`radeon_icd*.json`), it renders with wgpu on Vulkan, the loader seeing that manifest only
+(`VK_DRIVER_FILES`): the NVIDIA card is never asked anything. Otherwise it renders with
+tiny-skia. `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software).
+If wgpu finds no adapter that can present, iced falls back to tiny-skia by itself.
+
+A command the program starts goes through `gpu::for_child(&mut command)`, which gives it back
+the environment the program was started with.
+
+`surface::gpu_drawn()` tells which renderer drew the last `surface::Shadowed`: a program that
+sizes a surface for a blurred shadow (the bar's menu) learns it from its first frame.
+
+Tests always render with tiny-skia: `.cargo/config.toml` sets `ICED_TEST_BACKEND=tiny-skia`.
+`ICED_TEST_BACKEND=wgpu cargo test` tries the GPU, on the most powerful adapter: not on the
+reference laptop, it wakes the NVIDIA card.
 
 ## Tokens
 
@@ -310,7 +336,7 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   requests its own frames while it runs. Every control without a resting background (menu
   entries, icon, secondary, window and navigation buttons) now uses it: its hover is animated.
   (`animated::Scaled`, which drew menus opening at a scale, was removed: see below.)
-- **Shadows.** Menus and floating panels carry no iced shadow: iced 0.14's software renderer
+- **Shadows** (revised by D-02, see below). Menus and floating panels carry no iced shadow: iced 0.14's software renderer
   paints a blurred quad shadow as a separate image, outside the redrawn area's clip and
   without the current transformation, which broke the context menu of Evidence.
   `surface::Shadowed` draws a crisp shadow instead, from `metrics::MENU_SHADOW_LAYERS` and
@@ -323,6 +349,19 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
   drop the salmon to 4.39:1 on the lightest desktop disc). The gallery shows the destructive
   button, the toolbar button, the destructive menu entry and the navigation entries, and its
   snapshot is now 2,400 pixels high.
+
+## Additions of D-02 (GPU rendering)
+
+- **`gpu`**: the choice of the renderer, see Renderer. Tested without a GPU: the reference
+  laptop picks RADV's manifests only, no AMD chip or no Mesa Vulkan driver gives software, a
+  user's `ICED_BACKEND` wins, chips are read from a fake `/sys/class/drm`, children get the
+  environment back.
+- **Shadows.** `surface::Shadowed` takes an `Elevation` (`Flat`, `Menu`, `Panel`). On the GPU it
+  draws the design board's blurred shadow (`color::MENU_SHADOW` or `SHADOW`,
+  `metrics::MENU_SHADOW_OFFSET` and `_BLUR`, `SHADOW_OFFSET` and `_BLUR`); in software it keeps
+  the crisp steps of D-27. `Elevation::margins` gives the room the blurred shadow takes around a
+  surface. `Flat` draws nothing and only records the renderer.
+- **Gallery test**: its renderer is created headless with tiny-skia named explicitly.
 
 ## What the lot does not do
 

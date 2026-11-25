@@ -1,8 +1,8 @@
 # Top bar
 
 `desktop/bar` is the desktop's top bar: a separate program, anchored at the top of the screen
-with layer-shell (ADR 0005), written with iced 0.14 and tiny-skia software rendering
-(ADR 0014). Batch D-20 builds it from the `Main.dc.html` design board and, for the Sherlock
+with layer-shell (ADR 0005), written with iced 0.14 (ADR 0014), rendered by the GPU of the AMD
+chip, or in software without one (ADR 0018). Batch D-20 builds it from the `Main.dc.html` design board and, for the Sherlock
 menu, `Menus.dc.html`. The crate, the binary and the layer-shell namespace are all `bar`. The
 texts it shows stay in French, from `sherlock-ui`.
 
@@ -232,7 +232,8 @@ kwin_wayland --x11-display :0 --width 1440 --height 900 --socket wayland-bar &
 WAYLAND_DISPLAY=wayland-bar BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar
 ```
 
-Rendering is tiny-skia: no variable to set, the NVIDIA card sleeps. Logs go to standard
+The bar chooses its renderer itself (`sherlock_ui::gpu`, see `docs/sherlock-ui.md`) and logs
+it at start: `renderer=Vulkan { manifests: [...] }` on the reference laptop. Logs go to standard
 error; `RUST_LOG=bar=debug` shows more.
 
 1. **Anchoring**: the bar floats 10 from the top and 12 from the sides, across the whole width.
@@ -323,12 +324,27 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **« Éteindre »**: the board announces a submenu that it does not draw. The chevron is there; the
   entry is logged like the others.
 - **Blur and shadows**: the glass is only a translucent tint; blur is the compositor's job.
-  The menu shadow (`0 22px 54px`) would overflow its surface: it is not drawn.
+  On the GPU, the menu surface is enlarged to hold the board's shadow (`0 22px 54px`), cut on
+  the left where the screen ends; a click on the shadow closes the menu. In software the
+  surface is opaque and the menu has no shadow.
 - **Animations**: the menu opens at once, hovers change at once (`sherlock-ui` does not wire
   `motion` into its components yet).
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.
+
+## GPU rendering (D-02)
+
+On the GPU, the surface has alpha: the bar floats with its rounded corners and its translucent
+glass over the desktop. In software (no AMD chip, or a compositor without `linux-dmabuf`, such as
+ours for now), it stays opaque with black corners. Since D-02 the menu surface is placed by the
+centre of its top edge (anchor and gravity `Bottom`), so that its shadow can start left of and
+above the bar surface; the menu itself stays at (18, 52) of the Menus board, which a test checks
+with and without the shadow.
+
+`cargo run -p bar --example backdrop` lays the Main board's desktop background (colour and three
+discs) on the background layer: a nested KWin has no wallpaper, and the translucent glass only
+shows against one.
 
 ## What this batch does not do
 

@@ -11,7 +11,8 @@ cargo run --release -p evidence -- ~/Projets   # opens a folder
 ```
 
 Use `--release`: in a debug build, iced and tiny-skia are not optimised and the software
-renderer is several times slower (see Performance).
+renderer is several times slower (see Performance). Evidence logs the renderer it chose at start
+(ADR 0018); `ICED_BACKEND=tiny-skia` forces software rendering.
 
 ## Architecture
 
@@ -174,6 +175,8 @@ the menu draws correctly. Two changes, for safety beyond this case:
 - menus and floating panels no longer use iced shadows at all: `sherlock_ui::surface::Shadowed`
   draws a crisp, light shadow as a few plain offset rounded rectangles (ordinary quads,
   clipped and transformed like everything else), close to the design board's.
+  Since D-02 this crisp shadow is only the software one: on the GPU, `Shadowed` draws the
+  design board's blurred shadow (ADR 0018).
 
 Nothing blinks.
 
@@ -208,7 +211,8 @@ Limit of the engine: in a maximised window, scrolling stays around 50 frames per
 ADR 0014. The remaining cost is tiny-skia's: the sidebar and preview backgrounds and the title
 bar are still quads, redrawn for every damaged rectangle. This lot does not change the engine.
 The question of a GPU renderer (wgpu on the AMD chip) is for the author, as a revision of
-ADR 0014.
+ADR 0014: ADR 0018 (lot D-02) renders Evidence with wgpu on the AMD chip, and keeps tiny-skia
+when there is none. Its measurements are in the ADR.
 
 `cargo test --release -p evidence frame_cost -- --ignored` writes the headless cost of a frame
 (view, layout, render) to `target/tmp/frame_cost.txt`.
