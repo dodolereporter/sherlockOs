@@ -27,3 +27,7 @@ pub const SNAP_PREVIEW_BORDER: Color = color::ACCENT;
 
 /// Épaisseur de la bordure de l'aperçu de calage.
 pub const SNAP_PREVIEW_BORDER_WIDTH: i32 = 2;
+
+/// Distance que le pointeur doit parcourir avant qu'un déplacement bouge la fenêtre : un simple
+/// clic ne la décale pas, et ne la détache pas de sa zone.
+pub const DRAG_THRESHOLD: i32 = 4;

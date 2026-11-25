@@ -72,7 +72,8 @@ pub fn init(event_loop: &EventLoop<'static, State>, state: &mut State) -> Result
                 backend.window().request_redraw();
             }
             WinitEvent::CloseRequested => state.loop_signal.stop(),
-            WinitEvent::Focus(_) => {}
+            WinitEvent::Focus(false) => state.forget_intercepted_keys(),
+            WinitEvent::Focus(true) => {}
         })
         .map_err(|err| err.error)?;
     Ok(())

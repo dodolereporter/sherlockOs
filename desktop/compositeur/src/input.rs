@@ -46,6 +46,12 @@ pub(crate) fn gesture_modifier_held(nested: bool, modifiers: &ModifiersState) ->
     }
 }
 
+/// La touche des gestes est la seule tenue : Alt + Maj + flèche, par exemple, reste au client.
+fn gesture_modifier_alone(nested: bool, m: &ModifiersState) -> bool {
+    let others = [m.ctrl, m.shift, if nested { m.logo } else { m.alt }];
+    gesture_modifier_held(nested, m) && !others.contains(&true)
+}
+
 /// D'où vient un geste, pour le journal.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum GestureSource {
@@ -61,11 +67,18 @@ pub(crate) enum GestureSource {
 pub(crate) struct Gesture {
     window: Window,
     source: GestureSource,
+    /// Bouton qui a lancé le geste : seul son relâchement le termine.
+    button: u32,
     start: Point<f64, Logical>,
     initial: Rectangle<i32, Logical>,
     /// `None` pour un déplacement, les bords tirés pour un redimensionnement.
     edges: Option<Edges>,
     last_size: Size<i32, Logical>,
+    /// Le pointeur a assez bougé pour déplacer la fenêtre. Un simple clic ne la décale pas.
+    moved: bool,
+    /// Place flottante de la fenêtre au début du déplacement : celle qu'elle retrouvera si on
+    /// la cale. Une taille nulle laisse le client choisir.
+    floating: Rectangle<i32, Logical>,
     /// Zone où la fenêtre déplacée sera calée si on la lâche maintenant.
     zone: Option<Zone>,
 }
@@ -101,6 +114,18 @@ impl Shortcut {
     }
 }
 
+/// Sort la fenêtre de son agrandissement ou de sa zone. Rend sa place d'avant si elle en avait
+/// une (de taille nulle si elle n'avait pas de contenu), `None` si elle était flottante.
+fn leave_arrangement(window: &Window) -> Option<Rectangle<i32, Logical>> {
+    let data = window_data(window);
+    let was_zoned = data.zone.take().is_some();
+    let was_maximized = window
+        .toplevel()
+        .is_some_and(|t| t.with_pending_state(|s| s.states.unset(XdgState::Maximized)));
+    let restore = data.restore.take();
+    (was_zoned || was_maximized).then(|| restore.unwrap_or_default())
+}
+
 /// Forme du curseur pour tirer ces bords.
 fn resize_cursor(edges: Edges) -> CursorIcon {
     match (edges.top, edges.bottom, edges.left, edges.right) {
@@ -116,50 +141,38 @@ fn resize_cursor(edges: Edges) -> CursorIcon {
 }
 
 impl State {
-    /// Lance un geste sur `window`, depuis la position `start` du pointeur. `edges` vaut `None`
-    /// pour un déplacement. Une fenêtre en plein écran ne bouge pas.
+    /// Lance un geste sur `window`, depuis la position `start` du pointeur et l'appui de
+    /// `button`. `edges` vaut `None` pour un déplacement. Une fenêtre en plein écran ne bouge pas.
     pub(crate) fn start_gesture(
         &mut self,
         window: Window,
         start: Point<f64, Logical>,
+        button: u32,
         edges: Option<Edges>,
         source: GestureSource,
     ) {
-        let (Some(toplevel), Some(mut initial)) =
-            (window.toplevel(), self.space.element_geometry(&window))
-        else {
-            return;
-        };
         if is_fullscreen(&window) {
             tracing::debug!(?source, "geste refusé : la fenêtre est en plein écran");
             return;
         }
-        // Un geste sort la fenêtre de son agrandissement ou de sa zone.
-        let data = window_data(&window);
-        let was_zoned = data.zone.take().is_some();
-        let was_maximized = toplevel.with_pending_state(|s| s.states.unset(XdgState::Maximized));
-        let restore = data.restore.take();
-        if was_zoned || was_maximized {
-            // Déplacée, elle reprend sa taille d'avant sous le pointeur. Redimensionnée, elle
-            // part de sa taille actuelle.
-            if let (None, Some(restore)) = (edges, restore.filter(|r| !r.size.is_empty())) {
-                initial = Rectangle::new(
-                    layout::unsnapped(initial, restore.size, start),
-                    restore.size,
-                );
-                toplevel.with_pending_state(|s| s.size = Some(restore.size));
-                self.space.map_element(window.clone(), initial.loc, true);
-            }
+        if let (Some(edges), Some(toplevel)) = (edges, window.toplevel()) {
+            // Redimensionnée, elle quitte son agrandissement ou sa zone et part de sa taille
+            // actuelle, qui part au client avec le premier mouvement.
+            leave_arrangement(&window);
             toplevel.send_pending_configure();
+            let data = window_data(&window);
+            if let Some(initial) = self.space.element_geometry(&window) {
+                // Le recalage sur le bord opposé vaut pendant tout le geste.
+                data.resize.set(Some(Resize {
+                    edges,
+                    initial,
+                    done: false,
+                }));
+            }
         }
-        if let Some(edges) = edges {
-            // Le recalage sur le bord opposé vaut pendant tout le geste, pas seulement à la fin.
-            data.resize.set(Some(Resize {
-                edges,
-                initial,
-                done: false,
-            }));
-        }
+        let Some(initial) = self.space.element_geometry(&window) else {
+            return;
+        };
         tracing::debug!(
             ?source,
             ?edges,
@@ -169,27 +182,43 @@ impl State {
         self.gesture = Some(Gesture {
             window,
             source,
+            button,
             start,
             initial,
             edges,
             last_size: initial.size,
+            moved: false,
+            floating: initial,
             zone: None,
         });
     }
 
     fn update_gesture(&mut self, pointer: Point<f64, Logical>) {
-        let area = self.output_area();
-        let Some(gesture) = self.gesture.as_mut() else {
-            return;
-        };
+        if let Some(mut gesture) = self.gesture.take() {
+            self.drive_gesture(&mut gesture, pointer);
+            self.gesture = Some(gesture);
+        }
+    }
+
+    fn drive_gesture(&mut self, gesture: &mut Gesture, pointer: Point<f64, Logical>) {
         let Some(toplevel) = gesture.window.toplevel() else {
             return;
         };
         let Some(edges) = gesture.edges else {
+            let delta = pointer - gesture.start;
+            let threshold = f64::from(ui::DRAG_THRESHOLD);
+            if !gesture.moved && delta.x.hypot(delta.y) < threshold {
+                return;
+            }
+            if !gesture.moved {
+                gesture.moved = true;
+                self.detach_for_move(gesture);
+            }
             let loc = layout::moved(gesture.initial.loc, gesture.start, pointer);
             self.space.map_element(gesture.window.clone(), loc, true);
-            gesture.zone =
-                area.and_then(|a| Zone::under(a, pointer, ui::SNAP_EDGE, ui::SNAP_CORNER));
+            gesture.zone = self
+                .output_area()
+                .and_then(|a| Zone::under(a, pointer, ui::SNAP_EDGE, ui::SNAP_CORNER));
             return;
         };
         let (min, max) = with_states(toplevel.wl_surface(), |states| {
@@ -205,6 +234,27 @@ impl State {
         toplevel.send_pending_configure();
     }
 
+    /// Premier vrai mouvement d'un déplacement : une fenêtre agrandie ou calée reprend sa taille
+    /// d'avant sous le pointeur. Si elle n'en avait pas (agrandie avant son premier contenu),
+    /// le client choisit.
+    fn detach_for_move(&mut self, gesture: &mut Gesture) {
+        let (Some(toplevel), Some(restore)) = (
+            gesture.window.toplevel(),
+            leave_arrangement(&gesture.window),
+        ) else {
+            return;
+        };
+        let size = (!restore.size.is_empty()).then_some(restore.size);
+        if let Some(size) = size {
+            let loc = layout::unsnapped(gesture.initial, size, gesture.start);
+            gesture.initial = Rectangle::new(loc, size);
+            self.space.map_element(gesture.window.clone(), loc, true);
+        }
+        gesture.floating = Rectangle::new(gesture.initial.loc, restore.size);
+        toplevel.with_pending_state(|s| s.size = size);
+        toplevel.send_pending_configure();
+    }
+
     fn finish_gesture(&mut self, gesture: Gesture) {
         let Gesture {
             window,
@@ -212,6 +262,7 @@ impl State {
             initial,
             edges,
             last_size,
+            floating,
             zone,
             ..
         } = gesture;
@@ -221,12 +272,8 @@ impl State {
         };
         let Some(edges) = edges else {
             if let Some(zone) = zone {
-                // Lâchée contre un bord : calée. Elle retrouvera la taille qu'elle avait pendant
-                // le déplacement, là où on l'a lâchée.
-                let loc = self.space.element_location(&window).unwrap_or(initial.loc);
-                window_data(&window)
-                    .restore
-                    .set(Some(Rectangle::new(loc, initial.size)));
+                // Lâchée contre un bord : calée. Elle retrouvera sa place d'avant le glisser.
+                window_data(&window).restore.set(Some(floating));
                 self.snap(&window, Some(zone));
             }
             return;
@@ -242,6 +289,12 @@ impl State {
             initial,
             done: true,
         }));
+    }
+
+    /// Oublie les touches de raccourci en attente de relâchement : la fenêtre hôte a perdu le
+    /// clavier, et ces relâchements ne viendront pas.
+    pub fn forget_intercepted_keys(&mut self) {
+        self.intercepted_keys.clear();
     }
 
     /// Un geste de déplacement ou de redimensionnement est en cours.
@@ -290,7 +343,7 @@ impl State {
             let edges = self
                 .space
                 .element_geometry(window)
-                .filter(|_| !is_fullscreen(window))
+                .filter(|r| !r.size.is_empty() && !is_fullscreen(window))
                 .and_then(|r| layout::border_edges(r, pos, ui::RESIZE_BAND, ui::RESIZE_CORNER));
             if let Some(edges) = edges {
                 return Some(Hit::Border(window.clone(), edges));
@@ -316,8 +369,10 @@ impl State {
                     FilterResult::Forward
                 };
             }
+            // Un appui transmis annule une interception dont le relâchement s'est perdu.
+            state.intercepted_keys.retain(|k| *k != key);
             match Shortcut::for_key(sym.modified_sym()) {
-                Some(shortcut) if gesture_modifier_held(state.nested, mods) => {
+                Some(shortcut) if gesture_modifier_alone(state.nested, mods) => {
                     state.intercepted_keys.push(key);
                     FilterResult::Intercept(Some(shortcut))
                 }
@@ -427,14 +482,18 @@ impl State {
             time,
         };
         if let Some(gesture) = self.gesture.take() {
-            if state == ButtonState::Pressed {
-                self.gesture = Some(gesture);
-            } else {
+            // Le pointeur n'a pas de focus pendant le geste : aucun client ne voit les autres
+            // boutons, mais le siège les suit.
+            let ends = state == ButtonState::Released && button == gesture.button;
+            if ends {
                 self.finish_gesture(gesture);
-                // Le pointeur n'a pas de focus pendant le geste : aucun client ne voit ce
-                // relâchement, mais le siège oublie le bouton. Puis le focus revient.
-                pointer.button(self, &event);
-                pointer.frame(self);
+            } else {
+                self.gesture = Some(gesture);
+            }
+            pointer.button(self, &event);
+            pointer.frame(self);
+            if ends {
+                // Le focus revient à la surface sous le pointeur.
                 self.pointer_motion(location, time);
             }
             return;
@@ -462,7 +521,7 @@ impl State {
                 _ => None,
             };
             if let (Some(window), Some((edges, source))) = (window, gesture) {
-                self.start_gesture(window, location, edges, source);
+                self.start_gesture(window, location, button, edges, source);
                 if self.gesture_active() {
                     self.pointer_motion(location, time);
                     return;

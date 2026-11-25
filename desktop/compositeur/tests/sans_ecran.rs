@@ -20,11 +20,12 @@ mod tests {
         utils::{Logical, Point, Rectangle, Transform},
     };
     use wayland_client::{
-        Connection, Dispatch, EventQueue, QueueHandle, delegate_noop,
+        Connection, Dispatch, EventQueue, QueueHandle, WEnum, delegate_noop,
         protocol::{
             wl_buffer::WlBuffer,
             wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
+            wl_keyboard::{self, WlKeyboard},
             wl_pointer::{self, WlPointer},
             wl_registry,
             wl_seat::WlSeat,
@@ -47,6 +48,8 @@ mod tests {
         configures: Vec<(i32, i32, Vec<XdgState>)>,
         /// Serial du dernier appui de bouton reçu.
         button_serial: Option<u32>,
+        /// Touches reçues : code evdev, appuyée ou relâchée.
+        keys: Vec<(u32, bool)>,
         /// Le compositeur a répondu au dernier `wl_display.sync`.
         synced: bool,
     }
@@ -62,6 +65,22 @@ mod tests {
         ) {
             if let wl_pointer::Event::Button { serial, .. } = event {
                 client.button_serial = Some(serial);
+            }
+        }
+    }
+
+    impl Dispatch<WlKeyboard, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlKeyboard,
+            event: wl_keyboard::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_keyboard::Event::Key { key, state, .. } = event {
+                let pressed = state == WEnum::Value(wl_keyboard::KeyState::Pressed);
+                client.keys.push((key, pressed));
             }
         }
     }
@@ -184,12 +203,14 @@ mod tests {
     }
 
     const BTN_LEFT: u32 = 0x110;
+    const BTN_RIGHT: u32 = 0x111;
     // Codes xkb (evdev + 8) de Super gauche et des flèches. Sans `--imbrique`, la touche des
     // gestes est Super.
     const KEY_SUPER: u32 = 133;
     const KEY_UP: u32 = 111;
     const KEY_LEFT: u32 = 113;
     const KEY_DOWN: u32 = 116;
+    const KEY_SHIFT: u32 = 50;
 
     /// Fenêtre affichée par `Harness::show_window` : 100 × 80, centrée en (350, 260) dans l'écran
     /// de 800 × 600. Le fichier du tampon vit aussi longtemps qu'elle.
@@ -264,8 +285,13 @@ mod tests {
             self.client.configures.last().unwrap()
         }
 
-        /// Un client crée une fenêtre, l'affiche avec un tampon de 100 × 80 et écoute le pointeur.
         fn show_window(&mut self) -> Shown {
+            self.show_window_with(false)
+        }
+
+        /// Un client crée une fenêtre, l'affiche avec un tampon de 100 × 80 et écoute le pointeur
+        /// et le clavier. `maximized` : il demande l'agrandissement avant son premier contenu.
+        fn show_window_with(&mut self, maximized: bool) -> Shown {
             let qh = self.queue.handle();
             let registry = self.conn.display().get_registry(&qh, ());
             self.run_until("les globales", |c, _| {
@@ -276,10 +302,14 @@ mod tests {
             let shm: WlShm = self.bind(&registry);
             let seat: WlSeat = self.bind(&registry);
             let _pointer = seat.get_pointer(&qh, ());
+            let _keyboard = seat.get_keyboard(&qh, ());
             let surface = compositor.create_surface(&qh, ());
             let toplevel = wm_base
                 .get_xdg_surface(&surface, &qh, ())
                 .get_toplevel(&qh, ());
+            if maximized {
+                toplevel.set_maximized();
+            }
             surface.commit();
             self.run_until("la première configuration", |c, _| {
                 !c.configures.is_empty()
@@ -289,9 +319,8 @@ mod tests {
             let buffer = pool.create_buffer(0, 100, 80, 400, Format::Argb8888, &qh, ());
             surface.attach(Some(&buffer), 0, 0);
             surface.commit();
-            self.run_until("le placement", |_, s| {
-                location(s) == Some((350, 260).into())
-            });
+            let placed = if maximized { (0, 0) } else { (350, 260) };
+            self.run_until("le placement", |_, s| location(s) == Some(placed.into()));
             Shown {
                 seat,
                 toplevel,
@@ -324,12 +353,17 @@ mod tests {
 
         /// Touche des gestes et une touche, appuyées puis relâchées.
         fn shortcut(&mut self, key: u32) {
-            for (code, state) in [
-                (KEY_SUPER, KeyState::Pressed),
-                (key, KeyState::Pressed),
-                (key, KeyState::Released),
-                (KEY_SUPER, KeyState::Released),
-            ] {
+            self.chord(&[KEY_SUPER], key);
+        }
+
+        /// Les touches `mods` tenues pendant l'appui et le relâchement de `key`.
+        fn chord(&mut self, mods: &[u32], key: u32) {
+            let press = mods.iter().chain([&key]).map(|k| (*k, KeyState::Pressed));
+            let release = [&key]
+                .into_iter()
+                .chain(mods)
+                .map(|k| (*k, KeyState::Released));
+            for (code, state) in press.chain(release).collect::<Vec<_>>() {
                 self.state.keyboard_key(Keycode::new(code), state, 4);
             }
         }
@@ -459,9 +493,12 @@ mod tests {
         let serial = h.press(50.0, 10.0);
         toplevel._move(&seat, serial);
         h.run_until("le début du geste", |_, s| s.gesture_active());
+        // Sans mouvement, rien ne change : un simple clic ne détache pas la fenêtre.
+        h.state.pointer_motion((51.0, 11.0).into(), 3);
+        assert_eq!(h.last_configure().0, 800);
+        h.state.pointer_motion((300.0, 300.0).into(), 3);
         let states = h.wait_size("la taille d'avant", 100, 80);
         assert!(!states.contains(&XdgState::Maximized));
-        h.state.pointer_motion((300.0, 300.0).into(), 3);
         h.release();
         assert!(!h.state.gesture_active());
     }
@@ -489,6 +526,11 @@ mod tests {
         assert_eq!(h.state.snap_preview(), Some(rect(0, 0, 400, 600)));
         h.release();
         h.wait_size("la moitié gauche", 400, 600);
+
+        // Rendue, elle retrouve sa place d'avant le glisser, pas celle du lâcher.
+        h.shortcut(KEY_DOWN);
+        h.wait_size("la taille d'avant", 100, 80);
+        assert_eq!(location(&h.state), Some((400, 300).into()));
     }
 
     #[test]
@@ -506,16 +548,17 @@ mod tests {
         h.state.pointer_motion((485.0, 365.0).into(), 3);
         let states = h.wait_size("le redimensionnement", 130, 100);
         assert!(states.contains(&XdgState::Resizing));
+        // Un autre bouton ne termine pas le geste : seul le relâchement du gauche le fait.
+        h.state.pointer_button(BTN_RIGHT, ButtonState::Pressed, 3);
+        h.state.pointer_button(BTN_RIGHT, ButtonState::Released, 3);
+        assert!(h.state.gesture_active());
         h.release();
+        assert!(!h.state.gesture_active());
         h.run_until("la fin du redimensionnement", |c, _| {
             c.configures
                 .last()
                 .is_some_and(|c| !c.2.contains(&XdgState::Resizing))
         });
-        assert_eq!(
-            h.client.button_serial, None,
-            "le client ne voit pas l'appui"
-        );
     }
 
     #[test]
@@ -578,5 +621,45 @@ mod tests {
         h.wait_size("l'agrandissement", 800, 600);
         h.shortcut(KEY_UP);
         h.wait_size("le retour", 100, 80);
+
+        // Le client voit Super, jamais les flèches interceptées, ni leur appui ni leur relâchement.
+        h.conn.display().sync(&h.queue.handle(), ());
+        h.run_until("la réponse au sync", |c, _| c.synced);
+        let evdev = |xkb: u32| xkb - 8;
+        assert!(h.client.keys.contains(&(evdev(KEY_SUPER), true)));
+        let arrows = [KEY_UP, KEY_LEFT, KEY_DOWN].map(evdev);
+        assert!(!h.client.keys.iter().any(|(k, _)| arrows.contains(k)));
+
+        // Avec une autre touche en plus de celle des gestes, la flèche va au client.
+        h.chord(&[KEY_SUPER, KEY_SHIFT], KEY_LEFT);
+        h.run_until("la flèche", |c, _| {
+            c.keys.contains(&(evdev(KEY_LEFT), false))
+        });
+        assert!(h.client.keys.contains(&(evdev(KEY_LEFT), true)));
+        assert_eq!(h.last_configure().0, 100, "la fenêtre n'est pas calée");
+    }
+
+    #[test]
+    fn une_fenetre_agrandie_avant_son_contenu_se_deplace_a_la_taille_du_client() {
+        let mut h = Harness::start();
+        let Shown { seat, toplevel, .. } = h.show_window_with(true);
+        let states = h.wait_size("l'agrandissement", 800, 600);
+        assert!(states.contains(&XdgState::Maximized));
+
+        // Sa place d'avant est vide : le client choisit sa taille, 0 × 0.
+        let serial = h.press(50.0, 10.0);
+        toplevel._move(&seat, serial);
+        h.run_until("le début du geste", |_, s| s.gesture_active());
+        h.state.pointer_motion((300.0, 300.0).into(), 3);
+        let states = h.wait_size("la taille du client", 0, 0);
+        assert!(!states.contains(&XdgState::Maximized));
+
+        // Calée puis rendue, elle ne garde pas la taille de l'écran comme taille d'avant.
+        h.state.pointer_motion((1.0, 300.0).into(), 4);
+        h.release();
+        h.wait_size("la moitié gauche", 400, 600);
+        h.shortcut(KEY_DOWN);
+        let states = h.wait_size("la taille du client", 0, 0);
+        assert!(!states.contains(&XdgState::Maximized));
     }
 }

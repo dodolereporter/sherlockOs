@@ -146,7 +146,13 @@ impl State {
         // On reprend le pointeur au client : il ne reçoit plus rien jusqu'au relâchement.
         let time = self.start_time.elapsed().as_millis() as u32;
         pointer.unset_grab(self, serial, time);
-        self.start_gesture(window, start.location, edges, GestureSource::Client);
+        self.start_gesture(
+            window,
+            start.location,
+            start.button,
+            edges,
+            GestureSource::Client,
+        );
         self.pointer_motion(pointer.current_location(), time);
     }
 

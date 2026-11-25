@@ -44,7 +44,8 @@ Déplacer et redimensionner :
 - Une bande de 8 pixels entoure chaque fenêtre, à l'extérieur de sa géométrie. Elle s'élargit à
   20 pixels aux coins, en diagonale comme le long des côtés. Un appui du bouton gauche dans la
   bande tire ce bord ou ce coin. Le client ne voit pas l'appui. La bande d'une fenêtre passe
-  devant les fenêtres qu'elle recouvre, pas devant celles du dessus.
+  devant les fenêtres qu'elle recouvre, pas devant celles du dessus. Une fenêtre sans contenu
+  n'a pas de bande.
 - Glisser la barre de titre ou un bord qu'un client dessine lui-même déplace ou redimensionne sa
   fenêtre (`xdg_toplevel.move` et `.resize`). Comme le veut xdg-shell, la demande n'est accordée
   que sur le siège du compositeur, pendant l'appui d'un bouton sur une surface de ce client, avec
@@ -53,6 +54,10 @@ Déplacer et redimensionner :
   bouton droit, elle est redimensionnée par le coin le plus proche du pointeur.
 - Pendant un redimensionnement, le coin opposé reste en place, et les tailles minimale et
   maximale du client sont respectées.
+- Un déplacement ne bouge la fenêtre qu'une fois que le pointeur a parcouru 4 pixels : un simple
+  clic ne la décale pas et ne la détache pas de sa zone.
+- Seul le relâchement du bouton qui a lancé le geste le termine. Les autres boutons vont au
+  siège, sans client qui les reçoive.
 - Une fenêtre en plein écran ne se déplace ni ne se redimensionne par un geste, et n'a pas de
   bande.
 
@@ -64,11 +69,16 @@ Caler :
   rien. Pendant le glissement, un rectangle vert translucide montre la zone visée.
 - Cela vaut pour les déplacements à la touche des gestes comme pour ceux demandés par le client.
 - Déplacer une fenêtre calée ou agrandie lui rend sa taille d'avant, sous le pointeur, saisie à
-  la même proportion de sa largeur. La redimensionner lui retire l'état agrandi ou calé, et elle
-  part de sa taille actuelle.
+  la même proportion de sa largeur. Si elle n'en avait pas, parce qu'elle a été agrandie avant
+  son premier contenu, le client choisit sa taille. La redimensionner lui retire l'état agrandi
+  ou calé, et elle part de sa taille actuelle.
+- Une fenêtre calée au lâcher retrouvera, en quittant sa zone, sa place d'avant le glisser.
 - Touche des gestes + flèche haut agrandit la fenêtre qui a le clavier, ou lui rend sa taille
   d'avant si elle l'est déjà. Flèche gauche ou droite : moitié de l'écran. Flèche bas : taille
-  d'avant. Ces touches ne vont pas au client. Elles sont sans effet en plein écran.
+  d'avant. Seule la touche des gestes doit être tenue : avec Maj ou Ctrl en plus, la flèche va
+  au client. Ces touches, appui comme relâchement, ne vont pas au client. Elles sont sans effet
+  en plein écran. Si la fenêtre hôte perd le clavier entre l'appui et le relâchement, le
+  compositeur oublie l'interception.
 - L'agrandissement est l'état `maximized` de xdg-shell, que le client connaît. Une moitié ou un
   quart n'est qu'une taille imposée : les états `tiled` ne sont pas envoyés.
 
@@ -129,13 +139,18 @@ Les tests de `tests/sans_ecran.rs` :
   l'écran et le client reçoit 800 × 600 avec `maximized`. Déplacée de nouveau, elle reprend sa
   taille d'avant.
 - **Calage dans un coin, puis sur un côté.** La fenêtre lâchée dans le coin bas droit prend ce
-  quart. Lâchée ensuite contre le bord gauche, elle prend la moitié gauche.
+  quart. Lâchée ensuite contre le bord gauche, elle prend la moitié gauche. Super + bas la rend
+  à sa place d'avant le glisser.
+- **Agrandie avant son contenu.** Déplacée, elle reçoit 0 × 0 sans `maximized` : le client
+  choisit. Calée puis rendue, elle reçoit encore 0 × 0, pas la taille de l'écran.
 - **Bande de saisie.** Le curseur change au-dessus de la bande. Un appui dans le coin bas droit
-  redimensionne la fenêtre sans que le client le voie.
+  redimensionne la fenêtre. Un clic droit pendant le geste ne le termine pas.
 - **Redimensionnement demandé par le client.** Un `xdg_toplevel.resize` par le coin bas droit
   fait suivre la taille.
 - **Plein écran.** Ni déplacement ni redimensionnement, et pas de bande.
-- **Raccourcis.** Super + flèches cale à gauche, agrandit, rend la taille d'avant.
+- **Raccourcis.** Super + flèches cale à gauche, agrandit, rend la taille d'avant. Le client,
+  qui a un clavier, reçoit Super mais jamais l'appui ni le relâchement des flèches
+  interceptées. Super + Maj + gauche lui arrive et ne cale rien.
 
 Le test d'intégration fait tourner le compositeur et le client dans le même fil, sur une paire de
 sockets Unix : il ne dépend ni d'un écran, ni de `XDG_RUNTIME_DIR`. Il charge `libwayland-client`
@@ -178,13 +193,25 @@ RUST_LOG=compositeur=debug cargo run -p compositeur -- --imbrique env QT_QPA_PLA
 10. **Quarts.** Glisse jusque dans chacun des quatre coins. L'aperçu couvre ce quart, et la
     fenêtre le prend au lâcher. Près d'un coin, le long du bord, ça compte encore comme le coin.
 11. **Alt + glisser.** Refais l'étape 7 avec Alt + glisser au milieu de la fenêtre.
-12. **Redimensionner une fenêtre calée.** Cale une fenêtre à gauche, puis tire sa bande à droite.
+12. **Fenêtres qui se chevauchent.** Place une Konsole en partie au-dessus de l'autre. Appuie
+    juste à l'extérieur du bord de celle du dessous, à un endroit couvert par celle du dessus.
+    C'est la fenêtre du dessus qui reçoit le clic, le curseur reste celui de Konsole, et rien
+    n'est redimensionné.
+13. **Redimensionner une fenêtre calée.** Cale une fenêtre à gauche, puis tire sa bande à droite.
     Elle n'est plus calée : la déplacer ne change plus sa taille.
-13. **Raccourcis.** Konsole active, Alt + flèche gauche, puis Alt + flèche droite : moitié gauche,
-    puis moitié droite. Alt + flèche haut agrandit, une deuxième fois rend la taille d'avant.
-    Alt + flèche bas rend la taille d'avant. Konsole ne reçoit pas ces touches.
-14. **Plein écran.** Passe Konsole en plein écran (Ctrl + Maj + F11). Ni Alt + glisser, ni Alt +
-    clic droit, ni la bande ne la déplacent ni ne la redimensionnent. Ressors du plein écran.
+14. **Raccourcis.** Dans Konsole, tape `echo un deux trois` sans valider, et place le curseur du
+    shell sur `deux` avec les flèches. Puis :
+    - Alt + flèche gauche, puis Alt + flèche droite : moitié gauche, puis moitié droite ;
+    - Alt + flèche haut agrandit, une deuxième fois rend la taille d'avant ;
+    - Alt + flèche bas rend la taille d'avant.
+
+    Pendant tout ça, le curseur du shell ne bouge pas, aucun `;3D` ni `;3C` ne s'affiche, et rien
+    ne se répète après le relâchement. Alt + Maj + flèche gauche, elle, ne cale rien : la touche
+    va à Konsole.
+15. **Simple clic.** Sur une Konsole agrandie, un Alt + clic sans bouger ne change rien.
+16. **Plein écran.** Passe Konsole en plein écran (Ctrl + Maj + F11). Ni Alt + glisser, ni Alt +
+    clic droit, ni la bande ne la déplacent ni ne la redimensionnent. Alt + flèches ne change
+    rien non plus. Ressors du plein écran.
 
 Alt + flèches entre en conflit avec les applications qui s'en servent, en mode imbriqué
 seulement : ces touches n'arrivent plus à l'application. Par exemple, dans un navigateur,
