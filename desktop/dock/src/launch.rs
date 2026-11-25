@@ -74,23 +74,23 @@ mod tests {
 
     fn app(exec: &str) -> DesktopEntry {
         let text = format!(
-            "[Desktop Entry]\nType=Application\nName=Essai\nExec={exec}\nActions=new-window;\n\
+            "[Desktop Entry]\nType=Application\nName=Sample\nExec={exec}\nActions=new-window;\n\
              [Desktop Action new-window]\nExec={exec} --new\n"
         );
-        DesktopEntry::parse("essai", &text).expect("application")
+        DesktopEntry::parse("sample", &text).expect("application")
     }
 
     #[test]
     fn the_new_window_runs_its_own_command() {
-        let app = app("essai %U");
+        let app = app("sample %U");
         assert_eq!(
             command_line(&app, What::App),
-            Some(vec!["essai".to_owned()])
+            Some(vec!["sample".to_owned()])
         );
-        // `essai %U --new`: the field code goes, the action's own argument stays.
+        // `sample %U --new`: the field code goes, the action's own argument stays.
         assert_eq!(
             command_line(&app, What::NewWindow),
-            Some(vec!["essai".to_owned(), "--new".to_owned()])
+            Some(vec!["sample".to_owned(), "--new".to_owned()])
         );
     }
 

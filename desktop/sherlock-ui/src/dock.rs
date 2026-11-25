@@ -26,7 +26,7 @@ pub const LABEL_RADIUS: f32 = 8.0;
 pub const LABEL_SIZE: f32 = 12.0;
 /// Room for the label beside the icons of a dock on the left or right edge.
 pub const LABEL_SIDE_ROOM: f32 = 200.0;
-/// Separator before the open applications that are not pinned (board, before Réglages): its
+/// Separator before the open applications that are not pinned (board, before « Réglages »): its
 /// thickness, its length across the bar, its margin on each side.
 pub const SEPARATOR: (f32, f32) = (1.0, 40.0);
 pub const SEPARATOR_MARGIN: f32 = 2.0;
@@ -82,7 +82,7 @@ pub const DOT_OPEN: Color = color::CREAM;
 pub const DOT_ACTIVE: Color = color::ACCENT;
 /// Tile of the Sherlock icon: the night blue square of the color logo.
 pub const SHERLOCK_TILE: Color = color::DESKTOP;
-/// Tile of an application whose icon is not found, and its initial (Fichiers tile of the board).
+/// Tile of an application whose icon is not found, and its initial (the « Fichiers » tile of the board).
 pub const FALLBACK_TILE: Color = color::BLUE_DARK;
 pub const FALLBACK_LETTER: Color = color::CREAM;
 /// Separator before the open applications that are not pinned (board).

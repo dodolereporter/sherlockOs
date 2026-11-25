@@ -91,7 +91,7 @@ no pointer event.
 ![A click above the dock reaches the window below](../desktop/dock/screenshots/dock-click-through.png)
 
 **Opaque surface.** tiny-skia draws through softbuffer, whose Wayland buffers are `XRGB8888`:
-the transparent pixels of the surface come out black (see `docs/compositeur.md`). The dock's
+the transparent pixels of the surface come out black (see `docs/compositor.md`). The dock's
 glass shows on black, and so does the room above the bar, a band 56 high over the bottom of
 maximized windows. This goes with the GPU batch (D-02); the dock does not work around it.
 
@@ -141,7 +141,7 @@ dock for 4.5 s (XTest, one motion every 8 ms), five icons:
 
 | Host | Frames per second while magnifying | Dock CPU while magnifying | Dock CPU at rest (10 s) |
 | --- | --- | --- | --- |
-| Our compositor, nested in Xephyr (`--mesurer`: 220 to 230 frames per second of its own) | 44 to 47 | 0.40 s over 4.5 s (9 %) | 0 |
+| Our compositor, nested in Xephyr (`--measure`: 220 to 230 frames per second of its own) | 44 to 47 | 0.40 s over 4.5 s (9 %) | 0 |
 | KWin, nested in Xephyr | 22 to 26 | 0.23 s over 3.3 s (7 %) | 0 |
 
 The dock spends about 2 ms per frame (layout, tiny-skia, icons rasterized at their new size):
@@ -317,7 +317,7 @@ the clicks of the dock on them (the one behind brought forward, the active one m
    implementation of `windows::Source` and `windows::Control`. `ext-foreign-toplevel-list-v1` alone is not
    enough: it carries neither the active state nor `close`.
 2. **Restricted to the shell**: like layer-shell (see the security notes of
-   `docs/compositeur.md`), the global must not be open to every client, Flatpak ones
+   `docs/compositor.md`), the global must not be open to every client, Flatpak ones
    included: it lists and closes every window.
 3. **Game mode**: a way for the dock to know it, so that it hides (see below).
 4. **Windows over the dock**, for `AutoHide=smart` (D-21b): no standard protocol gives clients
@@ -335,8 +335,8 @@ closes it on a click elsewhere.
 | --- | --- |
 | Header: the application name, its window count when known (« 1 fenêtre ») | |
 | Ouvrir | The application has an `Exec` |
-| Nouvelle fenêtre | Only there when the desktop entry declares the action |
-| Garder dans le dock | Instead of « Retirer du dock », for an open application that is not pinned |
+| « Nouvelle fenêtre » | Only there when the desktop entry declares the action |
+| « Garder dans le dock » | Instead of « Retirer du dock », for an open application that is not pinned |
 | Retirer du dock | Pinned, except Sherlock |
 | Quitter | The windows are known, the source can close them, and the application has one |
 
@@ -413,14 +413,14 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
     warning and keep the default.
 
 With our compositor, in a second Xephyr, the dock is the command it starts (the compositor
-gives it its sockets; `--mesurer` logs its own frame rate):
+gives it its sockets; `--measure` logs its own frame rate):
 
 ```sh
-cargo build --release -p compositeur -p dock
+cargo build --release -p compositor -p dock
 Xephyr :22 -screen 1440x900 -br -nolisten tcp &
 DISPLAY=:22 XDG_CONFIG_HOME=/tmp/dock-test DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
   DOCK_OPEN=org.kde.konsole DOCK_ACTIVE=org.kde.konsole RUST_LOG=dock=debug \
-  target/release/compositeur --imbrique --mesurer target/release/dock
+  target/release/compositor --nested --measure target/release/dock
 ```
 
 Steps 1, 3, 4, 5, 6 and the menu by pointer were checked this way. The keys did not reach the
@@ -432,7 +432,7 @@ X focus): the keyboard steps were checked in the nested KWin.
 
 ## Tests
 
-`just verifier` runs everything, without a screen:
+`just verify` runs everything, without a screen:
 
 - **Curve** (`layout.rs`): the target size of each of the board's nine icons, at ten pointer
   positions, equals the board's script transcribed as it is; values at the key points (88 under
@@ -485,7 +485,7 @@ X focus): the keyboard steps were checked in the nested KWin.
   green of the active state.
 - **Label position**: the board's script puts it at `(i + 0.5) / n` of the bar width, which only
   matches the icon at rest. The dock centers it on the icon as drawn.
-- **Separator**: the board puts it before Réglages, which does not exist yet; the dock puts it
+- **Separator**: the board puts it before « Réglages », which does not exist yet; the dock puts it
   before the open applications that are not pinned.
 - **Menu**: the board's dock menu belongs to « Conteneurs » (its containers, « Tout mettre en
   pause », « Garder dans le dock » checked). The dock offers « Garder dans le dock » to open
