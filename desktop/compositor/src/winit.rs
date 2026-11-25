@@ -1,13 +1,17 @@
 //! Windowed backend: the compositor shows up in a window of a Wayland or X11 session.
 
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use sherlock_ui::color;
 use smithay::{
     backend::{
         renderer::{
-            Frame as _, Renderer as _, element::Element as _, element::RenderElement as _,
-            gles::GlesRenderer,
+            Frame as _, ImportDma as _, Renderer as _, element::Element as _,
+            element::RenderElement as _, gles::GlesRenderer,
         },
         winit::{self, WinitEvent, WinitGraphicsBackend},
     },
@@ -20,6 +24,7 @@ use smithay::{
 use crate::{
     Error, State,
     anim::PreviewMotion,
+    dmabuf,
     render::Scene,
     wallpaper::{Textures, Wallpaper},
 };
@@ -31,13 +36,20 @@ pub fn init(
     state: &mut State,
     scales: &[f64],
 ) -> Result<(), Error> {
-    let (mut backend, winit) = winit::init::<GlesRenderer>()?;
+    let (backend, winit) = winit::init::<GlesRenderer>()?;
+    // Shared with the dmabuf importer, which State calls while it reads the clients: never
+    // during a frame, since the loop runs one source at a time.
+    let backend = Rc::new(RefCell::new(backend));
+    enable_dmabuf(state, &backend);
     state.nested = true;
-    for scale in scales {
-        state.add_output(backend.window_size(), *scale);
-    }
-    state.resize_frame(backend.window_size());
-    let scene = Scene::new(backend.renderer())?;
+    let scene = {
+        let mut backend = backend.borrow_mut();
+        for scale in scales {
+            state.add_output(backend.window_size(), *scale);
+        }
+        state.resize_frame(backend.window_size());
+        Scene::new(backend.renderer())?
+    };
     let var = |key: &str| std::env::var_os(key);
     state.wallpaper = Wallpaper::start(
         &event_loop.handle(),
@@ -50,28 +62,67 @@ pub fn init(
 
     event_loop
         .handle()
-        .insert_source(winit, move |event, _, state| match event {
-            WinitEvent::Resized { size, .. } => state.resize_frame(size),
-            WinitEvent::Input(event) => {
-                state.process_input_event(event);
-                update_cursor(&backend, &mut cursor, state.cursor_icon());
-            }
-            WinitEvent::Redraw => {
-                // A client may change its cursor without the pointer moving.
-                update_cursor(&backend, &mut cursor, state.cursor_icon());
-                let frame = (&scene, &mut textures, &mut preview);
-                if let Err(err) = render(&mut backend, frame, state) {
-                    tracing::warn!("render: {err}");
+        .insert_source(winit, move |event, _, state| {
+            let mut backend = backend.borrow_mut();
+            match event {
+                WinitEvent::Resized { size, .. } => state.resize_frame(size),
+                WinitEvent::Input(event) => {
+                    state.process_input_event(event);
+                    update_cursor(&backend, &mut cursor, state.cursor_icon());
                 }
-                send_frames(state);
-                backend.window().request_redraw();
+                WinitEvent::Redraw => {
+                    // A client may change its cursor without the pointer moving.
+                    update_cursor(&backend, &mut cursor, state.cursor_icon());
+                    let frame = (&scene, &mut textures, &mut preview);
+                    if let Err(err) = render(&mut backend, frame, state) {
+                        tracing::warn!("render: {err}");
+                    }
+                    send_frames(state);
+                    backend.window().request_redraw();
+                }
+                WinitEvent::CloseRequested => state.loop_signal.stop(),
+                WinitEvent::Focus(false) => state.forget_intercepted_keys(),
+                WinitEvent::Focus(true) => {}
             }
-            WinitEvent::CloseRequested => state.loop_signal.stop(),
-            WinitEvent::Focus(false) => state.forget_intercepted_keys(),
-            WinitEvent::Focus(true) => {}
         })
         .map_err(|err| err.error)?;
     Ok(())
+}
+
+/// Offers linux-dmabuf to clients, with the formats the renderer imports, on the chip it draws on.
+/// Without a GPU (llvmpipe), or if EGL does not name its device, clients keep `wl_shm`.
+fn enable_dmabuf(state: &mut State, backend: &Rc<RefCell<WinitGraphicsBackend<GlesRenderer>>>) {
+    let (node, formats) = {
+        let mut backend = backend.borrow_mut();
+        let renderer = backend.renderer();
+        match dmabuf::render_node(renderer) {
+            Ok(node) => (node, renderer.dmabuf_formats()),
+            Err(err) => {
+                tracing::warn!("no linux-dmabuf, GPU clients will draw in software: {err}");
+                return;
+            }
+        }
+    };
+    let codes: std::collections::BTreeSet<_> = formats.iter().map(|f| f.code.to_string()).collect();
+    tracing::info!(
+        node = %node.path.display(),
+        driver = dmabuf::driver(node.dev).as_deref().unwrap_or("unknown"),
+        formats = formats.iter().count(),
+        codes = ?codes,
+        "linux-dmabuf offered"
+    );
+    for format in formats.iter() {
+        tracing::debug!(code = ?format.code, modifier = ?format.modifier, "dmabuf format");
+    }
+    let backend = Rc::clone(backend);
+    let import: dmabuf::Importer = Box::new(move |buffer| {
+        let mut backend = backend.try_borrow_mut()?;
+        backend.renderer().import_dmabuf(buffer, None)?;
+        Ok(())
+    });
+    if let Err(err) = state.enable_dmabuf(node.dev, formats, import) {
+        tracing::warn!("no linux-dmabuf, the feedback table cannot be created: {err}");
+    }
 }
 
 /// One frame per frame of the host window, for each surface: windows and anchored surfaces.
