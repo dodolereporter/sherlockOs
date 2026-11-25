@@ -93,12 +93,10 @@ impl State {
             return;
         }
 
-        // Redimensionnement par le haut ou la gauche : le bord opposé reste en place.
-        if let Some((edges, initial, done)) = data.resize.get() {
-            if done {
-                data.resize.set(None);
-            }
-            let loc = layout::anchored(initial, edges, size);
+        // Redimensionnement en cours : le bord opposé à celui qu'on tire reste en place.
+        if let Some(resize) = data.resize.get() {
+            let (loc, next) = resize.on_commit(size);
+            data.resize.set(next);
             self.space.map_element(window, loc, false);
         }
     }

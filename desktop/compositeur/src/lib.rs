@@ -33,7 +33,7 @@ use smithay::{
     },
 };
 
-use crate::layout::Edges;
+use crate::layout::Resize;
 
 /// Ce qui empêche le compositeur de démarrer.
 #[derive(thiserror::Error)]
@@ -83,12 +83,9 @@ struct WindowData {
     shown: Cell<bool>,
     /// Géométrie à retrouver en quittant l'agrandissement ou le plein écran.
     restore: Cell<Option<Rectangle<i32, Logical>>>,
-    /// Redimensionnement en cours : bords tirés, géométrie de départ, geste terminé.
-    resize: Cell<Option<ResizeState>>,
+    /// Redimensionnement en cours, gardé jusqu'au dernier envoi du client.
+    resize: Cell<Option<Resize>>,
 }
-
-/// Bords tirés, géométrie de départ, et vrai une fois le geste terminé.
-type ResizeState = (Edges, Rectangle<i32, Logical>, bool);
 
 fn window_data(window: &Window) -> &WindowData {
     window.user_data().get_or_insert(WindowData::default)

@@ -18,7 +18,7 @@ use smithay::{
 
 use crate::{
     State,
-    layout::{self, Edges},
+    layout::{self, Edges, Resize},
     window_data,
 };
 
@@ -37,6 +37,50 @@ pub(crate) struct Gesture {
 }
 
 impl Gesture {
+    fn begin(
+        window: Window,
+        start: Point<f64, Logical>,
+        initial: Rectangle<i32, Logical>,
+        edges: Option<Edges>,
+    ) -> Self {
+        let data = window_data(&window);
+        match (edges, window.toplevel()) {
+            // Le recalage sur le bord opposé vaut pendant tout le geste, pas seulement à la fin.
+            (Some(edges), _) => data.resize.set(Some(Resize {
+                edges,
+                initial,
+                done: false,
+            })),
+            // Déplacer une fenêtre agrandie la rend à sa taille d'avant, sous le pointeur.
+            (None, Some(toplevel)) => {
+                let unmaximized = toplevel.with_pending_state(|s| {
+                    let maximized = s.states.contains(XdgState::Maximized)
+                        && !s.states.contains(XdgState::Fullscreen);
+                    if maximized {
+                        s.states.unset(XdgState::Maximized);
+                        s.size = data
+                            .restore
+                            .take()
+                            .map(|r| r.size)
+                            .filter(|r| r.w > 0 && r.h > 0);
+                    }
+                    maximized
+                });
+                if unmaximized {
+                    toplevel.send_pending_configure();
+                }
+            }
+            (None, None) => {}
+        }
+        Self {
+            window,
+            start,
+            initial,
+            edges,
+            last_size: initial.size,
+        }
+    }
+
     fn update(&mut self, space: &mut Space<Window>, pointer: Point<f64, Logical>) {
         let Some(toplevel) = self.window.toplevel() else {
             return;
@@ -68,9 +112,11 @@ impl Gesture {
         });
         toplevel.send_pending_configure();
         // Le recalage de la position se fait au prochain envoi du client, le dernier du geste.
-        window_data(&self.window)
-            .resize
-            .set(Some((edges, self.initial, true)));
+        window_data(&self.window).resize.set(Some(Resize {
+            edges,
+            initial: self.initial,
+            done: true,
+        }));
     }
 }
 
@@ -173,14 +219,7 @@ impl State {
             if let (Some(window), Some(initial), Some(edges), true) =
                 (window, rect, edges, keyboard.modifier_state().logo)
             {
-                let last_size = initial.size;
-                self.gesture = Some(Gesture {
-                    window,
-                    start: location,
-                    initial,
-                    edges,
-                    last_size,
-                });
+                self.gesture = Some(Gesture::begin(window, location, initial, edges));
                 self.on_motion(location, time);
                 return;
             }

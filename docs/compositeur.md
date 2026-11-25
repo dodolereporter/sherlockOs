@@ -55,8 +55,8 @@ et s'ouvrirait hors du compositeur. `--separate` évite que la commande rejoigne
 ouverte.
 
 Sous KDE Plasma, KWin réserve par défaut Meta + glisser et Meta + clic droit à ses propres
-fenêtres, y compris celle du compositeur. Pour essayer les gestes en mode imbriqué, change le
-temps de l'essai la touche de modification des actions de fenêtre dans les réglages de KWin
+fenêtres, y compris celle du compositeur. Pour essayer les gestes en mode imbriqué, change, le
+temps de l'essai, la touche de modification des actions de fenêtre dans les réglages de KWin
 (Gestion des fenêtres, actions des fenêtres).
 
 ## Tester

@@ -94,6 +94,25 @@ pub fn anchored(
     loc
 }
 
+/// Redimensionnement d'une fenêtre, du premier mouvement jusqu'au dernier envoi du client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resize {
+    pub edges: Edges,
+    /// Géométrie de la fenêtre au début du geste.
+    pub initial: Rectangle<i32, Logical>,
+    /// Le bouton est relâché : le prochain envoi du client est le dernier du geste.
+    pub done: bool,
+}
+
+impl Resize {
+    /// À chaque nouveau contenu du client : position à donner à la fenêtre, et ce qu'il faut
+    /// garder pour l'envoi suivant.
+    pub fn on_commit(self, size: Size<i32, Logical>) -> (Point<i32, Logical>, Option<Self>) {
+        let next = (!self.done).then_some(self);
+        (anchored(self.initial, self.edges, size), next)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +246,28 @@ mod tests {
             (0, 0).into(),
         );
         assert_eq!(size, (210, 100).into());
+    }
+
+    #[test]
+    fn le_coin_oppose_reste_en_place_pendant_le_geste() {
+        let initial = rect(100, 100, 200, 100);
+        let top_left = Edges::from_xdg_bits(5);
+        let during = Resize {
+            edges: top_left,
+            initial,
+            done: false,
+        };
+        // Pendant le geste, chaque envoi recale la fenêtre et l'état reste.
+        let (loc, next) = during.on_commit((260, 140).into());
+        assert_eq!(loc, (40, 60).into());
+        assert_eq!(next, Some(during));
+        // Après le relâchement, le dernier envoi recale encore, puis l'état disparaît.
+        let (loc, next) = Resize {
+            done: true,
+            ..during
+        }
+        .on_commit((250, 130).into());
+        assert_eq!(loc, (50, 70).into());
+        assert_eq!(next, None);
     }
 }

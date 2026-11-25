@@ -33,10 +33,15 @@ fn main() -> Result<(), Error> {
     if let Some((program, arguments)) = command.split_first() {
         // La socket passe par l'environnement de l'enfant seulement : le nôtre garde celui
         // de la session hôte.
-        Command::new(program)
+        let mut child = Command::new(program)
             .args(arguments)
             .env("WAYLAND_DISPLAY", &socket)
             .spawn()?;
+        // Un fil attend la fin de la commande, pour qu'elle ne reste pas zombie.
+        std::thread::spawn(move || match child.wait() {
+            Ok(status) => tracing::info!(%status, "la commande lancée s'est terminée"),
+            Err(err) => tracing::warn!("attente de la commande lancée : {err}"),
+        });
     }
 
     event_loop.run(None, &mut state, State::refresh)?;
