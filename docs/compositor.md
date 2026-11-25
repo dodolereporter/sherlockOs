@@ -505,7 +505,7 @@ code.
 
 **Storage of the originals.** One original per wallpaper, never the variants. The author's
 images are PNG; they are stored as JPEG quality 95 without chroma subsampling (4:4:4), which is
-about three times lighter than lossless WebP for the same look. Measured with ImageMagick
+2.3 to 2.9 times lighter than lossless WebP for the same look. Measured with ImageMagick
 7.1.1 (libjpeg-turbo 2.1.5, libwebp 1.5.0), in bytes:
 
 | Id | PNG of the author | Lossless WebP | JPEG 95, 4:4:4 | PSNR of the JPEG |
@@ -525,7 +525,7 @@ about three times lighter than lossless WebP for the same look. Measured with Im
 | `observatory` | 6 851 029 | 4 484 750 | 1 688 785 | 49.3 dB |
 | `rowboat` | 6 243 708 | 3 862 736 | 1 699 568 | 49.4 dB |
 | `ring` (JPEG source) | | 2 768 312 | 1 261 945 (copied as is) | |
-| Total | 90 808 805 | 62 887 576 | 25 124 299 | |
+| Total | 90 808 805 | 65 655 886 | 25 124 299 | |
 
 Above 40 dB the difference does not show: on the earlier 1672 × 941 originals, a crop of the
 dark gradient under the ring of `first-clue`, contrast stretched 3.3 times, showed the same
