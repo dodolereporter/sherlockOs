@@ -414,18 +414,21 @@ every DRM node, with Mesa's EGL only, and the wallpaper `first-clue`:
   formats, `NV12`, `P010`, `YUYV` and the other YUV formats), each with `Linear`, the implicit
   modifier and AMD's tiled modifiers (9 pairs for `AR24`);
 - `vkcube --wsi wayland` (RADV, `VK_DRIVER_FILES` restricted to `radeon_icd.json`) shows up;
-- the bar and the dock of the D-02 branch (commit `22efe3c`) choose Vulkan on RADV, read the
-  default feedback, create `AR24` buffers with `create_immed`, and are drawn with their
-  transparency: rounded corners and glass over the wallpaper;
+- the bar and the dock of lot D-02 (branch commit `22efe3c`, then main once D-02 was merged,
+  `a5947ef`) choose Vulkan on RADV, read the default feedback, create `AR24` buffers with
+  `create_immed`, and are drawn with their transparency: rounded corners and glass over the
+  wallpaper;
 - the compositor, XWayland, the bar and the dock hold `/dev/dri/renderD128` only, no
   `/dev/nvidia*`, and only XWayland maps NVIDIA libraries (see above);
 - `/sys/bus/pci/devices/0000:01:00.0/power/runtime_status`, read every 100 ms from before the
-  KWin start to after the last stop: `suspended` throughout.
+  KWin start to after the last stop: `suspended` throughout. The last trial (main's bar and dock,
+  30 seconds under `timeout`, clients stopped before the compositor) read it with the CPU and
+  AMD temperatures and `gpu_busy_percent` (12 % at most): `suspended` before, during and after.
 
 | What | Screenshot |
 | --- | --- |
-| Bar and dock of D-02, before this lot (main): software rendering, black around the dock and the corners of the bar | ![Before](../desktop/compositor/screenshots/dmabuf-shell-before.jpg) |
-| The same, with linux-dmabuf: Vulkan on the AMD chip, transparent | ![After](../desktop/compositor/screenshots/dmabuf-shell.jpg) |
+| Bar and dock of D-02, before this lot (compositor of main): software rendering, black around the dock and the corners of the bar | ![Before](../desktop/compositor/screenshots/dmabuf-shell-before.jpg) |
+| Bar and dock of main, with linux-dmabuf: Vulkan on the AMD chip, transparent | ![After](../desktop/compositor/screenshots/dmabuf-shell.jpg) |
 | Corner of the dock, enlarged 8 times: rounded and smoothed over the wallpaper, glass tinted by what is behind | ![Dock corner](../desktop/compositor/screenshots/dmabuf-dock-corner.png) |
 | `vkcube --wsi wayland` | ![vkcube](../desktop/compositor/screenshots/dmabuf-vkcube.jpg) |
 
