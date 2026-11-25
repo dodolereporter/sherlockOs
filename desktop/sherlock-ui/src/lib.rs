@@ -6,6 +6,7 @@
 //! The gallery lives in `examples/gallery`. See `docs/sherlock-ui.md`.
 
 pub mod color;
+pub mod dock;
 pub mod icon;
 pub mod logo;
 pub mod metrics;

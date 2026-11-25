@@ -1,0 +1,2 @@
+[Default Applications]
+x-scheme-handler/https=missing-browser.desktop;org.example.OtherBrowser.desktop;

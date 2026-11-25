@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Example Terminal
+Name[fr]=Terminal d'exemple
+Exec=example-terminal
+Icon=example-terminal
+Categories=System;TerminalEmulator;
+Actions=NewWindow;NewTab;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=example-terminal --new-window
+
+[Desktop Action NewTab]
+Name=New Tab
+Exec=example-terminal --new-tab
