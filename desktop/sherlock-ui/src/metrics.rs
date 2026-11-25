@@ -131,6 +131,12 @@ pub const BADGE_RADIUS: f32 = 8.0;
 /// Right-click menu of a list and its submenu (Evidence mock-up).
 pub const CONTEXT_MENU_WIDTH: f32 = 236.0;
 pub const CONTEXT_SUBMENU_WIDTH: f32 = 216.0;
+/// "Ouvrir avec" submenu once it lists applications: wider than the planche's, for long
+/// application names; at most this many applications.
+pub const OPEN_WITH_WIDTH: f32 = 280.0;
+pub const OPEN_WITH_MAX: usize = 8;
+/// Height of the list of the application chooser.
+pub const CHOOSER_LIST_HEIGHT: f32 = 300.0;
 /// Question asked inside a window: width.
 pub const DIALOG_WIDTH: f32 = 380.0;
 

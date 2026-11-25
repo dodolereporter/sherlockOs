@@ -19,6 +19,7 @@ use crate::app::{App, Command, Location, Menu, MenuItem, Message, RENAME, SEARCH
 use crate::clock;
 use crate::devices::Volume;
 use crate::git::GitStatus;
+use crate::icons::AppIcon;
 use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::preview::Preview;
 
@@ -112,6 +113,9 @@ impl App {
         }
         if self.confirm_empty {
             layers.push(self.dialog());
+        }
+        if let Some(search) = &self.chooser {
+            layers.push(self.chooser(search));
         }
         stack(layers).into()
     }
@@ -661,7 +665,7 @@ impl App {
         let items = self.menu_items(menu.on_selection);
         let entries = items.iter().enumerate().map(|(i, item)| {
             let lit = !menu.submenu && menu.highlight == Some(i);
-            menu_entry(*item, lit, menu.submenu, true)
+            self.menu_entry(*item, lit, menu.submenu, true)
         });
         // The menu opens by scaling from its top left corner, on a spring.
         let factor = self
@@ -678,13 +682,18 @@ impl App {
                 .unwrap_or_default();
             let offset = App::menu_height(&items[..before])
                 - 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
-            let sub = App::submenu_items();
+            let sub = self.submenu_items();
             let entries = sub
                 .iter()
                 .enumerate()
-                .map(|(i, item)| menu_entry(*item, menu.highlight == Some(i), false, false));
+                .map(|(i, item)| self.menu_entry(*item, menu.highlight == Some(i), false, false));
             let x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
-            let sub = ui::menu(entries, metrics::CONTEXT_SUBMENU_WIDTH);
+            let width = if self.open_with.is_empty() {
+                metrics::CONTEXT_SUBMENU_WIDTH
+            } else {
+                metrics::OPEN_WITH_WIDTH
+            };
+            let sub = ui::menu(entries, width);
             layers.push(pin(sub).x(x).y(menu.at.y + offset).into());
         }
         stack(layers)
@@ -713,58 +722,152 @@ impl App {
     }
 }
 
-/// An entry of the menu or submenu. `lit`: highlighted from the keyboard. Hovering an entry of
-/// the main menu opens or closes the submenu, as in any menu.
-fn menu_entry<'a>(
-    item: MenuItem,
-    lit: bool,
-    submenu_open: bool,
-    main: bool,
-) -> Element<'a, Message> {
-    let light = |control: ui::Control<'a, Message>| {
-        if lit {
-            control.status(button::Status::Hovered)
-        } else {
-            control
-        }
-    };
-    match item {
-        MenuItem::Separator => ui::menu_separator(),
-        MenuItem::Disabled(label) => ui::menu_item(label, Trailing::None, None).into(),
-        MenuItem::OpenWith => {
-            let mut control = ui::menu_item(
-                t::OPEN_WITH,
-                Trailing::Submenu,
-                Some(Message::Submenu(!submenu_open)),
-            );
-            if submenu_open {
-                control = ui::open(control);
-            }
-            mouse_area(light(control))
-                .on_enter(Message::Submenu(true))
+impl App {
+    /// An application's icon at the size of a menu icon, if it has one.
+    fn app_icon(&self, id: &str) -> Option<Element<'_, Message>> {
+        let size = metrics::ICON_SIZE;
+        Some(match self.icons.get(id)? {
+            AppIcon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
+            AppIcon::Vector(handle) => iced::widget::svg(handle.clone())
+                .width(size)
+                .height(size)
+                .into(),
+        })
+    }
+
+    /// The chooser of every application: a search, the list, and the "always" switch.
+    fn chooser(&self, search: &str) -> Element<'_, Message> {
+        let needle = search.to_lowercase();
+        let apps: Vec<_> = self
+            .catalog
+            .as_ref()
+            .map(|c| c.choosable())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|app| needle.is_empty() || app.name.to_lowercase().contains(&needle))
+            .collect();
+        let list: Element<'_, Message> = if apps.is_empty() {
+            container(ui::description(t::CHOOSER_EMPTY))
+                .center_x(Length::Fill)
+                .height(metrics::CHOOSER_LIST_HEIGHT)
                 .into()
-        }
-        MenuItem::Action {
-            label,
-            keys,
-            command,
-            danger,
-            checked,
-        } => {
-            let trailing = match (checked, keys) {
-                (true, _) => Trailing::Checked,
-                (false, Some(keys)) => Trailing::Shortcut(keys),
-                (false, None) => Trailing::None,
-            };
-            let mut control = ui::menu_item(label, trailing, Some(Message::Run(command)));
-            if danger {
-                control = ui::danger(control);
-            }
-            let control = light(control);
-            if main && submenu_open {
-                mouse_area(control).on_enter(Message::Submenu(false)).into()
+        } else {
+            let rows = apps.into_iter().map(|app| {
+                ui::menu_item_with(
+                    self.app_icon(&app.id),
+                    app.name.as_str(),
+                    Trailing::None,
+                    Some(Message::OpenWithApp(app.id.clone())),
+                )
+                .into()
+            });
+            scrollable(Column::with_children(rows))
+                .height(metrics::CHOOSER_LIST_HEIGHT)
+                .into()
+        };
+        let always = row![
+            ui::toggle(self.always, Some(Message::Always)),
+            ui::description(t::ALWAYS),
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(Alignment::Center);
+        let card = column![
+            ui::body(t::CHOOSER_TITLE)
+                .font(typography::UI_SEMIBOLD)
+                .size(typography::CARD_TITLE_SIZE),
+            ui::search_field(
+                t::CHOOSER_SEARCH,
+                search,
+                Some(Message::ChooserSearch),
+                crate::app::CHOOSER_SEARCH,
+                metrics::DIALOG_WIDTH,
+            ),
+            list,
+            always,
+            row![
+                space::horizontal(),
+                ui::secondary_button(t::CANCEL, Some(Message::CloseChooser))
+            ],
+        ]
+        .spacing(metrics::PREVIEW_GAP);
+        let panel =
+            ui::glass_panel(card).width(metrics::DIALOG_WIDTH + 2.0 * metrics::PANEL_PADDING);
+        opaque(container(panel).center(Length::Fill).style(theme::scrim))
+    }
+
+    /// An entry of the menu or submenu. `lit`: highlighted from the keyboard. Hovering an
+    /// entry of the main menu opens or closes the submenu, as in any menu.
+    fn menu_entry<'a>(
+        &'a self,
+        item: MenuItem,
+        lit: bool,
+        submenu_open: bool,
+        main: bool,
+    ) -> Element<'a, Message> {
+        let light = |control: ui::Control<'a, Message>| {
+            if lit {
+                control.status(button::Status::Hovered)
             } else {
-                control.into()
+                control
+            }
+        };
+        match item {
+            MenuItem::Separator => ui::menu_separator(),
+            MenuItem::Disabled(label) => ui::menu_item(label, Trailing::None, None).into(),
+            MenuItem::App(index) => {
+                let Some(app) = self.open_with.get(index) else {
+                    return space().into();
+                };
+                // The first one is the default for the type.
+                let trailing = if index == 0 {
+                    Trailing::Checked
+                } else {
+                    Trailing::None
+                };
+                let icon = self.app_icon(&app.id);
+                let control = ui::menu_item_with(
+                    icon,
+                    app.name.as_str(),
+                    trailing,
+                    Some(Message::OpenWithApp(app.id.clone())),
+                );
+                light(control).into()
+            }
+            MenuItem::OpenWith => {
+                let mut control = ui::menu_item(
+                    t::OPEN_WITH,
+                    Trailing::Submenu,
+                    Some(Message::Submenu(!submenu_open)),
+                );
+                if submenu_open {
+                    control = ui::open(control);
+                }
+                mouse_area(light(control))
+                    .on_enter(Message::Submenu(true))
+                    .into()
+            }
+            MenuItem::Action {
+                label,
+                keys,
+                command,
+                danger,
+                checked,
+            } => {
+                let trailing = match (checked, keys) {
+                    (true, _) => Trailing::Checked,
+                    (false, Some(keys)) => Trailing::Shortcut(keys),
+                    (false, None) => Trailing::None,
+                };
+                let mut control = ui::menu_item(label, trailing, Some(Message::Run(command)));
+                if danger {
+                    control = ui::danger(control);
+                }
+                let control = light(control);
+                if main && submenu_open {
+                    mouse_area(control).on_enter(Message::Submenu(false)).into()
+                } else {
+                    control.into()
+                }
             }
         }
     }

@@ -379,6 +379,16 @@ pub fn menu_item<'a, Message: Clone + 'a>(
     trailing: Trailing<'a>,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
+    menu_item_with(None, label, trailing, on_press)
+}
+
+/// Menu entry with a leading picture, such as an application's icon (`metrics::ICON_SIZE`).
+pub fn menu_item_with<'a, Message: Clone + 'a>(
+    leading: Option<Element<'a, Message>>,
+    label: &'a str,
+    trailing: Trailing<'a>,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
     let end: Element<'a, Message> = match trailing {
         Trailing::None => space().into(),
         Trailing::Shortcut(keys) => text(keys)
@@ -394,7 +404,14 @@ pub fn menu_item<'a, Message: Clone + 'a>(
         .into(),
         Trailing::Checked => icon(Icon::Check, metrics::ICON_SIZE_SMALL, color::ACCENT).into(),
     };
-    let line = row![body(label), space::horizontal(), end]
+    let start: Element<'a, Message> = match leading {
+        Some(leading) => row![leading, body(label)]
+            .spacing(metrics::GAP_ICON)
+            .align_y(Alignment::Center)
+            .into(),
+        None => body(label).into(),
+    };
+    let line = row![start, space::horizontal(), end]
         .spacing(metrics::GAP_INLINE)
         .align_y(Alignment::Center)
         .height(Length::Fill);

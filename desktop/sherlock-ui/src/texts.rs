@@ -232,7 +232,15 @@ pub mod evidence {
     pub const OPEN_WITH: &str = "Ouvrir avec";
     pub const DEFAULT_APP: &str = "Application par défaut";
     pub const TERMINAL_HERE: &str = "Terminal, dans ce dossier";
-    pub const OTHER_APP: &str = "Autre application";
+    pub const OTHER_APP: &str = "Autre application…";
+    /// In the "Ouvrir avec" submenu: the switch that makes the chosen application the default.
+    pub const ALWAYS_SHORT: &str = "Toujours ouvrir ce type ainsi";
+    /// The same switch in the chooser of every application.
+    pub const ALWAYS: &str = "Toujours ouvrir ce type de fichier avec cette application";
+    pub const CHOOSER_TITLE: &str = "Ouvrir avec une autre application";
+    pub const CHOOSER_SEARCH: &str = "Rechercher une application";
+    pub const CHOOSER_EMPTY: &str = "Aucune application ne correspond.";
+    pub const DEFAULT_NOT_SAVED: &str = "Ce choix n'a pas pu être enregistré.";
     pub const RENAME: &str = "Renommer";
     pub const DUPLICATE: &str = "Dupliquer";
     pub const COPY_PATH: &str = "Copier le chemin";

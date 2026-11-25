@@ -40,6 +40,9 @@ impl Bench {
             maximized: false,
             devices: None,
             watch_devices: false,
+            xdg: None,
+            desktops: Vec::new(),
+            locales: Vec::new(),
         };
         let (mut app, task) = App::new(config);
         drain(&mut app, task);
@@ -372,6 +375,9 @@ fn window_renders_headless() {
         maximized: false,
         devices: None,
         watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -445,6 +451,9 @@ fn frame_cost() {
         maximized: false,
         devices: None,
         watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -527,6 +536,9 @@ fn devices_mount_open_unmount_and_eject_through_their_source() {
         maximized: false,
         devices: Some(source.clone()),
         watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
     };
     let (app, task) = App::new(config);
     let mut bench = Bench { tmp, app };
@@ -568,4 +580,86 @@ fn devices_mount_open_unmount_and_eject_through_their_source() {
     let notice = bench.app.notice.clone().expect("message");
     assert!(notice.error);
     assert_eq!(notice.text, sherlock_ui::texts::evidence::DEVICE_BUSY);
+}
+
+#[test]
+fn open_with_lists_installed_applications_and_remembers_a_default() {
+    let tmp = TempDir::new("open-with");
+    let xdg = mime_apps::Dirs {
+        config_home: tmp.path().join("xdg/config"),
+        config_dirs: Vec::new(),
+        data_home: tmp.path().join("xdg/data"),
+        data_dirs: vec![tmp.path().join("xdg/share")],
+    };
+    let write = |relative: &str, content: &str| {
+        let path = tmp.path().join("xdg").join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("folder");
+        fs::write(path, content).expect("write");
+    };
+    write("share/mime/globs2", "50:text/plain:*.txt\n");
+    // `true` stands in for the editors: opening runs it and nothing happens.
+    for (id, name) in [("kate", "Kate"), ("code", "Visual Studio Code")] {
+        write(
+            &format!("share/applications/{id}.desktop"),
+            &format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nExec=true %F\nMimeType=text/plain;\n"
+            ),
+        );
+    }
+    write(
+        "share/applications/viewer.desktop",
+        "[Desktop Entry]\nType=Application\nName=Images\nExec=true %U\nMimeType=image/png;\n",
+    );
+    let project = tmp.path().join("projet");
+    fs::create_dir_all(&project).expect("folder");
+    fs::write(project.join("notes.txt"), "notes").expect("write");
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: project,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: Some(xdg.clone()),
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    };
+    let (app, task) = App::new(config);
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.select("notes.txt");
+    bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
+    bench.send(Message::Submenu(true));
+    let names: Vec<&str> = bench
+        .app
+        .open_with
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(names, ["Visual Studio Code", "Kate"]);
+
+    // The "always" switch keeps the menu open; choosing an application then writes it as the
+    // default for the type, and the next open uses it.
+    bench.send(Message::Run(crate::app::Command::ToggleAlways));
+    assert!(bench.app.always && bench.app.menu.is_some());
+    bench.send(Message::OpenWithApp("code.desktop".into()));
+    let list = fs::read_to_string(xdg.config_home.join("mimeapps.list")).expect("mimeapps.list");
+    assert!(
+        list.contains("[Default Applications]\ntext/plain=code.desktop;"),
+        "{list}"
+    );
+    let catalog = bench.app.catalog.clone().expect("catalog");
+    assert_eq!(
+        catalog.default_for("text/plain").map(|a| a.id.as_str()),
+        Some("code.desktop")
+    );
+
+    // "Autre application…" opens the chooser of every application; Escape closes it.
+    bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
+    bench.send(Message::Run(crate::app::Command::ChooseApp));
+    assert!(bench.app.chooser.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.chooser.is_none());
 }

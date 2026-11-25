@@ -14,6 +14,7 @@ use sherlock_ui::texts::evidence as texts;
 
 use crate::devices::{DeviceError, DeviceSource, Volume};
 use crate::git::{self, Repo};
+use crate::icons::AppIcon;
 use crate::listing::{self, Column, Entry, Kind, Sort};
 use crate::ops;
 use crate::places::{self, Place};
@@ -22,6 +23,7 @@ use crate::probe::{Probe, Step};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,6 +31,7 @@ use std::time::{Duration, Instant};
 pub const LIST: &str = "list";
 pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
+pub const CHOOSER_SEARCH: &str = "chooser-search";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
@@ -45,6 +48,13 @@ pub struct Config {
     pub devices: Option<Arc<dyn DeviceSource>>,
     /// Follow UDisks2 signals so that devices appear and disappear by themselves.
     pub watch_devices: bool,
+    /// Where applications and associations are read and written; none disables "Ouvrir
+    /// avec" (tests that do not need it).
+    pub xdg: Option<mime_apps::Dirs>,
+    /// Current desktop names, lower case (`XDG_CURRENT_DESKTOP`), and locales to try for
+    /// application names.
+    pub desktops: Vec<String>,
+    pub locales: Vec<String>,
 }
 
 impl Config {
@@ -68,6 +78,7 @@ impl Config {
                 .unwrap_or_else(|| home.clone()),
         };
         let favorites = places::favorites(&home, places::read_user_dirs(&home).as_deref());
+        let home_for_xdg = home.clone();
         Self {
             home,
             start,
@@ -79,6 +90,14 @@ impl Config {
                 .ok()
                 .map(|u| Arc::new(u) as Arc<dyn DeviceSource>),
             watch_devices: true,
+            xdg: Some(mime_apps::Dirs::from_env(&home_for_xdg)),
+            desktops: std::env::var("XDG_CURRENT_DESKTOP")
+                .unwrap_or_default()
+                .split(':')
+                .filter(|d| !d.is_empty())
+                .map(str::to_lowercase)
+                .collect(),
+            locales: locales(),
         }
     }
 }
@@ -109,6 +128,10 @@ pub enum Command {
     Refresh,
     TogglePreview,
     SelectAll,
+    /// "Autre application…": the chooser of every application.
+    ChooseApp,
+    /// "Always open this type with the chosen application", on or off.
+    ToggleAlways,
     /// On the device whose menu is open: open (mounting first), unmount, eject.
     DeviceOpen,
     DeviceUnmount,
@@ -127,6 +150,8 @@ pub enum MenuItem {
     },
     /// Opens the "Ouvrir avec" submenu.
     OpenWith,
+    /// An application of the "Ouvrir avec" submenu, by its place in `App::open_with`.
+    App(usize),
     /// Planned, not available yet.
     Disabled(&'static str),
     Separator,
@@ -144,7 +169,7 @@ impl MenuItem {
     }
 
     fn selectable(self) -> bool {
-        matches!(self, Self::Action { .. } | Self::OpenWith)
+        matches!(self, Self::Action { .. } | Self::OpenWith | Self::App(_))
     }
 }
 
@@ -216,6 +241,20 @@ pub enum Message {
     Preview(PathBuf, Preview),
     /// A program was started, or could not be.
     Launched(bool),
+    /// Installed applications and associations, read off the interface thread.
+    Catalog(Arc<mime_apps::Catalog>),
+    /// Application icons, decoded off the interface thread.
+    Icons(Arc<HashMap<String, AppIcon>>),
+    /// Open the selection with this application (desktop id).
+    OpenWithApp(String),
+    /// The chooser's search field.
+    ChooserSearch(String),
+    /// Close the chooser.
+    CloseChooser,
+    /// The chooser's "always" switch.
+    Always(bool),
+    /// A default application was written to mimeapps.list, or could not be.
+    DefaultSet(bool),
     /// Which favourites exist, checked off the interface thread.
     Places(Vec<bool>),
     /// The volumes of the sidebar, as UDisks2 sees them now.
@@ -299,6 +338,16 @@ pub struct App {
     pub(crate) available: Vec<bool>,
     /// The trash items shown when the user was asked to empty it: only those are deleted.
     empty_ids: Vec<String>,
+    /// Installed applications, file types and associations.
+    pub(crate) catalog: Option<Arc<mime_apps::Catalog>>,
+    /// Applications of the open "Ouvrir avec" submenu, the default first.
+    pub(crate) open_with: Vec<mime_apps::DesktopEntry>,
+    /// "Always open this type with the chosen application".
+    pub(crate) always: bool,
+    /// The chooser of every application is open, with its search.
+    pub(crate) chooser: Option<String>,
+    /// Application icons, by desktop id.
+    pub(crate) icons: Arc<HashMap<String, AppIcon>>,
 }
 
 impl App {
@@ -345,11 +394,17 @@ impl App {
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
+            catalog: None,
+            open_with: Vec::new(),
+            always: false,
+            chooser: None,
+            icons: Arc::default(),
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
         let devices = app.refresh_devices();
-        (app, Task::batch([task, devices]))
+        let catalog = app.load_catalog();
+        (app, Task::batch([task, devices, catalog]))
     }
 
     /// Keyboard, pointer and window size.
@@ -550,10 +605,16 @@ impl App {
                 self.refilter();
             }
             Message::Run(command) => {
-                self.menu = None;
+                // The "always" switch stays in its open menu, like a check box.
+                if command != Command::ToggleAlways {
+                    self.menu = None;
+                }
                 return self.run(command);
             }
             Message::Submenu(open) => {
+                if open {
+                    self.prepare_open_with();
+                }
                 if let Some(menu) = &mut self.menu {
                     menu.submenu = open;
                     menu.highlight = None;
@@ -607,6 +668,31 @@ impl App {
             Message::Frame(now) => return self.frame(now),
             Message::Devices(volumes) => self.volumes = volumes,
             Message::Places(available) => self.available = available,
+            Message::Catalog(catalog) => {
+                self.catalog = Some(catalog.clone());
+                return Task::perform(
+                    async move { Arc::new(crate::icons::load_all(&catalog)) },
+                    Message::Icons,
+                );
+            }
+            Message::Icons(icons) => self.icons = icons,
+            Message::OpenWithApp(id) => {
+                self.menu = None;
+                self.chooser = None;
+                return self.open_with_app(&id);
+            }
+            Message::ChooserSearch(text) => self.chooser = Some(text),
+            Message::CloseChooser => self.chooser = None,
+            Message::Always(on) => self.always = on,
+            Message::DefaultSet(written) => {
+                if written {
+                    return self.load_catalog();
+                }
+                self.notice = Some(Notice {
+                    text: texts::DEFAULT_NOT_SAVED.into(),
+                    error: true,
+                });
+            }
             Message::Launched(started) => {
                 if !started {
                     self.notice = Some(Notice {
@@ -1042,20 +1128,101 @@ impl App {
         }
     }
 
-    /// Entries of the "Ouvrir avec" submenu.
-    pub fn submenu_items() -> Vec<MenuItem> {
-        vec![
-            MenuItem::Action {
-                label: texts::DEFAULT_APP,
-                keys: None,
-                command: Command::Open,
-                danger: false,
-                checked: true,
-            },
-            MenuItem::action(texts::TERMINAL_HERE, None, Command::OpenTerminal),
-            MenuItem::Separator,
-            MenuItem::Disabled(texts::OTHER_APP),
-        ]
+    /// Entries of the "Ouvrir avec" submenu: the applications that open the selected file's
+    /// type, the default first and checked, then a terminal here, the chooser of every
+    /// application, and the "always" switch.
+    pub fn submenu_items(&self) -> Vec<MenuItem> {
+        let mut items: Vec<MenuItem> = (0..self.open_with.len()).map(MenuItem::App).collect();
+        if self.open_with.is_empty() {
+            items.push(MenuItem::action(texts::DEFAULT_APP, None, Command::Open));
+        }
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::action(
+            texts::TERMINAL_HERE,
+            None,
+            Command::OpenTerminal,
+        ));
+        let other = if self.catalog.is_some() {
+            MenuItem::action(texts::OTHER_APP, None, Command::ChooseApp)
+        } else {
+            MenuItem::Disabled(texts::OTHER_APP)
+        };
+        items.push(other);
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Action {
+            label: texts::ALWAYS_SHORT,
+            keys: None,
+            command: Command::ToggleAlways,
+            danger: false,
+            checked: self.always,
+        });
+        items
+    }
+
+    /// MIME type of the selected file, from its name.
+    fn selected_type(&self) -> Option<String> {
+        let entry = self.single()?;
+        let catalog = self.catalog.as_ref()?;
+        Some(
+            catalog
+                .mime
+                .type_of(&entry.path, entry.kind == Kind::Folder),
+        )
+    }
+
+    /// Fills the "Ouvrir avec" submenu for the selection, at most eight applications.
+    fn prepare_open_with(&mut self) {
+        self.open_with = match (self.selected_type(), &self.catalog) {
+            (Some(mime), Some(catalog)) => catalog
+                .handlers(&mime)
+                .into_iter()
+                .take(metrics::OPEN_WITH_MAX)
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
+
+    /// Reads the applications and associations off the interface thread.
+    fn load_catalog(&self) -> Task<Message> {
+        let Some(dirs) = self.config.xdg.clone() else {
+            return Task::none();
+        };
+        let (desktops, locales) = (self.config.desktops.clone(), self.config.locales.clone());
+        Task::perform(
+            async move { Arc::new(mime_apps::Catalog::load(dirs, &desktops, &locales)) },
+            Message::Catalog,
+        )
+    }
+
+    /// Opens the selection with an application; with "always" on, makes it the default for
+    /// the selection's type in mimeapps.list first.
+    fn open_with_app(&mut self, id: &str) -> Task<Message> {
+        let (Some(catalog), Some(entry)) = (self.catalog.clone(), self.single().cloned()) else {
+            return Task::none();
+        };
+        let Some(app) = catalog.application(id).cloned() else {
+            return Task::none();
+        };
+        let save = match (self.always, self.selected_type(), self.config.xdg.clone()) {
+            (true, Some(mime), Some(dirs)) => {
+                let id = app.id.clone();
+                Task::perform(
+                    async move { mime_apps::set_default(&dirs, &mime, &id).is_ok() },
+                    Message::DefaultSet,
+                )
+            }
+            _ => Task::none(),
+        };
+        let launch = match app.command(&[entry.path]) {
+            Some((program, args)) => {
+                let mut command = Process::new(program);
+                command.args(args);
+                self.launch(command)
+            }
+            None => Task::none(),
+        };
+        Task::batch([save, launch])
     }
 
     /// Height of a menu, so that it fits in the window.
@@ -1106,7 +1273,7 @@ impl App {
             return Task::none();
         };
         let items = if menu.submenu {
-            Self::submenu_items()
+            self.submenu_items()
         } else {
             self.menu_items(menu.on_selection)
         };
@@ -1130,12 +1297,12 @@ impl App {
         let Some(menu) = &mut self.menu else {
             return Task::none();
         };
+        let mut open_submenu = false;
         match key {
             Key::Named(Named::ArrowDown) => menu.highlight = step(true),
             Key::Named(Named::ArrowUp) => menu.highlight = step(false),
             Key::Named(Named::ArrowRight) if highlighted == Some(MenuItem::OpenWith) => {
-                menu.submenu = true;
-                menu.highlight = Some(0);
+                open_submenu = true;
             }
             Key::Named(Named::ArrowLeft) if menu.submenu => {
                 menu.submenu = false;
@@ -1144,16 +1311,27 @@ impl App {
             Key::Named(Named::Escape) => self.menu = None,
             Key::Named(Named::Enter | Named::Space) => match highlighted {
                 Some(MenuItem::Action { command, .. }) => {
-                    self.menu = None;
+                    if command != Command::ToggleAlways {
+                        self.menu = None;
+                    }
                     return self.run(command);
                 }
-                Some(MenuItem::OpenWith) => {
-                    menu.submenu = true;
-                    menu.highlight = Some(0);
+                Some(MenuItem::App(index)) => {
+                    let id = self.open_with.get(index).map(|app| app.id.clone());
+                    self.menu = None;
+                    return id.map_or_else(Task::none, |id| self.open_with_app(&id));
                 }
+                Some(MenuItem::OpenWith) => open_submenu = true,
                 _ => {}
             },
             _ => {}
+        }
+        if open_submenu {
+            self.prepare_open_with();
+            if let Some(menu) = &mut self.menu {
+                menu.submenu = true;
+                menu.highlight = Some(0);
+            }
         }
         Task::none()
     }
@@ -1168,6 +1346,16 @@ impl App {
             return match key {
                 Key::Named(Named::Escape) => {
                     self.confirm_empty = false;
+                    Task::none()
+                }
+                Key::Named(Named::Tab) => focus::advance(direction(modifiers)),
+                _ => Task::none(),
+            };
+        }
+        if self.chooser.is_some() {
+            return match key {
+                Key::Named(Named::Escape) => {
+                    self.chooser = None;
                     Task::none()
                 }
                 Key::Named(Named::Tab) => focus::advance(direction(modifiers)),
@@ -1320,6 +1508,11 @@ impl App {
                 };
                 return self.device(action, id);
             }
+            Command::ChooseApp => {
+                self.chooser = Some(String::new());
+                return operation::focus(CHOOSER_SEARCH);
+            }
+            Command::ToggleAlways => self.always = !self.always,
             Command::SelectAll => {
                 self.selection = (0..self.entries.len()).collect();
                 self.cursor = self.selection.iter().next().copied();
@@ -1356,9 +1549,31 @@ impl App {
             let path = entry.path.clone();
             return self.go(Location::Folder(path));
         }
+        // The default application for the type, as mimeapps.list says; xdg-open when there
+        // is none or the catalog is not read yet.
+        let default = self.selected_type().and_then(|mime| {
+            self.catalog
+                .as_ref()?
+                .default_for(&mime)
+                .map(|a| a.id.clone())
+        });
+        if let Some(id) = default {
+            return self.open_with_app_once(&id);
+        }
+        let Some(entry) = self.cursor.and_then(|i| self.entries.get(i)) else {
+            return Task::none();
+        };
         let mut open = Process::new("xdg-open");
         open.arg(&entry.path);
         self.launch(open)
+    }
+
+    /// Opens with an application without touching the defaults.
+    fn open_with_app_once(&mut self, id: &str) -> Task<Message> {
+        let always = std::mem::replace(&mut self.always, false);
+        let task = self.open_with_app(id);
+        self.always = always;
+        task
     }
 
     /// Starts a program off the interface thread, without waiting for it; a thread reaps
@@ -1559,4 +1774,23 @@ fn done(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>)> {
         n => texts::done_skipping(n),
     };
     Ok((text, report.paths))
+}
+
+/// Locales to try for application names, most specific first: `fr_FR`, then `fr`.
+fn locales() -> Vec<String> {
+    let raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+    let base = raw.split(['.', '@']).next().unwrap_or_default().to_owned();
+    let mut out = Vec::new();
+    if !base.is_empty() && base != "C" && base != "POSIX" {
+        if let Some((language, _)) = base.split_once('_') {
+            out.push(base.clone());
+            out.push(language.to_owned());
+        } else {
+            out.push(base);
+        }
+    }
+    out
 }

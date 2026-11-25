@@ -8,6 +8,7 @@ pub mod app;
 pub mod clock;
 pub mod devices;
 pub mod git;
+pub mod icons;
 pub mod listing;
 pub mod ops;
 pub mod places;

@@ -866,6 +866,7 @@ dependencies = [
  "iced_test",
  "image",
  "libc",
+ "mime-apps",
  "serde_json",
  "sherlock-ui",
  "tracing",
