@@ -6,6 +6,7 @@
 //! limite, et un doute sur un niveau se résout vers le plus restrictif.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fmt;
 use std::future::Future;
 use std::process::Stdio;
@@ -39,6 +40,42 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Longueur maximale d'un message de serveur recopié dans un journal.
 const LOG_PREVIEW_BYTES: usize = 200;
 
+/// Variables d'environnement transmises aux processus lancés par `sherlockd` : chemins, identité
+/// de session, langue (`LC_*` aussi), terminal, niveau des journaux. Aucune clé, aucun jeton,
+/// aucune variable qui change la destination d'une requête : tout le reste est retiré.
+pub const ENV_ALLOWED: [&str; 16] = [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "TERM",
+    "TMPDIR",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "RUST_LOG",
+];
+
+/// Garde, de `vars`, les variables de [`ENV_ALLOWED`], les `LC_*` et celles de `extra`.
+pub fn clean_env(
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+    extra: &[&str],
+) -> Vec<(OsString, OsString)> {
+    vars.into_iter()
+        .filter(|(name, _)| {
+            name.to_str().is_some_and(|name| {
+                ENV_ALLOWED.contains(&name) || extra.contains(&name) || name.starts_with("LC_")
+            })
+        })
+        .collect()
+}
+
 /// Niveau d'un outil, qui décide de la règle d'accord (contexte, « Les trois niveaux »).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
@@ -63,6 +100,17 @@ impl Level {
             (Some(Some(true)), None | Some(Some(false))) => Self::Read,
             (None | Some(Some(false)), Some(Some(false))) => Self::Action,
             _ => Self::Destructive,
+        }
+    }
+}
+
+impl Level {
+    /// Annotations standard qui redonnent ce niveau, pour exposer l'outil à un client MCP.
+    pub fn annotations(self) -> Value {
+        match self {
+            Self::Read => json!({ "readOnlyHint": true }),
+            Self::Action => json!({ "readOnlyHint": false, "destructiveHint": false }),
+            Self::Destructive => json!({ "readOnlyHint": false, "destructiveHint": true }),
         }
     }
 }
@@ -255,6 +303,9 @@ impl McpClient {
         };
         let mut child = Command::new(&config.program)
             .args(&config.args)
+            // Un serveur ne reçoit ni clé ni jeton de la session.
+            .env_clear()
+            .envs(clean_env(std::env::vars_os(), &[]))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Filet de sécurité si le client disparaît sans `shutdown`.
@@ -562,6 +613,13 @@ impl McpServers {
         self.servers.push(client);
         Ok(())
     }
+
+    /// Arrête tous les serveurs, chacun comme [`McpClient::shutdown`].
+    pub async fn shutdown(&mut self) {
+        for server in &mut self.servers {
+            server.shutdown().await;
+        }
+    }
 }
 
 impl ToolHost for McpServers {
@@ -631,6 +689,33 @@ mod tests {
         assert_eq!(
             level(json!({ "readOnlyHint": true, "destructiveHint": "non" })),
             Level::Destructive
+        );
+    }
+
+    #[test]
+    fn environnement_sans_cle() {
+        let vars = [
+            "PATH",
+            "HOME",
+            "LC_ALL",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "GITHUB_TOKEN",
+            "HTTPS_PROXY",
+        ]
+        .map(|n| (OsString::from(n), OsString::from("x")));
+        let kept = |extra| -> Vec<OsString> {
+            clean_env(vars.clone(), extra)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect()
+        };
+        assert_eq!(kept(&[]), ["PATH", "HOME", "LC_ALL"]);
+        assert_eq!(
+            kept(&["HTTPS_PROXY"]),
+            ["PATH", "HOME", "LC_ALL", "HTTPS_PROXY"]
         );
     }
 

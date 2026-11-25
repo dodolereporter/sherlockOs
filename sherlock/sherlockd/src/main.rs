@@ -1,6 +1,6 @@
-//! Démon de Sherlock. Le lot A-10 ne pose que la boucle d'agent : le démon n'a pas encore de
-//! service à rendre, il sait dérouler une démonstration (`--essai`) et servir le serveur MCP de
-//! test (`--serveur-essai`).
+//! Démon de Sherlock. Il n'a pas encore de service à rendre : il sait dérouler une démonstration
+//! avec le faux modèle (`--essai`) ou avec Claude Code (`--claude-code`), servir le mandataire
+//! (`--mandataire`) et le serveur MCP de test (`--serveur-essai`).
 
 use std::io::Write;
 use std::time::Duration;
@@ -8,13 +8,19 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use serde_json::json;
 use sherlockd::agent::{Agent, AgentConfig};
+use sherlockd::claude_code::{ClaudeCode, ClaudeCodeConfig};
 use sherlockd::faux::ScriptedProvider;
+use sherlockd::mandataire;
 use sherlockd::mcp::{McpClient, McpServers, ServerConfig, ToolHost};
 use sherlockd::modele::{Message, ModelReply, ModelRequest, ToolCall};
 use sherlockd::serveur_essai::{self, Mode};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage : sherlockd --essai | --serveur-essai [cas]";
+const USAGE: &str = "usage : sherlockd --essai | --claude-code <demande> | --mandataire \
+                     | --serveur-essai [cas]";
+
+const SYSTEM: &str =
+    "Tu es Sherlock, l'agent de NOM_OS. Réponds en français, en tutoyant, par phrases courtes.";
 
 fn main() -> anyhow::Result<()> {
     // Journaux sur la sortie d'erreur : la sortie standard porte le protocole MCP ou la conversation.
@@ -32,6 +38,8 @@ fn main() -> anyhow::Result<()> {
         .as_slice()
     {
         ["--essai"] => essai(),
+        ["--claude-code", request] => claude_code(request),
+        ["--mandataire"] => serve_proxy(),
         ["--serveur-essai"] => serveur_essai::run(Mode::Normal).context("serveur d'essai"),
         ["--serveur-essai", case] => {
             let mode = Mode::from_arg(case).with_context(|| format!("cas inconnu : {case}"))?;
@@ -41,23 +49,58 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Déroule un scénario du faux modèle contre le serveur de test et affiche la conversation.
-fn essai() -> anyhow::Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("création du runtime")?;
-    runtime.block_on(async {
-        let exe = std::env::current_exe().context("chemin de sherlockd")?;
-        let exe = exe.to_str().context("chemin de sherlockd illisible")?;
-        // Le serveur de test est l'un des nôtres : ses annotations sont crues (ADR 0015).
-        let config = ServerConfig::new("essai", exe, &["--serveur-essai"])
-            .timeout(Duration::from_secs(5))
-            .ours();
-        let client = McpClient::spawn(&config).await?;
-        let mut servers = McpServers::new();
-        servers.add(client).await.context("découverte des outils")?;
+        .context("création du runtime")
+}
 
+fn exe() -> anyhow::Result<String> {
+    let exe = std::env::current_exe().context("chemin de sherlockd")?;
+    let exe = exe.to_str().context("chemin de sherlockd illisible")?;
+    Ok(exe.to_owned())
+}
+
+/// Les serveurs MCP de Sherlock. Pour l'instant, le seul serveur de test, l'un des nôtres : ses
+/// annotations sont crues (ADR 0015).
+async fn servers() -> anyhow::Result<McpServers> {
+    let exe = exe()?;
+    let config = ServerConfig::new("essai", &exe, &["--serveur-essai"])
+        .timeout(Duration::from_secs(5))
+        .ours();
+    let client = McpClient::spawn(&config).await?;
+    let mut servers = McpServers::new();
+    servers.add(client).await.context("découverte des outils")?;
+    Ok(servers)
+}
+
+/// Sert le mandataire sur l'entrée et la sortie standard, pour Claude Code.
+fn serve_proxy() -> anyhow::Result<()> {
+    runtime()?.block_on(async {
+        let mut servers = servers().await?;
+        let input = tokio::io::BufReader::new(tokio::io::stdin());
+        let served = mandataire::serve(input, tokio::io::stdout(), &mut servers).await;
+        servers.shutdown().await;
+        served.context("service du mandataire")
+    })
+}
+
+/// Confie la demande à Claude Code, branché sur le mandataire, et affiche la conversation.
+fn claude_code(request: &str) -> anyhow::Result<()> {
+    runtime()?.block_on(async {
+        let mut claude = ClaudeCode::new(ClaudeCodeConfig::new(&exe()?, SYSTEM));
+        let answer = claude.ask(request).await;
+        print_history(claude.history())?;
+        answer?;
+        Ok(())
+    })
+}
+
+/// Déroule un scénario du faux modèle contre le serveur de test et affiche la conversation.
+fn essai() -> anyhow::Result<()> {
+    runtime()?.block_on(async {
+        let servers = servers().await?;
         let mut out = std::io::stdout().lock();
         // La conversation est la sortie de la commande, pas un journal : elle va sur stdout.
         writeln!(out, "Outils du serveur de test :")?;
@@ -68,38 +111,43 @@ fn essai() -> anyhow::Result<()> {
                 tool.name, tool.level, tool.description
             )?;
         }
+        writeln!(out)?;
+        drop(out);
 
-        let system = "Tu es Sherlock, l'agent de NOM_OS. Réponds en français.";
-        let mut agent = Agent::new(scenario(), servers, system, AgentConfig::default());
+        let mut agent = Agent::new(scenario(), servers, SYSTEM, AgentConfig::default());
         agent
             .ask("Répète « Bonjour » avec l'outil echo, puis vide la corbeille.")
             .await
             .context("conversation")?;
-
-        writeln!(out)?;
-        for message in agent.history() {
-            match message {
-                Message::User(text) => writeln!(out, "Toi : {text}")?,
-                Message::Assistant(ModelReply::Text(text)) => writeln!(out, "Sherlock : {text}")?,
-                Message::Assistant(ModelReply::ToolCalls(calls)) => {
-                    for call in calls {
-                        writeln!(out, "Sherlock appelle {} {}", call.name, call.arguments)?;
-                    }
-                }
-                Message::ToolResult {
-                    content,
-                    is_error: false,
-                    ..
-                } => writeln!(out, "  résultat : {content}")?,
-                Message::ToolResult {
-                    content,
-                    is_error: true,
-                    ..
-                } => writeln!(out, "  refus : {content}")?,
-            }
-        }
-        Ok(())
+        print_history(agent.history())
     })
+}
+
+/// Affiche la conversation sur la sortie standard : c'est la sortie de la commande.
+fn print_history(history: &[Message]) -> anyhow::Result<()> {
+    let mut out = std::io::stdout().lock();
+    for message in history {
+        match message {
+            Message::User(text) => writeln!(out, "Toi : {text}")?,
+            Message::Assistant(ModelReply::Text(text)) => writeln!(out, "Sherlock : {text}")?,
+            Message::Assistant(ModelReply::ToolCalls(calls)) => {
+                for call in calls {
+                    writeln!(out, "Sherlock appelle {} {}", call.name, call.arguments)?;
+                }
+            }
+            Message::ToolResult {
+                content,
+                is_error: false,
+                ..
+            } => writeln!(out, "  résultat : {content}")?,
+            Message::ToolResult {
+                content,
+                is_error: true,
+                ..
+            } => writeln!(out, "  refus : {content}")?,
+        }
+    }
+    Ok(())
 }
 
 /// Le faux modèle appelle `echo`, puis l'outil sans niveau, puis répond avec le résultat d'`echo`.
