@@ -8,7 +8,8 @@
 # session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
 # XWayland starts too, for X11 applications; SHERLOCKOS_XWAYLAND=0 leaves it out (see "Real session"
 # in docs/compositor.md). SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
-# folder of the application icons and of the portal setting (see below), SHERLOCKOS_POLKIT_AGENTS
+# folder of the application icons and of the portal setting (see below), SHERLOCKOS_WALLPAPERS
+# the folder of the wallpapers (see below), SHERLOCKOS_POLKIT_AGENTS
 # the polkit agents to try (see "Everyday services" in docs/compositor.md). The log of the session goes to
 # $XDG_STATE_HOME/sherlockos/session.log (~/.local/state/sherlockos/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
@@ -69,6 +70,13 @@ export PATH="$PATH:$bin"
 # above, so that it is added once.
 data="${SHERLOCKOS_DATA:-$(dirname "$(dirname "$bin")")/share/sherlockos}"
 export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# The wallpapers that `just wallpapers` writes beside the programs' folder (target/wallpapers
+# when the session runs from the repository with SHERLOCKOS_BIN=target/release) come before the
+# installed ones, in <data folder>/sherlockos/wallpapers.
+if [ -z "${SHERLOCKOS_WALLPAPERS:-}" ] && [ -d "$(dirname "$bin")/wallpapers" ]; then
+	SHERLOCKOS_WALLPAPERS=$(cd "$(dirname "$bin")/wallpapers" && pwd)
+	export SHERLOCKOS_WALLPAPERS
+fi
 state="${XDG_STATE_HOME:-$HOME/.local/state}/sherlockos"
 log="$state/session.log"
 mkdir -p "$state"

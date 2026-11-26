@@ -65,7 +65,7 @@ mod tests {
         state.add_output((1440, 900).into(), 1.0);
         let handle = event_loop.handle();
         theme::follow_at(&handle, &mut state, file.clone());
-        state.wallpaper = Wallpaper::start(&handle, None, vec![data.clone()]).unwrap();
+        state.wallpaper = Wallpaper::start(&handle, None, vec![data.join("wallpapers")]).unwrap();
         assert_eq!(state.theme(), Theme::Dark);
         assert_eq!(color::palette(), &Palette::DARK);
         let screen = (1440, 900).into();

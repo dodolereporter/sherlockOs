@@ -452,13 +452,16 @@ pub struct Reveal<'a, Message> {
     inert: bool,
 }
 
+/// How far a mask cut below only reaches above and on the sides: beyond any surface.
+const UNCUT: f32 = 1.0e4;
+
 /// Where a moving `Reveal` is cut, so that nothing it draws leaves its panel.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Clip {
     None,
     /// Its bounds grown by this much on every side, while it moves.
     Margin(f32),
-    /// Its bounds, down to this height from their top.
+    /// Down to this height from the top of its bounds, nothing cut above nor on the sides.
     Height(f32),
 }
 
@@ -500,7 +503,8 @@ impl<Message> Reveal<'_, Message> {
         self
     }
 
-    /// Nothing is drawn below `height` from its top: a panel unfolding by a mask.
+    /// Nothing is drawn below `height` from its top, everything above and on its sides: a panel
+    /// unfolding by a mask, its shadow and its sides left whole.
     pub fn clip_height(mut self, height: f32) -> Self {
         self.clip = Clip::Height(height);
         self
@@ -517,9 +521,13 @@ impl<Message> Reveal<'_, Message> {
         let moving = self.offset != Vector::ZERO || self.scale != 1.0;
         match self.clip {
             Clip::Margin(margin) if moving => Some(bounds.expand(margin)),
+            // Cut below only: above and on the sides, everything it draws stays, a panel moving
+            // sideways and its shadow included.
             Clip::Height(height) => Some(Rectangle {
-                height: height.clamp(0.0, bounds.height),
-                ..bounds
+                x: bounds.x - UNCUT,
+                y: bounds.y - UNCUT,
+                width: bounds.width + 2.0 * UNCUT,
+                height: UNCUT + height.max(0.0),
             }),
             Clip::Margin(_) | Clip::None => None,
         }
@@ -1188,10 +1196,23 @@ mod tests {
                 Size::new(334.0, 428.0)
             ))
         );
-        let mask = reveal::<()>(iced::widget::space()).clip_height(120.0);
-        assert_eq!(mask.clip_area(bounds).map(|a| a.height), Some(120.0));
+        // A mask cuts below only: a panel that slides sideways keeps its edges, its corners and
+        // its shadow, wherever its surface holds them.
+        let mask = reveal::<()>(iced::widget::space())
+            .offset(12.0, 0.0)
+            .clip_height(120.0);
+        let Some(area) = mask.clip_area(bounds) else {
+            panic!("a mask cuts");
+        };
+        assert_eq!(area.y + area.height, bounds.y + 120.0);
+        let surface = Rectangle::new(Point::ORIGIN, Size::new(418.0, 773.0));
+        assert!(area.x <= surface.x && area.y <= surface.y);
+        assert!(area.x + area.width >= surface.x + surface.width);
         let beyond = reveal::<()>(iced::widget::space()).clip_height(900.0);
-        assert_eq!(beyond.clip_area(bounds).map(|a| a.height), Some(400.0));
+        assert_eq!(
+            beyond.clip_area(bounds).map(|a| a.y + a.height),
+            Some(915.0)
+        );
     }
 
     #[test]

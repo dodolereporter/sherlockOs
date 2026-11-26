@@ -752,7 +752,11 @@ impl Bar {
                     // from the clock to the indicators from the left, as they sit in the bar.
                     let side = if leaving == Panel::Control { 1.0 } else { -1.0 };
                     let progress = motion.settled();
-                    let height = leaving.size().1 + (which.size().1 - leaving.size().1) * progress;
+                    // The mask goes from one panel's height to the other's, the room for the
+                    // shadow below it kept.
+                    let height = leaving.size().1
+                        + (which.size().1 - leaving.size().1) * progress
+                        + self.panel_margins.bottom;
                     let slide = panels::SWITCH_SLIDE;
                     let out = color::with_opacity(1.0 - coming, || self.panel_view(leaving));
                     let out = animated::reveal(panel::place(out, room))

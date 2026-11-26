@@ -77,7 +77,8 @@ pub struct Wallpaper {
     /// `wallpaper.conf`, and its modification time and length when last read.
     file: Option<PathBuf>,
     stamp: Option<(SystemTime, u64)>,
-    data_dirs: Vec<PathBuf>,
+    /// Folders of the installed wallpapers (`desktop_config::wallpaper::dirs`).
+    dirs: Vec<PathBuf>,
     /// Theme the wallpaper follows (`State::set_theme`).
     theme: ThemeVariant,
     pub mode: Mode,
@@ -93,12 +94,12 @@ pub struct Wallpaper {
 
 impl Wallpaper {
     /// Reads the setting of `file`, falls back on the default wallpaper installed in
-    /// `data_dirs`, and plugs the loading and the periodic check into the loop. The theme is
+    /// `dirs`, and plugs the loading and the periodic check into the loop. The theme is
     /// the one already active (`theme::follow` runs first).
     pub fn start(
         handle: &LoopHandle<'static, State>,
         file: Option<PathBuf>,
-        data_dirs: Vec<PathBuf>,
+        dirs: Vec<PathBuf>,
     ) -> Result<Self, crate::Error> {
         let (sender, receiver) = channel::channel();
         handle
@@ -121,7 +122,7 @@ impl Wallpaper {
             .map_err(|err| err.error)?;
         let mut wallpaper = Self {
             file,
-            data_dirs,
+            dirs,
             theme: theme::variant(color::active()),
             sender: Some(sender),
             ..Self::default()
@@ -163,7 +164,7 @@ impl Wallpaper {
             None => Config::default(),
         };
         self.mode = setting.mode;
-        let source = resolve(setting.choice(self.theme), &self.data_dirs);
+        let source = resolve(setting.choice(self.theme), &self.dirs);
         if source == self.source && self.generation > 0 {
             return;
         }
@@ -246,14 +247,15 @@ fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
 }
 
 /// Where the images of a choice are: the user's path, a folder of variants or an image, or the
-/// folder of a wallpaper installed in `data_dirs`.
-fn resolve(choice: Choice, data_dirs: &[PathBuf]) -> Source {
+/// folder of a wallpaper installed in `dirs`.
+fn resolve(choice: Choice, dirs: &[PathBuf]) -> Source {
     let path = match choice {
         Choice::Path(path) => path,
-        Choice::Installed(id) => match config::find(&id, data_dirs) {
+        Choice::Installed(id) => match config::find(&id, dirs) {
             Some(dir) => dir,
             None => {
-                tracing::info!("wallpaper: {id} is not installed");
+                // The board's background shows: say where the wallpaper was looked for.
+                tracing::warn!(?dirs, "wallpaper: {id} is not installed");
                 return Source::Board;
             }
         },
@@ -513,7 +515,7 @@ mod tests {
         }
         // No settings file: the default wallpaper, found in the data folder.
         let mut w = Wallpaper {
-            data_dirs: vec![dir.clone()],
+            dirs: vec![dir.join("wallpapers")],
             ..Wallpaper::default()
         };
         w.reload();

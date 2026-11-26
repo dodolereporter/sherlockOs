@@ -574,7 +574,8 @@ the spring's 2 % overshoot scaled the panel a little past its size. Now:
   screen's edge) and fades, the calendar comes in from the other side, from the right going
   towards the clock, from the left going towards the indicators, as they sit in the bar; and a
   mask goes from the height of one to the other's (`Reveal::clip_height`): the height changes on
-  the spring. In software each panel keeps a popup of its own size, black around it, and the
+  the spring. The mask cuts below only, the room for the shadow under it kept: a panel sliding
+  sideways keeps its edges, its corners and its shadow. In software each panel keeps a popup of its own size, black around it, and the
   other replaces it at once.
 - **The Sherlock menu** unfolds from its top left corner and folds back like the panels, on
   the GPU; a panel opening takes it away at once, so that only one popup holds the grab.

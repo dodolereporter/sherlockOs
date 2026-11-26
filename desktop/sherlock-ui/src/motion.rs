@@ -131,23 +131,57 @@ impl Animation {
     }
 }
 
+/// Curve of a timed animation: the share of the way done at each share of the time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ease {
+    /// Brisk start, gentle arrival: `1 - (1 - t)³`.
+    OutCubic,
+    /// Brisker start, longer arrival: `1 - (1 - t)⁵`.
+    OutQuint,
+    /// Gentle start, brisk end: `t²`, close to CSS `ease-in`.
+    InQuad,
+    /// Gentler start, brisker end: `t³`.
+    InCubic,
+}
+
+impl Ease {
+    /// Share of the way at the share of the time `t`, both from 0 to 1. Never past 1: no
+    /// bounce.
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::OutCubic => 1.0 - (1.0 - t).powi(3),
+            Self::OutQuint => 1.0 - (1.0 - t).powi(5),
+            Self::InQuad => t * t,
+            Self::InCubic => t * t * t,
+        }
+    }
+}
+
 /// Fade of a value, most often an opacity, over a fixed duration, with a brisk start and a
-/// gentle arrival (cubic).
+/// gentle arrival (`Ease::OutCubic`), or on the curve given to `eased`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fade {
     from: f32,
     to: f32,
     start: Duration,
     duration: Duration,
+    ease: Ease,
 }
 
 impl Fade {
     pub fn new(from: f32, to: f32, start: Duration, duration: Duration) -> Self {
+        Self::eased(from, to, start, duration, Ease::OutCubic)
+    }
+
+    /// The same, on the curve `ease`.
+    pub fn eased(from: f32, to: f32, start: Duration, duration: Duration, ease: Ease) -> Self {
         Self {
             from,
             to,
             start,
             duration,
+            ease,
         }
     }
 
@@ -157,7 +191,7 @@ impl Fade {
             return 1.0;
         }
         let t = now.saturating_sub(self.start).as_secs_f32() / self.duration.as_secs_f32();
-        1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
+        self.ease.apply(t)
     }
 
     /// Value at the instant `now`.
@@ -181,7 +215,7 @@ impl Fade {
         let from = self.value(now);
         let span = (self.to - self.from).abs().max(f32::EPSILON);
         let share = ((to - from).abs() / span).clamp(0.0, 1.0);
-        *self = Self::new(from, to, now, full.mul_f32(share));
+        *self = Self::eased(from, to, now, full.mul_f32(share), self.ease);
     }
 }
 
@@ -226,16 +260,24 @@ pub const OPEN_SCALE: f64 = 0.92;
 /// 150 ms range.
 pub const FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
 
-/// Opening of a window in the compositor (lot D-34): its scale goes from `OPEN_SCALE` to 1 on
-/// this spring, critically damped (ratio 1.0): no bounce, 90 % of the way in about 150 ms,
-/// settled in about 250.
-pub const WINDOW_OPEN_SPRING: Spring = Spring::new(625.0, 50.0);
-/// Fade of a window opening, from transparent to opaque (lot D-34): longer than a hover, so
-/// that the opening shows, as on macOS.
-pub const WINDOW_OPEN_FADE: Duration = Duration::from_millis(200);
-/// Closing of a window (lot D-34): its last image shrinks to `OPEN_SCALE` and fades out, at a
-/// constant pace eased out, then it is freed.
-pub const WINDOW_CLOSE: Duration = Duration::from_millis(150);
+/// Opening of a window in the compositor, as on macOS (lots D-34, C-01): from its first
+/// content, it grows from `WINDOW_OPEN_SCALE` to 1 around its center, title bar and shadow
+/// included, and goes from transparent to opaque, both over this duration on
+/// `WINDOW_OPEN_EASE`.
+pub const WINDOW_OPEN: Duration = Duration::from_millis(250);
+/// Scale of a window at the start of its opening.
+pub const WINDOW_OPEN_SCALE: f64 = 0.90;
+/// Curve of the opening: a frank ease-out, without a bounce. Half the way is done in a fifth of
+/// the time, the rest settles gently.
+pub const WINDOW_OPEN_EASE: Ease = Ease::OutCubic;
+/// Closing of a window (lots D-34, C-01): its last image shrinks to `WINDOW_CLOSE_SCALE` and
+/// fades out over this duration on `WINDOW_CLOSE_EASE`, then it is freed.
+pub const WINDOW_CLOSE: Duration = Duration::from_millis(180);
+/// Scale of a window at the end of its closing.
+pub const WINDOW_CLOSE_SCALE: f64 = 0.92;
+/// Curve of the closing: an ease-in, close to CSS `ease-in`. The window leaves slowly, then
+/// faster: it never lingers once nearly transparent.
+pub const WINDOW_CLOSE_EASE: Ease = Ease::InQuad;
 
 /// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
 /// scale fallback. About half a second in lot D-19, found slow on the machine: 300 ms since
@@ -345,16 +387,38 @@ mod tests {
     }
 
     #[test]
-    fn a_window_opens_without_a_bounce_in_about_200_ms() {
-        let values = trajectory(WINDOW_OPEN_SPRING, 1000);
-        assert!(values.iter().all(|v| *v <= 1.0 + 1e-9));
-        assert!((WINDOW_OPEN_SPRING.damping_ratio() - 1.0).abs() < 1e-9);
-        let first_90 = values.iter().position(|v| *v >= 0.9).unwrap();
-        assert!(first_90 > 120 && first_90 < 200, "90 % at {first_90} ms");
-        // Within 1 % of the 0.08 of scale it travels: under a thousandth, invisible.
-        let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
-        assert!(settled < 300, "settled at {settled} ms");
-        assert!(WINDOW_OPEN_FADE > FADE && WINDOW_CLOSE <= WINDOW_OPEN_FADE);
+    fn a_window_opens_and_closes_like_on_macos() {
+        // Opening: about 250 ms, from 0.90, a frank ease-out without a bounce.
+        assert_eq!(WINDOW_OPEN, ms(250));
+        assert_eq!(WINDOW_OPEN_SCALE, 0.90);
+        let open = Fade::eased(0.0, 1.0, ms(0), WINDOW_OPEN, WINDOW_OPEN_EASE);
+        let values: Vec<f32> = (0..=300).map(|t| open.value(ms(t))).collect();
+        assert!(values.windows(2).all(|w| w[1] >= w[0]), "it only grows");
+        assert!(values.iter().all(|v| *v <= 1.0), "no bounce");
+        assert!(values[50] > 0.45, "brisk: {} at 50 ms", values[50]);
+        assert!(values[150] > 0.9 && values[150] < 1.0, "{}", values[150]);
+        assert_eq!(values[250], 1.0);
+        // Closing: about 180 ms, to 0.92, slow first then faster.
+        assert_eq!(WINDOW_CLOSE, ms(180));
+        assert_eq!(WINDOW_CLOSE_SCALE, 0.92);
+        let close = Fade::eased(1.0, 0.0, ms(0), WINDOW_CLOSE, WINDOW_CLOSE_EASE);
+        assert!(close.value(ms(45)) > 0.9, "{}", close.value(ms(45)));
+        assert!(close.value(ms(135)) < 0.5, "{}", close.value(ms(135)));
+        assert_eq!(close.value(ms(180)), 0.0);
+        assert!(WINDOW_CLOSE < WINDOW_OPEN && WINDOW_OPEN > FADE);
+    }
+
+    #[test]
+    fn every_curve_goes_from_0_to_1_without_a_bounce() {
+        for ease in [Ease::OutCubic, Ease::OutQuint, Ease::InQuad, Ease::InCubic] {
+            assert_eq!((ease.apply(0.0), ease.apply(1.0)), (0.0, 1.0), "{ease:?}");
+            assert_eq!((ease.apply(-1.0), ease.apply(2.0)), (0.0, 1.0), "{ease:?}");
+            let values: Vec<f32> = (0..=100).map(|i| ease.apply(i as f32 / 100.0)).collect();
+            assert!(values.windows(2).all(|w| w[1] >= w[0]), "{ease:?}");
+        }
+        // Out: ahead of the time; in: behind it.
+        assert!(Ease::OutQuint.apply(0.2) > Ease::OutCubic.apply(0.2));
+        assert!(Ease::InCubic.apply(0.5) < Ease::InQuad.apply(0.5));
     }
 
     #[test]
