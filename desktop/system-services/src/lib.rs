@@ -1,6 +1,7 @@
 //! The system services behind the quick settings of the bar and the media keys of the
 //! compositor (lot D-35): the sound of the default output and of the microphone (`pactl`, or
-//! `wpctl`), the screen brightness (logind), the media players (MPRIS). Every write goes to the
+//! `wpctl`), the screen brightness (logind), the keyboard backlight (UPower, or logind), the
+//! media players (MPRIS). Every write goes to the
 //! service that owns the setting, which asks polkit where its policy wants it. Nothing runs as
 //! root, nothing uses `sudo`, nothing writes into sysfs.
 //!
@@ -9,9 +10,11 @@
 
 pub mod audio;
 pub mod backlight;
+pub mod keyboard;
 pub mod mpris;
 pub mod notify;
 pub mod secret;
+pub mod watch;
 
 use zbus::DBusError;
 
@@ -82,6 +85,17 @@ fn classify(name: &str, text: String) -> Problem {
 
 pub type Result<T> = std::result::Result<T, Problem>;
 
+/// `count` presses of a key that moves `value` by `step`, up when positive, down when negative:
+/// the value they reach, and whether one of them pushed against the end, leaving the value where
+/// it was. The on-screen display stretches when a key insists that way.
+pub fn press<T: Copy + PartialEq>(value: T, count: i32, step: impl Fn(T, bool) -> T) -> (T, bool) {
+    let up = count > 0;
+    (0..count.unsigned_abs()).fold((value, false), |(v, pushed), _| {
+        let next = step(v, up);
+        (next, pushed || next == v)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +115,23 @@ mod tests {
         }
         let failed = classify("org.bluez.Error.Busy", String::new());
         assert!(matches!(failed, Problem::Failed(_)));
+    }
+
+    #[test]
+    fn a_press_at_the_end_pushes_against_it() {
+        let step = |v: u8, up: bool| {
+            if up {
+                (v + 5).min(100)
+            } else {
+                v.saturating_sub(5)
+            }
+        };
+        assert_eq!(press(90, 1, step), (95, false));
+        assert_eq!(press(95, 1, step), (100, false));
+        assert_eq!(press(100, 1, step), (100, true));
+        // Merged presses: the last one of three insists.
+        assert_eq!(press(90, 3, step), (100, true));
+        assert_eq!(press(0, -1, step), (0, true));
+        assert_eq!(press(50, 0, step), (50, false));
     }
 }

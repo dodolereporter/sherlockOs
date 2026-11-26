@@ -49,14 +49,19 @@ pub const GROUP_MAX: usize = 3;
 pub const QUICK_WIDTH: f32 = 336.0;
 /// Height of the control centre panels: the board's quick settings (a grid of two rows of 56
 /// and 8, the volume and brightness rows, the two segmented groups, the user row, 14 between
-/// each), plus the line under the volume that names the output.
+/// each), plus the line under the volume that names the output, plus the row of the keyboard
+/// backlight (D-35d), left empty above the user row on a machine without one.
 pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + (2.0 * 56.0 + 8.0)
     + 5.0 * metrics::GAP_SECTION
+    + KEYBOARD_ROW
     + (28.0 + 4.0 + 17.0)
     + 28.0
     + 2.0 * (17.0 + 6.0 + 36.0)
     + (metrics::BORDER_WIDTH + 12.0 + 34.0);
+
+/// The slider of the keyboard backlight under the brightness, with its gap.
+pub const KEYBOARD_ROW: f32 = ROW_BUTTON + metrics::GAP_SECTION;
 
 /// The notification centre under the calendar, in the panel of the clock: its height. The
 /// list scrolls inside it.
@@ -761,7 +766,18 @@ mod styles {
         value: u8,
         on_change: Option<fn(u8) -> Message>,
     ) -> Element<'a, Message> {
-        let control = crate::component::slider(value, on_change);
+        held_slider_row(leading, value, on_change, None)
+    }
+
+    /// The same row, its slider telling `on_release` when it is let go
+    /// (`component::held_slider`).
+    pub fn held_slider_row<'a, Message: Clone + 'a>(
+        leading: impl Into<Element<'a, Message>>,
+        value: u8,
+        on_change: Option<fn(u8) -> Message>,
+        on_release: Option<Message>,
+    ) -> Element<'a, Message> {
+        let control = crate::component::held_slider(value, on_change, on_release);
         iced::widget::row![leading.into(), control]
             .spacing(SLIDER_GAP)
             .align_y(iced::Alignment::Center)
