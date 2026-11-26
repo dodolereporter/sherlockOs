@@ -382,7 +382,7 @@ impl Bar {
                 if self.panel_surface() == Some(id) {
                     self.panel = None;
                     self.unfold = Unfold::default();
-                    self.quick.close();
+                    return self.quick.close().map(Message::Quick);
                 }
             }
             _ => {}
@@ -550,21 +550,21 @@ impl Bar {
     /// Closes the panel: it folds back first where it unfolds, and its popup closes once it
     /// has faded out (`Message::Frame`).
     fn close_panel(&mut self) -> Task<Message> {
-        self.quick.close();
+        let stopped = self.quick.close().map(Message::Quick);
         if self.panel.is_some() && self.animates() {
             self.unfold.fold(animated::clock(), false);
-            return Task::none();
+            return stopped;
         }
-        self.drop_panel()
+        stopped.chain(self.drop_panel())
     }
 
     /// Closes the popup of the panel at once, whatever it was doing.
     fn drop_panel(&mut self) -> Task<Message> {
-        self.quick.close();
+        let stopped = self.quick.close().map(Message::Quick);
         self.unfold = Unfold::default();
         match self.panel.take() {
-            Some((_, id)) => window::close(id),
-            None => Task::none(),
+            Some((_, id)) => stopped.chain(window::close(id)),
+            None => stopped,
         }
     }
 

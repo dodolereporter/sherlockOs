@@ -411,6 +411,16 @@ mod tests {
     #[zbus::interface(name = "org.bluez.Device1")]
     impl Gadget {
         #[zbus(property)]
+        fn name(&self) -> String {
+            String::from("Casque")
+        }
+
+        #[zbus(property)]
+        fn paired(&self) -> bool {
+            true
+        }
+
+        #[zbus(property)]
         fn connected(&self) -> bool {
             self.0
         }
