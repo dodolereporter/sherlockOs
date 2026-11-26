@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Calculator
+Name[fr]=Calculatrice
+Exec=example-calculator
+Path=/tmp

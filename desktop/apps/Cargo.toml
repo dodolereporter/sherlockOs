@@ -1,0 +1,43 @@
+[package]
+name = "apps"
+description = "Applications view of the desktop: every installed application in pages, a layer-shell overlay opened on demand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlockos-apps"
+path = "src/main.rs"
+
+[dependencies]
+# The same as the launcher (docs/launcher.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# Application icons (workspace crate).
+icon-theme = { path = "../icon-theme" }
+# The launcher's reading of the applications, its search, its start without a shell and its
+# single instance (workspace crate).
+launcher = { path = "../launcher" }
+# The data directories and the terminal (workspace crate).
+mime-apps = { path = "../mime-apps" }
+sherlock-ui = { path = "../sherlock-ui" }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
+
+[lints]
+workspace = true

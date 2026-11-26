@@ -1,0 +1,496 @@
+//! State of the applications view, its messages, update and view.
+
+use std::time::{Duration, Instant};
+
+use iced::keyboard::{self, key::Named};
+use iced::mouse::{self, ScrollDelta};
+use iced::widget::{
+    Space, button, column, container, mouse_area, operation, row, stack, svg, text,
+};
+use iced::window::{self, Id};
+use iced::{Alignment, Element, Event, Length, Padding, Size, Subscription, Task, event};
+use iced_exwlshell::to_layer_message;
+use launcher::app::{Spawn, icon_handle};
+use sherlock_ui::animated::reveal;
+use sherlock_ui::apps::{self as look, text as texts};
+use sherlock_ui::component as ui;
+use sherlock_ui::icon::Icon;
+use sherlock_ui::motion::Animation;
+use sherlock_ui::{color, metrics, typography};
+
+use crate::catalog::{Catalog, Tile};
+use crate::pager::{Pager, page_count};
+
+/// Id of the search field, to give it the keyboard.
+pub const QUERY: &str = "query";
+
+/// The keys the view acts on, whatever has the focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Left,
+    Right,
+    Up,
+    Down,
+    Enter,
+    Escape,
+}
+
+#[to_layer_message(multi)]
+#[derive(Debug, Clone)]
+pub enum Message {
+    Surface(Id),
+    Resized(Size),
+    Query(String),
+    Key(Key),
+    /// A tile clicked, by its place among those shown.
+    Launch(usize),
+    /// A page dot clicked.
+    Page(usize),
+    /// A click beside the tiles and the field: the view closes, as Launchpad does.
+    Dismiss,
+    Scroll(ScrollDelta),
+    Frame(Instant),
+}
+
+pub struct View {
+    catalog: Catalog,
+    spawn: Spawn,
+    pub query: String,
+    /// The tiles shown, by their place in the catalog: all of them, or those the query finds.
+    pub shown: Vec<usize>,
+    /// The tile chosen by the arrows or the search, among those shown.
+    pub selected: Option<usize>,
+    /// Size of the surface: the screen.
+    pub size: Size,
+    pub pager: Pager,
+    /// How far the view is shown, 0 to 1: the icons' scale and opacity, the veil.
+    presence: Animation,
+    /// The tile started, which grows as the view fades out.
+    pub launched: Option<usize>,
+    origin: Instant,
+    /// Time of the last event, from `origin`: the moment the view draws.
+    now: Duration,
+    surface: Option<Id>,
+    /// Asked to close: it fades out, then the program ends.
+    pub closing: bool,
+}
+
+impl View {
+    /// The view of `catalog`, opening; `spawn` starts the applications.
+    pub fn new(catalog: Catalog, spawn: Spawn) -> Self {
+        let (width, height) = metrics::REFERENCE_SCREEN;
+        let size = Size::new(width, height);
+        let shown: Vec<usize> = (0..catalog.len()).collect();
+        let pager = Pager::new(page_count(shown.len(), per_page(size)));
+        Self {
+            catalog,
+            spawn,
+            query: String::new(),
+            shown,
+            selected: None,
+            size,
+            pager,
+            presence: Animation::new(look::OPEN_SPRING, 0.0, 1.0, Duration::ZERO),
+            launched: None,
+            origin: Instant::now(),
+            now: Duration::ZERO,
+            surface: None,
+            closing: false,
+        }
+    }
+
+    /// The view already open, for the captures: no opening to wait for.
+    pub fn opened(mut self) -> Self {
+        self.presence = Animation::new(look::OPEN_SPRING, 1.0, 1.0, Duration::ZERO);
+        self
+    }
+
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    /// The tiles shown, in their order.
+    pub fn tiles(&self) -> impl Iterator<Item = &Tile> {
+        self.shown
+            .iter()
+            .filter_map(|index| self.catalog.tiles().get(*index))
+    }
+
+    /// The view laid out for the surface's size.
+    pub fn layout(&self) -> look::Layout {
+        look::Layout::fit(self.size.width, self.size.height)
+    }
+
+    /// How far the view is shown at the last event.
+    pub fn presence(&self) -> f64 {
+        self.presence.value(self.now)
+    }
+
+    /// Whether something still moves: frames are asked for only that long.
+    pub fn animating(&self) -> bool {
+        !self.presence.is_done(self.now, look::OPEN_PRECISION) || self.pager.moving(self.now)
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        let frames = if self.animating() {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([event::listen_with(on_event), frames])
+    }
+
+    /// The time of the clock, never before the last event's.
+    fn clock(&mut self) -> Duration {
+        self.now = self.now.max(self.origin.elapsed());
+        self.now
+    }
+
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Surface(id) => {
+                self.surface = Some(id);
+                return operation::focus(QUERY);
+            }
+            Message::Resized(size) if size != self.size && size.width > 0.0 => {
+                self.size = size;
+                self.paginate();
+            }
+            Message::Query(query) => {
+                self.query = query;
+                self.paginate();
+                let typed = !self.query.trim().is_empty() && !self.shown.is_empty();
+                self.selected = typed.then_some(0);
+            }
+            Message::Key(key) => return self.key(key),
+            Message::Launch(place) => return self.launch(place),
+            Message::Page(page) => {
+                let now = self.clock();
+                self.pager.go(page, now);
+            }
+            Message::Dismiss => return self.close(),
+            Message::Scroll(delta) => {
+                let now = self.clock();
+                match delta {
+                    ScrollDelta::Lines { x, y } => {
+                        let along = if y.abs() >= x.abs() { y } else { x };
+                        if along != 0.0 {
+                            // Down (or left) shows the next page.
+                            self.pager.notch(along < 0.0, now);
+                        }
+                    }
+                    ScrollDelta::Pixels { x, y } => {
+                        let along = if x.abs() >= y.abs() { x } else { y };
+                        self.pager.swipe(along, self.size.width, now);
+                    }
+                }
+            }
+            Message::Frame(at) => {
+                self.now = self.now.max(at.saturating_duration_since(self.origin));
+                self.pager.tick(self.now, self.size.width);
+                if self.closing && self.presence.is_done(self.now, look::OPEN_PRECISION) {
+                    return iced::exit();
+                }
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
+    /// The tiles of the query, from the first page.
+    fn paginate(&mut self) {
+        self.shown = self.catalog.filter(&self.query);
+        self.selected = None;
+        self.pager
+            .reset(page_count(self.shown.len(), per_page(self.size)));
+    }
+
+    fn key(&mut self, key: Key) -> Task<Message> {
+        match key {
+            Key::Enter => {
+                let first = (!self.query.trim().is_empty()).then_some(0);
+                match self.selected.or(first) {
+                    Some(place) => self.launch(place),
+                    None => Task::none(),
+                }
+            }
+            // Escape empties the search first, then closes.
+            Key::Escape if !self.query.is_empty() => {
+                self.query.clear();
+                self.paginate();
+                Task::none()
+            }
+            Key::Escape => self.close(),
+            arrow => {
+                self.select(arrow);
+                Task::none()
+            }
+        }
+    }
+
+    /// Moves the selection with an arrow; the first one selects the first tile of the page.
+    /// Up and Down stay on the page, Left and Right go on to the next one.
+    fn select(&mut self, arrow: Key) {
+        let count = self.shown.len();
+        let layout = self.layout();
+        let (columns, per_page) = (layout.columns, layout.per_page());
+        let next = match self.selected {
+            None => Some(self.pager.page() * per_page),
+            Some(at) => match arrow {
+                Key::Left => at.checked_sub(1),
+                Key::Right => Some(at + 1),
+                Key::Up => (at % per_page >= columns).then(|| at - columns),
+                Key::Down => Some(at + columns).filter(|n| n / per_page == at / per_page),
+                Key::Enter | Key::Escape => None,
+            },
+        };
+        if let Some(next) = next.filter(|n| *n < count) {
+            self.selected = Some(next);
+            let now = self.clock();
+            self.pager.go(next / per_page, now);
+        }
+    }
+
+    /// Starts tile `place`; the view fades out once it is started.
+    fn launch(&mut self, place: usize) -> Task<Message> {
+        // A second Enter, or a click while fading out, starts nothing.
+        if self.closing {
+            return Task::none();
+        }
+        let Some(tile) = self
+            .shown
+            .get(place)
+            .and_then(|index| self.catalog.tiles().get(*index))
+        else {
+            return Task::none();
+        };
+        match (self.spawn)(&tile.command) {
+            Ok(pid) => {
+                tracing::info!(id = tile.id(), pid, "started");
+                self.launched = Some(place);
+                self.close()
+            }
+            Err(error) => {
+                tracing::error!(%error, "cannot start the application");
+                Task::none()
+            }
+        }
+    }
+
+    /// Fades the view out; the program ends at the last frame.
+    fn close(&mut self) -> Task<Message> {
+        if !self.closing {
+            self.closing = true;
+            let now = self.clock();
+            self.presence.retarget(now, 0.0);
+        }
+        Task::none()
+    }
+
+    pub fn view(&self, _: Id) -> Element<'_, Message> {
+        self.view_screen()
+    }
+
+    /// The whole screen: the veil, the field, the pages, their dots.
+    pub fn view_screen(&self) -> Element<'_, Message> {
+        let shown = self.presence() as f32;
+        let opacity = shown.clamp(0.0, 1.0);
+        let scale = look::OPEN_SCALE - (look::OPEN_SCALE - 1.0) * shown;
+        let field = self.view_field();
+        let layout = self.layout();
+        let pages = reveal(self.view_pages(&layout, opacity)).scale(scale, (0.5, 0.5));
+        let content = column![
+            Space::new().height(layout.search_top),
+            container(field).center_x(Length::Fill),
+            Space::new().height(layout.grid_top - layout.search_top - metrics::FIELD_HEIGHT),
+            container(pages)
+                .width(Length::Fill)
+                .height(layout.rows as f32 * layout.cell.1),
+            Space::new().height(Length::Fill),
+            self.view_dots(),
+            Space::new().height(look::DOTS_BOTTOM - look::DOT),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill);
+        let veil = container(Space::new())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(look::veil);
+        reveal(stack![veil, mouse_area(content).on_press(Message::Dismiss)])
+            .opacity(opacity)
+            .into()
+    }
+
+    /// The search field, the magnifier inside it, as `component::search_field` lays them out.
+    fn view_field(&self) -> Element<'_, Message> {
+        let inset = metrics::FIELD_PADDING + metrics::ICON_SIZE_SMALL + metrics::SEARCH_ICON_GAP;
+        let vertical =
+            (metrics::FIELD_HEIGHT - typography::UI_SIZE * typography::LINE_HEIGHT) / 2.0;
+        let field = ui::text_field(texts::PLACEHOLDER, &self.query, Some(Message::Query))
+            .id(QUERY)
+            .width(look::SEARCH_WIDTH)
+            .padding(Padding {
+                top: vertical,
+                bottom: vertical,
+                left: inset,
+                right: metrics::FIELD_PADDING,
+            })
+            .style(look::field);
+        let tint = look::Colors::of(color::palette()).field_icon;
+        let magnifier = container(ui::icon(Icon::Search, metrics::ICON_SIZE_SMALL, tint))
+            .padding(Padding {
+                left: metrics::FIELD_PADDING,
+                ..Padding::ZERO
+            })
+            .height(metrics::FIELD_HEIGHT)
+            .center_y(metrics::FIELD_HEIGHT);
+        stack![field, magnifier].into()
+    }
+
+    /// The page shown, and its neighbour while they slide.
+    fn view_pages(&self, layout: &look::Layout, opacity: f32) -> Element<'_, Message> {
+        if self.shown.is_empty() {
+            let nothing = text(texts::NOTHING)
+                .size(typography::UI_SIZE)
+                .style(look::nothing);
+            return container(nothing).center_x(Length::Fill).into();
+        }
+        let width = self.size.width.max(1.0);
+        let at = self.pager.position(self.now, width);
+        let first = (at / width).floor().max(0.0) as usize;
+        let last = (first + 1).min(self.pager.count() - 1);
+        let mut layers: Vec<Element<'_, Message>> = Vec::new();
+        for page in first..=last {
+            let offset = page as f32 * width - at;
+            if offset.abs() >= width {
+                continue;
+            }
+            let layer = reveal(self.view_page(page, layout, opacity)).offset(offset, 0.0);
+            // Only the page the pages settle on takes the clicks.
+            let layer = if page == self.pager.page() {
+                layer
+            } else {
+                layer.inert()
+            };
+            layers.push(layer.into());
+        }
+        stack(layers)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn view_page(&self, page: usize, layout: &look::Layout, opacity: f32) -> Element<'_, Message> {
+        let (columns, (width, height)) = (layout.columns, layout.cell);
+        let start = page * layout.per_page();
+        let lines = (0..layout.rows).map(|line| {
+            let cells = (0..columns).map(|column| {
+                let place = start + line * columns + column;
+                match self.shown.get(place) {
+                    Some(index) => self.view_tile(place, *index, layout, opacity),
+                    None => Space::new().width(width).height(height).into(),
+                }
+            });
+            row(cells).into()
+        });
+        container(column(lines)).center_x(Length::Fill).into()
+    }
+
+    /// An application: its icon, or its initial, and its name cut with « … ».
+    fn view_tile(
+        &self,
+        place: usize,
+        index: usize,
+        layout: &look::Layout,
+        opacity: f32,
+    ) -> Element<'_, Message> {
+        let Some(tile) = self.catalog.tiles().get(index) else {
+            return Space::new().into();
+        };
+        let icon: Element<'_, Message> = match self.catalog.icon(tile) {
+            Some(path) => svg(icon_handle(&path))
+                .width(layout.icon)
+                .height(layout.icon)
+                .opacity(opacity)
+                .into(),
+            None => {
+                let initial = tile
+                    .name()
+                    .chars()
+                    .next()
+                    .and_then(|c| c.to_uppercase().next())
+                    .unwrap_or('?');
+                container(
+                    text(initial.to_string())
+                        .font(typography::UI_SEMIBOLD)
+                        .size(layout.letter_size()),
+                )
+                .center(layout.icon)
+                .style(look::tile(layout.tile_radius()))
+                .into()
+            }
+        };
+        let name =
+            container(ui::ellipsis(tile.name()).style(look::label)).center_x(layout.label_width());
+        let body = column![icon, name]
+            .spacing(look::LABEL_GAP)
+            .align_x(Alignment::Center);
+        let cell = button(container(body).center(Length::Fill))
+            .on_press(Message::Launch(place))
+            .width(layout.cell.0)
+            .height(layout.cell.1)
+            .padding(look::CELL_PADDING)
+            .style(look::cell(self.selected == Some(place)));
+        if self.launched == Some(place) {
+            let grow = 1.0 + (look::LAUNCH_SCALE - 1.0) * (1.0 - self.presence() as f32);
+            reveal(cell).scale(grow, (0.5, 0.5)).into()
+        } else {
+            cell.into()
+        }
+    }
+
+    /// A dot for each page, when there are several; a click goes to that page.
+    fn view_dots(&self) -> Element<'_, Message> {
+        let count = self.pager.count();
+        if count < 2 {
+            return Space::new().height(look::DOT).into();
+        }
+        let dots = (0..count).map(|page| {
+            let dot = container(Space::new())
+                .width(look::DOT)
+                .height(look::DOT)
+                .style(look::dot(page == self.pager.page()));
+            mouse_area(dot).on_press(Message::Page(page)).into()
+        });
+        container(row(dots).spacing(look::DOT_GAP))
+            .center_x(Length::Fill)
+            .into()
+    }
+}
+
+/// Applications on a page of a screen of `size`.
+fn per_page(size: Size) -> usize {
+    look::Layout::fit(size.width, size.height).per_page()
+}
+
+/// The arrows, Enter, Escape, the wheel and the touchpad, and the size of the surface, even
+/// when the search field took them. A held Enter starts nothing more.
+pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
+    match event {
+        Event::Keyboard(keyboard::Event::KeyPressed { key, repeat, .. }) => {
+            let key = match key {
+                keyboard::Key::Named(Named::ArrowLeft) => Key::Left,
+                keyboard::Key::Named(Named::ArrowRight) => Key::Right,
+                keyboard::Key::Named(Named::ArrowUp) => Key::Up,
+                keyboard::Key::Named(Named::ArrowDown) => Key::Down,
+                keyboard::Key::Named(Named::Enter) if !repeat => Key::Enter,
+                keyboard::Key::Named(Named::Escape) => Key::Escape,
+                _ => return None,
+            };
+            Some(Message::Key(key))
+        }
+        Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Message::Scroll(delta)),
+        Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
+        _ => None,
+    }
+}

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Control Room
+GenericName[fr]=Réglages
+Exec=control-room
+Icon=control-room

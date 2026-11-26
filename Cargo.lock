@@ -112,6 +112,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "apps"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "icon-theme",
+ "launcher",
+ "mime-apps",
+ "sherlock-ui",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
