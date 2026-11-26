@@ -45,8 +45,13 @@ closed hand. The full list is `SHAPES` in `desktop/cursor-theme/src/lib.rs`, and
 that every CSS name has a shape.
 
 `sherlock` is the arrow with a magnifier badge, for Super + click: Sherlock explains what is
-under the pointer. The theme holds the shape; the action itself is reserved and not plugged in
-yet.
+under the pointer. The compositor shows it while the gesture key and the left button are held
+on a window that has not moved yet (lot C-01): released there, it is a Super + click; dragged
+past 4 pixels, it is the move of the window, with the four arrows of « Déplacer ». The action
+itself is reserved: the compositor logs it, Sherlock is not plugged in yet.
+
+The boards draw no open hand: `grab` shows the closed hand, like `grabbing`. The fifteen
+drawings of the boards are all in the theme (lot C-01 checked them against both boards).
 
 ## The drawings
 
@@ -135,9 +140,37 @@ drawn until something changes (see "Frames of the real session" in `docs/composi
 still cursor goes on the screen's cursor plane when it fits; a scaled or fading one is
 composited.
 
-Not done in this lot: **show the clicks** (the accessibility option of the boards: the pointer
-sinks and a green wave leaves the clicked point) needs an option and a drawn ring, and comes
-next; Super + click for Sherlock is only a shape for now.
+- **Gestures (lot C-01).** A window held by its title bar, or moved at its client's request,
+  shows the closed hand (`grabbing`); moved with the gesture key, the four arrows (`move`), as
+  the board says; resized, the arrow of the pulled edge or corner. The shapes the shell's
+  components name (`pointer`, `grab`, `grabbing`, `text`, `not-allowed`) reach the hand that
+  points, the closed hand, the I-beam and the forbidden sign (`cursor.rs`, tested).
+- **Against the boards (lot C-01).** Waiting: a turn per second, as the board's arc. Change of
+  shape: from 0.8 and 30 %, 120 ms, on the boards' bouncing curve, as their `apparait`. Shake:
+  the board grows to 2.6 in 8 % of its 3.6 s loop (288 ms), holds, then comes back past 1
+  (0.92) to 1; the compositor takes 240 ms each way with the same bounce, 2.6 times, held a
+  second after the last shake: the same motion, a little brisker.
+
+## Show the clicks
+
+The accessibility option of the boards (lot C-01): at each press of a button, a green ring
+leaves the pressed point and the pointer sinks. Off by default; on with
+`$XDG_CONFIG_HOME/sherlockos/pointer.conf` (`desktop_config::pointer`), read again within
+2 seconds when it changes:
+
+```text
+# true: a green ring leaves each click, and the pointer sinks (false by default).
+show-clicks = true
+```
+
+- **The ring** (`compositor/src/clicks.rs`): a circle of 40 with a stroke of 2 in the accent
+  green, from 0.2 to 1.7 of its size while its opacity goes from 0.9 to 0, over 460 ms eased
+  out: the board's `onde`. Drawn in front of everything, a frame at each blank while it runs,
+  nothing after. In nested mode too.
+- **The pointer** sinks to 0.86 around its tip in 54 ms, then comes back in 126 ms: the
+  board's `appui`. Real session only: in nested mode, the host draws the pointer.
+- The tokens are in `sherlock_ui::cursor` (`CLICK_*`). `State::set_show_clicks` changes the
+  option while the session runs, for Control Room.
 
 ## Tests
 
@@ -145,8 +178,11 @@ next; Super + click for Sherlock is only a shape for now.
 | --- | --- |
 | `cursor-theme`, unit | Every name given once; every CSS name of the protocol has a shape; every drawing has its marks and its hotspot inside its image; the dark style block of the files; the light theme changes only the style block; the spinning group turns around its center; the Xcursor writer, read back by the parser the compositor uses |
 | `cursor-theme`, `tests/theme.rs` | Runs the generator: in both themes, every shape at every size, its hotspot, something drawn under it, 30 images for the waiting cursors, every alias a link to its drawing |
-| `compositor`, `cursor.rs` | The house theme follows the desktop's theme, read again on a change; every shape a client names finds the file of its drawing; the nearest size above; fallback on the user's theme and on the arrow; the turn of the waiting cursor and the time of its next image; the fade of a new shape; shake to find, held then back to rest; nothing asked at rest |
+| `compositor`, `cursor.rs` | The house theme follows the desktop's theme, read again on a change; every shape a client names finds the file of its drawing; the shapes of the shell and the Sherlock cursor find theirs; the nearest size above; fallback on the user's theme and on the arrow; the turn of the waiting cursor and the time of its next image; the fade of a new shape; shake to find, held then back to rest; nothing asked at rest |
 | `sherlock-ui`, `cursor.rs` | The bounce curve; the contrast of body and outline |
+| `compositor`, `clicks.rs` | The ring grows and fades out in 460 ms; the pointer sinks then comes back |
+| `desktop-config`, `pointer.rs` | The clicks are not shown by default; the option is read, mistakes are refused with their line |
+| `compositor`, `tests/headless.rs` | The cursor follows the gesture (closed hand, Sherlock, four arrows); a click shown leaves a ring, then nothing is drawn |
 
 On the machine, in the real session, after `just install-session` and the printed commands:
 

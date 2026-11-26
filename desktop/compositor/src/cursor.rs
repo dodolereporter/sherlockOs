@@ -114,15 +114,32 @@ impl Source {
         }
     }
 
-    /// The file of `icon`, by its CSS name or one of its legacy names.
-    fn find(&self, icon: CursorIcon) -> Option<PathBuf> {
-        let mut names = std::iter::once(icon.name()).chain(icon.alt_names().iter().copied());
+    /// The file of `shape`, by its CSS name or one of its legacy names.
+    fn find(&self, shape: Shape) -> Option<PathBuf> {
+        let names: Vec<&str> = match shape {
+            Shape::Icon(icon) => std::iter::once(icon.name())
+                .chain(icon.alt_names().iter().copied())
+                .collect(),
+            Shape::Sherlock => vec![SHERLOCK],
+        };
+        let mut names = names.into_iter();
         match self {
             Self::House(dir) => names.map(|n| dir.join(n)).find(|p| p.is_file()),
             Self::System(theme) => names.find_map(|n| theme.load_icon(n)),
         }
     }
 }
+
+/// A shape the compositor shows: a CSS name of `wp_cursor_shape_v1`, or the Sherlock cursor,
+/// which no client names (Super + click, lot C-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Shape {
+    Icon(CursorIcon),
+    Sherlock,
+}
+
+/// The file of the Sherlock cursor in the house themes (`cursor_theme::SHAPES`).
+const SHERLOCK: &str = "sherlock";
 
 /// The house theme of the desktop's `theme`. At startup, it is the one the session names in
 /// `XCURSOR_THEME` for every program (`sherlockos-session`), read from the same appearance
@@ -293,9 +310,9 @@ pub struct Cursors {
     theme: Theme,
     source: Source,
     size: u32,
-    images: HashMap<(CursorIcon, u32), Option<Rc<Image>>>,
+    images: HashMap<(Shape, u32), Option<Rc<Image>>>,
     /// The shape shown, since when.
-    shown: Option<(CursorIcon, Duration)>,
+    shown: Option<(Shape, Duration)>,
     shake: Shake,
     /// The time the wake-up timer is set for, if one is.
     wake: Rc<Cell<Option<Duration>>>,
@@ -336,12 +353,12 @@ impl Cursors {
     }
 
     /// The images of `icon` for `target` pixels, the arrow's if the theme has none.
-    fn image(&mut self, icon: CursorIcon, target: u32) -> Option<Rc<Image>> {
+    fn image(&mut self, icon: Shape, target: u32) -> Option<Rc<Image>> {
         let source = &self.source;
         self.images
             .entry((icon, target))
             .or_insert_with(|| {
-                let image = [icon, CursorIcon::Default]
+                let image = [icon, Shape::Icon(CursorIcon::Default)]
                     .into_iter()
                     .find_map(|i| read(&source.find(i)?, target));
                 if image.is_none() {
@@ -353,7 +370,7 @@ impl Cursors {
     }
 
     /// The motion at `now` of `icon`, the pointer being at `x` (logical pixels).
-    fn look(&mut self, icon: CursorIcon, x: f64, now: Duration) -> Look {
+    fn look(&mut self, icon: Shape, x: f64, now: Duration) -> Look {
         if self.shown.is_none_or(|(shown, _)| shown != icon) {
             self.shown = Some((icon, now));
         }
@@ -381,14 +398,14 @@ impl Cursors {
     }
 
     /// The cursor `icon` with its tip at `at`, in frame pixels, on a screen at `scale`, at
-    /// `now`; and what it needs next. `None` if the theme has no image for it, not even the
-    /// arrow.
+    /// `now`, `press` times its size (it sinks at a click shown, lot C-01); and what it needs
+    /// next. `None` if the theme has no image for it, not even the arrow.
     pub fn element(
         &mut self,
         renderer: &mut GlesRenderer,
-        icon: CursorIcon,
+        icon: Shape,
         at: Point<f64, Physical>,
-        scale: f64,
+        (scale, press): (f64, f32),
         now: Duration,
     ) -> Option<(MemoryRenderBufferRenderElement<GlesRenderer>, Next)> {
         let look = self.look(icon, at.x / scale, now);
@@ -404,7 +421,8 @@ impl Cursors {
         let ratio = match grown {
             true => f64::from(base) * f64::from(look.shake) / f64::from(image.nominal),
             false => 1.0,
-        } * f64::from(look.change);
+        } * f64::from(look.change)
+            * f64::from(press);
         let size = frame.size.to_f64().upscale(ratio).to_i32_round();
         let element = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
@@ -524,7 +542,9 @@ mod tests {
         let dir = theme("names", &[24], 1);
         let source = Source::House(dir.clone());
         for icon in ICONS {
-            let path = source.find(icon).unwrap_or_else(|| panic!("{icon:?}"));
+            let path = source
+                .find(Shape::Icon(icon))
+                .unwrap_or_else(|| panic!("{icon:?}"));
             // The file reached through the link is the shape that lists this CSS name.
             let shape = cursor_theme::shape(icon.name()).unwrap_or_else(|| panic!("{icon:?}"));
             assert_eq!(
@@ -533,6 +553,28 @@ mod tests {
                 "{icon:?}"
             );
         }
+    }
+
+    /// The shapes the components of the shell ask for (lot UI-01), and the Sherlock cursor of
+    /// Super + click, show their drawings: the hand that points, the closed hand, the I-beam,
+    /// the forbidden sign.
+    #[test]
+    fn the_shapes_of_the_shell_find_their_drawings() {
+        let dir = theme("shell", &[24], 1);
+        let source = Source::House(dir.clone());
+        let drawing = |shape: Shape| {
+            let path = source.find(shape).unwrap_or_else(|| panic!("{shape:?}"));
+            let path = path.canonicalize().unwrap();
+            path.file_name().unwrap().to_string_lossy().into_owned()
+        };
+        assert_eq!(drawing(Shape::Icon(CursorIcon::Pointer)), "pointer");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::Grab)), "grabbing");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::Grabbing)), "grabbing");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::Text)), "text");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::NotAllowed)), "not-allowed");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::Move)), "move");
+        assert_eq!(drawing(Shape::Icon(CursorIcon::NwseResize)), "nwse-resize");
+        assert_eq!(drawing(Shape::Sherlock), "sherlock");
     }
 
     #[test]
@@ -547,7 +589,7 @@ mod tests {
 
         let dir = theme("sizes", &[24, 32, 48], 1);
         let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
-        let image = cursors.image(CursorIcon::Text, 30).unwrap();
+        let image = cursors.image(Shape::Icon(CursorIcon::Text), 30).unwrap();
         assert_eq!(image.nominal, 32);
         assert_eq!(image.frames[0].hotspot, (8.0, 0.0).into());
         assert_eq!(image.frames[0].size, (32, 32).into());
@@ -561,18 +603,18 @@ mod tests {
         let dir = theme("fallback", &[24], 1);
         std::fs::remove_file(dir.join("text")).unwrap();
         let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
-        assert!(cursors.image(CursorIcon::Text, 24).is_some());
+        assert!(cursors.image(Shape::Icon(CursorIcon::Text), 24).is_some());
         // Nothing at all: no cursor, rather than a wrong one.
         let empty = std::env::temp_dir().join(format!("cursor-empty-{}", std::process::id()));
         let mut none = Cursors::new(Theme::Dark, Source::House(empty), 24);
-        assert!(none.image(CursorIcon::Default, 24).is_none());
+        assert!(none.image(Shape::Icon(CursorIcon::Default), 24).is_none());
     }
 
     #[test]
     fn the_waiting_cursor_turns_at_the_pace_of_its_images() {
         let dir = theme("turn", &[24], 3);
         let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
-        let image = cursors.image(CursorIcon::Wait, 24).unwrap();
+        let image = cursors.image(Shape::Icon(CursorIcon::Wait), 24).unwrap();
         assert_eq!(image.turn, 120 * MS);
         let (frame, next) = image.frame(50 * MS).unwrap();
         assert_eq!(frame.hotspot.y, 1.0);
@@ -582,21 +624,25 @@ mod tests {
         // A still cursor needs nothing.
         let still = theme("still", &[24], 1);
         let mut cursors = Cursors::new(Theme::Dark, Source::House(still), 24);
-        let image = cursors.image(CursorIcon::Default, 24).unwrap();
+        let image = cursors.image(Shape::Icon(CursorIcon::Default), 24).unwrap();
         assert_eq!(image.frame(50 * MS).unwrap().1, Next::Rest);
     }
 
     #[test]
     fn a_new_shape_fades_in_then_rests() {
         let mut cursors = Cursors::new(Theme::Dark, Source::House(PathBuf::new()), 24);
-        let first = cursors.look(CursorIcon::Default, 0.0, Duration::ZERO);
+        let first = cursors.look(Shape::Icon(CursorIcon::Default), 0.0, Duration::ZERO);
         assert!((first.change - SHAPE_FROM_SCALE).abs() < 1e-3);
         assert!((first.alpha - SHAPE_FROM_OPACITY).abs() < 1e-3);
         assert_eq!(first.next, Next::Frame);
-        let rest = cursors.look(CursorIcon::Default, 0.0, SHAPE_CHANGE);
+        let rest = cursors.look(Shape::Icon(CursorIcon::Default), 0.0, SHAPE_CHANGE);
         assert_eq!((rest.change, rest.alpha, rest.next), (1.0, 1.0, Next::Rest));
         // Another shape: another fade.
-        let pointer = cursors.look(CursorIcon::Pointer, 0.0, SHAPE_CHANGE + 10 * MS);
+        let pointer = cursors.look(
+            Shape::Icon(CursorIcon::Pointer),
+            0.0,
+            SHAPE_CHANGE + 10 * MS,
+        );
         assert_eq!(pointer.next, Next::Frame);
     }
 
@@ -635,7 +681,11 @@ mod tests {
         assert_eq!(house_theme(Theme::Light), cursor_theme::LIGHT_THEME);
         let dir = theme("follow", &[24], 1);
         let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
-        assert!(cursors.image(CursorIcon::Default, 24).is_some());
+        assert!(
+            cursors
+                .image(Shape::Icon(CursorIcon::Default), 24)
+                .is_some()
+        );
         // The same theme: the images read stay.
         cursors.follow(Theme::Dark);
         assert_eq!(cursors.images.len(), 1);

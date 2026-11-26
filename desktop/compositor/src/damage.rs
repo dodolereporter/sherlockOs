@@ -52,6 +52,8 @@ pub enum Part {
     /// The area of a screenshot being chosen, and the dim over its screen (lot D-35c).
     CaptureArea,
     CaptureDim,
+    /// The ring of a click shown (lot C-01), by its number.
+    Click(u64),
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

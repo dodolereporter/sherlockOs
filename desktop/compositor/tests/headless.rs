@@ -48,7 +48,7 @@ mod tests {
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_popup::{self, XdgPopup},
-        xdg_positioner::XdgPositioner,
+        xdg_positioner::{self, XdgPositioner},
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
@@ -359,6 +359,7 @@ mod tests {
     const KEY_LEFT: u32 = 113;
     const KEY_DOWN: u32 = 116;
     const KEY_SHIFT: u32 = 50;
+    const KEY_SPACE: u32 = 65;
 
     /// Window shown by `Harness::show_window`: 100 × 80, centered at (350, 260) in the 800 × 600
     /// screen. The buffer file lives as long as it does.
@@ -696,7 +697,8 @@ mod tests {
 
         toplevel._move(&seat, serial);
         h.run_until("the gesture start", |_, s| s.gesture_active());
-        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Move));
+        // Held by its title bar: the closed hand (lot C-01).
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
         h.state.pointer_motion((410.0, 300.0).into(), 3);
         assert_eq!(
             location(&h.state),
@@ -1975,6 +1977,261 @@ mod tests {
             .pointer_motion((corner.0 - 400.0, corner.1 - 400.0).into(), 9);
         h.wait_size("the minimum", 96, 64);
         h.release();
+    }
+
+    /// The cursor during the gestures (lot C-01): the closed hand on a title bar, the Sherlock
+    /// cursor while the gesture key and the button are held without moving, the four arrows
+    /// once the window moves with the gesture key.
+    #[test]
+    fn the_cursor_follows_the_gesture() {
+        use compositor::cursor::Shape;
+        let mut h = Harness::start();
+        let (_shown, _decoration) = h.show_decorated();
+        h.state.pointer_motion((300.0, 150.0).into(), 1);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Default));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_motion((310.0, 160.0).into(), 3);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+        h.release();
+        // Gesture key and press on the window: Sherlock's cursor until it moves.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 4);
+        h.state.pointer_motion((400.0, 300.0).into(), 5);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+        assert_eq!(h.state.cursor_shape(), Some(Shape::Sherlock));
+        h.state.pointer_motion((401.0, 301.0).into(), 7);
+        assert_eq!(
+            h.state.cursor_shape(),
+            Some(Shape::Sherlock),
+            "a click, not a drag"
+        );
+        h.state.pointer_motion((450.0, 320.0).into(), 8);
+        assert_eq!(h.state.cursor_shape(), Some(Shape::Icon(CursorIcon::Move)));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 9);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 10);
+        assert_eq!(
+            h.state.cursor_shape(),
+            Some(Shape::Icon(CursorIcon::Default))
+        );
+    }
+
+    /// Show the clicks (lot C-01): off by default; on, a ring leaves each press for 460 ms and
+    /// the pointer sinks, then nothing is drawn any more.
+    #[test]
+    fn a_click_shown_leaves_a_ring() {
+        let mut h = Harness::start();
+        // The window appears at once: only the ring animates.
+        h.state.set_window_animations(false);
+        let _shown = h.show_window();
+        settle(&mut h);
+        assert!(!h.state.show_clicks());
+        h.click(100.0, 100.0, 1);
+        assert!(
+            !animating(&h, h.state.now()),
+            "nothing while the option is off"
+        );
+        h.state.set_show_clicks(true);
+        h.click(100.0, 100.0, 2);
+        let now = h.state.now();
+        assert!(animating(&h, now), "the ring grows");
+        let rings = |at: Duration| {
+            let output = h.state.space.outputs().next().unwrap().clone();
+            let view = h.state.views()[0].1;
+            let items = compositor::render::items(&h.state, (&output, &view), None, false, at).0;
+            items
+                .iter()
+                .filter(|i| {
+                    matches!(i, compositor::render::Item::Shape { key, .. }
+                    if matches!(key.part, compositor::damage::Part::Click(_)))
+                })
+                .count()
+        };
+        assert_eq!(rings(now), 1);
+        let (press, sinking) = h.state.click_sink(now + Duration::from_millis(54));
+        assert!(sinking && (press - 0.86).abs() < 1e-3);
+        assert_eq!(rings(now + Duration::from_millis(470)), 0);
+        std::thread::sleep(Duration::from_millis(470));
+        h.state.refresh();
+        assert!(!animating(&h, h.state.now()));
+    }
+
+    /// A menu of a window appears with a short fade, without moving (lot C-01).
+    #[test]
+    fn a_menu_of_a_window_appears_with_a_fade() {
+        let mut h = Harness::start();
+        // The window itself appears at once: only the menu fades.
+        h.state.set_window_animations(false);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals.iter().any(|g| g.1 == "wl_shm")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let buffer = |w: i32, ht: i32| {
+            let file = shm_file((w * ht * 4) as u64);
+            let pool = shm.create_pool(file.as_fd(), w * ht * 4, &qh, ());
+            (
+                pool.create_buffer(0, w, ht, w * 4, Format::Argb8888, &qh, ()),
+                file,
+            )
+        };
+        let surface = compositor.create_surface(&qh, ());
+        let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+        let _toplevel = xdg_surface.get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("the first configure", |c, _| !c.configures.is_empty());
+        let (window_buffer, _window_file) = buffer(100, 80);
+        surface.attach(Some(&window_buffer), 0, 0);
+        surface.commit();
+        h.run_until("the placement", |_, s| {
+            location(s) == Some((350, 260).into())
+        });
+
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(60, 40);
+        positioner.set_anchor_rect(10, 10, 1, 1);
+        let menu = compositor.create_surface(&qh, ());
+        let _popup = wm_base.get_xdg_surface(&menu, &qh, ()).get_popup(
+            Some(&xdg_surface),
+            &positioner,
+            &qh,
+            (),
+        );
+        menu.commit();
+        settle(&mut h);
+        let (menu_buffer, _menu_file) = buffer(60, 40);
+        menu.attach(Some(&menu_buffer), 0, 0);
+        menu.commit();
+        settle(&mut h);
+        let alpha = |h: &Harness| {
+            let output = h.state.space.outputs().next().unwrap().clone();
+            let view = h.state.views()[0].1;
+            let now = h.state.now();
+            let (items, animating) =
+                compositor::render::items(&h.state, (&output, &view), None, false, now);
+            let alpha = items.iter().find_map(|item| match item {
+                compositor::render::Item::Surface { surface, alpha, .. }
+                    if surface.id().protocol_id() == menu.id().protocol_id() =>
+                {
+                    Some(*alpha)
+                }
+                _ => None,
+            });
+            (alpha.expect("the menu is drawn"), animating)
+        };
+        let (first, animating) = alpha(&h);
+        assert!(first < 1.0, "it fades in: {first}");
+        assert!(animating);
+        std::thread::sleep(sherlock_ui::motion::MENU_FADE);
+        let (shown, animating) = alpha(&h);
+        assert_eq!(shown, 1.0);
+        assert!(!animating);
+    }
+
+    /// With the gesture key, a press on an open panel of the bar stays with the panel: only
+    /// the bar itself lets it through to the window below (review of C-01a).
+    #[test]
+    fn the_gesture_key_does_not_go_through_a_panel_of_the_bar() {
+        let mut h = Harness::start();
+        let (_shown, _decoration) = h.show_decorated();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        // A panel of 200 × 150 below the bar, from 473 to 673 and 46 to 196: over the window.
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(560, 0, 2, 36);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        settle(&mut h);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let before = h.state.space.element_geometry(&window);
+        // Gesture key + drag on the panel: the window under it does not move.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 1);
+        h.state.pointer_motion((580.0, 150.0).into(), 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+        assert!(!h.state.gesture_active(), "the panel keeps the press");
+        h.state.pointer_motion((500.0, 300.0).into(), 4);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 5);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 6);
+        assert_eq!(h.state.space.element_geometry(&window), before);
+        drop(file);
+    }
+
+    /// A window whose client took its content away is not drawn: it takes no click either
+    /// (review of C-01a: an X11 window before its first buffer).
+    #[test]
+    fn a_window_without_content_takes_no_click() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        shown.surface.attach(None, 0, 0);
+        shown.surface.commit();
+        settle(&mut h);
+        h.client.button_serial = None;
+        h.state.pointer_motion((400.0, 300.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.release();
+        settle(&mut h);
+        assert_eq!(h.client.button_serial, None, "the click reaches nothing");
+        assert!(!h.state.gesture_active());
+    }
+
+    /// The gesture key and Space start the launcher, again to close it (a second launcher
+    /// closes the first), and do not open Mission Control when the gesture key is released
+    /// (lot C-01).
+    #[test]
+    fn the_gesture_key_and_space_start_the_launcher() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut h = Harness::start();
+        let dir = std::env::temp_dir().join(format!("launcher-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("started");
+        let program = dir.join("launcher");
+        let script = format!("#!/bin/sh\necho started >> '{}'\n", marker.display());
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        h.state.set_launcher_program(program);
+        let started = |n: usize| {
+            for _ in 0..500 {
+                let lines = std::fs::read_to_string(&marker).map_or(0, |t| t.lines().count());
+                if lines >= n {
+                    return lines;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            0
+        };
+        h.shortcut(KEY_SPACE);
+        assert_eq!(started(1), 1, "the launcher is started");
+        assert!(!h.state.overview_open(), "the gesture key was not alone");
+        h.shortcut(KEY_SPACE);
+        assert_eq!(started(2), 2, "started again, it closes the open one");
+        // Space alone goes to the client.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SPACE), KeyState::Pressed, 9);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SPACE), KeyState::Released, 10);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(started(2), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

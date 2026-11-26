@@ -111,6 +111,8 @@ impl State {
     /// `window` goes away: its client destroyed it, or unmapped it (X11). Keeps its last image
     /// and starts its closing, if it is shown and animated. Call it before unmapping it.
     pub(crate) fn start_closing(&mut self, window: &Window) {
+        // Its buttons stop moving, and the pointer forgets them (lot C-01).
+        self.forget_decoration(window);
         let animated = !self.window_anims.off
             && !is_override_redirect(window)
             && crate::window_data(window).shown.get()

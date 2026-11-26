@@ -82,6 +82,12 @@ impl CompositorHandler for State {
             }
             if let Some(window) = self.window_for(&root) {
                 window.on_commit();
+                // An X11 window shown before its first buffer takes the keyboard with it.
+                let data = window_data(&window);
+                if data.focus_on_content.get() && crate::has_buffer(&window) {
+                    data.focus_on_content.set(false);
+                    self.focus(Some(window.clone()));
+                }
                 if &root == surface {
                     self.toplevel_commit(window);
                 }
