@@ -1150,7 +1150,10 @@ mod tests {
     #[test]
     fn the_sound_server_gets_one_call_at_a_time_the_latest_winning() {
         let mut queue = SoundQueue::default();
-        assert_eq!(queue.push(SoundCall::Volume(10)), Some(SoundCall::Volume(10)));
+        assert_eq!(
+            queue.push(SoundCall::Volume(10)),
+            Some(SoundCall::Volume(10))
+        );
         assert_eq!(queue.push(SoundCall::Volume(20)), None);
         assert_eq!(queue.push(SoundCall::Mute(true)), None);
         assert_eq!(queue.push(SoundCall::Volume(30)), None);
@@ -1158,7 +1161,10 @@ mod tests {
         assert_eq!(queue.push(SoundCall::Volume(40)), None);
         assert_eq!(queue.done(), Some(SoundCall::Volume(40)));
         assert_eq!(queue.done(), None);
-        assert_eq!(queue.push(SoundCall::Mute(false)), Some(SoundCall::Mute(false)));
+        assert_eq!(
+            queue.push(SoundCall::Mute(false)),
+            Some(SoundCall::Mute(false))
+        );
     }
 
     /// A session that records the commands it is given.

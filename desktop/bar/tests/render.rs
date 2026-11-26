@@ -385,7 +385,7 @@ fn the_panels_render_in_both_themes() {
             if let Load::Ready(wifi) = &mut state.quick.wifi {
                 wifi.networks.push(other);
             }
-            state.quick.password = String::from("secret");
+            state.quick.password = quick::Secret::new(String::from("secret"));
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("wifi-networks{suffix}")));
         });

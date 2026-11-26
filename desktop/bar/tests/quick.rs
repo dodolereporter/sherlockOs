@@ -711,7 +711,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("pactl");
         std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
-        let chmod = Command::new("chmod").arg("+x").arg(&script).status().unwrap();
+        let chmod = Command::new("chmod")
+            .arg("+x")
+            .arg(&script)
+            .status()
+            .unwrap();
         assert!(chmod.success());
         let pactl = Pactl {
             program: script.into_os_string(),
