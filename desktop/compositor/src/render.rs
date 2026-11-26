@@ -42,7 +42,7 @@ use crate::{
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
-    genie, is_override_redirect,
+    genie, is_override_redirect, mission_control,
     output::View,
     wallpaper, window_data,
 };
@@ -69,6 +69,8 @@ pub struct Scene {
     genie: genie::Painter,
     /// Textures of the title bars the compositor draws (lot D-08).
     bars: RefCell<decorations::Textures>,
+    /// Textures of the titles of Mission Control (lot D-33).
+    labels: RefCell<mission_control::Labels>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -123,6 +125,13 @@ pub enum Item {
         look: Look,
         alpha: f32,
     },
+    /// A title of Mission Control in `rect` (lot D-33).
+    Label {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        label: mission_control::Label,
+        alpha: f32,
+    },
 }
 
 impl Item {
@@ -150,6 +159,7 @@ impl Item {
             }
             Item::Genie(frame) => frame.params(),
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -190,6 +200,7 @@ impl Scene {
             clip,
             genie: genie::Painter::new(renderer)?,
             bars: RefCell::default(),
+            labels: RefCell::default(),
         })
     }
 
@@ -227,6 +238,7 @@ impl Scene {
         ids.sweep();
         self.genie.sweep();
         self.bars.borrow_mut().sweep();
+        self.labels.borrow_mut().sweep();
         let used: Vec<_> = state
             .views()
             .iter()
@@ -376,6 +388,19 @@ impl Scene {
                     .into_iter()
                     .collect()
             }
+            Item::Label {
+                key,
+                rect,
+                label,
+                alpha,
+            } => {
+                let mut labels = self.labels.borrow_mut();
+                let label = labels.element(renderer, key.clone(), &label, rect, alpha);
+                label
+                    .map(|label| SceneElement::Decoration(ids.stamp(key, params, label)))
+                    .into_iter()
+                    .collect()
+            }
         }
     }
 }
@@ -410,7 +435,10 @@ pub fn items(
         });
     }
     animating |= state.workspaces_sliding(now);
-    for window in state.space.elements().rev() {
+    // Mission Control draws the windows of its own (lot D-33).
+    let overview = mission_control::push_items(&mut items, state, (output, view), now);
+    animating |= overview.unwrap_or(false);
+    for window in state.space.elements().rev().filter(|_| overview.is_none()) {
         // Minimized, or on a workspace out of view.
         let Some(shift) = state.workspace_shift(window, now) else {
             continue;

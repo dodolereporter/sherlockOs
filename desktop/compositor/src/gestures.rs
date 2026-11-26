@@ -2,10 +2,11 @@
 //!
 //! Gestures of three fingers or more belong to the compositor. Three fingers left or right move
 //! the row of workspaces with the fingers, then let it go with their velocity on the spring of
-//! the workspace slide (`anim::WorkspaceSlide`); up is the overview, reserved; down is the
-//! setting `swipe-down`. Four fingers and more, and pinches of three fingers or more, are
-//! reserved: taken, without effect. Gestures of fewer fingers go to the client under the
-//! pointer, through `zwp_pointer_gestures_v1`: pinch to zoom, holds.
+//! the workspace slide (`anim::WorkspaceSlide`); up opens Mission Control and down closes it;
+//! down on the desktop is the setting `swipe-down`, nothing by default. Four fingers and more,
+//! and pinches of three fingers or more, are reserved: taken, without effect. Gestures of fewer
+//! fingers go to the client under the pointer, through `zwp_pointer_gestures_v1`: pinch to
+//! zoom, holds.
 
 use std::collections::VecDeque;
 
@@ -313,10 +314,9 @@ impl State {
             Some(Direction::Horizontal) => {
                 self.release_workspaces(swipe.landing(time), swipe.velocity(time));
             }
-            Some(Direction::Up) if done => {
-                // Reserved for the overview (Mission Control), a lot of its own.
-                tracing::info!("three finger swipe up: the overview is not there yet");
-            }
+            // Mission Control (lot D-33).
+            Some(Direction::Up) if done => self.open_overview(),
+            Some(Direction::Down) if done && self.overview_open() => self.close_overview(),
             Some(Direction::Down)
                 if done && self.touchpad.config().swipe_down == SwipeDown::Minimize =>
             {

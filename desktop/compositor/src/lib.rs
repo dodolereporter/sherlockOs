@@ -18,6 +18,7 @@ pub mod keyboard;
 mod layer;
 pub mod layout;
 pub mod mesa;
+pub mod mission_control;
 pub mod options;
 pub mod output;
 pub mod pacing;
@@ -199,6 +200,8 @@ pub struct State {
     pub perf: perf::LoopStats,
     /// Server-side decorations: their protocols, the pointer on them (lot D-08).
     decorations: decorations::Decorations,
+    /// Mission Control (lot D-33).
+    overview: mission_control::Overview,
 }
 
 /// Data attached to each window.
@@ -313,6 +316,7 @@ impl State {
             shell_epoch: None,
             perf: perf::LoopStats::default(),
             decorations: decorations::Decorations::new(&dh),
+            overview: mission_control::Overview::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -474,11 +478,12 @@ impl State {
     }
 
     /// Gives the keyboard to `target`, unless an anchored surface with an exclusive keyboard
-    /// keeps it.
+    /// keeps it. While Mission Control is open, no window has it.
     pub(crate) fn set_keyboard_focus(&mut self, target: Option<KeyboardFocus>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        let target = target.filter(|_| !self.overview.is_open());
         let target = self
             .exclusive_layer()
             .map(KeyboardFocus::Wayland)

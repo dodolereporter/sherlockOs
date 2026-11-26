@@ -463,6 +463,22 @@ mod tests {
             (rect(300, 271, 200, 100), rect(300, 271, 200, 100))
         );
 
+        // Mission Control (lot D-33): the X11 window is in the grid, its menu is not; a click
+        // on it gives it the keyboard back and closes the view.
+        h.state.open_overview();
+        assert!(h.state.focused_window().is_none());
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let tiles = h.state.overview_tiles(&output, None);
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0].window, window);
+        let slot = tiles[0].slot;
+        let center = slot.loc + slot.size.downscale(2.0).to_point();
+        h.motion(center.x, center.y);
+        h.button(ButtonState::Pressed);
+        h.button(ButtonState::Released);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.state.focused_window().as_ref(), Some(&window));
+
         // Grab band: the bottom right corner follows the pointer, the top left corner stays.
         h.run_until("the window content", |s| {
             s.window_visual(&window, Duration::ZERO).is_some()

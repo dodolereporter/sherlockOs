@@ -704,6 +704,9 @@ mod tests {
             Item::Genie(frame) => paint(ids, frame.key, frame.area, frame.alpha),
             Item::Decoration {
                 key, rect, alpha, ..
+            }
+            | Item::Label {
+                key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
         }
     }
