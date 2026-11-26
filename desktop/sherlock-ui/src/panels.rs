@@ -81,7 +81,7 @@ pub const CALENDAR_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
 /// Quick settings: a tile of the grid (height, radius, gap, side padding, glyph, gap between
 /// the glyph and its texts), the chevron of the Wi-Fi tile.
 pub const TILE_HEIGHT: f32 = 56.0;
-pub const TILE_RADIUS: f32 = 14.0;
+pub const QUICK_TILE_RADIUS: f32 = 14.0;
 pub const TILE_GAP: f32 = 8.0;
 pub const TILE_PADDING: f32 = 12.0;
 pub const GLYPH: f32 = 18.0;
@@ -529,7 +529,7 @@ mod styles {
             };
             container::Style {
                 background: fill(back),
-                border: border::rounded(TILE_RADIUS),
+                border: border::rounded(QUICK_TILE_RADIUS),
                 ..container::Style::default()
             }
         }
@@ -548,7 +548,7 @@ mod styles {
             };
             button::Style {
                 background: veil.and_then(fill),
-                border: border::rounded(TILE_RADIUS),
+                border: border::rounded(QUICK_TILE_RADIUS),
                 ..button::Style::default()
             }
         }
@@ -557,7 +557,7 @@ mod styles {
     /// A tile of the grid: its glyph, its title and the line under it. `on_press` switches it;
     /// without it the tile is faded and does nothing. `more`: a chevron on its right, with its
     /// label, which opens a page of its own.
-    pub fn tile<'a, Message: Clone + 'a>(
+    pub fn quick_tile<'a, Message: Clone + 'a>(
         glyph_of: Glyph,
         title: &'a str,
         line: String,
@@ -587,7 +587,7 @@ mod styles {
             .spacing(TILE_ICON_GAP)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);
-        let mut main = Control::new(content, tile_press(on), on_press, TILE_RADIUS);
+        let mut main = Control::new(content, tile_press(on), on_press, QUICK_TILE_RADIUS);
         main.button = main
             .button
             .width(Length::Fill)
@@ -595,13 +595,10 @@ mod styles {
             .padding([0.0, TILE_PADDING]);
         let mut line = iced::widget::Row::new().push(main);
         if let Some((label, message)) = more {
-            let chevron = crate::component::icon(
-                crate::icon::Icon::Chevron,
-                metrics::ICON_SIZE,
-                ink,
-            );
+            let chevron =
+                crate::component::icon(crate::icon::Icon::Chevron, metrics::ICON_SIZE, ink);
             let chevron = container(chevron).center(Length::Fill);
-            let mut open = Control::new(chevron, tile_press(on), Some(message), TILE_RADIUS);
+            let mut open = Control::new(chevron, tile_press(on), Some(message), QUICK_TILE_RADIUS);
             open.button = open.button.width(CHEVRON).height(TILE_HEIGHT).padding(0);
             open.label = Some(label);
             line = line.push(open);

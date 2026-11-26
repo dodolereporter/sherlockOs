@@ -256,7 +256,10 @@ impl Quick {
             ),
             Service::Sound => {
                 let pactl = self.pactl.clone();
-                blocking(move || pactl.read(), |r| Message::Sound(Load::from_result(r)))
+                blocking(
+                    move || pactl.read(),
+                    |r| Message::Sound(Load::from_result(r)),
+                )
             }
             Service::Brightness => {
                 let root = self.sysfs.clone();
@@ -661,7 +664,7 @@ impl Quick {
         };
         let line = self.failed(Service::Wifi).map_or(line, str::to_owned);
         let more = (enabled && on).then_some((words::NETWORKS, Message::ShowNetworks(true)));
-        panels::tile(
+        panels::quick_tile(
             Glyph::Wifi,
             words::WIFI,
             line,
@@ -676,13 +679,11 @@ impl Quick {
             Load::Loading => (false, words::LOADING.to_owned(), false),
             Load::Failed(_) => (false, words::UNAVAILABLE.to_owned(), false),
             Load::Ready(read) if !read.powered => (false, words::OFF.to_owned(), true),
-            Load::Ready(read) if read.connected > 0 => {
-                (true, words::devices(read.connected), true)
-            }
+            Load::Ready(read) if read.connected > 0 => (true, words::devices(read.connected), true),
             Load::Ready(_) => (true, words::ON.to_owned(), true),
         };
         let line = self.failed(Service::Bluetooth).map_or(line, str::to_owned);
-        panels::tile(
+        panels::quick_tile(
             Glyph::Bluetooth,
             words::BLUETOOTH,
             line,
@@ -700,7 +701,7 @@ impl Quick {
             None => words::OFF,
         };
         let enabled = self.settings.is_some();
-        panels::tile(
+        panels::quick_tile(
             Glyph::Moon,
             words::DO_NOT_DISTURB,
             line.to_owned(),
@@ -821,9 +822,14 @@ impl Quick {
             .font(typography::TITLE)
             .size(panels::TITLE_SIZE);
         let switch: Option<fn(bool) -> Message> = wifi.map(|_| switch_wifi as fn(bool) -> _);
-        let head = row![back, title, space::horizontal(), ui::toggle(enabled, switch)]
-            .spacing(metrics::GAP_ICON)
-            .align_y(Alignment::Center);
+        let head = row![
+            back,
+            title,
+            space::horizontal(),
+            ui::toggle(enabled, switch)
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(Alignment::Center);
         let body: Element<'_, Message> = match wifi {
             Some(wifi) if wifi.enabled && !wifi.networks.is_empty() => {
                 let rows = wifi.networks.iter().map(|n| self.network_row(n));
@@ -893,7 +899,7 @@ fn switch_wifi(_: bool) -> Message {
 
 /// The tile of the game mode: there is no game mode yet.
 fn game_tile<'a>() -> Element<'a, Message> {
-    panels::tile(
+    panels::quick_tile(
         Glyph::Gamepad,
         words::GAME_MODE,
         words::SOON.to_owned(),
@@ -910,11 +916,7 @@ fn group<'a>(
     note: Option<&'a str>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let small = |s: &'a str| {
-        text(s)
-            .font(typography::UI)
-            .size(typography::SMALL_SIZE)
-    };
+    let small = |s: &'a str| text(s).font(typography::UI).size(typography::SMALL_SIZE);
     let mut head = row![small(label).style(panels::secondary_text)];
     if let Some(note) = note {
         head = head

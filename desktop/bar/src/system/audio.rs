@@ -51,8 +51,8 @@ impl Pactl {
     pub fn read(&self) -> Result<Output> {
         let volume = self.run(&["get-sink-volume", "@DEFAULT_SINK@"])?;
         let mute = self.run(&["get-sink-mute", "@DEFAULT_SINK@"])?;
-        let sound = sound::parse(&format!("{volume}{mute}"))
-            .map_err(|e| Problem::Failed(e.to_string()))?;
+        let sound =
+            sound::parse(&format!("{volume}{mute}")).map_err(|e| Problem::Failed(e.to_string()))?;
         let default = self.run(&["get-default-sink"])?;
         let sinks = self.run(&["list", "sinks"])?;
         Ok(Output {

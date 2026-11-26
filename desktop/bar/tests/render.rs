@@ -10,17 +10,17 @@ use bar::history::{Entry, Group};
 use bar::menu;
 use bar::panel::{self, History, Panel};
 use bar::quick::{self, Load};
+use bar::source::battery::{Battery, Charge};
+use bar::source::clock::LocalTime;
+use bar::source::network::{Link, Network};
+use bar::source::sound::Sound;
+use bar::source::workspaces::Desktop;
 use bar::system::Problem;
 use bar::system::audio::Output;
 use bar::system::backlight::Backlight;
 use bar::system::bluetooth::Bluetooth;
 use bar::system::network::{Network, Security, Wifi};
 use bar::system::power::{Power, Profile};
-use bar::source::battery::{Battery, Charge};
-use bar::source::clock::LocalTime;
-use bar::source::network::{Link, Network};
-use bar::source::sound::Sound;
-use bar::source::workspaces::Desktop;
 use iced_test::simulator::Simulator;
 use sherlock_ui::color::{self, Theme};
 use sherlock_ui::{metrics, theme};
@@ -468,8 +468,21 @@ fn the_quick_settings_answer_their_clicks() {
     board_quick(&mut state);
     let size = panel_size(&state, Panel::Control);
     let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-    for text in ["Wi-Fi", "Maison", "Bluetooth", "Désactivé", "Mode jeu", "Bientôt", "Haut-parleurs intégrés", "Équilibré", "Dodo"] {
-        assert!(ui.find(text).is_ok(), "{text} missing from the quick settings");
+    for text in [
+        "Wi-Fi",
+        "Maison",
+        "Bluetooth",
+        "Désactivé",
+        "Mode jeu",
+        "Bientôt",
+        "Haut-parleurs intégrés",
+        "Équilibré",
+        "Dodo",
+    ] {
+        assert!(
+            ui.find(text).is_ok(),
+            "{text} missing from the quick settings"
+        );
     }
     ui.click("Bluetooth").expect("tile found");
     ui.click("Économie").expect("profile found");

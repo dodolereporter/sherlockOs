@@ -35,8 +35,7 @@ mod tests {
 
     impl Bus {
         fn start(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("bar-quick-{name}-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("bar-quick-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             let config = dir.join("bus.conf");
@@ -640,7 +639,11 @@ mod tests {
             f = fixtures.display(),
         );
         std::fs::write(&script, body).unwrap();
-        let chmod = Command::new("chmod").arg("+x").arg(&script).status().unwrap();
+        let chmod = Command::new("chmod")
+            .arg("+x")
+            .arg(&script)
+            .status()
+            .unwrap();
         assert!(chmod.success());
         (
             Pactl {
@@ -662,7 +665,10 @@ mod tests {
         pactl.set_volume(62).unwrap();
         pactl.set_mute(true).unwrap();
         let calls = std::fs::read_to_string(&log).unwrap();
-        assert!(calls.contains("set-sink-volume @DEFAULT_SINK@ 62%"), "{calls}");
+        assert!(
+            calls.contains("set-sink-volume @DEFAULT_SINK@ 62%"),
+            "{calls}"
+        );
         assert!(calls.contains("set-sink-mute @DEFAULT_SINK@ 1"), "{calls}");
         // A refusal of the sound server, and no `pactl` at all.
         assert!(matches!(pactl.set_volume(99), Err(Problem::Failed(_))));

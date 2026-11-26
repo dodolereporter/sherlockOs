@@ -159,7 +159,15 @@ pub fn security(flags: u32, wpa: u32, rsn: u32) -> Security {
 
 /// Switches the Wi-Fi on or off (polkit: `org.freedesktop.NetworkManager.enable-disable-wifi`).
 pub async fn enable(bus: &Connection, on: bool) -> Result<()> {
-    set(bus, SERVICE, PATH, MANAGER, "WirelessEnabled", Value::from(on)).await
+    set(
+        bus,
+        SERVICE,
+        PATH,
+        MANAGER,
+        "WirelessEnabled",
+        Value::from(on),
+    )
+    .await
 }
 
 /// Asks the device for a new scan; the networks change afterwards.
