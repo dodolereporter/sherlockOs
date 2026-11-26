@@ -44,7 +44,7 @@ use crate::{
     decorations::{self, Bar, Look},
     genie, is_override_redirect, mission_control,
     output::View,
-    wallpaper, window_data,
+    wallpaper, window_anim, window_data,
 };
 
 /// No fill: only the border of a shape is drawn.
@@ -138,6 +138,13 @@ pub enum Item {
     Thumbnail {
         rect: Rectangle<i32, Physical>,
         radius: f32,
+    },
+    /// The last image of a window that closes, stretched into `rect` (lot D-34).
+    Snapshot {
+        key: Key,
+        texture: GlesTexture,
+        rect: Rectangle<i32, Physical>,
+        alpha: f32,
     },
 }
 
@@ -256,7 +263,7 @@ impl Scene {
     }
 
     /// The render elements of one item.
-    fn elements(
+    pub(crate) fn elements(
         &self,
         renderer: &mut GlesRenderer,
         ids: &mut Ids,
@@ -424,6 +431,15 @@ impl Scene {
                 })
                 .into_iter()
                 .collect(),
+            Item::Snapshot {
+                key,
+                texture,
+                rect,
+                alpha,
+            } => {
+                let element = window_anim::element(renderer, texture, rect, alpha);
+                vec![SceneElement::Decoration(ids.stamp(key, params, element))]
+            }
         }
     }
 }
@@ -461,6 +477,8 @@ pub fn items(
     // Mission Control draws the windows of its own (lot D-33).
     let overview = mission_control::push_items(&mut items, state, (output, view), now);
     animating |= overview.unwrap_or(false);
+    // Windows closing (lot D-34): their last image, in front of the others.
+    animating |= window_anim::push_closing(&mut items, state, (output, view), now);
     for window in state.space.elements().rev().filter(|_| overview.is_none()) {
         // Minimized, or on a workspace out of view.
         let Some(shift) = state.workspace_shift(window, now) else {

@@ -451,7 +451,11 @@ fn push_genie(
 }
 
 /// The view of a texture of `size` pixels showing `area` of the space at `scale`.
-fn offscreen(area: Rectangle<i32, Logical>, size: Size<i32, Physical>, scale: f64) -> View {
+pub(crate) fn offscreen(
+    area: Rectangle<i32, Logical>,
+    size: Size<i32, Physical>,
+    scale: f64,
+) -> View {
     View {
         area,
         frame: Rectangle::from_size(size),

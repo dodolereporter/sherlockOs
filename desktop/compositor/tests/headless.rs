@@ -1807,6 +1807,209 @@ mod tests {
         h.run_until("the press on the window", |c, _| c.button_serial.is_some());
     }
 
+    /// Whether the screen animates at `at`: a frame is due at the next blank.
+    fn animating(h: &Harness, at: Duration) -> bool {
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let view = h.state.views()[0].1;
+        compositor::render::items(&h.state, (&output, &view), None, false, at).1
+    }
+
+    /// Opening and closing (lot D-34). A window closes while another one is under it: its last
+    /// image shrinks and fades for 150 ms, out of reach, then it is forgotten.
+    #[test]
+    fn a_closing_window_takes_no_click_and_is_freed_at_the_end() {
+        let mut h = Harness::start();
+        // Both windows appear at once: only the closing animates below.
+        h.state.set_window_animations(false);
+        let _below = h.show_window();
+        let above = h.show_window();
+        let centered = |s: &State| {
+            let at = |w| s.space.element_location(w) == Some((350, 260).into());
+            s.space.elements().filter(|w| at(w)).count() == 2
+        };
+        h.run_until("both windows", |_, s| centered(s));
+        assert!(!animating(&h, h.state.now()));
+        h.state.set_window_animations(true);
+        assert!(h.state.window_animations());
+
+        above.toplevel.destroy();
+        h.run_until("the window gone", |_, s| s.space.elements().count() == 1);
+        // No renderer here: the closing runs without a texture.
+        assert_eq!(h.state.closing_windows(), (1, 0));
+        let now = h.state.now();
+        assert!(animating(&h, now), "a frame at each blank while it closes");
+        // The click at its place reaches the window below.
+        h.press(400.0, 300.0);
+        h.release();
+        // Over: no frame any more, and nothing is kept.
+        assert!(!animating(&h, now + Duration::from_millis(160)));
+        std::thread::sleep(Duration::from_millis(160));
+        h.state.refresh();
+        assert_eq!(h.state.closing_windows(), (0, 0));
+    }
+
+    #[test]
+    fn a_fullscreen_window_opens_and_closes_at_once() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        shown.toplevel.set_fullscreen(None);
+        h.wait_size("fullscreen", 800, 600);
+        let _file = h.redraw(&shown, 800, 600);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let first = h.state.window_visual(&window, h.state.now()).unwrap();
+        assert_eq!(first.opacity, 1.0);
+        assert_eq!(first.rect, rect(0, 0, 800, 600).to_f64());
+        shown.toplevel.destroy();
+        h.run_until("the window gone", |_, s| s.space.elements().count() == 0);
+        assert_eq!(h.state.closing_windows(), (0, 0));
+    }
+
+    #[test]
+    fn with_window_animations_off_windows_open_and_close_at_once() {
+        let mut h = Harness::start();
+        h.state.set_window_animations(false);
+        assert!(!h.state.window_animations());
+        let shown = h.show_window();
+        let (drawn, real) = h.drawn(0);
+        assert_eq!(drawn, real);
+        let window = h.state.space.elements().next().unwrap().clone();
+        assert_eq!(
+            h.state
+                .window_visual(&window, h.state.now())
+                .unwrap()
+                .opacity,
+            1.0
+        );
+        assert!(!animating(&h, h.state.now()));
+        shown.toplevel.destroy();
+        h.run_until("the window gone", |_, s| s.space.elements().count() == 0);
+        assert_eq!(h.state.closing_windows(), (0, 0));
+        assert!(!animating(&h, h.state.now()));
+    }
+
+    /// The opening and the closing drawn for real, without a screen, by Mesa's software
+    /// renderer (llvmpipe), as the genie is: a decorated window halfway through its opening,
+    /// then its last image halfway through its closing, drawn from the texture kept when its
+    /// client destroyed it. The images go to Cargo's temporary folder of the integration tests
+    /// (`target/tmp`): `window-opening.png`, `window-closing.png`. Without Mesa's EGL the test
+    /// has nothing to draw with: it says so, and fails on the CI, which installs it.
+    #[test]
+    fn the_opening_and_the_closing_are_drawn_halfway() {
+        use compositor::{damage::Ids, render::Scene, wallpaper};
+        use sherlock_ui::color;
+        use smithay::backend::{
+            allocator::Fourcc,
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::{
+                Bind as _, ExportMem as _, Offscreen as _, TextureMapping as _,
+                damage::OutputDamageTracker,
+                gles::{GlesRenderer, GlesTexture},
+            },
+        };
+        use smithay::utils::Transform;
+        use std::{cell::RefCell, rc::Rc};
+
+        let software = EGLDevice::enumerate()
+            .ok()
+            .and_then(|mut d| d.find(EGLDevice::is_software));
+        let Some(device) = software else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "the CI has Mesa's EGL (libegl-mesa0): its software device must be found"
+            );
+            eprintln!("no software EGL device (Mesa's llvmpipe): nothing is drawn");
+            return;
+        };
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let gpu = Rc::new(RefCell::new(renderer));
+        let scene = Rc::new(Scene::new(&mut gpu.borrow_mut()).unwrap());
+        let (w, ht) = (800, 600);
+        // The scene at `at`, read back as rows from the top.
+        let shoot = |state: &mut State, at: Duration| {
+            let mut renderer = gpu.borrow_mut();
+            let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+            let views = state.views();
+            let drawn = scene.screens(
+                &mut renderer,
+                &mut ids,
+                state,
+                &mut textures,
+                &views,
+                None,
+                at,
+            );
+            let elements = drawn.0.into_iter().next().unwrap();
+            let mut texture: GlesTexture = renderer
+                .create_buffer(Fourcc::Abgr8888, (w, ht).into())
+                .unwrap();
+            let mut target = renderer.bind(&mut texture).unwrap();
+            let mut tracker = OutputDamageTracker::new((w, ht), 1.0, Transform::Normal);
+            let background = color::palette().desktop.premultiplied();
+            tracker
+                .render_output(&mut *renderer, &mut target, 0, &elements, background)
+                .unwrap();
+            let region = Rectangle::from_size((w, ht).into());
+            let mapping = renderer
+                .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+                .unwrap();
+            let pixels = renderer.map_texture(&mapping).unwrap().to_vec();
+            match mapping.flipped() {
+                true => pixels,
+                false => pixels
+                    .chunks(w as usize * 4)
+                    .rev()
+                    .flatten()
+                    .copied()
+                    .collect(),
+            }
+        };
+        let save = |name: &str, pixels: &[u8]| {
+            let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+            image::save_buffer(&path, pixels, w as u32, ht as u32, image::ColorType::Rgba8)
+                .unwrap();
+            eprintln!("{name}: {}", path.display());
+        };
+        let at =
+            |pixels: &[u8], x: usize, y: usize| pixels[(y * w as usize + x) * 4..][..3].to_vec();
+
+        let mut h = Harness::start();
+        let (gpu_, scene_) = (Rc::clone(&gpu), Rc::clone(&scene));
+        h.state.set_snapshotter(Box::new(move |state, window| {
+            let mut renderer = gpu_.try_borrow_mut().ok()?;
+            compositor::window_anim::snapshot(&scene_, &mut renderer, state, window)
+        }));
+        let fill = color::palette().window;
+        let (shown, _decoration) = h.show_decorated_in(fill);
+        // The whole window is at (200, 129), 400 × 342 with its bar.
+        let start = h.state.now();
+        shoot(&mut h.state, start);
+        let opening = shoot(&mut h.state, start + Duration::from_millis(60));
+        save("window-opening.png", &opening);
+        let open = shoot(&mut h.state, start + Duration::from_secs(1));
+        let window = [fill.r, fill.g, fill.b].to_vec();
+        assert_eq!(at(&open, 400, 400), window);
+        // Halfway: smaller, its edge inside its place, and still translucent.
+        assert_ne!(at(&opening, 203, 400), at(&open, 203, 400));
+        assert_ne!(at(&opening, 400, 400), window);
+
+        shown.toplevel.destroy();
+        h.run_until("the window gone", |_, s| s.space.elements().count() == 0);
+        assert_eq!(h.state.closing_windows(), (1, 1), "its last image is kept");
+        let closed = h.state.now();
+        let closing = shoot(&mut h.state, closed + Duration::from_millis(50));
+        save("window-closing.png", &closing);
+        let gone = shoot(&mut h.state, closed + Duration::from_millis(200));
+        assert_ne!(at(&closing, 400, 400), at(&gone, 400, 400));
+        assert_ne!(at(&closing, 203, 400), at(&open, 203, 400));
+        std::thread::sleep(Duration::from_millis(160));
+        h.state.refresh();
+        assert_eq!(h.state.closing_windows(), (0, 0), "its texture is freed");
+    }
+
     /// Captures of a decorated window, dark then light with the pointer on the maximize
     /// button: the scene of a screen, as the real session draws it, but into a texture with
     /// Mesa's software renderer. They go to `screenshots/`, to compare with the Main board.

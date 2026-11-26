@@ -202,9 +202,20 @@ pub const DECORATION_SPRING: Spring = Spring::new(700.0, 53.0);
 
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
-/// Fade of a window opening, and of the snap preview appearing: the duration of a hover, in
-/// the 110 to 150 ms range.
+/// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
+/// 150 ms range.
 pub const FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
+
+/// Opening of a window in the compositor (lot D-34): its scale goes from `OPEN_SCALE` to 1 on
+/// this spring, critically damped (ratio 1.0): no bounce, 90 % of the way in about 150 ms,
+/// settled in about 250.
+pub const WINDOW_OPEN_SPRING: Spring = Spring::new(625.0, 50.0);
+/// Fade of a window opening, from transparent to opaque (lot D-34): longer than a hover, so
+/// that the opening shows, as on macOS.
+pub const WINDOW_OPEN_FADE: Duration = Duration::from_millis(200);
+/// Closing of a window (lot D-34): its last image shrinks to `OPEN_SCALE` and fades out, at a
+/// constant pace eased out, then it is freed.
+pub const WINDOW_CLOSE: Duration = Duration::from_millis(150);
 
 /// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
 /// scale fallback. The duration the brief of the lot gives, about half a second.
@@ -310,6 +321,19 @@ mod tests {
         assert!(first_90 < 150, "90 % at {first_90} ms");
         let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
         assert!(settled < 300, "settled at {settled} ms");
+    }
+
+    #[test]
+    fn a_window_opens_without_a_bounce_in_about_200_ms() {
+        let values = trajectory(WINDOW_OPEN_SPRING, 1000);
+        assert!(values.iter().all(|v| *v <= 1.0 + 1e-9));
+        assert!((WINDOW_OPEN_SPRING.damping_ratio() - 1.0).abs() < 1e-9);
+        let first_90 = values.iter().position(|v| *v >= 0.9).unwrap();
+        assert!(first_90 > 120 && first_90 < 200, "90 % at {first_90} ms");
+        // Within 1 % of the 0.08 of scale it travels: under a thousandth, invisible.
+        let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
+        assert!(settled < 300, "settled at {settled} ms");
+        assert!(WINDOW_OPEN_FADE > FADE && WINDOW_CLOSE <= WINDOW_OPEN_FADE);
     }
 
     #[test]
