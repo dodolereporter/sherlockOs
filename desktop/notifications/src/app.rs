@@ -250,7 +250,8 @@ impl Notifications {
         let open = match self.surface {
             Some(_) => Task::none(),
             None => {
-                self.height = 1;
+                // Room to lay the first bubble out at its true height.
+                self.height = ui::MEASURE_ROOM as u32;
                 let (id, task) = Message::layershell_open(crate::surface(self.height));
                 self.surface = Some(id);
                 task
