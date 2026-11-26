@@ -1,0 +1,247 @@
+//! `AutoHide` without a screen: the dock gives up its zone and slides out while a maximized
+//! window is on its screen, comes back at the edge, hides again, comes back when the window is
+//! restored; on the four edges. And the rectangle of each icon on its screen, for the minimize
+//! animation.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use dock::app::{Dock, Message, Pointer, Screen, Sources};
+use dock::entry::Catalog;
+use dock::icons::IconLookup;
+use dock::windows::{Placed, Placeholder, Recorder};
+use dock_config::{AutoHide, DockConfig, Position};
+use iced::window::Id;
+use iced::{Point, Rectangle};
+use sherlock_ui::dock as tokens;
+
+const SCREEN: &str = "eDP-1";
+const SIZE: (i32, i32) = (1440, 900);
+
+fn fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/data")
+}
+
+/// The dock on `SCREEN`, at `position`, with the terminal open, acting through `recorder`.
+fn dock(position: Position, mode: AutoHide, recorder: &Recorder) -> Dock {
+    let data = fixtures();
+    let mut config = DockConfig::default();
+    config.position = position;
+    config.auto_hide = mode;
+    let sources = Sources {
+        catalog: Catalog::load(std::slice::from_ref(&data)),
+        lookup: IconLookup::new(std::slice::from_ref(&data), None, Some("Exemple")),
+        config,
+        config_path: None,
+        pinned: ["org.example.Files", "org.example.Terminal"]
+            .map(String::from)
+            .to_vec(),
+        data_dirs: vec![data],
+        home: None,
+        gtk_theme: None,
+        control: Arc::new(recorder.clone()),
+    };
+    let mut dock = Dock::new(sources);
+    let id = Id::unique();
+    let _ = dock.update(Message::Surface(id));
+    let _ = dock.update(Message::Screen(
+        id,
+        Some(Screen {
+            name: Some(String::from(SCREEN)),
+            size: Some(SIZE),
+        }),
+    ));
+    let _ = dock.update(windows(&[]));
+    settle(&mut dock);
+    dock
+}
+
+/// The terminal open, and maximized on the screens of `covered`.
+fn windows(covered: &[&str]) -> Message {
+    let Placeholder(mut windows) = Placeholder::new("terminal", Some("terminal"));
+    windows.controllable = true;
+    windows.covered = covered.iter().map(|s| String::from(*s)).collect();
+    Message::Windows(windows)
+}
+
+fn settle(dock: &mut Dock) {
+    let end = dock.now() + Duration::from_secs(3);
+    let _ = dock.tick(end);
+    assert!(!dock.animating(), "at rest");
+}
+
+/// Depth of the surface, away from its edge.
+fn depth(dock: &Dock, position: Position) -> f32 {
+    if position.is_vertical() {
+        dock.surface_size.width
+    } else {
+        dock.surface_size.height
+    }
+}
+
+/// Distance from the edge given to the surface.
+fn margin(dock: &Dock, position: Position) -> i32 {
+    let margin = dock.layer_settings().margin;
+    match position {
+        Position::Bottom => margin.bottom,
+        Position::Top => margin.top,
+        Position::Left => margin.left,
+        Position::Right => margin.right,
+    }
+}
+
+/// What the compositor keeps clear along the edge: the zone and the margin (`docs/compositor.md`).
+fn reserved(dock: &Dock, position: Position) -> i32 {
+    let zone = dock.layer_settings().exclusive_zone;
+    if zone > 0 {
+        zone + margin(dock, position)
+    } else {
+        0
+    }
+}
+
+const EDGES: [Position; 4] = [
+    Position::Bottom,
+    Position::Top,
+    Position::Left,
+    Position::Right,
+];
+
+#[test]
+fn a_maximized_window_takes_the_room_of_the_dock_on_every_edge() {
+    for position in EDGES {
+        let mut dock = dock(position, AutoHide::Smart, &Recorder::default());
+        // Shown: the bar of 76 and its gap of 8 are kept clear.
+        assert_eq!(reserved(&dock, position), 84, "{position:?}");
+        assert_eq!(margin(&dock, position), 8);
+        let rest = dock.input_area();
+
+        // A window is maximized on the dock's screen: no zone at once, then the dock slides out.
+        let _ = dock.update(windows(&[SCREEN]));
+        assert_eq!(reserved(&dock, position), 0, "{position:?}");
+        assert!(dock.animating(), "it slides");
+        settle(&mut dock);
+        let hidden = tokens::HIDE_STRIP as i32 - depth(&dock, position).round() as i32;
+        assert_eq!(margin(&dock, position), hidden, "{position:?}");
+        // Only the band that stays on the screen takes the pointer: the side away from the
+        // edge, over the whole surface.
+        let strip = dock.input_area();
+        let size = dock.surface_size;
+        let expected = match position {
+            Position::Bottom => Rectangle::new(Point::ORIGIN, iced::Size::new(size.width, 2.0)),
+            Position::Top => Rectangle::new(
+                Point::new(0.0, size.height - 2.0),
+                iced::Size::new(size.width, 2.0),
+            ),
+            Position::Left => Rectangle::new(
+                Point::new(size.width - 2.0, 0.0),
+                iced::Size::new(2.0, size.height),
+            ),
+            Position::Right => Rectangle::new(Point::ORIGIN, iced::Size::new(2.0, size.height)),
+        };
+        assert_eq!(strip, expected, "{position:?}");
+
+        // Restored: back, and its zone once in place; until then it goes over the windows, the
+        // compositor never reserves less than nothing.
+        let _ = dock.update(windows(&[]));
+        assert_eq!(reserved(&dock, position), 0);
+        settle(&mut dock);
+        assert_eq!(reserved(&dock, position), 84);
+        assert_eq!(margin(&dock, position), 8);
+        assert_eq!(dock.input_area(), rest);
+    }
+}
+
+#[test]
+fn a_window_on_another_screen_changes_nothing() {
+    let mut dock = dock(Position::Bottom, AutoHide::Smart, &Recorder::default());
+    let _ = dock.update(windows(&["HDMI-1"]));
+    assert!(!dock.covered());
+    assert_eq!(reserved(&dock, Position::Bottom), 84);
+}
+
+#[test]
+fn the_edge_brings_the_dock_back_over_the_window() {
+    let mut dock = dock(Position::Bottom, AutoHide::Smart, &Recorder::default());
+    let _ = dock.update(windows(&[SCREEN]));
+    settle(&mut dock);
+    // The pointer touches the band.
+    let _ = dock.update(Message::Pointer(Pointer::Moved(Point::new(300.0, 1.0))));
+    settle(&mut dock);
+    assert_eq!(margin(&dock, Position::Bottom), 8, "back");
+    assert_eq!(reserved(&dock, Position::Bottom), 0, "over the window");
+    assert_ne!(
+        dock.input_area().height,
+        2.0,
+        "the whole bar takes the pointer"
+    );
+
+    // It leaves: the dock stays for the delay, then hides.
+    let _ = dock.update(Message::Pointer(Pointer::Left));
+    let left = dock.now();
+    let _ = dock.tick(left + tokens::HIDE_DELAY - Duration::from_millis(20));
+    assert_eq!(margin(&dock, Position::Bottom), 8);
+    let _ = dock.tick(left + tokens::HIDE_DELAY);
+    assert!(dock.animating());
+    settle(&mut dock);
+    assert!(margin(&dock, Position::Bottom) < 0, "hidden again");
+    assert_eq!(dock.input_area().height, 2.0);
+}
+
+#[test]
+fn always_and_never() {
+    let dock_always = dock(Position::Bottom, AutoHide::Always, &Recorder::default());
+    assert_eq!(reserved(&dock_always, Position::Bottom), 0);
+    assert!(
+        margin(&dock_always, Position::Bottom) < 0,
+        "hidden from the start"
+    );
+    let mut never = dock(Position::Bottom, AutoHide::Never, &Recorder::default());
+    let _ = never.update(windows(&[SCREEN]));
+    settle(&mut never);
+    assert_eq!(reserved(&never, Position::Bottom), 84);
+}
+
+#[test]
+fn each_window_gets_the_rectangle_of_its_icon_on_the_screen() {
+    let recorder = Recorder::probing(&["terminal", "files"]);
+    let mut dock = dock(Position::Bottom, AutoHide::Smart, &recorder);
+    let places = recorder.places();
+    let last = places.last().expect("placed");
+    // The files, Sherlock, the terminal: the icons at rest, the surface centered at the bottom,
+    // 8 above the edge.
+    assert_eq!(last.len(), 3);
+    let size = dock.surface_size;
+    let left = SIZE.0 / 2 - size.width.round() as i32 / 2;
+    let top = SIZE.1 - 8 - size.height.round() as i32;
+    let icon = dock.layout(dock.now()).icons[2];
+    assert_eq!(
+        last[2],
+        Placed {
+            app_id: Some(String::from("terminal")),
+            output: String::from(SCREEN),
+            rectangle: (left + icon.x as i32, top + icon.y as i32, 52, 52),
+        }
+    );
+    assert_eq!(last[0].app_id.as_deref(), Some("files"));
+    assert_eq!(
+        last[1].app_id, None,
+        "Sherlock, in the middle, owns no window"
+    );
+
+    // The pointer magnifies the icons, the dock hides: the places at rest do not change.
+    let count = places.len();
+    let _ = dock.update(Message::Pointer(Pointer::Moved(icon.center())));
+    let _ = dock.update(windows(&[SCREEN]));
+    settle(&mut dock);
+    assert_eq!(recorder.places().len(), count, "nothing sent again");
+
+    // A new open application: the icons move, and are placed again.
+    let Placeholder(mut more) = Placeholder::new("terminal,ExampleBrowser", None);
+    more.controllable = true;
+    let _ = dock.update(Message::Windows(more));
+    let places = recorder.places();
+    assert_eq!(places.len(), count + 1);
+    assert_eq!(places[count].len(), 4);
+}

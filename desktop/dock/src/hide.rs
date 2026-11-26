@@ -17,6 +17,9 @@ use dock_config::AutoHide;
 use sherlock_ui::dock;
 use sherlock_ui::motion::{self, Animation};
 
+/// Settled within half a pixel of a surface 100 deep.
+const PRECISION: f64 = motion::GEOMETRY_PRECISION / 100.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Hide {
     mode: AutoHide,
@@ -61,10 +64,16 @@ impl Hide {
         self.hides() && !self.revealed
     }
 
-    /// The dock reserves its room on the screen: only when its mode does not hide it. A dock
-    /// brought back by the pointer goes over the windows.
+    /// The dock reserves its room on the screen: only when its mode does not hide it, once it
+    /// is back in place. A dock brought back by the pointer goes over the windows, and so does
+    /// a dock sliding back: the compositor reserves the zone plus the margin, which is negative
+    /// until the dock is in place.
     pub fn exclusive(&self) -> bool {
-        !self.hides()
+        !self.hides() && !self.sliding()
+    }
+
+    fn sliding(&self) -> bool {
+        !self.slide.is_done(self.now, PRECISION)
     }
 
     /// A new mode, at `now`.
@@ -114,10 +123,7 @@ impl Hide {
 
     /// From shown (0) to hidden (1), at the last tick.
     pub fn progress(&self) -> f32 {
-        if self
-            .slide
-            .is_done(self.now, motion::GEOMETRY_PRECISION / 100.0)
-        {
+        if !self.sliding() {
             self.slide.target() as f32
         } else {
             self.slide.value(self.now).clamp(-0.1, 1.1) as f32
@@ -126,10 +132,7 @@ impl Hide {
 
     /// Frames are needed: the dock slides, or waits to hide.
     pub fn running(&self) -> bool {
-        self.left_at.is_some()
-            || !self
-                .slide
-                .is_done(self.now, motion::GEOMETRY_PRECISION / 100.0)
+        self.left_at.is_some() || self.sliding()
     }
 
     fn target(&self) -> f64 {
@@ -183,11 +186,12 @@ mod tests {
         assert!(hide.hidden() && !hide.exclusive() && hide.running());
         let t = settle(&mut hide, ms(0));
         assert_eq!(hide.progress(), 1.0);
-        // The window is restored: the dock comes back and takes its room again.
+        // The window is restored: the dock comes back, and takes its room again once there.
         hide.set_covered(false, false, t);
-        assert!(!hide.hidden() && hide.exclusive());
+        assert!(!hide.hidden() && !hide.exclusive());
         settle(&mut hide, t);
         assert_eq!(hide.progress(), 0.0);
+        assert!(hide.exclusive());
     }
 
     #[test]

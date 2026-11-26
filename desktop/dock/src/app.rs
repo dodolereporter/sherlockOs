@@ -1012,16 +1012,7 @@ impl Dock {
         let Some(id) = self.surface else {
             return Task::none();
         };
-        let area = if self.hide.hidden() {
-            self.geometry.strip(self.surface_size)
-        } else {
-            self.geometry.input_region(
-                self.surface_size,
-                self.items.len(),
-                self.separator,
-                self.hovering,
-            )
-        };
+        let area = self.input_area();
         let callback = RegionActionCB::new(move |region| {
             let (x, y, width, height) = layout::pixels(area);
             let added = region.add(x, y, width, height);
@@ -1030,6 +1021,21 @@ impl Dock {
             }
         });
         Task::done(Message::SetInputRegion { id, callback })
+    }
+
+    /// Where the surface takes the pointer: the band of a hidden dock, otherwise
+    /// `Geometry::input_region`.
+    pub fn input_area(&self) -> iced::Rectangle {
+        if self.hide.hidden() {
+            self.geometry.strip(self.surface_size)
+        } else {
+            self.geometry.input_region(
+                self.surface_size,
+                self.items.len(),
+                self.separator,
+                self.hovering,
+            )
+        }
     }
 
     fn key(&mut self, key: Key) -> Task<Message> {
