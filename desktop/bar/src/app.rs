@@ -550,6 +550,8 @@ impl Bar {
             return closed;
         };
         self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
+        // Room for the keyboard backlight only on a machine that has one (UI-04).
+        panel::reserve_keyboard(self.quick.has_keyboard());
         self.panel_shared = self.animates();
         self.swap = None;
         let shared = self.panel_shared;

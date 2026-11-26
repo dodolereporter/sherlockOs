@@ -33,7 +33,7 @@ Never change the model here: it is produced by Blender scripts in its own reposi
 | --- | --- |
 | Skeleton | 30 bones; `eye_L` and `eye_R` are driven by code only, `eyelid_L` and `eyelid_R` are separate |
 | Mesh | One mesh, 14 primitives: position, normal, UV, color, joints, weights |
-| Materials | 14, PBR in the file, drawn unlit here: the occlusion of the hollows is baked in the vertex colors (`COLOR_0`, 16-bit, linear, 0.55 to 1) |
+| Materials | 14, PBR in the file, drawn with fixed lights here (see Rendering): the occlusion of the hollows is baked in the vertex colors (`COLOR_0`, 16-bit, linear, 0.55 to 1) |
 | Textures | 2 JPEG (the scarf's knit and its normal map, which is ignored) |
 | Clips | 30: loops, entries and exits, reactions, face layers |
 
@@ -93,7 +93,8 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
   of `Peek` shows no arc. Blinks only come while both eyes are open.
 - `look_at(Some(point))` turns `eye_L` and `eye_R` toward a point of the model's space, by
   `GAZE_LIMIT` (0.12 rad, as the model's own player) at most, smoothed; `None` looks ahead
-  again. Further, the eyes slide down onto the mouth when they look at the field below.
+  again. Further, the eyes slide down onto the mouth when they look at the field below. A shut
+  eye does not follow the gaze: its arc stays where the eye rests, above the mouth.
 
 ## The widget
 
@@ -131,9 +132,10 @@ Two passes per frame:
 
 1. **Scene.** The skinned mesh in a texture of the size of the widget, `Rgba8UnormSrgb`,
    multisampled ×4 with a 32-bit depth buffer, cleared transparent, then resolved. Color =
-   vertex color × base color × texture × a darkening of up to 18 % toward the bottom of the
-   body (heights 1.9 down to 0.9 in the model's space), written premultiplied; materials are
-   double-sided. Opaque parts first, then any blended part (the model has none).
+   (vertex color × base color × texture) × light + a soft highlight, × a darkening of up to
+   18 % toward the bottom of the body (heights 1.9 down to 0.9 in the model's space), + the
+   material's emission; written premultiplied. Materials are double-sided. Opaque parts first,
+   then any blended part (the model has none).
 2. **Composite.** The resolved texture laid over the target in premultiplied alpha, like iced,
    cut to a disc (`Cut::Circle`, one pixel of antialiasing) or not, over a drop shadow and an
    optional background. The shadow is the mascot's silhouette moved right and down (2.5 % and
@@ -141,9 +143,21 @@ Two passes per frame:
    blurred over 5 % with 24 linear taps, at 28 % opacity. When the target has no sRGB format
    (iced with web colors), the shader encodes to sRGB itself.
 
-There is no lighting. The reference renders of the model's repository (Blender) and its web
-player (three.js) light the PBR materials with a key, a fill and a back light: that is where
-most of their relief comes from. The vertex colors only hold the occlusion of the hollows.
+The vertex colors only hold the occlusion of the hollows: the relief of the reference renders
+of the model's repository (Blender, `sherlock_views.py`) comes from a key, a fill and a back
+light. The scene shader has the same three, fixed to the camera (directions in the camera's
+space, from the light positions of `place_lights`), and nothing that moves or casts a shadow:
+
+| Light | Direction | Strength | Note |
+| --- | --- | --- | --- |
+| Ambient | | 0.50 | The light world of the reference |
+| Key | top left, in front | 0.70 | Large and soft: a Lambert that wraps 0.45 past the terminator |
+| Fill | right, in front | 0.18 | |
+| Back | top right, behind | 0.35 | Only on the edges that turn away from the viewer: lifts the outline off a dark background |
+
+The highlight is a Blinn-Phong of the key, from the material's roughness: sharp and visible
+on the eyes (0.3), a faint wide sheen on the cap (0.92). The cost is a few products per pixel,
+in the same pass: no extra draw, and still 30 frames per second at most.
 
 `Camera::UPPER_BODY` frames the cap, the face, the scarf and the top of the body, legs out of
 the frame, with a margin between the pompom and the top of the bubble; `Camera::FULL_BODY` the

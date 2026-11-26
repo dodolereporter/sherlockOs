@@ -124,6 +124,15 @@ pub fn opacity() -> f32 {
     OPACITY.with(std::cell::Cell::get)
 }
 
+/// The opacity an icon or an image drawn in `tint` must be given (UI-04): iced's renderers,
+/// wgpu and tiny-skia alike, take only the red, green and blue of an SVG's color, never its
+/// alpha, so neither the tint's own alpha nor `with_opacity` would fade it. Read when the icon
+/// is built inside `with_opacity` (a panel's view), or when it is drawn inside it (a widget of
+/// ours under `animated::Reveal`).
+pub fn icon_opacity(tint: Color) -> f32 {
+    (tint.a * opacity()).clamp(0.0, 1.0)
+}
+
 /// Runs `f` with every color converted for iced faded to `opacity` (0 to 1): how a whole
 /// panel fades in and out, iced having no opacity for a group of widgets. A program builds the
 /// view of the panel inside it, and `animated::Reveal` draws it inside it, since styles take

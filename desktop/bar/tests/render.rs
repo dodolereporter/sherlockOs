@@ -467,6 +467,28 @@ fn the_motions_of_the_panels_stay_inside_them() {
     }
 }
 
+/// The control centre halfway through its opening, as on the GPU (UI-04): its icons as faded
+/// and as far along as its texts and its tiles. `control-centre-opening`, then
+/// `control-centre-opening-light`.
+#[test]
+fn the_icons_of_an_opening_panel_fade_with_it() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(true);
+            board_quick(&mut state);
+            let start = Duration::from_secs(1);
+            let mut unfold = bar::unfold::Unfold::opening(start);
+            unfold.tick(start + Duration::from_millis(45));
+            assert!(unfold.opacity() > 0.3 && unfold.opacity() < 0.9);
+            state.unfold = unfold;
+            let size = panel_size(&state, Panel::Control);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("control-centre-opening{suffix}")));
+        });
+    }
+}
+
 #[test]
 fn the_calendar_marks_today_and_walks_the_months() {
     let mut state = sample();
