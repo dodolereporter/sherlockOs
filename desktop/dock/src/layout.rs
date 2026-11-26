@@ -170,6 +170,39 @@ impl Geometry {
             depth,
         )
     }
+
+    /// Where a hidden dock takes the pointer: the band of `HIDE_STRIP` the screen still shows
+    /// of the surface, along its side away from the edge, over its whole length.
+    pub fn strip(&self, surface: Size) -> Rectangle {
+        let (span, deep) = if self.position.is_vertical() {
+            (surface.height, surface.width)
+        } else {
+            (surface.width, surface.height)
+        };
+        let strip = dock::HIDE_STRIP.min(deep);
+        to_surface(self.position, surface, 0.0, deep - strip, span, strip)
+    }
+}
+
+/// `icon`, drawn in a surface of `surface` at `distance` from the `position` edge of a screen
+/// of `screen` (logical width and height), relative to the top left corner of the screen. The
+/// surface is centered along its edge as the compositor centers it, halves rounded down.
+pub fn on_screen(
+    position: Position,
+    surface: Size,
+    screen: (i32, i32),
+    distance: i32,
+    icon: Rectangle,
+) -> (i32, i32, i32, i32) {
+    let (width, height) = (surface.width.round() as i32, surface.height.round() as i32);
+    let (x, y) = match position {
+        Position::Bottom => (screen.0 / 2 - width / 2, screen.1 - distance - height),
+        Position::Top => (screen.0 / 2 - width / 2, distance),
+        Position::Left => (distance, screen.1 / 2 - height / 2),
+        Position::Right => (screen.0 - distance - width, screen.1 / 2 - height / 2),
+    };
+    let (left, top, w, h) = pixels(icon);
+    (x + left, y + top, w, h)
 }
 
 /// `rectangle` in whole pixels, as `x, y, width, height`, covering all of it.

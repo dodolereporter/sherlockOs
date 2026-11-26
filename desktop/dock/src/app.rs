@@ -12,6 +12,8 @@ use iced::{Point, Size, Subscription, Task};
 use iced::{keyboard, mouse, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::settings::LayerShellSettings;
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::dock;
@@ -21,12 +23,13 @@ use sherlock_ui::motion::Fade;
 use crate::anim::{Launch, Leaving, Track};
 use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
+use crate::hide::{self, Hide};
 use crate::icons::IconLookup;
 use crate::items::{Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key};
-use crate::windows::{self, Click, Control, Request, Windows};
+use crate::windows::{self, Click, Control, Place, Request, Windows};
 
 /// The menu of an icon, while it is open.
 #[derive(Debug, Clone)]
@@ -56,8 +59,8 @@ pub enum Message {
     Pointer(Pointer),
     Frame(Instant),
     Windows(Windows),
-    /// The windows of the compositor's shell socket, for the bounce of a starting application.
-    Shell(Windows),
+    /// The screen a surface is on, from iced_exwlshell.
+    Screen(Id, Option<Screen>),
     /// The pointer while the button is held on an icon.
     Gesture(Gesture),
     /// The configuration file changed.
@@ -69,6 +72,27 @@ pub enum Message {
     Closed(Id),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
+}
+
+/// A screen, as the dock needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Screen {
+    /// Its `wl_output` name.
+    pub name: Option<String>,
+    /// Its logical width and height.
+    pub size: Option<(i32, i32)>,
+}
+
+/// An icon on its screen: the icon, the screen's name, its rectangle there.
+type IconPlace = (Target, String, (i32, i32, i32, i32));
+
+/// What the compositor was last told of the surface.
+#[derive(Debug, Clone, Copy, Default)]
+struct Sent {
+    margin: Option<i32>,
+    zone: Option<i32>,
+    /// Whether the input region was the band of a hidden dock.
+    hidden: Option<bool>,
 }
 
 /// What the dock reads at startup.
@@ -119,9 +143,6 @@ pub struct Dock {
     /// Time of the last event, from `origin`: the moment the view draws.
     pub(crate) now: Duration,
     pub windows: Option<Windows>,
-    /// The windows of the shell socket, read for the bounce only (batch D-18c uses them for the
-    /// rest).
-    shell: Option<Windows>,
     /// Icon with the keyboard focus, kept in our state like the bar does.
     pub(crate) focus: Option<usize>,
     pub(crate) menu: Option<OpenMenu>,
@@ -130,11 +151,20 @@ pub struct Dock {
     frames_since: Duration,
     /// The theme of the appearance file, shown with a fade.
     pub theme: ThemeFade,
+    /// When the dock hides, and its slide.
+    pub hide: Hide,
+    /// The screen of each surface, reported by `screens`.
+    outputs: HashMap<Id, Option<Screen>>,
+    screens: Option<ShellReceiver>,
+    sent: Sent,
+    /// The icons last placed on their screen (`Control::place`).
+    placed: Vec<IconPlace>,
 }
 
 impl Dock {
     pub fn new(sources: Sources) -> Self {
         let geometry = Geometry::from_config(&sources.config);
+        let sources_auto_hide = sources.config.auto_hide;
         let mut dock = Self {
             items: Vec::new(),
             separator: None,
@@ -157,15 +187,150 @@ impl Dock {
             origin: Instant::now(),
             now: Duration::ZERO,
             windows: None,
-            shell: None,
             focus: None,
             menu: None,
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
+            hide: Hide::new(sources_auto_hide),
+            outputs: HashMap::new(),
+            screens: None,
+            sent: Sent::default(),
+            placed: Vec::new(),
         };
         dock.rebuild(false);
         dock
+    }
+
+    /// The dock, told of the screen of its surface by `screens`.
+    pub fn with_screens(mut self, screens: ShellReceiver) -> Self {
+        self.screens = Some(screens);
+        self
+    }
+
+    /// The surface settings for the dock as it is: shown, hidden or on its way.
+    pub fn layer_settings(&self) -> LayerShellSettings {
+        let mut settings = crate::surface(self.geometry, self.surface_size);
+        settings.margin = crate::margin(self.geometry.position, self.margin());
+        settings.exclusive_zone = self.zone();
+        settings
+    }
+
+    /// Distance from the screen edge to the surface, as the dock slides.
+    fn margin(&self) -> i32 {
+        let depth = if self.geometry.position.is_vertical() {
+            self.surface_size.width
+        } else {
+            self.surface_size.height
+        };
+        hide::margin(self.hide.progress(), depth)
+    }
+
+    /// The exclusive zone: the bar's thickness, none while the dock hides.
+    fn zone(&self) -> i32 {
+        if self.hide.exclusive() {
+            self.geometry.bar_thickness().round() as i32
+        } else {
+            0
+        }
+    }
+
+    /// The screen of the dock's surface, once known.
+    pub fn screen(&self) -> Option<&Screen> {
+        self.surface
+            .and_then(|id| self.outputs.get(&id))
+            .and_then(Option::as_ref)
+    }
+
+    /// A maximized or fullscreen window is on the dock's screen.
+    pub fn covered(&self) -> bool {
+        let name = self.screen().and_then(|s| s.name.as_deref());
+        match (name, &self.windows) {
+            (Some(name), Some(windows)) => windows.covered.contains(name),
+            _ => false,
+        }
+    }
+
+    /// The windows or the screen changed: the dock hides or comes back.
+    fn follow_windows(&mut self) -> Task<Message> {
+        let now = self.now;
+        self.hide.set_covered(self.covered(), self.hovering, now);
+        self.place_icons();
+        self.apply_hide()
+    }
+
+    /// Tells the compositor what changed of the margin, the exclusive zone and the input
+    /// region as the dock hides or comes back.
+    fn apply_hide(&mut self) -> Task<Message> {
+        let Some(id) = self.surface else {
+            return Task::none();
+        };
+        let mut tasks = Vec::new();
+        let margin = self.margin();
+        if self.sent.margin != Some(margin) {
+            self.sent.margin = Some(margin);
+            let margin = crate::margin(self.geometry.position, margin);
+            tasks.push(Task::done(Message::MarginChange { id, margin }));
+        }
+        let zone = self.zone();
+        if self.sent.zone != Some(zone) {
+            self.sent.zone = Some(zone);
+            tasks.push(Task::done(Message::ExclusiveZoneChange {
+                id,
+                zone_size: zone,
+            }));
+        }
+        let hidden = self.hide.hidden();
+        if self.sent.hidden != Some(hidden) {
+            self.sent.hidden = Some(hidden);
+            tasks.push(self.input_region());
+        }
+        Task::batch(tasks)
+    }
+
+    /// Tells the control where each icon is on its screen, at rest and shown, when that
+    /// changed: the compositor keeps it for each window, for the minimize animation.
+    fn place_icons(&mut self) {
+        let Some((name, size)) = self.screen().and_then(|s| Some((s.name.clone()?, s.size?)))
+        else {
+            return;
+        };
+        let sizes = self.geometry.targets(None, self.items.len());
+        let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
+        let distance = dock::MARGIN_BOTTOM as i32;
+        let placed: Vec<_> = self
+            .items
+            .iter()
+            .zip(&rest.icons)
+            .map(|(item, icon)| {
+                let rectangle = layout::on_screen(
+                    self.geometry.position,
+                    self.surface_size,
+                    size,
+                    distance,
+                    *icon,
+                );
+                (item.target(), name.clone(), rectangle)
+            })
+            .collect();
+        if placed == self.placed {
+            return;
+        }
+        let places = self
+            .items
+            .iter()
+            .zip(&placed)
+            .map(|(item, (_, output, rectangle))| {
+                let item = item.clone();
+                Place {
+                    owns: Box::new(move |app_id| item.owns(app_id)),
+                    output: output.clone(),
+                    rectangle: *rectangle,
+                }
+            })
+            .collect();
+        self.placed = placed;
+        self.sources.control.place(places);
     }
 
     /// Builds the icons again from the pinned list and the open windows. Each icon keeps its
@@ -293,6 +458,7 @@ impl Dock {
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
+            || self.hide.running()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -317,10 +483,16 @@ impl Dock {
         } else {
             Subscription::none()
         };
+        let screens = self
+            .screens
+            .as_ref()
+            .map_or_else(Subscription::none, |events| {
+                events.listen().filter_map(on_screen)
+            });
         Subscription::batch([
             appearance,
+            screens,
             Subscription::run(|| windows::watch(windows::source)).map(Message::Windows),
-            Subscription::run(|| windows::watch(crate::shell::source)).map(Message::Shell),
             gesture,
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
@@ -392,7 +564,18 @@ impl Dock {
         match message {
             Message::Surface(id) => {
                 self.surface = Some(id);
-                return self.input_region();
+                // What `layer_settings` gave the surface when it was made.
+                self.sent = Sent {
+                    margin: Some(self.margin()),
+                    zone: Some(self.zone()),
+                    hidden: Some(self.hide.hidden()),
+                };
+                return Task::batch([self.input_region(), self.follow_windows()]);
+            }
+            Message::Screen(id, screen) => {
+                self.outputs.insert(id, screen);
+                self.clock();
+                return self.follow_windows();
             }
             Message::Pointer(event) => {
                 let now = self.clock();
@@ -408,13 +591,9 @@ impl Dock {
                 // The first list is the dock at startup: in place at once.
                 let first = self.windows.is_none();
                 self.windows = Some(windows);
-                self.windows_came(0);
-                return self.refresh_as(self.geometry, !first);
-            }
-            Message::Shell(windows) => {
-                self.clock();
-                self.shell = Some(windows);
-                self.windows_came(1);
+                self.windows_came();
+                let refreshed = self.refresh_as(self.geometry, !first);
+                return Task::batch([refreshed, self.follow_windows()]);
             }
             Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
@@ -437,6 +616,9 @@ impl Dock {
             Message::MenuPick(entry) => return self.pick(entry),
             Message::Closed(id) if self.menu.as_ref().is_some_and(|m| m.id == id) => {
                 self.menu = None;
+            }
+            Message::Closed(id) => {
+                self.outputs.remove(&id);
             }
             _ => {}
         }
@@ -462,9 +644,11 @@ impl Dock {
             self.pinned.clone_from(pinned);
         }
         self.geometry = Geometry::from_config(&config);
+        let now = self.clock();
+        self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
-        self.clock();
-        self.refresh(previous)
+        let refreshed = self.refresh(previous);
+        Task::batch([refreshed, self.follow_windows()])
     }
 
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
@@ -493,7 +677,9 @@ impl Dock {
         };
         let mut tasks = Vec::new();
         if self.geometry.position != previous.position || self.surface_size != size {
-            let settings = crate::surface(self.geometry, self.surface_size);
+            let settings = self.layer_settings();
+            self.sent.margin = Some(self.margin());
+            self.sent.zone = Some(settings.exclusive_zone);
             tasks.push(Task::done(Message::LayoutChange {
                 id,
                 anchor: settings.anchor,
@@ -511,6 +697,7 @@ impl Dock {
             self.hovering = false;
             tasks.push(self.input_region());
         }
+        self.place_icons();
         Task::batch(tasks)
     }
 
@@ -578,7 +765,10 @@ impl Dock {
     /// that left are gone.
     pub fn tick(&mut self, now: Duration) -> Task<Message> {
         self.frame(now);
-        self.settle()
+        let busy = self.menu_open() || self.press.is_some();
+        self.hide.tick(self.now, busy);
+        let settled = self.settle();
+        Task::batch([settled, self.apply_hide()])
     }
 
     /// The time the dock draws at.
@@ -602,16 +792,11 @@ impl Dock {
         self.resize(size, self.geometry)
     }
 
-    /// A source of windows (0 the dock's, 1 the shell socket) has a new list: an application
-    /// that starts and has one more window than when it started stops bouncing.
-    fn windows_came(&mut self, source: usize) {
+    /// The source of windows has a new list: an application that starts and has one more
+    /// window than when it started stops bouncing.
+    fn windows_came(&mut self) {
         let now = self.now;
-        let windows = if source == 0 {
-            self.windows.as_ref()
-        } else {
-            self.shell.as_ref()
-        };
-        let Some(windows) = windows else {
+        let Some(windows) = self.windows.as_ref() else {
             return;
         };
         for launch in &mut self.launches {
@@ -619,7 +804,7 @@ impl Dock {
                 continue;
             };
             let (count, _) = windows.of(|app_id| item.owns(app_id));
-            if launch.windows(source, count, now) {
+            if launch.windows(count, now) {
                 tracing::info!(app = item.name, "window came: the bounce stops");
             }
         }
@@ -789,9 +974,16 @@ impl Dock {
                     Pointer::Moved(point) => Some(point),
                     _ => None,
                 };
-                if self.hover(point, now) {
-                    return self.input_region();
+                // On the dock, or on the band of a hidden one: it comes back, or stays.
+                match point {
+                    Some(_) => self.hide.pointer_in(now),
+                    None => self.hide.pointer_out(now),
                 }
+                let hide = self.apply_hide();
+                if self.hover(point, now) {
+                    return Task::batch([hide, self.input_region()]);
+                }
+                return hide;
             }
             Pointer::Pressed(button) => {
                 // Like `:focus-visible`: the mouse removes the keyboard ring.
@@ -820,12 +1012,16 @@ impl Dock {
         let Some(id) = self.surface else {
             return Task::none();
         };
-        let area = self.geometry.input_region(
-            self.surface_size,
-            self.items.len(),
-            self.separator,
-            self.hovering,
-        );
+        let area = if self.hide.hidden() {
+            self.geometry.strip(self.surface_size)
+        } else {
+            self.geometry.input_region(
+                self.surface_size,
+                self.items.len(),
+                self.separator,
+                self.hovering,
+            )
+        };
         let callback = RegionActionCB::new(move |region| {
             let (x, y, width, height) = layout::pixels(area);
             let added = region.add(x, y, width, height);
@@ -953,8 +1149,7 @@ impl Dock {
                 return;
             }
         }
-        let count = |windows: Option<&Windows>| windows.map(|w| w.of(|a| item.owns(a)).0);
-        let before = [count(self.windows.as_ref()), count(self.shell.as_ref())];
+        let before = self.windows.as_ref().map(|w| w.of(|a| item.owns(a)).0);
         self.launches.retain(|l| l.target != target);
         if !self.animating() {
             self.frames = 0;
@@ -1135,4 +1330,18 @@ pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
         tracing::warn!(%error, "the dock will not follow the appearance file");
     }
     receiver
+}
+
+/// The screen of a surface, from iced_exwlshell's reports.
+fn on_screen(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { window, output } => Some(Message::Screen(
+            window,
+            output.map(|o| Screen {
+                name: o.info.name.clone(),
+                size: o.info.logical_size,
+            }),
+        )),
+        _ => None,
+    }
 }

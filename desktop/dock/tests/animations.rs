@@ -368,7 +368,7 @@ fn quick_app(name: &str) -> PathBuf {
 }
 
 fn shell(app_ids: &[&str]) -> Message {
-    Message::Shell(Windows {
+    Message::Windows(Windows {
         list: app_ids
             .iter()
             .map(|a| Window {
@@ -376,7 +376,7 @@ fn shell(app_ids: &[&str]) -> Message {
                 activated: false,
             })
             .collect(),
-        controllable: false,
+        ..Windows::default()
     })
 }
 

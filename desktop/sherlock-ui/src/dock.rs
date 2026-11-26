@@ -257,3 +257,14 @@ mod tests {
         assert!(FALLBACK_LETTER.contrast(FALLBACK_TILE) >= 4.5);
     }
 }
+
+// Hiding (batch D-18c2): `AutoHide`, `docs/dock.md`.
+
+/// Band along the screen edge where a hidden dock still takes the pointer, to come back.
+pub const HIDE_STRIP: f32 = 2.0;
+/// A dock that came back over a maximized window hides again this long after the pointer left
+/// it.
+pub const HIDE_DELAY: Duration = Duration::from_millis(300);
+/// The dock sliding off the screen and back: it answers a window being maximized or restored,
+/// like the top bar, so it moves with the same spring.
+pub const HIDE_SPRING: Spring = motion::TOP_BAR_SPRING;

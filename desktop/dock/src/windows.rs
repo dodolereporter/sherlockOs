@@ -1,18 +1,19 @@
 //! Open windows, for the dot under open applications, the active one, a click on an open
 //! application (brought forward, or minimized when it already is), and « Quitter ».
 //!
-//! A source implements `Source`, like the bar's sources. Two exist:
+//! A source implements `Source`, like the bar's sources. Three exist, tried in this order:
 //!
-//! - `Wlr`, the `zwlr_foreign_toplevel_manager_v1` protocol, on its own Wayland connection. Our
-//!   compositor does not offer it yet, nor does KWin; wlroots compositors do.
 //! - `Placeholder`, a fake list set by two environment variables, for tests and screenshots.
+//! - `shell::Shell`, our compositor's `sherlock_shell_v1` on its shell socket (ADR 0021).
+//! - `Wlr`, the `zwlr_foreign_toplevel_manager_v1` protocol of wlroots compositors.
 //!
-//! Without either, the dock does not know the windows: no dot, « Quitter » disabled. What our
-//! compositor will have to provide is in `docs/dock.md`.
+//! Without any, the dock does not know the windows: no dot, « Quitter » disabled.
 //!
-//! Acting on windows goes through `Control`: `WlrControl` sends `activate`, `set_minimized` or
-//! `close` on a connection of its own, `Recorder` is the fake one.
+//! Acting on windows goes through `Control`: `Auto` sends `activate`, `minimize` or `close`
+//! through the shell protocol when its source runs, through the wlroots one otherwise;
+//! `Recorder` is the fake one.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use iced::futures::Stream;
@@ -51,6 +52,8 @@ pub struct Windows {
     /// Whether the windows can be acted on (brought forward, minimized, closed). Not those of
     /// the placeholder: a click starts the application, « Quitter » stays off.
     pub controllable: bool,
+    /// Names of the screens a maximized or fullscreen window is on (shell protocol only).
+    pub covered: BTreeSet<String>,
 }
 
 impl Windows {
@@ -118,7 +121,7 @@ impl Placeholder {
             .collect();
         Self(Windows {
             list,
-            controllable: false,
+            ..Windows::default()
         })
     }
 
@@ -223,9 +226,45 @@ pub fn click(open: Option<(usize, bool)>, controllable: bool) -> Click {
     }
 }
 
+/// Which windows are an application's own, by `app_id`.
+pub type Owns = Box<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Where an icon is on its screen, for the windows of its application.
+pub struct Place {
+    pub owns: Owns,
+    /// Name of the screen (`wl_output` name).
+    pub output: String,
+    /// The icon at rest, relative to the top left corner of the screen: x, y, width, height.
+    pub rectangle: (i32, i32, i32, i32),
+}
+
 /// Acts on the windows of an application. `owns` says which windows are its own.
 pub trait Control: Send + Sync {
-    fn send(&self, request: Request, owns: Box<dyn Fn(&str) -> bool + Send>);
+    fn send(&self, request: Request, owns: Owns);
+
+    /// Tells the compositor where the icon of each window is (`set_rectangle`), for the
+    /// minimize animation: the windows of the first place that owns them. Replaces the
+    /// previous places, and applies to the windows that come later.
+    fn place(&self, _places: Vec<Place>) {}
+}
+
+/// Acts through the shell protocol while its source runs, through the wlroots one otherwise.
+#[derive(Debug, Default)]
+pub struct Auto;
+
+impl Control for Auto {
+    fn send(&self, request: Request, owns: Owns) {
+        match crate::shell::control() {
+            Some(shell) => shell.send(request, owns),
+            None => WlrControl.send(request, owns),
+        }
+    }
+
+    fn place(&self, places: Vec<Place>) {
+        if let Some(shell) = crate::shell::control() {
+            shell.place(places);
+        }
+    }
 }
 
 /// Acts through `zwlr_foreign_toplevel_manager_v1`, on a thread and a connection of its own:
@@ -235,7 +274,7 @@ pub trait Control: Send + Sync {
 pub struct WlrControl;
 
 impl Control for WlrControl {
-    fn send(&self, request: Request, owns: Box<dyn Fn(&str) -> bool + Send>) {
+    fn send(&self, request: Request, owns: Owns) {
         let spawned = std::thread::Builder::new()
             .name(String::from("windows-request"))
             .spawn(move || {
@@ -255,11 +294,40 @@ impl Control for WlrControl {
 
 /// Fake control: records what is asked, acts on nothing.
 #[derive(Debug, Default, Clone)]
-pub struct Recorder(pub Arc<Mutex<Vec<Request>>>);
+pub struct Recorder {
+    requests: Arc<Mutex<Vec<Request>>>,
+    /// Each `place`: the screen and rectangle of each icon, with the first `app_id` of the
+    /// probe list it owns.
+    places: Arc<Mutex<Vec<Vec<Placed>>>>,
+    probe: Vec<String>,
+}
+
+/// A place as `Recorder` keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    pub app_id: Option<String>,
+    pub output: String,
+    pub rectangle: (i32, i32, i32, i32),
+}
 
 impl Recorder {
+    /// A recorder that names each place by the first of `app_ids` it owns.
+    pub fn probing(app_ids: &[&str]) -> Self {
+        Self {
+            probe: app_ids.iter().map(|a| String::from(*a)).collect(),
+            ..Self::default()
+        }
+    }
+
     pub fn requests(&self) -> Vec<Request> {
-        self.0
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn places(&self) -> Vec<Vec<Placed>> {
+        self.places
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -267,11 +335,26 @@ impl Recorder {
 }
 
 impl Control for Recorder {
-    fn send(&self, request: Request, _: Box<dyn Fn(&str) -> bool + Send>) {
-        self.0
+    fn send(&self, request: Request, _: Owns) {
+        self.requests
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(request);
+    }
+
+    fn place(&self, places: Vec<Place>) {
+        let placed = places
+            .into_iter()
+            .map(|p| Placed {
+                app_id: self.probe.iter().find(|a| (p.owns)(a)).cloned(),
+                output: p.output,
+                rectangle: p.rectangle,
+            })
+            .collect();
+        self.places
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(placed);
     }
 }
 
@@ -302,12 +385,15 @@ pub fn act(
     Ok(count)
 }
 
-/// The source to use: the placeholder if `DOCK_OPEN` is set, otherwise the compositor's list if
-/// it publishes one, otherwise none.
+/// The source to use: the placeholder if `DOCK_OPEN` is set, otherwise our compositor's shell
+/// protocol, otherwise the wlroots list if the compositor publishes one, otherwise none.
 pub fn source() -> Option<Box<dyn Source>> {
     if let Some(placeholder) = Placeholder::from_env() {
         tracing::info!("open windows from {OPEN_VAR} (placeholder)");
         return Some(Box::new(placeholder));
+    }
+    if let Some(shell) = crate::shell::source() {
+        return Some(shell);
     }
     match Wlr::connect() {
         Ok(wlr) => Some(Box::new(wlr)),
@@ -386,6 +472,7 @@ impl Toplevels {
                 })
                 .collect(),
             controllable: true,
+            covered: BTreeSet::new(),
         }
     }
 }

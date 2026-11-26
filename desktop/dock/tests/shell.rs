@@ -193,7 +193,7 @@ fn the_shell_windows_are_read_as_they_come_and_go() {
     let connection = fake.connection.take().expect("connection");
     let mut shell = Shell::with_connection(connection).expect("manager bound");
     let windows = shell.read().expect("read");
-    assert!(!windows.controllable, "read only until D-18c");
+    assert!(windows.controllable);
     assert_eq!(windows.of(|id| id == "org.example.terminal"), (1, true));
 
     // An application starts: its window comes.
