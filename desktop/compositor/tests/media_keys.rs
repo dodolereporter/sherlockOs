@@ -289,13 +289,43 @@ mod tests {
         let calls = h.brightness.lock().unwrap().clone();
         assert_eq!(calls.len(), steps, "{calls:?}");
         assert!((4..=8).contains(&steps), "{calls:?}");
-        // From 20 %, by steps of 5, through logind: never written by the compositor itself.
+        // From 20 %, by steps of 5, through logind: never written by the compositor itself. A
+        // repeat skipped while logind answers is not lost: the steps waiting go together.
         assert_eq!(calls[0], "backlight amdgpu_bl1 64");
-        let percent = 20 + 5 * steps as u16;
-        let raw = (255 * u32::from(percent) + 50) / 100;
-        assert_eq!(calls[steps - 1], format!("backlight amdgpu_bl1 {raw}"));
+        let raw = |percent: u16| {
+            format!(
+                "backlight amdgpu_bl1 {}",
+                (255 * u32::from(percent) + 50) / 100
+            )
+        };
+        let last = calls.last().unwrap();
+        let percent = (40..=100).step_by(5).find(|p| raw(*p) == *last);
+        let percent = percent.unwrap_or_else(|| panic!("{calls:?}"));
         let shown = level(Kind::Brightness, percent, false);
         h.run_until("the level shown", |h| h.state.osd_level() == shown);
+    }
+
+    #[test]
+    fn a_key_held_against_a_hung_sound_server_piles_nothing_up() {
+        let mut h = Harness::start("hung");
+        // From now on `pactl` hangs, until it is killed after `audio::TIMEOUT`.
+        let script = h.dir.join("pactl");
+        let log = h.dir.join("pactl.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nexec sleep 30\n",
+            log.display()
+        );
+        std::fs::write(&script, body).unwrap();
+        h.key(VOLUME_UP, KeyState::Pressed);
+        h.run_for(Duration::from_secs(4));
+        h.key(VOLUME_UP, KeyState::Released);
+        let at_release = h.pactl_log().lines().count();
+        // What runs at the release ends, plus one action at most, merged from what waited.
+        h.run_for(system_services::audio::TIMEOUT * 2 + Duration::from_millis(500));
+        let calls = h.pactl_log().lines().count();
+        assert!(calls <= at_release + 1, "{at_release} then {calls}");
+        assert!(calls <= 3, "{}", h.pactl_log());
+        assert_eq!(h.state.osd_level(), None);
     }
 
     #[test]

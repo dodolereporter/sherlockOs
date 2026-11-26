@@ -41,6 +41,11 @@ under Plasma): the compositor never changes the sound of the session it runs in.
   (`media-keys`), one key after the other, in the order pressed. What changed comes back to the
   event loop by a calloop channel and shows in the pill. A slow `pactl` or a bus that does not
   answer never holds a frame back.
+- **Nothing piles up.** A held key only repeats when the worker has done the keys before it (a
+  flag set from a key sent until the worker is idle again); a press always goes. The steps of
+  the volume, or of the brightness, waiting together are merged: their sum is set at once. A
+  key held 4 s against a `pactl` that hangs leaves at most one action after its release
+  (`tests/media_keys.rs`), instead of a hundred.
 
 ## The on-screen display
 

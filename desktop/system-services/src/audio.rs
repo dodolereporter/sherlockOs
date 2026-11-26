@@ -287,10 +287,11 @@ impl Mixer {
         }
     }
 
-    /// One step up or down of the output volume, which also unmutes it. Returns the new sound.
-    pub fn step_volume(&self, up: bool) -> Result<Sound> {
+    /// `steps` steps of the output volume, up when positive, down when negative, set at once;
+    /// it also unmutes it. Returns the new sound.
+    pub fn step_volume(&self, steps: i32) -> Result<Sound> {
         let now = self.sound(Device::Output)?;
-        let volume = step(now.volume, up);
+        let volume = (0..steps.unsigned_abs()).fold(now.volume, |v, _| step(v, steps > 0));
         self.set_volume(volume)?;
         Ok(Sound {
             volume,
