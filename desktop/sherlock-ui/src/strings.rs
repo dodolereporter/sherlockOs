@@ -49,6 +49,17 @@ pub mod top_bar {
     pub const POWER_OFF: &str = "Éteindre";
 }
 
+/// Names of the color themes given to GTK, Qt and KDE applications, as their theme pickers
+/// show them.
+pub mod toolkit_theme {
+    /// The dark variant.
+    pub const DARK: &str = "SherlockOS sombre";
+    /// The light variant.
+    pub const LIGHT: &str = "SherlockOS clair";
+    /// The description of the GTK theme.
+    pub const COMMENT: &str = "Couleurs du bureau SherlockOS";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

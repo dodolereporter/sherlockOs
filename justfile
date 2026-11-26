@@ -67,6 +67,20 @@ install-evidence:
         install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
     done
 
+# Writes the GTK, Qt and KDE themes under a folder laid out like a home folder, to look at them; overwrites nothing unless `force` is `--force`
+themes output="target/themes" force="":
+    cargo run -p toolkit-theme -- generate {{ force }} {{ quote(output) }}
+
+# Installs the colors of the desktop for GTK, Qt and KDE applications, without root: every file it replaces is kept as <name>.bak-<date>
+install-themes:
+    cargo build --release -p toolkit-theme
+    "${CARGO_TARGET_DIR:-target}/release/toolkit-theme" install
+
+# Takes away what install-themes installed and puts the backups back
+uninstall-themes:
+    cargo build --release -p toolkit-theme
+    "${CARGO_TARGET_DIR:-target}/release/toolkit-theme" uninstall
+
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
     python3 distro/tests/check-language.py --self-test

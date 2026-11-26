@@ -1,9 +1,10 @@
 //! Settings of the desktop that several programs share: the compositor applies them, Control
-//! Room (lot D-26) will write them. For now, the wallpaper. See "Wallpapers" in
-//! `docs/compositor.md`.
+//! Room (lot D-26) will write them: the wallpaper (see "Wallpapers" in `docs/compositor.md`)
+//! and the touchpad (see "Touchpad" there).
 
 use std::{ffi::OsString, path::PathBuf};
 
+pub mod touchpad;
 pub mod wallpaper;
 
 #[cfg(feature = "variants")]
