@@ -102,7 +102,7 @@ split into terms; every term must be found. Each term is scored where it fits be
 Scattered letters only count in the name: in the longer generic names and keywords they matched
 almost anything. A result's score is the sum over the terms. The order is stable and total:
 score, then folded name, then desktop id. The files' order never matters (tested by reading
-them backwards). Searching 500 applications takes well under 50 ms (tested, in a debug build).
+them backwards). Searching 500 applications takes well under 50 ms (tested in a debug build, best of 5 runs).
 
 ## Sections
 

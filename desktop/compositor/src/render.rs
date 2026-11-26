@@ -42,7 +42,7 @@ use crate::{
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
-    genie, is_override_redirect,
+    genie, is_override_redirect, mission_control,
     output::View,
     wallpaper, window_data,
 };
@@ -59,6 +59,7 @@ render_elements! {
     Wallpaper=TextureRenderElement<GlesTexture>,
     Genie=Stamped<genie::GenieElement>,
     Decoration=Stamped<TextureRenderElement<GlesTexture>>,
+    Thumbnail=RoundedSurface<TextureRenderElement<GlesTexture>>,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -69,6 +70,8 @@ pub struct Scene {
     genie: genie::Painter,
     /// Textures of the title bars the compositor draws (lot D-08).
     bars: RefCell<decorations::Textures>,
+    /// Textures of the titles of Mission Control (lot D-33).
+    labels: RefCell<mission_control::Labels>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -124,6 +127,19 @@ pub enum Item {
         look: Look,
         alpha: f32,
     },
+    /// A title of Mission Control in `rect` (lot D-33).
+    Label {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        label: mission_control::Label,
+        alpha: f32,
+    },
+    /// The wallpaper of the screen in `rect`, cut to its rounded corners: a workspace thumbnail
+    /// of Mission Control.
+    Thumbnail {
+        rect: Rectangle<i32, Physical>,
+        radius: f32,
+    },
 }
 
 impl Item {
@@ -152,6 +168,7 @@ impl Item {
             }
             Item::Genie(frame) => frame.params(),
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -192,6 +209,7 @@ impl Scene {
             clip,
             genie: genie::Painter::new(renderer)?,
             bars: RefCell::default(),
+            labels: RefCell::default(),
         })
     }
 
@@ -231,12 +249,14 @@ impl Scene {
         ids.sweep();
         self.genie.sweep();
         self.bars.borrow_mut().sweep();
-        let used: Vec<_> = state
-            .views()
+        self.labels.borrow_mut().sweep();
+        let all = state.views();
+        let used: Vec<_> = all
             .iter()
             .filter_map(|(_, view)| state.wallpaper.image_for(view.frame.size))
             .collect();
-        textures.retain(&used);
+        let names: Vec<_> = all.iter().map(|(output, _)| output.name()).collect();
+        textures.retain(&used, &names);
         (screens, animating)
     }
 
@@ -383,6 +403,35 @@ impl Scene {
                     .into_iter()
                     .collect()
             }
+            Item::Label {
+                key,
+                rect,
+                label,
+                alpha,
+            } => {
+                let mut labels = self.labels.borrow_mut();
+                let label = labels.element(renderer, key.clone(), &label, rect, alpha);
+                label
+                    .map(|label| SceneElement::Decoration(ids.stamp(key, params, label)))
+                    .into_iter()
+                    .collect()
+            }
+            Item::Thumbnail { rect, radius } => wallpaper
+                .iter()
+                .map(|(texture, alpha)| {
+                    let inside = View {
+                        frame: rect,
+                        ..*view
+                    };
+                    SceneElement::Thumbnail(RoundedSurface {
+                        inner: wallpaper::element(texture, *alpha, mode, &inside),
+                        program: self.clip.clone(),
+                        clip: rect.to_f64(),
+                        radius,
+                        frame_size: view.frame_size,
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -417,7 +466,10 @@ pub fn items(
         });
     }
     animating |= state.workspaces_sliding(now);
-    for window in state.space.elements().rev() {
+    // Mission Control draws the windows of its own (lot D-33).
+    let overview = mission_control::push_items(&mut items, state, (output, view), now);
+    animating |= overview.unwrap_or(false);
+    for window in state.space.elements().rev().filter(|_| overview.is_none()) {
         // Minimized, or on a workspace out of view.
         let Some(shift) = state.workspace_shift(window, now) else {
             continue;
@@ -733,10 +785,10 @@ pub fn rounded_opaque(
         .collect()
 }
 
-/// A client surface clipped by the rounded rectangle of its window. The texture program
-/// replaces Smithay's while the surface is drawn.
-pub struct RoundedSurface {
-    inner: RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+/// A client surface clipped by the rounded rectangle of its window, or the wallpaper by that of
+/// a workspace thumbnail. The texture program replaces Smithay's while it is drawn.
+pub struct RoundedSurface<E = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>> {
+    inner: E,
     program: GlesTexProgram,
     /// Clip rectangle, in the frame, before its transform.
     clip: Rectangle<f64, Physical>,
@@ -744,7 +796,7 @@ pub struct RoundedSurface {
     frame_size: Size<i32, Physical>,
 }
 
-impl Element for RoundedSurface {
+impl<E: Element> Element for RoundedSurface<E> {
     fn id(&self) -> &Id {
         self.inner.id()
     }
@@ -799,7 +851,7 @@ impl Element for RoundedSurface {
     }
 }
 
-impl RenderElement<GlesRenderer> for RoundedSurface {
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for RoundedSurface<E> {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,

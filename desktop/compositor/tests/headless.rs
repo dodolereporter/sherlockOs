@@ -1784,6 +1784,29 @@ mod tests {
         drop(shown);
     }
 
+    #[test]
+    fn a_click_without_moving_reaches_a_window_back_from_its_icon() {
+        let mut h = Harness::start();
+        let _shown = h.show_window();
+        let window = h.state.space.elements().next().unwrap().clone();
+        h.state.pointer_motion((400.0, 300.0).into(), 1);
+        h.state.minimize(&window);
+        h.run_until("the window in its icon", |_, s| {
+            s.minimize_progress(&window, s.now()).is_none()
+        });
+        // Restored under the still pointer: during its effect, the pointer does not reach it.
+        h.state.activate(&window);
+        assert!(h.state.minimize_progress(&window, h.state.now()).is_some());
+        h.run_until("the window back", |_, s| {
+            s.minimize_progress(&window, s.now()).is_none()
+        });
+        // The loop iteration after the last frame of the effect.
+        h.state.refresh();
+        h.client.button_serial = None;
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.run_until("the press on the window", |c, _| c.button_serial.is_some());
+    }
+
     /// Captures of a decorated window, dark then light with the pointer on the maximize
     /// button: the scene of a screen, as the real session draws it, but into a texture with
     /// Mesa's software renderer. They go to `screenshots/`, to compare with the Main board.

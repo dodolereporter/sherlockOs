@@ -18,6 +18,7 @@ pub mod keyboard;
 mod layer;
 pub mod layout;
 pub mod mesa;
+pub mod mission_control;
 pub mod options;
 pub mod output;
 pub mod pacing;
@@ -202,6 +203,8 @@ pub struct State {
     decorations: decorations::Decorations,
     /// The theme of the appearance file and the fade towards it (lot D-05c).
     themes: theme::Themes,
+    /// Mission Control (lot D-33).
+    overview: mission_control::Overview,
 }
 
 /// Data attached to each window.
@@ -317,6 +320,7 @@ impl State {
             perf: perf::LoopStats::default(),
             decorations: decorations::Decorations::new(&dh),
             themes: theme::Themes::default(),
+            overview: mission_control::Overview::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -478,11 +482,12 @@ impl State {
     }
 
     /// Gives the keyboard to `target`, unless an anchored surface with an exclusive keyboard
-    /// keeps it.
+    /// keeps it. While Mission Control is open, no window has it.
     pub(crate) fn set_keyboard_focus(&mut self, target: Option<KeyboardFocus>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        let target = target.filter(|_| !self.overview.is_open());
         let target = self
             .exclusive_layer()
             .map(KeyboardFocus::Wayland)
@@ -581,6 +586,7 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.end_minimize_effects();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;

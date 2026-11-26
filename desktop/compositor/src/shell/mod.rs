@@ -204,6 +204,12 @@ impl State {
         true
     }
 
+    /// Stops the slide between workspaces: the active one is shown at once (Mission Control
+    /// switches under its own animation, lot D-33).
+    pub(crate) fn stop_workspace_slide(&mut self) {
+        self.shell.slide.stop();
+    }
+
     /// Activates the workspace `steps` away from the active one, if there is one.
     pub fn activate_workspace_by(&mut self, steps: isize) {
         let model = &self.shell.workspace_model;
@@ -332,7 +338,7 @@ impl State {
     }
 
     /// The pointer goes to what is under it now that windows came or went.
-    fn refresh_pointer_focus(&mut self) {
+    pub(crate) fn refresh_pointer_focus(&mut self) {
         if let Some(pointer) = self.seat.get_pointer() {
             let time = self.start_time.elapsed().as_millis() as u32;
             self.pointer_motion(pointer.current_location(), time);

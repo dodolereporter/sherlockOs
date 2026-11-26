@@ -8,11 +8,9 @@ namespace are all `bar`. The texts it shows stay in French, from `sherlock-ui`.
 
 ![The bar in a nested KWin](../desktop/bar/screenshots/bar-kwin.png)
 
-![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
-
-Both screenshots come from a nested KWin running inside a Xephyr display started for the test,
+The screenshot comes from a nested KWin running inside a Xephyr display started for the test,
 with `USER=Camille` so that no login name of the machine shows (see « Running and checking by
-hand »).
+hand »). The Sherlock menu open is shown in « Theme ».
 
 ### Logo
 
@@ -610,11 +608,10 @@ The bar above, rendered by RADV in a headless KWin (`kwin_wayland --virtual`, 14
 the `backdrop` example: floating, rounded corners, and the glass lets the disc through. Over the
 disc `(22, 49, 79)` the bar reads `(17, 31, 51)`, the board's `rgba(16,26,44,0.78)` laid over it.
 
-![The Sherlock menu in its GPU surface, with the board's blurred shadow](../desktop/bar/screenshots/menu-shadow-gpu.png)
-
-The menu with its blurred shadow, in the surface the GPU gets (headless render by wgpu on RADV,
-scale 2, `ICED_TEST_BACKEND=wgpu` with the variables of ADR 0018). No input could be sent to the
-headless KWin to open it there.
+The menu with its blurred shadow, in the surface the GPU gets, is rendered by the
+`sherlock-menu-shadow` capture of `tests/render.rs` (headless render by wgpu on RADV with
+`ICED_TEST_BACKEND=wgpu` and the variables of ADR 0018). No input could be sent to the headless
+KWin to open it there.
 
 `cargo run -p bar --example backdrop` lays the Main board's desktop background (colour and three
 discs) on the background layer: a nested KWin has no wallpaper, and the translucent glass only

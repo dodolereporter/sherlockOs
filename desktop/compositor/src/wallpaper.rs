@@ -131,10 +131,13 @@ impl Wallpaper {
     }
 
     /// The desktop changes theme: a wallpaper that follows it changes to its pendant.
+    /// Before the setting is read (`start`), the theme is only kept: nothing is looked for yet.
     pub fn set_theme(&mut self, theme: ThemeVariant) {
         if theme != self.theme {
             self.theme = theme;
-            self.reload();
+            if self.generation > 0 {
+                self.reload();
+            }
         }
     }
 
@@ -375,8 +378,12 @@ impl Textures {
 
     /// Keeps only the textures drawn in this frame: a variant no screen shows any more goes
     /// away.
-    pub fn retain(&mut self, used: &[PathBuf]) {
+    /// The screens are `screens`, by name: what an unplugged screen showed or was fading from
+    /// goes away with it.
+    pub fn retain(&mut self, used: &[PathBuf], screens: &[String]) {
         self.textures.retain(|path, _| used.contains(path));
+        self.shown.retain(|screen, _| screens.contains(screen));
+        self.outgoing.retain(|screen, _| screens.contains(screen));
     }
 }
 
@@ -603,6 +610,14 @@ mod tests {
         let end = blend(&mut old, Some(2), start + THEME_FADE);
         assert_eq!(end, (vec![(2, 1.0)], false));
         assert_eq!(old, None);
+    }
+
+    #[test]
+    fn a_theme_before_the_start_is_only_kept() {
+        // `theme::follow` runs before the setting is read: nothing is looked for, nothing logged.
+        let mut w = Wallpaper::default();
+        w.set_theme(ThemeVariant::Light);
+        assert_eq!((w.theme, w.generation), (ThemeVariant::Light, 0));
     }
 
     #[test]
