@@ -78,7 +78,7 @@ use crate::{
 pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
-         [command [arguments…]]"
+         [--workspaces N] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -367,12 +367,12 @@ impl State {
         }
     }
 
-    /// Topmost window, X11 menus aside: the one that takes the keyboard back.
+    /// Topmost shown window, X11 menus aside: the one that takes the keyboard back.
     pub(crate) fn top_window(&self) -> Option<Window> {
         self.space
             .elements()
             .rev()
-            .find(|w| !is_override_redirect(w))
+            .find(|w| !is_override_redirect(w) && self.is_visible(w))
             .cloned()
     }
 

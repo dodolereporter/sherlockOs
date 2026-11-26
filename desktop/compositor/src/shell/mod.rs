@@ -6,11 +6,10 @@
 //! loop iteration, `State::refresh_shell` reads the windows and the screens, and each bound
 //! client receives what changed since it was last told.
 //!
-//! The workspaces are modeled here (`workspaces::Workspaces`): a single one, `1`, for now, which
-//! lot D-18w fills.
-//!
-//! Minimizing lives here too: a minimized window leaves the space, so that rendering, input and
-//! snapping no longer see it, and comes back at the same place when activated.
+//! The workspaces live here too (`workspaces::Workspaces`, lot D-18w): each window belongs to
+//! one, and only the windows of the active one are shown, as are the windows that are not
+//! minimized. Hidden windows stay in the space, at their place: they keep their commits, their
+//! screen and their arrangement, and rendering, input and focus skip them (`State::is_visible`).
 
 mod toplevels;
 mod workspaces;
@@ -44,24 +43,20 @@ pub(crate) struct Shell {
     managers: Vec<toplevels::Manager>,
     /// Bound `ext_workspace_manager_v1`, with what each one was told.
     workspaces: Vec<workspaces::Manager>,
-    /// Minimized windows, out of the space, with the geometry and screen they had.
-    minimized: Vec<Minimized>,
+    /// Minimized windows: hidden, at their place in the space.
+    minimized: Vec<Window>,
     /// Rectangle of the dock icon of each window, by window id: screen name and rectangle on it.
     icons: Vec<(u32, String, Rectangle<i32, Logical>)>,
     /// Listening shell socket in the loop, removed by `State::shutdown`.
     listener: Option<smithay::reexports::calloop::RegistrationToken>,
     /// The workspaces and the active one.
     workspace_model: workspaces::Workspaces,
+    /// Slide from one workspace to the next.
+    slide: crate::anim::WorkspaceSlide,
 }
 
-/// Workspace of a window, by id: the active one when the window is first seen.
+/// Workspace of a window, by id: the active one when the window shows up.
 struct WindowWorkspace(RefCell<String>);
-
-struct Minimized {
-    window: Window,
-    geometry: Rectangle<i32, Logical>,
-    output: String,
-}
 
 impl Shell {
     /// Creates the globals of the shell: only clients of the shell socket see them.
@@ -164,20 +159,42 @@ impl State {
         &self.shell.workspace_model
     }
 
-    /// Makes the workspace `id` active. Lot D-18w shows its windows, hides the others and
-    /// slides between them; for now there is only one.
+    /// Makes the workspace `id` active: its windows show up and the others slide away. The
+    /// keyboard goes to its window on top, and a window being dragged comes along.
     pub fn activate_workspace(&mut self, id: &str) {
-        if self.shell.workspace_model.activate(id) {
-            tracing::debug!(id, "workspace activated");
+        let model = &mut self.shell.workspace_model;
+        let from = model.active_index();
+        if !model.activate(id) || model.active_index() == from {
+            return;
+        }
+        tracing::debug!(id, "workspace activated");
+        let now = self.start_time.elapsed();
+        let to = model.active_index();
+        self.shell.slide.go(now, from, to);
+        if let Some(window) = self.gesture_window() {
+            *self.window_workspace(&window).0.borrow_mut() = id.to_owned();
+        }
+        self.dismiss_popups();
+        self.focus(self.top_window());
+        self.refresh_pointer_focus();
+    }
+
+    /// Activates the workspace `steps` away from the active one, if there is one.
+    pub fn activate_workspace_by(&mut self, steps: isize) {
+        let model = &self.shell.workspace_model;
+        let index = model.active_index().checked_add_signed(steps);
+        if let Some(id) = index.and_then(|i| model.id_at(i)).map(str::to_owned) {
+            self.activate_workspace(&id);
         }
     }
 
-    /// Sets the number of workspaces (at least one), numbered from 1. The windows of a removed
-    /// workspace go to the active one. Lot D-18w calls it with the setting; nothing does yet.
+    /// Sets the number of workspaces, from 1 to 9, numbered from 1. The windows of a removed
+    /// workspace go to the active one; if that was the active one, the first one becomes active,
+    /// without sliding.
     pub fn set_workspace_count(&mut self, count: usize) {
+        let before = self.shell.workspace_model.active().to_owned();
         self.shell.workspace_model.set_count(count);
-        let minimized = self.shell.minimized.iter().map(|m| &m.window);
-        let windows: Vec<_> = self.space.elements().chain(minimized).cloned().collect();
+        let windows: Vec<_> = self.space.elements().cloned().collect();
         let active = self.shell.workspace_model.active().to_owned();
         for window in &windows {
             if !self
@@ -188,6 +205,11 @@ impl State {
                 *self.window_workspace(window).0.borrow_mut() = active.clone();
             }
         }
+        if active != before {
+            self.shell.slide.stop();
+            self.focus(self.top_window());
+            self.refresh_pointer_focus();
+        }
     }
 
     /// Id of the workspace `window` belongs to.
@@ -195,10 +217,56 @@ impl State {
         self.window_workspace(window).0.borrow().clone()
     }
 
-    /// Puts `window` on the workspace `id`, if it exists.
+    /// Puts `window` on the workspace `id`, if it exists. Leaving the active workspace, it hides,
+    /// and if it was the active window, the keyboard goes to the window on top.
     pub fn move_to_workspace(&mut self, window: &Window, id: &str) {
-        if self.shell.workspace_model.contains(id) {
-            *self.window_workspace(window).0.borrow_mut() = id.to_owned();
+        if !self.shell.workspace_model.contains(id) || self.workspace_of(window) == id {
+            return;
+        }
+        let active = is_activated(window) || self.focused_window().as_ref() == Some(window);
+        *self.window_workspace(window).0.borrow_mut() = id.to_owned();
+        if active && !self.is_visible(window) {
+            self.focus(self.top_window());
+        }
+        self.refresh_pointer_focus();
+    }
+
+    /// Puts a window that shows up on the active workspace.
+    pub(crate) fn join_active_workspace(&self, window: &Window) {
+        let active = self.shell.workspace_model.active().to_owned();
+        *self.window_workspace(window).0.borrow_mut() = active;
+    }
+
+    /// Whether `window` is shown: on the active workspace, and not minimized.
+    pub fn is_visible(&self, window: &Window) -> bool {
+        !self.is_minimized(window) && self.workspace_of(window) == self.workspaces().active()
+    }
+
+    /// Horizontal shift at `now` of `window` for the slide between workspaces, `None` when it
+    /// is not on the screen: minimized, or on a workspace out of view.
+    pub fn workspace_shift(&self, window: &Window, now: std::time::Duration) -> Option<f64> {
+        if self.is_minimized(window) {
+            return None;
+        }
+        let model = &self.shell.workspace_model;
+        let index = model.index(&self.workspace_of(window))?;
+        let screen = self.window_output(window);
+        let width = screen.and_then(|o| self.space.output_geometry(&o));
+        let width = width.map_or(0.0, |g| f64::from(g.size.w));
+        let active = model.active_index();
+        self.shell.slide.shift(now, index, active, width)
+    }
+
+    /// The workspaces are sliding at `now`.
+    pub fn workspaces_sliding(&self, now: std::time::Duration) -> bool {
+        self.shell.slide.is_animating(now)
+    }
+
+    /// The pointer goes to what is under it now that windows came or went.
+    fn refresh_pointer_focus(&mut self) {
+        if let Some(pointer) = self.seat.get_pointer() {
+            let time = self.start_time.elapsed().as_millis() as u32;
+            self.pointer_motion(pointer.current_location(), time);
         }
     }
 
@@ -211,22 +279,22 @@ impl State {
 
     /// Whether `window` is minimized.
     pub fn is_minimized(&self, window: &Window) -> bool {
-        self.shell.minimized.iter().any(|m| &m.window == window)
+        self.shell.minimized.contains(window)
     }
 
     /// Hides `window` until it is activated. If it was the active one, the window on top
     /// becomes active.
     /// Nothing happens during a gesture, which would put the window back.
     pub fn minimize(&mut self, window: &Window) {
-        let Some(geometry) = self.space.element_geometry(window) else {
-            return;
-        };
-        if is_override_redirect(window) || self.gesture_active() {
+        if self.space.element_geometry(window).is_none()
+            || self.is_minimized(window)
+            || is_override_redirect(window)
+            || self.gesture_active()
+        {
             return;
         }
-        let output = self.window_output(window).map(|o| o.name());
         let active = is_activated(window) || self.focused_window().as_ref() == Some(window);
-        self.space.unmap_elem(window);
+        self.shell.minimized.push(window.clone());
         window.set_activated(false);
         if let Some(toplevel) = window.toplevel() {
             toplevel.send_pending_configure();
@@ -236,42 +304,29 @@ impl State {
         {
             tracing::warn!("hiding the X11 window: {err}");
         }
-        self.shell.minimized.push(Minimized {
-            window: window.clone(),
-            geometry,
-            output: output.unwrap_or_default(),
-        });
         if active {
             self.focus(self.top_window());
         }
+        self.refresh_pointer_focus();
     }
 
-    /// Brings `window` back if minimized, raises it and gives it the keyboard.
+    /// Brings `window` back if minimized, goes to its workspace, raises it and gives it the
+    /// keyboard.
     pub fn activate(&mut self, window: &Window) {
-        if let Some(i) = self
-            .shell
-            .minimized
-            .iter()
-            .position(|m| &m.window == window)
-        {
-            let minimized = self.shell.minimized.remove(i);
+        if !self.space.elements().any(|w| w == window) {
+            return;
+        }
+        if self.is_minimized(window) {
+            self.shell.minimized.retain(|w| w != window);
             if let Some(surface) = window.x11_surface()
                 && let Err(err) = surface.set_suspended(false)
             {
                 tracing::warn!("showing the X11 window: {err}");
             }
-            // Its screen went away meanwhile: centered on the pointer's, not off every screen.
-            let mut loc = minimized.geometry.loc;
-            if !self.space.outputs().any(|o| o.name() == minimized.output)
-                && let Some(area) = self.output_area()
-            {
-                loc = crate::layout::centered(area, minimized.geometry.size);
-            }
-            self.move_window(window, loc, false);
         }
-        if self.space.elements().any(|w| w == window) {
-            self.focus(Some(window.clone()));
-        }
+        self.activate_workspace(&self.workspace_of(window));
+        self.focus(Some(window.clone()));
+        self.refresh_pointer_focus();
     }
 
     /// Asks the application of `window` to close it.
@@ -283,14 +338,9 @@ impl State {
         }
     }
 
-    /// The window of id `id`, shown or minimized.
+    /// The window of id `id`, shown or hidden.
     fn window_by_id(&self, id: u32) -> Option<Window> {
-        let minimized = self.shell.minimized.iter().map(|m| &m.window);
-        self.space
-            .elements()
-            .chain(minimized)
-            .find(|w| window_id(w) == id)
-            .cloned()
+        self.space.elements().find(|w| window_id(w) == id).cloned()
     }
 
     /// Tells the clients of the shell what changed since the last call. Called after each loop
@@ -299,9 +349,9 @@ impl State {
         // A window destroyed, or withdrawn by its X11 client, while minimized is forgotten. A
         // withdrawn X11 window loses `_NET_WM_STATE_HIDDEN`: smithay keeps it for the life of the
         // surface, and the window mapped again would believe it is still minimized.
-        self.shell.minimized.retain(|m| {
-            let kept = m.window.alive() && m.window.x11_surface().is_none_or(|s| s.is_mapped());
-            if let (false, Some(surface)) = (kept, m.window.x11_surface())
+        self.shell.minimized.retain(|window| {
+            let kept = window.alive() && window.x11_surface().is_none_or(|s| s.is_mapped());
+            if let (false, Some(surface)) = (kept, window.x11_surface())
                 && surface.alive()
                 && let Err(err) = surface.set_suspended(false)
             {
@@ -343,7 +393,7 @@ impl State {
     /// Every window the shell sees, and the state of every screen.
     fn snapshot(&self) -> (toplevels::Windows, toplevels::Outputs) {
         use toplevels::{OutputState, ToplevelState};
-        let shown = self
+        let windows: Vec<_> = self
             .space
             .elements()
             .filter(|w| !is_override_redirect(w) && window_data(w).shown.get())
@@ -351,19 +401,8 @@ impl State {
                 let (name, screen) = self.screen(self.window_output(w));
                 let mut geometry = self.space.element_geometry(w)?;
                 geometry.loc -= screen;
-                Some((w, name, geometry, false))
-            });
-        // A minimized window whose screen went away is given the first one.
-        let minimized = self.shell.minimized.iter().map(|m| {
-            let output = self.space.outputs().find(|o| o.name() == m.output);
-            let output = output.or_else(|| self.space.outputs().next()).cloned();
-            let (name, screen) = self.screen(output);
-            let mut geometry = m.geometry;
-            geometry.loc -= screen;
-            (&m.window, name, geometry, true)
-        });
-        let windows: Vec<_> = shown
-            .chain(minimized)
+                Some((w, name, geometry, self.is_minimized(w)))
+            })
             .map(|(window, output, geometry, minimized)| {
                 let mut states = Vec::new();
                 let arrangement = crate::handlers::Arrangement::of(window);

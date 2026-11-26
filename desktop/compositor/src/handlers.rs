@@ -118,6 +118,7 @@ impl State {
         // keyboard.
         if !data.shown.get() && size.w > 0 && size.h > 0 {
             data.shown.set(true);
+            self.join_active_workspace(&window);
             if let (false, Some(area)) = (filled, self.output_area()) {
                 let loc = layout::centered(area, size);
                 self.move_window(&window, loc, false);
@@ -286,12 +287,12 @@ impl State {
                 data.restore.set(self.space.element_geometry(window));
             }
             self.request_size(window, Some(rect.size));
-            self.move_window(window, rect.loc, true);
+            self.move_window(window, rect.loc, false);
         } else if let Some(restore) = data.restore.take() {
             // Zero size: the window had no content yet, the client chooses.
             let size = (restore.size.w > 0 && restore.size.h > 0).then_some(restore.size);
             self.request_size(window, size);
-            self.move_window(window, restore.loc, true);
+            self.move_window(window, restore.loc, false);
         }
         if let Some(toplevel) = window.toplevel()
             && toplevel.is_initial_configure_sent()

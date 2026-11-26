@@ -399,6 +399,7 @@ impl XWaylandShellHandler for State {
         let data = window_data(&window);
         if !surface.is_override_redirect() && !data.shown.get() {
             data.shown.set(true);
+            self.join_active_workspace(&window);
             self.focus(Some(window));
         }
     }

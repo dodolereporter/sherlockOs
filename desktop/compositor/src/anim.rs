@@ -1,4 +1,4 @@
-//! Motion of the windows and of the snap preview: the springs and fades of
+//! Motion of the windows, of the snap preview and of the workspaces: the springs and fades of
 //! `sherlock_ui::motion` applied to rectangles. Pure computation, without rendering or Wayland.
 
 use std::time::Duration;
@@ -199,6 +199,54 @@ impl PreviewMotion {
     }
 }
 
+/// Slide from one workspace to another. The workspaces stand in a row, side by side; the view
+/// is a position along that row, in workspaces (0 is the first one), carried by `SNAP_SPRING`
+/// to the active one. Each screen shows its own part of the row: a workspace is shifted by its
+/// distance to the view times the width of the screen.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkspaceSlide(Option<Animation>);
+
+impl WorkspaceSlide {
+    /// Half a pixel on a screen 4096 wide, in workspaces.
+    const PRECISION: f64 = motion::GEOMETRY_PRECISION / 4096.0;
+
+    /// Slides from the workspace at `from` (the one shown at rest) to the one at `to`. During a
+    /// slide, the view leaves from where it is: nothing jumps.
+    pub fn go(&mut self, now: Duration, from: usize, to: usize) {
+        match &mut self.0 {
+            Some(view) if !view.is_done(now, Self::PRECISION) => view.retarget(now, to as f64),
+            _ => {
+                self.0 = Some(Animation::new(
+                    motion::SNAP_SPRING,
+                    from as f64,
+                    to as f64,
+                    now,
+                ))
+            }
+        }
+    }
+
+    /// Stops the slide: the active workspace is shown at once.
+    pub fn stop(&mut self) {
+        self.0 = None;
+    }
+
+    pub fn is_animating(&self, now: Duration) -> bool {
+        self.0.is_some_and(|v| !v.is_done(now, Self::PRECISION))
+    }
+
+    /// Horizontal shift at `now` of the workspace at `index`, on a screen `width` wide, when
+    /// the one at `active` is the active one. `None` when it is out of the screen.
+    pub fn shift(&self, now: Duration, index: usize, active: usize, width: f64) -> Option<f64> {
+        let view = match self.0 {
+            Some(view) if self.is_animating(now) => view.value(now),
+            _ => active as f64,
+        };
+        let distance = index as f64 - view;
+        (distance.abs() < 1.0).then_some(distance * width)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +351,38 @@ mod tests {
         assert_eq!(fading.opacity, 1.0);
         assert!(preview.frame(ms(650), None).unwrap().opacity < 1.0);
         assert_eq!(preview.frame(ms(600) + motion::FADE, None), None);
+    }
+
+    #[test]
+    fn workspaces_slide_side_by_side() {
+        let mut slide = WorkspaceSlide::default();
+        let shift = |s: &WorkspaceSlide, now, index| s.shift(ms(now), index, 1, 800.0);
+        // At rest, only the active workspace is on the screen.
+        assert_eq!(shift(&slide, 0, 1), Some(0.0));
+        assert_eq!((shift(&slide, 0, 0), shift(&slide, 0, 2)), (None, None));
+        // From the first to the second: the first leaves to the left, the second comes in from
+        // the right, and both are on the screen together.
+        slide.go(ms(1000), 0, 1);
+        assert_eq!(shift(&slide, 1000, 0), Some(0.0));
+        assert_eq!(shift(&slide, 1000, 1), None, "not yet on the screen");
+        let (out, coming) = (shift(&slide, 1050, 0), shift(&slide, 1050, 1));
+        assert!(out.is_some_and(|x| x < 0.0 && x > -800.0));
+        assert!(coming.is_some_and(|x| x > 0.0 && x < 800.0));
+        assert!(
+            coming
+                .zip(out)
+                .is_some_and(|(c, o)| (c - o - 800.0).abs() < 1e-9)
+        );
+        assert!(slide.is_animating(ms(1050)));
+        assert_eq!(shift(&slide, 2000, 1), Some(0.0));
+        assert_eq!(shift(&slide, 2000, 0), None);
+        assert!(!slide.is_animating(ms(2000)));
+        // Back halfway: the view turns around from where it is.
+        slide.go(ms(3000), 1, 0);
+        let before = shift(&slide, 3050, 1);
+        slide.go(ms(3050), 1, 1);
+        assert_eq!(shift(&slide, 3050, 1), before);
+        slide.stop();
+        assert_eq!(shift(&slide, 3060, 1), Some(0.0));
     }
 }

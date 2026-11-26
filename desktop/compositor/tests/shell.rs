@@ -19,7 +19,13 @@ mod tests {
         sherlock_shell_manager_v1::{self, SherlockShellManagerV1},
         sherlock_shell_toplevel_v1::{self, SherlockShellToplevelV1, State as Flag},
     };
-    use smithay::{backend::input::ButtonState, reexports::calloop::EventLoop, utils::Rectangle};
+    use smithay::{
+        backend::input::{ButtonState, KeyState},
+        input::keyboard::Keycode,
+        reexports::calloop::EventLoop,
+        utils::Rectangle,
+        wayland::seat::WaylandFocus,
+    };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child,
         protocol::{
@@ -51,6 +57,15 @@ mod tests {
     const MANAGER: &str = "sherlock_shell_manager_v1";
     const WORKSPACES: &str = "ext_workspace_manager_v1";
     const BTN_LEFT: u32 = 0x110;
+    // xkb codes (evdev + 8): left Super, Shift and Ctrl, the arrows, and 1 to 3 of the top row.
+    const KEY_SUPER: u32 = 133;
+    const KEY_SHIFT: u32 = 50;
+    const KEY_CTRL: u32 = 37;
+    const KEY_LEFT: u32 = 113;
+    const KEY_RIGHT: u32 = 114;
+    const KEY_1: u32 = 10;
+    const KEY_2: u32 = 11;
+    const KEY_3: u32 = 12;
 
     /// A window as the shell client knows it, applied at `done`.
     #[derive(Debug, Default, Clone)]
@@ -246,6 +261,10 @@ mod tests {
             _: &QueueHandle<Self>,
         ) {
             use ext_workspace_handle_v1::{Event, State as WorkspaceState};
+            if let Event::Removed = event {
+                client.workspaces.retain(|w| &w.0 != handle);
+                return;
+            }
             let workspace = &mut client
                 .workspaces
                 .iter_mut()
@@ -532,6 +551,37 @@ mod tests {
         fn only_window(&self) -> smithay::desktop::Window {
             self.state.space.elements().next().unwrap().clone()
         }
+
+        /// The window titled `title`.
+        fn titled(&self, title: &str) -> smithay::desktop::Window {
+            let mut windows = self.state.space.elements();
+            let window = windows.find(|w| State::title(w).as_deref() == Some(title));
+            window.unwrap().clone()
+        }
+
+        /// `key` pressed and released while `held` are held, then a few turns.
+        fn keys(&mut self, held: &[u32], key: u32) {
+            let mut time = 0;
+            let mut press = |h: &mut Self, code, state| {
+                time += 1;
+                h.state.keyboard_key(Keycode::new(code), state, time);
+            };
+            for code in held {
+                press(self, *code, KeyState::Pressed);
+            }
+            press(self, key, KeyState::Pressed);
+            press(self, key, KeyState::Released);
+            for code in held.iter().rev() {
+                press(self, *code, KeyState::Released);
+            }
+            for _ in 0..5 {
+                self.turn();
+            }
+        }
+
+        fn focused_title(&self) -> Option<String> {
+            self.state.focused_window().and_then(|w| State::title(&w))
+        }
     }
 
     #[test]
@@ -645,14 +695,15 @@ mod tests {
         assert_eq!(h.shell.client.window(id).title, "Renamed");
         assert_eq!(h.shell.client.window(id).geometry.0, 0);
 
-        // Minimized by the shell: out of the space, no longer active, the screen uncovered.
+        // Minimized by the shell: hidden, no longer active, the screen uncovered.
         let window = h.only_window();
         h.shell.client.handle(id).minimize();
         h.next_done("minimized");
         assert!(h.shell.client.has(id, Flag::Minimized));
         assert!(!h.shell.client.has(id, Flag::Activated));
         assert_eq!(h.shell.client.output("virtual-1"), Some(&Vec::new()));
-        assert!(h.state.space.elements().next().is_none());
+        assert!(!h.state.is_visible(&window));
+        assert!(h.state.focused_window().is_none());
         assert!(h.state.is_minimized(&window));
         assert_eq!(h.shell.client.window(id).output, "virtual-1");
 
@@ -895,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn one_workspace_shared_by_every_screen() {
+    fn the_workspaces_are_shared_by_every_screen() {
         let mut h = Harness::start();
         let _output: WlOutput = h.shell.bind();
         let manager: ExtWorkspaceManagerV1 = h.shell.bind();
@@ -911,8 +962,9 @@ mod tests {
             coordinates: vec![0],
             active: true,
         };
-        assert_eq!(h.shell.client.workspaces.len(), 1);
+        assert_eq!(h.shell.client.workspaces.len(), 3, "three by default");
         assert_eq!(h.shell.client.workspaces[0].1, first);
+        assert_eq!(h.shell.client.workspaces[2].1.coordinates, vec![2]);
         assert_eq!(h.state.workspaces().active(), "1");
 
         // A new screen joins the same group, once the client binds its wl_output.
@@ -939,7 +991,7 @@ mod tests {
             h.shell.client.group_outputs == 2
         });
         assert_eq!(h.shell.client.groups.len(), 1);
-        assert_eq!(h.shell.client.workspaces.len(), 1);
+        assert_eq!(h.shell.client.workspaces.len(), 3);
 
         // Activating the active workspace, then committing: nothing changes, nothing breaks.
         h.shell.client.workspaces[0].0.activate();
@@ -973,5 +1025,163 @@ mod tests {
         assert_eq!(h.state.workspace_of(&window), "1");
         assert_eq!(h.shell.client.window(id).workspace, "1");
         assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    #[test]
+    fn the_keys_switch_workspace_and_the_keyboard_follows() {
+        let mut h = Harness::start();
+        h.open_window("One");
+        let one = h.only_window();
+        assert_eq!(h.state.workspace_of(&one), "1");
+
+        // Super + 2: the window hides, nothing has the keyboard. The slide starts from the first
+        // workspace, and ends on the second.
+        h.keys(&[KEY_SUPER], KEY_2);
+        assert_eq!(h.state.workspaces().active(), "2");
+        assert!(!h.state.is_visible(&one));
+        assert!(h.state.focused_window().is_none());
+        assert_eq!(h.state.workspace_shift(&one, Duration::ZERO), Some(0.0));
+        let later = Duration::from_secs(3600);
+        assert_eq!(h.state.workspace_shift(&one, later), None);
+        assert!(!h.state.workspaces_sliding(later));
+        // The pointer no longer reaches it.
+        h.state.pointer_motion((400.0, 300.0).into(), 10);
+        let pointer = h.state.seat.get_pointer().unwrap();
+        assert_eq!(pointer.current_focus(), None);
+
+        // A window opened here belongs to the second workspace, and stands above the first one.
+        h.open_window("Two");
+        let two = h.titled("Two");
+        assert_eq!(h.state.workspace_of(&two), "2");
+        assert_eq!(h.state.workspace_shift(&two, later), Some(0.0));
+
+        // Super + Ctrl + Left: back to the first one, its window takes the keyboard and the
+        // pointer back.
+        h.keys(&[KEY_SUPER, KEY_CTRL], KEY_LEFT);
+        assert_eq!(h.state.workspaces().active(), "1");
+        assert!(h.state.is_visible(&one) && !h.state.is_visible(&two));
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+        let one_surface = one.wl_surface().map(|s| s.into_owned());
+        assert_eq!(pointer.current_focus(), one_surface);
+
+        // No workspace left of the first one; Super + Ctrl + Right goes to the second.
+        h.keys(&[KEY_SUPER, KEY_CTRL], KEY_LEFT);
+        assert_eq!(h.state.workspaces().active(), "1");
+        h.keys(&[KEY_SUPER, KEY_CTRL], KEY_RIGHT);
+        assert_eq!(h.state.workspaces().active(), "2");
+        assert_eq!(h.focused_title().as_deref(), Some("Two"));
+
+        // Super + Shift + 3 sends the active window to the third workspace: hidden, without
+        // following it.
+        h.keys(&[KEY_SUPER, KEY_SHIFT], KEY_3);
+        assert_eq!(h.state.workspace_of(&two), "3");
+        assert_eq!(h.state.workspaces().active(), "2");
+        assert!(!h.state.is_visible(&two));
+        assert!(h.state.focused_window().is_none());
+        h.keys(&[KEY_SUPER], KEY_3);
+        assert_eq!(h.focused_title().as_deref(), Some("Two"));
+        h.keys(&[KEY_SUPER], KEY_1);
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+    }
+
+    #[test]
+    fn the_shell_switches_workspace_and_moves_windows() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let manager: ExtWorkspaceManagerV1 = h.shell.bind();
+        h.run_until("the workspaces", |h| h.shell.client.workspaces.len() == 3);
+        h.open_window("One");
+        h.open_window("Two");
+        h.run_until("both windows", |h| h.shell.client.toplevels.len() == 2);
+        let (one, two) = (h.titled("One"), h.titled("Two"));
+        let two_id = h.shell.client.toplevels[1].1.id.unwrap();
+
+        // The shell moves the active window to workspace 2: the one behind takes the keyboard.
+        h.shell.client.handle(two_id).move_to_workspace("2".into());
+        h.run_until("the window on workspace 2", |h| {
+            h.shell.client.window(two_id).workspace == "2"
+        });
+        assert!(!h.state.is_visible(&two));
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+
+        // `ext-workspace-v1`: activate and commit go to workspace 2.
+        let handle = |h: &Harness, id: &str| {
+            let workspaces = &h.shell.client.workspaces;
+            workspaces.iter().find(|w| w.1.id == id).unwrap().0.clone()
+        };
+        handle(&h, "2").activate();
+        manager.commit();
+        h.run_until("workspace 2 active", |h| {
+            h.shell
+                .client
+                .workspaces
+                .iter()
+                .any(|w| w.1.id == "2" && w.1.active)
+        });
+        assert!(h.state.is_visible(&two) && !h.state.is_visible(&one));
+        assert_eq!(h.focused_title().as_deref(), Some("Two"));
+
+        // Activating a window of another workspace goes there.
+        let one_id = h.shell.client.toplevels[0].1.id.unwrap();
+        h.shell.client.handle(one_id).activate();
+        h.run_until("back on workspace 1", |h| {
+            h.state.workspaces().active() == "1"
+        });
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+
+        // Fewer workspaces while on the third: its windows and the active state go to the
+        // first one. More: the list grows, nothing moves.
+        h.state.move_to_workspace(&two, "3");
+        h.state.activate_workspace("3");
+        h.state.set_workspace_count(2);
+        h.run_until("two workspaces", |h| h.shell.client.workspaces.len() == 2);
+        assert_eq!(h.state.workspaces().active(), "1");
+        assert_eq!(h.state.workspace_of(&two), "1");
+        assert!(h.state.is_visible(&one) && h.state.is_visible(&two));
+        h.state.set_workspace_count(5);
+        h.run_until("five workspaces", |h| h.shell.client.workspaces.len() == 5);
+        assert_eq!(h.state.workspaces().active(), "1");
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    #[test]
+    fn a_minimized_window_follows_the_work_area() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let (toplevel, surface) = h.open_window("Window");
+        toplevel.set_maximized();
+        surface.commit();
+        h.run_until("the window listed", |h| {
+            h.shell
+                .client
+                .toplevels
+                .first()
+                .is_some_and(|t| t.1.id.is_some())
+        });
+        let id = h.shell.client.toplevels[0].1.id.unwrap();
+        h.run_until("maximized", |h| h.shell.client.has(id, Flag::Maximized));
+        h.shell.client.handle(id).minimize();
+        h.next_done("minimized");
+
+        // A dock with an exclusive zone of 76 appears: the minimized window gets the work area.
+        let qh = h.shell.queue.handle();
+        let compositor: WlCompositor = h.shell.bind();
+        let layer_shell: ZwlrLayerShellV1 = h.shell.bind();
+        let dock_surface = compositor.create_surface(&qh, ());
+        let dock =
+            layer_shell.get_layer_surface(&dock_surface, None, Layer::Top, "dock".into(), &qh, ());
+        dock.set_anchor(Anchor::Bottom | Anchor::Left | Anchor::Right);
+        dock.set_size(0, 76);
+        dock.set_exclusive_zone(76);
+        dock_surface.commit();
+        h.run_until("the dock configure", |h| h.shell.client.layer_configured);
+        h.shell.draw(&dock_surface, 800, 76);
+        let window = h.only_window();
+        let pending =
+            |w: &smithay::desktop::Window| w.toplevel().unwrap().with_pending_state(|s| s.size);
+        h.run_until("the work area", |_| {
+            pending(&window) == Some((800, 524).into())
+        });
+        assert!(h.state.is_minimized(&window));
     }
 }

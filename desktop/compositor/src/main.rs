@@ -10,6 +10,7 @@
 //! end. The session then stops with the command.
 //! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
 //! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
+//! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default).
 
 use std::{
     ffi::{OsStr, OsString},
@@ -41,6 +42,9 @@ fn main() -> Result<(), Error> {
     let mut state = State::new(&event_loop)?;
     if options.measure {
         state.frame_stats = Some(FrameStats::default());
+    }
+    if let Some(count) = options.workspaces {
+        state.set_workspace_count(count);
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.
