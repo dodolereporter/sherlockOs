@@ -30,6 +30,7 @@ use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 /// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
@@ -43,6 +44,13 @@ pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
     }
     receiver
 }
+
+/// What the start log reports once.
+static OPENED: AtomicBool = AtomicBool::new(false);
+static LISTED: AtomicBool = AtomicBool::new(false);
+static CATALOG: AtomicBool = AtomicBool::new(false);
+static DEVICES: AtomicBool = AtomicBool::new(false);
+pub(crate) static FIRST_VIEW: AtomicBool = AtomicBool::new(false);
 
 /// Identifiers of the widgets the application drives.
 pub const LIST: &str = "list";
@@ -103,9 +111,8 @@ impl Config {
             trash: Trash::user(),
             measure,
             maximized,
-            devices: UDisks::connect()
-                .ok()
-                .map(|u| Arc::new(u) as Arc<dyn DeviceSource>),
+            // Not connected yet: the bus is reached off the interface thread, on first use.
+            devices: Some(Arc::new(UDisks::system()) as Arc<dyn DeviceSource>),
             watch_devices: true,
             xdg: Some(mime_apps::Dirs::from_env(&home_for_xdg)),
             desktops: std::env::var("XDG_CURRENT_DESKTOP")
@@ -260,6 +267,8 @@ pub enum Message {
     /// The left button went up, wherever the pointer is: a lasso ends.
     Released,
     Resized(Size),
+    /// The window exists (for the start log).
+    Opened,
     Scrolled(f32, f32),
     RenameInput(String),
     RenameSubmit,
@@ -399,6 +408,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
+        let built = Instant::now();
         let start = Location::Folder(config.start.clone());
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
@@ -455,6 +465,7 @@ impl App {
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
+        crate::startup::step("application built", built.elapsed());
         (app, Task::batch([task, devices, catalog]))
     }
 
@@ -476,6 +487,7 @@ impl App {
                 Some(Message::Released)
             }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
+            Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
             _ => None,
         });
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
@@ -707,6 +719,7 @@ impl App {
                 self.drag_lasso();
             }
             Message::Resized(size) => self.size = size,
+            Message::Opened => crate::startup::first(&OPENED, "window opened"),
             Message::Scrolled(offset, height) => {
                 self.scroll = (offset, height);
                 self.drag_lasso();
@@ -750,9 +763,13 @@ impl App {
                 return self.frame(now);
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
-            Message::Devices(volumes) => self.volumes = volumes,
+            Message::Devices(volumes) => {
+                crate::startup::first(&DEVICES, "devices read");
+                self.volumes = volumes;
+            }
             Message::Places(available) => self.available = available,
             Message::Catalog(catalog) => {
+                crate::startup::first(&CATALOG, "applications read");
                 self.catalog = Some(catalog.clone());
                 return Task::perform(
                     async move { Arc::new(crate::icons::load_all(&catalog)) },
@@ -794,6 +811,7 @@ impl App {
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
             Message::Loaded(generation, result) => {
+                crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
                     return self.loaded(result);
                 }
@@ -1413,11 +1431,28 @@ impl App {
             (Some(mime), Some(catalog)) => catalog
                 .handlers(&mime)
                 .into_iter()
-                .take(metrics::OPEN_WITH_MAX)
+                .take(self.open_with_room())
                 .cloned()
                 .collect(),
             _ => Vec::new(),
         };
+    }
+
+    /// How many applications the « Ouvrir avec » submenu lists: at most `OPEN_WITH_MAX`, and
+    /// no more than the window's height holds with the submenu's other entries; the others
+    /// are in « Autre application… ».
+    fn open_with_room(&self) -> usize {
+        let others = Self::menu_height(&self.open_with_items()) - metrics::MENU_ITEM_HEIGHT;
+        let room = ((self.size.height - others) / metrics::MENU_ITEM_HEIGHT).floor();
+        (room.max(1.0) as usize).min(metrics::OPEN_WITH_MAX)
+    }
+
+    /// Height of the list of the application chooser: as on the design, less in a window too
+    /// low for it, never less than a few rows; the list scrolls.
+    pub fn chooser_list_height(&self) -> f32 {
+        let room = self.size.height - more::CHOOSER_CHROME;
+        let least = more::CHOOSER_MIN_ROWS * metrics::MENU_ITEM_HEIGHT;
+        room.clamp(least, metrics::CHOOSER_LIST_HEIGHT)
     }
 
     /// Reads the applications and associations off the interface thread.

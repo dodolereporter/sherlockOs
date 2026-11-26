@@ -43,13 +43,19 @@ pub fn runtime_dir() -> Option<PathBuf> {
 
 /// Takes the lock in `dir`, or closes the launcher that holds it.
 pub fn claim(dir: &Path) -> io::Result<Claim> {
+    claim_named(dir, FILE)
+}
+
+/// The same with the lock file `name`: another program shown on demand (the applications view)
+/// toggles the same way.
+pub fn claim_named(dir: &Path, name: &str) -> io::Result<Claim> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(dir.join(FILE))?;
+        .open(dir.join(name))?;
     match file.try_lock() {
         Ok(()) => {
             file.set_len(0)?;

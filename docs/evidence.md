@@ -106,6 +106,18 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   "open once with" never changes the defaults shared with the desktop. `Terminal=true`
   applications open in the terminal (see `docs/mime-apps.md`). In the trash: restore, empty.
   On a device: open or mount, unmount, eject.
+  The chooser keeps its rows whole (lot E-01, the author found it « toute écrasée dans
+  certains cas »): every row is one line of `MENU_ITEM_HEIGHT`, a long name ends with « … »
+  (`sherlock_ui::ellipsis`), an application without an icon gets an empty square of the icon's
+  size so that names line up, icons of any size are drawn at 16 px; the list scrolls, as high
+  as the design (300) or as the window allows, never less than four rows. « Ouvrir avec »
+  lists no more applications than the window's height holds. The window cannot be made
+  smaller than 720 × 460 (`sherlock_ui::evidence::MIN_WINDOW`), where the menu and the
+  chooser fit.
+
+  | 30 applications | Long names, light | Smallest window | « Ouvrir avec » in a corner |
+  | --- | --- | --- | --- |
+  | ![](evidence/chooser-many.png) | ![](evidence/chooser-long-light.png) | ![](evidence/chooser-small.png) | ![](evidence/open-with-small.png) |
 - The menu, as in Finder and Dolphin (lot E-01). On an item or a selection: « Ouvrir »,
   « Ouvrir avec » (for several files of one type, the application gets them all), « Copier »,
   « Couper », « Coller », « Renommer », « Dupliquer », « Compresser », « Copier le chemin »,
@@ -249,6 +261,31 @@ the menu draws correctly. Two changes, for safety beyond this case:
   design board's blurred shadow (ADR 0018).
 
 Nothing blinks.
+
+## Start
+
+Lot E-01, after Evidence took more than 10 s to show its window in the author's session.
+
+- **Nothing on D-Bus before the window.** UDisks2 used to be reached while the application
+  was built, before its window: a system bus slow to answer held the window back. `UDisks`
+  now opens its connection on first use, off the interface thread, and every call runs on a
+  thread of its own and gives up after `sherlock_ui::evidence::BUS_READ_TIMEOUT` (5 s, as the
+  bar) for a read, `BUS_ACTION_TIMEOUT` (120 s, polkit may ask for a password) for a mount,
+  unmount or eject. A bus that never answers leaves the devices out; the window and the folder
+  come at once. The watcher thread waits for the bus as long as it takes, holding nothing
+  else. Evidence reaches no other bus (the session bus is not used).
+- **Each step logs when it ends**, with `RUST_LOG=evidence=info`: `renderer chosen`,
+  `theme read`, `configuration read`, `application built`, `first view`, `window opened`,
+  `folder listed`, `applications read`, `devices read`, counted from the start of the
+  process (`startup`). In a hidden window on the reference laptop, debug build: first view at
+  202 ms, window at 396 ms, folder and applications at 500 ms.
+- Test: a bus socket that takes connections and never says a word; the application and its
+  first view are ready in less than 500 ms, the devices are left out after the delay
+  (`a_silent_bus_never_delays_the_first_view`).
+
+The start in the author's session also had Mesa's shader cache threads (`disk`) running: if
+the log shows the time going between `first view` and `window opened`, the renderer (wgpu
+on the AMD chip) is the next suspect, not D-Bus.
 
 ## Performance
 

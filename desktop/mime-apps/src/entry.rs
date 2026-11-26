@@ -195,7 +195,7 @@ pub fn read_applications(dirs: &Dirs, locales: &[String]) -> Vec<DesktopEntry> {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            if let Ok(text) = std::fs::read_to_string(&path)
+            if let Some(text) = read_entry(&path)
                 && let Some(app) = parse(&id, &path, &text, locales)
                 && app.try_exec.as_deref().is_none_or(is_executable)
             {
@@ -204,6 +204,30 @@ pub fn read_applications(dirs: &Dirs, locales: &[String]) -> Vec<DesktopEntry> {
         }
     }
     apps
+}
+
+/// The largest desktop entry read: real ones hold a few kilobytes, even with every
+/// translation.
+pub const MAX_ENTRY_SIZE: u64 = 256 * 1024;
+
+/// The text of the desktop entry at `path`: only a regular file once its links are followed,
+/// of `MAX_ENTRY_SIZE` at most, in UTF-8. A link to `/dev/zero`, a pipe or a huge file in an
+/// `applications` folder would otherwise take all the memory of whoever lists them.
+fn read_entry(path: &Path) -> Option<String> {
+    use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_ENTRY_SIZE + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_ENTRY_SIZE {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Splits an `Exec` value into arguments: spaces separate them, double quotes group them,
@@ -296,6 +320,30 @@ impl DesktopEntry {
 mod tests {
     use super::*;
     use crate::testing::TempDir;
+
+    #[test]
+    fn only_regular_files_of_a_sane_size_are_read() {
+        let dir = TempDir::new("sizes");
+        let entry =
+            |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec={name}\n");
+        dir.write("data/applications/plain.desktop", &entry("Plain"));
+        // Just past the limit: left out, even though it starts as a valid entry.
+        let padding = "#".repeat(MAX_ENTRY_SIZE as usize);
+        dir.write(
+            "data/applications/huge.desktop",
+            &format!("{}{padding}\n", entry("Huge")),
+        );
+        let apps = dir.path().join("data/applications");
+        // A link to a device that never ends, a link to a valid entry, a folder named as one.
+        std::os::unix::fs::symlink("/dev/zero", apps.join("zero.desktop")).expect("link");
+        std::os::unix::fs::symlink(apps.join("plain.desktop"), apps.join("linked.desktop"))
+            .expect("link");
+        std::fs::create_dir_all(apps.join("folder.desktop")).expect("folder");
+        let found = read_applications(&dir.dirs(), &[]);
+        let mut ids: Vec<&str> = found.iter().map(|a| a.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["linked.desktop", "plain.desktop"]);
+    }
 
     #[test]
     fn entries_read_localized_names_and_types() {

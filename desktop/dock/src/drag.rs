@@ -65,9 +65,10 @@ pub fn gesture(event: Event, _: event::Status, _: window::Id) -> Option<Gesture>
 
 /// The orders the first `pinned` icons can take with the application at `from` moved to each
 /// place among the applications, Sherlock (at `sherlock`) put back in their middle as the dock
-/// does. Each order lists the current places of the icons.
-pub fn orders(pinned: usize, sherlock: usize, from: usize) -> Vec<Vec<usize>> {
-    let others: Vec<usize> = (0..pinned)
+/// does, the `fixed` first icons (the « Applications » button) staying first. Each order lists
+/// the current places of the icons.
+pub fn orders(fixed: usize, pinned: usize, sherlock: usize, from: usize) -> Vec<Vec<usize>> {
+    let others: Vec<usize> = (fixed..pinned)
         .filter(|&i| i != sherlock && i != from)
         .collect();
     (0..=others.len())
@@ -75,7 +76,7 @@ pub fn orders(pinned: usize, sherlock: usize, from: usize) -> Vec<Vec<usize>> {
             let mut order = others.clone();
             order.insert(place, from);
             order.insert(order.len().div_ceil(2), sherlock);
-            order
+            (0..fixed).chain(order).collect()
         })
         .collect()
 }
@@ -87,7 +88,7 @@ mod tests {
     #[test]
     fn the_dragged_application_takes_every_place_and_sherlock_stays_in_the_middle() {
         // Files, Terminal, Sherlock, Editor, Browser; the terminal is dragged.
-        let five = orders(5, 2, 1);
+        let five = orders(0, 5, 2, 1);
         assert_eq!(
             five,
             [
@@ -98,7 +99,17 @@ mod tests {
             ]
         );
         // Three applications: Sherlock after the second one, as the dock builds it.
-        assert_eq!(orders(4, 2, 0)[2], vec![1, 3, 2, 0]);
+        assert_eq!(orders(0, 4, 2, 0)[2], vec![1, 3, 2, 0]);
+        // The « Applications » button stays first.
+        assert_eq!(
+            orders(1, 6, 3, 2),
+            [
+                vec![0, 2, 1, 3, 4, 5],
+                vec![0, 1, 2, 3, 4, 5],
+                vec![0, 1, 4, 3, 2, 5],
+                vec![0, 1, 4, 3, 5, 2],
+            ]
+        );
     }
 
     #[test]

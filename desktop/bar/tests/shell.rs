@@ -380,7 +380,7 @@ fn bar_on(output: &str, desktop: Desktop) -> Bar {
     let mut bar = Bar::default();
     let surface = Id::unique();
     let _ = bar.update(Message::Surface(surface));
-    let _ = bar.update(Message::Output(surface, Some(output.to_owned())));
+    let _ = bar.update(Message::Output(surface, Some(output.to_owned()), None));
     let _ = bar.update(Message::Desktop(desktop));
     bar
 }
@@ -465,7 +465,11 @@ fn the_bar_follows_the_compositor_and_switches_workspaces() {
     assert_eq!(desktop.app, None);
     let mut bar = bar_on("eDP-1", desktop);
     assert!(!bar.shape.attached(), "the bar floats again");
-    let _ = bar.update(Message::Output(Id::unique(), Some(String::from("DP-1"))));
+    let _ = bar.update(Message::Output(
+        Id::unique(),
+        Some(String::from("DP-1")),
+        None,
+    ));
     assert!(!bar.shape.attached());
 }
 
