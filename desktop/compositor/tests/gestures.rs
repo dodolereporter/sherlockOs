@@ -278,6 +278,27 @@ mod tests {
     }
 
     #[test]
+    fn a_swipe_cut_short_by_a_console_switch_comes_back() {
+        let (_event_loop, mut state) = desktop();
+        let begin = Gesture {
+            fingers: 3,
+            ..Gesture::default()
+        };
+        state.process_input_event(InputEvent::<Fake>::GestureSwipeBegin { event: begin });
+        let event = Gesture {
+            time: 10,
+            delta: (-300.0, 0.0),
+            ..Gesture::default()
+        };
+        state.process_input_event(InputEvent::<Fake>::GestureSwipeUpdate { event });
+        assert!(state.workspace_view(later(&state)) > 0.5);
+        // The session pauses: libinput says no more, the row is let go and comes back.
+        state.cancel_gestures();
+        assert_eq!(state.workspaces().active(), "1");
+        assert_eq!(state.workspace_view(later(&state)), 0.0);
+    }
+
+    #[test]
     fn four_fingers_and_vertical_swipes_do_not_change_workspace() {
         let (_event_loop, mut state) = desktop();
         swipe(&mut state, 4, 30, (-10.0, 0.0), false);

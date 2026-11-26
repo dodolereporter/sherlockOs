@@ -239,7 +239,7 @@ impl State {
     }
 
     /// Runs `send` with the pointer, which hands the gesture to the client it is over.
-    fn to_client(&mut self, send: impl FnOnce(&PointerHandle<State>, &mut State)) {
+    fn send_to_client(&mut self, send: impl FnOnce(&PointerHandle<State>, &mut State)) {
         if let Some(pointer) = self.seat.get_pointer() {
             send(&pointer, self);
         }
@@ -261,7 +261,7 @@ impl State {
                     time,
                     fingers,
                 };
-                self.to_client(|p, state| p.gesture_swipe_begin(state, &event));
+                self.send_to_client(|p, state| p.gesture_swipe_begin(state, &event));
                 Route::Client
             }
         };
@@ -274,7 +274,7 @@ impl State {
         match &mut self.gestures.swipe {
             Some(Route::Client) => {
                 let event = GestureSwipeUpdateEvent { time, delta };
-                self.to_client(|p, state| p.gesture_swipe_update(state, &event));
+                self.send_to_client(|p, state| p.gesture_swipe_update(state, &event));
             }
             Some(Route::Swipe(swipe)) => {
                 if let Some(view) = swipe.update(time, delta) {
@@ -295,7 +295,7 @@ impl State {
                     time,
                     cancelled,
                 };
-                self.to_client(|p, state| p.gesture_swipe_end(state, &event));
+                self.send_to_client(|p, state| p.gesture_swipe_end(state, &event));
             }
             Some(Route::Swipe(swipe)) => self.finish_swipe(&swipe, time, cancelled),
             Some(Route::Reserved) | None => {}
@@ -328,6 +328,21 @@ impl State {
         }
     }
 
+    /// Ends every gesture in progress, cancelled: the touchpad goes away in the middle of one
+    /// (console switch), and its end would never come. A held row of workspaces comes back.
+    pub fn cancel_gestures(&mut self) {
+        let time = self.now().as_millis() as u32;
+        if self.gestures.swipe.is_some() {
+            self.gesture_swipe_end(time, true);
+        }
+        if self.gestures.pinch.is_some() {
+            self.gesture_pinch_end(time, true);
+        }
+        if self.gestures.hold.is_some() {
+            self.gesture_hold_end(time, true);
+        }
+    }
+
     pub fn gesture_pinch_begin(&mut self, fingers: u32, time: u32) {
         let route = route(fingers);
         if let Route::Client = route {
@@ -337,7 +352,7 @@ impl State {
                 time,
                 fingers,
             };
-            self.to_client(|p, state| p.gesture_pinch_begin(state, &event));
+            self.send_to_client(|p, state| p.gesture_pinch_begin(state, &event));
         }
         self.gestures.pinch = Some(route);
     }
@@ -356,7 +371,7 @@ impl State {
                 scale,
                 rotation,
             };
-            self.to_client(|p, state| p.gesture_pinch_update(state, &event));
+            self.send_to_client(|p, state| p.gesture_pinch_update(state, &event));
         }
     }
 
@@ -368,7 +383,7 @@ impl State {
                 time,
                 cancelled,
             };
-            self.to_client(|p, state| p.gesture_pinch_end(state, &event));
+            self.send_to_client(|p, state| p.gesture_pinch_end(state, &event));
         }
     }
 
@@ -381,7 +396,7 @@ impl State {
                 time,
                 fingers,
             };
-            self.to_client(|p, state| p.gesture_hold_begin(state, &event));
+            self.send_to_client(|p, state| p.gesture_hold_begin(state, &event));
         }
         self.gestures.hold = Some(route);
     }
@@ -394,7 +409,7 @@ impl State {
                 time,
                 cancelled,
             };
-            self.to_client(|p, state| p.gesture_hold_end(state, &event));
+            self.send_to_client(|p, state| p.gesture_hold_end(state, &event));
         }
     }
 }

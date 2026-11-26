@@ -523,6 +523,7 @@ impl Backend {
             }
         }
         state.forget_intercepted_keys();
+        state.cancel_gestures();
         self.device.pause();
     }
 
