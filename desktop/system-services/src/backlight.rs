@@ -52,6 +52,23 @@ impl Backlight {
 /// The backlight of the screen under `root`: the firmware one first, then the platform one,
 /// then a raw one, as the kernel documentation advises; by name within a kind.
 pub fn find(root: &Path) -> Result<Backlight> {
+    let (name, path) = locate(root)?;
+    let number = |file: &str| -> Result<u32> {
+        let text = std::fs::read_to_string(path.join(file))
+            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))?;
+        text.trim()
+            .parse()
+            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))
+    };
+    Ok(Backlight {
+        brightness: number("brightness")?,
+        max: number("max_brightness")?,
+        name,
+    })
+}
+
+/// The name and the folder of the backlight `find` reads.
+pub fn locate(root: &Path) -> Result<(String, PathBuf)> {
     let entries =
         std::fs::read_dir(root).map_err(|e| Problem::Absent(format!("{}: {e}", root.display())))?;
     let mut found: Vec<(u8, String, PathBuf)> = entries
@@ -71,18 +88,7 @@ pub fn find(root: &Path) -> Result<Backlight> {
     let Some((_, name, path)) = found.into_iter().next() else {
         return Err(Problem::Absent(String::from("no backlight")));
     };
-    let number = |file: &str| -> Result<u32> {
-        let text = std::fs::read_to_string(path.join(file))
-            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))?;
-        text.trim()
-            .parse()
-            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))
-    };
-    Ok(Backlight {
-        brightness: number("brightness")?,
-        max: number("max_brightness")?,
-        name,
-    })
+    Ok((name, path))
 }
 
 /// Sets the brightness of `backlight` to `percent`, through logind.

@@ -3714,6 +3714,7 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "thiserror 2.0.21",
  "tracing",
  "zbus",

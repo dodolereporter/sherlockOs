@@ -386,9 +386,13 @@ grid centred.
 ### Quick settings
 
 The control centre, after the right column of the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
-« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the graphics card and energy
-choices, then the user and the session buttons (`quick.rs`, services in `system/`; sound and
-brightness in the `system-services` crate, shared with the media keys of the compositor).
+« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the keyboard backlight
+slider on a machine that has one, the graphics card and energy choices, then the user and the
+session buttons (`quick.rs`, services in `system/`; sound, brightnesses and their watchers in the
+`system-services` crate, shared with the media keys of the compositor). The panel keeps room for
+the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above the user row.
+
+![The control centre of a machine with a keyboard backlight](../desktop/bar/screenshots/control-centre-keyboard.png)
 
 | Control | Service | Read | Written |
 | --- | --- | --- | --- |
@@ -397,6 +401,7 @@ brightness in the `system-services` crate, shared with the media keys of the com
 | « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
 | Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
+| Keyboard backlight | UPower, system bus; else `/sys/class/leds` and logind | `GetBrightness`, `GetMaxBrightness` of `org.freedesktop.UPower.KbdBacklight`; else the LED `…::kbd_backlight` | `SetBrightness`; else `Session.SetBrightness("leds", name, value)` |
 | « Énergie » | power-profiles-daemon, system bus | `ActiveProfile`, `Profiles`, under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles` | `ActiveProfile` |
 | « Mode jeu », « Carte graphique » | none yet | | Faded, « Bientôt » |
 | Session | the launcher's `Systemd` (`launcher::system`) | | `loginctl lock-session`, `terminate-session`, `systemctl reboot`, `poweroff` |
@@ -487,8 +492,24 @@ the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
 
 **Live.** While the control centre is open, the bar follows `PropertiesChanged` of
 NetworkManager's main object, `StateChanged` of its devices, `PropertiesChanged` of BlueZ and of
-power-profiles-daemon, on the system bus (`quick::watch`), and reads that service again. Sound
-and brightness are read when the panel opens and after each change. The signals come in
+power-profiles-daemon, and UPower's `BrightnessChanged` of the keyboard backlight, on the system
+bus (`quick::watch`), and reads that service again. Sound and screen brightness follow what
+changes elsewhere, a key or another application (lot D-35d, `system_services::watch`, merged in
+`quick::watch` by `quick::local`), without polling:
+
+- **Sound**: `pactl subscribe`, on a thread of its own, its lines about an output or the server
+  (`watch::sound_changed`, also the filter of the bar's icon). It dies with the bar
+  (`PR_SET_PDEATHSIG`); when it dies, it starts again after 0.5 s, then twice as long each time,
+  up to 30 s, and the volume is read again. Each read is a `pactl` killed after 3 s. The icon of
+  the bar reads through the same timed `pactl`.
+- **Screen brightness**: `actual_brightness` of the backlight, with `poll(2)`, which sysfs wakes
+  up when the kernel changes it, and inotify for a plain file. Its value read again only then.
+- **Held slider**: while a slider is held under the pointer (`Quick::held`, until iced's
+  `on_release`), or while a value it sent is on its way, a read leaves it where it is; once let
+  go, the service is read again and the change made elsewhere shows.
+
+The watchers ask every second whether the panel is still open (`watch::CHECK`), and stop with
+their command once it is closed. The signals come in
 bursts (BlueZ sends one for each device seen again during a scan, whoever started it):
 `bus::coalesce` lets one batch through every 150 ms at most, each service once in it, and a
 service has one read at a time, one more asked meanwhile running after it (`Reads`). The
@@ -731,7 +752,9 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   chosen by kind, set through logind, never below 1 %; the profiles under the older name of
   the daemon, without performance; each service refusing (polkit's `AccessDenied`) and absent;
   a `StateChanged` of NetworkManager reaching the bar. A fake `pactl` for the sound. In
-  `quick.rs`: the slider throttle, the session rules (lock at once, a second click too soon,
+  `quick.rs`: a held slider that does not jump under a change made elsewhere, the keyboard row
+  only with a keyboard backlight, a fake `pactl subscribe` and a fake sysfs followed
+  (`quick::local`), the slider throttle, the session rules (lock at once, a second click too soon,
   cancelled, confirmed), Do not disturb written to a temporary file, a refusal under its tile.
   In `tests/render.rs`: the clicks on the tiles, a profile, and nothing from the game mode or
   the graphics card.

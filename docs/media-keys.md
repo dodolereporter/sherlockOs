@@ -124,5 +124,5 @@ No board draws it: its measures come from the panel and dock tokens, to review w
 
 In the real session (`docs/compositor.md`, "Real session"): each key of the table, held for the
 volume and the brightnesses; held again at 100 % and at 0 %, the pill stretches then comes back;
-the pill on the screen under the pointer, on each screen; the bar's quick settings
-show the same level once their panel opens again.
+the pill on the screen under the pointer, on each screen; the bar's quick settings, left
+open, follow each key live, but for a slider held under the pointer (`docs/bar.md`, "Live").
