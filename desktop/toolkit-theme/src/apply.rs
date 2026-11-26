@@ -1,5 +1,6 @@
 //! Switching the session to a theme: the palette of qt5ct and qt6ct, which their applications
-//! read again at once, and the GTK theme and `color-scheme` in the session's dconf database.
+//! read again at once, and the GTK theme, `color-scheme` and the cursor in the session's dconf
+//! database.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -40,16 +41,31 @@ pub fn in_session(layout: &Layout, profile: Option<&OsStr>) -> bool {
     profile.is_some_and(|p| Path::new(p) == layout.dconf_profile())
 }
 
+/// Cursor size when `XCURSOR_SIZE` does not give one, as in the compositor.
+pub const CURSOR_SIZE: u32 = 24;
+
+/// The cursor size of the session: `XCURSOR_SIZE` when it is a whole number above 0.
+pub fn cursor_size(xcursor_size: Option<&OsStr>) -> u32 {
+    xcursor_size
+        .and_then(OsStr::to_str)
+        .and_then(|s| s.trim().parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(CURSOR_SIZE)
+}
+
 /// The keys of `org.gnome.desktop.interface` that follow the theme: the GTK theme, read again
-/// at once by GTK 3 and GTK 4, and the preference libadwaita follows.
-pub fn gsettings_keys(theme: Theme) -> [(&'static str, &'static str); 2] {
-    let scheme = match theme {
-        Theme::Dark => "prefer-dark",
-        Theme::Light => "default",
+/// at once by GTK 3 and GTK 4, the preference libadwaita follows, and the cursor, which GTK
+/// takes from here and not from `XCURSOR_THEME` under Wayland.
+pub fn gsettings_keys(theme: Theme, cursor_size: u32) -> [(&'static str, String); 4] {
+    let (scheme, cursor) = match theme {
+        Theme::Dark => ("prefer-dark", cursor_theme::THEME),
+        Theme::Light => ("default", cursor_theme::LIGHT_THEME),
     };
     [
-        ("gtk-theme", crate::gtk_theme_name(theme)),
-        ("color-scheme", scheme),
+        ("gtk-theme", crate::gtk_theme_name(theme).to_owned()),
+        ("color-scheme", scheme.to_owned()),
+        ("cursor-theme", cursor.to_owned()),
+        ("cursor-size", cursor_size.to_string()),
     ]
 }
 
@@ -61,9 +77,10 @@ pub fn gsettings(layout: &Layout, theme: Theme) -> io::Result<()> {
             layout.dconf_profile().display()
         )));
     }
-    for (key, value) in gsettings_keys(theme) {
+    let size = cursor_size(std::env::var_os("XCURSOR_SIZE").as_deref());
+    for (key, value) in gsettings_keys(theme, size) {
         let status = Command::new("gsettings")
-            .args(["set", "org.gnome.desktop.interface", key, value])
+            .args(["set", "org.gnome.desktop.interface", key, &value])
             .status()?;
         if !status.success() {
             return Err(io::Error::other(format!(
@@ -85,7 +102,7 @@ pub fn apply(layout: &Layout, theme: Theme) {
         Err(error) => tracing::warn!(%error, "cannot switch the Qt palette"),
     }
     match gsettings(layout, theme) {
-        Ok(()) => tracing::info!(?theme, "GTK theme and color scheme set"),
+        Ok(()) => tracing::info!(?theme, "GTK theme, color scheme and cursor set"),
         Err(error) => tracing::warn!(%error, "cannot set the GTK theme"),
     }
 }
