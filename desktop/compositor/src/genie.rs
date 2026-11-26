@@ -323,8 +323,8 @@ impl State {
 }
 
 /// Items of the windows whose effect runs at `now`, seen on `output` through `view`, from front
-/// to back, and whether one runs. They go in front of the bar and the dock: the window goes
-/// into its icon.
+/// to back, and whether one runs. They go in front of the other windows, behind the bar and
+/// the dock: the window is sucked into its icon.
 pub(crate) fn push_effects(
     items: &mut Vec<Item>,
     state: &State,
@@ -773,23 +773,41 @@ mod tests {
         assert!(half.opacity > 0.0 && half.opacity < 1.0);
     }
 
+    /// `share` of the whole way after `at`.
+    fn after(at: Duration, share: f64) -> Duration {
+        at + motion::MINIMIZE.mul_f64(share)
+    }
+
+    #[test]
+    fn minimize_and_restore_take_the_same_time() {
+        for minimizing in [true, false] {
+            let progress = Progress::new(ms(1000), minimizing);
+            assert!(!progress.is_done(after(ms(1000), 0.99)));
+            assert!(progress.is_done(after(ms(1000), 1.0)));
+        }
+    }
+
     #[test]
     fn turned_around_halfway_it_leaves_from_where_it_is() {
         let mut progress = Progress::new(ms(1000), true);
         assert_eq!(progress.value(ms(1000)), 0.0);
-        let at = progress.value(ms(1225));
+        let half = after(ms(1000), 0.5);
+        let at = progress.value(half);
         assert!(close(at, 0.5));
         // Restored halfway: no jump, and the way back takes half the time.
-        progress.turn(ms(1225), false);
-        assert!(close(progress.value(ms(1225)), at));
-        assert!(progress.value(ms(1300)) < at);
-        assert!(!progress.is_done(ms(1440)));
-        assert!(progress.is_done(ms(1450)) && progress.value(ms(1450)) == 0.0);
+        progress.turn(half, false);
+        assert!(close(progress.value(half), at));
+        assert!(progress.value(after(half, 0.15)) < at);
+        assert!(!progress.is_done(after(half, 0.45)));
+        let back = after(half, 0.5);
+        assert!(progress.is_done(back) && progress.value(back) == 0.0);
         // Minimized again before the end: back toward 1 from where it is.
         let mut progress = Progress::new(ms(0), false);
-        progress.turn(ms(90), true);
-        assert!(close(progress.value(ms(90)), 0.8));
-        assert!(progress.is_done(ms(181)));
+        let turn = after(ms(0), 0.2);
+        progress.turn(turn, true);
+        assert!(close(progress.value(turn), 0.8));
+        assert!(!progress.is_done(after(turn, 0.19)));
+        assert!(progress.is_done(after(turn, 0.2) + ms(1)));
         // A genie drawn on both sides of the turn is the same.
         let before = genie(at).bounds();
         let after = genie(

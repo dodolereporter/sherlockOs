@@ -818,14 +818,16 @@ mod tests {
         assert!(frames.len() < 40, "then rest: {} frames", frames.len());
     }
 
-    /// Index of the genie of the window, and of the dock, in what the screen shows.
-    fn genie_and_dock(items: &[Item], dock: &WlSurface) -> (Option<usize>, Option<usize>) {
+    /// Indexes, from front to back, of the dock, the genie of the window and the first other
+    /// window in what the screen shows.
+    fn dock_genie_window(items: &[Item], dock: &WlSurface) -> [Option<usize>; 3] {
         let dock = dock.id().protocol_id();
-        let genie = items.iter().position(|i| matches!(i, Item::Genie(_)));
         let at = items.iter().position(
             |i| matches!(i, Item::Surface { surface, .. } if surface.id().protocol_id() == dock),
         );
-        (genie, at)
+        let genie = items.iter().position(|i| matches!(i, Item::Genie(_)));
+        let window = items.iter().position(|i| matches!(i, Item::Window { .. }));
+        [at, genie, window]
     }
 
     #[test]
@@ -836,11 +838,15 @@ mod tests {
         let icon = bench.give_icon(top);
         let rect = bench.rect_of_window(top);
         bench.state.minimize(&window);
-        // In front of the dock, into its icon.
-        let (genie, dock) = genie_and_dock(&bench.items(), &bench.dock.as_ref().unwrap().surface);
+        // Under the dock, sucked into its icon, but in front of the other windows.
+        let dock = &bench.dock.as_ref().unwrap().surface;
+        let [Some(dock), Some(genie), Some(other)] = dock_genie_window(&bench.items(), dock) else {
+            panic!("the dock, the genie and the other windows are drawn");
+        };
+        assert!(dock < genie, "the genie is drawn behind the dock");
         assert!(
-            genie.unwrap() < dock.unwrap(),
-            "the genie is drawn in front of the dock"
+            genie < other,
+            "the genie is drawn in front of the other windows"
         );
         let frames: Vec<Frame> = (0..60).filter_map(|_| bench.tick()).collect();
         let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
