@@ -30,12 +30,19 @@ use smithay::{
     },
     desktop::{PopupManager, Window, layer_map_for_output},
     output::Output,
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{Resource as _, protocol::wl_surface::WlSurface},
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
     wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 
-use crate::{State, anim::Visual, is_override_redirect, output::View, wallpaper, window_data};
+use crate::{
+    State,
+    anim::Visual,
+    damage::{Ids, Key, Part, Stamped, params_hash},
+    is_override_redirect,
+    output::View,
+    wallpaper, window_data,
+};
 
 /// No fill: only the border of a shape is drawn.
 const NO_FILL: [f32; 4] = [0.0; 4];
@@ -43,7 +50,7 @@ const NO_FILL: [f32; 4] = [0.0; 4];
 render_elements! {
     /// Everything a desktop frame contains.
     pub SceneElement<=GlesRenderer>;
-    Shape=PixelShaderElement,
+    Shape=Stamped<PixelShaderElement>,
     Window=RoundedSurface,
     Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Wallpaper=TextureRenderElement<GlesTexture>,
@@ -54,6 +61,69 @@ pub struct Scene {
     shape: GlesPixelProgram,
     shadow: GlesPixelProgram,
     clip: GlesTexProgram,
+}
+
+/// What a screen shows, from front to back, before it becomes render elements: plain data,
+/// built without a renderer. The tests and the bench turn it into elements of their own.
+#[derive(Debug)]
+pub enum Item {
+    /// A surface tree drawn as is (anchored surface, menu, X11 menu): built at scale 1 from
+    /// `origin`, then scaled by `scale` around it.
+    Surface {
+        surface: WlSurface,
+        origin: Point<i32, Physical>,
+        scale: f64,
+        alpha: f32,
+    },
+    /// The surface tree of a window, whose geometry starts at `geometry` in its buffer,
+    /// stretched into `rect` and clipped to its rounded rectangle.
+    Window {
+        surface: WlSurface,
+        rect: Rectangle<i32, Physical>,
+        geometry: Rectangle<i32, Logical>,
+        alpha: f32,
+        radius: f32,
+    },
+    /// A rounded rectangle: `fill` (premultiplied) inside, `border` over `border_width` pixels
+    /// along the edge, inside the rectangle like a CSS border.
+    Shape {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        fill: [f32; 4],
+        border: [f32; 4],
+        border_width: f32,
+        radius: f32,
+        alpha: f32,
+    },
+    /// The shadow of a window.
+    Shadow {
+        key: Key,
+        shadow: Shadow,
+        radius: f32,
+        alpha: f32,
+    },
+    /// The wallpaper of the screen.
+    Wallpaper,
+}
+
+impl Item {
+    /// Hash of what a shape or a shadow draws, for `Ids::stamp`.
+    pub fn params(&self) -> u64 {
+        match self {
+            Item::Shape {
+                fill,
+                border,
+                border_width,
+                radius,
+                ..
+            } => params_hash(&[&fill[..], border, &[*border_width, *radius]].concat()),
+            Item::Shadow { shadow, radius, .. } => {
+                let scalars = [*radius, shadow.sigma];
+                params_hash(&[&shadow.caster[..], &shadow.window, &scalars].concat())
+            }
+            _ => 0,
+        }
+    }
 }
 
 impl Scene {
@@ -94,11 +164,14 @@ impl Scene {
 
     /// Elements of each screen of `views`, in its own frame pixels, at time `now`, and whether
     /// an animation is running. The wallpaper of each screen is uploaded once as a texture per
-    /// variant; the textures no screen of `state` uses any more are freed. Shared by the
-    /// windowed backend and the real session.
+    /// variant; the textures no screen of `state` uses any more are freed. The elements the
+    /// compositor draws itself take their identity from `ids`. Shared by the windowed backend
+    /// and the real session.
+    #[allow(clippy::too_many_arguments)]
     pub fn screens(
         &self,
         renderer: &mut GlesRenderer,
+        ids: &mut Ids,
         state: &mut State,
         textures: &mut wallpaper::Textures,
         views: &[(Output, View)],
@@ -111,12 +184,16 @@ impl Scene {
         for (output, view) in views {
             let image = state.wallpaper.image_for(view.frame.size);
             let wallpaper = image.as_deref().and_then(|path| textures.get(path));
-            let screen = (output, view);
-            let (elements, moving) =
-                self.elements(renderer, state, screen, preview, wallpaper, now);
+            let (items, moving) = items(state, (output, view), preview, wallpaper.is_some(), now);
             animating |= moving;
+            let mode = state.wallpaper.mode;
+            let elements = items
+                .into_iter()
+                .flat_map(|item| self.elements(renderer, ids, item, view, wallpaper, mode))
+                .collect();
             screens.push(elements);
         }
+        ids.sweep();
         let used: Vec<_> = state
             .views()
             .iter()
@@ -126,275 +203,304 @@ impl Scene {
         (screens, animating)
     }
 
-    /// Elements of the screen `output`, seen through `view`, at time `now`, and whether an
-    /// animation is running. Elements are in frame pixels, at the screen's scale: corners,
-    /// borders and shadows follow that scale. `preview` is in the space. `wallpaper`: the
-    /// texture of this screen, once loaded; the discs of the board otherwise.
-    pub fn elements(
+    /// The render elements of one item.
+    fn elements(
         &self,
         renderer: &mut GlesRenderer,
-        state: &State,
-        (output, view): (&Output, &View),
-        preview: Option<Visual>,
-        wallpaper: Option<&wallpaper::Texture>,
-        now: Duration,
-    ) -> (Vec<SceneElement>, bool) {
-        let mut elements = Vec::new();
-        let mut animating = preview.is_some();
-        let scale = view.scale as f32;
-        self.push_layers(
-            renderer,
-            &mut elements,
-            output,
-            view,
-            &[Layer::Overlay, Layer::Top],
-        );
-        if let Some(preview) = preview {
-            elements.push(SceneElement::Shape(self.shape(
-                view.rect(preview.rect),
-                ui::SNAP_PREVIEW_FILL.premultiplied(),
-                ui::SNAP_PREVIEW_BORDER,
-                ui::SNAP_PREVIEW_BORDER_WIDTH as f32 * scale,
-                corner_radius(preview.rect.size.to_i32_round()) * scale,
-                preview.opacity,
-            )));
-        }
-        animating |= state.workspaces_sliding(now);
-        for window in state.space.elements().rev() {
-            // Minimized, or on a workspace out of view.
-            let Some(shift) = state.workspace_shift(window, now) else {
-                continue;
-            };
-            // The shadow stays on the window's own screen: a maximized window does not cast it
-            // on the next one. While sliding, the window itself does not reach the next screen.
-            let own = state.window_output(window).as_ref() == Some(output);
-            let Some(mut visual) = state
-                .window_visual(window, now)
-                .filter(|_| own || shift == 0.0)
-            else {
-                continue;
-            };
-            visual.rect.loc.x += shift;
-            animating |= window_data(window).motion.borrow().is_animating();
-            self.push_window(renderer, &mut elements, window, visual, view, own);
-        }
-        let below = [Layer::Bottom, Layer::Background];
-        self.push_layers(renderer, &mut elements, output, view, &below);
-        // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
-        // the frame, like the rest of the desktop.
-        if let Some(texture) = wallpaper {
-            let mode = state.wallpaper.mode;
-            elements.push(SceneElement::Wallpaper(wallpaper::element(
-                texture, mode, view,
-            )));
-            return (elements, animating);
-        }
-        let discs = desktop_discs(view.area.size);
-        for (rect, color) in discs.into_iter().rev() {
-            let rect = view.rect(Rectangle::new(rect.loc + view.area.loc, rect.size).to_f64());
-            let radius = rect.size.w as f32 / 2.0;
-            elements.push(SceneElement::Shape(self.shape(
-                rect,
-                color.premultiplied(),
-                color,
-                0.0,
-                radius,
-                1.0,
-            )));
-        }
-        (elements, animating)
-    }
-
-    /// Anchored surfaces of `layers`, the front one first, each with its menus in front.
-    fn push_layers(
-        &self,
-        renderer: &mut GlesRenderer,
-        elements: &mut Vec<SceneElement>,
-        output: &Output,
+        ids: &mut Ids,
+        item: Item,
         view: &View,
-        layers: &[Layer],
-    ) {
-        let map = layer_map_for_output(output);
-        for layer in layers {
-            for surface in map.layers_on(*layer).rev() {
-                let Some(geometry) = map.layer_geometry(surface) else {
-                    continue;
-                };
-                let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
-                let at = Placement {
-                    view,
-                    loc,
-                    alpha: 1.0,
-                };
-                self.push_surface(renderer, elements, surface.wl_surface(), at, true);
-                self.push_backdrop(elements, view.rect(geometry.to_f64()));
-            }
-        }
-    }
-
-    /// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn
-    /// behind `rect` gets blurred here, just behind the surface. Nothing yet: the surface is
-    /// drawn as is, translucent over a sharp background.
-    fn push_backdrop(&self, _elements: &mut [SceneElement], _rect: Rectangle<i32, Physical>) {}
-
-    /// A surface tree, untouched (no clip, border or shadow), placed by `at`. `popups`: its
-    /// menus too, in front of it (smithay lists nested menus with the root surface, so a menu
-    /// never has menus of its own here).
-    fn push_surface(
-        &self,
-        renderer: &mut GlesRenderer,
-        elements: &mut Vec<SceneElement>,
-        surface: &WlSurface,
-        at: Placement<'_>,
-        popups: bool,
-    ) {
-        if popups {
-            for (popup, offset) in PopupManager::popups_for_surface(surface) {
-                let loc = at.loc + (offset - popup.geometry().loc).to_f64();
-                let at = Placement { loc, ..at };
-                self.push_surface(renderer, elements, popup.wl_surface(), at, false);
-            }
-        }
-        let Placement { view, loc, alpha } = at;
-        // Built at scale 1 from the origin, then scaled around it: subsurfaces keep their
-        // logical offsets, multiplied by the screen's scale.
-        let origin = view.point(loc).to_i32_round();
-        let tree: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            render_elements_from_surface_tree(
-                renderer,
+        wallpaper: Option<&wallpaper::Texture>,
+        mode: desktop_config::wallpaper::Mode,
+    ) -> Vec<SceneElement> {
+        let params = item.params();
+        match item {
+            Item::Surface {
                 surface,
                 origin,
-                1.0,
+                scale,
                 alpha,
-                Kind::Unspecified,
-            );
-        elements.extend(tree.into_iter().map(|element| {
-            SceneElement::Surface(RescaleRenderElement::from_element(
-                element, origin, view.scale,
-            ))
-        }));
-    }
-
-    fn push_window(
-        &self,
-        renderer: &mut GlesRenderer,
-        elements: &mut Vec<SceneElement>,
-        window: &Window,
-        visual: Visual,
-        view: &View,
-        shadow: bool,
-    ) {
-        let Some(surface) = window.wl_surface() else {
-            return;
-        };
-        let surface = surface.as_ref();
-        let (rect, geometry) = (view.rect(visual.rect), window.geometry());
-        if rect.size.is_empty() || geometry.size.is_empty() {
-            return;
+            } => {
+                let tree: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &surface,
+                        origin,
+                        1.0,
+                        alpha,
+                        Kind::Unspecified,
+                    );
+                tree.into_iter()
+                    .map(|element| {
+                        SceneElement::Surface(RescaleRenderElement::from_element(
+                            element, origin, scale,
+                        ))
+                    })
+                    .collect()
+            }
+            Item::Window {
+                surface,
+                rect,
+                geometry,
+                alpha,
+                radius,
+            } => {
+                let stretch = Scale {
+                    x: f64::from(rect.size.w) / f64::from(geometry.size.w),
+                    y: f64::from(rect.size.h) / f64::from(geometry.size.h),
+                };
+                let tree: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                    render_elements_from_surface_tree(
+                        renderer,
+                        &surface,
+                        rect.loc - geometry.loc.to_physical(1),
+                        1.0,
+                        alpha,
+                        Kind::Unspecified,
+                    );
+                tree.into_iter()
+                    .map(|surface| {
+                        SceneElement::Window(RoundedSurface {
+                            inner: RescaleRenderElement::from_element(surface, rect.loc, stretch),
+                            program: self.clip.clone(),
+                            clip: rect.to_f64(),
+                            radius,
+                            frame_size: view.frame_size,
+                        })
+                    })
+                    .collect()
+            }
+            Item::Shape {
+                key,
+                rect,
+                fill,
+                border,
+                border_width,
+                radius,
+                alpha,
+            } => {
+                let shape = PixelShaderElement::new(
+                    self.shape.clone(),
+                    frame_area(rect),
+                    None,
+                    alpha,
+                    vec![
+                        Uniform::new("fill", fill),
+                        Uniform::new("border", border),
+                        Uniform::new("radius", radius),
+                        Uniform::new("border_width", border_width),
+                    ],
+                    Kind::Unspecified,
+                );
+                vec![SceneElement::Shape(ids.stamp(key, params, shape))]
+            }
+            Item::Shadow {
+                key,
+                shadow,
+                radius,
+                alpha,
+            } => {
+                let element = PixelShaderElement::new(
+                    self.shadow.clone(),
+                    frame_area(shadow.area),
+                    None,
+                    alpha,
+                    vec![
+                        Uniform::new("color", color::SHADOW.premultiplied()),
+                        Uniform::new("caster", shadow.caster),
+                        Uniform::new("window", shadow.window),
+                        Uniform::new("radius", radius),
+                        Uniform::new("sigma", shadow.sigma),
+                    ],
+                    Kind::Unspecified,
+                );
+                vec![SceneElement::Shape(ids.stamp(key, params, element))]
+            }
+            Item::Wallpaper => wallpaper
+                .map(|texture| SceneElement::Wallpaper(wallpaper::element(texture, mode, view)))
+                .into_iter()
+                .collect(),
         }
-        // X11 menu or tooltip: no clip, no border, no shadow, like a Wayland menu.
-        if is_override_redirect(window) {
+    }
+}
+
+/// What the screen `output` shows, seen through `view`, at time `now`, from front to back, and
+/// whether an animation is running. Items are in frame pixels, at the screen's scale: corners,
+/// borders and shadows follow that scale. `preview` is in the space. `wallpaper`: the screen's
+/// wallpaper is loaded; the discs of the board are drawn otherwise.
+pub fn items(
+    state: &State,
+    (output, view): (&Output, &View),
+    preview: Option<Visual>,
+    wallpaper: bool,
+    now: Duration,
+) -> (Vec<Item>, bool) {
+    let mut items = Vec::new();
+    let mut animating = preview.is_some();
+    let scale = view.scale as f32;
+    push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
+    if let Some(preview) = preview {
+        items.push(Item::Shape {
+            key: Key::of(None, Part::Preview),
+            rect: view.rect(preview.rect),
+            fill: ui::SNAP_PREVIEW_FILL.premultiplied(),
+            border: ui::SNAP_PREVIEW_BORDER.premultiplied(),
+            border_width: ui::SNAP_PREVIEW_BORDER_WIDTH as f32 * scale,
+            radius: corner_radius(preview.rect.size.to_i32_round()) * scale,
+            alpha: preview.opacity,
+        });
+    }
+    animating |= state.workspaces_sliding(now);
+    for window in state.space.elements().rev() {
+        // Minimized, or on a workspace out of view.
+        let Some(shift) = state.workspace_shift(window, now) else {
+            continue;
+        };
+        // The shadow stays on the window's own screen: a maximized window does not cast it
+        // on the next one. While sliding, the window itself does not reach the next screen.
+        let own = state.window_output(window).as_ref() == Some(output);
+        let Some(mut visual) = state
+            .window_visual(window, now)
+            .filter(|_| own || shift == 0.0)
+        else {
+            continue;
+        };
+        visual.rect.loc.x += shift;
+        animating |= window_data(window).motion.borrow().is_animating();
+        push_window(&mut items, window, visual, view, own);
+    }
+    push_layers(&mut items, output, view, &[Layer::Bottom, Layer::Background]);
+    // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
+    // the frame, like the rest of the desktop.
+    if wallpaper {
+        items.push(Item::Wallpaper);
+        return (items, animating);
+    }
+    let discs = desktop_discs(view.area.size);
+    for (i, (rect, color)) in discs.into_iter().enumerate().rev() {
+        let rect = view.rect(Rectangle::new(rect.loc + view.area.loc, rect.size).to_f64());
+        items.push(Item::Shape {
+            key: Key::of(None, Part::Disc(i)),
+            rect,
+            fill: color.premultiplied(),
+            border: color.premultiplied(),
+            border_width: 0.0,
+            radius: rect.size.w as f32 / 2.0,
+            alpha: 1.0,
+        });
+    }
+    (items, animating)
+}
+
+/// Anchored surfaces of `layers`, the front one first, each with its menus in front.
+fn push_layers(items: &mut Vec<Item>, output: &Output, view: &View, layers: &[Layer]) {
+    let map = layer_map_for_output(output);
+    for layer in layers {
+        for surface in map.layers_on(*layer).rev() {
+            let Some(geometry) = map.layer_geometry(surface) else {
+                continue;
+            };
+            let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
             let at = Placement {
                 view,
-                loc: visual.rect.loc,
+                loc,
                 alpha: 1.0,
             };
-            self.push_surface(renderer, elements, surface, at, false);
-            return;
-        }
-        // Menus go in front, without clipping or scaling.
-        for (popup, offset) in PopupManager::popups_for_surface(surface) {
-            let at = Placement {
-                view,
-                loc: visual.rect.loc + (offset - popup.geometry().loc).to_f64(),
-                alpha: visual.opacity,
-            };
-            self.push_surface(renderer, elements, popup.wl_surface(), at, false);
-        }
-        // A maximized or fullscreen window has no corners, border or shadow: they shrink and
-        // fade on a spring as it gets there, and come back as it leaves (`Visual::decoration`).
-        let decoration = visual.decoration;
-        let decorated = decoration > 0.0;
-        let scale = view.scale as f32;
-        let radius = corner_radius(visual.rect.size.to_i32_round()) * scale * decoration;
-        if decorated {
-            elements.push(SceneElement::Shape(self.shape(
-                rect,
-                NO_FILL,
-                color::BORDER,
-                metrics::BORDER_WIDTH * scale,
-                radius,
-                visual.opacity * decoration,
-            )));
-        }
-        // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's
-        // scale, and the animation's if there is one.
-        let stretch = Scale {
-            x: f64::from(rect.size.w) / f64::from(geometry.size.w),
-            y: f64::from(rect.size.h) / f64::from(geometry.size.h),
-        };
-        let origin = rect.loc;
-        let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            render_elements_from_surface_tree(
-                renderer,
-                surface,
-                origin - geometry.loc.to_physical(1),
-                1.0,
-                visual.opacity,
-                Kind::Unspecified,
-            );
-        elements.extend(surfaces.into_iter().map(|surface| {
-            SceneElement::Window(RoundedSurface {
-                inner: RescaleRenderElement::from_element(surface, origin, stretch),
-                program: self.clip.clone(),
-                clip: rect.to_f64(),
-                radius,
-                frame_size: view.frame_size,
-            })
-        }));
-        if decorated && shadow {
-            let shadow = Shadow::of(rect, view.scale);
-            elements.push(SceneElement::Shape(PixelShaderElement::new(
-                self.shadow.clone(),
-                frame_area(shadow.area),
-                None,
-                visual.opacity * decoration,
-                vec![
-                    Uniform::new("color", color::SHADOW.premultiplied()),
-                    Uniform::new("caster", shadow.caster),
-                    Uniform::new("window", shadow.window),
-                    Uniform::new("radius", radius),
-                    Uniform::new("sigma", shadow.sigma),
-                ],
-                Kind::Unspecified,
-            )));
+            push_surface(items, surface.wl_surface(), at, true);
+            push_backdrop(items, view.rect(geometry.to_f64()));
         }
     }
+}
 
-    /// Rounded rectangle: `fill` (premultiplied) inside, `border` over `border_width` pixels
-    /// along the edge, inside the rectangle like a CSS border.
-    fn shape(
-        &self,
-        rect: Rectangle<i32, Physical>,
-        fill: [f32; 4],
-        border: Color,
-        border_width: f32,
-        radius: f32,
-        alpha: f32,
-    ) -> PixelShaderElement {
-        PixelShaderElement::new(
-            self.shape.clone(),
-            frame_area(rect),
-            None,
-            alpha,
-            vec![
-                Uniform::new("fill", fill),
-                Uniform::new("border", border.premultiplied()),
-                Uniform::new("radius", radius),
-                Uniform::new("border_width", border_width),
-            ],
-            Kind::Unspecified,
-        )
+/// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn behind
+/// `rect` gets blurred here, just behind the surface. Nothing yet: the surface is drawn as is,
+/// translucent over a sharp background.
+fn push_backdrop(_items: &mut [Item], _rect: Rectangle<i32, Physical>) {}
+
+/// A surface tree, untouched (no clip, border or shadow), placed by `at`. `popups`: its menus
+/// too, in front of it (smithay lists nested menus with the root surface, so a menu never has
+/// menus of its own here).
+fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, popups: bool) {
+    if popups {
+        for (popup, offset) in PopupManager::popups_for_surface(surface) {
+            let loc = at.loc + (offset - popup.geometry().loc).to_f64();
+            let at = Placement { loc, ..at };
+            push_surface(items, popup.wl_surface(), at, false);
+        }
+    }
+    let Placement { view, loc, alpha } = at;
+    // Built at scale 1 from the origin, then scaled around it: subsurfaces keep their logical
+    // offsets, multiplied by the screen's scale.
+    items.push(Item::Surface {
+        surface: surface.clone(),
+        origin: view.point(loc).to_i32_round(),
+        scale: view.scale,
+        alpha,
+    });
+}
+
+fn push_window(items: &mut Vec<Item>, window: &Window, visual: Visual, view: &View, shadow: bool) {
+    let Some(surface) = window.wl_surface() else {
+        return;
+    };
+    let surface = surface.as_ref();
+    let (rect, geometry) = (view.rect(visual.rect), window.geometry());
+    if rect.size.is_empty() || geometry.size.is_empty() {
+        return;
+    }
+    // X11 menu or tooltip: no clip, no border, no shadow, like a Wayland menu.
+    if is_override_redirect(window) {
+        let at = Placement {
+            view,
+            loc: visual.rect.loc,
+            alpha: 1.0,
+        };
+        push_surface(items, surface, at, false);
+        return;
+    }
+    // Menus go in front, without clipping or scaling.
+    for (popup, offset) in PopupManager::popups_for_surface(surface) {
+        let at = Placement {
+            view,
+            loc: visual.rect.loc + (offset - popup.geometry().loc).to_f64(),
+            alpha: visual.opacity,
+        };
+        push_surface(items, popup.wl_surface(), at, false);
+    }
+    // A maximized or fullscreen window has no corners, border or shadow: they shrink and fade
+    // on a spring as it gets there, and come back as it leaves (`Visual::decoration`).
+    let decoration = visual.decoration;
+    let decorated = decoration > 0.0;
+    let scale = view.scale as f32;
+    let radius = corner_radius(visual.rect.size.to_i32_round()) * scale * decoration;
+    let owner = Some(surface.id());
+    if decorated {
+        items.push(Item::Shape {
+            key: Key::of(owner.clone(), Part::Border),
+            rect,
+            fill: NO_FILL,
+            border: color::BORDER.premultiplied(),
+            border_width: metrics::BORDER_WIDTH * scale,
+            radius,
+            alpha: visual.opacity * decoration,
+        });
+    }
+    // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's scale,
+    // and the animation's if there is one.
+    items.push(Item::Window {
+        surface: surface.clone(),
+        rect,
+        geometry,
+        alpha: visual.opacity,
+        radius,
+    });
+    if decorated && shadow {
+        items.push(Item::Shadow {
+            key: Key::of(owner, Part::Shadow),
+            shadow: Shadow::of(rect, view.scale),
+            radius,
+            alpha: visual.opacity * decoration,
+        });
     }
 }
 

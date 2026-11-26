@@ -462,6 +462,7 @@ impl State {
     /// A key (xkb code) is pressed or released. Entry point of every backend, and of the
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
+        self.queue_redraw();
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
@@ -587,6 +588,7 @@ impl State {
 
     /// The pointer is at `location`. Entry point of every backend, and of the tests.
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
+        self.queue_redraw();
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -617,6 +619,7 @@ impl State {
 
     /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        self.queue_redraw();
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;

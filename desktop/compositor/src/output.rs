@@ -80,6 +80,7 @@ impl State {
     /// Adds `output`, a screen of `size` pixels at `scale`, to the right of the existing ones.
     /// Its refresh rate is its current mode's, if it has one.
     pub fn add_screen(&mut self, output: Output, size: Size<i32, Physical>, scale: f64) {
+        self.queue_redraw();
         let global = output.create_global::<State>(&self.display_handle);
         output.change_current_state(
             None,
@@ -100,6 +101,7 @@ impl State {
     /// windows no screen shows any more come to the screen under the pointer: snapped and
     /// maximized ones in its work area, the others centered in it.
     pub fn remove_screen(&mut self, output: &Output) {
+        self.queue_redraw();
         let Some(i) = self.screens.iter().position(|s| &s.output == output) else {
             return;
         };
@@ -160,6 +162,7 @@ impl State {
 
     /// The host frame is now `size`: it is shared equally between the screens.
     pub fn resize_frame(&mut self, size: Size<i32, Physical>) {
+        self.queue_redraw();
         let count = self.screens.len() as i32;
         for (i, screen) in self.screens.iter_mut().enumerate() {
             let w = size.w / count.max(1);

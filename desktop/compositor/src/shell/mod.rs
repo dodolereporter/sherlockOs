@@ -163,6 +163,7 @@ impl State {
     /// keyboard goes to the window of that workspace that had it last, and a window being
     /// dragged comes along.
     pub fn activate_workspace(&mut self, id: &str) {
+        self.queue_redraw();
         if self.switch_workspace(id) {
             self.focus(self.top_window());
             self.refresh_pointer_focus();
@@ -201,6 +202,7 @@ impl State {
     /// workspace go to the active one; if that was the active one, the first one becomes active,
     /// without sliding.
     pub fn set_workspace_count(&mut self, count: usize) {
+        self.queue_redraw();
         let before = self.shell.workspace_model.active().to_owned();
         self.shell.workspace_model.set_count(count);
         let windows: Vec<_> = self.space.elements().cloned().collect();
@@ -231,6 +233,7 @@ impl State {
     /// and if it was the active window, the keyboard goes to the window that had it before.
     /// Nothing happens during a gesture, which would go on with a hidden window.
     pub fn move_to_workspace(&mut self, window: &Window, id: &str) {
+        self.queue_redraw();
         if !self.shell.workspace_model.contains(id)
             || self.workspace_of(window) == id
             || self.gesture_active()
@@ -310,6 +313,7 @@ impl State {
     /// becomes active.
     /// Nothing happens during a gesture, which would put the window back.
     pub fn minimize(&mut self, window: &Window) {
+        self.queue_redraw();
         if self.space.element_geometry(window).is_none()
             || self.is_minimized(window)
             || is_override_redirect(window)
@@ -337,6 +341,7 @@ impl State {
     /// Brings `window` back if minimized, goes to its workspace, raises it and gives it the
     /// keyboard.
     pub fn activate(&mut self, window: &Window) {
+        self.queue_redraw();
         if !self.space.elements().any(|w| w == window) {
             return;
         }

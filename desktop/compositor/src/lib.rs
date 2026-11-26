@@ -6,6 +6,7 @@
 pub mod anim;
 pub mod card;
 mod cursor;
+pub mod damage;
 pub mod dmabuf;
 pub mod focus;
 mod handlers;
@@ -16,6 +17,8 @@ pub mod layout;
 pub mod mesa;
 pub mod options;
 pub mod output;
+pub mod pacing;
+pub mod perf;
 pub mod render;
 mod shell;
 pub mod stats;
@@ -45,7 +48,7 @@ use smithay::{
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, LoopSignal, Mode as LoopMode, PostAction,
-            RegistrationToken, generic::Generic,
+            RegistrationToken, generic::Generic, ping::Ping,
         },
         wayland_server::{
             Display, DisplayHandle, ListeningSocket,
@@ -175,6 +178,14 @@ pub struct State {
     shell: shell::Shell,
     /// Margin around snapped windows (`--snap-gap`, `SNAP_GAP` by default).
     snap_gap: i32,
+    /// Moves on with every change that may show on a screen (see `queue_redraw`).
+    redraw_epoch: u64,
+    /// Wakes the real session's frame scheduling up when the epoch moves.
+    redraw_ping: Option<Ping>,
+    /// Epoch at the last `refresh_shell`: the shell is only read again after a change.
+    shell_epoch: Option<u64>,
+    /// Where the time of the event loop goes (lot P-01).
+    pub perf: perf::LoopStats,
 }
 
 /// Data attached to each window.
@@ -226,11 +237,16 @@ impl State {
             .insert_source(
                 Generic::new(display, Interest::READ, LoopMode::Level),
                 |_, display, state| {
+                    let since = state.perf.start();
                     // SAFETY: the display is neither replaced nor freed; we only read its clients.
                     let display = unsafe { display.get_mut() };
                     if let Err(err) = display.dispatch_clients(state) {
                         tracing::warn!("reading Wayland clients: {err}");
                     }
+                    state.perf.stop(perf::Phase::Clients, since);
+                    // Whatever a client asked for may show: a commit, a window closed, a
+                    // request of the shell.
+                    state.queue_redraw();
                     Ok(PostAction::Continue)
                 },
             )
@@ -276,6 +292,10 @@ impl State {
             listener: None,
             shell: shell::Shell::new(&dh),
             snap_gap: sherlock_ui::window::SNAP_GAP,
+            redraw_epoch: 0,
+            redraw_ping: None,
+            shell_epoch: None,
+            perf: perf::LoopStats::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -407,6 +427,7 @@ impl State {
     /// Gives the keyboard to a window and raises it, or takes the keyboard away from everyone.
     pub fn focus(&mut self, window: Option<Window>) {
         static FOCUS_COUNT: AtomicU64 = AtomicU64::new(1);
+        self.queue_redraw();
         match &window {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -483,6 +504,7 @@ impl State {
     /// Changes the margin around snapped windows; those already snapped take it at once.
     pub fn set_snap_gap(&mut self, gap: i32) {
         self.snap_gap = gap.max(0);
+        self.queue_redraw();
         let outputs: Vec<_> = self.space.outputs().cloned().collect();
         for output in &outputs {
             self.reflow(output);
@@ -503,8 +525,31 @@ impl State {
         }
     }
 
-    /// Cleanup after each loop iteration: dead windows, popups, flush to the clients.
+    /// Something that may show on a screen changed: the screens draw a frame, those of the
+    /// real session at their next vertical blank. Called for every client request, input event,
+    /// screen change and wallpaper loaded, and by the methods that change the desktop.
+    pub fn queue_redraw(&mut self) {
+        self.redraw_epoch = self.redraw_epoch.wrapping_add(1);
+        if let Some(ping) = &self.redraw_ping {
+            ping.ping();
+        }
+    }
+
+    /// Counts the changes: a frame built at an epoch is up to date until it moves on.
+    pub fn redraw_epoch(&self) -> u64 {
+        self.redraw_epoch
+    }
+
+    /// Wakes `ping` up at each `queue_redraw` (real session).
+    pub(crate) fn set_redraw_ping(&mut self, ping: Option<Ping>) {
+        self.redraw_ping = ping;
+    }
+
+    /// Cleanup after each loop iteration: dead windows, popups, flush to the clients. The
+    /// shell programs are told what changed only when something did: an iteration woken by a
+    /// vertical blank or a timer alone has nothing new for them.
     pub fn refresh(&mut self) {
+        let since = self.perf.start();
         self.space.refresh();
         for output in self.space.outputs() {
             layer_map_for_output(output).cleanup();
@@ -515,10 +560,18 @@ impl State {
             self.popup_grab = None;
         }
         self.update_scales();
-        self.refresh_shell();
+        self.perf.stop(perf::Phase::Refresh, since);
+        if self.shell_epoch != Some(self.redraw_epoch) {
+            let since = self.perf.start();
+            self.refresh_shell();
+            self.shell_epoch = Some(self.redraw_epoch);
+            self.perf.stop(perf::Phase::Shell, since);
+        }
+        let since = self.perf.start();
         if let Err(err) = self.display_handle.flush_clients() {
             tracing::warn!("flushing Wayland clients: {err}");
         }
+        self.perf.stop(perf::Phase::Refresh, since);
     }
 }
 

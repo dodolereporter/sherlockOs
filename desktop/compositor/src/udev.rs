@@ -7,13 +7,15 @@
 //! - **Screens**: every connector with a screen, each driven by a `DrmCompositor` at its
 //!   preferred mode, drawn by the same GLES scene as the windowed backend (`render::Scene`).
 //! - **Input**: libinput (keyboard, mouse, touchpad with tap to click).
+//! - **Frames** (lot P-01): a screen draws only when something changed (`pacing`), at the pace
+//!   of its vertical blank, and redraws only what changed (`damage`).
 //!
 //! See "Real session" in `docs/compositor.md`.
 
 use std::{
     cell::RefCell,
     collections::HashMap,
-    rc::Rc,
+    rc::{Rc, Weak},
     time::{Duration, Instant},
 };
 
@@ -45,6 +47,7 @@ use smithay::{
     reexports::{
         calloop::{
             EventLoop, LoopHandle, RegistrationToken,
+            ping::make_ping,
             timer::{TimeoutAction, Timer},
         },
         drm::control::{Device as _, ModeTypeFlags, connector, crtc},
@@ -55,19 +58,22 @@ use smithay::{
 };
 
 use crate::{
-    Error, State,
+    Error, HIDDEN_FRAME_INTERVAL, State,
     anim::PreviewMotion,
     card,
     cursor::Cursors,
+    damage::Ids,
     dmabuf,
     options::Options,
     output::View,
+    pacing::{Pacing, Phase},
+    perf,
     render::{Scene, SceneElement},
     wallpaper::{Textures, Wallpaper},
 };
 
-/// Frame period when nothing changed on a screen: its next frame is tried after it.
-const IDLE: Duration = Duration::from_millis(16);
+/// Frame period of a screen whose mode gives no refresh rate.
+const DEFAULT_PERIOD: Duration = Duration::from_micros(16_667);
 
 /// The pointer moved by `delta` from `from`: kept on the screens (`areas`, side by side).
 pub fn clamp_pointer(
@@ -110,8 +116,12 @@ struct Head {
     output: Output,
     connector: connector::Handle,
     compositor: Compositor,
-    /// A frame waits for the screen's vertical blank.
-    queued: bool,
+    /// When the next frame is due.
+    pacing: Pacing,
+    /// Identities of the elements the compositor draws, for the damage tracker of this screen.
+    ids: Ids,
+    /// Time between two vertical blanks.
+    period: Duration,
 }
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
@@ -132,6 +142,9 @@ struct Backend {
     options: Options,
     /// Frames that failed in a row: only some of them are logged.
     failures: u64,
+    /// The backend itself, for the timers it starts.
+    me: Weak<RefCell<Backend>>,
+    handle: LoopHandle<'static, State>,
 }
 
 /// The real session, to close when leaving the loop.
@@ -150,6 +163,7 @@ impl RealSession {
             self.handle.remove(token);
         }
         state.switch_vt = None;
+        state.set_redraw_ping(None);
         match Rc::try_unwrap(self.backend) {
             Ok(backend) => drop(backend.into_inner()),
             Err(backend) => {
@@ -234,7 +248,10 @@ pub fn init(
         preview: PreviewMotion::default(),
         options: options.clone(),
         failures: 0,
+        me: Weak::new(),
+        handle: event_loop.handle(),
     }));
+    backend.borrow_mut().me = Rc::downgrade(&backend);
     enable_dmabuf(state, &backend);
     backend.borrow_mut().scan(state);
     if backend.borrow().heads.is_empty() {
@@ -248,9 +265,21 @@ pub fn init(
     let mut sources = insert_sources(&handle, &backend, notifier, drm_events, udev)?;
     let input = LibinputInputBackend::new(libinput);
     let token = handle
-        .insert_source(input, |event, _, state| input_event(event, state))
+        .insert_source(input, |event, _, state| {
+            let since = state.perf.start();
+            input_event(event, state);
+            state.perf.stop(perf::Phase::Input, since);
+        })
         .map_err(|e| e.error)?;
     sources.push(token);
+    // Every change that may show wakes the screens up (`State::queue_redraw`).
+    let (ping, wake) = make_ping().map_err(|e| fail("frame scheduling", &e))?;
+    let b = backend.clone();
+    let token = handle
+        .insert_source(wake, move |_, _, state| b.borrow_mut().render_all(state))
+        .map_err(|e| e.error)?;
+    sources.push(token);
+    state.set_redraw_ping(Some(ping));
     Ok(RealSession {
         backend,
         handle,
@@ -293,9 +322,13 @@ fn insert_sources(
     udev: UdevBackend,
 ) -> Result<Vec<RegistrationToken>, Error> {
     let b = backend.clone();
-    let session = handle.insert_source(notifier, move |event, _, state| match event {
-        SessionEvent::PauseSession => b.borrow_mut().pause(state),
-        SessionEvent::ActivateSession => b.borrow_mut().activate(state),
+    let session = handle.insert_source(notifier, move |event, _, state| {
+        let since = state.perf.start();
+        match event {
+            SessionEvent::PauseSession => b.borrow_mut().pause(state),
+            SessionEvent::ActivateSession => b.borrow_mut().activate(state),
+        }
+        state.perf.stop(perf::Phase::Screens, since);
     });
     let b = backend.clone();
     let drm = handle.insert_source(drm_events, move |event, _, state| match event {
@@ -305,7 +338,9 @@ fn insert_sources(
     let b = backend.clone();
     let udev = handle.insert_source(udev, move |event, _, state| match event {
         UdevEvent::Changed { device_id } if device_id == b.borrow().device_id => {
+            let since = state.perf.start();
             b.borrow_mut().scan(state);
+            state.perf.stop(perf::Phase::Screens, since);
         }
         UdevEvent::Removed { device_id } if device_id == b.borrow().device_id => {
             tracing::error!("the card is gone");
@@ -314,11 +349,11 @@ fn insert_sources(
         // Other cards are never opened.
         other => tracing::debug!(?other, "udev"),
     });
-    // Screens whose last frame changed nothing are drawn again a little later.
-    let b = backend.clone();
-    let timer = handle.insert_source(Timer::from_duration(IDLE), move |_, _, state| {
-        b.borrow_mut().render_all(state);
-        TimeoutAction::ToDuration(IDLE)
+    // Windows out of view get their frame callbacks even when no screen draws.
+    let interval = HIDDEN_FRAME_INTERVAL;
+    let timer = handle.insert_source(Timer::from_duration(interval), move |_, _, state| {
+        send_hidden_frames(state);
+        TimeoutAction::ToDuration(interval)
     });
     Ok(vec![
         session.map_err(|e| e.error)?,
@@ -454,13 +489,19 @@ impl Backend {
             None,
         )?;
         let scale = self.options.scale(state.outputs().len());
+        let period = match mode.vrefresh() {
+            0 => DEFAULT_PERIOD,
+            hz => Duration::from_secs(1) / hz,
+        };
         tracing::info!(screen = name, ?mode, scale, "screen plugged in");
         state.add_screen(output.clone(), wl_mode.size, scale);
         let head = Head {
             output,
             connector: info.handle(),
             compositor,
-            queued: false,
+            pacing: Pacing::default(),
+            ids: Ids::default(),
+            period,
         };
         self.heads.insert(crtc, head);
         Ok(())
@@ -494,7 +535,7 @@ impl Backend {
                 tracing::warn!("DRM: {err}");
             }
             head.compositor.reset_buffers();
-            head.queued = false;
+            head.pacing.reset();
         }
         // Screens may have changed while away.
         self.scan(state);
@@ -505,9 +546,40 @@ impl Backend {
             if let Err(err) = head.compositor.frame_submitted() {
                 tracing::warn!("DRM: {err}");
             }
-            head.queued = false;
+            head.pacing.presented();
         }
         self.render(state, crtc);
+    }
+
+    /// The estimated vertical blank after a frame that was not shown: the clients waiting for a
+    /// frame callback get it, as if the frame had been shown, then the next frame if one is due.
+    fn estimated(&mut self, state: &mut State, crtc: crtc::Handle) {
+        let Some(head) = self.heads.get_mut(&crtc) else {
+            return;
+        };
+        // The screen was reset meanwhile.
+        if head.pacing.phase() != Phase::Estimate {
+            return;
+        }
+        head.pacing.presented();
+        let output = head.output.clone();
+        send_frames(state, &output);
+        self.render(state, crtc);
+    }
+
+    /// Calls `estimated` for `crtc` after `period`, without blocking the loop.
+    fn estimate(&self, crtc: crtc::Handle, period: Duration) {
+        let backend = self.me.clone();
+        let timer = Timer::from_duration(period);
+        let inserted = self.handle.insert_source(timer, move |_, _, state| {
+            if let Some(backend) = backend.upgrade() {
+                backend.borrow_mut().estimated(state, crtc);
+            }
+            TimeoutAction::Drop
+        });
+        if let Err(err) = inserted {
+            tracing::warn!("frame timer: {}", err.error);
+        }
     }
 
     fn render_all(&mut self, state: &mut State) {
@@ -517,12 +589,17 @@ impl Backend {
         }
     }
 
-    /// Draws the next frame of a screen, unless the previous one still waits for its blank.
+    /// Draws the next frame of a screen if one is due (`Pacing::wants_frame`): something
+    /// changed since its last frame, or an animation runs, and its previous frame is no longer
+    /// waiting for the vertical blank. Only the damage is redrawn. A frame with damage goes to
+    /// the screen, its vertical blank calls `frame_done`; a frame without, or a failure, waits
+    /// for the estimated blank (`estimated`). Nothing here waits for the screen.
     fn render(&mut self, state: &mut State, crtc: crtc::Handle) {
+        let epoch = state.redraw_epoch();
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
         };
-        if head.queued || !self.session.is_active() {
+        if !head.pacing.wants_frame(epoch) || !self.session.is_active() {
             return;
         }
         let Some((output, view)) = state.views().into_iter().find(|(o, _)| *o == head.output)
@@ -537,11 +614,13 @@ impl Backend {
             ..view
         };
         let started = Instant::now();
+        let since = state.perf.start();
         let now = state.start_time.elapsed();
         let preview = self.preview.frame(now, state.snap_preview());
         let screen = [(output.clone(), view)];
         let (mut screens, animating) = self.scene.screens(
             &mut self.renderer,
+            &mut head.ids,
             state,
             &mut self.textures,
             &screen,
@@ -565,6 +644,8 @@ impl Backend {
                 .flatten()
                 .map(SessionElement::Scene),
         );
+        state.perf.stop(perf::Phase::Scene, since);
+        let since = state.perf.start();
         let clear = color::DESKTOP.premultiplied();
         let frame =
             head.compositor
@@ -572,18 +653,24 @@ impl Backend {
         let failure = match frame {
             Ok(frame) if !frame.is_empty => match head.compositor.queue_frame(()) {
                 Ok(()) => {
-                    head.queued = true;
+                    head.pacing.drawn(epoch, true, animating);
                     None
                 }
                 Err(err) => Some(format!("DRM: {err}")),
             },
-            Ok(_) => None,
+            Ok(_) => {
+                head.pacing.drawn(epoch, false, animating);
+                None
+            }
             Err(err) => Some(format!("render: {err}")),
         };
+        state.perf.stop(perf::Phase::Draw, since);
+        let period = head.period;
         match failure {
             // A failure that repeats on every frame is logged at the 1st, 2nd, 4th, 8th… time,
             // not 60 times a second.
             Some(err) => {
+                head.pacing.failed();
                 self.failures += 1;
                 if self.failures.is_power_of_two() {
                     tracing::warn!(failures = self.failures, "{err}");
@@ -595,12 +682,32 @@ impl Backend {
             }
             None => {}
         }
+        let shown = head.pacing.phase() == Phase::Flip;
+        state.perf.frame(shown);
         if let Some(stats) = state.frame_stats.as_mut()
             && let Some(period) = stats.record(now, started.elapsed(), animating)
         {
             tracing::info!(animation = animating, "measure: {period}");
         }
-        send_frames(state, &output);
+        if shown {
+            send_frames(state, &output);
+        } else {
+            self.estimate(crtc, period);
+        }
+    }
+}
+
+/// Frame callbacks of the windows out of view (minimized, or on another workspace): one per
+/// `HIDDEN_FRAME_INTERVAL`, even when no screen draws.
+fn send_hidden_frames(state: &State) {
+    let time = state.start_time.elapsed();
+    let Some(output) = state.space.outputs().next() else {
+        return;
+    };
+    for window in state.space.elements() {
+        if state.workspace_shift(window, time).is_none() {
+            state.send_window_frame(window, output, time);
+        }
     }
 }
 

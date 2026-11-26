@@ -99,12 +99,17 @@ impl Wallpaper {
             .insert_source(receiver, |event, _, state| {
                 if let channel::Event::Msg(decoded) = event {
                     state.wallpaper.receive(decoded);
+                    state.queue_redraw();
                 }
             })
             .map_err(|err| err.error)?;
         handle
             .insert_source(Timer::from_duration(RELOAD_EVERY), |_, _, state| {
+                let generation = state.wallpaper.generation;
                 state.wallpaper.check();
+                if state.wallpaper.generation != generation {
+                    state.queue_redraw();
+                }
                 TimeoutAction::ToDuration(RELOAD_EVERY)
             })
             .map_err(|err| err.error)?;
