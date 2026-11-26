@@ -24,11 +24,32 @@ pub enum Panel {
     Calendar,
 }
 
+thread_local! {
+    /// Whether the control centre opened with room for the keyboard backlight's slider. On the
+    /// interface thread, where the bar sets it when it opens the panel.
+    static KEYBOARD_ROOM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Gives the control centre the row of the keyboard backlight, or takes it away: on a machine
+/// without one, the panel is shorter instead of keeping an empty row (UI-04).
+pub fn reserve_keyboard(room: bool) {
+    KEYBOARD_ROOM.with(|cell| cell.set(room));
+}
+
+/// Whether the control centre has the row of the keyboard backlight.
+pub fn keyboard_room() -> bool {
+    KEYBOARD_ROOM.with(std::cell::Cell::get)
+}
+
 impl Panel {
     /// Size of the panel itself, without the room for its shadow.
     pub fn size(self) -> (f32, f32) {
         match self {
-            Self::Control => (panels::QUICK_WIDTH, panels::CONTROL_HEIGHT),
+            Self::Control if keyboard_room() => (panels::QUICK_WIDTH, panels::CONTROL_HEIGHT),
+            Self::Control => (
+                panels::QUICK_WIDTH,
+                panels::CONTROL_HEIGHT - panels::KEYBOARD_ROW,
+            ),
             Self::Calendar => (
                 panels::CENTER_WIDTH,
                 panels::CALENDAR_HEIGHT + panels::PANEL_GAP + panels::CENTER_HEIGHT,

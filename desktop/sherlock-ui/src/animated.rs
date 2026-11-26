@@ -1054,7 +1054,10 @@ impl<Message> Widget<Message, Theme, Renderer> for GlyphFade {
         let share = state.share(clock());
         let bounds = layout.bounds();
         let tint: iced::Color = self.tint.into();
+        // Drawn under a fading panel, it fades with it (`color::icon_opacity`).
+        let faded = color::icon_opacity(self.tint);
         let mut paint = |document: &str, opacity: f32| {
+            let opacity = opacity * faded;
             if opacity > 0.0 && !document.is_empty() {
                 let svg = Svg {
                     handle: glyph_handle(document),

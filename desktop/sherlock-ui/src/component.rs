@@ -210,11 +210,12 @@ fn handle(glyph: Icon) -> svg::Handle {
         .unwrap_or_else(|| svg::Handle::from_memory(glyph.svg().into_bytes()))
 }
 
-/// Line icon, in the given color.
+/// Line icon, in the given color. It fades with what is around it (`color::icon_opacity`).
 pub fn icon<'a>(icon: Icon, size: f32, tint: Color) -> Svg<'a> {
     svg(handle(icon))
         .width(size)
         .height(size)
+        .opacity(color::icon_opacity(tint))
         .style(move |_, _| svg::Style {
             color: Some(tint.into()),
         })
@@ -877,6 +878,7 @@ pub fn logo<'a>(version: Logo, size: f32) -> Svg<'a> {
     svg(svg::Handle::from_memory(version.bare().as_bytes()))
         .width(size)
         .height(size)
+        .opacity(color::opacity())
 }
 
 /// Logo in its square, at the given size: the optical version at 32 px and below.
@@ -884,6 +886,7 @@ pub fn logo_square<'a>(version: Logo, size: f32) -> Svg<'a> {
     svg(svg::Handle::from_memory(version.square(size).as_bytes()))
         .width(size)
         .height(size)
+        .opacity(color::opacity())
 }
 
 /// Sherlock button of the top bar: the color logo symbol, its ring and dot in the colors of
@@ -903,7 +906,8 @@ pub fn sherlock_button<'a, Message: Clone + 'a>(
     let step = usize::from(color::mix_step().min(color::MIX_STEPS));
     let glyph = svg(logos[step].clone())
         .width(metrics::SHERLOCK_GLYPH)
-        .height(metrics::SHERLOCK_GLYPH);
+        .height(metrics::SHERLOCK_GLYPH)
+        .opacity(color::opacity());
     let content = container(glyph).center(Length::Fill);
     let mut control = Control::new(
         content,

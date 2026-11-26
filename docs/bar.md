@@ -613,6 +613,14 @@ the spring's 2 % overshoot scaled the panel a little past its size. Now:
 ![A page halfway, cut to the glass](../desktop/bar/screenshots/page-sliding.png)
 ![The control centre turning into the calendar](../desktop/bar/screenshots/panels-switching.png)
 
+**UI-04.** The icons fade with the panel (see « Icons that fade » in `docs/sherlock-ui.md`), and
+the control centre leaves out the row of the keyboard backlight on a machine without one: the
+panel opens shorter by that row (`panel::reserve_keyboard`, from the last read of the
+backlight), instead of keeping it empty. A backlight found while the panel is open shows the
+next time it opens.
+
+![The control centre halfway through its opening](../desktop/bar/screenshots/control-centre-opening.png)
+
 iced 0.14 has no opacity for a group of widgets: `sherlock_ui::color::with_opacity` multiplies
 the opacity of every color given to iced on the thread, the panel view is built inside it, and
 `animated::Reveal` draws its content inside it, with a transformation for the offset and the
