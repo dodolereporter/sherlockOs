@@ -2,14 +2,17 @@
 //! layer-shell (ADR 0005), written with iced 0.14 and software rendering (ADR 0014), like the
 //! bar. See `docs/dock.md`.
 
+pub mod anim;
 pub mod app;
 pub mod config;
+pub mod drag;
 pub mod entry;
 pub mod icons;
 pub mod items;
 pub mod launch;
 pub mod layout;
 pub mod menu;
+pub mod shell;
 mod view;
 pub mod watch;
 pub mod windows;

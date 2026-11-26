@@ -293,6 +293,22 @@ impl DockConfig {
     }
 }
 
+/// Moves `id` in the pinned list so that it comes just before `before`, or last when `before`
+/// is `None` or not in the list: the drag and drop of the dock, and the same order in the
+/// settings. Returns whether the order changed; an `id` that is not pinned changes nothing.
+pub fn move_pinned(pinned: &mut Vec<String>, id: &str, before: Option<&str>) -> bool {
+    let Some(from) = pinned.iter().position(|p| p == id) else {
+        return false;
+    };
+    let previous = pinned.clone();
+    let moved = pinned.remove(from);
+    let to = before
+        .and_then(|b| pinned.iter().position(|p| p == b))
+        .unwrap_or(pinned.len());
+    pinned.insert(to, moved);
+    *pinned != previous
+}
+
 /// Saves made by this process, for unique temporary names.
 static SAVES: AtomicU64 = AtomicU64::new(0);
 
@@ -390,6 +406,22 @@ pub fn path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pinned_application_moves_before_another() {
+        let list = |s: &str| -> Vec<String> { s.split(' ').map(String::from).collect() };
+        let mut pinned = list("a b c d");
+        assert!(move_pinned(&mut pinned, "a", Some("d")));
+        assert_eq!(pinned, list("b c a d"));
+        assert!(move_pinned(&mut pinned, "d", Some("b")));
+        assert_eq!(pinned, list("d b c a"));
+        assert!(move_pinned(&mut pinned, "d", None), "last");
+        assert_eq!(pinned, list("b c a d"));
+        // In place already, or not pinned: nothing changes.
+        assert!(!move_pinned(&mut pinned, "c", Some("a")));
+        assert!(!move_pinned(&mut pinned, "z", Some("a")));
+        assert_eq!(pinned, list("b c a d"));
+    }
 
     #[test]
     fn every_setting_is_read() {

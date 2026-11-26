@@ -2,8 +2,10 @@
 //! Values from the Dock design board, `docs/design/planches/Dock.dc.html`, and from the dock
 //! menu of the Menus board.
 
+use std::time::Duration;
+
 use crate::color::{Color, Palette};
-use crate::motion::Spring;
+use crate::motion::{self, Spring};
 
 // Geometry, in logical pixels.
 
@@ -70,6 +72,31 @@ const _: () = {
 pub const SPRING: Spring = Spring::new(1740.0, 52.6);
 /// Fade of the label (`opacity 120ms` on the board).
 pub const LABEL_FADE_MS: u64 = 120;
+
+// Motion of batch D-21b. The board shows none of it: these follow macOS, with the springs and
+// the fade of `motion`.
+
+/// An icon arriving or leaving: its room in the bar and its scale, from 0 to 1 or back (the
+/// spring of a window opening, overshoot of 2 %).
+pub const ARRIVAL_SPRING: Spring = motion::OPEN_SPRING;
+/// Fade of an icon arriving or leaving: the fade of a window opening.
+pub const ICON_FADE: Duration = motion::FADE;
+/// Icons moving aside or closing up, and a dropped icon flying to its place (the spring of a
+/// window snapping, overshoot of 3 %).
+pub const SHIFT_SPRING: Spring = motion::SNAP_SPRING;
+
+/// Bounce of an icon while its application starts: height of a hop, as a share of the icon
+/// side, and its duration. A choice of D-21b, close to macOS.
+pub const BOUNCE_HEIGHT: f32 = 0.5;
+pub const BOUNCE_PERIOD: Duration = Duration::from_millis(600);
+/// The icon stops bouncing after this long even when no window of the application came.
+pub const BOUNCE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Distance the pointer travels with the button held before the icon follows it: under it, a
+/// press and a release make a click.
+pub const DRAG_THRESHOLD: f32 = 4.0;
+/// Opacity of an icon dragged out of the dock, where letting it go removes it.
+pub const DRAG_OUT_OPACITY: f32 = 0.5;
 
 // Colors. The dock bar, its label, dots and separator take the palette shown
 // (`theme::palette`); the tiles keep their colors in both themes (`docs/design/THEME-CLAIR.md`).

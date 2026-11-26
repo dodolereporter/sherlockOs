@@ -295,7 +295,10 @@ fn the_dock_renders_with_an_open_application_after_the_separator() {
     let _theme = in_theme(Theme::Dark);
     let mut dock = sample();
     let _ = dock.unpin(1);
-    let layout = dock.layout(Duration::ZERO);
+    // The terminal moves after the separator: once it is there.
+    let _ = dock.tick(dock.now() + Duration::from_secs(3));
+    assert!(!dock.animating());
+    let layout = dock.layout(dock.now());
     assert!(layout.separator.is_some());
     let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
     let bytes = capture(ui, "dock-open").expect("screenshot written");
