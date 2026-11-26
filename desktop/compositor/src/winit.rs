@@ -196,7 +196,7 @@ fn render(
         // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;
         frame.clear(
-            color::DESKTOP.premultiplied().into(),
+            color::palette().desktop.premultiplied().into(),
             &[Rectangle::from_size(size)],
         )?;
         for ((_, view), elements) in views.iter().zip(&screens) {

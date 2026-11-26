@@ -615,7 +615,7 @@ fn push_tile(
         key: Key::of(owner.clone(), Part::Border),
         rect,
         fill: NO_FILL,
-        border: color::BORDER.premultiplied(),
+        border: color::palette().border.premultiplied(),
         border_width: metrics::BORDER_WIDTH * scale,
         radius,
         alpha: look.opacity * look.decoration,
@@ -659,6 +659,7 @@ fn push_tile(
     items.push(Item::Shadow {
         key: Key::of(owner, Part::Shadow),
         shadow: Shadow::of(rect, view.scale * zoom),
+        color: color::palette().shadow.premultiplied(),
         radius,
         alpha: look.opacity * look.decoration,
     });

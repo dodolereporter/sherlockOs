@@ -14,7 +14,10 @@ mod tests {
     use std::{
         fs::{File, OpenOptions},
         os::{fd::AsFd, unix::net::UnixStream},
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
 
@@ -24,6 +27,7 @@ mod tests {
         pacing::Pacing,
         render::{Item, items, rounded_opaque},
     };
+    use sherlock_ui::color::{self, Palette, Theme};
     use smithay::{
         backend::renderer::{
             damage::OutputDamageTracker,
@@ -307,7 +311,17 @@ mod tests {
         before: bool,
     }
 
+    /// The palette shown is the process's: a bench that changes the theme runs alone.
+    static THEME: RwLock<()> = RwLock::new(());
+
+    #[allow(dead_code)] // Held for its lifetime only.
+    enum ThemeGuard {
+        Shared(RwLockReadGuard<'static, ()>),
+        Alone(RwLockWriteGuard<'static, ()>),
+    }
+
     struct Bench {
+        _theme: ThemeGuard,
         event_loop: EventLoop<'static, State>,
         state: State,
         conn: Connection,
@@ -321,6 +335,17 @@ mod tests {
 
     impl Bench {
         fn start(before: bool) -> Self {
+            let theme = THEME.read().unwrap_or_else(PoisonError::into_inner);
+            Self::start_with(before, ThemeGuard::Shared(theme))
+        }
+
+        /// A bench that may change the theme: no other one runs meanwhile.
+        fn start_alone() -> Self {
+            let theme = THEME.write().unwrap_or_else(PoisonError::into_inner);
+            Self::start_with(false, ThemeGuard::Alone(theme))
+        }
+
+        fn start_with(before: bool, theme: ThemeGuard) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
             state.add_output(SCREEN.into(), 1.0);
@@ -329,6 +354,7 @@ mod tests {
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
             let mut bench = Self {
+                _theme: theme,
                 event_loop,
                 state,
                 conn,
@@ -502,7 +528,10 @@ mod tests {
             }
             let (output, view) = self.state.views().remove(0);
             let now = self.state.now();
+            // As `Scene::screens`: the fade of the theme first.
+            let fading = self.state.tick_theme();
             let (items, animating) = items(&self.state, (&output, &view), None, false, now);
+            let animating = animating || fading;
             let elements: Vec<Probe> = items
                 .into_iter()
                 .flat_map(|item| probe(&mut screen.renderer, &mut screen.ids, item, !screen.before))
@@ -819,6 +848,33 @@ mod tests {
         let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
         assert!(shown > 5, "a frame at each blank while sliding: {shown}");
         assert!(frames.len() < 40, "then rest: {} frames", frames.len());
+    }
+
+    #[test]
+    fn a_theme_change_fades_everything_then_rests() {
+        let mut bench = Bench::start_alone();
+        // The theme at start: at once.
+        bench.state.set_theme(Theme::Dark);
+        bench.settle();
+        // The appearance file turns light: the background, borders, shadows and title bars
+        // fade to the light palette, then nothing is drawn.
+        bench.state.set_theme(Theme::Light);
+        let frames: Vec<Frame> = (0..60).filter_map(|_| bench.tick()).collect();
+        let screen = Rectangle::from_size(SCREEN.into());
+        let damage: Vec<_> = frames.iter().flat_map(|f| f.damage.clone()).collect();
+        assert_eq!(bounds(&damage), Some(screen), "the whole screen");
+        let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
+        assert!(shown > 5, "a frame at each blank while fading: {shown}");
+        assert!(frames.len() < 30, "then rest: {} frames", frames.len());
+        assert_eq!(color::palette(), &Palette::LIGHT);
+        let epoch = bench.state.redraw_epoch();
+        let built = (0..30).filter_map(|_| bench.tick()).count();
+        assert_eq!(built, 0, "no frame at rest in the light theme");
+        assert_eq!(bench.state.redraw_epoch(), epoch);
+        // And back, for the other benches.
+        bench.state.set_theme(Theme::Dark);
+        bench.settle();
+        assert_eq!(color::palette(), &Palette::DARK);
     }
 
     /// Indexes, from front to back, of the dock, the genie of the window and the first other

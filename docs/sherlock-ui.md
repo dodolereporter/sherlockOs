@@ -9,7 +9,7 @@ toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 00
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `gpu` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `click`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -96,6 +96,9 @@ All tokens are named by their role, in English like the rest of the code.
   it their decoration: `INSET` (42: border, bar of 40, divider), title, pill and buttons taken
   from `metrics` and `typography`, `RESTORE_ICON`, `DOUBLE_CLICK` (400 ms), and `Colors::of`, the
   colors of a palette, those of the title bar of Evidence.
+- **`click`** (Q-13): `DoubleClick`, a double click recognised in the state of the
+  application, two presses on one target within `decorations::DOUBLE_CLICK` and
+  `DOUBLE_CLICK_DISTANCE` (6 px). A widget's own detection is lost when iced rebuilds its tree.
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
@@ -521,8 +524,8 @@ A program sets its theme with `color::set_active` (at once) or a `color::ThemeFa
 fade, see below) and returns `theme::theme()` from its iced `theme` function. The styles read
 the palette of the iced theme they are given (`theme::palette`), the constructors of
 `component` read `color::palette()`: no component tests the theme. The module constants of
-`color` stay, with the dark values, for the compositor, which follows the theme in D-05c; the
-shell programs no longer use them. The file and the automatic mode are in
+`color` keep the dark values for the tests and the few tokens built on them; neither the shell
+programs nor the compositor draw with them any more (lot D-05c). The file and the automatic mode are in
 `docs/appearance.md`.
 
 The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch

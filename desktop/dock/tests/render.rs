@@ -433,3 +433,57 @@ fn the_menu_follows_its_application_when_the_icons_move() {
         ["org.example.Files", "example-editor", "example-browser"]
     );
 }
+
+/// The next theme of the appearance file, five seconds at most.
+fn next_theme(themes: &mut iced::futures::channel::mpsc::UnboundedReceiver<Theme>) -> Theme {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Ok(theme) = themes.try_recv() {
+            return theme;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("no theme from the appearance file");
+}
+
+/// `Theme=` rewritten in the appearance file: the dock follows without restarting. Its glass,
+/// its dots, the label and Sherlock's tile take the palette shown: `dock-live-dark`, then
+/// `dock-live-light`, hovered over Sherlock with two applications open.
+#[test]
+fn the_dock_follows_a_new_theme_in_the_file() {
+    let _theme = in_theme(Theme::Dark);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("dock-live-theme");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch folder");
+    let file = dir.join("appearance.conf");
+    let write = |theme: &str| {
+        let new = file.with_extension("new");
+        let text = format!("[Appearance]\nTheme={theme}\n");
+        std::fs::write(&new, text).expect("appearance file");
+        std::fs::rename(&new, &file).expect("appearance file");
+    };
+    write("dark");
+    let mut themes = dock::app::appearance(&file);
+    let mut dock = hovered(icon_center(&sample(), 2));
+    let _ = dock.update(Message::Theme(next_theme(&mut themes)));
+    assert_eq!(color::palette(), &Palette::DARK);
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-live-dark").expect("screenshot written") > 2_000);
+
+    write("light");
+    let start = Instant::now();
+    let _ = dock.update(Message::Theme(next_theme(&mut themes)));
+    assert!(dock.animating(), "frames are asked for the fade");
+    let fade = sherlock_ui::motion::THEME_FADE;
+    let _ = dock.update(Message::Frame(start + fade * 2));
+    assert!(!dock.animating(), "nothing more once it is over");
+    assert_eq!(color::palette(), &Palette::LIGHT);
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-live-light").expect("screenshot written") > 2_000);
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let dark = std::fs::read(tmp.join("dock-live-dark-tiny-skia.png")).expect("capture");
+    let light = std::fs::read(tmp.join("dock-live-light-tiny-skia.png")).expect("capture");
+    assert_ne!(dark, light, "the dock changed with the theme");
+    color::set_active(Theme::Dark);
+    let _ = std::fs::remove_dir_all(&dir);
+}
