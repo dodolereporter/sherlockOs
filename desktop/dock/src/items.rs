@@ -15,6 +15,8 @@ use crate::windows::Windows;
 /// What an icon stands for.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
+    /// The button that opens the applications view (D-41), first, as on macOS.
+    Applications,
     /// Sherlock, in the middle of the pinned applications. It has no window to open yet.
     Sherlock,
     App(Box<DesktopEntry>),
@@ -26,6 +28,7 @@ pub enum Kind {
 /// when windows open and close.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
+    Applications,
     Sherlock,
     /// A desktop file id.
     App(String),
@@ -65,8 +68,21 @@ impl Item {
         }
     }
 
+    /// The « Applications » button: always there, first.
+    pub fn applications() -> Self {
+        Self {
+            kind: Kind::Applications,
+            name: String::from(dock::text::APPLICATIONS),
+            glyph: Glyph::File(svg::Handle::from_memory(
+                dock::applications_icon().into_bytes(),
+            )),
+            pinned: true,
+        }
+    }
+
     pub fn target(&self) -> Target {
         match &self.kind {
+            Kind::Applications => Target::Applications,
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
             Kind::Window(app_id) => Target::Window(app_id.clone()),
@@ -85,13 +101,15 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock => false,
+            Kind::Sherlock | Kind::Applications => false,
         }
     }
 }
 
 /// Builds the icons, and finds their glyphs once: `glyphs` keeps them by desktop file id.
 pub struct Builder<'a> {
+    /// The « Applications » button first.
+    pub applications: bool,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -100,7 +118,8 @@ pub struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    /// The icons for `pinned`, then the open applications of `windows` that none of them owns,
+    /// The « Applications » button, the icons for `pinned` with Sherlock in their middle, then
+    /// the open applications of `windows` that none of them owns,
     /// in the order their windows came. Returns them with the index of the first unpinned one,
     /// where the separator goes.
     pub fn build(
@@ -119,6 +138,9 @@ impl Builder<'_> {
             })
             .collect();
         items.insert(items.len().div_ceil(2), Item::sherlock());
+        if self.applications {
+            items.insert(0, Item::applications());
+        }
         let first_open = items.len();
         for window in windows.map(|w| w.list.as_slice()).unwrap_or_default() {
             if items.iter().any(|item| item.owns(&window.app_id)) {
@@ -202,6 +224,7 @@ mod tests {
         let lookup = IconLookup::new(&[data], None, None);
         let mut glyphs = HashMap::new();
         let mut builder = Builder {
+            applications: true,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -209,7 +232,10 @@ mod tests {
         };
         let pinned = ["org.example.Files".to_owned(), "example-browser".to_owned()];
         let (items, separator) = builder.build(&pinned, None);
-        assert_eq!(names(&items), ["Fichiers", "Sherlock", "Example Browser"]);
+        assert_eq!(
+            names(&items),
+            ["Applications", "Fichiers", "Sherlock", "Example Browser"]
+        );
         assert_eq!(separator, None);
         // The browser is open but pinned; the terminal is known; `mystery` has no entry.
         let Placeholder(windows) =
@@ -218,6 +244,7 @@ mod tests {
         assert_eq!(
             names(&items),
             [
+                "Applications",
                 "Fichiers",
                 "Sherlock",
                 "Example Browser",
@@ -225,11 +252,11 @@ mod tests {
                 "mystery"
             ]
         );
-        assert_eq!(separator, Some(3));
-        assert!(items[..3].iter().all(|i| i.pinned));
-        assert!(items[3..].iter().all(|i| !i.pinned));
-        assert_eq!(items[4].kind, Kind::Window("mystery".to_owned()));
-        assert!(matches!(items[4].glyph, Glyph::Letter('M')));
+        assert_eq!(separator, Some(4));
+        assert!(items[..4].iter().all(|i| i.pinned));
+        assert!(items[4..].iter().all(|i| !i.pinned));
+        assert_eq!(items[5].kind, Kind::Window("mystery".to_owned()));
+        assert!(matches!(items[5].glyph, Glyph::Letter('M')));
         // Glyphs are looked up once per application.
         assert_eq!(glyphs.len(), 3);
     }

@@ -156,6 +156,9 @@ Snapping:
   `docs/launcher.md`): `$SHERLOCKOS_BIN/launcher`, or `launcher` in the session's `PATH`.
   Neither the Space nor its release go to the client, and the gesture key, no longer alone,
   does not open Mission Control.
+- F4 alone opens the applications view, and closes it when pressed again (lot D-41, see
+  `docs/apps.md`): `$SHERLOCKOS_BIN/sherlockos-apps`, or `sherlockos-apps` in the `PATH`. F4 with
+  a modifier (Alt + F4) still goes to the client.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;

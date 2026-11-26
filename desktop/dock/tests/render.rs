@@ -98,6 +98,7 @@ fn sources(config: DockConfig) -> Sources {
         home: None,
         gtk_theme: None,
         control: Arc::new(Recorder::default()),
+        applications: false,
     }
 }
 
@@ -216,7 +217,7 @@ fn the_menu_of_an_icon_renders_its_entries() {
         "1 fenêtre",
         "Ouvrir",
         "Nouvelle fenêtre",
-        "Retirer du dock",
+        "Retirer du Dock",
         "Quitter",
     ] {
         assert!(ui.find(text).is_ok(), "{text} missing from the menu");
@@ -280,7 +281,7 @@ fn an_open_application_can_be_kept_and_unpinned_again() {
     assert_eq!(dock.open_windows(4), Some((1, true)));
     let abilities = dock.abilities(4);
     assert!(abilities.keep && !abilities.unpin);
-    // « Garder dans le dock »: back among the pinned ones, at their end.
+    // « Garder dans le Dock »: back among the pinned ones, at their end.
     let _ = dock.keep(4);
     assert_eq!(dock.separator, None);
     assert_eq!(
@@ -486,4 +487,30 @@ fn the_dock_follows_a_new_theme_in_the_file() {
     assert_ne!(dark, light, "the dock changed with the theme");
     color::set_active(Theme::Dark);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The « Applications » button (D-41): first, Sherlock still in the middle of the applications,
+/// its menu disabled; `dock-applications`, the pointer over it.
+#[test]
+fn the_applications_button_comes_first() {
+    let _theme = in_theme(Theme::Dark);
+    let mut sources = sources(DockConfig::default());
+    sources.applications = true;
+    let mut dock = Dock::new(sources);
+    let Placeholder(windows) = Placeholder::new("terminal,ExampleBrowser", Some("terminal"));
+    let _ = dock.update(Message::Windows(windows));
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names[0], sherlock_ui::dock::text::APPLICATIONS);
+    assert_eq!(
+        names[3], "Sherlock",
+        "in the middle of the four applications"
+    );
+    assert_eq!(names.len(), 6);
+    let can = dock.abilities(0);
+    assert!(!can.launch && !can.keep && !can.unpin && !can.quit && !can.new_window);
+    let point = icon_center(&dock, 0);
+    let _ = dock.hover(Some(point), Duration::ZERO);
+    dock.frame(Duration::from_secs(2));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
 }

@@ -41,6 +41,7 @@ fn dock(position: Position, mode: AutoHide, recorder: &Recorder) -> Dock {
         home: None,
         gtk_theme: None,
         control: Arc::new(recorder.clone()),
+        applications: false,
     };
     let mut dock = Dock::new(sources);
     let id = Id::unique();

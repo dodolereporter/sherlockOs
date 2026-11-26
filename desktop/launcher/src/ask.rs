@@ -67,6 +67,7 @@ impl Source for Ask {
             title: text::ASK.to_owned(),
             subtitle: Some(subtitle.to_owned()),
             tile: Tile::Sherlock,
+            app: None,
             action,
         }]
     }

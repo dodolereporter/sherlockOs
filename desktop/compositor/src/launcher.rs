@@ -3,7 +3,7 @@
 //! launcher is started on demand: started again while open, it closes the open one, so the
 //! same shortcut opens and closes it (`docs/launcher.md`). The program is
 //! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
-//! otherwise.
+//! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41).
 
 use std::{
     ffi::OsString,
@@ -16,16 +16,24 @@ use crate::State;
 /// Name of the program.
 pub const PROGRAM: &str = "launcher";
 
+/// The applications view (lot D-41), found the same way, started by F4.
+pub const APPLICATIONS: &str = "sherlockos-apps";
+
 /// The folder of the session's programs, as `sherlockos-session` exports it.
 pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
 
 /// The launcher to start: `PROGRAM` in the folder `var` gives for `BIN_VAR` if it is there,
 /// else `PROGRAM` alone, looked for in the `PATH`.
 pub fn program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    program_named(PROGRAM, var)
+}
+
+/// `name` in the folder `var` gives for `BIN_VAR` if it is there, else `name` in the `PATH`.
+pub fn program_named(name: &str, var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
     var(BIN_VAR)
-        .map(|dir| Path::new(&dir).join(PROGRAM))
+        .map(|dir| Path::new(&dir).join(name))
         .filter(|path| path.is_file())
-        .unwrap_or_else(|| PROGRAM.into())
+        .unwrap_or_else(|| name.into())
 }
 
 impl State {
@@ -40,6 +48,16 @@ impl State {
             .launcher_program
             .clone()
             .unwrap_or_else(|| program(|key| std::env::var_os(key)));
+        self.start_shell_program(program);
+    }
+
+    /// Opens the applications view, or closes it if it is open, the same way (lot D-41).
+    pub(crate) fn start_applications(&mut self) {
+        self.start_shell_program(program_named(APPLICATIONS, |key| std::env::var_os(key)));
+    }
+
+    /// Starts `program` with the compositor's Wayland socket and X11 display.
+    fn start_shell_program(&mut self, program: PathBuf) {
         let mut command = Command::new(&program);
         if let Some(socket) = &self.socket_name {
             command.env("WAYLAND_DISPLAY", socket);
@@ -50,21 +68,20 @@ impl State {
         };
         match command.spawn() {
             Ok(mut child) => {
-                tracing::info!(program = %program.display(), "launcher started");
+                tracing::info!(program = %program.display(), "started");
                 // A thread waits for it, so that it does not stay a zombie.
-                let spawned =
-                    std::thread::Builder::new()
-                        .name("launcher".into())
-                        .spawn(move || {
-                            if let Err(err) = child.wait() {
-                                tracing::warn!("waiting for the launcher: {err}");
-                            }
-                        });
+                let spawned = std::thread::Builder::new()
+                    .name("shell-program".into())
+                    .spawn(move || {
+                        if let Err(err) = child.wait() {
+                            tracing::warn!("waiting for a shell program: {err}");
+                        }
+                    });
                 if let Err(err) = spawned {
-                    tracing::warn!("launcher: no thread to wait for it: {err}");
+                    tracing::warn!("no thread to wait for a shell program: {err}");
                 }
             }
-            Err(err) => tracing::warn!(program = %program.display(), "launcher: {err}"),
+            Err(err) => tracing::warn!(program = %program.display(), "cannot start: {err}"),
         }
     }
 }
