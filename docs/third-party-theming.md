@@ -96,7 +96,7 @@ stops). It sets the theme of the appearance file at start, then at every change:
 | Qt through qt6ct | qt6ct watches its settings folder and reads the palette again a few seconds later |
 | KDE applications | Their palette follows qt6ct; the colors they read through `KColorScheme` come from `kdeglobals` (see "Limits") |
 | Firefox, Zen | GTK widgets follow the GTK theme; the dark mode of web pages is to be checked |
-| Cursor | GTK follows `cursor-theme` live; the compositor and Qt keep the cursor of `XCURSOR_THEME`, set at startup, until lot D-05c |
+| Cursor | GTK follows `cursor-theme` live, and the compositor follows the appearance file (lot D-05c); XWayland and Qt keep the cursor of `XCURSOR_THEME`, set at startup (see "Limit: XWayland and Qt" in `docs/cursor.md`) |
 
 Checked without a screen: the GTK 3 and GTK 4 themes as rendered, and the live switch of
 libadwaita through the session's database. Not checked: the reload of GTK under Wayland when

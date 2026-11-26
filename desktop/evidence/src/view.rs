@@ -121,10 +121,11 @@ impl App {
     }
 
     fn title_bar(&self) -> Element<'_, Message> {
-        let badge = container(space())
+        // The icon of Evidence (D-03), its own rounded tile, where the boards draw the badge.
+        let icon = sherlock_ui::app_icon::AppIcon::Evidence.at(metrics::APP_BADGE, 1.0);
+        let badge = iced::widget::svg(iced::widget::svg::Handle::from_memory(icon.as_bytes()))
             .width(metrics::APP_BADGE)
-            .height(metrics::APP_BADGE)
-            .style(theme::app_badge);
+            .height(metrics::APP_BADGE);
         let controls = ui::window_controls(
             [t::MINIMIZE, t::MAXIMIZE, t::CLOSE],
             [
@@ -533,7 +534,6 @@ impl App {
         let line = hoverable(line, color::palette().hover, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))
-            .on_double_click(Message::DoubleClick(i))
             .on_right_press(Message::RightClick(Some(i)))
             .into()
     }

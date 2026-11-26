@@ -46,8 +46,8 @@ shell-protocol = { path = "../shell-protocol", features = ["server"] }
 # built.
 ab_glyph = "=0.2.32"
 tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
-# The theme of the appearance file, followed live by the decorations, and read at startup for
-# the cursors (workspace crate).
+# The theme of the appearance file, followed live by everything the compositor draws: colors,
+# wallpaper and cursors (workspace crate).
 appearance-config = { path = "../appearance-config" }
 # The media keys (lot D-35): sound, brightness and players, shared with the quick settings of
 # the bar (workspace crate), and zbus for their buses, with the version and features it pins.

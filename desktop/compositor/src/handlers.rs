@@ -440,6 +440,7 @@ impl XdgShellHandler for State {
         // hidden workspace, or while an anchored surface has the keyboard, takes nothing.
         if let Some(window) = self.window_for(surface.wl_surface()) {
             let focused = self.focused_window().as_ref() == Some(&window);
+            self.start_closing(&window);
             self.space.unmap_elem(&window);
             if focused {
                 self.focus(self.top_window());

@@ -3,10 +3,9 @@
 //! (`docs/design/cursors-dark.html`, `docs/design/cursors-light.html`).
 //!
 //! - **Theme**: the house theme, generated from `assets/cursors/` and installed by
-//!   `just install-session`: the one the session names in `XCURSOR_THEME` for every program,
-//!   else `nom-os`, or `nom-os-light` when the appearance file asks for the light theme at
-//!   startup. Without it, the user's theme: `XCURSOR_THEME`, else the system's `default`. A
-//!   shape missing from the theme shows the arrow.
+//!   `just install-session`: `nom-os`, or `nom-os-light` while the desktop is light, followed
+//!   live (lot D-05c). Without it, the user's theme: `XCURSOR_THEME`, else the system's
+//!   `default`. A shape missing from the theme shows the arrow.
 //! - **Size**: `XCURSOR_SIZE` (24 by default) times the screen's scale. The image of the nearest
 //!   size above is shown pixel for pixel, never stretched: sharp at a fractional scale too.
 //! - **Motion**: the waiting cursors turn, a turn per second, each image shown at its time by a
@@ -84,11 +83,10 @@ enum Source {
 }
 
 impl Source {
-    /// The house theme `XCURSOR_THEME` names, else the one of `theme`, if it is installed; else
-    /// that of the dark desktop; else the user's theme.
+    /// The house theme of `theme`, if it is installed; else that of the dark desktop; else the
+    /// user's theme.
     fn load(theme: Theme) -> Self {
-        let asked = std::env::var("XCURSOR_THEME").ok();
-        let first = house_theme(asked.as_deref(), theme);
+        let first = house_theme(theme);
         let houses = std::iter::once(first)
             .chain((first != cursor_theme::THEME).then_some(cursor_theme::THEME));
         Self::from_house(houses.into_iter().find_map(|name| {
@@ -126,15 +124,14 @@ impl Source {
     }
 }
 
-/// The house theme to show. The session names it in `XCURSOR_THEME` for every program
-/// (`sherlockos-session`): the compositor takes the same, so that two themes never mix.
-/// Otherwise, the one of the desktop's `theme`.
-fn house_theme(asked: Option<&str>, theme: Theme) -> &'static str {
-    match (asked, theme) {
-        (Some(cursor_theme::THEME), _) => cursor_theme::THEME,
-        (Some(cursor_theme::LIGHT_THEME), _) => cursor_theme::LIGHT_THEME,
-        (_, Theme::Light) => cursor_theme::LIGHT_THEME,
-        (_, Theme::Dark) => cursor_theme::THEME,
+/// The house theme of the desktop's `theme`. At startup, it is the one the session names in
+/// `XCURSOR_THEME` for every program (`sherlockos-session`), read from the same appearance
+/// file; after a change of theme, the compositor follows it and XWayland keeps the first one
+/// (see "Cursors" in `docs/cursor.md`).
+fn house_theme(theme: Theme) -> &'static str {
+    match theme {
+        Theme::Light => cursor_theme::LIGHT_THEME,
+        Theme::Dark => cursor_theme::THEME,
     }
 }
 
@@ -292,6 +289,8 @@ struct Look {
 
 /// The theme, the images already read, and the state of the cursor's motion.
 pub struct Cursors {
+    /// The desktop's theme, whose house cursors `source` reads.
+    theme: Theme,
     source: Source,
     size: u32,
     images: HashMap<(CursorIcon, u32), Option<Rc<Image>>>,
@@ -303,26 +302,36 @@ pub struct Cursors {
 }
 
 impl Cursors {
-    pub fn load() -> Self {
-        let theme = appearance_config::path()
-            .map_or(Theme::Dark, |path| appearance_config::theme_now(&path));
+    /// The cursors of the desktop's `theme`.
+    pub fn load(theme: Theme) -> Self {
         let size = std::env::var("XCURSOR_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|s| (1..=256).contains(s))
             .unwrap_or(DEFAULT_SIZE);
         tracing::info!(size, "cursor size");
-        Self::new(Source::load(theme), size)
+        Self::new(theme, Source::load(theme), size)
     }
 
-    fn new(source: Source, size: u32) -> Self {
+    fn new(theme: Theme, source: Source, size: u32) -> Self {
         Self {
+            theme,
             source,
             size,
             images: HashMap::new(),
             shown: None,
             shake: Shake::default(),
             wake: Rc::default(),
+        }
+    }
+
+    /// Follows the desktop's `theme`: on a change, the house cursors of the new one, read again
+    /// from their files. The shape shown and a shake go on.
+    pub fn follow(&mut self, theme: Theme) {
+        if theme != self.theme {
+            self.theme = theme;
+            self.source = Source::load(theme);
+            self.images.clear();
         }
     }
 
@@ -537,7 +546,7 @@ mod tests {
         assert_eq!(pick_size(std::iter::empty(), 24), None);
 
         let dir = theme("sizes", &[24, 32, 48], 1);
-        let mut cursors = Cursors::new(Source::House(dir), 24);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
         let image = cursors.image(CursorIcon::Text, 30).unwrap();
         assert_eq!(image.nominal, 32);
         assert_eq!(image.frames[0].hotspot, (8.0, 0.0).into());
@@ -551,18 +560,18 @@ mod tests {
         // The text cursor is missing from the house theme: the arrow.
         let dir = theme("fallback", &[24], 1);
         std::fs::remove_file(dir.join("text")).unwrap();
-        let mut cursors = Cursors::new(Source::House(dir), 24);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
         assert!(cursors.image(CursorIcon::Text, 24).is_some());
         // Nothing at all: no cursor, rather than a wrong one.
         let empty = std::env::temp_dir().join(format!("cursor-empty-{}", std::process::id()));
-        let mut none = Cursors::new(Source::House(empty), 24);
+        let mut none = Cursors::new(Theme::Dark, Source::House(empty), 24);
         assert!(none.image(CursorIcon::Default, 24).is_none());
     }
 
     #[test]
     fn the_waiting_cursor_turns_at_the_pace_of_its_images() {
         let dir = theme("turn", &[24], 3);
-        let mut cursors = Cursors::new(Source::House(dir), 24);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
         let image = cursors.image(CursorIcon::Wait, 24).unwrap();
         assert_eq!(image.turn, 120 * MS);
         let (frame, next) = image.frame(50 * MS).unwrap();
@@ -572,14 +581,14 @@ mod tests {
         assert_eq!(image.frame(170 * MS).unwrap().0.hotspot.y, 1.0);
         // A still cursor needs nothing.
         let still = theme("still", &[24], 1);
-        let mut cursors = Cursors::new(Source::House(still), 24);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(still), 24);
         let image = cursors.image(CursorIcon::Default, 24).unwrap();
         assert_eq!(image.frame(50 * MS).unwrap().1, Next::Rest);
     }
 
     #[test]
     fn a_new_shape_fades_in_then_rests() {
-        let mut cursors = Cursors::new(Source::House(PathBuf::new()), 24);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(PathBuf::new()), 24);
         let first = cursors.look(CursorIcon::Default, 0.0, Duration::ZERO);
         assert!((first.change - SHAPE_FROM_SCALE).abs() < 1e-3);
         assert!((first.alpha - SHAPE_FROM_OPACITY).abs() < 1e-3);
@@ -621,16 +630,19 @@ mod tests {
     }
 
     #[test]
-    fn the_theme_the_session_names_wins() {
-        use cursor_theme::{LIGHT_THEME, THEME};
-        assert_eq!(house_theme(Some(LIGHT_THEME), Theme::Dark), LIGHT_THEME);
-        assert_eq!(house_theme(Some(THEME), Theme::Light), THEME);
-        // Another theme, or none: the desktop's.
-        assert_eq!(
-            house_theme(Some("breeze_cursors"), Theme::Light),
-            LIGHT_THEME
-        );
-        assert_eq!(house_theme(None, Theme::Dark), THEME);
+    fn the_house_theme_follows_the_desktop() {
+        assert_eq!(house_theme(Theme::Dark), cursor_theme::THEME);
+        assert_eq!(house_theme(Theme::Light), cursor_theme::LIGHT_THEME);
+        let dir = theme("follow", &[24], 1);
+        let mut cursors = Cursors::new(Theme::Dark, Source::House(dir), 24);
+        assert!(cursors.image(CursorIcon::Default, 24).is_some());
+        // The same theme: the images read stay.
+        cursors.follow(Theme::Dark);
+        assert_eq!(cursors.images.len(), 1);
+        // The other one: its cursors, read again.
+        cursors.follow(Theme::Light);
+        assert_eq!(cursors.theme, Theme::Light);
+        assert!(cursors.images.is_empty());
     }
 
     #[test]
