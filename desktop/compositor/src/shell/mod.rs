@@ -468,6 +468,7 @@ impl State {
                 for (flag, value) in [
                     (OutputState::Maximized, ToplevelState::Maximized),
                     (OutputState::Fullscreen, ToplevelState::Fullscreen),
+                    (OutputState::Snapped, ToplevelState::Snapped),
                 ] {
                     let active = self.shell.workspace_model.active();
                     let on = windows.iter().any(|(_, w)| {

@@ -1,6 +1,6 @@
 //! The windows of our compositor, read and acted on through `sherlock_shell_v1` on its shell
-//! socket (ADR 0021): the dots, the active application, the screens a maximized window covers
-//! (for `AutoHide=smart`), a click that brings forward or minimizes, « Quitter », and the
+//! socket (ADR 0021): the dots, the active application, the screens a maximized, fullscreen or
+//! snapped window covers (for `AutoHide=smart`), a click that brings forward or minimizes, « Quitter », and the
 //! rectangle of each window's icon (`set_rectangle`, for the minimize animation).
 //!
 //! Requests go out on the watching connection, from any thread, while the watching thread
@@ -52,7 +52,7 @@ impl Shell {
     pub fn with_connection(connection: Connection) -> Result<Self, SourceError> {
         let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
         let manager = globals
-            .bind(&queue.handle(), 1..=1, ())
+            .bind(&queue.handle(), 1..=2, ())
             .map_err(SourceError::NoShellProtocol)?;
         let control = ShellControl {
             connection,
@@ -310,8 +310,15 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                 described: false,
             }),
             manager::Event::Output { name, state: flags } => {
-                let covered = holds(&flags, manager::OutputState::Maximized as u32)
-                    || holds(&flags, manager::OutputState::Fullscreen as u32);
+                // A snapped window covers the screen like a maximized one: it takes the whole
+                // height once the dock hides (version 2 of the protocol).
+                let covered = [
+                    manager::OutputState::Maximized,
+                    manager::OutputState::Fullscreen,
+                    manager::OutputState::Snapped,
+                ]
+                .into_iter()
+                .any(|flag| holds(&flags, flag as u32));
                 state.pending_outputs.insert(name, Some(covered));
             }
             manager::Event::OutputRemoved { name } => {

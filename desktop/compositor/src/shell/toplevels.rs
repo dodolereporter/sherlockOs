@@ -16,8 +16,11 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 
 use crate::State;
 
+/// Version of the global. Version 2 adds the `snapped` state of a screen.
+const VERSION: u32 = 2;
+
 pub(super) fn create_global(dh: &DisplayHandle) {
-    dh.create_global::<State, SherlockShellManagerV1, ()>(1, ());
+    dh.create_global::<State, SherlockShellManagerV1, ()>(VERSION, ());
 }
 
 /// What a client knows of a window.
@@ -67,6 +70,18 @@ impl Manager {
         windows: &[(u32, Snapshot)],
         outputs: &[(String, Vec<u32>)],
     ) {
+        // A manager bound at version 1 does not know the `snapped` state of a screen.
+        let outputs: Outputs = match self.resource.version() {
+            1 => outputs
+                .iter()
+                .map(|(name, state)| {
+                    let state = state.iter().copied();
+                    let known = state.filter(|s| *s != OutputState::Snapped as u32);
+                    (name.clone(), known.collect())
+                })
+                .collect(),
+            _ => outputs.to_vec(),
+        };
         let mut changed = false;
         self.toplevels.retain(|t| {
             let open = windows.iter().any(|w| w.0 == t.id);
@@ -111,13 +126,13 @@ impl Manager {
                 changed = true;
             }
         }
-        for output in outputs {
+        for output in &outputs {
             if !self.outputs.contains(output) {
                 self.resource.output(output.0.clone(), bytes(&output.1));
                 changed = true;
             }
         }
-        self.outputs = outputs.to_vec();
+        self.outputs = outputs;
         // Always a first `done`, even with no window and no screen.
         if changed || !self.told {
             self.resource.done();
