@@ -338,6 +338,21 @@ D-03 the dock showed the logo on a night blue tile, which the board does not hav
 
 ![The dock with the application icons](../desktop/dock/screenshots/dock-app-icons.png)
 
+These come from the headless test `desktop/dock/tests/app_icons.rs`, at scale 2: at rest, then
+magnified over Sherlock, then at the smallest size the dock allows (32), then in the light
+theme. Stand-in desktop entries name the icons; the applications without a chosen name get a
+neutral one, never shown in a capture.
+
+![Magnified over Sherlock](../desktop/dock/screenshots/dock-app-icons-hover.png)
+
+![The smallest dock](../desktop/dock/screenshots/dock-app-icons-small.png)
+
+![In the light theme](../desktop/dock/screenshots/dock-app-icons-light.png)
+
+In the light theme, the cream Sherlock tile has no edge on the light dock glass: the tiles keep
+their colors (`THEME-CLAIR.md`), and the author's hairline border is white. A border for the
+light theme is for the author to choose.
+
 Gaps with the boards: the author's tiles have a radius of 22 % (5.28 on 24), the Dock board 27 %;
 the board's tiles have an inner light line at the top (`inset 0 1px 0`), the author's a hairline
 border all around. The icons are kept as the author drew them.
