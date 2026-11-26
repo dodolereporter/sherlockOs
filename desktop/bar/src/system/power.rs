@@ -22,7 +22,7 @@ pub const NAMES: [(&str, &str, &str); 2] = [
     ),
 ];
 
-/// A profile of the board: Économie, Équilibré, Performance.
+/// A profile of the board: « Économie », « Équilibré », « Performance ».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     Saver,

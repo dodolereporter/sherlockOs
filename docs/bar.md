@@ -314,8 +314,69 @@ in iced tasks, never on the interface thread. The interface is described in
 `docs/notifications.md` (History over D-Bus).
 
 The board shows the centre next to the quick settings, both 54 from the top: the control
-centre is both, and its height is the quick settings' (`panels::CONTROL_HEIGHT`); the
-notification list scrolls inside it.
+centre is both, in one popup, and its height is the quick settings' (`panels::CONTROL_HEIGHT`,
+462); the notification list scrolls inside it.
+
+### Quick settings
+
+The right column of the control centre, after the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
+« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the graphics card and energy
+choices, then the user and the session buttons (`quick.rs`, services in `system/`).
+
+| Control | Service | Read | Written |
+| --- | --- | --- | --- |
+| Wi-Fi | NetworkManager, system bus | `WirelessEnabled`, `WirelessHardwareEnabled`, the first device of type 2, its `ActiveAccessPoint` and `AccessPoints` | `WirelessEnabled`; `ActivateConnection` of a saved connection, else `AddAndActivateConnection` |
+| Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its connected `Device1` | `Powered` |
+| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
+| Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
+| Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
+| « Énergie » | power-profiles-daemon, system bus | `ActiveProfile`, `Profiles`, under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles` | `ActiveProfile` |
+| « Mode jeu », « Carte graphique » | none yet | | Faded, « Bientôt » |
+| Session | the launcher's `Systemd` (`launcher::system`) | | `loginctl lock-session`, `terminate-session`, `systemctl reboot`, `poweroff` |
+
+**Every system write goes through D-Bus** to the service that owns the setting, which asks
+polkit when its policy wants it (NetworkManager: `enable-disable-wifi`, `network-control`,
+`settings.modify.system`; power-profiles-daemon: `switch-profile`); logind lets the user of the
+active session set the brightness. Nothing runs as root, nothing uses `sudo`. Sound is the
+exception: PipeWire has no D-Bus interface, and `pactl` talks to the user's own sound server.
+The calls run in iced tasks, never on the interface thread. A slider sends one call at a time,
+the latest value winning (`Throttle`): a drag does not queue dozens of calls. The brightness
+never goes below 1 %.
+
+**States.** A tile shows « … » while it is read. A service that is not there fades its control:
+« Indisponible » (no NetworkManager, no Bluetooth adapter), « Aucune carte » without a Wi-Fi
+device, « Bloqué » when the radio switch keeps the Wi-Fi off, « Service absent » next to
+« Énergie », « Aucune sortie son » under the volume, a faded rail without a backlight. A service
+that refuses shows « Refusé » under its tile (« Échec » for another error), the details in the
+log; the next read shows the real state again. The D-Bus error name sorts them:
+`ServiceUnknown`, `NameHasNoOwner` and an unknown object, interface or method are absent;
+`AccessDenied`, `NotAuthorized`, `PermissionDenied`, `InteractiveAuthorizationRequired` are
+refused.
+
+**Wi-Fi.** A click on the tile switches the Wi-Fi; its line is the network it is on. The
+chevron on its right (« Réseaux Wi-Fi ») opens the list of networks after asking for a scan: one
+line per name (the access point in use, else the strongest), twelve at most, a padlock on a
+protected one, a check on the one in use. An open or saved network is joined at once. A new
+protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
+NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
+(`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
+depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+
+**Live.** While the control centre is open, the bar follows `PropertiesChanged` of
+NetworkManager's main object, `StateChanged` of its devices, `PropertiesChanged` of BlueZ and of
+power-profiles-daemon, on the system bus (`quick::watch`), and reads that service again. Sound
+and brightness are read when the panel opens and after each change.
+
+**Session.** The user row of the board, with the launcher's commands and rules
+(`docs/launcher.md`): « Verrouiller » at once; « Se déconnecter », « Redémarrer » and
+« Éteindre » want a second click at least 400 ms after the first (`launcher::CONFIRM_DELAY`),
+so that a double click only arms them. The armed button turns amber and « Reclique pour
+confirmer » replaces the user's name; any other click cancels it.
+
+![The control centre](../desktop/bar/screenshots/control-centre.png)
+![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
+![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
+![The control centre without notification nor service](../desktop/bar/screenshots/control-centre-empty.png)
 
 ### Calendar
 
@@ -341,13 +402,12 @@ only today comes from `localtime_r`.
 | Panel | Tab, Shift+Tab | Moves between its controls (iced focus), Enter or Space activates |
 | Calendar | Page Down, Page Up, Home | Next month, previous month, today's month |
 
-![The notification centre](../desktop/bar/screenshots/notification-centre.png)
-![The notification centre in the light theme](../desktop/bar/screenshots/notification-centre-light.png)
 ![The calendar](../desktop/bar/screenshots/calendar.png)
 ![The calendar in the light theme](../desktop/bar/screenshots/calendar-light.png)
 
 From `cargo test -p bar --test render`, at scale 2, in software: the board's three
-applications (with a second Sherlock notification), and November 2026 on the board's date.
+applications (with a second Sherlock notification) next to the board's quick settings, and
+November 2026 on the board's date.
 
 ## Running and checking by hand
 
@@ -461,6 +521,17 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   across years, the grid of November and December 2026 and of February 2027 and 2028.
 - **Panels** (`panel.rs`): both panels land at 54, their right edge at 1428, with and without
   their shadow, and 12 from the edge under an attached bar; the time of a notification.
+- **Quick settings** (`tests/quick.rs`): fake NetworkManager, BlueZ, logind and
+  power-profiles-daemon on a private bus started by the test, never the system bus: the Wi-Fi
+  read (devices, networks merged by name, security), switched, a saved network joined, a new
+  one only with its password; Bluetooth read and switched, an adapter missing; the backlight
+  chosen by kind, set through logind, never below 1 %; the profiles under the older name of
+  the daemon, without performance; each service refusing (polkit's `AccessDenied`) and absent;
+  a `StateChanged` of NetworkManager reaching the bar. A fake `pactl` for the sound. In
+  `quick.rs`: the slider throttle, the session rules (lock at once, a second click too soon,
+  cancelled, confirmed), Do not disturb written to a temporary file, a refusal under its tile.
+  In `tests/render.rs`: the clicks on the tiles, a profile, and nothing from the game mode or
+  the graphics card.
 - **Notification centre** (`tests/history.rs`): the real daemon on a private bus: the history
   listed and grouped, `Changed` after each notification, an action run from the centre, « Tout
   effacer », and a bus without the daemon.
@@ -495,6 +566,12 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.
+- **Panels** (D-20b): the notification centre is as high as the quick settings and its list
+  scrolls; the board's centre is only as high as its cards. A card per application, not per
+  notification. The board's « Réglages » button of the user row is not there (Control Room
+  does not exist yet); « Se déconnecter » and « Redémarrer » are added. The Wi-Fi tile has a
+  chevron for the network list, which no board draws, nor the calendar. « Carte graphique »
+  shows no active choice, since none exists yet. Panels open at once, without animation.
 
 ## GPU rendering (D-02)
 
@@ -526,8 +603,8 @@ shows against one.
 
 - The application name from its `.desktop` file: the bar shows the window title.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
-- The quick settings of the control centre: batch D-20b2. The dock (D-21), the launcher
-  (D-22).
+- The game mode and the choice of the graphics card: their tiles wait for their batches.
+  Bluetooth devices are not listed nor paired: the tile only switches the adapter.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
   already follows that screen alone; a bar on every screen needs the menu to open on the
   surface that was clicked.

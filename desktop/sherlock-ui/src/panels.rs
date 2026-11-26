@@ -777,7 +777,7 @@ mod styles {
         }
     }
 
-    /// A button of the user row (Verrouiller, Éteindre…). `label` names it.
+    /// A button of the user row (« Verrouiller », « Éteindre »…). `label` names it.
     pub fn round_button<'a, Message: Clone + 'a>(
         glyph_of: Glyph,
         label: &'a str,
