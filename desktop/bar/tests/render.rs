@@ -601,7 +601,7 @@ fn the_bluetooth_devices_render_in_both_themes() {
             let mut ui =
                 Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             for text in [
-                "Mes appareils",
+                "MES APPAREILS",
                 "Casque",
                 "Connecté · 80\u{202F}%",
                 "Clavier",
