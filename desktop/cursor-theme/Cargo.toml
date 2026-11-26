@@ -1,0 +1,29 @@
+[package]
+name = "cursor-theme"
+description = "Cursor theme of the desktop: shapes, hotspots, names, Xcursor writer and generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# The generator (`cursor-theme`) alone renders the SVGs. The compositor only reads the names.
+render = ["dep:resvg"]
+
+[dependencies]
+# Renders the SVGs of `assets/cursors/` and the board. The version and the features that iced
+# 0.14 already pulls (through iced_tiny_skia): nothing new is built.
+resvg = { version = "=0.45.1", optional = true }
+# Colors of the variants and of the board: only the tokens, without iced.
+sherlock-ui = { path = "../sherlock-ui", default-features = false }
+
+[dev-dependencies]
+# Reads back the files written, with the parser the compositor uses.
+xcursor = "=0.3.11"
+
+[[bin]]
+name = "cursor-theme"
+required-features = ["render"]
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- ew-resize: the horizontal double arrow. Hotspot (12, 12), its middle. -->
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1" stdDeviation="0.6" flood-color="#030812" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M3 12 L7.5 7.8 V10.9 H16.5 V7.8 L21 12 L16.5 16.2 V13.1 H7.5 V16.2 Z"
+          fill="#14233B" stroke="#F4EBE3" stroke-width="3" stroke-linejoin="round"
+          paint-order="stroke"/>
+  </g>
+</svg>

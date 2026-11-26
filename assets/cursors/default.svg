@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- default: the arrow. Hotspot (3, 3), the tip. Grid of 24, one unit per pixel at 24. -->
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1" stdDeviation="0.6" flood-color="#030812" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <!-- Left edge, notch, tail, wing. The cream outline is drawn under the fill: 1.5 outside. -->
+    <path d="M3 3 L3 17.35 L6.31 14.32 L8.43 19.19 L10.45 18.27 L8.34 13.49 L13.12 13.49 Z"
+          fill="#14233B" stroke="#F4EBE3" stroke-width="3" stroke-linejoin="round"
+          paint-order="stroke"/>
+  </g>
+</svg>

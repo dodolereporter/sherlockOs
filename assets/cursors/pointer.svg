@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+  <!-- pointer: the pointing hand. Hotspot (9, 3), the tip of the index finger. -->
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1" stdDeviation="0.6" flood-color="#030812" flood-opacity="0.35"/>
+    </filter>
+    <!-- The hand as a union of rounded shapes: outlined once, filled once. -->
+    <g id="hand">
+      <rect x="7.5" y="2.5" width="3" height="11" rx="1.5"/>
+      <rect x="10.5" y="8" width="3" height="6" rx="1.5"/>
+      <rect x="13.5" y="8.7" width="3" height="6" rx="1.5"/>
+      <rect x="16.5" y="9.9" width="2.6" height="5.5" rx="1.3"/>
+      <rect x="3.4" y="12.4" width="6" height="3" rx="1.5" transform="rotate(42 6.4 13.9)"/>
+      <rect x="7.5" y="11" width="11.6" height="9" rx="3.4"/>
+    </g>
+  </defs>
+  <g filter="url(#shadow)" stroke-linejoin="round">
+    <use xlink:href="#hand" fill="#F4EBE3" stroke="#F4EBE3" stroke-width="3"/>
+    <use xlink:href="#hand" fill="#14233B"/>
+    <!-- The folded fingers, apart. -->
+    <path d="M10.5 9.6 V12.4 M13.5 10.3 V13 M16.5 11.5 V13.6" fill="none" stroke="#F4EBE3"
+          stroke-width="0.9" stroke-linecap="round"/>
+  </g>
+</svg>
