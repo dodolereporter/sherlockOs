@@ -9,6 +9,7 @@
 pub mod battery;
 pub mod clock;
 pub mod network;
+pub mod shell;
 pub mod sound;
 pub mod workspaces;
 
