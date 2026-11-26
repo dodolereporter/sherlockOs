@@ -1,0 +1,37 @@
+[package]
+name = "sherlock-3d"
+description = "The 3D mascot: glTF model, animation and wgpu renderer (ADR 0024)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Reads `sherlock.glb`. Without its default `import` feature, which would pull the `image`
+# crate with every codec and `base64`: the model is a single binary file, its two JPEG
+# textures are decoded below. `utils` gives the typed accessor readers, `names` the names of
+# the bones and clips.
+gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names"] }
+# Vectors, quaternions and matrices. The version iced pulls: only the declaration is new.
+glam = "=0.25.0"
+# Vertex and uniform structures as bytes for wgpu. Already pulled by iced and wgpu.
+bytemuck = { version = "=1.25.2", features = ["derive"] }
+# Decodes the textures of the model (JPEG) and writes the test captures (PNG). The version and
+# the codecs Evidence already uses.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# The version iced 0.14 pulls, with its Vulkan backend only, like sherlock-ui (ADR 0018).
+wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+
+[dev-dependencies]
+# The choice of the GPU (ADR 0018) for the off-screen tests, without iced.
+sherlock-ui = { path = "../sherlock-ui", default-features = false }
+
+# Changes the process environment to pick the Vulkan driver: one thread, so no libtest harness.
+[[test]]
+name = "offscreen"
+harness = false
+
+[lints]
+workspace = true

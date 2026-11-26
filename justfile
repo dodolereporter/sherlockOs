@@ -31,6 +31,32 @@ build:
 wallpapers output="target/wallpapers":
     cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
 
+# Revision of the public repository dodolereporter/sherlock that holds the mascot's model, and the SHA-256 of its sherlock.glb (ADR 0024)
+mascot_revision := "5af31dc452b52db7046a761667106e24d41dfa13"
+mascot_sha256 := "a50ec91a1801557333d94920f47c78537a854d5c1659431915b0f2f849ac9229"
+
+# Downloads the mascot's 3D model at the pinned revision and checks its SHA-256; it is not in this repository
+mascot output="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output={{ quote(output) }}
+    if [[ -z "$output" ]]; then
+        output="${XDG_DATA_HOME:-$HOME/.local/share}/sherlockos/mascot/sherlock.glb"
+    fi
+    if [[ -f "$output" ]] && echo "{{ mascot_sha256 }}  $output" | sha256sum --check --status; then
+        echo "already there: $output"
+        exit 0
+    fi
+    mkdir -p "$(dirname "$output")"
+    partial=$(mktemp "$output.XXXXXX")
+    trap 'rm -f "$partial"' EXIT
+    curl --fail --silent --show-error --location --retry 3 --output "$partial" \
+        "https://raw.githubusercontent.com/dodolereporter/sherlock/{{ mascot_revision }}/sherlock.glb"
+    echo "{{ mascot_sha256 }}  $partial" | sha256sum --check --quiet
+    chmod 644 "$partial"
+    mv "$partial" "$output"
+    echo "downloaded: $output"
+
 # Generates the cursor themes sherlockos and sherlockos-light from the SVGs of assets/cursors
 cursors output="target/cursors":
     cargo run --release -p cursor-theme --features render -- build assets/cursors {{ quote(output) }}
