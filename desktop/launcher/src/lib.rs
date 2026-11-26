@@ -127,13 +127,16 @@ pub fn sources() -> (Vec<Box<dyn source::Source>>, oneshot::Receiver<usize>) {
 
 /// The sources in the order of their sections: the calculator, whose single result is the
 /// most precise answer, the applications, then the system commands where the board has its
-/// settings, the files, and « Demander à Sherlock » last, as on the board.
+/// settings, the files, and « Demander à Sherlock » last, as on the board. System commands
+/// found by a keyword only come after the files.
 pub fn arrange(apps: Apps, files: files::Files, ask: ask::Ask) -> Vec<Box<dyn source::Source>> {
+    use system::{Placement, System};
     vec![
         Box::new(calc::Calculator),
         Box::new(apps),
-        Box::new(system::System::default()),
+        Box::new(System::new(Placement::ByName)),
         Box::new(files),
+        Box::new(System::new(Placement::ByKeyword)),
         Box::new(ask),
     ]
 }

@@ -175,7 +175,7 @@ impl Lookup {
         let mut pending: Vec<String> = theme.map(str::to_owned).into_iter().collect();
         while let Some(name) = pending.pop() {
             // `hicolor` comes last, whoever inherits from it; a loop of themes stops here.
-            if name == FALLBACK_THEME || seen.contains(&name) {
+            if name == FALLBACK_THEME || seen.contains(&name) || !is_inside(&name) {
                 continue;
             }
             seen.push(name.clone());
@@ -269,9 +269,18 @@ impl Theme {
     fn read(name: String, index: &KeyFile) -> Self {
         let mut paths = index.list("Icon Theme", "Directories");
         paths.extend(index.list("Icon Theme", "ScaledDirectories"));
-        let dirs = paths.iter().filter_map(|p| Dir::read(index, p)).collect();
+        let dirs = paths
+            .iter()
+            .filter(|p| is_inside(p))
+            .filter_map(|p| Dir::read(index, p))
+            .collect();
         Self { name, dirs }
     }
+}
+
+/// Whether a theme name or a theme folder stays under its base folder: no `..`, not absolute.
+fn is_inside(relative: &str) -> bool {
+    !relative.is_empty() && !relative.contains("..") && !relative.starts_with('/')
 }
 
 /// `dir/name.<ext>` for the first extension that exists.
@@ -467,6 +476,33 @@ mod tests {
         assert_eq!(lookup.find("browser", 48, 1), Some(mine));
         // Nothing installed at all: no theme, nothing found.
         assert!(Lookup::new(&[], None, Some("Exemple")).themes().is_empty());
+    }
+
+    #[test]
+    fn themes_and_folders_stay_under_the_base_folders() {
+        let tmp = TempDir::new("escape");
+        let data = fake_data(&tmp);
+        // A theme outside `icons/`, reachable by `..`, and one by an absolute path.
+        tmp.write(
+            "share/outside/index.theme",
+            "[Icon Theme]\nDirectories=apps\n[apps]\nSize=32\n",
+        );
+        tmp.write("share/outside/apps/secret.png", "png");
+        let absolute = tmp.0.join("share/outside");
+        for name in ["../outside", absolute.to_str().expect("utf-8")] {
+            let lookup = Lookup::new(std::slice::from_ref(&data), None, Some(name));
+            assert_eq!(lookup.themes(), ["hicolor"], "{name}");
+            assert_eq!(lookup.find("secret", 32, 1), None, "{name}");
+        }
+        // Folders of a theme that climb out of it are left out too.
+        tmp.write(
+            "share/icons/Climber/index.theme",
+            "[Icon Theme]\nDirectories=../../outside/apps,/etc\n\
+             [../../outside/apps]\nSize=32\n[/etc]\nSize=32\n",
+        );
+        let lookup = Lookup::new(&[data], None, Some("Climber"));
+        assert_eq!(lookup.themes(), ["Climber", "hicolor"]);
+        assert_eq!(lookup.find("secret", 32, 1), None);
     }
 
     #[test]

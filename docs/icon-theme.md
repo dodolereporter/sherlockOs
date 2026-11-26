@@ -19,7 +19,9 @@ let file = lookup.find("kitty", 30, 2);                         // Option<PathBu
 
 - `Lookup::new(data_dirs, home, theme)` reads the `index.theme` of the chosen theme, of the
   themes it inherits from (depth first, in the order of `Inherits`), and of `hicolor`, which
-  always comes last. A theme that is not installed is skipped; a loop of `Inherits` ends.
+  always comes last. A theme that is not installed is skipped; a loop of `Inherits` ends. A
+  theme name or a `Directories` entry holding `..` or starting with `/` is refused: the lookup
+  never leaves the base folders.
 - `context(name)` keeps only the folders of that `Context`: an application icon is then looked
   for in some forty folders instead of the eight hundred of `hicolor`.
 - `find(name, size, scale)` returns the file. An absolute name is taken as it is when the file
@@ -52,7 +54,7 @@ launcher does, by icon name).
 `cargo test -p icon-theme`, on a fake theme written in a temporary folder: the chosen theme
 before its parent before `hicolor` before `pixmaps`, a loop of `Inherits`, an exact size before
 a closer one, the `@2` folder at scale 2, a scalable folder's range, the closest fixed size, a
-context narrowing the folders, absolute names, names with an extension, `$HOME/.icons` first, a
+context narrowing the folders, theme names and folders climbing out refused, absolute names, names with an extension, `$HOME/.icons` first, a
 missing theme, and the user's theme from GTK then from Plasma.
 
 ## Limits

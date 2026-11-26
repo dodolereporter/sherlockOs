@@ -45,6 +45,9 @@ pub const MAX_RESULTS: usize = 9;
 pub const SECTION_RESULTS: usize = 5;
 /// Sections at most: calculator, applications, system, files, Sherlock.
 pub const MAX_SECTIONS: usize = 5;
+/// Least time between arming a session command (« Se déconnecter », « Redémarrer »,
+/// « Éteindre ») and confirming it: longer than a double click and than a key bounce.
+pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 /// Width of the ring around the selected Sherlock row, which keeps its cream.
 pub const SHERLOCK_RING: f32 = 2.0;
 
@@ -170,7 +173,7 @@ pub mod text {
     pub const POWER_OFF: &str = "Éteindre";
     pub const POWER_OFF_LINE: &str = "Éteins l'ordinateur";
     pub const POWER_OFF_WORDS: [&str; 4] = ["eteindre", "arreter", "shutdown", "poweroff"];
-    /// The line of « Redémarrer » and « Éteindre » after a first Enter.
+    /// The line of « Se déconnecter », « Redémarrer » and « Éteindre » after a first Enter.
     pub const CONFIRM: &str = "Appuie encore sur Entrée pour confirmer";
 
     /// A file right in the personal folder: the line under its name.

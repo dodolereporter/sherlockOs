@@ -1,10 +1,11 @@
 //! Files and folders of the personal folder whose name matches the query. The folder is walked
 //! once, in the background, when the launcher opens: breadth first, 4 levels and 20 000
 //! entries at most, without hidden entries nor the known heavy folders, never following a
-//! symbolic link. Enter opens a result with its default application, from `mime-apps`. A real
+//! symbolic link nor entering another file system. Enter opens a result with its default application, from `mime-apps`. A real
 //! index comes later.
 
 use std::collections::VecDeque;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -40,33 +41,46 @@ pub struct Entry {
     name: String,
 }
 
-/// Walks `home`, breadth first: when the limit is met, the shallow entries are in.
+/// Walks `home`, breadth first: when the limit is met, the shallow entries are in. The walk
+/// stays on the device of `home`: another file system mounted inside (a USB disk, a network
+/// share that may hang) is listed, never entered.
 pub fn walk(home: &Path) -> Vec<Entry> {
+    match std::fs::metadata(home) {
+        Ok(meta) => walk_on(home, meta.dev()),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Walks `home`, entering only the folders of device `device`.
+pub fn walk_on(home: &Path, device: u64) -> Vec<Entry> {
     let mut found = Vec::new();
     let mut pending = VecDeque::from([(home.to_path_buf(), 1)]);
     while let Some((dir, depth)) = pending.pop_front() {
         let Ok(reader) = std::fs::read_dir(&dir) else {
             continue;
         };
-        let mut children: Vec<_> = reader.flatten().collect();
-        // Readable in the same order on every run.
-        children.sort_by_key(|c| c.file_name());
-        for child in children {
-            let name = child.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') {
-                continue;
+        // Read no more than the room left: a folder of a million entries stops early.
+        let room = MAX_ENTRIES - found.len();
+        let mut children = Vec::new();
+        for child in reader.flatten() {
+            if children.len() == room {
+                break;
             }
+            let name = child.file_name().to_string_lossy().into_owned();
             // `file_type` does not follow a symbolic link: a link is listed, never entered.
             let is_dir = child.file_type().is_ok_and(|t| t.is_dir());
-            if is_dir && SKIPPED.contains(&name.as_ref()) {
+            if name.starts_with('.') || (is_dir && SKIPPED.contains(&name.as_str())) {
                 continue;
             }
-            if found.len() == MAX_ENTRIES {
-                return found;
-            }
+            children.push((name, child, is_dir));
+        }
+        // Readable in the same order on every run.
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, child, is_dir) in children {
             let path = child.path();
-            if is_dir && depth < MAX_DEPTH {
+            let enter =
+                is_dir && depth < MAX_DEPTH && child.metadata().is_ok_and(|m| m.dev() == device);
+            if enter {
                 pending.push_back((path.clone(), depth + 1));
             }
             found.push(Entry {
@@ -75,6 +89,9 @@ pub fn walk(home: &Path) -> Vec<Entry> {
                 is_dir,
                 depth,
             });
+        }
+        if found.len() == MAX_ENTRIES {
+            break;
         }
     }
     found

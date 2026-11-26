@@ -26,9 +26,10 @@ pub enum Power {
 }
 
 impl Power {
-    /// Restarting and powering off ask for a second Enter.
+    /// Everything but locking loses unsaved work: logging out, restarting and powering off
+    /// ask for a second Enter.
     pub fn needs_confirmation(self) -> bool {
-        matches!(self, Self::Reboot | Self::PowerOff)
+        !matches!(self, Self::Lock)
     }
 }
 

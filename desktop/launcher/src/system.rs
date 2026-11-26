@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use sherlock_ui::launcher::{Glyph, text};
 
 use crate::launch::{self, LaunchError};
-use crate::search::Haystack;
+use crate::search::fold;
 use crate::source::{Action, Command, Hit, Power, Query, Source, Tile};
 
 /// What runs a session command.
@@ -67,25 +67,49 @@ impl Session for NoSession {
     }
 }
 
-/// The four commands, a source.
+/// Where the system section goes: before the files when a command is found by its name,
+/// after them when it is only found by a keyword (`crate::arrange` holds one of each).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    ByName,
+    ByKeyword,
+}
+
+/// The four commands, a source. A command is offered only when the query starts its name as
+/// shown (« se d », « étein ») or is one of its keywords in full (`logout`): a query that only
+/// looks like one (« logo », « déco ») offers nothing.
 #[derive(Debug, Clone)]
 pub struct System {
-    commands: Vec<(Power, Haystack)>,
+    placement: Placement,
+    /// Each command, its folded name and its keywords.
+    commands: Vec<(Power, String, &'static [&'static str])>,
+}
+
+impl System {
+    pub fn new(placement: Placement) -> Self {
+        let command = |power| {
+            let (title, _, _) = describe(power);
+            let words: &'static [&'static str] = match power {
+                Power::Lock => &text::LOCK_WORDS,
+                Power::LogOut => &text::LOG_OUT_WORDS,
+                Power::Reboot => &text::REBOOT_WORDS,
+                Power::PowerOff => &text::POWER_OFF_WORDS,
+            };
+            (power, fold(title), words)
+        };
+        Self {
+            placement,
+            commands: [Power::Lock, Power::LogOut, Power::Reboot, Power::PowerOff]
+                .into_iter()
+                .map(command)
+                .collect(),
+        }
+    }
 }
 
 impl Default for System {
     fn default() -> Self {
-        let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
-        let command =
-            |power, title, list: &[&str]| (power, Haystack::new(title, None, &words(list)));
-        Self {
-            commands: vec![
-                command(Power::Lock, text::LOCK, &text::LOCK_WORDS),
-                command(Power::LogOut, text::LOG_OUT, &text::LOG_OUT_WORDS),
-                command(Power::Reboot, text::REBOOT, &text::REBOOT_WORDS),
-                command(Power::PowerOff, text::POWER_OFF, &text::POWER_OFF_WORDS),
-            ],
-        }
+        Self::new(Placement::ByName)
     }
 }
 
@@ -104,23 +128,36 @@ impl Source for System {
         text::SYSTEM
     }
 
-    /// Best score first, then in the order written. Scattered letters do not count: « et »
-    /// must not offer to power off.
+    /// The commands found by their name first, then those found by a keyword, each in the
+    /// order written. The whole list goes to the placement it calls for, the other one has
+    /// none.
     fn search(&self, query: &Query, limit: usize) -> Vec<Hit> {
-        let mut found: Vec<(u32, usize, Power)> = self
+        let wanted = query.terms.join(" ");
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<(Placement, Power)> = self
             .commands
             .iter()
-            .enumerate()
-            .filter_map(|(order, (power, words))| {
-                let score = words.score_from(&query.terms, crate::search::WORD)?;
-                Some((score, order, *power))
+            .filter_map(|(power, name, words)| {
+                if name.starts_with(&wanted) {
+                    Some((Placement::ByName, *power))
+                } else {
+                    words
+                        .contains(&wanted.as_str())
+                        .then_some((Placement::ByKeyword, *power))
+                }
             })
             .collect();
-        found.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        found.sort_by_key(|(placement, _)| *placement != Placement::ByName);
+        let placement = found.first().map(|(p, _)| *p);
+        if placement != Some(self.placement) {
+            return Vec::new();
+        }
         found
             .into_iter()
             .take(limit)
-            .map(|(_, _, power)| {
+            .map(|(_, power)| {
                 let (title, line, glyph) = describe(power);
                 Hit {
                     title: title.to_owned(),

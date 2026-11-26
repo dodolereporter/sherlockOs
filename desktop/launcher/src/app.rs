@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use iced::keyboard::{self, key::Named};
 use iced::widget::{Space, button, column, container, operation, row, svg, text, text_input};
@@ -72,8 +73,9 @@ pub struct Launcher {
     spawn: Spawn,
     session: Arc<dyn Session>,
     clipboard: Clipboard,
-    /// The result waiting for its second Enter (« Redémarrer », « Éteindre »).
-    pub armed: Option<usize>,
+    /// The result waiting for its confirmation (« Se déconnecter », « Redémarrer »,
+    /// « Éteindre »), and when it was armed.
+    armed: Option<(usize, Instant)>,
     /// The result just copied with iced's clipboard.
     pub copied: Option<usize>,
     pub query: String,
@@ -111,6 +113,11 @@ impl Launcher {
     pub fn with_clipboard(mut self, clipboard: Clipboard) -> Self {
         self.clipboard = clipboard;
         self
+    }
+
+    /// The result waiting for its confirmation.
+    pub fn armed(&self) -> Option<usize> {
+        self.armed.map(|(index, _)| index)
     }
 
     /// Every result, in the order of the list.
@@ -200,22 +207,34 @@ impl Launcher {
         match action {
             Action::Start(command) => self.start(&command),
             Action::Copy(value) => self.copy(index, value),
-            Action::Session(power) if power.needs_confirmation() && self.armed != Some(index) => {
-                self.armed = Some(index);
-                Task::none()
-            }
-            Action::Session(power) => match self.session.run(power) {
-                Ok(()) => {
-                    tracing::info!(?power, "session command");
-                    self.close()
+            Action::Session(power) if power.needs_confirmation() => match self.armed {
+                // Confirmed by a new press, not too soon: a double click or a key bounce
+                // arms, never confirms (a held Enter never gets here, see `on_event`).
+                Some((armed, at)) if armed == index && at.elapsed() >= look::CONFIRM_DELAY => {
+                    self.run_session(power)
                 }
-                Err(error) => {
-                    tracing::error!(%error, "cannot run the session command");
-                    self.armed = None;
+                Some((armed, _)) if armed == index => Task::none(),
+                _ => {
+                    self.armed = Some((index, Instant::now()));
                     Task::none()
                 }
             },
+            Action::Session(power) => self.run_session(power),
             Action::Disabled => Task::none(),
+        }
+    }
+
+    fn run_session(&mut self, power: crate::source::Power) -> Task<Message> {
+        match self.session.run(power) {
+            Ok(()) => {
+                tracing::info!(?power, "session command");
+                self.close()
+            }
+            Err(error) => {
+                tracing::error!(%error, "cannot run the session command");
+                self.armed = None;
+                Task::none()
+            }
         }
     }
 
@@ -323,7 +342,7 @@ impl Launcher {
 
     /// The line under a result: its own, or what its first Enter or copy did.
     fn subtitle<'a>(&self, hit: &'a Hit, index: usize) -> Option<&'a str> {
-        if self.armed == Some(index) {
+        if self.armed() == Some(index) {
             Some(texts::CONFIRM)
         } else if self.copied == Some(index) {
             Some(texts::COPIED)
@@ -471,15 +490,16 @@ fn key_cap<'a>(name: &'a str, in_row: bool) -> Element<'a, Message> {
         .into()
 }
 
-/// The arrows, Enter and Escape, even when the search field took them.
+/// The arrows, Enter and Escape, even when the search field took them. A held Enter repeats
+/// nothing: every Enter is a new press, so a key held down never confirms a session command.
 pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
-    let Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) = event else {
+    let Event::Keyboard(keyboard::Event::KeyPressed { key, repeat, .. }) = event else {
         return None;
     };
     let key = match key {
         keyboard::Key::Named(Named::ArrowUp) => Key::Up,
         keyboard::Key::Named(Named::ArrowDown) => Key::Down,
-        keyboard::Key::Named(Named::Enter) => Key::Enter,
+        keyboard::Key::Named(Named::Enter) if !repeat => Key::Enter,
         keyboard::Key::Named(Named::Escape) => Key::Escape,
         _ => return None,
     };

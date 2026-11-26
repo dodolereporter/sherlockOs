@@ -106,6 +106,8 @@ mod tests {
         tmp.file("a/b/c/dock-level4.txt");
         tmp.file("a/b/c/d/dock-level5.txt");
         tmp.file("rapport-rendu.txt");
+        tmp.file("Notes/eteindre-le-serveur.txt");
+        tmp.file("Notes/deconnexion-wifi.txt");
         let _ = std::os::unix::fs::symlink(tmp.0.join("Projets"), tmp.0.join("lien"));
         tmp
     }
@@ -220,10 +222,40 @@ mod tests {
         assert!(launcher.height() <= look::panel_height(look::MAX_SECTIONS, look::MAX_RESULTS));
     }
 
+    /// Past the delay a confirmation needs.
+    fn wait_confirmation_delay() {
+        std::thread::sleep(look::CONFIRM_DELAY + std::time::Duration::from_millis(50));
+    }
+
+    /// The message an Enter press gives, held down (`repeat`) or not.
+    fn enter_key(repeat: bool) -> Option<Message> {
+        let named = keyboard::Key::Named(keyboard::key::Named::Enter);
+        let event = iced::Event::Keyboard(keyboard::Event::KeyPressed {
+            key: named.clone(),
+            modified_key: named,
+            physical_key: keyboard::key::Physical::Unidentified(
+                keyboard::key::NativeCode::Unidentified,
+            ),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat,
+        });
+        app::on_event(
+            event,
+            iced::event::Status::Captured,
+            iced::window::Id::unique(),
+        )
+    }
+
     #[test]
-    fn power_off_and_reboot_wait_for_a_second_enter() {
+    fn log_out_reboot_and_power_off_wait_for_a_second_enter() {
         let home = home();
-        for (query, power) in [("eteindre", Power::PowerOff), ("redem", Power::Reboot)] {
+        for (query, power) in [
+            ("eteindre", Power::PowerOff),
+            ("redem", Power::Reboot),
+            ("se deco", Power::LogOut),
+        ] {
             let (mut launcher, record) = launcher_on(&home.0, Clipboard::Toolkit);
             let _ = launcher.update(Message::Query(query.into()));
             assert_eq!(
@@ -231,17 +263,16 @@ mod tests {
                 Some(Action::Session(power))
             );
             enter(&mut launcher);
-            assert_eq!(launcher.armed, Some(0));
-            assert!(
-                record.session.lock().expect("record").is_empty(),
-                "{query}: not yet"
-            );
+            assert_eq!(launcher.armed(), Some(0));
             assert!(!launcher.closing);
             // Moving away disarms it: the next Enter asks again.
             let _ = launcher.update(Message::Key(app::Key::Down));
             let _ = launcher.update(Message::Key(app::Key::Up));
-            assert_eq!(launcher.armed, None);
+            assert_eq!(launcher.armed(), None);
             enter(&mut launcher);
+            // Too soon: a bounce or a quick second press confirms nothing.
+            enter(&mut launcher);
+            assert!(record.session.lock().expect("record").is_empty(), "{query}");
             let mut ui = Simulator::with_size(
                 launcher::settings(),
                 (look::WIDTH, launcher.height()),
@@ -252,19 +283,95 @@ mod tests {
                 "{query}: the line asks to confirm"
             );
             drop(ui);
+            wait_confirmation_delay();
             enter(&mut launcher);
             assert_eq!(record.session.lock().expect("record").as_slice(), [power]);
             assert!(launcher.closing);
             // Nothing went through the program starter.
             assert!(record.started.lock().expect("record").is_empty());
         }
-        // Locking and logging out go at the first Enter.
-        for (query, power) in [("verrouiller", Power::Lock), ("deconnexion", Power::LogOut)] {
-            let (mut launcher, record) = launcher_on(&home.0, Clipboard::Toolkit);
-            let _ = launcher.update(Message::Query(query.into()));
-            enter(&mut launcher);
-            assert_eq!(record.session.lock().expect("record").as_slice(), [power]);
+        // Locking goes at the first Enter: it loses nothing.
+        let (mut launcher, record) = launcher_on(&home.0, Clipboard::Toolkit);
+        let _ = launcher.update(Message::Query("verrouiller".into()));
+        enter(&mut launcher);
+        assert_eq!(
+            record.session.lock().expect("record").as_slice(),
+            [Power::Lock]
+        );
+    }
+
+    #[test]
+    fn a_held_enter_never_confirms() {
+        // A repeated Enter is no key for the launcher at all.
+        assert!(enter_key(true).is_none());
+        assert!(matches!(
+            enter_key(false),
+            Some(Message::Key(app::Key::Enter))
+        ));
+        let home = home();
+        let (mut launcher, record) = launcher_on(&home.0, Clipboard::Toolkit);
+        let _ = launcher.update(Message::Query("eteindre".into()));
+        let _ = launcher.update(enter_key(false).expect("a launcher key"));
+        assert_eq!(launcher.armed(), Some(0));
+        // Held past the compositor's repeat delay and the confirmation delay.
+        wait_confirmation_delay();
+        for _ in 0..20 {
+            if let Some(message) = enter_key(true) {
+                let _ = launcher.update(message);
+            }
         }
+        assert!(record.session.lock().expect("record").is_empty());
+        assert!(!launcher.closing);
+    }
+
+    #[test]
+    fn a_double_click_never_confirms() {
+        let home = home();
+        let (mut launcher, record) = launcher_on(&home.0, Clipboard::Toolkit);
+        let _ = launcher.update(Message::Query("redemarrer".into()));
+        let _ = launcher.update(Message::Pick(0));
+        let _ = launcher.update(Message::Pick(0));
+        assert_eq!(launcher.armed(), Some(0));
+        assert!(record.session.lock().expect("record").is_empty());
+        // A deliberate second click, later, does.
+        wait_confirmation_delay();
+        let _ = launcher.update(Message::Pick(0));
+        assert_eq!(
+            record.session.lock().expect("record").as_slice(),
+            [Power::Reboot]
+        );
+    }
+
+    #[test]
+    fn session_commands_need_their_name_or_a_whole_keyword() {
+        let home = home();
+        let (mut launcher, _) = launcher_on(&home.0, Clipboard::Toolkit);
+        let session_rows = |launcher: &Launcher| {
+            launcher
+                .hits()
+                .filter(|h| matches!(h.action, Action::Session(_)))
+                .count()
+        };
+        // Looks like a command, is none: no system row.
+        for query in ["logo", "déco", "quit", "eteind pc", "shut", "dre"] {
+            let _ = launcher.update(Message::Query(query.into()));
+            assert_eq!(session_rows(&launcher), 0, "{query}");
+            assert!(!sections(&launcher).contains(&texts::SYSTEM), "{query}");
+        }
+        // By its name: before the files.
+        let _ = launcher.update(Message::Query("Éteindre".into()));
+        assert_eq!(
+            sections(&launcher),
+            [texts::SYSTEM, texts::FILES, texts::SHERLOCK]
+        );
+        // By a whole keyword only: after the files.
+        let _ = launcher.update(Message::Query("deconnexion".into()));
+        assert_eq!(
+            sections(&launcher),
+            [texts::FILES, texts::SYSTEM, texts::SHERLOCK]
+        );
+        let _ = launcher.update(Message::Query("logout".into()));
+        assert_eq!(sections(&launcher), [texts::SYSTEM, texts::SHERLOCK]);
     }
 
     #[test]
@@ -407,8 +514,16 @@ mod tests {
             tmp.file(&format!("many/{i:05}"));
         }
         assert_eq!(files::walk(&tmp.0).len(), files::MAX_ENTRIES);
-        // In the background: the source answers once the receiver fired.
+        // Another device: its folders are listed, never entered.
         let home = home();
+        let elsewhere = files::walk_on(&home.0, u64::MAX);
+        assert!(elsewhere.iter().all(|e| e.depth == 1), "{elsewhere:?}");
+        assert!(
+            elsewhere
+                .iter()
+                .any(|e| e.path.ends_with("Projets") && e.is_dir)
+        );
+        // In the background: the source answers once the receiver fired.
         let (source, walked) = Files::start(home.0.clone(), Catalog::default);
         let count = iced::futures::executor::block_on(walked).expect("walked");
         assert_eq!(Some(count), source.entries().map(<[_]>::len));

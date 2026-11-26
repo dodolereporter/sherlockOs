@@ -112,15 +112,17 @@ The sources answer in this order, each under its title (`launcher::arrange`):
 | --- | --- | --- |
 | « Calculatrice » | `calc.rs` | The query is an expression with at least one operation |
 | « Applications » | `apps.rs` | As above |
-| « Système » | `system.rs` | A term starts a word of the command's name or of its words |
+| « Système » | `system.rs` | The query starts the command's name, or is one of its keywords in full |
 | « Fichiers » | `files.rs` | Every term is inside the file's name |
+| « Système » | `system.rs` | The same section, here when the commands are found by a keyword only |
 | « Sherlock » | `ask.rs` | Always, last, when the query is not empty |
 
 The board orders « Applications », « Réglages », « Fichiers », « Sherlock ». It has neither the
 calculator nor the system commands: the calculator comes first, its single result being the
 most precise answer to a query that is a calculation (and an expression rarely matches
 anything else); the system commands take the place of the board's « Réglages », which have no
-source yet. A section gives 5 results at most (`launcher::SECTION_RESULTS`), and the panel 9 in
+source yet. A command found only by a keyword (`logout`) is a weaker guess than a file whose
+name holds the query: its section then comes after the files. A section gives 5 results at most (`launcher::SECTION_RESULTS`), and the panel 9 in
 all (`launcher::MAX_RESULTS`), which keeps it clear of the dock on the 900 high reference
 screen with five sections (tested). Sherlock's row is reserved: the sources before it never
 take it (`Source::reserved`).
@@ -147,9 +149,11 @@ Enter copies the result as shown:
 
 ### System commands
 
-« Verrouiller », « Se déconnecter », « Redémarrer » and « Éteindre », found by the start of a
-word of their name or of a few words (`eteindre`, `shutdown`, `reboot`, `deconnexion`…; never
-by scattered letters). The launcher hands them to a `Session` (`system.rs`), never to the
+« Verrouiller », « Se déconnecter », « Redémarrer » and « Éteindre ». A command is offered
+only when the query (folded, its words joined by one space) starts its name as shown (« se d »,
+« étein », « Redém ») or is one of its keywords in full (`deconnexion`, `logout`, `quitter`,
+`reboot`, `shutdown`…). A query that only looks like one, « logo », « déco » or « quit », offers
+nothing: these commands must never sit first on an ordinary search. The launcher hands them to a `Session` (`system.rs`), never to the
 program starter. `Systemd`, the real one, runs without a shell:
 
 | Command | Program |
@@ -161,9 +165,13 @@ program starter. `Systemd`, the real one, runs without a shell:
 
 `<id>` is `$XDG_SESSION_ID`, or an empty argument, which `loginctl` reads as the caller's
 session. Locking only asks logind to lock: the session needs a locker that listens (the lock
-screen is a later batch). « Redémarrer » and « Éteindre » ask for confirmation: the first Enter
-(or click) turns their line into « Appuie encore sur Entrée pour confirmer »; the second runs
-the command. Moving the selection or typing cancels it. Without a session given (tests, or
+screen is a later batch). Everything but locking loses unsaved work, so « Se déconnecter »,
+« Redémarrer » and « Éteindre » ask for confirmation: the first Enter (or click) turns their
+line into « Appuie encore sur Entrée pour confirmer »; a second one runs the command, if it is
+a new press at least 400 ms later (`launcher::CONFIRM_DELAY`). A held Enter repeats nothing
+(the compositor repeats keys after 200 ms: a repeated Enter is ignored altogether), and a
+double click or a key bounce only arms the command. Moving the selection, typing, or the end of
+the files' walk cancels it. Without a session given (tests, or
 `Launcher::new` alone), `NoSession` refuses every command and the launcher stays open.
 
 ### Files
@@ -171,7 +179,9 @@ the command. Moving the selection or typing cancels it. Without a session given 
 The personal folder (`$HOME`) is walked once, on a thread of its own, as the launcher opens:
 breadth first, 4 levels and 20 000 entries at most (the shallow ones first), leaving out hidden
 entries (`.git`, `.cache`…) and the folders `node_modules`, `target`, `__pycache__`, `venv` and
-`site-packages`; a symbolic link is listed, never followed. The MIME catalog of `mime-apps` is
+`site-packages`; a symbolic link is listed, never followed, and so is a folder on another
+device (`st_dev` differs from the personal folder's: a USB disk, a network share that may
+hang). A folder is read no further than the room left under the 20 000 entries. The MIME catalog of `mime-apps` is
 read on the same thread. When the walk is done, the query is searched again
 (`Message::Refresh`), so typing never waits for it. A file counts when every term is inside its
 name (accents and case ignored, no scattered letters); the best score first, then the
@@ -266,7 +276,9 @@ RUST_LOG=launcher=debug cargo run -p launcher
   not found.
 - « Demander à Sherlock » is disabled until sherlockd takes requests from the shell.
 - Without `wl-copy`, a copied result lives while the launcher is open, unless a clipboard
-  manager takes it.
+  manager takes it; since the launcher keeps the keyboard, it cannot be pasted elsewhere
+  meanwhile. `wl-clipboard` is not yet a package of the image (`distro/`): to add with the
+  system track.
 - The settings of the board's « Réglages » section have no source yet (Control Room).
 - `OnlyShowIn` and `NotShowIn` are not checked (a limit of `mime-apps`).
 - A click outside the panel does nothing: the surface is only the panel, and with the keyboard
@@ -305,14 +317,17 @@ RUST_LOG=launcher=debug cargo run -p launcher
   screenshots in `target/tmp`;
 - sources (`tests/sources.rs`): the order of the sections (applications, system, files,
   Sherlock last; the calculator first), an empty query showing nothing, 5 results a section and
-  9 in all with Sherlock's row kept, a disabled Sherlock doing nothing; « Éteindre » and
-  « Redémarrer » waiting for a second Enter, an arrow cancelling it, « Verrouiller » and « Se
-  déconnecter » at once, all through a fake session, the program starter never called; the
+  9 in all with Sherlock's row kept, a disabled Sherlock doing nothing; « Se déconnecter »,
+  « Éteindre » and « Redémarrer » waiting for a second Enter at least 400 ms later, an arrow
+  cancelling it, « Verrouiller » at once, a held Enter (`repeat`) and a double click never
+  confirming, all through a fake session, the program starter never called; « logo », « déco »,
+  « quit » offering no command, a command found by its name before the files and by a keyword
+  after them; the
   `loginctl` and `systemctl` commands built and never run, a launcher without a session
   refusing them; the copy through `wl-copy -- <result>` (recorded) or iced's clipboard; files
   with accents, hidden and heavy folders, level 5 and links left out, the open command of a
-  file and of a folder, a type nobody opens disabled; the walk stopped at 20 000 and run in the
-  background; an application's icon from a fake `hicolor`; three more screenshots;
+  file and of a folder, a type nobody opens disabled; the walk stopped at 20 000, never
+  entering another device, and run in the background; an application's icon from a fake `hicolor`; three more screenshots;
 - calculator (`calc.rs`): priorities, `^` to the right, unary minus, modulo and percent, comma
   and point, division by zero, invalid expressions, a lone number, deep nesting, the writing of
   results;
