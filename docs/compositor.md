@@ -1650,8 +1650,12 @@ The shared bus breaks other things too: the notification daemon finds
 `org.freedesktop.Notifications` taken by Plasma and stops (`docs/notifications.md`), and an
 application that keeps a single instance through the bus may open its window in the Plasma
 session instead (not tried). So `sherlockos-session` starts the session on a bus of its own
-(`dbus-run-session`) when logind lists another graphical session (type `x11`, `wayland` or
-`mir`, not closing) of the same user; the session it runs in does not count. The traffic was
+when logind lists another graphical session (type `x11`, `wayland` or `mir`, not closing) of
+the same user; the session it runs in does not count. The script starts the bus daemon itself
+(`dbus-daemon --session --fork`), exports its address and stops it when the session ends. It
+does not go through `dbus-run-session`: with the compositor run under it, libseat could not
+take the screen on the author's machine ("Resource temporarily unavailable" when opening the
+card), while the same session on the shared bus started. The traffic was
 read with `dbus-monitor` on the private bus only: the author's bus is never listened to. Once the
 compositor is ready, `dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY` gives the
 display to the services the bus starts (the portals): without it, on a private bus, the
