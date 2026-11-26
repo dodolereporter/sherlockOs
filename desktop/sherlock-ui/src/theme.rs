@@ -320,26 +320,50 @@ pub fn divider(theme: &Theme) -> container::Style {
 
 /// Top bar: glass of the Main design board, radius 12.
 pub fn top_bar(theme: &Theme) -> container::Style {
-    let p = palette(theme);
-    surface(
-        theme,
-        p.top_bar_glass,
-        p.top_bar_border,
-        metrics::TOP_BAR_RADIUS,
-    )
+    top_bar_shaped(0.0, metrics::TOP_BAR_RADIUS)(theme)
+}
+
+/// Top bar on its way between its two forms (D-18b): `solid` is 0 for the floating glass, 1 for
+/// the band attached to the top edge, whose fill is the same glass made opaque and whose border
+/// is gone, the screen edges and the window below taking its place.
+pub fn top_bar_shaped(solid: f32, radius: f32) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let p = palette(theme);
+        let solid = solid.clamp(0.0, 1.0);
+        let glass = p.top_bar_glass;
+        let fill = Color {
+            a: glass.a + (1.0 - glass.a) * solid,
+            ..glass
+        };
+        let edge = Color {
+            a: p.top_bar_border.a * (1.0 - solid),
+            ..p.top_bar_border
+        };
+        surface(theme, fill, edge, radius)
+    }
 }
 
 /// Workspace chip: green when the workspace is active, veiled otherwise.
 pub fn chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    workspace_chip(active, true)
+}
+
+/// Workspace chip of the top bar (D-18b): green when the workspace is active, veiled when it
+/// holds windows, bare with the tertiary text when it holds none, veiled again on hover.
+pub fn workspace_chip(
+    active: bool,
+    occupied: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme, status| {
         let p = palette(theme);
         let (fill, text) = match (active, status) {
-            (_, button::Status::Disabled) => (p.disabled, p.text_tertiary),
-            (true, _) => (p.accent, p.text_on_accent),
-            (false, button::Status::Active) => (p.chip, p.text_secondary),
-            (false, _) => (p.chip_hover, p.text_primary),
+            (_, button::Status::Disabled) => (Some(p.disabled), p.text_tertiary),
+            (true, _) => (Some(p.accent), p.text_on_accent),
+            (false, button::Status::Active) if occupied => (Some(p.chip), p.text_secondary),
+            (false, button::Status::Active) => (None, p.text_tertiary),
+            (false, _) => (Some(p.chip_hover), p.text_primary),
         };
-        button_style(Some(fill), text, border::rounded(metrics::CHIP_RADIUS))
+        button_style(fill, text, border::rounded(metrics::CHIP_RADIUS))
     }
 }
 
@@ -797,37 +821,44 @@ mod tests {
         if tile_icon < 3.0 {
             failures.push((String::from("tile icon"), PREVIEW_TILE_ICON, tile_icon));
         }
-        // Top bar over the desktop and its discs: texts and workspace chips.
+        // Top bar over the desktop and its discs, and attached to the top edge (opaque):
+        // texts and workspace chips.
         let desktops = std::iter::once(p.desktop).chain(p.desktop_discs);
+        let solid = Color {
+            a: 1.0,
+            ..p.top_bar_glass
+        };
         for (i, d) in desktops.enumerate() {
-            let on = (format!("top bar on desktop {i}"), p.top_bar_glass.over(d));
-            for (name, text) in [
-                ("top bar text", p.text_primary),
-                ("top bar indicator", p.text_secondary),
-                ("low battery", p.amber_text),
-            ] {
-                check(&mut failures, name, text, None, &on);
-            }
-            // The ring and dot of the logo, non-text elements: 3 to 1 at least (WCAG 1.4.11),
-            // under every state of the Sherlock button.
-            for open in [true, false] {
-                for status in STATUSES {
-                    let s = sherlock_button(open)(&theme, status);
-                    let below = fill(&s).map_or(on.1, |f| f.over(on.1));
-                    for (part, mark) in [("ring", p.logo_ring), ("dot", p.logo_dot)] {
-                        let ratio = mark.contrast(below);
-                        if ratio < 3.0 {
-                            let what = format!("logo {part} ({open}, {status:?}) on {}", on.0);
-                            failures.push((what, mark, ratio));
+            let glass = (format!("top bar on desktop {i}"), p.top_bar_glass.over(d));
+            for on in [glass, (String::from("attached top bar"), solid)] {
+                for (name, text) in [
+                    ("top bar text", p.text_primary),
+                    ("top bar indicator", p.text_secondary),
+                    ("low battery", p.amber_text),
+                ] {
+                    check(&mut failures, name, text, None, &on);
+                }
+                // The ring and dot of the logo, non-text elements: 3 to 1 at least (WCAG 1.4.11),
+                // under every state of the Sherlock button.
+                for open in [true, false] {
+                    for status in STATUSES {
+                        let s = sherlock_button(open)(&theme, status);
+                        let below = fill(&s).map_or(on.1, |f| f.over(on.1));
+                        for (part, mark) in [("ring", p.logo_ring), ("dot", p.logo_dot)] {
+                            let ratio = mark.contrast(below);
+                            if ratio < 3.0 {
+                                let what = format!("logo {part} ({open}, {status:?}) on {}", on.0);
+                                failures.push((what, mark, ratio));
+                            }
                         }
                     }
                 }
-            }
-            for active in [true, false] {
-                for status in STATUSES {
-                    let s = chip(active)(&theme, status);
-                    let what = format!("workspace chip ({active}, {status:?})");
-                    check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
+                for (active, occupied) in [(true, true), (false, true), (false, false)] {
+                    for status in STATUSES {
+                        let s = workspace_chip(active, occupied)(&theme, status);
+                        let what = format!("workspace chip ({active}, {occupied}, {status:?})");
+                        check(&mut failures, &what, s.text_color.into(), fill(&s), &on);
+                    }
                 }
             }
         }

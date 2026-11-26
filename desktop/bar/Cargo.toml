@@ -23,6 +23,12 @@ appearance-config = { path = "../appearance-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }
+# The compositor's workspaces and windows (ADR 0021): sherlock_shell_v1 and ext-workspace-v1,
+# on a connection of the bar's own to the shell socket. The versions the workspace already
+# pulls through iced_exwlshell, smithay and the compositor.
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
@@ -32,6 +38,10 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# A fake compositor for the shell protocols test: the server side that smithay already pulls.
+shell-protocol = { path = "../shell-protocol", features = ["client", "server"] }
+wayland-server = "=0.31.14"
+wayland-protocols = { version = "=0.32.13", features = ["client", "server", "staging"] }
 
 [lints]
 workspace = true

@@ -794,13 +794,25 @@ pub fn chip<'a, Message: Clone + 'a>(
     active: bool,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
+    workspace_chip(label, active, true, on_press)
+}
+
+/// Workspace chip in the top bar, green when the workspace is active, bare when it holds no
+/// window (`theme::workspace_chip`).
+pub fn workspace_chip<'a, Message: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    active: bool,
+    occupied: bool,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
     let font = if active {
         typography::UI_SEMIBOLD
     } else {
         typography::UI
     };
     let content = container(body(label).font(font)).center_y(Length::Fill);
-    let mut control = Control::new(content, theme::chip(active), on_press, metrics::CHIP_RADIUS);
+    let style = theme::workspace_chip(active, occupied);
+    let mut control = Control::new(content, style, on_press, metrics::CHIP_RADIUS);
     control.button = control
         .button
         .height(metrics::CHIP_HEIGHT)

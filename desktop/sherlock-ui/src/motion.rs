@@ -176,6 +176,9 @@ impl Fade {
 pub const SNAP_SPRING: Spring = Spring::new(500.0, 33.5);
 /// Opening of a window: its scale (ratio 0.80, overshoot of 2 %).
 pub const OPEN_SPRING: Spring = Spring::new(450.0, 34.0);
+/// Top bar attaching to the top edge and floating again (D-18b): it answers a window being
+/// maximized or restored, so it moves with the same spring.
+pub const TOP_BAR_SPRING: Spring = SNAP_SPRING;
 /// Snap preview, brisker than the window it announces (ratio 0.79).
 pub const PREVIEW_SPRING: Spring = Spring::new(700.0, 42.0);
 

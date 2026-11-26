@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod menu;
+pub mod shape;
 pub mod source;
 pub mod user;
 
@@ -20,13 +21,14 @@ const NAMESPACE: &str = "bar";
 
 /// Surface settings: anchored to the top and both sides, 36 high, margins of the design
 /// board, exclusive zone of its height. The keyboard only comes when clicking into the bar.
+/// The bar starts floating; `shape` moves its margins.
 pub fn layer_settings() -> LayerShellSettings {
     let side = metrics::TOP_BAR_MARGIN_SIDE as i32;
     LayerShellSettings {
         anchor: Anchor::Top | Anchor::Left | Anchor::Right,
         layer: Layer::Top,
         size: LayerSize::fill_width(metrics::TOP_BAR_HEIGHT as u32),
-        exclusive_zone: metrics::TOP_BAR_HEIGHT as i32,
+        exclusive_zone: shape::exclusive_zone(),
         margin: Margin {
             top: metrics::TOP_BAR_MARGIN_TOP as i32,
             right: side,
@@ -57,7 +59,10 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
     if let Some(path) = appearance_config::path() {
         color::set_active(appearance_config::theme_now(&path));
     }
-    let result = iced_exwlshell::daemon(Bar::new, namespace, Bar::update, Bar::view)
+    // iced_exwlshell reports there the screen each surface is on.
+    let (broadcast, shell_events) = iced_exwlshell::shell::channel();
+    let boot = move || Bar::new(shell_events.clone());
+    let result = iced_exwlshell::daemon(boot, namespace, Bar::update, Bar::view)
         .theme(|_: &Bar, _| Some(theme::theme()))
         .style(|_, _| iced::theme::Style {
             background_color: color::TRANSPARENT.into(),
@@ -70,6 +75,7 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         .settings(settings())
         .wl_settings(ExWlSettings {
             layer_settings: layer_settings(),
+            shell_broadcast: broadcast,
             ..ExWlSettings::default()
         })
         .run();

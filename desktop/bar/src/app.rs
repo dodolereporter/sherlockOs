@@ -1,14 +1,16 @@
 //! Bar state, messages, and its two views: the bar and the Sherlock menu.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
 use iced::futures::channel::mpsc::UnboundedReceiver;
-use iced::widget::{container, mouse_area, opaque, row};
+use iced::widget::{container, mouse_area, opaque, row, text};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{Margin, PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
@@ -18,12 +20,14 @@ use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, strings, typography};
 
 use crate::menu::{self, Action};
+use crate::shape::{Geometry, Shape};
 use crate::source::battery::{Battery, Charge, UPower};
 use crate::source::clock::{LocalTime, SystemClock};
 use crate::source::network::{Network, NetworkManager};
+use crate::source::shell::{self, Auto};
 use crate::source::sound::{Pactl, Sound};
 use crate::source::watch;
-use crate::source::workspaces::{Placeholder, Workspaces};
+use crate::source::workspaces::{Desktop, Group};
 use crate::user;
 
 #[derive(Debug, Default)]
@@ -33,10 +37,18 @@ pub struct Bar {
     pub battery: Option<Option<Battery>>,
     pub network: Option<Network>,
     pub sound: Option<Sound>,
-    pub workspaces: Option<Workspaces>,
+    pub desktop: Option<Desktop>,
     pub user: String,
     /// Surface of the bar, which the menu attaches to.
     surface: Option<Id>,
+    /// Name of the screen each surface is on, as iced_exwlshell reports it.
+    outputs: HashMap<Id, Option<String>>,
+    /// Where iced_exwlshell reports the screens of the surfaces.
+    shell_events: Option<ShellReceiver>,
+    /// Floating or attached to the top edge, and the spring between the two.
+    pub shape: Shape,
+    /// The margins last given to the surface.
+    applied: Geometry,
     /// Surface of the Sherlock menu while it is open.
     menu: Option<Id>,
     /// Room around the menu in its surface: the gap below the bar, and its shadow on the GPU.
@@ -67,7 +79,9 @@ pub enum Message {
     Battery(Option<Battery>),
     Network(Network),
     Sound(Sound),
-    Workspaces(Workspaces),
+    Desktop(Desktop),
+    /// The screen a surface is on.
+    Output(Id, Option<String>),
     ToggleMenu,
     MenuKey(menu::Key),
     Hover(usize),
@@ -83,9 +97,11 @@ pub enum Message {
 }
 
 impl Bar {
-    pub fn new() -> (Self, Task<Message>) {
+    /// The bar, told of the screens of its surfaces by `shell_events`.
+    pub fn new(shell_events: ShellReceiver) -> (Self, Task<Message>) {
         let bar = Self {
             user: user::current(),
+            shell_events: Some(shell_events),
             ..Self::default()
         };
         (bar, Task::none())
@@ -100,7 +116,7 @@ impl Bar {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
-        let frames = if self.theme.running() {
+        let frames = if self.theme.running() || self.shape.running() {
             window::frames().map(Message::Frame)
         } else {
             Subscription::none()
@@ -112,7 +128,12 @@ impl Bar {
             Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
             Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
             Subscription::run(|| watch(Pactl::default(), "sound")).map(Message::Sound),
-            Subscription::run(|| watch(Placeholder, "workspaces")).map(Message::Workspaces),
+            Subscription::run(|| watch(Auto::default(), "workspaces")).map(Message::Desktop),
+            self.shell_events
+                .as_ref()
+                .map_or_else(Subscription::none, |events| {
+                    events.listen().filter_map(on_output)
+                }),
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
             iced::event::listen_with(on_pointer),
@@ -126,7 +147,14 @@ impl Bar {
             Message::Battery(battery) => self.battery = Some(battery),
             Message::Network(network) => self.network = Some(network),
             Message::Sound(sound) => self.sound = Some(sound),
-            Message::Workspaces(workspaces) => self.workspaces = Some(workspaces),
+            Message::Desktop(desktop) => {
+                self.desktop = Some(desktop);
+                return self.reshape(Instant::now());
+            }
+            Message::Output(id, name) => {
+                self.outputs.insert(id, name);
+                return self.reshape(Instant::now());
+            }
             Message::ToggleMenu => return self.toggle_menu(),
             Message::MenuKey(key) if self.menu_open() => match key {
                 menu::Key::Close => return self.close_menu(),
@@ -150,12 +178,13 @@ impl Bar {
                 tracing::info!(?action, "Sherlock menu entry not available yet");
                 return self.close_menu();
             }
-            Message::SelectWorkspace(index) => {
-                tracing::info!(
-                    index,
-                    "switching workspaces waits for the compositor's ext-workspace protocol"
-                );
-            }
+            Message::SelectWorkspace(index) => match self.to_activate(index) {
+                Some(id) => shell::switch_to(id),
+                None if self.desktop.as_ref().is_some_and(|d| !d.live) => {
+                    tracing::info!(index, "placeholder workspaces: nothing to switch");
+                }
+                None => {}
+            },
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
                     Direction::Next => menu::Key::Next,
@@ -178,9 +207,12 @@ impl Bar {
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Frame(now) => {
                 self.theme.tick(now);
+                self.shape.tick(now);
+                return self.apply_shape();
             }
             Message::Closed(id) => {
                 // The compositor closes the menu on a click elsewhere (popup_done).
+                self.outputs.remove(&id);
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
@@ -191,9 +223,65 @@ impl Bar {
         Task::none()
     }
 
+    /// Name of the screen the bar is on, once known.
+    pub fn output(&self) -> Option<&str> {
+        self.surface
+            .and_then(|id| self.outputs.get(&id))
+            .and_then(Option::as_deref)
+    }
+
+    /// The workspaces of the bar's screen.
+    pub fn group(&self) -> Option<&Group> {
+        self.desktop.as_ref()?.group(self.output())
+    }
+
+    /// Id of the workspace a click on the chip `index` switches to: one of the compositor's,
+    /// not already active.
+    pub fn to_activate(&self, index: usize) -> Option<&str> {
+        let live = self.desktop.as_ref().is_some_and(|d| d.live);
+        let workspace = self.group()?.workspaces.get(index)?;
+        (live && !workspace.active).then_some(workspace.id.as_str())
+    }
+
+    /// Attaches the bar to the top edge while a maximized or fullscreen window is on its
+    /// screen, floats it otherwise.
+    fn reshape(&mut self, now: Instant) -> Task<Message> {
+        let output = self.output().map(str::to_owned);
+        let covered = self
+            .desktop
+            .as_ref()
+            .is_some_and(|d| d.covers(output.as_deref()));
+        if self.shape.set(covered, now) {
+            tracing::debug!(?output, attached = covered, "bar shape");
+        }
+        self.apply_shape()
+    }
+
+    /// Gives the surface the margins of the current shape, when they changed by a pixel.
+    fn apply_shape(&mut self) -> Task<Message> {
+        let geometry = self.shape.geometry();
+        let Some(id) = self.surface else {
+            return Task::none();
+        };
+        let moved = (geometry.margin_top, geometry.margin_side)
+            != (self.applied.margin_top, self.applied.margin_side);
+        if !moved {
+            return Task::none();
+        }
+        self.applied = geometry;
+        let side = geometry.margin_side;
+        let margin = Margin {
+            top: geometry.margin_top,
+            right: side,
+            bottom: 0,
+            left: side,
+        };
+        Task::done(Message::MarginChange { id, margin })
+    }
+
     /// The bar buttons, in Tab order: Sherlock, then the workspaces.
     pub fn targets(&self) -> Vec<Target> {
-        let workspaces = self.workspaces.as_ref().map_or(0, |w| w.names.len());
+        let workspaces = self.group().map_or(0, |g| g.workspaces.len());
         std::iter::once(Target::Sherlock)
             .chain((0..workspaces).map(Target::Workspace))
             .collect()
@@ -280,20 +368,25 @@ impl Bar {
         let mut left = row![sherlock]
             .spacing(metrics::TOP_BAR_LEFT_GAP)
             .align_y(Alignment::Center);
-        if let Some(app) = self.workspaces.as_ref().and_then(|w| w.app.as_deref()) {
+        if let Some(app) = self.desktop.as_ref().and_then(|d| d.app.as_deref()) {
             let (pad_left, pad_right) = metrics::APP_NAME_PADDING;
-            let name = ui::body(app).font(typography::UI_SEMIBOLD);
-            left = left.push(container(name).padding(Padding {
+            // A long window title is cut where the left half of the bar ends.
+            let name = ui::body(app)
+                .font(typography::UI_SEMIBOLD)
+                .wrapping(text::Wrapping::None);
+            let name = container(name).clip(true).padding(Padding {
                 left: pad_left,
                 right: pad_right,
                 ..Padding::ZERO
-            }));
+            });
+            left = left.push(name);
         }
 
-        let chips = self.workspaces.iter().flat_map(|w| {
-            w.names.iter().enumerate().map(move |(i, name)| {
-                let label = strings::top_bar::workspace(i + 1, name.as_deref());
-                let chip = ui::chip(label, i == w.active, Some(Message::SelectWorkspace(i)));
+        let chips = self.group().into_iter().flat_map(|g| {
+            g.workspaces.iter().enumerate().map(move |(i, w)| {
+                let label = strings::top_bar::workspace(i + 1, w.name.as_deref());
+                let select = Some(Message::SelectWorkspace(i));
+                let chip = ui::workspace_chip(label, w.active, w.occupied(), select);
                 ring(chip, Target::Workspace(i)).into()
             })
         });
@@ -321,12 +414,16 @@ impl Bar {
             right: pad_right + metrics::BORDER_WIDTH,
             ..Padding::ZERO
         });
+        let shape = self.shape.geometry();
         let bar = container(line)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(sherlock_ui::theme::top_bar);
+            .style(sherlock_ui::theme::top_bar_shaped(
+                shape.solid,
+                shape.radius,
+            ));
         // Flat: no shadow, but drawing it tells the menu which renderer draws the bar.
-        surface::shadowed(bar, metrics::TOP_BAR_RADIUS, Elevation::Flat).into()
+        surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }
 
     /// Network, sound, battery, then date and time. An indicator not read yet is not shown.
@@ -410,6 +507,17 @@ pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
     receiver
 }
 
+/// The screen of a surface, from iced_exwlshell's reports.
+fn on_output(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { window, output } => Some(Message::Output(
+            window,
+            output.and_then(|o| o.info.name.clone()),
+        )),
+        _ => None,
+    }
+}
+
 /// Any mouse button press, captured by a widget or not.
 fn on_pointer(event: iced::Event, _: iced::event::Status, _: Id) -> Option<Message> {
     matches!(
@@ -490,8 +598,8 @@ mod tests {
 
     fn with_workspaces() -> Bar {
         let mut bar = Bar::default();
-        let workspaces = Workspaces::placeholder(Some("Code,Web,Jeu"), None);
-        let _ = bar.update(Message::Workspaces(workspaces));
+        let desktop = Desktop::placeholder(Some("Code,Web,Jeu"), None);
+        let _ = bar.update(Message::Desktop(desktop));
         bar
     }
 
