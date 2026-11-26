@@ -401,7 +401,14 @@ fn the_calendar_marks_today_and_walks_the_months() {
     for text in ["novembre 2026", "lu", "di", "24", "30"] {
         assert!(ui.find(text).is_ok(), "{text} missing from the calendar");
     }
-    ui.click("Mois suivant").expect("arrow found");
+    // The arrows are icons: their label only shows on hover. « Mois suivant » is the last
+    // button of the month row, at the right of the panel, under its padding.
+    let inset = sherlock_ui::panels::PADDING + sherlock_ui::metrics::BORDER_WIDTH;
+    let button = sherlock_ui::metrics::ICON_BUTTON;
+    let x = sherlock_ui::panels::CALENDAR_WIDTH - inset - button / 2.0;
+    let y = state.panel_margins.top + inset + sherlock_ui::panels::MONTH_ROW / 2.0;
+    ui.point_at(iced::Point::new(x, y));
+    ui.simulate(iced_test::simulator::click());
     let messages: Vec<_> = ui.into_messages().collect();
     assert!(matches!(
         messages[..],
