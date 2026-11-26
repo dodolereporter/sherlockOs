@@ -21,7 +21,10 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
 | `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, the command |
-| `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches |
+| `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches, the frame cycle of each screen |
+| `src/pacing.rs` | When a screen of the real session draws: only after a change or during an animation, at the pace of its vertical blank (lot P-01) |
+| `src/damage.rs` | Stable identity of the elements the compositor draws itself, so that only what changed is redrawn (lot P-01) |
+| `src/perf.rs` | Where the time of the event loop goes: totals every 5 s, stalls at once (lot P-01) |
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
 | `src/cursor.rs` | Cursor images of the real session, from the cursor theme |
@@ -37,7 +40,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
-| `src/render.rs` | Rendering: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants` |
 | `src/shaders/` | The three GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag` |
@@ -413,10 +416,12 @@ the space.
   again. The xdg-shell `suspended` state is not sent: smithay 0.7 can send it, but it is only a
   hint, and every workspace switch would then cost a configure and a redraw to each window
   that leaves or arrives; the throttle alone does not depend on the client.
-- **Cost of `snapshot`.** Without a shell client, nothing is read. With one, each loop
-  iteration (so at the pace of the pointer) allocates the title, `app_id`, screen and
-  workspace of every window and locks two mutexes per window: about O(windows × managers +
-  windows²). A dirty flag, or a comparison without allocation, can come later.
+- **Cost of `snapshot`.** Without a shell client, nothing is read. With one, a snapshot
+  allocates the title, `app_id`, screen and workspace of every window and locks two mutexes per
+  window: about O(windows × managers + windows²). Since lot P-01 it is only taken after a
+  change (`State::redraw_epoch` moved: a client request, an input event, a screen, X11), not at
+  every iteration: a vertical blank or a timer alone reads nothing. A comparison without
+  allocation can come later.
 - **Signals.** After a panic or a SIGTERM, neither socket nor its lock is removed (the `flock`
   falls with the process, and the next start takes the place back). Stopping the loop on
   SIGTERM and SIGINT through calloop's signals would clean them.
@@ -759,11 +764,12 @@ shadow offset and blur, and the snap preview border are multiplied by the scale:
 window has a radius of 24 pixels, a border of 1.5 and a shadow offset by 42 and blurred over 105,
 exactly the 1.5× of the board. Client surfaces are built at scale 1 from their origin, then
 scaled around it (`RescaleRenderElement`), with the animation's stretch when there is one: a
-client that draws at the screen's scale is drawn pixel for pixel. The compositor draws the
-frame itself rather than through smithay's `OutputDamageTracker`: it clears the frame, then
-draws each screen's elements from back to front, each one limited to its screen's slice (the
-damage given to `draw`). The frame is drawn at scale 1: the elements' "logical" coordinates
-are frame pixels.
+client that draws at the screen's scale is drawn pixel for pixel. In nested mode, the
+compositor draws the host frame itself rather than through smithay's `OutputDamageTracker`: it
+clears the frame, then draws each screen's elements from back to front, each one limited to its
+screen's slice (the damage given to `draw`). The real session draws through each screen's
+`DrmCompositor`, which redraws only the damage (see "Frames of the real session"). The frame is
+drawn at scale 1: the elements' "logical" coordinates are frame pixels.
 
 | Program | Kind | What it draws |
 | --- | --- | --- |
@@ -807,9 +813,12 @@ rectangle. The computation follows Evan Wallace ("Fast Rounded Rectangle Shadows
 integral in x, four samples in y. The shadow is not drawn under the window, which matters for a
 translucent client and during fades.
 
-**Cost.** Clipped surfaces have no opaque region: the windows below are always drawn. The frame
-is redrawn in full every time (age 0), as before this lot. The DRM backend (D-14) will be able to
-give surfaces back their opaque part, outside the corners.
+**Cost.** Since lot P-01, a clipped surface keeps the opaque region its client declares, inside
+the clip and without the four rounded corners (`render::rounded_opaque`, one pixel more for the
+smoothing): what an opaque window covers is not drawn, neither the windows below, nor its own
+shadow under it, nor the wallpaper under a maximized window. A translucent client (the bar, the
+dock) declares nothing and hides nothing. In nested mode the host frame is still redrawn in
+full at each of its frames.
 
 ### Animations
 
@@ -1237,8 +1246,10 @@ How it works (`src/udev.rs`):
 - **Rendering.** The same scene as the windowed backend (`Scene::screens`), built for each
   screen in its own frame, at scale 1 in the `DrmCompositor` (the scene already applies the
   screen's scale). Everything is composited: no plane is given to a client buffer, since the
-  rounded clip would be lost. A screen draws its next frame after the vertical blank of the
-  previous one; a frame that changes nothing is tried again 16 ms later. The cursor is drawn in
+  rounded clip would be lost; the cursor alone goes on the screen's cursor plane when it fits
+  there, so that moving the pointer draws nothing. A screen draws only when something changed,
+  at the pace of its vertical blank, and only what changed (see "Frames of the real session").
+  The cursor is drawn in
   front of the scene, from the cursor theme (`XCURSOR_THEME`, or the system's `default`;
   `XCURSOR_SIZE`, 24 by default, times the screen's scale), in the shape `cursor_icon` asks for;
   a client that draws its own cursor image gets the arrow, as in nested mode. linux-dmabuf
@@ -1344,9 +1355,91 @@ theme. Each console switch logs `session paused` and `session active again`.
 - XWayland in the real session by default, once the author's test with `--xwayland` shows
   Xwayland keeping off the NVIDIA card with the dmabuf feedback.
 - `DmabufBlocker` in the real session (see "GPU buffers").
-- Drawing on damage only, for the battery.
+
+### Frames of the real session (lot P-01)
+
+Before this lot, each screen drew a frame at every vertical blank, and a frame that changed
+nothing was tried again 16 ms later: at rest the loop woke up 60 times a second or more. The
+compositor's own elements (borders, shadows, discs) took a new identity in every frame, so the
+damage tracker saw them new every time and the whole screen was composited at every blank, 144
+times a second on the reference laptop's screen. Now:
+
+- **Nothing at rest.** Every change that may show moves `State::redraw_epoch` on
+  (`State::queue_redraw`): a client request (any: a commit, a window closed, a shell request),
+  an input event, a screen plugged in or out, a wallpaper loaded, a batch of X11 events, and the
+  methods that change the desktop (workspaces, focus, minimize, snap gap). It also wakes the real
+  session up through a calloop `Ping`. A screen builds a frame only if the epoch moved since its
+  last one, or if an animation runs (`pacing::Pacing`). At rest no frame is built and the loop
+  sleeps in `epoll`; the only timers left are the frame callbacks of hidden windows (once a
+  second) and the wallpaper setting check.
+- **At the pace of the vertical blank, never waiting for it.** A frame with damage goes to the
+  screen (`queue_frame`, non-blocking); its vertical blank comes back as a DRM event and lets the
+  next frame be built. A frame without damage, or one that failed, is not shown: a timer at the
+  screen's refresh period (from its mode, 144 Hz → 6.9 ms) stands for the blank, sends the frame
+  callbacks of the clients that asked for one, and lets the next frame be built. A change during
+  a pending frame waits for its blank: at most one frame per blank.
+- **Only what changed.** The elements the compositor draws keep their identity from one frame to
+  the next (`damage::Ids`, one per screen): a key by window (its main surface) and part
+  (border, shadow, preview, disc), and a commit that moves on only when what it draws changes
+  (`damage::Stamped`). The damage tracker of the `DrmCompositor`, with the buffer age, then
+  redraws: the area of a window that draws again; the old and new places of what moves; the
+  whole of what appears, goes, or changes place in the stacking order. A workspace slide or a
+  window that opens therefore redraws the whole screen, an animated dock its own rectangle.
+- **Frame callbacks.** Clients get theirs when their frame goes to the screen, or at the
+  estimated blank when nothing was shown; hidden windows once a second, by a timer of their own.
 
 ## Measuring
+
+### The event loop (lot P-01)
+
+Every iteration of the loop is measured, in the real session as in nested mode, without a line
+per frame (`src/perf.rs`): the time waiting for an event, and the time spent in each part of the
+work:
+
+| Part | What |
+| --- | --- |
+| `clients` | Reading the requests of the Wayland clients (commits, dmabuf imports) |
+| `input` | Keyboard, mouse and touchpad events (real session) |
+| `scene` | Building the elements of a frame, which uploads the client buffers that changed |
+| `draw` | Drawing the frame through the `DrmCompositor` and handing it to the screen |
+| `screens` | Screens plugged in or out, console switches |
+| `shell` | Telling the bar and the dock what changed |
+| `refresh` | The cleanup after each iteration, and flushing the clients |
+| `other` | Sources that are not measured: timers, XWayland |
+
+- **Every 5 seconds**, at the `debug` level of `compositor::perf`, one line: iterations, share of
+  the time spent working, longest iteration, frames shown and frames without damage, then each
+  part with its count, average and maximum. The line comes with the first iteration after the
+  5 seconds: at rest, within a second (the timer of hidden windows).
+- **At once**, at the `warn` level: an iteration that keeps the loop busy more than 25 ms
+  (`perf::STALL`), with the time of each part, at most one line a second (`stalls` counts those
+  held back). That is when libinput writes "your system is too slow".
+- **When the session ends**, at the `info` level: the totals of the whole session.
+
+**Procedure on the reference laptop**, in the real session:
+
+1. Build in release, and start the session with the log level:
+   `RUST_LOG=info,compositor::perf=debug` (from a console, as in "From a text console"; from
+   SDDM, put it in the environment of `sherlockos-session`, whose log is
+   `~/.local/state/nom-os/session.log`).
+2. Use the desktop for a few minutes: rest without touching anything for 30 s, move the pointer,
+   hover the dock, open Kate and Nautilus, snap and maximize them with Super + arrows, drag and
+   resize a window, switch workspaces.
+3. Read the log: `grep -E 'compositor::perf|too slow' session.log`. At rest, the 5 s lines show a
+   handful of iterations and no frame; `loop busy for` lines name the part that blocks; the line
+   `event loop, whole session` sums it all up. Attach these lines to the merge request.
+
+**Without a screen**, `tests/perf.rs` runs the real session's frame cycle on a fake screen of
+1440 × 900 at 60 Hz with ten opaque windows, the bar and the dock, without a GPU
+(`DummyRenderer`): frames built and shown, damage and pixels drawn, CPU time of a frame. The
+bench prints them before and after lot P-01 (before: new identities in every frame, a frame at
+every blank, no opaque region):
+
+```sh
+cargo test --release -p compositor --test perf -- --ignored --nocapture
+```
+
+### Frames (`--measure`)
 
 `--measure`, right after `--nested`, writes to the log every second the number of frames, the
 frame rate, the average and maximum render time, the longest interval between two frames and
@@ -1434,7 +1527,7 @@ just verify
 | `sherlock-ui/src/color.rs` | Colors premultiplied by their opacity |
 | `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
 | `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
-| `src/render.rs` | Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
+| `src/render.rs` | An opaque window hides what is below but its rounded corners; a translucent one hides nothing. Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/stats.rs` | Frame rate, late frames, summary of animated frames |
 | `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders and its pendant after `set_theme`, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
 | `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, choice per theme (default pair, fixed wallpaper, wallpaper without a pendant, user's path), variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible), 4K variant identical to its original |
@@ -1445,6 +1538,10 @@ just verify
 | `src/input.rs` | Ctrl + Alt + Fn and Ctrl + Alt + Backspace in a real session, nothing in nested mode |
 | `src/mesa.rs` | Mesa's EGL vendor file found and NVIDIA's left out; Xwayland's environment: the EGL restriction and a GBM folder without NVIDIA's backend (an older link to it removed), nothing more without a runtime folder |
 | `src/udev.rs` | The pointer kept on screens of different heights |
+| `src/pacing.rs` | Nothing drawn at rest, one frame per change, none while a frame waits for its blank, an animation drawn at every blank until its end, a frame without damage waiting for the estimated blank, a failed or reset screen drawing again |
+| `src/damage.rs` | An element keeps its identity and its commit while its parameters stay, a new commit when they change, forgotten after a frame without it; one identity per part |
+| `src/perf.rs` | An iteration split into wait, parts and the rest; totals per part counted where it ran; the loop measuring its parts and frames |
+| `tests/perf.rs` | Frame cycle and damage without a screen, see below |
 | `src/dmabuf.rs` | Device numbers split as glibc does, for the driver in the log |
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
@@ -1544,6 +1641,22 @@ at what the X server knows about the window:
 - closing: the client leaves, its windows go away, nobody has the keyboard;
 - clean shutdown: XWayland removes its socket, and the compositor's Wayland socket (opened in
   the temporary directory, since the CI has no `XDG_RUNTIME_DIR`) and its lock go away.
+
+The tests in `tests/perf.rs` (lot P-01) run the real session's frame cycle on a fake screen of
+1440 × 900 at 60 Hz, in real time: `Pacing` says when a frame is due, `render::items` builds the
+scene, `Ids` gives the compositor's elements their identity, and smithay's damage tracker, the
+one inside each `DrmCompositor`, computes the damage; `DummyRenderer` (smithay's
+`renderer_test` feature, for the tests only) stands for the GPU. A client shows ten opaque
+windows of 800 × 600, a bar and a dock:
+
+- **Nothing is drawn at rest.** Once the openings are over, 30 blanks build no frame, and the
+  epoch does not move.
+- **A window that draws redraws only its area.** One frame, whose damage is exactly the window's
+  rectangle, then rest again.
+- **The animated dock redraws only the dock.** Drawing again at each frame callback, it gets a
+  frame at every blank, each damaging the dock's rectangle only.
+- **A workspace switch redraws everything while it slides.** A frame at each blank during the
+  slide, whose damages cover the whole screen, then rest.
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):

@@ -72,6 +72,10 @@ use crate::{
     wallpaper::{Textures, Wallpaper},
 };
 
+/// Only the cursor may leave the composition, for the cursor plane: a client buffer on a plane
+/// of its own would lose its rounded clip.
+const FRAME_FLAGS: FrameFlags = FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
+
 /// Frame period of a screen whose mode gives no refresh rate.
 const DEFAULT_PERIOD: Duration = Duration::from_micros(16_667);
 
@@ -486,7 +490,9 @@ impl Backend {
             [Fourcc::Xrgb8888, Fourcc::Argb8888],
             self.renderer.dmabuf_formats(),
             self.device.cursor_size(),
-            None,
+            // The cursor goes on the screen's cursor plane when it fits (lot P-01): moving the
+            // pointer then draws nothing.
+            Some(self.gbm.clone()),
         )?;
         let scale = self.options.scale(state.outputs().len());
         let period = match mode.vrefresh() {
@@ -647,9 +653,9 @@ impl Backend {
         state.perf.stop(perf::Phase::Scene, since);
         let since = state.perf.start();
         let clear = color::DESKTOP.premultiplied();
-        let frame =
-            head.compositor
-                .render_frame(&mut self.renderer, &elements, clear, FrameFlags::empty());
+        let frame = head
+            .compositor
+            .render_frame(&mut self.renderer, &elements, clear, FRAME_FLAGS);
         let failure = match frame {
             Ok(frame) if !frame.is_empty => match head.compositor.queue_frame(()) {
                 Ok(()) => {

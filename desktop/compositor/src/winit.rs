@@ -181,7 +181,8 @@ fn render(
         // Counted after `bind`, which may wait for a buffer of the host window to be released.
         let started = Instant::now();
         let views = state.views();
-        let (screens, animating) = scene.screens(renderer, ids, state, textures, &views, preview, now);
+        let (screens, animating) =
+            scene.screens(renderer, ids, state, textures, &views, preview, now);
         // GLES draws upside down: the frame is flipped to make up for it. Redrawn in full every
         // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;

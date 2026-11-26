@@ -535,6 +535,11 @@ impl State {
         }
     }
 
+    /// Time since startup: the clock of the animations.
+    pub fn now(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+
     /// Counts the changes: a frame built at an epoch is up to date until it moves on.
     pub fn redraw_epoch(&self) -> u64 {
         self.redraw_epoch

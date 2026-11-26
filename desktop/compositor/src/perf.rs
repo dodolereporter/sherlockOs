@@ -14,7 +14,7 @@ use std::{
 /// An iteration longer than this is a stall: a frame and a half at 60 frames per second.
 pub const STALL: Duration = Duration::from_millis(25);
 /// Time between two summaries in the log.
-const SUMMARY_EVERY: Duration = Duration::from_secs(10);
+const SUMMARY_EVERY: Duration = Duration::from_secs(5);
 /// Least time between two stall lines in the log.
 const STALL_LOG_EVERY: Duration = Duration::from_secs(1);
 
@@ -181,7 +181,9 @@ impl Iteration {
 impl fmt::Display for Iteration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:.1} ms", ms(self.busy()))?;
-        let parts = Phase::ALL.iter().map(|p| (p.name(), self.phases[*p as usize]));
+        let parts = Phase::ALL
+            .iter()
+            .map(|p| (p.name(), self.phases[*p as usize]));
         for (name, time) in parts.chain([("other", self.other())]) {
             if !time.is_zero() {
                 write!(f, ", {name} {:.1} ms", ms(time))?;

@@ -47,6 +47,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 ] }
 
 [dev-dependencies]
+# The same smithay, with its renderer for tests (`DummyRenderer`): the damage tests and the
+# bench build the scene's elements without a GPU (lot P-01).
+smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test"] }
 # Wayland client of the integration test: the same crates that smithay already pulls for
 # its winit backend.
 wayland-client = "=0.31.15"

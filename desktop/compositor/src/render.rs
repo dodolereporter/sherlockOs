@@ -107,7 +107,9 @@ pub enum Item {
 }
 
 impl Item {
-    /// Hash of what a shape or a shadow draws, for `Ids::stamp`.
+    /// Hash of what a shape or a shadow draws, for `Ids::stamp`. The opacity is in it too,
+    /// although the damage tracker sees it: an element of the tests, which has none, still
+    /// changes with it.
     pub fn params(&self) -> u64 {
         match self {
             Item::Shape {
@@ -115,10 +117,16 @@ impl Item {
                 border,
                 border_width,
                 radius,
+                alpha,
                 ..
-            } => params_hash(&[&fill[..], border, &[*border_width, *radius]].concat()),
-            Item::Shadow { shadow, radius, .. } => {
-                let scalars = [*radius, shadow.sigma];
+            } => params_hash(&[&fill[..], border, &[*border_width, *radius, *alpha]].concat()),
+            Item::Shadow {
+                shadow,
+                radius,
+                alpha,
+                ..
+            } => {
+                let scalars = [*radius, shadow.sigma, *alpha];
                 params_hash(&[&shadow.caster[..], &shadow.window, &scalars].concat())
             }
             _ => 0,
@@ -369,7 +377,12 @@ pub fn items(
         animating |= window_data(window).motion.borrow().is_animating();
         push_window(&mut items, window, visual, view, own);
     }
-    push_layers(&mut items, output, view, &[Layer::Bottom, Layer::Background]);
+    push_layers(
+        &mut items,
+        output,
+        view,
+        &[Layer::Bottom, Layer::Background],
+    );
     // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
     // the frame, like the rest of the desktop.
     if wallpaper {
@@ -595,6 +608,34 @@ fn clip_in_frame(
     [clip.loc.x, clip.loc.y, clip.size.w, clip.size.h].map(|v| v as f32)
 }
 
+/// The opaque part of a window's surface: its `regions`, relative to the element at `loc`, kept
+/// inside `clip` and without the rounded corners of `radius`, which show what is underneath.
+pub fn rounded_opaque(
+    regions: OpaqueRegions<i32, Physical>,
+    loc: Point<i32, Physical>,
+    clip: Rectangle<f64, Physical>,
+    radius: f32,
+) -> OpaqueRegions<i32, Physical> {
+    if regions.is_empty() {
+        return regions;
+    }
+    let (x0, y0) = (clip.loc.x.ceil() as i32, clip.loc.y.ceil() as i32);
+    let x1 = (clip.loc.x + clip.size.w).floor() as i32;
+    let y1 = (clip.loc.y + clip.size.h).floor() as i32;
+    let inside = Rectangle::new((x0 - loc.x, y0 - loc.y).into(), (x1 - x0, y1 - y0).into());
+    // One more pixel for the smoothing of the edge.
+    let r = radius.ceil() as i32 + 1;
+    let (left, top) = (inside.loc.x, inside.loc.y);
+    let (right, bottom) = (left + inside.size.w - r, top + inside.size.h - r);
+    let corners = [(left, top), (right, top), (left, bottom), (right, bottom)]
+        .map(|(x, y)| Rectangle::new((x, y).into(), (r, r).into()));
+    regions
+        .into_iter()
+        .filter_map(|region| region.intersection(inside))
+        .flat_map(|region| region.subtract_rects(corners))
+        .collect()
+}
+
 /// A client surface clipped by the rounded rectangle of its window. The texture program
 /// replaces Smithay's while the surface is drawn.
 pub struct RoundedSurface {
@@ -639,10 +680,17 @@ impl Element for RoundedSurface {
         self.inner.damage_since(scale, commit)
     }
 
-    // No opaque regions: the clipped corners show what is underneath. The windows below are
-    // therefore always drawn.
-    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        OpaqueRegions::default()
+    // The client's opaque region, inside the clip and without the rounded corners, which show
+    // what is underneath (lot P-01). What an opaque window covers is not drawn: the windows
+    // below, its own shadow, the wallpaper under a maximized window.
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        let loc = self.geometry(scale).loc;
+        rounded_opaque(
+            self.inner.opaque_regions(scale),
+            loc,
+            self.clip,
+            self.radius,
+        )
     }
 
     fn alpha(&self) -> f32 {
@@ -777,6 +825,26 @@ mod tests {
             clip_in_frame(clip, Transform::Flipped180, size),
             [36.0, 900.0 - 64.0 - 652.0, 836.0, 652.0]
         );
+    }
+
+    #[test]
+    fn an_opaque_window_hides_what_is_below_but_its_corners() {
+        // A window of 100 × 80 at (10, 20), opaque everywhere, radius 16.
+        let opaque = OpaqueRegions::from_slice(&[frame_rect(0, 0, 100, 80)]);
+        let clip = Rectangle::new((10.0, 20.0).into(), (100.0, 80.0).into());
+        let regions = rounded_opaque(opaque, (10, 20).into(), clip, 16.0);
+        let area: i32 = regions.iter().map(|r| r.size.w * r.size.h).sum();
+        // The four corners of 17 × 17 are not opaque, nor anything outside.
+        assert_eq!(area, 100 * 80 - 4 * 17 * 17);
+        assert!(
+            regions
+                .iter()
+                .all(|r| frame_rect(0, 0, 100, 80).contains_rect(*r))
+        );
+        assert!(!regions.iter().any(|r| r.contains((0, 0))));
+        // A translucent client declares nothing: nothing is hidden.
+        let none = rounded_opaque(OpaqueRegions::default(), (10, 20).into(), clip, 16.0);
+        assert!(none.is_empty());
     }
 
     #[test]
