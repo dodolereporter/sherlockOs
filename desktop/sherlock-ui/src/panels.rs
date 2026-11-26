@@ -74,6 +74,10 @@ pub const OPEN_FADE: std::time::Duration = motion::FADE;
 /// A page that replaces another in a panel (the Wi-Fi networks): it slides in from 24 on its
 /// side, on the same spring and fade.
 pub const PAGE_SLIDE: f32 = 24.0;
+/// The control centre turning into the calendar or back (UI-01): each slides by this much, one
+/// out, the other in, while a mask goes from the height of one to the other's. 12, the room
+/// between the panels and the edge of the screen: nothing leaves the surface.
+pub const SWITCH_SLIDE: f32 = metrics::TOP_BAR_MARGIN_SIDE;
 /// A tile switched on or off: its colors mix over a hover's duration.
 pub const TILE_FADE: std::time::Duration = motion::FADE;
 

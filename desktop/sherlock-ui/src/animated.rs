@@ -434,6 +434,19 @@ pub struct Reveal<'a, Message> {
     scale: f32,
     /// The point the scale keeps in place, as a share of the width and the height.
     origin: (f32, f32),
+    clip: Clip,
+    /// Drawn only: it takes no input and no focus (a page on its way out).
+    inert: bool,
+}
+
+/// Where a moving `Reveal` is cut, so that nothing it draws leaves its panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Clip {
+    None,
+    /// Its bounds grown by this much on every side, while it moves.
+    Margin(f32),
+    /// Its bounds, down to this height from their top.
+    Height(f32),
 }
 
 /// `content` at rest; see the setters.
@@ -444,6 +457,8 @@ pub fn reveal<'a, Message>(content: impl Into<Element<'a, Message>>) -> Reveal<'
         offset: Vector::ZERO,
         scale: 1.0,
         origin: (0.5, 0.0),
+        clip: Clip::None,
+        inert: false,
     }
 }
 
@@ -463,6 +478,38 @@ impl<Message> Reveal<'_, Message> {
         self.scale = scale;
         self.origin = origin;
         self
+    }
+
+    /// While it moves, nothing is drawn further than `margin` from its bounds: a page that
+    /// slides stays inside the glass of its panel, its padding being `margin`.
+    pub fn clip_margin(mut self, margin: f32) -> Self {
+        self.clip = Clip::Margin(margin);
+        self
+    }
+
+    /// Nothing is drawn below `height` from its top: a panel unfolding by a mask.
+    pub fn clip_height(mut self, height: f32) -> Self {
+        self.clip = Clip::Height(height);
+        self
+    }
+
+    /// Drawn only, without input nor focus: a page or a panel on its way out.
+    pub fn inert(mut self) -> Self {
+        self.inert = true;
+        self
+    }
+
+    /// The area it is cut to, if any, for its bounds.
+    fn clip_area(&self, bounds: Rectangle) -> Option<Rectangle> {
+        let moving = self.offset != Vector::ZERO || self.scale != 1.0;
+        match self.clip {
+            Clip::Margin(margin) if moving => Some(bounds.expand(margin)),
+            Clip::Height(height) => Some(Rectangle {
+                height: height.clamp(0.0, bounds.height),
+                ..bounds
+            }),
+            Clip::Margin(_) | Clip::None => None,
+        }
     }
 
     /// Where the content is drawn: from its bounds to the screen.
@@ -508,6 +555,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        if self.inert {
+            return;
+        }
         self.content
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
@@ -524,6 +574,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if self.inert {
+            return;
+        }
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -544,6 +597,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        if self.inert {
+            return mouse::Interaction::None;
+        }
         self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -579,11 +635,18 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
                 );
             });
         };
-        if self.offset == Vector::ZERO && self.scale == 1.0 {
-            draw(renderer);
-        } else {
-            let moved = self.transformation(layout.bounds());
-            iced::advanced::Renderer::with_transformation(renderer, moved, draw);
+        let bounds = layout.bounds();
+        let placed = |renderer: &mut Renderer| {
+            if self.offset == Vector::ZERO && self.scale == 1.0 {
+                draw(renderer);
+            } else {
+                let moved = self.transformation(bounds);
+                iced::advanced::Renderer::with_transformation(renderer, moved, draw);
+            }
+        };
+        match self.clip_area(bounds) {
+            Some(area) => iced::advanced::Renderer::with_layer(renderer, area, placed),
+            None => placed(renderer),
         }
     }
 
@@ -925,6 +988,26 @@ mod tests {
         let half = state.open.map_or(0.0, |l| l.value(120 * MS));
         assert!(half > 0.0 && half < 1.0, "{half}");
         assert!(!state.tick(100 * MS + motion::FADE));
+    }
+
+    #[test]
+    fn a_moving_page_is_cut_to_its_panel_and_a_mask_to_its_height() {
+        let bounds = Rectangle::new(Point::new(15.0, 15.0), Size::new(306.0, 400.0));
+        let page = || reveal::<()>(iced::widget::space()).clip_margin(14.0);
+        // At rest nothing is cut: no layer to draw.
+        assert_eq!(page().clip_area(bounds), None);
+        let moving = page().offset(24.0, 0.0).clip_area(bounds);
+        assert_eq!(
+            moving,
+            Some(Rectangle::new(
+                Point::new(1.0, 1.0),
+                Size::new(334.0, 428.0)
+            ))
+        );
+        let mask = reveal::<()>(iced::widget::space()).clip_height(120.0);
+        assert_eq!(mask.clip_area(bounds).map(|a| a.height), Some(120.0));
+        let beyond = reveal::<()>(iced::widget::space()).clip_height(900.0);
+        assert_eq!(beyond.clip_area(bounds).map(|a| a.height), Some(400.0));
     }
 
     #[test]

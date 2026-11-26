@@ -37,6 +37,18 @@ impl Panel {
     }
 }
 
+/// The room a panel takes in its surface. `shared`: on the GPU, where the room around the
+/// panels is transparent, both panels share one surface the size of both, so that one turns
+/// into the other without a popup closing and another opening (UI-01). In software the room
+/// around a panel is black: each has a surface of its own size.
+pub fn room(panel: Panel, shared: bool) -> (f32, f32) {
+    if !shared {
+        return panel.size();
+    }
+    let (control, calendar) = (Panel::Control.size(), Panel::Calendar.size());
+    (control.0.max(calendar.0), control.1.max(calendar.1))
+}
+
 /// Room around the panel in its surface. In software, only the gap below the bar: the surface
 /// is opaque and holds no shadow (ADR 0018). On the GPU, the panel shadow of the board, cut on
 /// the right where the screen ends.
@@ -55,8 +67,8 @@ pub fn margins(gpu: bool) -> Padding {
 }
 
 /// Size of the panel surface, `margins` included.
-pub fn surface_size(panel: Panel, margins: Padding) -> (u32, u32) {
-    let (width, height) = panel.size();
+pub fn surface_size(panel: Panel, margins: Padding, shared: bool) -> (u32, u32) {
+    let (width, height) = room(panel, shared);
     (
         (width + margins.left + margins.right).ceil() as u32,
         (height + margins.top + margins.bottom).ceil() as u32,
@@ -74,9 +86,10 @@ pub fn anchor_rect(
     margins: Padding,
     bar_width: f32,
     margin_side: f32,
+    shared: bool,
 ) -> (i32, i32, u32, u32) {
-    let (width, _) = surface_size(panel, margins);
-    let (panel_width, _) = panel.size();
+    let (width, _) = surface_size(panel, margins, shared);
+    let (panel_width, _) = room(panel, shared);
     let right = bar_width - (metrics::TOP_BAR_MARGIN_SIDE - margin_side).max(0.0);
     let left = right - panel_width - margins.left;
     let top = metrics::TOP_BAR_HEIGHT + panels::BELOW_BAR - margins.top;
@@ -84,11 +97,13 @@ pub fn anchor_rect(
     (centre - 1, 0, 2, top.max(1.0) as u32)
 }
 
-/// The panel itself in its surface (x, y, width, height): the input region of the popup.
-pub fn input_rect(panel: Panel, margins: Padding) -> (i32, i32, i32, i32) {
+/// The panel itself in its surface (x, y, width, height): the input region of the popup. The
+/// panel sits at the top right of its room.
+pub fn input_rect(panel: Panel, margins: Padding, shared: bool) -> (i32, i32, i32, i32) {
     let (width, height) = panel.size();
+    let (room_width, _) = room(panel, shared);
     (
-        margins.left as i32,
+        (margins.left + room_width - width) as i32,
         margins.top as i32,
         width.ceil() as i32,
         height.ceil() as i32,
@@ -107,6 +122,11 @@ pub fn glass<'a>(
         .padding(panels::PADDING + metrics::BORDER_WIDTH)
         .style(panels::panel);
     opaque(surface::shadowed(glass, panels::RADIUS, Elevation::Panel))
+}
+
+/// A panel at the top right of its room `(width, height)`.
+pub fn place<'a>(panel: Element<'a, Message>, (width, height): (f32, f32)) -> Element<'a, Message> {
+    container(panel).align_right(width).height(height).into()
 }
 
 /// The panel in its surface, and a click on the room around it closing it, for a compositor
@@ -383,16 +403,17 @@ mod tests {
 
     /// Where the panel lands on the screen, from its surface and its margins, under a bar
     /// floating on the reference screen.
-    fn on_screen(panel: Panel, margins: Padding) -> (f32, f32) {
+    fn on_screen(panel: Panel, margins: Padding, shared: bool) -> (f32, f32) {
         let side = metrics::TOP_BAR_MARGIN_SIDE;
         let bar_width = metrics::REFERENCE_SCREEN.0 - 2.0 * side;
-        let (width, _) = surface_size(panel, margins);
-        let (x, _, w, top) = anchor_rect(panel, margins, bar_width, side);
+        let (width, _) = surface_size(panel, margins, shared);
+        let (x, _, w, top) = anchor_rect(panel, margins, bar_width, side, shared);
         assert_eq!(w, 2);
         assert_eq!(width % 2, 0, "an odd width cannot be centred exactly");
         let surface_left = side + (x + 1) as f32 - (width / 2) as f32;
         let surface_top = metrics::TOP_BAR_MARGIN_TOP + top as f32;
-        (surface_left + margins.left, surface_top + margins.top)
+        let (ix, iy, _, _) = input_rect(panel, margins, shared);
+        (surface_left + ix as f32, surface_top + iy as f32)
     }
 
     #[test]
@@ -401,31 +422,38 @@ mod tests {
         for gpu in [false, true] {
             let margins = margins(gpu);
             for panel in [Panel::Control, Panel::Calendar] {
-                let (left, top) = on_screen(panel, margins);
+                let (left, top) = on_screen(panel, margins, gpu);
                 assert_eq!(left + panel.size().0, right, "{panel:?}, gpu: {gpu}");
                 assert_eq!(top, 54.0, "{panel:?}, gpu: {gpu}");
-                let (x, y, _, height) = anchor_rect(panel, margins, right - 12.0, 12.0);
+                let (x, y, _, height) = anchor_rect(panel, margins, right - 12.0, 12.0, gpu);
                 assert!(x >= 0 && y >= 0 && height >= 1);
                 assert!(height as f32 <= metrics::TOP_BAR_HEIGHT);
                 // The input region is the panel alone.
-                let (ix, iy, iw, ih) = input_rect(panel, margins);
-                assert_eq!((ix, iy), (margins.left as i32, margins.top as i32));
+                let (_, iy, iw, ih) = input_rect(panel, margins, gpu);
+                assert_eq!(iy, margins.top as i32);
                 assert_eq!(
                     (iw, ih),
                     (panel.size().0 as i32, panel.size().1.ceil() as i32)
                 );
             }
+            // On the GPU both panels share a surface: the same size, the same place.
+            if gpu {
+                let control = surface_size(Panel::Control, margins, true);
+                assert_eq!(control, surface_size(Panel::Calendar, margins, true));
+                let rect = |p| anchor_rect(p, margins, right - 12.0, 12.0, true);
+                assert_eq!(rect(Panel::Control), rect(Panel::Calendar));
+            }
         }
         // The board's quick settings at 1092.
-        assert_eq!(on_screen(Panel::Control, margins(false)).0, 1092.0);
+        assert_eq!(on_screen(Panel::Control, margins(false), false).0, 1092.0);
     }
 
     #[test]
     fn under_an_attached_bar_the_panel_keeps_its_distance_to_the_edge() {
         let screen = metrics::REFERENCE_SCREEN.0;
         let margins = margins(false);
-        let (x, _, _, _) = anchor_rect(Panel::Calendar, margins, screen, 0.0);
-        let (width, _) = surface_size(Panel::Calendar, margins);
+        let (x, _, _, _) = anchor_rect(Panel::Calendar, margins, screen, 0.0, false);
+        let (width, _) = surface_size(Panel::Calendar, margins, false);
         let left = (x + 1) as f32 - (width / 2) as f32;
         assert_eq!(left + Panel::Calendar.size().0, screen - 12.0);
     }

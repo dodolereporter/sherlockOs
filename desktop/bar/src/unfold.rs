@@ -78,23 +78,32 @@ impl Unfold {
         self.fade.value(self.now).clamp(0.0, 1.0)
     }
 
-    /// A panel at this instant: faded, a little smaller and higher, around its top right
-    /// corner, under the bar's end. `content` must be built inside `color::with_opacity` of
+    /// The spring's progress, without its overshoot: what a panel is scaled and moved by, so
+    /// that it never grows past its size nor leaves its surface (UI-01).
+    pub fn settled(&self) -> f32 {
+        self.progress().min(1.0)
+    }
+
+    /// A panel at this instant: faded, a little smaller and higher, around `corner` (shares of
+    /// its width and height: its top right corner under the bar's end, the top left one under
+    /// the Sherlock button). `content` must be built inside `color::with_opacity` of
     /// `opacity()` for the colors it takes when it is built.
     pub fn panel<'a, Message: 'a>(
         &self,
         content: impl Into<Element<'a, Message>>,
+        corner: (f32, f32),
     ) -> Element<'a, Message> {
-        let folded = 1.0 - self.progress();
+        let folded = 1.0 - self.settled();
         reveal(content)
             .opacity(self.opacity())
             .offset(0.0, -folded * panels::OPEN_RISE)
-            .scale(1.0 - folded * (1.0 - panels::OPEN_SCALE), (1.0, 0.0))
+            .scale(1.0 - folded * (1.0 - panels::OPEN_SCALE), corner)
             .into()
     }
 
     /// A page at this instant, built by `page` faded: it slides in from the right
-    /// (`forward`) or from the left.
+    /// (`forward`) or from the left, cut to the glass of its panel (`panels::PADDING` around
+    /// it).
     pub fn page<'a, Message: 'a>(
         &self,
         forward: bool,
@@ -106,6 +115,26 @@ impl Unfold {
         reveal(content)
             .opacity(self.opacity())
             .offset(offset, 0.0)
+            .clip_margin(panels::PADDING)
+            .into()
+    }
+
+    /// The page this one replaces, on its way out: it slides the other way and fades as this
+    /// one comes in, cut the same way, and takes no input.
+    pub fn leaving_page<'a, Message: 'a>(
+        &self,
+        forward: bool,
+        page: impl FnOnce() -> Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        let side = if forward { -1.0 } else { 1.0 };
+        let offset = side * self.progress().clamp(0.0, 1.0) * panels::PAGE_SLIDE;
+        let opacity = 1.0 - self.opacity();
+        let content = color::with_opacity(opacity, page);
+        reveal(content)
+            .opacity(opacity)
+            .offset(offset, 0.0)
+            .clip_margin(panels::PADDING)
+            .inert()
             .into()
     }
 }
@@ -132,6 +161,17 @@ mod tests {
         assert_eq!(unfold.opacity(), 1.0);
         assert!((unfold.progress() - 1.0).abs() < 1e-3);
         assert!(!Unfold::default().running());
+        // Past its target on the overshoot, the panel stays at its size.
+        let unfold = Unfold::opening(Duration::ZERO);
+        let peak = (0..400)
+            .map(|t| {
+                let mut at = unfold;
+                at.tick(ms(t));
+                (at.progress(), at.settled())
+            })
+            .fold((0.0f32, 0.0f32), |(p, s), (a, b)| (p.max(a), s.max(b)));
+        assert!(peak.0 > 1.0, "the spring overshoots: {}", peak.0);
+        assert_eq!(peak.1, 1.0, "the panel does not");
     }
 
     #[test]

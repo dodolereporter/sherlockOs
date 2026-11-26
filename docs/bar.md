@@ -532,6 +532,34 @@ values are in `sherlock_ui::panels`.
 - **Rest**: the bar asks for frames (`window::frames`) only while something moves; at rest it
   draws nothing.
 
+**UI-01.** The author found that the animations « sortent un peu de la fenêtre ». The cause: a
+page sliding in was drawn 24 to the side without being cut, over the panel's padding and border
+and out of its glass, into the room for the shadow, where the surface's edge cut it short; and
+the spring's 2 % overshoot scaled the panel a little past its size. Now:
+
+- **Inside the glass.** A page that slides is cut to the glass of its panel
+  (`animated::Reveal::clip_margin`, the panel's padding around it) while it moves; at rest
+  nothing is cut, so the software renderer draws no mask. A panel unfolds on the spring's
+  progress clamped at 1 (`Unfold::settled`): it never grows past its size.
+- **Pages, both ways.** The page shown slides out the other way and fades while the new one
+  comes in (`Unfold::leaving_page`), to the Wi-Fi networks or the Bluetooth devices and back. The
+  page going out takes no input and no focus (`Reveal::inert`). At rest an empty layer keeps its
+  place, so the page shown keeps its scroll and its field.
+- **From the control centre to the calendar and back.** On the GPU both panels share one
+  popup the size of both (`panel::room`), the panel at its top right, the input region the panel
+  shown. Clicking the clock while the control centre is open turns it into the calendar in the
+  same popup: the control centre slides out by 12 (`panels::SWITCH_SLIDE`, the room before the
+  screen's edge) and fades, the calendar comes in from the other side, from the right going
+  towards the clock, from the left going towards the indicators, as they sit in the bar; and a
+  mask goes from the height of one to the other's (`Reveal::clip_height`): the height changes on
+  the spring. In software each panel keeps a popup of its own size, black around it, and the
+  other replaces it at once.
+- **The Sherlock menu** unfolds from its top left corner and folds back like the panels, on
+  the GPU; a panel opening takes it away at once, so that only one popup holds the grab.
+
+![A page halfway, cut to the glass](../desktop/bar/screenshots/page-sliding.png)
+![The control centre turning into the calendar](../desktop/bar/screenshots/panels-switching.png)
+
 iced 0.14 has no opacity for a group of widgets: `sherlock_ui::color::with_opacity` multiplies
 the opacity of every color given to iced on the thread, the panel view is built inside it, and
 `animated::Reveal` draws its content inside it, with a transformation for the offset and the
@@ -648,6 +676,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   the control centre in both themes, full and empty; the battery at 5, 50 and 100 %, charging,
   plugged in and low; a click on the indicators or the clock, on a month arrow, on an action
   and on « Tout effacer ».
+- **Panel motions** (UI-01): in `app.rs`, the control centre turning into the calendar and back
+  in the same popup on the GPU, then at rest, and a popup of its own in software; the menu
+  folding back before it closes, unfolding again when clicked meanwhile, and gone at once when a
+  panel opens. In `unfold.rs`, the panel never past its size. In `sherlock-ui`, a moving page cut
+  to its glass and a mask cut to its height. Captures `page-sliding` and `panels-switching`.
 - **Clicks and rest** (`app.rs`): twelve quick clicks on the indicators keep one popup, turned
   back and forth, closed once after it has faded out, then no frame; a late close of an old
   popup changes nothing; in software each click opens or closes at once. A notification
