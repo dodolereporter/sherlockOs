@@ -10,7 +10,8 @@ anchored surfaces (layer-shell) for the bar, the dock and the panels, several sc
 fractional scaling. Lot D-04 draws the wallpaper. Lot D-06 accepts the buffers of clients that
 draw on the GPU (linux-dmabuf). Lot D-14 runs it as a real session, on the screens of the
 machine, from a text console or the login screen (see "Real session"). Lot D-31 gives the
-touchpad its setting and its gestures (see "Touchpad").
+touchpad its setting and its gestures (see "Touchpad"). Lot D-33 adds Mission Control (see
+"Mission Control").
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -41,6 +42,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
 | `src/gestures.rs` | Touchpad gestures (lot D-31): three finger swipes for the compositor, the others to the clients (`zwp_pointer_gestures_v1`) |
 | `src/touchpad.rs` | Touchpad setting applied to libinput, read again when it changes (lot D-31) |
+| `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
@@ -399,8 +401,8 @@ D-18w gives them their behavior.
 - **Moving a window** (`State::move_to_workspace`): out of the active workspace, it hides
   without being followed, and if it was the active window, the keyboard goes back as above.
   Refused during a gesture, which would go on with a hidden window.
-- **Who changes workspace.** Only the user, by the keys and the three finger swipe (see
-  "Touchpad"), and the shell, by `activate` (of a
+- **Who changes workspace.** Only the user, by the keys, the three finger swipe (see
+  "Touchpad") and Mission Control, and the shell, by `activate` (of a
   workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
   no `xdg-activation`, and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. An
   application may minimize its own window (lot D-18c1), never bring it back. A new window opens on the active workspace and
@@ -779,15 +781,16 @@ Each frame is redrawn in full with Smithay's GLES renderer (`GlesRenderer`), in 
 single thread. `render::Scene` compiles three programs at startup and lays out the elements from
 front to back, as Smithay expects them:
 
-1. anchored surfaces of the overlay layer, then the windows during their minimize effect (lot
-   D-19), then the anchored surfaces of the top layer, each with its menus in front;
-2. the snap preview: translucent green rounded rectangle, 2 px green border;
-3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
+1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
+   front;
+2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
+3. the snap preview: translucent green rounded rectangle, 2 px green border;
+4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
    scaled), its border, its title bar if the compositor draws it, its clipped content, its
-   shadow;
-4. anchored surfaces of the bottom and background layers;
-5. the wallpaper, or without one the three background discs (see "Wallpapers");
-6. the desktop color, which fills the rest.
+   shadow; while Mission Control is shown, its own items instead (see "Mission Control");
+5. anchored surfaces of the bottom and background layers;
+6. the wallpaper, or without one the three background discs (see "Wallpapers");
+7. the desktop color, which fills the rest.
 
 **Screens and scale (lot D-12).** Each screen has its own list of elements, built in pixels of
 the frame by its `View`: its area of the space, its slice of the frame, its scale. Rectangles are
@@ -918,8 +921,9 @@ Minimized, by the dock, its keys or its application, a window is sucked into its
 activated, it comes back out the same way, backwards. `src/genie.rs`.
 
 - **Genie.** The icon is the rectangle the dock gives with `set_rectangle`
-  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (450 ms),
-  at a constant pace. During the first 40 % the sides bend: what is level with the window's top
+  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (300 ms
+  since lot Q-14, 450 ms before: found slow on the machine), at a constant pace, the same both
+  ways. During the first 40 % the sides bend: what is level with the window's top
   keeps its width, what reaches the icon's top takes the icon's width, along a smoothstep curve
   in between; the bottom of the window narrows toward the icon. During the rest, the window
   slides down this funnel and is squeezed into the icon, whose rectangle it covers exactly at the
@@ -937,8 +941,11 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
   drawn into the texture, follow the deformation; the edges of the funnel are smoothed over one
   pixel on the screen. The shadow is not deformed: it fades out while the sides bend. `Genie`
   holds the same computation in Rust, for the area and the tests; the two must stay in line.
-- **In front of the dock.** The window goes into its icon, so it is drawn in front of the
-  anchored surfaces of the top layer (bar, dock), behind those of the overlay layer.
+- **Under the dock** (lot Q-14). The window is sucked into its icon, as on macOS: it is drawn
+  behind the anchored surfaces of the top and overlay layers (bar, dock, notifications), in
+  front of the other windows. From the back: the wallpaper, the windows, the genie, then the
+  bar, the dock and the notifications. In front of the dock (lot D-19), the window covered the
+  icon it went into.
 - **Without an icon** (no dock, or a window without an icon in it), the scale effect: the window
   shrinks to `motion::MINIMIZE_SCALE` (a fifth) toward the bottom of its screen, centered under
   itself, and fades out; drawn like a window, stretched (`RescaleRenderElement`), with its
@@ -1633,7 +1640,7 @@ optional; without the file, the defaults below apply.
 | `speed` | `0` | `-1` to `1` | Pointer speed |
 | `acceleration` | `adaptive` | `adaptive`, `flat` | Faster movements go further, or not |
 | `click` | `fingers` | `fingers`, `areas` | A press clicks by the number of fingers (clickfinger), or by where it presses (bottom right corner: right button) |
-| `swipe-down` | `minimize` | `minimize`, `nothing` | What three fingers down do |
+| `swipe-down` | `nothing` | `nothing`, `minimize` | What three fingers down do out of Mission Control (`minimize` was the default before lot D-33) |
 
 Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
 when they are plugged in, and again within 2 seconds of a change of the file (modification time
@@ -1654,8 +1661,8 @@ gives no two finger swipe, but a device that would is passed on.
 | Fingers | Gesture | Effect |
 | --- | --- | --- |
 | 3 | Left or right | The row of workspaces follows the fingers, then lands on the neighbour or comes back |
-| 3 | Up | The overview: reserved for Mission Control, a lot of its own. A line in the log, nothing on screen |
-| 3 | Down | Minimizes the window that has the keyboard (`swipe-down = minimize`), or nothing |
+| 3 | Up | Opens Mission Control, which follows the fingers (see "Mission Control") |
+| 3 | Down | Closes Mission Control; out of it, nothing, or minimizes the window that has the keyboard with `swipe-down = minimize` |
 | 3 | Pinch, hold | Reserved |
 | 4 and more | Any | Reserved |
 | 1 and 2 | Pinch, hold, swipe | To the client under the pointer |
@@ -1713,8 +1720,8 @@ libinput events to `State::process_input_event`:
   objects, with a window under the pointer: it receives a two finger pinch (begin, scale, end),
   a hold (cancelled) and a two finger swipe; it receives nothing of three or four finger swipes,
   pinches or holds.
-- **Three fingers down.** Not far enough, or `swipe-down = nothing`: the window stays; by
-  default, it is minimized.
+- **Three fingers down.** Not far enough, or by default: the window stays; with
+  `swipe-down = minimize`, it is minimized.
 
 ### Manual test on the reference laptop
 
@@ -1727,9 +1734,175 @@ libinput events to `State::process_input_event`:
 4. With three windows on three workspaces: three fingers left, slowly, and stop halfway: both
    workspaces show, side by side, where the fingers are. Lift: it comes back. Flick: it goes to
    the next one. On the first workspace, three fingers right: it resists and springs back.
-5. Three fingers down on a window: it is minimized. Write `swipe-down = nothing` in
+5. Three fingers down on a window: nothing. Write `swipe-down = minimize` in
    `~/.config/nom-os/touchpad.conf`: within 2 seconds the log shows the new setting, and the
-   gesture does nothing. `natural-scroll = false`: the scrolling turns around.
+   gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
+
+## Mission Control
+
+Lots D-33a and D-33b: every window of the active workspace side by side, under the strip of the
+workspaces, as macOS does, in the style of the desktop. D-33b adds the strip, dragging a window
+to another workspace, and the view that follows the fingers. No board draws it: the measures are choices of the
+lot (`sherlock_ui::mission_control`), to review with the design.
+
+![Mission Control, dark](../desktop/compositor/screenshots/mission-control-dark.png)
+
+![Mission Control, light](../desktop/compositor/screenshots/mission-control-light.png)
+
+### Opening and closing
+
+| Input (Alt in place of Super with `--nested`) | Effect |
+| --- | --- |
+| Super alone, pressed then released with nothing in between | Opens, or closes |
+| Super + Tab | Opens, or closes |
+| Escape | Closes |
+| Three fingers up | Opens; the view follows the fingers |
+| Three fingers down | Closes; the view follows the fingers |
+| A click on nothing | Closes |
+| A click on a window | That window comes on top with the keyboard, and the view closes |
+| A click on a thumbnail | Goes to that workspace, and the view closes |
+
+Super is not alone if another key or a mouse button is pressed before it is released: Super + 1,
+Super + drag, Super + arrow never open the view. The client under the keyboard still sees the
+press and the release of Super, as before. Super + Tab was free; Tab and Escape, like the other
+shortcuts, do not reach the client.
+
+**Following the fingers.** Once a three finger swipe picks the vertical direction (see
+"Touchpad"), the view is held where the fingers put it: 300 units up open it fully
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
+past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
+closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
+leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
+
+**What it may not do.** It does not open during a move or resize gesture, nor while an anchored
+surface keeps the keyboard (a lock screen).
+
+### The view
+
+- **The windows** of the active workspace, not minimized, X11 menus aside, each on the screen
+  under its center: each screen shows its own. They fill the work area under the strip, with a
+  margin of 32 (`MARGIN`).
+- **The grid** (`layout::arrange`, pure computation): every window takes the same scale, so that
+  their sizes compare as on the desktop, at most 0.8 (`MAX_SCALE`): even alone, a window shrinks
+  a little. Each number of rows from 1 to n is tried; the windows are cut into rows by the
+  height of their center, as evenly as possible, each row from left to right by the center:
+  the number of rows that gives the largest scale wins, the fewest rows on a tie. Rows are
+  centered, windows centered in their row, 24 apart (`GAP`), each with room for its title below.
+  Nothing overlaps, and each window travels little: what is above stays above, what is on the
+  left stays on the left.
+- **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
+  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
+  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  window gets its corners back as it shrinks.
+- **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
+  opens. No blur: the compositor has none yet (see "What rendering does not do yet").
+- **The strip**, at the top of the work area: one thumbnail per workspace, as wide as the screen
+  for 84 of height (smaller if they do not fit), with the wallpaper, the windows of that
+  workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
+  workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
+  over. The strip comes down from above the screen as the view opens.
+- **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
+  as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
+  window chosen by a click is raised first, then every window goes back to its place.
+
+### Dragging to another workspace
+
+A window pressed and moved past the drag threshold (4 px) follows the pointer, in front of
+everything, without its title. Dropped on a thumbnail, it moves to that workspace
+(`State::move_to_workspace`) and leaves the grid; the view stays open. Dropped elsewhere, it
+goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
+row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
+The bar follows through `ext-workspace-v1`, as for any switch.
+
+### Input while it is open
+
+- **Keyboard.** No window has it: `set_keyboard_focus` gives none while the view is open, and
+  the clients get `leave`. A window that opens in the view does not get it either; the view
+  gives the keyboard back when it closes: to the window clicked, or else to the window that had
+  it last (`State::top_window`), the new window if one opened. An anchored surface with an
+  exclusive keyboard keeps its own, as always.
+- **Pointer.** It is on no client: neither the windows nor the bar and the dock receive motion,
+  buttons, scrolling or gestures. The cursor is the arrow.
+- **Windows that come and go.** A window opened in the view takes its slot in the grid (with its
+  opening animation), one closed leaves it; the grid is computed again at each frame, so the
+  others jump to their new slot (see below).
+
+### Rendering
+
+The thumbnails are the windows' own surfaces, scaled by the renderer (`render::Item::Window`
+with a smaller rectangle): no copy on the processor. The title bar is the texture of the desktop
+(`decorations::Textures`), stretched, made again only if its look changes; the titles are
+textures of their own (`mission_control::Labels`), made once per text. The wallpaper of a
+thumbnail is the screen's texture, drawn into the thumbnail and cut to its rounded corners by
+the clip program (`render::RoundedSurface` over a texture). X11 and Wayland windows go through
+the same items.
+
+`mission_control::push_items` takes the place of the windows in `render::items`, behind the bar
+and the dock: the bar and the dock stay as they are, undimmed. While the view opens or closes,
+a frame is drawn at every vertical blank; open and at rest, nothing is drawn (lot P-01): only
+an input event (a hover) or a client draws a frame.
+
+### Tests
+
+`src/mission_control/layout.rs`: 1, 2, 5 and 12 windows of every size, and 12 on a small
+screen, never overlap (titles included), stay in the area, keep their proportions and one
+scale; a window alone shrinks to 0.8 and is centered; the grid keeps the order of the desktop
+(left stays left, top stays top). `src/mission_control/label.rs`: a label fits its text and
+draws it. `tests/mission_control.rs`, like `tests/headless.rs`, with a client of decorated
+windows on a screen of 1440 × 900:
+
+- **Keys.** Super alone opens (animated, then fully open) and takes the keyboard; Escape closes
+  and gives it back; Super + Tab opens and closes; Super with A or with a click between is not
+  alone; Super alone twice opens and closes.
+- **Three fingers.** 150 units up: half open, held without an animation, following the fingers
+  back down; lifted past the trigger, it opens the rest of the way from there; 30 down stays
+  open; 150 down closes and gives the keyboard back; 40 up, or cancelled, stays closed.
+- **Click.** The left window is on the left; a click on it raises it with the keyboard and
+  closes the view; a click on nothing closes it.
+- **Input.** Keys typed and a click on a window during the view: the client receives no key,
+  no button, has neither keyboard nor pointer; the cursor is the arrow; closed, keys go through.
+- **Drag.** A window dragged onto the second thumbnail goes to workspace 2 and leaves the grid,
+  the view open; a click on that thumbnail goes there, without a slide, the window with the
+  keyboard.
+- **Windows that come and go.** A window opened in the view joins the grid without the
+  keyboard, one closed leaves it; closed, the view gives the keyboard to the new window.
+- **No frame at rest.** The scene animates while the view opens and not once it is open; the
+  epoch does not move with time alone.
+- **Two screens.** Each shows its own window and its strip; a click on the second screen's
+  window chooses it.
+
+`tests/xwayland.rs` opens the view with the X11 window: it is in the grid, its menu is not, and a
+click gives it the keyboard back. `tests/gestures.rs`: three fingers down minimize only with
+`swipe-down = minimize`.
+
+`captures_of_the_view_with_five_windows` (ignored, needs Mesa's EGL) draws the scene with five
+decorated windows, the pointer on one, into `screenshots/mission-control-dark.png` and
+`-light.png`, and checks the accent border:
+`cargo test -p compositor --test mission_control -- --ignored`.
+
+### Manual test
+
+1. Start the session (nested: `--nested`, the gesture key is then Alt), open four or five
+   windows, Konsole (Qt), a GTK application and an X11 one (`xterm`).
+2. Super alone: the windows shrink into the grid on a spring, titles below, the strip comes
+   down, the wallpaper dims. Hover: the accent border follows the pointer. Click a window: it
+   comes on top with the keyboard, the others go back to their place.
+3. Super + Tab, then Escape. Typing in the view reaches no application.
+4. Three fingers up slowly, stop halfway: the windows stay halfway. Lift: the view opens. Three
+   fingers down: it closes.
+5. Drag a window onto the second thumbnail: it leaves the grid. Click the second thumbnail: the
+   bar shows workspace 2, the window there has the keyboard.
+6. With two screens, each shows its windows.
+7. `RUST_LOG=compositor=debug`: the log says when the view opens and closes.
+
+### Left for later
+
+- **The grid moves at once** when a window opens or closes in the view: the others jump to
+  their new slot instead of sliding there.
+- **Keyboard navigation** in the view (arrows, Enter) and the search that filters the windows
+  (proposition 2.3) are not there.
+- **Blur** of the wallpaper: the dim stands for it until the compositor blurs (lot D-11b).
 
 ## Measuring
 
@@ -1898,6 +2071,7 @@ just verify
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
+| `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
 The tests in `tests/headless.rs`:
 
@@ -2018,8 +2192,9 @@ windows of 800 × 600, a bar and a dock:
 - **A workspace switch redraws everything while it slides.** A frame at each blank during the
   slide, whose damages cover the whole screen, then rest.
 - **A minimized window sweeps into its icon, then rests** (lot D-19). The window on top, given
-  an icon in the dock, is minimized: its genie is drawn in front of the dock, a frame at each
-  blank, the damages cover the window and the icon, then nothing at rest and no genie left.
+  an icon in the dock, is minimized: its genie is drawn behind the dock and in front of the
+  other windows (lot Q-14), a frame at each blank, the damages cover the window and the icon,
+  then nothing at rest and no genie left.
 - **Without an icon, the window shrinks toward the bottom**: drawn as a window, smaller, lower
   and fading, then rest.
 - **Restored halfway, it comes back from where it is**: the progress does not jump and goes
@@ -2034,8 +2209,11 @@ renderer (llvmpipe), through its EGL device (`EGL_MESA_device_software`), draws 
 240 × 160 with a title bar and a grid, halfway to an icon of 32 × 32, into a texture read back.
 The title bar is at the top row `Genie::row` gives, the body at the bottom one, the desktop
 just outside the narrowed bottom, above the window that slid down and in the icon not reached
-yet. The image is saved in `target/tmp/genie-half.png`. Without Mesa's EGL (`libegl-mesa0`)
-the test says it has nothing to draw with, and fails on the CI, which installs it.
+yet. The image is saved in `target/tmp/genie-half.png`. The whole way, in six steps, is saved
+in `target/tmp/genie-steps.png`, with an opaque dock and its icon drawn in front of the genie as
+the compositor orders them (lot Q-14): at the end, only the icon shows. Without Mesa's EGL
+(`libegl-mesa0`) the test says it has nothing to draw with, and fails on the CI, which installs
+it.
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):

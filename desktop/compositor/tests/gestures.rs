@@ -646,21 +646,21 @@ mod tests {
     }
 
     #[test]
-    fn three_fingers_down_minimize_the_active_window_if_set() {
+    fn three_fingers_down_minimize_the_active_window_only_if_set() {
         let (mut h, _toplevel) = Harness::start();
         let window = h.state.focused_window().unwrap();
         // Not far enough: nothing.
         swipe(&mut h.state, 3, 5, (0.0, 10.0), false);
         assert!(!h.state.is_minimized(&window));
-        // Off in the setting: nothing.
-        h.state.set_touchpad(Config {
-            swipe_down: SwipeDown::Nothing,
-            ..Config::default()
-        });
+        // By default, nothing either (lot D-33).
         swipe(&mut h.state, 3, 20, (0.0, 10.0), false);
         assert!(!h.state.is_minimized(&window));
-        // By default: minimized.
-        h.state.set_touchpad(Config::default());
+        assert!(!h.state.overview_open());
+        // Asked for in the setting: minimized.
+        h.state.set_touchpad(Config {
+            swipe_down: SwipeDown::Minimize,
+            ..Config::default()
+        });
         swipe(&mut h.state, 3, 20, (0.0, 10.0), false);
         assert!(h.state.is_minimized(&window));
         assert_eq!(h.received(), Vec::<String>::new());

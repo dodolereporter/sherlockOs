@@ -14,7 +14,7 @@
 //! `docs/compositor.md`.
 
 mod protocol;
-mod raster;
+pub(crate) mod raster;
 
 pub use raster::{Bar, Look, Textures, draw};
 
