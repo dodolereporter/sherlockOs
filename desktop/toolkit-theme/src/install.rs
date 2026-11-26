@@ -223,10 +223,9 @@ pub fn generate(root: &Path, force: bool) -> Result<Vec<PathBuf>, Error> {
         home: root.to_owned(),
     };
     let files = files(&target);
-    if !force {
-        if let Some(there) = files.iter().find(|f| f.path.symlink_metadata().is_ok()) {
-            return Err(Error::Exists(there.path.clone()));
-        }
+    let there = files.iter().find(|f| f.path.symlink_metadata().is_ok());
+    if let (false, Some(there)) = (force, there) {
+        return Err(Error::Exists(there.path.clone()));
     }
     for file in &files {
         write_atomic(&file.path, &file.content, file.executable)?;
