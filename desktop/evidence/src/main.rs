@@ -8,17 +8,17 @@ use sherlock_ui::{metrics, theme, typography};
 const APP_ID: &str = "evidence";
 
 fn main() -> iced::Result {
-    let start = startup::begin();
     // Before anything else: the renderer is chosen through the environment (ADR 0018).
     let renderer = sherlock_ui::gpu::Choice::detect();
-    let detected = start.elapsed();
     // SAFETY: first statement of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
+    // The start log counts from here.
+    startup::begin();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     tracing::info!(?renderer, "renderer");
-    startup::step("renderer chosen", detected);
+    startup::step("renderer chosen", std::time::Duration::ZERO);
     // The theme of the file before the first frame; the subscription follows it afterwards.
     startup::timed("theme read", || {
         if let Some(path) = appearance_config::path() {
