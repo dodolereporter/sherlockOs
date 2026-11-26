@@ -9,6 +9,7 @@ mod cursor;
 pub mod damage;
 pub mod dmabuf;
 pub mod focus;
+pub mod genie;
 mod handlers;
 mod input;
 pub mod keyboard;
@@ -85,7 +86,8 @@ use crate::{
 pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
-         [--workspaces N] [--snap-gap PX] [command [arguments…]]"
+         [--workspaces N] [--snap-gap PX] [--minimize-effect genie|scale|none] \
+         [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -178,6 +180,8 @@ pub struct State {
     shell: shell::Shell,
     /// Margin around snapped windows (`--snap-gap`, `SNAP_GAP` by default).
     snap_gap: i32,
+    /// What minimizing and restoring a window shows (`--minimize-effect`, lot D-19).
+    minimize_effect: genie::Effect,
     /// Moves on with every change that may show on a screen (see `queue_redraw`).
     redraw_epoch: u64,
     /// Wakes the real session's frame scheduling up when the epoch moves.
@@ -292,6 +296,7 @@ impl State {
             listener: None,
             shell: shell::Shell::new(&dh),
             snap_gap: sherlock_ui::window::SNAP_GAP,
+            minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
             redraw_ping: None,
             shell_epoch: None,

@@ -1,13 +1,13 @@
 //! Command line of the compositor.
 //!
 //! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [--workspaces N]
-//! [--snap-gap PX] [command [arguments…]]`.
+//! [--snap-gap PX] [--minimize-effect genie|scale|none] [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
 //! the login screen, never inside another graphical session.
 
 use std::ffi::OsString;
 
-use crate::Error;
+use crate::{Error, genie::Effect};
 
 /// What the command line asks for.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +26,9 @@ pub struct Options {
     /// Margin around snapped windows, from 0 to 64 pixels (`--snap-gap`); `None` keeps the
     /// default, `SNAP_GAP` of sherlock-ui.
     pub snap_gap: Option<i32>,
+    /// What minimizing a window shows (`--minimize-effect`); `None` keeps the default, the
+    /// genie.
+    pub minimize_effect: Option<Effect>,
     /// Command launched once XWayland is ready.
     pub command: Vec<OsString>,
 }
@@ -39,7 +42,7 @@ impl Options {
             command.remove(0);
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
-        let (mut workspaces, mut snap_gap) = (None, None);
+        let (mut workspaces, mut snap_gap, mut minimize_effect) = (None, None, None);
         loop {
             match command.first().and_then(|a| a.to_str()) {
                 Some("--measure") => measure = true,
@@ -48,6 +51,7 @@ impl Options {
                 Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
                 Some("--workspaces") => workspaces = Some(option(&mut command, 1..=9)?),
                 Some("--snap-gap") => snap_gap = Some(option(&mut command, 0..=64)?),
+                Some("--minimize-effect") => minimize_effect = Some(named(&mut command)?),
                 Some("--outputs" | "--nested") => return Err(Error::Usage),
                 _ => break,
             }
@@ -66,6 +70,7 @@ impl Options {
             scales,
             workspaces,
             snap_gap,
+            minimize_effect,
             command,
         })
     }
@@ -96,6 +101,18 @@ impl Options {
 
 fn scale_of(scales: &[f64], i: usize) -> f64 {
     scales.get(i).or(scales.last()).copied().unwrap_or(1.0)
+}
+
+/// Value of the option in front of `args`, by its name, removed as `option` does.
+fn named<T: std::str::FromStr>(args: &mut Vec<OsString>) -> Result<T, Error> {
+    if args.len() < 2 {
+        return Err(Error::Usage);
+    }
+    let value = args.remove(1);
+    value
+        .to_str()
+        .and_then(|v| v.parse().ok())
+        .ok_or(Error::Usage)
 }
 
 /// Value of the option in front of `args`, which is removed with it, the option itself being
@@ -149,6 +166,8 @@ mod tests {
             "5",
             "--snap-gap",
             "0",
+            "--minimize-effect",
+            "scale",
             "konsole",
             "--scale",
         ])
@@ -158,6 +177,8 @@ mod tests {
         assert_eq!(options.workspaces, Some(5));
         assert_eq!(options.snap_gap, Some(0));
         assert_eq!(parse(&[]).unwrap().snap_gap, None);
+        assert_eq!(options.minimize_effect, Some(Effect::Scale));
+        assert_eq!(parse(&[]).unwrap().minimize_effect, None);
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
@@ -210,6 +231,8 @@ mod tests {
             &["--workspaces", "10"],
             &["--snap-gap", "-1"],
             &["--snap-gap", "65"],
+            &["--minimize-effect", "lamp"],
+            &["--minimize-effect"],
         ] {
             assert!(matches!(parse(args), Err(Error::Usage)), "{args:?}");
         }

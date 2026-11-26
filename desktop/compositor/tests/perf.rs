@@ -36,7 +36,7 @@ mod tests {
             test::DummyRenderer,
             utils::{CommitCounter, DamageSet, OpaqueRegions},
         },
-        desktop::layer_map_for_output,
+        desktop::{Window, layer_map_for_output},
         reexports::{calloop::EventLoop, wayland_server::Resource as _},
         utils::{Buffer, Physical, Point, Rectangle, Scale, Transform},
         wayland::seat::WaylandFocus as _,
@@ -562,17 +562,57 @@ mod tests {
             frames
         }
 
-        /// Where window `index` is, in frame pixels (scale 1).
-        fn rect_of_window(&self, index: usize) -> Rectangle<i32, Physical> {
+        /// The compositor's window of window `index`.
+        fn window(&self, index: usize) -> Window {
             let id = self.windows[index].surface.id().protocol_id();
-            let window = self
-                .state
+            self.state
                 .space
                 .elements()
                 .find(|w| w.wl_surface().is_some_and(|s| s.id().protocol_id() == id))
+                .unwrap()
+                .clone()
+        }
+
+        /// Where window `index` is, in frame pixels (scale 1).
+        fn rect_of_window(&self, index: usize) -> Rectangle<i32, Physical> {
+            let r = self
+                .state
+                .space
+                .element_geometry(&self.window(index))
                 .unwrap();
-            let r = self.state.space.element_geometry(window).unwrap();
             Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())
+        }
+
+        /// What the screen shows now, front to back.
+        fn items(&self) -> Vec<Item> {
+            let (output, view) = self.state.views().remove(0);
+            items(&self.state, (&output, &view), None, false, self.state.now()).0
+        }
+
+        /// Blanks until the minimize effect of `window` is past `progress`; panics if it ends.
+        fn run_effect_to(&mut self, window: &Window, progress: f64) -> f64 {
+            loop {
+                let now = self.state.now();
+                let at = self
+                    .state
+                    .minimize_progress(window, now)
+                    .expect("the effect runs");
+                if at >= progress {
+                    return at;
+                }
+                drop(self.tick());
+            }
+        }
+
+        /// Gives window `index` an icon of 52 × 52 in the dock, 100 pixels from its left end.
+        fn give_icon(&mut self, index: usize) -> Rectangle<i32, Physical> {
+            let dock = self.dock_rect();
+            let icon = Rectangle::new((dock.loc.x + 100, dock.loc.y + 12).into(), (52, 52).into());
+            let name = self.state.space.outputs().next().unwrap().name();
+            let logical = Rectangle::new((icon.loc.x, icon.loc.y).into(), (52, 52).into());
+            let window = self.window(index);
+            self.state.set_icon_rectangle(&window, &name, Some(logical));
+            icon
         }
 
         fn dock_rect(&self) -> Rectangle<i32, Physical> {
@@ -650,6 +690,8 @@ mod tests {
                 key, shadow, alpha, ..
             } => paint(ids, key, shadow.area, alpha),
             Item::Wallpaper => Vec::new(),
+            // The window's texture, deformed over the area it sweeps.
+            Item::Genie(frame) => paint(ids, frame.key, frame.area, frame.alpha),
         }
     }
 
@@ -734,6 +776,137 @@ mod tests {
         let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
         assert!(shown > 5, "a frame at each blank while sliding: {shown}");
         assert!(frames.len() < 40, "then rest: {} frames", frames.len());
+    }
+
+    /// Index of the genie of the window, and of the dock, in what the screen shows.
+    fn genie_and_dock(items: &[Item], dock: &WlSurface) -> (Option<usize>, Option<usize>) {
+        let dock = dock.id().protocol_id();
+        let genie = items.iter().position(|i| matches!(i, Item::Genie(_)));
+        let at = items.iter().position(
+            |i| matches!(i, Item::Surface { surface, .. } if surface.id().protocol_id() == dock),
+        );
+        (genie, at)
+    }
+
+    #[test]
+    fn a_minimized_window_sweeps_into_its_icon_then_rests() {
+        let mut bench = Bench::start(false);
+        bench.settle();
+        let (top, window) = (WINDOWS - 1, bench.window(WINDOWS - 1));
+        let icon = bench.give_icon(top);
+        let rect = bench.rect_of_window(top);
+        bench.state.minimize(&window);
+        // In front of the dock, into its icon.
+        let (genie, dock) = genie_and_dock(&bench.items(), &bench.dock.as_ref().unwrap().surface);
+        assert!(
+            genie.unwrap() < dock.unwrap(),
+            "the genie is drawn in front of the dock"
+        );
+        let frames: Vec<Frame> = (0..60).filter_map(|_| bench.tick()).collect();
+        let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
+        assert!(shown > 10, "a frame at each blank while it runs: {shown}");
+        assert!(frames.len() < 40, "then rest: {} frames", frames.len());
+        // The damage covers the whole way, from the window to its icon.
+        let damage: Vec<_> = frames.iter().flat_map(|f| f.damage.clone()).collect();
+        let swept = bounds(&damage).unwrap();
+        assert!(
+            swept.contains_rect(rect) && swept.contains_rect(icon),
+            "{swept:?}"
+        );
+        // Nothing at rest once it is over: no frame, no effect, the window hidden.
+        assert_eq!((0..30).filter_map(|_| bench.tick()).count(), 0);
+        assert_eq!(
+            bench.state.minimize_progress(&window, bench.state.now()),
+            None
+        );
+        assert!(!bench.items().iter().any(|i| matches!(i, Item::Genie(_))));
+    }
+
+    #[test]
+    fn without_an_icon_the_window_shrinks_toward_the_bottom() {
+        let mut bench = Bench::start(false);
+        bench.settle();
+        let (top, window) = (WINDOWS - 1, bench.window(WINDOWS - 1));
+        let rect = bench.rect_of_window(top);
+        bench.state.minimize(&window);
+        bench.run_effect_to(&window, 0.2);
+        // Drawn as a window, smaller, lower, fading; no genie.
+        let items = bench.items();
+        assert!(!items.iter().any(|i| matches!(i, Item::Genie(_))));
+        let shrunk = items.iter().find_map(|i| match i {
+            Item::Window {
+                surface,
+                rect,
+                alpha,
+                ..
+            } if Some(surface) == window.wl_surface().as_deref() => Some((*rect, *alpha)),
+            _ => None,
+        });
+        let (drawn, alpha) = shrunk.expect("the window is still drawn");
+        assert!(
+            drawn.size.w < rect.size.w && drawn.loc.y > rect.loc.y,
+            "{drawn:?}"
+        );
+        assert!(alpha > 0.0 && alpha < 1.0);
+        let frames = (0..60).filter_map(|_| bench.tick()).count();
+        assert!(frames < 30, "then rest: {frames} frames");
+        assert_eq!((0..30).filter_map(|_| bench.tick()).count(), 0);
+    }
+
+    #[test]
+    fn restored_halfway_it_comes_back_from_where_it_is() {
+        let mut bench = Bench::start(false);
+        bench.settle();
+        let (top, window) = (WINDOWS - 1, bench.window(WINDOWS - 1));
+        bench.give_icon(top);
+        let rect = bench.rect_of_window(top);
+        bench.state.minimize(&window);
+        bench.run_effect_to(&window, 0.4);
+        let halfway = bench
+            .state
+            .minimize_progress(&window, bench.state.now())
+            .unwrap();
+        bench.state.activate(&window);
+        // No jump: it leaves from where it was, toward the window's place.
+        let back = bench
+            .state
+            .minimize_progress(&window, bench.state.now())
+            .unwrap();
+        assert!((back - halfway).abs() < 0.01, "{halfway} then {back}");
+        // While it comes back, the pointer does not reach it.
+        let center = rect.loc + (rect.size.w / 2, rect.size.h / 2).into();
+        bench
+            .state
+            .pointer_motion((f64::from(center.x), f64::from(center.y)).into(), 1);
+        let pointer = bench.state.seat.get_pointer().unwrap();
+        assert_ne!(
+            pointer.current_focus(),
+            window.wl_surface().map(|s| s.into_owned())
+        );
+        let later = bench
+            .state
+            .minimize_progress(&window, bench.state.now() + PERIOD);
+        assert!(later.unwrap() < halfway, "it goes back");
+        let frames = (0..60).filter_map(|_| bench.tick()).count();
+        assert!(frames < 40, "then rest: {frames} frames");
+        // Back at its place, drawn as a window, and the pointer reaches it again.
+        assert_eq!(
+            bench.state.minimize_progress(&window, bench.state.now()),
+            None
+        );
+        assert!(bench.items().iter().any(|i| matches!(
+            i,
+            Item::Window { rect: drawn, .. } if *drawn == rect
+        )));
+        bench
+            .state
+            .pointer_motion((f64::from(center.x), f64::from(center.y) + 1.0).into(), 2);
+        let pointer = bench.state.seat.get_pointer().unwrap();
+        assert_eq!(
+            pointer.current_focus(),
+            window.wl_surface().map(|s| s.into_owned())
+        );
+        assert_eq!((0..30).filter_map(|_| bench.tick()).count(), 0);
     }
 
     /// Figures over a run, per second of the screen.

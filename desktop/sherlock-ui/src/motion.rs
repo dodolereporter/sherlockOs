@@ -191,6 +191,12 @@ pub const OPEN_SCALE: f64 = 0.92;
 /// the 110 to 150 ms range.
 pub const FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
 
+/// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
+/// scale fallback. The duration the brief of the lot gives, about half a second.
+pub const MINIMIZE: Duration = Duration::from_millis(450);
+/// Scale of a window at the end of the minimize fallback, at the bottom of its screen.
+pub const MINIMIZE_SCALE: f64 = 0.2;
+
 /// Fade of the whole desktop from one theme to the other (`color::ThemeFade`). A choice of
 /// D-05b: the 0.25 s of the cross-fades between two animations of Sherlock
 /// (`docs/contexte.md`), longer than a hover, since every surface changes at once.
