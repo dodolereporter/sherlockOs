@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="5 2.5">
-  <!-- En arriere-plan: the arrow and the turning ring, half size, bottom right. -->
+  <!-- « En arrière-plan » on the boards: the arrow and the turning ring, half size, bottom right. -->
   <style id="theme">
     .body { fill: #F4EBE3 }
     .edge { stroke: #0B1220 }

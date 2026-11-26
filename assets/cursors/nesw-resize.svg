@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12 12">
-  <!-- Diagonale, mirrored: the top right or bottom left corner of a window. -->
+  <!-- « Diagonale », mirrored on the boards: the top right or bottom left corner of a window. -->
   <style id="theme">
     .body { fill: #F4EBE3 }
     .edge { stroke: #0B1220 }

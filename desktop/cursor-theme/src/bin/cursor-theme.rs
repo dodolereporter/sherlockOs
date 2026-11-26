@@ -109,8 +109,10 @@ fn images(source: &(String, Drawing), variant: Variant) -> Result<Vec<Image>> {
             let pixmap = render(source, variant, angle, size)?;
             let pixels = pixmap
                 .data()
-                .chunks_exact(4)
-                .map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&[r, g, b, a]| u32::from_be_bytes([a, r, g, b]))
                 .collect();
             images.push(Image {
                 size,
