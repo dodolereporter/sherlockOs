@@ -615,7 +615,7 @@ mod tests {
         // 0.25 + 3 × 0.01, and a little more from the spring pulling towards the second.
         assert!(early > 0.28 && early < 0.31, "{early}");
         assert!(slide.is_animating(ms(1010)));
-        assert_eq!(shift(&slide, 2000, 1), Some(0.0));
+        assert_eq!(slide.shift(ms(2000), 1, 1, 1000.0), Some(0.0));
         assert!(!slide.is_animating(ms(2000)));
         // A key during the swipe lets the view go from where it is.
         slide.hold(1.4);
