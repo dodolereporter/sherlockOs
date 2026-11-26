@@ -1,12 +1,13 @@
 //! Visual library of the desktop.
 //!
 //! The only place where colors, sizes and interface texts are written. The tokens (`color`,
-//! `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `logo`, `window`) depend on
-//! nothing, and neither does `gpu`, the choice of the renderer. The theme and the iced
+//! `cursor`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `logo`, `window`)
+//! depend on nothing, and neither does `gpu`, the choice of the renderer. The theme and the iced
 //! components sit behind the `iced` feature, on by default. The gallery lives in
 //! `examples/gallery`. See `docs/sherlock-ui.md`.
 
 pub mod color;
+pub mod cursor;
 pub mod dock;
 pub mod gpu;
 pub mod icon;

@@ -1,15 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <!-- text: the I-beam. Hotspot (12, 12), its middle. -->
-  <defs>
-    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feDropShadow dx="0" dy="1" stdDeviation="0.6" flood-color="#030812" flood-opacity="0.35"/>
-    </filter>
-    <!-- The stem and its curled serifs, as one line. -->
-    <path id="beam" d="M8.75 4.5 C10.9 4.5 12 5 12 6.75 C12 5 13.1 4.5 15.25 4.5 M12 6.75 V17.25
-                        M8.75 19.5 C10.9 19.5 12 19 12 17.25 C12 19 13.1 19.5 15.25 19.5"/>
-  </defs>
-  <g filter="url(#shadow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <use href="#beam" stroke="#F4EBE3" stroke-width="3.75"/>
-    <use href="#beam" stroke="#14233B" stroke-width="1.5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12 12">
+  <!-- Texte: the I-beam, where one types or selects text. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path class="edge" stroke-width="5" d="M9 4.5h6M12 4.5v15M9 19.5h6"/>
+    <path class="ink" stroke-width="2.2" d="M9 4.5h6M12 4.5v15M9 19.5h6"/>
   </g>
 </svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="5 2.5">
+  <!-- En arriere-plan: the arrow and the turning ring, half size, bottom right. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <path class="body edge" d="M5 2.5L5 19.5L9.2 15.6L11.9 21.6L14.6 20.4L12 14.6L17.8 14.6Z"
+        stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/>
+  <g id="spin" data-center="20.5 19.5">
+    <g transform="translate(14.5 13.5) scale(0.5)">
+    <circle class="edge" cx="12" cy="12" r="8" fill="none" stroke-width="6"/>
+    <circle class="track" cx="12" cy="12" r="8" fill="none" stroke-width="3"/>
+    <circle cx="12" cy="12" r="8" fill="none" stroke="#85C595" stroke-width="3"
+            stroke-linecap="round" stroke-dasharray="14 36.3"/>
+    </g>
+  </g>
+</svg>

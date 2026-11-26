@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12 12">
+  <!-- Deplacer: Super and drag on a window. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <path class="body edge" d="M12 2L16 6H13.5V10.5H18V8L22 12L18 16V13.5H13.5V18H16L12 22L8 18H10.5V13.5H6V16L2 12L6 8V10.5H10.5V6H8Z"
+        stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/>
+</svg>

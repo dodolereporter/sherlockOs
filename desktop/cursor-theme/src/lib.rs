@@ -1,170 +1,120 @@
-//! The cursor theme of the desktop: its shapes, their hotspots and their names, and the Xcursor
-//! format the themes are written in.
+//! The cursor theme of the desktop: its shapes and every name they answer to, how a drawing is
+//! read and painted, and the Xcursor format the themes are written in.
 //!
-//! The drawings are the SVGs of `assets/cursors/`, on a grid of 24 units: one unit is one pixel
-//! at the size 24. The generator (`cursor-theme`, feature `render`) renders them at every size
-//! of `SIZES` and writes two themes, `nom-os` (night blue, cream outline) and `nom-os-inverse`
-//! (cream, night blue outline). See `docs/cursor.md`.
+//! The drawings are the SVGs of `assets/cursors/`, from the author's cursor boards, on a grid
+//! of 24 units: one unit is one pixel at the size 24. Each SVG says its hotspot
+//! (`data-hotspot="x y"` on the root) and paints its parts with the classes of its
+//! `<style id="theme">` block: `body`, `edge`, `ink`, `track`. A group `id="spin"` with a
+//! `data-center="x y"` turns, for the waiting cursors. Replacing a drawing is copying its SVG.
+//!
+//! The generator (`cursor-theme`, feature `render`) writes two themes: `nom-os` for the dark
+//! desktop and `nom-os-light` for the light one. See `docs/cursor.md`.
 
 pub mod xcursor;
 
-use sherlock_ui::color::{self, Color};
+use std::{fmt, time::Duration};
 
-/// Theme the compositor uses by default: night blue filled, cream outline.
+use sherlock_ui::{
+    color::Color,
+    cursor::{self, CursorColors},
+};
+
+/// Theme of the dark desktop, the default: cream cursors.
 pub const THEME: &str = "nom-os";
-/// The optional variant: cream filled, night blue outline.
-pub const INVERSE_THEME: &str = "nom-os-inverse";
+/// Theme of the light desktop: night blue cursors.
+pub const LIGHT_THEME: &str = "nom-os-light";
 
 /// Side of the drawing grid of the SVGs.
 pub const GRID: u32 = 24;
-/// Nominal sizes written in each file: scales 1 to 4 of the size 24.
+/// Nominal sizes written in each file: the size 24 at the scales 1, 1.33, 2, 2.67 and 4.
 pub const SIZES: [u32; 5] = [24, 32, 48, 64, 96];
 
-/// A part of the drawing that turns, for the waiting cursors: the group `id="spin"` of the SVG.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Spin {
-    /// Center of the rotation, in grid units.
-    pub center: (f32, f32),
-    /// Images in a turn.
-    pub frames: u32,
-    /// Time each image is shown, in milliseconds.
-    pub delay_ms: u32,
+/// Side of the image of the nominal `size`: a quarter more than the grid, for the outlines
+/// that go past it and for the badges that go past it at the bottom right, as in the boards.
+pub fn canvas(size: u32) -> u32 {
+    size * 5 / 4
 }
 
-/// A cursor shape: one drawing, its hotspot and every name it answers to.
+/// Where the grid starts in the image of the nominal `size`: two units in, rounded up to a
+/// whole pixel so that the drawing stays on the pixels of its grid.
+pub fn margin(size: u32) -> u32 {
+    (2 * size).div_ceil(GRID)
+}
+
+/// Images in a turn of the waiting cursors, and the time each one is shown.
+pub const SPIN_FRAMES: u32 = 30;
+pub fn spin_delay() -> Duration {
+    cursor::SPIN_TURN / SPIN_FRAMES
+}
+
+/// A cursor shape: its drawing, `assets/cursors/<name>.svg`, and the names it answers to.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shape {
-    /// Name of the file and of the SVG: the CSS name, as `wp_cursor_shape_v1` gives it.
+    /// Name of the file: the CSS name `wp_cursor_shape_v1` gives, `sherlock` for ours.
     pub name: &'static str,
-    /// The point of the cursor, in grid units. Multiples of 3, so that it falls on a whole
-    /// pixel at each size of `SIZES`.
-    pub hotspot: (u32, u32),
     /// Other names, CSS and legacy X11: links to the file in the theme.
     pub aliases: &'static [&'static str],
-    /// Turns, for the waiting cursors.
-    pub spin: Option<Spin>,
 }
 
-impl Shape {
-    /// The hotspot in pixels for the nominal `size`.
-    pub fn hotspot_at(&self, size: u32) -> (u32, u32) {
-        let scale = |v: u32| (v * size + GRID / 2) / GRID;
-        (scale(self.hotspot.0), scale(self.hotspot.1))
-    }
+const fn shape_of(name: &'static str, aliases: &'static [&'static str]) -> Shape {
+    Shape { name, aliases }
 }
 
-/// One turn per second, 30 images: smooth at 60 Hz, two vertical blanks per image.
-const SPIN_FRAMES: u32 = 30;
-const SPIN_DELAY_MS: u32 = 33;
-
-const fn arrow(name: &'static str, aliases: &'static [&'static str]) -> Shape {
-    Shape {
-        name,
-        hotspot: (3, 3),
-        aliases,
-        spin: None,
-    }
-}
-
-const fn centered(name: &'static str, aliases: &'static [&'static str]) -> Shape {
-    Shape {
-        name,
-        hotspot: (12, 12),
-        aliases,
-        spin: None,
-    }
-}
-
-/// Every shape of the theme. The CSS names of `wp_cursor_shape_v1` that share a drawing are
-/// aliases: a window edge shows the double arrow of its axis, as the compositor's resizing.
+/// Every shape of the theme. The boards draw 17 of them: the CSS names without a drawing are
+/// aliases of the closest one (a column edge moves as a window edge, a cell is aimed at as a
+/// point).
 pub const SHAPES: &[Shape] = &[
-    arrow(
+    shape_of(
         "default",
-        &["left_ptr", "arrow", "top_left_arrow", "left_arrow"],
-    ),
-    arrow("context-menu", &["dnd-ask"]),
-    arrow("help", &["question_arrow", "whats_this", "left_ptr_help"]),
-    Shape {
-        name: "pointer",
-        hotspot: (9, 3),
-        aliases: &["hand2", "hand1", "hand", "pointing_hand"],
-        spin: None,
-    },
-    Shape {
-        name: "progress",
-        hotspot: (3, 3),
-        aliases: &["left_ptr_watch", "half-busy"],
-        spin: Some(Spin {
-            center: (17.0, 17.0),
-            frames: SPIN_FRAMES,
-            delay_ms: SPIN_DELAY_MS,
-        }),
-    },
-    Shape {
-        name: "wait",
-        hotspot: (12, 12),
-        aliases: &["watch"],
-        spin: Some(Spin {
-            center: (12.0, 12.0),
-            frames: SPIN_FRAMES,
-            delay_ms: SPIN_DELAY_MS,
-        }),
-    },
-    centered("cell", &["plus"]),
-    centered("crosshair", &["cross", "tcross"]),
-    centered("text", &["xterm", "ibeam"]),
-    centered("vertical-text", &[]),
-    arrow("alias", &["link", "dnd-link"]),
-    arrow("copy", &["dnd-copy"]),
-    centered("move", &["all-resize", "fleur", "dnd-move"]),
-    arrow(
-        "not-allowed",
         &[
-            "no-drop",
-            "crossed_circle",
-            "forbidden",
-            "circle",
-            "dnd-no-drop",
+            "left_ptr",
+            "arrow",
+            "top_left_arrow",
+            "left_arrow",
+            "context-menu",
+            "help",
+            "question_arrow",
+            "whats_this",
+            "left_ptr_help",
+            "alias",
+            "link",
+            "dnd-link",
+            "dnd-ask",
         ],
     ),
-    centered("grab", &["openhand"]),
-    centered("grabbing", &["closedhand", "dnd-none"]),
-    centered(
+    shape_of("pointer", &["hand2", "hand1", "hand", "pointing_hand"]),
+    shape_of("text", &["xterm", "ibeam", "vertical-text"]),
+    shape_of("wait", &["watch"]),
+    shape_of("progress", &["left_ptr_watch", "half-busy"]),
+    shape_of(
         "ew-resize",
         &[
             "e-resize",
             "w-resize",
+            "col-resize",
             "right_side",
             "left_side",
+            "split_h",
             "h_double_arrow",
             "sb_h_double_arrow",
             "size_hor",
         ],
     ),
-    centered(
+    shape_of(
         "ns-resize",
         &[
             "n-resize",
             "s-resize",
+            "row-resize",
             "top_side",
             "bottom_side",
+            "split_v",
             "v_double_arrow",
             "sb_v_double_arrow",
             "size_ver",
         ],
     ),
-    centered(
-        "nesw-resize",
-        &[
-            "ne-resize",
-            "sw-resize",
-            "top_right_corner",
-            "bottom_left_corner",
-            "fd_double_arrow",
-            "size_bdiag",
-        ],
-    ),
-    centered(
+    shape_of(
         "nwse-resize",
         &[
             "nw-resize",
@@ -175,21 +125,37 @@ pub const SHAPES: &[Shape] = &[
             "size_fdiag",
         ],
     ),
-    centered("col-resize", &["split_h"]),
-    centered("row-resize", &["split_v"]),
-    centered("all-scroll", &["size_all"]),
-    Shape {
-        name: "zoom-in",
-        hotspot: (9, 9),
-        aliases: &[],
-        spin: None,
-    },
-    Shape {
-        name: "zoom-out",
-        hotspot: (9, 9),
-        aliases: &[],
-        spin: None,
-    },
+    shape_of(
+        "nesw-resize",
+        &[
+            "ne-resize",
+            "sw-resize",
+            "top_right_corner",
+            "bottom_left_corner",
+            "fd_double_arrow",
+            "size_bdiag",
+        ],
+    ),
+    shape_of(
+        "move",
+        &["all-resize", "all-scroll", "fleur", "size_all", "dnd-move"],
+    ),
+    shape_of("grabbing", &["grab", "openhand", "closedhand", "dnd-none"]),
+    shape_of(
+        "not-allowed",
+        &[
+            "no-drop",
+            "crossed_circle",
+            "forbidden",
+            "circle",
+            "dnd-no-drop",
+        ],
+    ),
+    shape_of("crosshair", &["cross", "tcross", "cell", "plus"]),
+    shape_of("zoom-in", &[]),
+    shape_of("zoom-out", &[]),
+    shape_of("copy", &["dnd-copy"]),
+    shape_of("sherlock", &[]),
 ];
 
 /// The shape that answers to `name`, by its own name or one of its aliases.
@@ -199,47 +165,134 @@ pub fn shape(name: &str) -> Option<&'static Shape> {
         .find(|s| s.name == name || s.aliases.contains(&name))
 }
 
-/// The two themes written by the generator.
+/// What an SVG says of itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drawing {
+    /// The point of the cursor, in grid units.
+    pub hotspot: (f32, f32),
+    /// Center of the group that turns, in grid units.
+    pub spin: Option<(f32, f32)>,
+}
+
+/// An SVG that lacks what the generator needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawingError(String);
+
+impl fmt::Display for DrawingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for DrawingError {}
+
+/// The two numbers of the attribute `name` in the first tag that holds `marker`.
+fn point(svg: &str, marker: &str, name: &str) -> Result<Option<(f32, f32)>, DrawingError> {
+    let Some(tag_start) = svg.find(marker) else {
+        return Ok(None);
+    };
+    let tag = &svg[tag_start
+        ..svg[tag_start..]
+            .find('>')
+            .map_or(svg.len(), |e| tag_start + e)];
+    let key = format!("{name}=\"");
+    let value = tag
+        .find(&key)
+        .map(|at| &tag[at + key.len()..])
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| DrawingError(format!("no {name} next to {marker}")))?;
+    let numbers: Vec<f32> = value
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|_| DrawingError(format!("{name}=\"{value}\" is not two numbers")))?;
+    match numbers.as_slice() {
+        [x, y] => Ok(Some((*x, *y))),
+        _ => Err(DrawingError(format!(
+            "{name}=\"{value}\" is not two numbers"
+        ))),
+    }
+}
+
+impl Drawing {
+    pub fn read(svg: &str) -> Result<Self, DrawingError> {
+        let hotspot = point(svg, "<svg", "data-hotspot")?
+            .ok_or_else(|| DrawingError("no <svg> root".into()))?;
+        let spin = point(svg, SPIN, "data-center")?;
+        if !svg.contains(STYLE) {
+            return Err(DrawingError(format!("no {STYLE} block")));
+        }
+        Ok(Self { hotspot, spin })
+    }
+
+    /// The hotspot in the image of the nominal `size`: the pixel under the point.
+    pub fn hotspot_at(&self, size: u32) -> (u32, u32) {
+        let scale = |v: f32| margin(size) + (v * size as f32 / GRID as f32).floor().max(0.0) as u32;
+        (scale(self.hotspot.0), scale(self.hotspot.1))
+    }
+}
+
+const SPIN: &str = "id=\"spin\"";
+const STYLE: &str = "<style id=\"theme\">";
+
+/// The two themes written by the generator, one per desktop theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
-    /// Night blue filled, cream outline: the default.
-    Night,
-    /// Cream filled, night blue outline.
-    Inverse,
+    Dark,
+    Light,
 }
 
 impl Variant {
-    pub const ALL: [Self; 2] = [Self::Night, Self::Inverse];
+    pub const ALL: [Self; 2] = [Self::Dark, Self::Light];
 
     /// Name of the theme folder.
     pub fn theme(self) -> &'static str {
         match self {
-            Self::Night => THEME,
-            Self::Inverse => INVERSE_THEME,
+            Self::Dark => THEME,
+            Self::Light => LIGHT_THEME,
         }
     }
 
-    /// The SVG of a drawing in this variant. The drawings are written in the night variant:
-    /// the inverse one swaps the fill and the outline.
-    pub fn paint(self, svg: &str) -> String {
+    pub fn colors(self) -> CursorColors {
         match self {
-            Self::Night => svg.to_owned(),
-            Self::Inverse => {
-                let (fill, outline) = (hex(FILL), hex(OUTLINE));
-                svg.replace(&fill, "\u{0}")
-                    .replace(&outline, &fill)
-                    .replace('\u{0}', &outline)
-            }
+            Self::Dark => cursor::DARK,
+            Self::Light => cursor::LIGHT,
         }
+    }
+
+    /// The rules of the `<style id="theme">` block, the drawing's colors in this theme.
+    pub fn stylesheet(self) -> String {
+        let c = self.colors();
+        format!(
+            "\n    .body {{ fill: {} }}\n    .edge {{ stroke: {} }}\n    .ink {{ stroke: {} }}\n    \
+             .track {{ stroke: {}; stroke-opacity: {} }}\n  ",
+            hex(c.body),
+            hex(c.edge),
+            hex(c.body),
+            hex(c.track),
+            c.track.a
+        )
+    }
+
+    /// The SVG of a drawing in this theme, its spinning group turned by `angle` degrees.
+    pub fn paint(self, svg: &str, drawing: &Drawing, angle: f32) -> String {
+        let mut svg = match svg.find(STYLE).map(|at| at + STYLE.len()) {
+            Some(start) => {
+                let end = svg[start..].find("</style>").map_or(start, |e| start + e);
+                format!("{}{}{}", &svg[..start], self.stylesheet(), &svg[end..])
+            }
+            None => svg.to_owned(),
+        };
+        if let Some((x, y)) = drawing.spin {
+            svg = svg.replacen(
+                SPIN,
+                &format!("{SPIN} transform=\"rotate({angle} {x} {y})\""),
+                1,
+            );
+        }
+        svg
     }
 }
-
-/// Fill of the drawings: the night blue of the text on cream.
-pub const FILL: Color = color::TEXT_ON_CREAM;
-/// Outline of the drawings.
-pub const OUTLINE: Color = color::CREAM;
-/// Colors a drawing may use: fill, outline, the shadow and the green of the waiting ring.
-pub const DRAWING_COLORS: [Color; 4] = [FILL, OUTLINE, color::SHADOW_BASE, color::ACCENT];
 
 /// `#RRGGBB`, as the SVGs write colors.
 pub fn hex(c: Color) -> String {
@@ -249,8 +302,8 @@ pub fn hex(c: Color) -> String {
 /// The `index.theme` of a theme.
 pub fn index_theme(variant: Variant) -> String {
     let comment = match variant {
-        Variant::Night => "Night blue cursors of NOM_OS",
-        Variant::Inverse => "Cream cursors of NOM_OS",
+        Variant::Dark => "Cursors of NOM_OS, dark desktop",
+        Variant::Light => "Cursors of NOM_OS, light desktop",
     };
     format!(
         "[Icon Theme]\nName={}\nComment={comment}\nInherits=default\n",
@@ -260,9 +313,20 @@ pub fn index_theme(variant: Variant) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{collections::HashSet, path::PathBuf};
 
     use super::*;
+
+    fn svgs() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/cursors")
+    }
+
+    fn read(shape: &Shape) -> (String, Drawing) {
+        let path = svgs().join(format!("{}.svg", shape.name));
+        let svg = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        let drawing = Drawing::read(&svg).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        (svg, drawing)
+    }
 
     #[test]
     fn every_name_is_given_once() {
@@ -275,74 +339,77 @@ mod tests {
     }
 
     #[test]
-    fn hotspots_fall_on_whole_pixels_inside_the_image() {
-        for shape in SHAPES {
-            let (x, y) = shape.hotspot;
-            assert!(x < GRID && y < GRID, "{}", shape.name);
-            for size in SIZES {
-                assert_eq!((x * size) % GRID, 0, "{} at {size}", shape.name);
-                assert_eq!((y * size) % GRID, 0, "{} at {size}", shape.name);
-                let (hx, hy) = shape.hotspot_at(size);
-                assert!(hx < size && hy < size);
-            }
-        }
-        assert_eq!(SHAPES[0].hotspot_at(96), (12, 12));
-    }
-
-    #[test]
     fn every_css_name_of_the_protocol_has_a_shape() {
         // The names of `wp_cursor_shape_v1`, versions 1 and 2.
-        let css = [
-            "default",
-            "context-menu",
-            "help",
-            "pointer",
-            "progress",
-            "wait",
-            "cell",
-            "crosshair",
-            "text",
-            "vertical-text",
-            "alias",
-            "copy",
-            "move",
-            "no-drop",
-            "not-allowed",
-            "grab",
-            "grabbing",
-            "e-resize",
-            "n-resize",
-            "ne-resize",
-            "nw-resize",
-            "s-resize",
-            "se-resize",
-            "sw-resize",
-            "w-resize",
-            "ew-resize",
-            "ns-resize",
-            "nesw-resize",
-            "nwse-resize",
-            "col-resize",
-            "row-resize",
-            "all-scroll",
-            "zoom-in",
-            "zoom-out",
-            "dnd-ask",
-            "all-resize",
-        ];
-        for name in css {
+        let css = "default context-menu help pointer progress wait cell crosshair text \
+                   vertical-text alias copy move no-drop not-allowed grab grabbing e-resize \
+                   n-resize ne-resize nw-resize s-resize se-resize sw-resize w-resize ew-resize \
+                   ns-resize nesw-resize nwse-resize col-resize row-resize all-scroll zoom-in \
+                   zoom-out dnd-ask all-resize";
+        for name in css.split_whitespace() {
             assert!(shape(name).is_some(), "{name}");
         }
     }
 
     #[test]
-    fn the_inverse_variant_swaps_fill_and_outline() {
-        let svg = format!("<path fill=\"{}\" stroke=\"{}\"/>", hex(FILL), hex(OUTLINE));
-        let inverse = Variant::Inverse.paint(&svg);
+    fn every_shape_has_a_drawing_with_its_hotspot_inside() {
+        for shape in SHAPES {
+            let (_, drawing) = read(shape);
+            for size in SIZES {
+                let (x, y) = drawing.hotspot_at(size);
+                assert!(
+                    x < canvas(size) && y < canvas(size),
+                    "{} at {size}",
+                    shape.name
+                );
+            }
+        }
+        let arrow = read(&SHAPES[0]).1;
+        assert_eq!(arrow.hotspot, (5.0, 2.5));
+        assert_eq!(arrow.hotspot_at(24), (7, 4));
+        assert_eq!(arrow.hotspot_at(96), (28, 18));
         assert_eq!(
-            inverse,
-            format!("<path fill=\"{}\" stroke=\"{}\"/>", hex(OUTLINE), hex(FILL))
+            read(shape("wait").unwrap_or(&SHAPES[0])).1.spin,
+            Some((12.0, 12.0))
         );
-        assert_eq!(Variant::Night.paint(&svg), svg);
+    }
+
+    #[test]
+    fn the_drawings_show_the_dark_theme_as_the_generator_paints_it() {
+        for shape in SHAPES {
+            let (svg, drawing) = read(shape);
+            // Without turning the spinning group, the dark theme is the file itself.
+            let still = Drawing {
+                spin: None,
+                ..drawing
+            };
+            assert_eq!(
+                Variant::Dark.paint(&svg, &still, 0.0),
+                svg,
+                "{}",
+                shape.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_light_theme_changes_only_the_style_block() {
+        let (svg, drawing) = read(&SHAPES[0]);
+        let light = Variant::Light.paint(&svg, &drawing, 0.0);
+        assert!(light.contains(".body { fill: #14233B }"));
+        assert!(light.contains(".edge { stroke: #FFFFFF }"));
+        let outside = |s: &str| s[s.find("</style>").unwrap_or(0)..].to_owned();
+        assert_eq!(outside(&light), outside(&svg));
+    }
+
+    #[test]
+    fn the_spinning_group_turns_around_its_center() {
+        let svg = "<svg data-hotspot=\"12 12\"><style id=\"theme\"></style>\
+                   <g id=\"spin\" data-center=\"20.5 19.5\"></g></svg>";
+        let drawing = Drawing::read(svg).unwrap_or_else(|e| panic!("{e}"));
+        let turned = Variant::Dark.paint(svg, &drawing, 90.0);
+        assert!(turned.contains("id=\"spin\" transform=\"rotate(90 20.5 19.5)\""));
+        assert!(Drawing::read("<svg><style id=\"theme\"></style></svg>").is_err());
+        assert!(Drawing::read("<svg data-hotspot=\"1\"><style id=\"theme\">").is_err());
     }
 }

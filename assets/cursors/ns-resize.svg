@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12 12">
+  <!-- Hauteur: the top or bottom edge of a window. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <path class="body edge" d="M12 2L16.5 7H13.5V17H16.5L12 22L7.5 17H10.5V7H7.5Z"
+        stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/>
+</svg>

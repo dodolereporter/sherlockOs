@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12 12">
+  <!-- Attente: the green arc turns, a turn per second. The generator turns the group spin around its data-center. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <g id="spin" data-center="12 12">
+    <circle class="edge" cx="12" cy="12" r="8" fill="none" stroke-width="6"/>
+    <circle class="track" cx="12" cy="12" r="8" fill="none" stroke-width="3"/>
+    <circle cx="12" cy="12" r="8" fill="none" stroke="#85C595" stroke-width="3"
+            stroke-linecap="round" stroke-dasharray="14 36.3"/>
+  </g>
+</svg>
