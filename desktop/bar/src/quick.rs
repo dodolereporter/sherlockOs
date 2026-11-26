@@ -1225,9 +1225,19 @@ impl Quick {
         panels::held_slider_row(icon, value.unwrap_or(0), on_change, release)
     }
 
-    /// The brightness, and under it the keyboard backlight when the machine has one.
+    /// Whether the machine has a keyboard backlight, as last read: the panel opens with room
+    /// for its slider or without.
+    pub fn has_keyboard(&self) -> bool {
+        self.keyboard.ready().is_some()
+    }
+
+    /// The brightness, and under it the keyboard backlight when the machine has one and the
+    /// panel opened with room for it (a backlight found while it is open shows the next time).
     fn lights(&self) -> Element<'_, Message> {
-        match self.keyboard_row() {
+        let row = crate::panel::keyboard_room()
+            .then(|| self.keyboard_row())
+            .flatten();
+        match row {
             Some(keyboard) => column![self.brightness_row(), keyboard]
                 .spacing(metrics::GAP_SECTION)
                 .into(),

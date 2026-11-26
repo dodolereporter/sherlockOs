@@ -246,3 +246,34 @@ fn from_closed_to_peek_the_left_eye_opens_half_way() {
     assert!((left.z - PEEK_OPENING).abs() < 0.02, "{left}");
     assert_eq!(eyelid(&pose, &model, "eyelid_R"), 0.0);
 }
+
+#[test]
+fn a_shut_eye_does_not_follow_the_gaze() {
+    let Some(mut animator) = animator() else {
+        return;
+    };
+    let model = animator.model().clone();
+    let (right, left) = (node(&model, "eye_R"), node(&model, "eye_L"));
+    animator.set_mood(Mood::Peek);
+    play(&mut animator, 1.0);
+    let ahead = animator.pose();
+    // The password field, far below.
+    animator.look_at(Some(glam::Vec3::new(0.0, -6.0, 4.0)));
+    play(&mut animator, 1.0);
+    let down = animator.pose();
+    let turned = |eye: usize| {
+        down.transforms[eye]
+            .rotation
+            .angle_between(ahead.transforms[eye].rotation)
+    };
+    assert!(
+        turned(right) < 1e-3,
+        "the closed eye stays: {}",
+        turned(right)
+    );
+    assert!(
+        turned(left) > GAZE_LIMIT * 0.9,
+        "the ajar eye looks down: {}",
+        turned(left)
+    );
+}
