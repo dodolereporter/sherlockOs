@@ -687,7 +687,7 @@ mod tests {
     /// A fake `pactl` that answers from the fixtures and writes each call to a log.
     fn fake_pactl(dir: &Path) -> (Pactl, PathBuf) {
         let log = dir.join("pactl.log");
-        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../system-services/fixtures");
         let script = dir.join("pactl");
         let body = format!(
             "#!/bin/sh\necho \"$@\" >> '{log}'\ncase \"$1\" in\n\

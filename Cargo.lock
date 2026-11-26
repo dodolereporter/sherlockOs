@@ -301,6 +301,7 @@ dependencies = [
  "notifications-config",
  "shell-protocol",
  "sherlock-ui",
+ "system-services",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
@@ -579,9 +580,11 @@ dependencies = [
  "cursor-theme",
  "desktop-config",
  "image",
+ "resvg",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
+ "system-services",
  "thiserror 2.0.21",
  "tiny-skia",
  "tracing",
@@ -592,6 +595,7 @@ dependencies = [
  "wayland-protocols-wlr",
  "x11rb",
  "xcursor",
+ "zbus",
 ]
 
 [[package]]
@@ -3704,6 +3708,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "system-services"
+version = "0.0.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tracing",
+ "zbus",
 ]
 
 [[package]]

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use zbus::Connection;
 
-use super::{Problem, Result};
+use crate::{Problem, Result};
 
 pub const SERVICE: &str = "org.freedesktop.login1";
 /// The caller's own session.
@@ -14,8 +14,11 @@ pub const SESSION: &str = "/org/freedesktop/login1/session/auto";
 const INTERFACE: &str = "org.freedesktop.login1.Session";
 /// Where the kernel lists the backlights.
 pub const SYSFS: &str = "/sys/class/backlight";
-/// Lowest brightness the slider gives, in percent: a black screen is not a brightness.
+/// Lowest brightness the slider and the keys give, in percent: a black screen is not a
+/// brightness.
 pub const MIN_PERCENT: u8 = 1;
+/// Step of the brightness keys, in percent.
+pub const STEP: u8 = 5;
 
 /// A backlight and its brightness.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,4 +97,40 @@ pub async fn set(bus: &Connection, backlight: &Backlight, percent: u8) -> Result
     )
     .await?;
     Ok(())
+}
+
+/// The brightness one key press away from `percent`: the next multiple of `STEP` up (at most
+/// 100) or down (at least `MIN_PERCENT`).
+pub fn step(percent: u8, up: bool) -> u8 {
+    if up {
+        ((percent / STEP + 1) * STEP).min(100)
+    } else {
+        (percent.saturating_sub(1) / STEP * STEP).max(MIN_PERCENT)
+    }
+}
+
+/// `steps` steps of the backlight found under `root`, up when positive, down when negative,
+/// set at once through logind. Returns the new brightness, in percent.
+pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<u8> {
+    let backlight = find(root)?;
+    let percent = (0..steps.unsigned_abs()).fold(backlight.percent(), |p, _| step(p, steps > 0));
+    set(bus, &backlight, percent).await?;
+    Ok(percent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keys_step_by_five_and_never_reach_black() {
+        assert_eq!(step(50, true), 55);
+        assert_eq!(step(52, true), 55);
+        assert_eq!(step(52, false), 50);
+        assert_eq!(step(50, false), 45);
+        assert_eq!(step(100, true), 100);
+        assert_eq!(step(5, false), MIN_PERCENT);
+        assert_eq!(step(MIN_PERCENT, false), MIN_PERCENT);
+        assert_eq!(step(MIN_PERCENT, true), 5);
+    }
 }

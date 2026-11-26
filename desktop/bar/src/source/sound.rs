@@ -1,33 +1,15 @@
 //! Sound of the default output, read with the `pactl` command (PulseAudio or PipeWire).
 
-use super::{Monitor, Source, SourceError, field, run};
+use super::{Monitor, Source, SourceError, run};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Sound {
-    /// Volume of the first channel, in percent. It can exceed 100.
-    pub volume: u16,
-    pub muted: bool,
-}
+pub use system_services::audio::Sound;
 
 /// Parses the outputs of `pactl get-sink-volume @DEFAULT_SINK@` then `get-sink-mute`, joined.
 pub fn parse(output: &str) -> Result<Sound, SourceError> {
-    let error = |detail: &str| SourceError::Parse {
+    system_services::audio::parse(output).map_err(|e| SourceError::Parse {
         command: "pactl",
-        detail: detail.to_owned(),
-    };
-    // "Volume: front-left: 36045 /  55% / -15.58 dB,   front-right: …"
-    let volume = output
-        .lines()
-        .find(|line| line.starts_with("Volume:"))
-        .and_then(|line| line.split('/').nth(1))
-        .and_then(|part| part.trim().trim_end_matches('%').parse().ok())
-        .ok_or_else(|| error("missing volume"))?;
-    let muted = match field(output, "Mute") {
-        Some("yes") => true,
-        Some("no") => false,
-        _ => return Err(error("missing mute state")),
-    };
-    Ok(Sound { volume, muted })
+        detail: e.to_string(),
+    })
 }
 
 /// The machine's sound, watched with `pactl subscribe`.
@@ -58,35 +40,5 @@ impl Source for Pactl {
 
     fn wait(&mut self) -> bool {
         self.monitor.wait()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sound_on() {
-        // Recorded on the reference laptop.
-        let sound = parse(include_str!("../../fixtures/pactl-55.txt")).unwrap();
-        assert_eq!(
-            sound,
-            Sound {
-                volume: 55,
-                muted: false
-            }
-        );
-    }
-
-    #[test]
-    fn sound_muted() {
-        let sound = parse(include_str!("../../fixtures/pactl-muted.txt")).unwrap();
-        assert!(sound.muted);
-    }
-
-    #[test]
-    fn incomplete_output_is_rejected() {
-        assert!(parse("Mute: no\n").is_err());
-        assert!(parse("Volume: front-left: 36045 /  55% / -15.58 dB\n").is_err());
     }
 }

@@ -258,22 +258,24 @@ pub fn snapshot(
         .into_iter()
         .flat_map(|item| scene.elements(renderer, &mut ids, item, &view, &[], mode))
         .collect();
-    draw(renderer, size, &elements)
+    draw(renderer, size, &elements, [0.0; 4])
         .inspect_err(|err| tracing::warn!("closing: drawing the window: {err}"))
         .ok()
 }
 
-/// Draws `elements`, from front to back, into a new texture of `size`.
-fn draw(
+/// Draws `elements`, from front to back, into a new texture of `size` filled with `clear`
+/// (premultiplied).
+pub(crate) fn draw(
     renderer: &mut GlesRenderer,
     size: Size<i32, Physical>,
     elements: &[SceneElement],
+    clear: [f32; 4],
 ) -> Result<GlesTexture, GlesError> {
     let buffer_size = (size.w.max(1), size.h.max(1)).into();
     let mut texture: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, buffer_size)?;
     let mut target = renderer.bind(&mut texture)?;
     let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
-    frame.clear([0.0f32; 4].into(), &[Rectangle::from_size(size)])?;
+    frame.clear(clear.into(), &[Rectangle::from_size(size)])?;
     for element in elements.iter().rev() {
         let dst = element.geometry(Scale::from(1.0));
         let damage = [Rectangle::from_size(dst.size)];

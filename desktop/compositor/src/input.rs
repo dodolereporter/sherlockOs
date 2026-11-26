@@ -31,11 +31,12 @@ use smithay::{
 };
 
 use crate::{
-    State,
+    State, capture,
     decorations::{self, Control},
     handlers::{Arrangement, is_fullscreen, is_maximized},
     is_override_redirect,
     layout::{self, Edges, Resize, Zone},
+    media_keys::MediaKey,
     window_data,
 };
 
@@ -130,6 +131,12 @@ enum Shortcut {
     /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
     /// nothing else answers.
     Quit,
+    /// A media key, in a real session, with its xkb code (lot D-35).
+    Media(MediaKey, Keycode),
+    /// Print Screen, with Shift or Alt, in a real session (lot D-35c).
+    Screenshot(capture::Kind),
+    /// Escape while the area of a screenshot is chosen.
+    CancelArea,
 }
 
 impl Shortcut {
@@ -481,8 +488,12 @@ impl State {
 
     /// Forgets the shortcut keys waiting for their release: the host window has lost the
     /// keyboard, and these releases will not come.
+    /// The area of a screenshot being chosen goes too (lot D-35c): the real session calls it
+    /// when the console is left.
     pub fn forget_intercepted_keys(&mut self) {
         self.intercepted_keys.clear();
+        self.cancel_area();
+        self.stop_media_repeat(None);
     }
 
     /// A move or resize gesture is in progress.
@@ -505,6 +516,9 @@ impl State {
     /// chooses it. Over a client, the client does, if it names it (cursor shape protocol); if it
     /// draws its cursor itself, the arrow.
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
+        if self.picking_area() {
+            return Some(CursorIcon::Crosshair);
+        }
         if self.overview_open() {
             return Some(CursorIcon::Default);
         }
@@ -571,6 +585,8 @@ impl State {
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
+        // A media key held repeats until its release, or until another key (lot D-35).
+        self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
@@ -594,12 +610,20 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            if state.picking_area() && sym == Keysym::Escape {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(Shortcut::CancelArea));
+            }
             if state.overview_open() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
+            let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
+            let screenshot = capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots());
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
-                .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym));
+                .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
+                .or(media.map(|media| Shortcut::Media(media, key)))
+                .or(screenshot.map(Shortcut::Screenshot));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
@@ -650,6 +674,18 @@ impl State {
             }
             Shortcut::CloseOverview => {
                 self.close_overview();
+                return;
+            }
+            Shortcut::Media(media, code) => {
+                self.press_media_key(code, media);
+                return;
+            }
+            Shortcut::Screenshot(kind) => {
+                self.screenshot(kind);
+                return;
+            }
+            Shortcut::CancelArea => {
+                self.cancel_area();
                 return;
             }
             Shortcut::SendToWorkspace(index) => {
@@ -726,6 +762,10 @@ impl State {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
+        } else if self.picking_area() {
+            // The area of a screenshot: no client has the pointer (lot D-35c).
+            self.area_motion(location);
+            None
         } else if self.overview_open() {
             // Mission Control: no client has the pointer (lot D-33).
             self.overview_motion(location);
@@ -772,6 +812,14 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        if self.picking_area() {
+            // The area of a screenshot: the click goes to no client (lot D-35c).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            let pressed = state == ButtonState::Pressed;
+            self.area_button(button == BTN_LEFT, pressed, location);
+            return;
+        }
         if self.overview_open() {
             // Mission Control: the click goes to no client (lot D-33).
             pointer.button(self, &event);

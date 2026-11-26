@@ -57,11 +57,16 @@ pub enum Icon {
     Battery,
     /// Battery charging.
     BatteryCharging,
+    /// Microphone listening, and muted (on-screen display of the media keys, lot D-35).
+    Microphone,
+    MicrophoneMuted,
+    /// Screen brightness: a sun.
+    Brightness,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 34] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -93,12 +98,16 @@ impl Icon {
         Self::SoundMuted,
         Self::Battery,
         Self::BatteryCharging,
+        Self::Microphone,
+        Self::MicrophoneMuted,
+        Self::Brightness,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
     /// arrows. The device icons are drawn for Evidence, on the same grid and stroke, except
     /// the system disk, which is the mock-up's. The boards draw neither the battery, nor the
-    /// network off, nor the muted sound: those follow the stroke of the others.
+    /// network off, nor the muted sound, nor the microphone and the sun of the media keys:
+    /// those follow the stroke of the others.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -157,6 +166,15 @@ impl Icon {
             }
             Self::BatteryCharging => {
                 "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3M12 9l-2.5 3.5h3L10 16"
+            }
+            Self::Microphone => {
+                "M9 7a3 3 0 0 1 6 0v4a3 3 0 0 1-6 0zM6 11a6 6 0 0 0 12 0M12 17v3M9 20h6"
+            }
+            Self::MicrophoneMuted => {
+                "M9 7a3 3 0 0 1 6 0v4a3 3 0 0 1-6 0zM6 11a6 6 0 0 0 12 0M12 17v3M9 20h6M4 4l16 16"
+            }
+            Self::Brightness => {
+                "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"
             }
         }
     }

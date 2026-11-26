@@ -42,7 +42,7 @@ use crate::{
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
-    genie, is_override_redirect, mission_control,
+    genie, is_override_redirect, mission_control, osd,
     output::View,
     wallpaper, window_anim, window_data,
 };
@@ -72,6 +72,8 @@ pub struct Scene {
     bars: RefCell<decorations::Textures>,
     /// Textures of the titles of Mission Control (lot D-33).
     labels: RefCell<mission_control::Labels>,
+    /// Texture of the on-screen display of the media keys (lot D-35).
+    osd: RefCell<osd::Texture>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -134,6 +136,13 @@ pub enum Item {
         label: mission_control::Label,
         alpha: f32,
     },
+    /// The on-screen display of the media keys in `rect` (lot D-35).
+    Osd {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        look: osd::Look,
+        alpha: f32,
+    },
     /// The wallpaper of the screen in `rect`, cut to its rounded corners: a workspace thumbnail
     /// of Mission Control.
     Thumbnail {
@@ -176,6 +185,7 @@ impl Item {
             Item::Genie(frame) => frame.params(),
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
+            Item::Osd { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -217,6 +227,7 @@ impl Scene {
             genie: genie::Painter::new(renderer)?,
             bars: RefCell::default(),
             labels: RefCell::default(),
+            osd: RefCell::default(),
         })
     }
 
@@ -423,6 +434,18 @@ impl Scene {
                     .into_iter()
                     .collect()
             }
+            Item::Osd {
+                key,
+                rect,
+                look,
+                alpha,
+            } => {
+                let element = self.osd.borrow_mut().element(renderer, &look, rect, alpha);
+                element
+                    .map(|element| SceneElement::Decoration(ids.stamp(key, params, element)))
+                    .into_iter()
+                    .collect()
+            }
             Item::Thumbnail { rect, radius } => wallpaper
                 .iter()
                 .map(|(texture, alpha)| {
@@ -466,6 +489,10 @@ pub fn items(
     let mut items = Vec::new();
     let mut animating = preview.is_some();
     let scale = view.scale as f32;
+    // The area of a screenshot being chosen, then the on-screen display of the media keys, in
+    // front of everything (lot D-35).
+    crate::capture::push_area(&mut items, state, (output, view));
+    animating |= osd::push_item(&mut items, state, (output, view));
     push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
     animating |= genie::push_effects(&mut items, state, (output, view), now);

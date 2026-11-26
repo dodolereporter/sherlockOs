@@ -27,6 +27,8 @@ notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }
+# Sound and brightness, shared with the media keys of the compositor (workspace crate).
+system-services = { path = "../system-services" }
 # The compositor's workspaces and windows (ADR 0021): sherlock_shell_v1 and ext-workspace-v1,
 # on a connection of the bar's own to the shell socket. The versions the workspace already
 # pulls through iced_exwlshell, smithay and the compositor.

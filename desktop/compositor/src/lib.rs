@@ -4,6 +4,7 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod capture;
 pub mod card;
 mod cursor;
 pub mod damage;
@@ -17,9 +18,11 @@ mod input;
 pub mod keyboard;
 mod layer;
 pub mod layout;
+pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
 pub mod options;
+pub mod osd;
 pub mod output;
 pub mod pacing;
 pub mod perf;
@@ -208,7 +211,18 @@ pub struct State {
     overview: mission_control::Overview,
     /// Opening and closing of the windows (lot D-34).
     window_anims: window_anim::WindowAnims,
+    /// The media keys, taken in the real session only (lot D-35).
+    media_keys: Option<media_keys::MediaKeys>,
+    /// What the media keys changed, on screen (lot D-35).
+    osd: osd::Osd,
+    /// Screenshots (lot D-35c).
+    capture: capture::Capture,
 }
+
+/// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
+/// clients with the keyboard, and followed by the media keys.
+pub const KEY_REPEAT_DELAY: i32 = 200;
+pub const KEY_REPEAT_RATE: i32 = 25;
 
 /// Data attached to each window.
 #[derive(Default)]
@@ -245,12 +259,16 @@ impl State {
         // AZERTY by default, unless the environment or the system sets a layout. A layout xkb
         // does not know falls back to AZERTY: a session that does not start would be worse.
         let layout = keyboard::Layout::system();
-        if let Err(err) = seat.add_keyboard(layout.xkb(), 200, 25) {
+        if let Err(err) = seat.add_keyboard(layout.xkb(), KEY_REPEAT_DELAY, KEY_REPEAT_RATE) {
             tracing::warn!(
                 ?layout,
                 "keyboard layout refused ({err}): French AZERTY instead"
             );
-            seat.add_keyboard(keyboard::Layout::azerty().xkb(), 200, 25)?;
+            seat.add_keyboard(
+                keyboard::Layout::azerty().xkb(),
+                KEY_REPEAT_DELAY,
+                KEY_REPEAT_RATE,
+            )?;
         }
         seat.add_pointer();
 
@@ -325,6 +343,9 @@ impl State {
             themes: theme::Themes::default(),
             overview: mission_control::Overview::default(),
             window_anims: window_anim::WindowAnims::default(),
+            media_keys: None,
+            osd: osd::Osd::default(),
+            capture: capture::Capture::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
