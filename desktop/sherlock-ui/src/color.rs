@@ -314,6 +314,28 @@ pub const ACTIVE_ENTRY: Color = Color::rgba(133, 197, 149, 0.16);
 /// Dark value only: use `palette()`.
 pub const FOCUS_RING: Color = BLUE_LIGHT;
 
+// Application tiles (D-03): the backgrounds of the application icons the author drew, in
+// `icons/apps/`. Like the dock tiles, they keep their colors in both themes
+// (`docs/design/THEME-CLAIR.md`). The SVGs carry the same values: a test of `app_icon` compares
+// them.
+
+/// Files (Evidence): the darkest blue.
+pub const TILE_FILES: Color = BLUE_DARK;
+/// Terminal (Inquiry): the darkest background.
+pub const TILE_TERMINAL: Color = DEEPEST;
+/// Settings (Control Room): slate blue.
+pub const TILE_SETTINGS: Color = Color::rgb(0x3A, 0x4A, 0x63);
+/// Sherlock: cream, the mascot's own color.
+pub const TILE_SHERLOCK: Color = CREAM;
+/// Development environment: deep green.
+pub const TILE_LAB: Color = Color::rgb(0x2F, 0x7A, 0x52);
+/// Games: the green of the scarf.
+pub const TILE_GAMES: Color = ACCENT;
+/// Installer: deep blue.
+pub const TILE_INSTALLER: Color = Color::rgb(0x21, 0x47, 0x62);
+/// Light blue of two knobs of the settings icon.
+pub const TILE_KNOB: Color = Color::rgb(0xA6, 0xC4, 0xDD);
+
 /// The two themes. They share sizes and spacings: only the palette changes
 /// (`docs/design/THEME-CLAIR.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

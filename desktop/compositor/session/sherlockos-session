@@ -5,8 +5,11 @@
 #
 # The programs are looked for next to this script (`just install-session` puts them in
 # /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
-# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`. NOM_OS_XWAYLAND=1 starts XWayland too (off by
-# default: see "Real session" in docs/compositor.md). The log of the session goes to
+# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`. The data
+# of the session, the application icons as a hicolor theme, are in share/nom-os beside the
+# libexec folder (/usr/local/share/nom-os), or in NOM_OS_DATA: that folder goes first in
+# XDG_DATA_DIRS, for the programs of the session only. NOM_OS_XWAYLAND=1 starts XWayland too
+# (off by default: see "Real session" in docs/compositor.md). The log of the session goes to
 # $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
 # session with it.
@@ -20,7 +23,10 @@ if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"
 fi
 
+data="${NOM_OS_DATA:-$(dirname "$(dirname "$bin")")/share/nom-os}"
+
 export PATH="$PATH:$bin"
+export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 export XDG_CURRENT_DESKTOP=NOM_OS
 export XDG_SESSION_DESKTOP=NOM_OS
 export XDG_SESSION_TYPE=wayland

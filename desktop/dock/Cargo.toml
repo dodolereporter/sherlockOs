@@ -19,6 +19,8 @@ iced = { version = "=0.14.0", default-features = false, features = [
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 dock-config = { path = "../dock-config" }
+# Icon lookup shared with the launcher (workspace crate).
+icon-theme = { path = "../icon-theme" }
 # The theme of the appearance file, followed live (workspace crate).
 appearance-config = { path = "../appearance-config" }
 # inotify, to reload the configuration without polling: the version the bar already pins.

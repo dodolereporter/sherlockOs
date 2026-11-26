@@ -327,7 +327,7 @@ RUST_LOG=launcher=debug cargo run -p launcher
   refusing them; the copy through `wl-copy -- <result>` (recorded) or iced's clipboard; files
   with accents, hidden and heavy folders, level 5 and links left out, the open command of a
   file and of a folder, a type nobody opens disabled; the walk stopped at 20 000, never
-  entering another device, and run in the background; an application's icon from a fake `hicolor`; three more screenshots;
+  entering another device, and run in the background; an application's icon from a fake `hicolor`, Evidence's from the hicolor theme of sherlock-ui (D-03); three more screenshots;
 - calculator (`calc.rs`): priorities, `^` to the right, unary minus, modulo and percent, comma
   and point, division by zero, invalid expressions, a lone number, deep nesting, the writing of
   results;

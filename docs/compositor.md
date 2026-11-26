@@ -1286,7 +1286,8 @@ it.
    ```
 
    Or the whole session, as the login screen starts it:
-   `NOM_OS_BIN=$PWD/target/release desktop/compositor/session/sherlockos-session`.
+   `NOM_OS_BIN=$PWD/target/release NOM_OS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
+   (`NOM_OS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
    With `--xwayland` after `compositor` (`NOM_OS_XWAYLAND=1` for the script), X11 applications
    too, at the risk of waking the NVIDIA card (see above).
 
@@ -1305,16 +1306,17 @@ running them:
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
   launcher find it; it runs `evidence`, which the session finds in its `PATH`;
+- the application icons, a hicolor theme, go to `/usr/local/share/nom-os/icons/` (D-03);
 - `sudo apt install libseat1` is added when libseat is missing.
 
 At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
 adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there), then launches the compositor, which launches the bar, the dock and the notification
+there) and `/usr/local/share/nom-os` at the start of `XDG_DATA_DIRS` (the icons), then launches the compositor, which launches the bar, the dock and the notification
 daemon once it is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
 up, with a line in the log (`session: … given up`).
-To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
+To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/local/share/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
 shell built from this workspace, and are tried on the author's Debian before the base exists.

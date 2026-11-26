@@ -5,7 +5,6 @@ use iced::widget::{container, mouse_area, pin, row, space, stack, svg, text};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Rectangle, mouse};
 use sherlock_ui::component::{self as ui, Trailing};
-use sherlock_ui::logo::Logo;
 use sherlock_ui::{color, dock, metrics, typography};
 
 use crate::app::{Dock, Message, Pointer};
@@ -231,11 +230,6 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
             .height(side)
             .opacity(opacity)
             .into(),
-        Glyph::Sherlock => tile(
-            ui::logo(Logo::Color, side * dock::SHERLOCK_GLYPH_RATIO).opacity(opacity),
-            faded(dock::SHERLOCK_TILE),
-            side,
-        ),
         Glyph::Letter(letter) => {
             let letter = text(letter.to_string())
                 .size(side * dock::LETTER_RATIO)
