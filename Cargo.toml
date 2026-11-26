@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "desktop/appearance-config",
+    "desktop/apps",
     "desktop/bar",
     "desktop/compositor",
     "desktop/cursor-theme",

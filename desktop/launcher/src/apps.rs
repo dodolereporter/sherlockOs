@@ -21,6 +21,8 @@ pub struct Apps {
     names: Vec<Haystack>,
     /// Where the icons are; none: every application shows its initial.
     icons: Option<Lookup>,
+    /// Side the icons are drawn at, and the scale they are looked up for.
+    icon_size: (u32, u32),
     /// Icons already looked up, by icon name.
     found: Mutex<HashMap<String, Option<PathBuf>>>,
 }
@@ -50,6 +52,7 @@ impl Apps {
             catalog,
             names,
             icons: None,
+            icon_size: (look::APP_ICON as u32, look::ICON_SCALE),
             found: Mutex::default(),
         }
     }
@@ -60,14 +63,37 @@ impl Apps {
         self
     }
 
+    /// Looks the icons up for `size` at `scale`: the applications view draws them larger.
+    pub fn with_icon_size(mut self, size: u32, scale: u32) -> Self {
+        self.icon_size = (size, scale);
+        self
+    }
+
     /// The icon file of `app`, looked up once.
-    fn icon(&self, app: &DesktopEntry) -> Option<PathBuf> {
+    pub fn icon(&self, app: &DesktopEntry) -> Option<PathBuf> {
         let (lookup, name) = (self.icons.as_ref()?, app.icon.as_deref()?);
         let mut found = self.found.lock().ok()?;
+        let (size, scale) = self.icon_size;
         found
             .entry(name.to_owned())
-            .or_insert_with(|| lookup.find(name, look::APP_ICON as u32, look::ICON_SCALE))
+            .or_insert_with(|| lookup.find(name, size, scale))
             .clone()
+    }
+
+    /// Every application, with what it is called, in the order of the files.
+    pub fn entries(&self) -> impl Iterator<Item = (&DesktopEntry, &Haystack)> {
+        self.catalog.applications.iter().zip(&self.names)
+    }
+
+    /// What starts `app`, without a shell: its `Exec` (in a terminal for `Terminal=true`), in
+    /// its `Path`.
+    pub fn start(&self, app: &DesktopEntry) -> Option<Command> {
+        let (program, args) = self.catalog.command(app, &[])?;
+        Some(Command {
+            program,
+            args,
+            dir: app.working_dir.clone(),
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -102,16 +128,11 @@ impl Source for Apps {
         found
             .into_iter()
             .filter_map(|(_, _, app)| {
-                let (program, args) = self.catalog.command(app, &[])?;
                 Some(Hit {
                     title: app.name.clone(),
                     subtitle: app.generic_name.clone(),
                     tile: Tile::App(self.icon(app)),
-                    action: Action::Start(Command {
-                        program,
-                        args,
-                        dir: app.working_dir.clone(),
-                    }),
+                    action: Action::Start(self.start(app)?),
                 })
             })
             .take(limit)

@@ -461,7 +461,7 @@ fn glyph_handle(glyph: Glyph) -> svg::Handle {
 
 /// An SVG icon as it is; a PNG inside a small SVG, which the SVG renderer reads by path, as
 /// the dock does: iced's `image` feature would bring its own decoders.
-fn icon_handle(path: &Path) -> svg::Handle {
+pub fn icon_handle(path: &Path) -> svg::Handle {
     if path.extension().is_some_and(|e| e == "svg") {
         return svg::Handle::from_path(path);
     }
