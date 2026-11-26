@@ -1,6 +1,7 @@
 //! Command line of the compositor.
 //!
-//! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [command [arguments…]]`.
+//! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [--workspaces N]
+//! [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
 //! the login screen, never inside another graphical session.
 
@@ -20,6 +21,8 @@ pub struct Options {
     /// Scale of each screen, in order; missing ones repeat the last one given, or 1. In nested
     /// mode, one per screen of the window (`--outputs`).
     pub scales: Vec<f64>,
+    /// Number of workspaces, from 1 to 9 (`--workspaces`); `None` keeps the default, 3.
+    pub workspaces: Option<usize>,
     /// Command launched once XWayland is ready.
     pub command: Vec<OsString>,
 }
@@ -33,12 +36,14 @@ impl Options {
             command.remove(0);
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
+        let mut workspaces = None;
         loop {
             match command.first().and_then(|a| a.to_str()) {
                 Some("--measure") => measure = true,
                 Some("--xwayland") => xwayland = true,
                 Some("--outputs") if nested => screens = Some(option(&mut command, 1..=4)?),
                 Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
+                Some("--workspaces") => workspaces = Some(option(&mut command, 1..=9)?),
                 Some("--outputs" | "--nested") => return Err(Error::Usage),
                 _ => break,
             }
@@ -55,6 +60,7 @@ impl Options {
             measure,
             xwayland,
             scales,
+            workspaces,
             command,
         })
     }
@@ -134,12 +140,15 @@ mod tests {
             "2",
             "--scale",
             "2",
+            "--workspaces",
+            "5",
             "konsole",
             "--scale",
         ])
         .unwrap();
         assert!(options.nested && options.measure);
         assert_eq!(options.scales, [2.0, 2.0]);
+        assert_eq!(options.workspaces, Some(5));
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
@@ -188,6 +197,8 @@ mod tests {
             &["--scale", "9"],
             &["--scale"],
             &["--measure", "--nested"],
+            &["--workspaces", "0"],
+            &["--workspaces", "10"],
         ] {
             assert!(matches!(parse(args), Err(Error::Usage)), "{args:?}");
         }

@@ -118,6 +118,7 @@ impl State {
         // keyboard.
         if !data.shown.get() && size.w > 0 && size.h > 0 {
             data.shown.set(true);
+            self.join_active_workspace(&window);
             if let (false, Some(area)) = (filled, self.output_area()) {
                 let loc = layout::centered(area, size);
                 self.move_window(&window, loc, false);
@@ -134,15 +135,30 @@ impl State {
         }
     }
 
-    /// Places the window at `loc` and raises it. An X11 window learns its place: XWayland needs
-    /// it to place its menus and translate the pointer.
+    /// Places the window at `loc`; with `activate`, raises it and makes it the active one. An
+    /// X11 window learns its place: XWayland needs it to place its menus and translate the
+    /// pointer.
     pub(crate) fn move_window(
         &mut self,
         window: &Window,
         loc: Point<i32, Logical>,
         activate: bool,
     ) {
+        // The space raises every window it maps: those that were above go back above it.
+        let above: Vec<Window> = match activate {
+            true => Vec::new(),
+            false => self
+                .space
+                .elements()
+                .skip_while(|w| *w != window)
+                .skip(1)
+                .cloned()
+                .collect(),
+        };
         self.space.map_element(window.clone(), loc, activate);
+        for other in &above {
+            self.space.raise_element(other, false);
+        }
         if let Some(surface) = window.x11_surface() {
             configure_x11(surface, Rectangle::new(loc, surface.geometry().size));
         }
@@ -286,12 +302,12 @@ impl State {
                 data.restore.set(self.space.element_geometry(window));
             }
             self.request_size(window, Some(rect.size));
-            self.move_window(window, rect.loc, true);
+            self.move_window(window, rect.loc, false);
         } else if let Some(restore) = data.restore.take() {
             // Zero size: the window had no content yet, the client chooses.
             let size = (restore.size.w > 0 && restore.size.h > 0).then_some(restore.size);
             self.request_size(window, size);
-            self.move_window(window, restore.loc, true);
+            self.move_window(window, restore.loc, false);
         }
         if let Some(toplevel) = window.toplevel()
             && toplevel.is_initial_configure_sent()
@@ -411,9 +427,14 @@ impl XdgShellHandler for State {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // The keyboard goes back to a window only if this one had it: a window closing on a
+        // hidden workspace, or while an anchored surface has the keyboard, takes nothing.
         if let Some(window) = self.window_for(surface.wl_surface()) {
+            let focused = self.focused_window().as_ref() == Some(&window);
             self.space.unmap_elem(&window);
-            self.focus(self.top_window());
+            if focused {
+                self.focus(self.top_window());
+            }
         }
     }
 

@@ -222,7 +222,8 @@ impl XwmHandler for State {
         let loc = surface.geometry().loc;
         let window = Window::new_x11_window(surface);
         window.override_z_index(RenderZindex::Overlay as u8);
-        self.space.map_element(window, loc, false);
+        self.space.map_element(window.clone(), loc, false);
+        self.join_active_workspace(&window);
     }
 
     fn unmapped_window(&mut self, _xwm: XwmId, surface: X11Surface) {
@@ -399,6 +400,7 @@ impl XWaylandShellHandler for State {
         let data = window_data(&window);
         if !surface.is_override_redirect() && !data.shown.get() {
             data.shown.set(true);
+            self.join_active_workspace(&window);
             self.focus(Some(window));
         }
     }
