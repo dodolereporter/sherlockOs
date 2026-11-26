@@ -11,6 +11,8 @@ members = [
     "desktop/icon-theme",
     "desktop/launcher",
     "desktop/mime-apps",
+    "desktop/notifications",
+    "desktop/notifications-config",
     "desktop/sherlock-ui",
     "desktop/shell-protocol",
     "sherlock/sherlockd",
