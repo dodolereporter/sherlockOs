@@ -332,7 +332,7 @@ impl State {
     }
 
     /// The pointer goes to what is under it now that windows came or went.
-    fn refresh_pointer_focus(&mut self) {
+    pub(crate) fn refresh_pointer_focus(&mut self) {
         if let Some(pointer) = self.seat.get_pointer() {
             let time = self.start_time.elapsed().as_millis() as u32;
             self.pointer_motion(pointer.current_location(), time);

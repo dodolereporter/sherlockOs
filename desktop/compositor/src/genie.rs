@@ -295,6 +295,24 @@ impl State {
         (!progress.is_done(now)).then(|| progress.value(now))
     }
 
+    /// Forgets the effects over at this time. The pointer did not reach their windows while
+    /// they ran: it goes to what is under it now, as after a move, so that a click made without
+    /// moving reaches a window back from its icon. Called after each loop iteration.
+    pub(crate) fn end_minimize_effects(&mut self) {
+        let now = self.now();
+        let mut ended = false;
+        for window in self.space.elements() {
+            let track = track(window);
+            if track.running.get().is_some_and(|(p, _)| p.is_done(now)) {
+                track.running.set(None);
+                ended = true;
+            }
+        }
+        if ended {
+            self.refresh_pointer_focus();
+        }
+    }
+
     /// The icon rectangle of `window` in the space.
     fn icon_in_space(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
         let (name, rect) = self.icon_rectangle(window)?;
@@ -306,7 +324,7 @@ impl State {
 
 /// Items of the windows whose effect runs at `now`, seen on `output` through `view`, from front
 /// to back, and whether one runs. They go in front of the bar and the dock: the window goes
-/// into its icon. A finished effect is forgotten.
+/// into its icon.
 pub(crate) fn push_effects(
     items: &mut Vec<Item>,
     state: &State,
@@ -320,8 +338,8 @@ pub(crate) fn push_effects(
         let Some((progress, shape)) = track.running.get() else {
             continue;
         };
+        // Over: `end_minimize_effects` forgets it and gives the pointer back.
         if progress.is_done(now) {
-            track.running.set(None);
             continue;
         }
         let geometry = state.space.element_geometry(window);

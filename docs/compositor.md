@@ -2024,7 +2024,10 @@ windows of 800 × 600, a bar and a dock:
   and fading, then rest.
 - **Restored halfway, it comes back from where it is**: the progress does not jump and goes
   back; meanwhile the pointer over its place does not reach it; at the end it is drawn at its
-  place, the pointer reaches it, and nothing is drawn at rest.
+  place, the pointer reaches it, and nothing is drawn at rest. The pointer reaches it even
+  when it did not move: the loop iteration after the effect gives the pointer to what is
+  under it, as after a move, so a click goes to the window and not to what was there during
+  the effect (`tests/headless.rs`, lot Q-11).
 
 The test in `tests/genie.rs` draws `genie.frag` for real without a screen: Mesa's software
 renderer (llvmpipe), through its EGL device (`EGL_MESA_device_software`), draws a window of

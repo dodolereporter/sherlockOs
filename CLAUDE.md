@@ -85,8 +85,10 @@ Build container: `just builder`, `just in-builder <command>`, `just test-builder
 and `test-boot` must both be green.
 
 Prerequisites of the machine: `rustup`, `just`, `python3` (for `check-language`), a C compiler
-used as linker (`gcc` and `libc6-dev` on Debian) and the compositor libraries (`libxkbcommon-dev`
-and `libwayland-dev` on Debian). The Rust version is read from `rust-toolchain.toml` and installs
+used as linker (`gcc` and `libc6-dev` on Debian), the compositor libraries (`libxkbcommon-dev`,
+`libwayland-dev`, `libudev-dev`, `libinput-dev`, `libseat-dev`, `libgbm-dev` and `libdrm-dev` on
+Debian), the `Xwayland` server (`xwayland`), Mesa's EGL (`libegl1` and `libegl-mesa0`) and
+`dbus-daemon`. `docs/ci.md` says what each one is for. The Rust version is read from `rust-toolchain.toml` and installs
 itself on the first `cargo`. Do not change it: it is also copied into `rust-version` of the root
 `Cargo.toml`, and both change together.
 

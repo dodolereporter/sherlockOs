@@ -52,9 +52,12 @@ mod tests {
     const KEY_SUPER: u32 = 133;
     const KEY_DOWN: u32 = 116;
     // Time given to each step of the test. XWayland startup gets more: it starts a whole X
-    // server, which took 9.9 s on a loaded machine.
+    // server, which took 9.9 s on a loaded machine, and went past 30 s with the whole
+    // workspace's tests running beside it. The wait ends on XWayland's own signal (ready, or
+    // failed if the server exits): the budget only stops a startup that hangs, so a long one
+    // costs nothing when the machine is idle.
     const STEP_BUDGET: Duration = Duration::from_secs(10);
-    const XWAYLAND_STARTUP_BUDGET: Duration = Duration::from_secs(30);
+    const XWAYLAND_STARTUP_BUDGET: Duration = Duration::from_secs(120);
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())

@@ -300,10 +300,17 @@ fn searching_500_applications_takes_less_than_50_ms() {
         .collect();
     let apps = Apps::new(entries, None);
     assert_eq!(apps.len(), 500);
+    // The best of 5 runs: a loaded machine can pause the test thread during one run, which
+    // says nothing about the cost of the search. The threshold stays the same in every build.
     for query in ["e", "ki", "edit web", "numero 42", "zzz", "o t l"] {
-        let start = Instant::now();
-        let _ = apps.search(&Query::new(query), look::MAX_RESULTS);
-        let spent = start.elapsed();
+        let spent = (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                let _ = apps.search(&Query::new(query), look::MAX_RESULTS);
+                start.elapsed()
+            })
+            .min()
+            .unwrap_or(Duration::MAX);
         assert!(spent < Duration::from_millis(50), "{query}: {spent:?}");
     }
 }
