@@ -81,8 +81,9 @@ already pulls).
 | `just cursor-board` | Draws `docs/cursor/board.png` |
 | `just install-session` | Also runs `just cursors`, then prints the commands that copy both themes into `/usr/local/share/icons` |
 
-Each theme has an `index.theme` (inheriting `default`) and, in `cursors/`, one Xcursor file per
-drawing and a link per alias. A file holds one image per nominal size: 24, 32, 48, 64 and 96
+Each theme has an `index.theme` (inheriting `default`), with the name a cursor setting shows:
+« SherlockOS » and « SherlockOS clair » (`sherlock_ui::cursor`). In `cursors/`, it has one
+Xcursor file per drawing and a link per alias. A file holds one image per nominal size: 24, 32, 48, 64 and 96
 (scales 1 to 4). An image is a quarter larger than its size (30 px at 24): room for the outline
 that passes the grid and for the badges that pass it at the bottom right, as in the boards. The
 grid starts two units in, rounded up to a whole pixel, so the drawing stays on its pixels; the

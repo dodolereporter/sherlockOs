@@ -19,7 +19,11 @@ fn every_shape_exists_at_every_size_with_its_hotspot() {
     for variant in Variant::ALL {
         let theme = out.join(variant.theme());
         let index = fs::read_to_string(theme.join("index.theme")).unwrap();
-        assert!(index.contains(&format!("Name={}", variant.theme())));
+        assert!(
+            index.starts_with("[Icon Theme]\nName=SherlockOS"),
+            "{index}"
+        );
+        assert!(index.contains("Inherits=default"));
         for shape in SHAPES {
             let svg = fs::read_to_string(root.join(format!("assets/cursors/{}.svg", shape.name)))
                 .unwrap();

@@ -31,6 +31,12 @@ pub const LIGHT: CursorColors = CursorColors {
     track: Color::rgba(0x14, 0x23, 0x3B, 0.22),
 };
 
+/// Names and descriptions of the two cursor themes, as a cursor setting lists them.
+pub const DARK_NAME: &str = "SherlockOS";
+pub const DARK_COMMENT: &str = "Curseurs de SherlockOS pour le bureau sombre";
+pub const LIGHT_NAME: &str = "SherlockOS clair";
+pub const LIGHT_COMMENT: &str = "Curseurs de SherlockOS pour le bureau clair";
+
 /// The arc of the waiting cursors makes a turn in this time.
 pub const SPIN_TURN: Duration = Duration::from_secs(1);
 

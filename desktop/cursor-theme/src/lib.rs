@@ -299,16 +299,13 @@ pub fn hex(c: Color) -> String {
     format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
 }
 
-/// The `index.theme` of a theme.
+/// The `index.theme` of a theme: the name and description a cursor setting shows.
 pub fn index_theme(variant: Variant) -> String {
-    let comment = match variant {
-        Variant::Dark => "Cursors of NOM_OS, dark desktop",
-        Variant::Light => "Cursors of NOM_OS, light desktop",
+    let (name, comment) = match variant {
+        Variant::Dark => (cursor::DARK_NAME, cursor::DARK_COMMENT),
+        Variant::Light => (cursor::LIGHT_NAME, cursor::LIGHT_COMMENT),
     };
-    format!(
-        "[Icon Theme]\nName={}\nComment={comment}\nInherits=default\n",
-        variant.theme()
-    )
+    format!("[Icon Theme]\nName={name}\nComment={comment}\nInherits=default\n")
 }
 
 #[cfg(test)]
