@@ -78,7 +78,7 @@ impl Server {
     async fn get_server_information(&self) -> (String, String, String, String) {
         (
             String::from(env!("CARGO_PKG_NAME")),
-            String::from("NOM_OS"),
+            String::from("SherlockOS"),
             String::from(env!("CARGO_PKG_VERSION")),
             String::from("1.2"),
         )

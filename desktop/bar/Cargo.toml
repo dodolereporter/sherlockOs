@@ -33,7 +33,7 @@ sherlock-ui = { path = "../sherlock-ui" }
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
-# The notification history (org.nomos.Notifications.History) on the session bus, and the
+# The notification history (org.sherlockos.Notifications.History) on the session bus, and the
 # system services of the quick settings on the system bus: the version
 # and features the notification daemon and Evidence pin (blocking API, its own small executor,
 # no tokio).

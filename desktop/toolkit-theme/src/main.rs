@@ -7,7 +7,7 @@
 //! - `uninstall` takes them away and puts the backups back;
 //! - `apply [dark|light]` switches the session to a theme, that of the appearance file by
 //!   default;
-//! - `follow` does it at start, then at every change of the appearance file: the NOM_OS
+//! - `follow` does it at start, then at every change of the appearance file: the SherlockOS
 //!   session runs it.
 //!
 //! See `docs/third-party-theming.md`.
