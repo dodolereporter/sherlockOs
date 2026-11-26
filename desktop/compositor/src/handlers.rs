@@ -291,11 +291,17 @@ impl State {
         ) {
             (true, ..) => Some(screen),
             (false, true, _) => Some(work),
-            (false, false, zone) => zone.map(|zone| zone.geometry(work)),
+            (false, false, zone) => zone.map(|zone| zone.geometry(work, self.snap_gap)),
         };
-        if target.is_some() || data.restore.get().is_some() {
-            // Snap, maximize, fullscreen or restore: the window slides to its place.
-            data.motion.borrow_mut().animate_next_change();
+        // Snap, maximize, fullscreen or restore: the window slides to its place, at once, even
+        // when only its size changes (an exclusive zone that goes away under a maximized
+        // window). Restored to a size its client chooses, it slides once that size is known.
+        let restore = data.restore.get();
+        let known = restore.filter(|r| r.size.w > 0 && r.size.h > 0);
+        match target.or(known) {
+            Some(rect) => data.motion.borrow_mut().animate_to(rect),
+            None if restore.is_some() => data.motion.borrow_mut().animate_next_change(),
+            None => {}
         }
         if let Some(rect) = target {
             if data.restore.get().is_none() {
@@ -509,6 +515,16 @@ impl XdgShellHandler for State {
                 a.maximized = false;
                 zone.set(None);
             });
+        }
+    }
+
+    /// The application asks to be minimized (its minimize button): like the shell does it. A
+    /// window without content yet is not, nor a window being dragged.
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        if let Some(window) = self.surface_window(&surface)
+            && window_data(&window).shown.get()
+        {
+            self.minimize(&window);
         }
     }
 

@@ -124,22 +124,34 @@ impl Zone {
         })
     }
 
-    /// Rectangle taken by a window snapped into this zone of `area`. An odd pixel goes to the
-    /// right or to the bottom.
-    pub fn geometry(self, area: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+    /// Rectangle taken by a window snapped into this zone of `area`, `gap` away from the edges
+    /// of the area and from the window in the next zone. A maximized window takes the whole
+    /// area, without a gap. An odd pixel goes to the right or to the bottom.
+    pub fn geometry(self, area: Rectangle<i32, Logical>, gap: i32) -> Rectangle<i32, Logical> {
+        // Start and length of the first and of the second half along an axis.
+        let halves = |start: i32, len: i32| {
+            let free = (len - 3 * gap).max(0);
+            let first = free / 2;
+            (
+                (start + gap, first),
+                (start + 2 * gap + first, free - first),
+            )
+        };
         let Point { x, y, .. } = area.loc;
         let Size { w, h, .. } = area.size;
-        let (half_w, half_h) = (w / 2, h / 2);
-        let (loc, size) = match self {
-            Self::Maximized => ((x, y), (w, h)),
-            Self::Left => ((x, y), (half_w, h)),
-            Self::Right => ((x + half_w, y), (w - half_w, h)),
-            Self::TopLeft => ((x, y), (half_w, half_h)),
-            Self::TopRight => ((x + half_w, y), (w - half_w, half_h)),
-            Self::BottomLeft => ((x, y + half_h), (half_w, h - half_h)),
-            Self::BottomRight => ((x + half_w, y + half_h), (w - half_w, h - half_h)),
+        let (left, right) = halves(x, w);
+        let (top, bottom) = halves(y, h);
+        let whole = (y + gap, (h - 2 * gap).max(0));
+        let ((x, w), (y, h)) = match self {
+            Self::Maximized => return area,
+            Self::Left => (left, whole),
+            Self::Right => (right, whole),
+            Self::TopLeft => (left, top),
+            Self::TopRight => (right, top),
+            Self::BottomLeft => (left, bottom),
+            Self::BottomRight => (right, bottom),
         };
-        Rectangle::new(loc.into(), size.into())
+        Rectangle::new((x, y).into(), (w, h).into())
     }
 }
 
@@ -544,8 +556,32 @@ mod tests {
             (Zone::BottomRight, rect(510, 420, 501, 401)),
         ];
         for (zone, expected) in cases {
-            assert_eq!(zone.geometry(area), expected, "{zone:?}");
+            assert_eq!(zone.geometry(area, 0), expected, "{zone:?}");
         }
+    }
+
+    #[test]
+    fn snapped_windows_keep_their_gap() {
+        // 8 from the edges of the work area and between two windows; maximized, none.
+        let area = rect(0, 46, 1440, 778);
+        let cases = [
+            (Zone::Maximized, rect(0, 46, 1440, 778)),
+            (Zone::Left, rect(8, 54, 708, 762)),
+            (Zone::Right, rect(724, 54, 708, 762)),
+            (Zone::TopLeft, rect(8, 54, 708, 377)),
+            (Zone::TopRight, rect(724, 54, 708, 377)),
+            (Zone::BottomLeft, rect(8, 439, 708, 377)),
+            (Zone::BottomRight, rect(724, 439, 708, 377)),
+        ];
+        for (zone, expected) in cases {
+            assert_eq!(zone.geometry(area, 8), expected, "{zone:?}");
+        }
+        // Side by side, the two halves leave the gap between them, and the area's edges.
+        let (left, right) = (Zone::Left.geometry(area, 8), Zone::Right.geometry(area, 8));
+        assert_eq!(right.loc.x - (left.loc.x + left.size.w), 8);
+        assert_eq!(area.loc.x + area.size.w - (right.loc.x + right.size.w), 8);
+        // An area smaller than its gaps gives empty windows, never negative ones.
+        assert!(Zone::BottomRight.geometry(rect(0, 0, 10, 10), 8).size.w >= 0);
     }
 
     #[test]

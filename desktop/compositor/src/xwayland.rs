@@ -312,6 +312,18 @@ impl XwmHandler for State {
         }
     }
 
+    /// The application asks to be iconified (`WM_CHANGE_STATE` with `IconicState`, what
+    /// `XIconifyWindow` sends): minimized like the shell does it, `_NET_WM_STATE_HIDDEN` set.
+    /// smithay 0.7 ignores `_NET_WM_STATE_HIDDEN` asked through `_NET_WM_STATE`, as EWMH tells
+    /// window managers to. Coming back (`NormalState`) is left to the dock, like for Wayland.
+    fn minimize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
+        if let Some(window) = self.x11_window(&surface)
+            && window_data(&window).shown.get()
+        {
+            self.minimize(&window);
+        }
+    }
+
     fn resize_request(&mut self, _xwm: XwmId, surface: X11Surface, _button: u32, edge: ResizeEdge) {
         self.x11_gesture(&surface, Some(x11_edges(edge)));
     }

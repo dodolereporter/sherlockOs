@@ -608,25 +608,26 @@ mod tests {
         toplevel._move(&seat, serial);
         h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((795.0, 590.0).into(), 3);
-        assert_eq!(h.state.snap_preview(), Some(rect(400, 300, 400, 300)));
+        // 8 from the edges of the screen, 8 from the window of the next quarter.
+        assert_eq!(h.state.snap_preview(), Some(rect(404, 304, 388, 288)));
         h.release();
-        let states = h.wait_size("the bottom right quarter", 400, 300);
+        let states = h.wait_size("the bottom right quarter", 388, 288);
         assert!(!states.contains(&XdgState::Maximized));
-        assert_eq!(location(&h.state), Some((400, 300).into()));
+        assert_eq!(location(&h.state), Some((404, 304).into()));
 
         // The content stays 100 × 80 as long as the client has not redrawn it.
-        let serial = h.press(410.0, 310.0);
+        let serial = h.press(414.0, 314.0);
         toplevel._move(&seat, serial);
         h.run_until("the gesture start", |_, s| s.gesture_active());
         h.state.pointer_motion((1.0, 300.0).into(), 3);
-        assert_eq!(h.state.snap_preview(), Some(rect(0, 0, 400, 600)));
+        assert_eq!(h.state.snap_preview(), Some(rect(8, 8, 388, 584)));
         h.release();
-        h.wait_size("the left half", 400, 600);
+        h.wait_size("the left half", 388, 584);
 
         // Restored, it returns to its place from before the drag, not the one where it was dropped.
         h.shortcut(KEY_DOWN);
         h.wait_size("the previous size", 100, 80);
-        assert_eq!(location(&h.state), Some((400, 300).into()));
+        assert_eq!(location(&h.state), Some((404, 304).into()));
     }
 
     #[test]
@@ -704,7 +705,7 @@ mod tests {
         let _shown = h.show_window();
 
         h.shortcut(KEY_LEFT);
-        let states = h.wait_size("the left half", 400, 600);
+        let states = h.wait_size("the left half", 388, 584);
         assert!(!states.contains(&XdgState::Maximized));
         h.shortcut(KEY_UP);
         let states = h.wait_size("maximizing", 800, 600);
@@ -754,7 +755,7 @@ mod tests {
         // Snapped then restored, it does not keep the screen size as its previous size.
         h.state.pointer_motion((1.0, 300.0).into(), 4);
         h.release();
-        h.wait_size("the left half", 400, 600);
+        h.wait_size("the left half", 388, 584);
         h.shortcut(KEY_DOWN);
         let states = h.wait_size("the client size", 0, 0);
         assert!(!states.contains(&XdgState::Maximized));
@@ -792,8 +793,9 @@ mod tests {
         let shown = h.show_window();
         h.drawn(0);
         h.shortcut(KEY_LEFT);
-        h.wait_size("the left half", 400, 600);
+        h.wait_size("the left half", 388, 584);
         h.drawn(1000);
+        let _left = h.redraw(&shown, 388, 584);
         h.assert_follows(3000, "snapped");
 
         // Already on the left: the snap changes nothing.
@@ -801,16 +803,16 @@ mod tests {
         h.assert_follows(3010, "snapped again");
 
         // Resized by the right band, it is drawn at its new size.
-        h.state.pointer_motion((104.0, 40.0).into(), 1);
+        h.state.pointer_motion((400.0, 40.0).into(), 1);
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
         assert!(h.state.gesture_active());
-        h.state.pointer_motion((134.0, 40.0).into(), 3);
-        h.wait_size("the resize", 130, 80);
-        let _file = h.redraw(&shown, 130, 80);
+        h.state.pointer_motion((430.0, 40.0).into(), 3);
+        h.wait_size("the resize", 418, 584);
+        let _file = h.redraw(&shown, 418, 584);
         h.assert_follows(3020, "resized");
         assert_eq!(
             h.drawn(3030).0,
-            Rectangle::new((0.0, 0.0).into(), (130.0, 80.0).into())
+            Rectangle::new((8.0, 8.0).into(), (418.0, 584.0).into())
         );
         h.release();
     }
@@ -818,12 +820,14 @@ mod tests {
     #[test]
     fn a_snapped_window_pulled_out_follows_the_pointer() {
         let mut h = Harness::start();
-        let Shown { seat, toplevel, .. } = h.show_window();
+        let shown = h.show_window();
         h.drawn(0);
         h.shortcut(KEY_LEFT);
-        h.wait_size("the left half", 400, 600);
+        h.wait_size("the left half", 388, 584);
         h.drawn(1000);
+        let _left = h.redraw(&shown, 388, 584);
         h.assert_follows(3000, "snapped");
+        let Shown { seat, toplevel, .. } = shown;
 
         // Pulled out by dragging it, then dragged fast: it stays under the pointer.
         let serial = h.press(10.0, 10.0);
@@ -959,8 +963,8 @@ mod tests {
         h.shortcut(KEY_DOWN);
         h.wait_size("the previous size", 100, 80);
         h.shortcut(KEY_LEFT);
-        h.wait_size("the left half", 400, 554);
-        assert_eq!(location(&h.state), Some((0, 46).into()));
+        h.wait_size("the left half", 388, 538);
+        assert_eq!(location(&h.state), Some((8, 54).into()));
 
         // A click on the bar gives it the keyboard: it asked for it on demand.
         h.press(100.0, 20.0);
@@ -984,12 +988,12 @@ mod tests {
         h.state.pointer_motion((400.0, 300.0).into(), 3);
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
         h.state.pointer_motion((1597.0, 300.0).into(), 5);
-        assert_eq!(h.state.snap_preview(), Some(rect(1200, 0, 400, 600)));
+        assert_eq!(h.state.snap_preview(), Some(rect(1204, 8, 388, 584)));
         h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
         h.state
             .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 7);
-        h.wait_size("the right half of the second screen", 400, 600);
-        assert_eq!(location(&h.state), Some((1200, 0).into()));
+        h.wait_size("the right half of the second screen", 388, 584);
+        assert_eq!(location(&h.state), Some((1204, 8).into()));
 
         // Maximized by the shortcut, it stays on the second screen.
         h.shortcut(KEY_UP);
@@ -1151,7 +1155,7 @@ mod tests {
         );
         // The compositor still works: snapped left, the window takes the whole height.
         h.shortcut(KEY_LEFT);
-        h.wait_size("the left half", 400, 600);
+        h.wait_size("the left half", 388, 584);
     }
 
     #[test]

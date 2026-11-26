@@ -1,7 +1,7 @@
 //! Command line of the compositor.
 //!
 //! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [--workspaces N]
-//! [command [arguments…]]`.
+//! [--snap-gap PX] [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
 //! the login screen, never inside another graphical session.
 
@@ -23,6 +23,9 @@ pub struct Options {
     pub scales: Vec<f64>,
     /// Number of workspaces, from 1 to 9 (`--workspaces`); `None` keeps the default, 3.
     pub workspaces: Option<usize>,
+    /// Margin around snapped windows, from 0 to 64 pixels (`--snap-gap`); `None` keeps the
+    /// default, `SNAP_GAP` of sherlock-ui.
+    pub snap_gap: Option<i32>,
     /// Command launched once XWayland is ready.
     pub command: Vec<OsString>,
 }
@@ -36,7 +39,7 @@ impl Options {
             command.remove(0);
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
-        let mut workspaces = None;
+        let (mut workspaces, mut snap_gap) = (None, None);
         loop {
             match command.first().and_then(|a| a.to_str()) {
                 Some("--measure") => measure = true,
@@ -44,6 +47,7 @@ impl Options {
                 Some("--outputs") if nested => screens = Some(option(&mut command, 1..=4)?),
                 Some("--scale") => scales.push(option(&mut command, 0.5..=4.0)?),
                 Some("--workspaces") => workspaces = Some(option(&mut command, 1..=9)?),
+                Some("--snap-gap") => snap_gap = Some(option(&mut command, 0..=64)?),
                 Some("--outputs" | "--nested") => return Err(Error::Usage),
                 _ => break,
             }
@@ -61,6 +65,7 @@ impl Options {
             xwayland,
             scales,
             workspaces,
+            snap_gap,
             command,
         })
     }
@@ -142,6 +147,8 @@ mod tests {
             "2",
             "--workspaces",
             "5",
+            "--snap-gap",
+            "0",
             "konsole",
             "--scale",
         ])
@@ -149,6 +156,8 @@ mod tests {
         assert!(options.nested && options.measure);
         assert_eq!(options.scales, [2.0, 2.0]);
         assert_eq!(options.workspaces, Some(5));
+        assert_eq!(options.snap_gap, Some(0));
+        assert_eq!(parse(&[]).unwrap().snap_gap, None);
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
@@ -199,6 +208,8 @@ mod tests {
             &["--measure", "--nested"],
             &["--workspaces", "0"],
             &["--workspaces", "10"],
+            &["--snap-gap", "-1"],
+            &["--snap-gap", "65"],
         ] {
             assert!(matches!(parse(args), Err(Error::Usage)), "{args:?}");
         }

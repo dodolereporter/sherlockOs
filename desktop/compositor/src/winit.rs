@@ -132,7 +132,7 @@ fn send_frames(state: &State) {
     let throttle = Some(Duration::ZERO);
     if let Some(output) = outputs.first() {
         for window in state.space.elements() {
-            window.send_frame(output, time, throttle, |_, _| Some(output.clone()));
+            state.send_window_frame(window, output, time);
         }
     }
     for output in &outputs {

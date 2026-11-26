@@ -35,10 +35,7 @@ use smithay::{
     wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 
-use crate::{
-    State, anim::Visual, handlers::is_fullscreen, is_override_redirect, output::View, wallpaper,
-    window_data,
-};
+use crate::{State, anim::Visual, is_override_redirect, output::View, wallpaper, window_data};
 
 /// No fill: only the border of a shape is drawn.
 const NO_FILL: [f32; 4] = [0.0; 4];
@@ -314,15 +311,12 @@ impl Scene {
             };
             self.push_surface(renderer, elements, popup.wl_surface(), at, false);
         }
-        // A fullscreen window has no corners, border or shadow. It keeps them while it slides
-        // towards the whole screen, so that they do not vanish before it gets there.
-        let decorated = !is_fullscreen(window) || visual.moving;
+        // A maximized or fullscreen window has no corners, border or shadow: they shrink and
+        // fade on a spring as it gets there, and come back as it leaves (`Visual::decoration`).
+        let decoration = visual.decoration;
+        let decorated = decoration > 0.0;
         let scale = view.scale as f32;
-        let radius = if decorated {
-            corner_radius(visual.rect.size.to_i32_round()) * scale
-        } else {
-            0.0
-        };
+        let radius = corner_radius(visual.rect.size.to_i32_round()) * scale * decoration;
         if decorated {
             elements.push(SceneElement::Shape(self.shape(
                 rect,
@@ -330,7 +324,7 @@ impl Scene {
                 color::BORDER,
                 metrics::BORDER_WIDTH * scale,
                 radius,
-                visual.opacity,
+                visual.opacity * decoration,
             )));
         }
         // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's
@@ -364,7 +358,7 @@ impl Scene {
                 self.shadow.clone(),
                 frame_area(shadow.area),
                 None,
-                visual.opacity,
+                visual.opacity * decoration,
                 vec![
                     Uniform::new("color", color::SHADOW.premultiplied()),
                     Uniform::new("caster", shadow.caster),
