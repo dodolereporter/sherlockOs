@@ -21,7 +21,11 @@ use wayland_server::{Client, DataInit, Dispatch, Display, DisplayHandle, GlobalD
 /// What the test asks the fake compositor to do.
 enum Change {
     Open(&'static str),
+    /// `closed`, then `done`.
     Close(&'static str),
+    /// `closed` alone: the batch is not over.
+    Closing(&'static str),
+    Done,
 }
 
 struct Compositor {
@@ -57,13 +61,19 @@ impl Compositor {
         match change {
             Change::Open(app_id) => self.announce(display, app_id, false),
             Change::Close(app_id) => {
+                self.apply(display, Change::Closing(app_id));
+                self.apply(display, Change::Done);
+            }
+            Change::Closing(app_id) => {
                 for (_, toplevel) in self.toplevels.iter().filter(|(a, _)| *a == app_id) {
                     toplevel.closed();
                 }
+                self.toplevels.retain(|(a, _)| *a != app_id);
+            }
+            Change::Done => {
                 for (_, manager) in &self.managers {
                     manager.done();
                 }
-                self.toplevels.retain(|(a, _)| *a != app_id);
             }
         }
     }
@@ -210,4 +220,39 @@ fn a_compositor_without_the_shell_protocol_is_reported() {
     let connection = fake.connection.take().expect("connection");
     let result = Shell::with_connection(connection);
     assert!(matches!(result, Err(SourceError::NoShellProtocol(_))));
+}
+
+#[test]
+fn a_closed_window_is_published_with_its_batch_only() {
+    let mut fake = Fake::start(
+        &[("org.example.terminal", false), ("QuickExample", false)],
+        true,
+    )
+    .expect("fake compositor");
+    let connection = fake.connection.take().expect("connection");
+    let mut shell = Shell::with_connection(connection).expect("manager bound");
+    assert_eq!(shell.read().expect("read").list.len(), 2);
+
+    // A window closes, and the batch goes on: nothing is published yet. Read halfway, the
+    // dock would count one window less and take a window that only stayed for a new one.
+    fake.changes
+        .send(Change::Closing("org.example.terminal"))
+        .expect("sent");
+    let (published, waited) = channel();
+    let waiting = std::thread::spawn(move || {
+        let changed = shell.wait();
+        let _ = published.send(changed);
+        shell
+    });
+    assert!(
+        waited.recv_timeout(Duration::from_millis(300)).is_err(),
+        "published before done"
+    );
+    // The batch ends: now it is.
+    fake.changes.send(Change::Done).expect("sent");
+    assert_eq!(waited.recv_timeout(Duration::from_secs(5)), Ok(true));
+    let mut shell = waiting.join().expect("waiting thread");
+    let windows = shell.read().expect("read");
+    assert_eq!(windows.list.len(), 1);
+    assert_eq!(windows.of(|id| id == "org.example.terminal"), (0, false));
 }

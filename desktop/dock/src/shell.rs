@@ -41,6 +41,8 @@ impl Shell {
             .map_err(SourceError::NoShellProtocol)?;
         let mut toplevels = Toplevels::default();
         queue.roundtrip(&mut toplevels)?;
+        // The windows already open are the first `read`; `wait` waits for what comes next.
+        toplevels.changed = false;
         Ok(Self {
             queue,
             toplevels,
@@ -95,7 +97,7 @@ impl Source for Shell {
 #[derive(Debug, Default)]
 struct Toplevels {
     list: Vec<Toplevel>,
-    /// A `done` came since the last `wait`.
+    /// A `done` came since the last `wait`: only it publishes the state.
     changed: bool,
 }
 
@@ -187,10 +189,9 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Toplevels {
             toplevel::Event::State { state: flags } => {
                 toplevel.pending_activated = Some(is_activated(&flags));
             }
-            toplevel::Event::Closed => {
-                state.list.remove(index).handle.destroy();
-                state.changed = true;
-            }
+            // Gone, but published with the rest of its batch: only `done` makes a consistent
+            // state (a window closing and another opening must not read as one window less).
+            toplevel::Event::Closed => state.list.remove(index).handle.destroy(),
             _ => {}
         }
     }
