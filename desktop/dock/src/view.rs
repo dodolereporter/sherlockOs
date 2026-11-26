@@ -3,7 +3,7 @@
 use dock_config::Position as Edge;
 use iced::widget::{container, mouse_area, pin, row, space, stack, svg, text};
 use iced::window::Id;
-use iced::{Alignment, Element, Length, mouse};
+use iced::{Alignment, Element, Length, Rectangle, mouse};
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::logo::Logo;
 use sherlock_ui::{color, dock, metrics, typography};
@@ -23,6 +23,7 @@ impl Dock {
 
     pub fn view_dock(&self) -> Element<'_, Message> {
         let layout = self.layout(self.now);
+        let edge = self.geometry.position;
         let bar = layout.bar;
         let glass = container(space())
             .width(bar.width)
@@ -36,8 +37,40 @@ impl Dock {
                 .style(dock::separator);
             layers.push(place(line, separator.x, separator.y));
         }
+        let now = self.now;
+        // Icons leaving: closing their room in the bar, or vanishing where they were let go.
+        for (leaving, rect) in self.flowing().zip(&layout.leaving) {
+            let track = &leaving.track;
+            let (scale, opacity) = (track.drawn_scale(now), track.opacity.value(now));
+            layers.push(drawn(&leaving.item.glyph, *rect, edge, scale, 0.0, opacity));
+        }
+        for leaving in &self.leaving {
+            let Some(offset) = leaving.dropped else {
+                continue;
+            };
+            let track = &leaving.track;
+            let rect = layout.at_offset(offset, track.size.value(now) as f32);
+            let (scale, opacity) = (track.drawn_scale(now), track.opacity.value(now));
+            layers.push(drawn(&leaving.item.glyph, rect, edge, scale, 0.0, opacity));
+        }
+        let held = self.held();
+        let mut on_top = None;
         for (index, (item, icon)) in self.items.iter().zip(&layout.icons).enumerate() {
-            layers.push(place(glyph(&item.glyph, icon.width), icon.x, icon.y));
+            let track = &self.tracks[index];
+            let (scale, opacity) = match held {
+                Some((i, out)) if i == index => {
+                    (1.0, if out { dock::DRAG_OUT_OPACITY } else { 1.0 })
+                }
+                _ => (track.drawn_scale(now), track.opacity.value(now)),
+            };
+            let lift = self.lift(index, now);
+            let layer = drawn(&item.glyph, *icon, edge, scale, lift, opacity);
+            if held.is_some_and(|(i, _)| i == index) {
+                // Above the others, without its dot.
+                on_top = Some(layer);
+                continue;
+            }
+            layers.push(layer);
             if self.focus == Some(index) {
                 let pad = metrics::FOCUS_RING_GAP + metrics::FOCUS_RING_WIDTH;
                 let ring = container(space())
@@ -57,6 +90,7 @@ impl Dock {
                 layers.push(place(mark, dot.x, dot.y));
             }
         }
+        layers.extend(on_top);
         if let Some(label) = self.view_label(&layout) {
             layers.push(label);
         }
@@ -67,6 +101,7 @@ impl Dock {
             .on_move(|point| Message::Pointer(Pointer::Moved(point)))
             .on_exit(Message::Pointer(Pointer::Left))
             .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
+            .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
             .into()
     }
@@ -76,6 +111,9 @@ impl Dock {
     fn view_label(&self, layout: &Layout) -> Option<Element<'_, Message>> {
         let opacity = self.label.value(self.now);
         let index = self.label_item?;
+        if self.held().is_some() {
+            return None;
+        }
         if opacity <= 0.0 {
             return None;
         }
@@ -160,21 +198,50 @@ fn place<'a>(content: impl Into<Element<'a, Message>>, x: f32, y: f32) -> Elemen
     pin(content).x(x).y(y).into()
 }
 
-/// An icon of side `side`.
-fn glyph(glyph: &Glyph, side: f32) -> Element<'static, Message> {
+/// An icon laid out at `rect`, drawn at `scale` from the middle of its side against the
+/// `edge`, `lift` away from its place (a bounce), at `opacity`.
+fn drawn(
+    glyph_of: &Glyph,
+    rect: Rectangle,
+    edge: Edge,
+    scale: f32,
+    lift: f32,
+    opacity: f32,
+) -> Element<'static, Message> {
+    let side = rect.width * scale;
+    let grow = rect.width - side;
+    let (x, y) = match edge {
+        Edge::Bottom => (rect.x + grow / 2.0, rect.y + grow - lift),
+        Edge::Top => (rect.x + grow / 2.0, rect.y + lift),
+        Edge::Left => (rect.x + lift, rect.y + grow / 2.0),
+        Edge::Right => (rect.x + grow - lift, rect.y + grow / 2.0),
+    };
+    place(glyph(glyph_of, side, opacity), x, y)
+}
+
+/// An icon of side `side`, at `opacity`.
+fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
+    let faded = |c: color::Color| color::Color {
+        a: c.a * opacity,
+        ..c
+    };
     match glyph {
-        Glyph::File(handle) => svg(handle.clone()).width(side).height(side).into(),
+        Glyph::File(handle) => svg(handle.clone())
+            .width(side)
+            .height(side)
+            .opacity(opacity)
+            .into(),
         Glyph::Sherlock => tile(
-            ui::logo(Logo::Color, side * dock::SHERLOCK_GLYPH_RATIO),
-            dock::SHERLOCK_TILE,
+            ui::logo(Logo::Color, side * dock::SHERLOCK_GLYPH_RATIO).opacity(opacity),
+            faded(dock::SHERLOCK_TILE),
             side,
         ),
         Glyph::Letter(letter) => {
             let letter = text(letter.to_string())
                 .size(side * dock::LETTER_RATIO)
                 .font(typography::TITLE)
-                .color(dock::FALLBACK_LETTER);
-            tile(letter, dock::FALLBACK_TILE, side)
+                .color(faded(dock::FALLBACK_LETTER));
+            tile(letter, faded(dock::FALLBACK_TILE), side)
         }
     }
 }

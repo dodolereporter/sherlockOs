@@ -37,8 +37,8 @@ is at 8.8 or more.
 | Place | Content | Source |
 | --- | --- | --- |
 | Left | Sherlock button, which opens the Sherlock menu as an `xdg_popup` | |
-| Left | Name of the active application | Placeholder (see Workspaces) |
-| Center | The workspaces, the active one in green | Placeholder (see Workspaces) |
+| Left | Title of the active window | `sherlock_shell_v1` (see Workspaces) |
+| Center | The workspaces of its screen, the active one in green, the empty ones bare | `ext-workspace-v1`, `sherlock_shell_v1` |
 | Right | Network, sound, battery and its percentage | NetworkManager, PulseAudio or PipeWire, UPower |
 | Right | Short date and time, in French | Local clock |
 
@@ -52,6 +52,7 @@ indicator disappears. A battery discharging below 15 % turns amber.
 | `lib.rs` | Layer-shell surface and iced settings, startup (`run`) |
 | `app.rs` | State (`Bar`), messages, update, bar view and menu view |
 | `menu.rs` | Sherlock menu entries, size of its surface, keyboard keys |
+| `shape.rs` | The two forms of the bar, floating and attached, and the spring between them |
 | `source/` | One source per piece of system data, behind the `Source` trait |
 | `user.rs` | User name, read from the GECOS field of `/etc/passwd` |
 
@@ -64,7 +65,8 @@ bar is the low battery one (`battery::LOW_PERCENT`), which is behavior.
 ### Surface
 
 The layer-shell surface is anchored to the top, left and right, on the `Top` layer, 36 high
-with margins of 10 at the top and 12 on the sides. It declares an exclusive zone of 36. It gets
+with margins of 10 at the top and 12 on the sides, which change when it attaches to the top
+edge (see « Attached to the top edge »). It declares an exclusive zone of 36. It gets
 the keyboard on demand (`OnDemand`): only when clicking into the bar or its menu. Protocol log
 taken in the nested KWin (`WAYLAND_DEBUG=client`):
 
@@ -130,6 +132,7 @@ subscription. It only sends a state when it changed: the bar does not redraw for
 | `UPower` | `upower -i /org/freedesktop/UPower/devices/DisplayDevice` | `upower --monitor` | `fixtures/upower-*.txt` |
 | `NetworkManager` | `nmcli -t -f TYPE,STATE,CONNECTION device` | `nmcli monitor` | `fixtures/nmcli-*.txt` |
 | `Pactl` | `pactl get-sink-volume` and `get-sink-mute` on `@DEFAULT_SINK@` | `pactl subscribe`, lines about an output or the server | `fixtures/pactl-*.txt` |
+| `shell::Auto` | `ext-workspace-v1` and `sherlock_shell_v1` on the shell socket, or `Placeholder` | The protocol events | Fake compositor (`tests/shell.rs`) |
 | `Placeholder` | Variables `BAR_WORKSPACES` and `BAR_APP` | None | Module tests |
 
 Commands run with `LC_ALL=C`, for an output that does not depend on the language. A watch
@@ -170,28 +173,72 @@ development machine, another one will replace it if needed.
 
 ### Workspaces and active application
 
-The compositor publishes neither its workspaces nor its windows yet. The `Placeholder` source
-is fake: three numbered workspaces, the first one active, no active application. To compare
-with the design board:
+Our compositor publishes both on its shell socket, next to the session's Wayland socket
+(`wayland-1-shell` for `wayland-1`, ADR 0021). `source::shell` opens a connection of its own
+there (`shell_protocol::socket_from_env`), on the source's thread, and binds:
+
+- **`ext-workspace-v1`**: the groups and the screens they hold, each workspace with its `id`,
+  `name`, `coordinates` (its order) and `active` state. The bar shows the group holding the
+  screen it sits on, the first group while it does not know its screen yet, and none for a
+  screen no group holds. Workspaces are shared by every screen for now: a single group.
+- **`sherlock_shell_v1`**: the windows, with their workspace and states, and per screen the
+  `output` state (a maximized or fullscreen window is on it). A workspace with no window has a
+  bare chip, without the veil; minimized windows count. The name on the left is the title of
+  the `activated` window, its `app_id` when it has no title, cut where the left half of the
+  bar ends. A window keeps its states on a workspace that is not shown: only an active window
+  of an active workspace names the application.
+
+**Batches.** Each protocol's events stay pending until the `done` of that protocol's manager,
+which settles them; the bar only reads settled batches. A half sent batch of one protocol is
+never read because the other one ended a batch.
+
+A click on a workspace (or Enter on its ringed chip) sends `activate` then `commit` on the
+watching connection itself (`shell::Switcher`): requests can go from the interface thread
+while the source's thread waits for events, and nothing waits for the compositor, so a click
+never blocks, even on a compositor that hangs. The bar changes when the compositor says the
+workspace changed, not before. The active workspace does nothing. A workspace named after its
+number shows the number alone.
+
+The bar's own screen comes from iced_exwlshell (`shell_broadcast`, `WindowOutputChanged`): the
+`wl_output` name of its surface, the name both protocols use.
+
+**Elsewhere** (Plasma, another compositor, no shell socket), the bar logs it once at start,
+`placeholder workspaces, no active application`, with the reason, and keeps the
+`Placeholder` source. When the shell socket is missing or nobody listens on it yet, the
+source tries it again every 3 s (`shell::RETRY`), quietly: the unchanged placeholder is not
+sent again, so no frame is asked for; once the socket answers, the compositor's workspaces
+replace the placeholder. Any other error (the protocols not offered) stops the tries. The
+placeholder: three numbered workspaces, the first one active, all veiled, no active
+application, the bar always floating. A click is logged. The two variables force the
+placeholder even on our compositor, to compare with the design board:
 
 ```sh
 BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" cargo run -p bar
 ```
 
-A click on a workspace is logged; the active workspace does not change, since nothing really
-switches workspaces.
+## Attached to the top edge
 
-**What the compositor will have to provide** to replace `Placeholder` with a real source:
+While a maximized or fullscreen window is on its screen (the `output` state of
+`sherlock_shell_v1`, windows of the active workspace only), the bar leaves its floating pill
+for a band along the top edge: margins 0, the whole width, square corners, and the bar's glass
+made opaque, its border gone (`theme::top_bar_shaped`). It floats again when no maximized
+window is left there. A bar decides from its own screen only: a maximized window on another
+screen leaves it floating.
 
-1. **Workspaces**: the `ext-workspace-v1` protocol. One workspace group per output; for each
-   workspace its `name`, its place (`coordinates`, for the number) and its `active` state; and
-   the `activate` request to switch workspaces on click. The bar shows the workspaces of the
-   group of the output it sits on.
-2. **Active application**: `ext-foreign-toplevel-list-v1` lists the windows with their `app_id`
-   and title, but does not say which one has the focus. The "activated" state of a window is
-   needed as well: `zwlr_foreign_toplevel_manager_v1` (`activated` state) or an extension of our
-   compositor. The bar shows the application name, taken from its `.desktop` file by `app_id`.
-3. Events on every change, so the bar never has to poll.
+![The attached bar](../desktop/bar/screenshots/bar-attached.png)
+![The attached bar in the light theme](../desktop/bar/screenshots/bar-attached-light.png)
+
+The change follows `motion::TOP_BAR_SPRING`, the spring of a window being maximized
+(`shape::Shape`, from 0 floating to 1 attached): margins, radius, opacity and border move
+together, frame by frame, and a change of mind halfway turns back from where the bar is. The
+overshoot of the spring is clipped, so the bar never leaves the screen nor goes below the pill.
+
+**Exclusive zone.** The compositor keeps clear the exclusive zone plus the top margin: 46
+floating, 36 attached. The surface keeps an exclusive zone of 36 and only its margins move,
+one commit per whole pixel, at most a dozen in a transition: the room a maximized window gets
+follows the bar. Changing the zone too would take a second commit per frame (iced_exwlshell
+commits each change on its own), and between the two the compositor would reserve a height
+that is neither the old one nor the new one.
 
 ## Sherlock menu
 
@@ -307,7 +354,18 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   to the light palette over the frames, without restarting.
 - **Battery, network, sound**: parsing of the recorded and rewritten outputs in `fixtures/`.
 - **Sources**: `watch` only sends changes; `Fixed` yields its state once.
-- **Placeholder workspaces** and **user name**.
+- **Placeholder workspaces** and **user name**; the group and the cover of each screen.
+- **Shell protocols** (`tests/shell.rs`): a fake compositor with three workspaces, two
+  screens, two windows (one active and maximized on `eDP-1`, one on workspace 3), driven by
+  commands from the test: the list, names, active and empty workspaces, the active window's
+  title; the bar attached on `eDP-1` and floating on `DP-1`; a click names the workspace,
+  `activate` then `commit` reach the compositor, the bar sees the switch, floats again and
+  loses the title of a window left on another workspace. A half batch of either protocol is
+  not read while the other one ends a batch; a window that closes, a workspace removed, a
+  compositor that goes. Without the protocols, the placeholder; a shell socket that appears
+  after start is picked up. Every wait fails the test after 5 s instead of hanging.
+- **Shape** (`shape.rs`): both geometries and their reserved height (46, 36), the clipped
+  overshoot, the spring there and back, turned back halfway without a jump.
 - **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the
   board.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
@@ -315,10 +373,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Children** (`tests/children.rs`): no monitoring command survives the bar, after SIGTERM or
   SIGKILL.
 - **Bursts**: a burst of monitor lines gives a single refresh.
-- **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, expected
-  texts, a click on a workspace and on a menu entry yields the right message.
-- **Contrast** (`sherlock-ui`): bar texts and workspace chips, on the bar over the desktop and
-  its three discs.
+- **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, and of the
+  attached bar (`bar-attached`, `bar-attached-light`), expected texts, a click on a workspace
+  and on a menu entry yields the right message.
+- **Contrast** (`sherlock-ui`): bar texts and workspace chips (active, occupied, empty), on
+  the bar over the desktop and its three discs, and on the opaque attached bar.
 
 ## Differences from the design board
 
@@ -377,10 +436,12 @@ shows against one.
 
 ## What this batch does not do
 
-- Real workspaces and active application: they wait for the compositor protocols.
+- The application name from its `.desktop` file: the bar shows the window title.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
 - Quick settings on a click on an indicator (Panels batch), the dock (D-21), the launcher
   (D-22).
-- Several outputs: the bar opens on the active output (`StartMode::Active`).
+- Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
+  already follows that screen alone; a bar on every screen needs the menu to open on the
+  surface that was clicked.
 - A real session: the bar only ran in a nested KWin. Our compositor supports layer-shell in
   batch D-12.
