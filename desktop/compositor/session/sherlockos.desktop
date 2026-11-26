@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=NOM_OS
-Comment=Le bureau de NOM_OS, avec Sherlock
-Exec=/usr/local/libexec/nom-os/sherlockos-session
-TryExec=/usr/local/libexec/nom-os/sherlockos-session
-DesktopNames=NOM_OS
+Name=SherlockOS
+Comment=Le bureau de SherlockOS, avec Sherlock
+Exec=/usr/local/libexec/sherlockos/sherlockos-session
+TryExec=/usr/local/libexec/sherlockos/sherlockos-session
+DesktopNames=SherlockOS

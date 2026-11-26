@@ -142,8 +142,8 @@ fn install_backs_up_and_uninstall_restores() {
         backup
     }));
     assert_eq!(tree(&layout.home), before);
-    assert!(!layout.data.join("nom-os").exists());
-    assert!(!layout.data.join("themes").join("NOM_OS-dark").exists());
+    assert!(!layout.data.join("sherlockos").exists());
+    assert!(!layout.data.join("themes").join("SherlockOS-dark").exists());
     let _ = fs::remove_dir_all(&layout.home);
 }
 
@@ -246,11 +246,11 @@ fn the_session_alone_touches_the_gtk_settings() {
     };
     assert_eq!(
         pairs(Theme::Light, 24),
-        "gtk-theme=NOM_OS-light color-scheme=default cursor-theme=nom-os-light cursor-size=24"
+        "gtk-theme=SherlockOS-light color-scheme=default cursor-theme=sherlockos-light cursor-size=24"
     );
     assert_eq!(
         pairs(Theme::Dark, 48),
-        "gtk-theme=NOM_OS-dark color-scheme=prefer-dark cursor-theme=nom-os cursor-size=48"
+        "gtk-theme=SherlockOS-dark color-scheme=prefer-dark cursor-theme=sherlockos cursor-size=48"
     );
     let _ = fs::remove_dir_all(&layout.home);
 }
@@ -289,7 +289,7 @@ fn a_link_that_leads_nowhere_comes_back() {
     assert!(backup.symlink_metadata().is_err());
     // The folders installing created are gone, the others stay.
     assert!(!layout.config.join("qt5ct").exists());
-    assert!(!layout.data.join("nom-os").exists());
+    assert!(!layout.data.join("sherlockos").exists());
     assert!(layout.data.join("themes").is_dir());
     assert!(qt6.parent().must().is_dir());
     let _ = fs::remove_dir_all(&layout.home);

@@ -1,6 +1,7 @@
 //! The panels of the bar, each an `xdg_popup` of the bar surface placed under its right end:
-//! the control centre (the notification centre, opened by the indicators) and the calendar
-//! (opened by the clock). Their size, their place, and their views.
+//! the control centre (the quick settings, opened by the indicators) and the calendar with the
+//! notification centre under it (opened by the clock), as on a Mac. Their size, their place,
+//! and their views.
 
 use iced::widget::{Column, column, container, mouse_area, opaque, row, scrollable, space, text};
 use iced::{Alignment, Element, Length, Padding};
@@ -17,9 +18,9 @@ use crate::history::{Entry, Group};
 /// Which panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
-    /// Opened by the indicators: the notification centre.
+    /// Opened by the indicators: the quick settings.
     Control,
-    /// Opened by the date and time.
+    /// Opened by the date and time: the calendar, and the notification centre under it.
     Calendar,
 }
 
@@ -27,11 +28,11 @@ impl Panel {
     /// Size of the panel itself, without the room for its shadow.
     pub fn size(self) -> (f32, f32) {
         match self {
-            Self::Control => (
-                panels::CENTER_WIDTH + panels::PANEL_GAP + panels::QUICK_WIDTH,
-                panels::CONTROL_HEIGHT,
+            Self::Control => (panels::QUICK_WIDTH, panels::CONTROL_HEIGHT),
+            Self::Calendar => (
+                panels::CENTER_WIDTH,
+                panels::CALENDAR_HEIGHT + panels::PANEL_GAP + panels::CENTER_HEIGHT,
             ),
-            Self::Calendar => (panels::CALENDAR_WIDTH, panels::CALENDAR_HEIGHT),
         }
     }
 }
@@ -94,14 +95,12 @@ pub fn input_rect(panel: Panel, margins: Padding) -> (i32, i32, i32, i32) {
     )
 }
 
-/// One panel: `content` on the glass, `width` wide and as high as `panel`, over its shadow
-/// (on the GPU).
+/// One panel: `content` on the glass, `width` by `height`, over its shadow (on the GPU).
 pub fn glass<'a>(
     content: impl Into<Element<'a, Message>>,
-    panel: Panel,
     width: f32,
+    height: f32,
 ) -> Element<'a, Message> {
-    let (_, height) = panel.size();
     let glass = container(content)
         .width(width)
         .height(height)
@@ -110,11 +109,10 @@ pub fn glass<'a>(
     opaque(surface::shadowed(glass, panels::RADIUS, Elevation::Panel))
 }
 
-/// The panels of a surface, side by side, and a click on the room around them closing them,
-/// for a compositor that would ignore the input region.
-pub fn frame<'a>(glasses: Vec<Element<'a, Message>>, margins: Padding) -> Element<'a, Message> {
-    let line = iced::widget::Row::with_children(glasses).spacing(panels::PANEL_GAP);
-    let room = container(line).padding(margins);
+/// The panel in its surface, and a click on the room around it closing it, for a compositor
+/// that would ignore the input region.
+pub fn frame<'a>(panel: Element<'a, Message>, margins: Padding) -> Element<'a, Message> {
+    let room = container(panel).padding(margins);
     mouse_area(room).on_press(Message::ClosePanel).into()
 }
 
@@ -323,6 +321,7 @@ pub fn calendar(month: Month, today: Option<Date>) -> Element<'static, Message> 
         top: metrics::GAP_INLINE,
         ..Padding::ZERO
     })
+    .width(Length::Fill)
     .height(panels::AGENDA_HEIGHT);
     column![
         head,
@@ -334,6 +333,7 @@ pub fn calendar(month: Month, today: Option<Date>) -> Element<'static, Message> 
         agenda,
     ]
     .width(Length::Fill)
+    .align_x(Alignment::Center)
     .into()
 }
 
@@ -409,8 +409,8 @@ mod tests {
                 );
             }
         }
-        // The board's notification centre at 756, the quick settings at 1092.
-        assert_eq!(on_screen(Panel::Control, margins(false)).0, 756.0);
+        // The board's quick settings at 1092.
+        assert_eq!(on_screen(Panel::Control, margins(false)).0, 1092.0);
     }
 
     #[test]
@@ -420,7 +420,7 @@ mod tests {
         let (x, _, _, _) = anchor_rect(Panel::Calendar, margins, screen, 0.0);
         let (width, _) = surface_size(Panel::Calendar, margins);
         let left = (x + 1) as f32 - (width / 2) as f32;
-        assert_eq!(left + panels::CALENDAR_WIDTH, screen - 12.0);
+        assert_eq!(left + Panel::Calendar.size().0, screen - 12.0);
     }
 
     #[test]

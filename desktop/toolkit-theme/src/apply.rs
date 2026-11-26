@@ -73,7 +73,7 @@ pub fn gsettings_keys(theme: Theme, cursor_size: u32) -> [(&'static str, String)
 pub fn gsettings(layout: &Layout, theme: Theme) -> io::Result<()> {
     if !in_session(layout, std::env::var_os("DCONF_PROFILE").as_deref()) {
         return Err(io::Error::other(format!(
-            "DCONF_PROFILE is not {}: outside the NOM_OS session, the GTK settings are left alone",
+            "DCONF_PROFILE is not {}: outside the SherlockOS session, the GTK settings are left alone",
             layout.dconf_profile().display()
         )));
     }

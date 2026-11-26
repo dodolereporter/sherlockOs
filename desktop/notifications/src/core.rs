@@ -275,7 +275,7 @@ impl Core {
         self.lock().history.iter().cloned().collect()
     }
 
-    /// The history as `org.nomos.Notifications.History` lists it, newest first, each entry
+    /// The history as `org.sherlockos.Notifications.History` lists it, newest first, each entry
     /// telling whether its notification is still open.
     pub fn history_entries(&self) -> Vec<Entry> {
         let state = self.lock();
