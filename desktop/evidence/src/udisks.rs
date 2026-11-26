@@ -10,6 +10,8 @@ use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use iced::futures::channel::mpsc;
 use iced::futures::{SinkExt, Stream, StreamExt};
@@ -27,10 +29,23 @@ const FILESYSTEM: &str = "org.freedesktop.UDisks2.Filesystem";
 const BLOCK: &str = "org.freedesktop.UDisks2.Block";
 const DRIVE: &str = "org.freedesktop.UDisks2.Drive";
 
-/// A connection to UDisks2.
-#[derive(Debug)]
+/// UDisks2, reached on first use: creating it touches no bus, so it never delays the window.
+/// Every call runs on a thread of its own and gives up after a delay
+/// (`sherlock_ui::evidence::BUS_READ_TIMEOUT` for a read, `BUS_ACTION_TIMEOUT` for an action,
+/// which may wait for a password): a bus that never answers leaves the devices out, nothing
+/// else.
+#[derive(Debug, Clone)]
 pub struct UDisks {
-    connection: Connection,
+    shared: Arc<Shared>,
+}
+
+#[derive(Debug)]
+struct Shared {
+    /// The bus address; the system bus when none.
+    address: Option<String>,
+    read: Duration,
+    action: Duration,
+    connection: Mutex<Option<Connection>>,
 }
 
 fn error(error: zbus::Error) -> DeviceError {
@@ -46,56 +61,127 @@ fn error(error: zbus::Error) -> DeviceError {
 }
 
 impl UDisks {
-    /// Connects to the system bus.
-    pub fn connect() -> Result<Self, DeviceError> {
-        Connection::system()
-            .map(|connection| Self { connection })
-            .map_err(error)
+    /// UDisks2 on the system bus, not connected yet.
+    pub fn system() -> Self {
+        let read = sherlock_ui::evidence::BUS_READ_TIMEOUT;
+        Self::new(None, read, sherlock_ui::evidence::BUS_ACTION_TIMEOUT)
+    }
+
+    /// UDisks2 on the bus at `address`, every call bounded by `timeout`: for the tests.
+    pub fn at(address: &str, timeout: Duration) -> Self {
+        Self::new(Some(address.to_owned()), timeout, timeout)
+    }
+
+    fn new(address: Option<String>, read: Duration, action: Duration) -> Self {
+        let shared = Shared {
+            address,
+            read,
+            action,
+            connection: Mutex::new(None),
+        };
+        Self {
+            shared: Arc::new(shared),
+        }
+    }
+
+    /// The connection, opened on first use. Blocking: called on the threads of `run` only.
+    fn connection(shared: &Shared) -> Result<Connection, DeviceError> {
+        let mut slot = shared
+            .connection
+            .lock()
+            .map_err(|_| DeviceError::Unavailable)?;
+        if let Some(connection) = slot.as_ref() {
+            return Ok(connection.clone());
+        }
+        let builder = match &shared.address {
+            Some(address) => zbus::blocking::connection::Builder::address(address.as_str()),
+            None => zbus::blocking::connection::Builder::system(),
+        };
+        let connection = builder
+            .map_err(error)?
+            .method_timeout(shared.action)
+            .build()
+            .map_err(error)?;
+        *slot = Some(connection.clone());
+        Ok(connection)
+    }
+
+    /// Runs `job` on the bus, on a thread of its own, and waits for it at most `timeout`.
+    fn run<T: Send + 'static>(
+        &self,
+        timeout: Duration,
+        job: impl FnOnce(&Connection) -> Result<T, DeviceError> + Send + 'static,
+    ) -> Result<T, DeviceError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let shared = self.shared.clone();
+        std::thread::Builder::new()
+            .name("udisks".into())
+            .spawn(move || {
+                let result = Self::connection(&shared).and_then(|c| job(&c));
+                let _ = sender.send(result);
+            })
+            .map_err(|_| DeviceError::Unavailable)?;
+        receiver.recv_timeout(timeout).unwrap_or_else(|_| {
+            tracing::warn!(?timeout, "UDisks2 did not answer in time");
+            Err(DeviceError::Unavailable)
+        })
     }
 
     fn objects(&self) -> Result<Objects, DeviceError> {
-        let reply = self
-            .connection
-            .call_method(
-                Some(SERVICE),
-                ROOT,
-                Some(OBJECT_MANAGER),
-                "GetManagedObjects",
-                &(),
-            )
-            .map_err(error)?;
-        let raw: HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>> =
-            reply.body().deserialize().map_err(error)?;
-        Ok(raw
-            .into_iter()
-            .map(|(path, ifaces)| {
-                let ifaces: Interfaces = ifaces
-                    .into_iter()
-                    .map(|(name, props)| {
-                        let props: Properties = props
-                            .iter()
-                            .filter_map(|(key, value)| Some((key.clone(), convert(value)?)))
-                            .collect();
-                        (name, props)
-                    })
-                    .collect();
-                (path.to_string(), ifaces)
-            })
-            .collect())
+        self.run(self.shared.read, objects)
     }
 
     /// Calls a UDisks method that takes only an empty options dictionary.
     fn call(
         &self,
         path: &str,
-        interface: &str,
-        method: &str,
+        interface: &'static str,
+        method: &'static str,
     ) -> Result<zbus::Message, DeviceError> {
-        let options: HashMap<&str, Variant<'_>> = HashMap::new();
-        self.connection
-            .call_method(Some(SERVICE), path, Some(interface), method, &(options,))
-            .map_err(error)
+        let path = path.to_owned();
+        self.run(self.shared.action, move |connection| {
+            let options: HashMap<&str, Variant<'_>> = HashMap::new();
+            connection
+                .call_method(
+                    Some(SERVICE),
+                    path.as_str(),
+                    Some(interface),
+                    method,
+                    &(options,),
+                )
+                .map_err(error)
+        })
     }
+}
+
+fn objects(connection: &Connection) -> Result<Objects, DeviceError> {
+    let reply = connection
+        .call_method(
+            Some(SERVICE),
+            ROOT,
+            Some(OBJECT_MANAGER),
+            "GetManagedObjects",
+            &(),
+        )
+        .map_err(error)?;
+    let raw: HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>> =
+        reply.body().deserialize().map_err(error)?;
+    Ok(raw
+        .into_iter()
+        .map(|(path, ifaces)| {
+            let ifaces: Interfaces = ifaces
+                .into_iter()
+                .map(|(name, props)| {
+                    let props: Properties = props
+                        .iter()
+                        .filter_map(|(key, value)| Some((key.clone(), convert(value)?)))
+                        .collect();
+                    (name, props)
+                })
+                .collect();
+            (path.to_string(), ifaces)
+        })
+        .collect())
 }
 
 /// Converts the property types Evidence reads; the others are skipped.
@@ -228,15 +314,16 @@ impl DeviceSource for UDisks {
 /// Follows UDisks2: sends the volumes once, then again after every signal that changes them.
 /// Runs on its own thread until the receiver is gone.
 fn watch(sender: mpsc::UnboundedSender<Vec<Volume>>) {
-    let Ok(udisks) = UDisks::connect() else {
+    let udisks = UDisks::system();
+    // This thread may wait for the bus as long as it takes: it holds nothing else.
+    let Ok(connection) = UDisks::connection(&udisks.shared) else {
         return;
     };
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(SERVICE)
         .map(zbus::match_rule::Builder::build);
-    let messages =
-        rule.and_then(|rule| MessageIterator::for_match_rule(rule, &udisks.connection, None));
+    let messages = rule.and_then(|rule| MessageIterator::for_match_rule(rule, &connection, None));
     let mut last = None;
     let mut send = |volumes: Vec<Volume>| {
         if last.as_ref() == Some(&volumes) {
