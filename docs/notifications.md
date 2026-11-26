@@ -206,7 +206,7 @@ notify-send -u critical -A restart=Relancer -A logs="Voir les logs" "front-next 
 Checked during this batch without a screen: a private bus, a headless KWin
 (`kwin_wayland --virtual`, 1440 × 900) and `gdbus` for the notifications. Protocol log
 (`WAYLAND_DEBUG=client`), a normal notification of 1.5 s then a critical one with an action,
-then `CloseNotification` on the critical one:
+then `CloseNotification` on the critical one from another `gdbus` call, so another connection:
 
 ```text
 zwlr_layer_shell_v1#19.get_layer_surface(new id zwlr_layer_surface_v1#25, wl_surface#24, nil, 2, "notifications")
@@ -219,8 +219,11 @@ zwlr_layer_surface_v1#25.set_size(332, 570)            # the second one is being
 wl_region#55.add(0, 0, 320, 126)                       # the critical one on top
 wl_region#55.add(0, 133, 320, 91)                      # the first one pushed down
 zwlr_layer_surface_v1#25.set_size(332, 142)            # the first one expired
-zwlr_layer_surface_v1#25.destroy()                     # the last one closed
 ```
+
+The `CloseNotification` got the empty error: each `gdbus` call is a connection of its own, and
+only the sender of a notification may close it. Before that rule, the same call closed the
+critical one and the surface went (`zwlr_layer_surface_v1#25.destroy()`).
 
 A second daemon on the same bus logged its message and exited with status 0.
 
