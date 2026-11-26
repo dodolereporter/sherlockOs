@@ -88,7 +88,8 @@ All tokens are named by their role, in English like the rest of the code.
   `MENU_HEADER_PADDING`; `color::TOP_BAR_BUTTON_OPEN` (veil of an open bar button); icons `NetworkOff`, `SoundMuted`, `Battery`, `BatteryCharging`;
   `color::TRANSPARENT` for the background of a shell surface, `metrics::EVENT_COALESCE_MS`
   (150 ms) and `EVENT_COALESCE_MAX_MS` (500 ms) for merging bursts of system events.
-- **`window`**: grab band and snapping of windows, set by D-17 for the compositor.
+- **`window`**: grab band and snapping of windows, set by D-17 for the compositor, and
+  `SNAP_GAP`, the 8 px margin around snapped windows (D-18c1).
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
@@ -110,6 +111,7 @@ instant, with no state that advances frame by frame.
 | `SNAP_SPRING` | stiffness 500, damping 33.5 (ratio 0.75, overshoot of 3 %) | Snap, maximize, restore of a window |
 | `OPEN_SPRING` | stiffness 450, damping 34 (ratio 0.80, overshoot of 2 %) | Scale of a window as it opens |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 (ratio 0.79) | Snap preview |
+| `DECORATION_SPRING` | stiffness 700, damping 53 (ratio 1.0, no overshoot) | Corners, border and shadow of a window that becomes maximized or fullscreen, or leaves it (D-18c1) |
 | `OPEN_SCALE` | 0.92 | Scale of a window at the start of its opening, and of the preview that appears |
 | `FADE` | 150 ms, the top of `metrics::HOVER_MS` | Fade of opening, appearing and clearing |
 | `FRAME_RATE` | 60 | Frame rate to hold, animations included (`docs/contexte.md`) |
