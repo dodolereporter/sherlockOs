@@ -5,7 +5,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use iced::futures::stream::{self, BoxStream};
 use iced::futures::{Future, StreamExt};
@@ -16,15 +16,18 @@ use launcher::system::{NoSession, Session};
 use notifications_config::NotificationsConfig;
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::icon::Icon;
+use sherlock_ui::motion::Fade;
 use sherlock_ui::panels::{self, Glyph, text as words};
 use sherlock_ui::{color, metrics, typography};
 
+use crate::source::battery::{Battery, Charge};
 use crate::system::audio::{Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
 use crate::system::network::{self, Network, Security, Wifi};
 use crate::system::power::{self, Power, Profile};
 use crate::system::{self, Problem};
+use crate::unfold::Unfold;
 
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,6 +64,64 @@ pub enum Service {
     Energy,
     DoNotDisturb,
     Session,
+}
+
+/// One read of a service at a time: one asked meanwhile runs once the first ends, however
+/// many were asked. A burst of signals never stacks reads on the bus.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Reads {
+    reading: u8,
+    again: u8,
+}
+
+impl Reads {
+    fn bit(service: Service) -> u8 {
+        1 << service as u8
+    }
+
+    /// Whether to read `service` now; else it is read once the read under way ends.
+    pub fn start(&mut self, service: Service) -> bool {
+        let bit = Self::bit(service);
+        if self.reading & bit != 0 {
+            self.again |= bit;
+            return false;
+        }
+        self.reading |= bit;
+        true
+    }
+
+    /// The read of `service` ended: whether to read it again.
+    pub fn end(&mut self, service: Service) -> bool {
+        let bit = Self::bit(service);
+        self.reading &= !bit;
+        let again = self.again & bit != 0;
+        self.again &= !bit;
+        again
+    }
+}
+
+/// How much a tile is on, from 0 to 1: a switch mixes its colors over `panels::TILE_FADE`, the
+/// first state read shows at once.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Lit(Option<Fade>);
+
+impl Lit {
+    pub fn set(&mut self, on: bool, now: Duration) {
+        let to = f32::from(u8::from(on));
+        match &mut self.0 {
+            Some(fade) if fade.target() != to => fade.retarget(now, to, panels::TILE_FADE),
+            Some(_) => {}
+            None => self.0 = Some(Fade::new(to, to, now, Duration::ZERO)),
+        }
+    }
+
+    pub fn value(&self, now: Duration) -> f32 {
+        self.0.map_or(0.0, |fade| fade.value(now))
+    }
+
+    pub fn running(&self, now: Duration) -> bool {
+        self.0.is_some_and(|fade| !fade.is_done(now))
+    }
 }
 
 /// The page of the panel.
@@ -228,10 +289,14 @@ pub struct Quick {
     pub sysfs: PathBuf,
     sound_calls: SoundQueue,
     light: Throttle,
-    /// A read of the Wi-Fi is under way, and another one was asked for meanwhile: the signals
-    /// of a scan come in bursts.
-    wifi_reading: bool,
-    wifi_again: bool,
+    pub reads: Reads,
+    /// The instant of the animations (`animated::clock`), given by the bar.
+    pub now: Duration,
+    /// The Wi-Fi, Bluetooth and Do not disturb tiles.
+    pub lit: [Lit; 3],
+    /// The page coming in, and whether it comes from the right.
+    pub page_motion: Unfold,
+    page_forward: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -351,15 +416,15 @@ impl Quick {
     }
 
     fn read(&mut self, service: Service) -> Task<Message> {
+        if matches!(service, Service::DoNotDisturb | Service::Session) || !self.reads.start(service)
+        {
+            return Task::none();
+        }
         match service {
-            Service::Wifi if self.wifi_reading => {
-                self.wifi_again = true;
-                Task::none()
-            }
-            Service::Wifi => {
-                self.wifi_reading = true;
-                self.read_wifi()
-            }
+            Service::Wifi => on_system(
+                |bus| async move { network::read(&bus).await },
+                |r| Message::Wifi(Load::from_result(r)),
+            ),
             Service::Bluetooth => on_system(
                 |bus| async move { bluetooth::read(&bus).await },
                 |r| Message::Bluetooth(Load::from_result(r)),
@@ -386,14 +451,41 @@ impl Quick {
         }
     }
 
-    fn read_wifi(&self) -> Task<Message> {
-        on_system(
-            |bus| async move { network::read(&bus).await },
-            |r| Message::Wifi(Load::from_result(r)),
-        )
+    /// Frames are needed: a tile or a page moves.
+    pub fn running(&self) -> bool {
+        self.page_motion.running() || self.lit.iter().any(|lit| lit.running(self.now))
+    }
+
+    pub fn tick(&mut self, now: Duration) {
+        self.now = now;
+        self.page_motion.tick(now);
+    }
+
+    /// A tile switched by an action or by a read: its colors mix towards its new state. A
+    /// service not read, or not there, starts from nothing: its first state shows at once.
+    fn relight(&mut self) {
+        let on = [
+            self.wifi
+                .ready()
+                .map(|w| w.enabled && w.device.is_some() && !w.hardware_off),
+            self.bluetooth.ready().map(|b| b.powered),
+            self.do_not_disturb,
+        ];
+        for (lit, on) in self.lit.iter_mut().zip(on) {
+            match on {
+                Some(on) => lit.set(on, self.now),
+                None => *lit = Lit::default(),
+            }
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.relight();
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         // Any other click cancels a session command waiting for its confirmation.
         let passive = matches!(
             message,
@@ -421,15 +513,24 @@ impl Quick {
                     self.connecting = None;
                 }
                 self.wifi = wifi;
-                self.wifi_reading = false;
-                if std::mem::take(&mut self.wifi_again) {
-                    return self.read(Service::Wifi);
-                }
+                return self.read_ended(Service::Wifi);
             }
-            Message::Bluetooth(read) => self.bluetooth = read,
-            Message::Sound(read) => self.sound = read,
-            Message::Brightness(read) => self.brightness = read,
-            Message::Energy(read) => self.energy = read,
+            Message::Bluetooth(read) => {
+                self.bluetooth = read;
+                return self.read_ended(Service::Bluetooth);
+            }
+            Message::Sound(read) => {
+                self.sound = read;
+                return self.read_ended(Service::Sound);
+            }
+            Message::Brightness(read) => {
+                self.brightness = read;
+                return self.read_ended(Service::Brightness);
+            }
+            Message::Energy(read) => {
+                self.energy = read;
+                return self.read_ended(Service::Energy);
+            }
             Message::ToggleWifi => {
                 if let Some(wifi) = self.wifi.ready() {
                     let on = !wifi.enabled;
@@ -439,7 +540,12 @@ impl Quick {
                 }
             }
             Message::ShowNetworks(show) => {
-                self.page = if show { Page::Networks } else { Page::Main };
+                let page = if show { Page::Networks } else { Page::Main };
+                if page != self.page {
+                    self.page_motion = Unfold::opening(self.now);
+                    self.page_forward = show;
+                }
+                self.page = page;
                 self.joining = None;
                 self.password.wipe();
                 let device = self.wifi.ready().and_then(|w| w.device.clone());
@@ -514,6 +620,15 @@ impl Quick {
             Message::Changed(service) => return self.read(service),
         }
         Task::none()
+    }
+
+    /// A read ended: the service read once more if a change came meanwhile.
+    fn read_ended(&mut self, service: Service) -> Task<Message> {
+        if self.reads.end(service) {
+            self.read(service)
+        } else {
+            Task::none()
+        }
     }
 
     /// An action ended: its failure kept for the view, the next slider value sent, else the
@@ -764,18 +879,21 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
         let messages = zbus::MessageStream::for_match_rule(rule, bus, None).await?;
         streams.push(messages.map(move |_| service).boxed());
     }
-    Ok(stream::select_all(streams).boxed())
+    let all = stream::select_all(streams).boxed();
+    Ok(crate::bus::coalesce(all, crate::bus::SIGNAL_GAP))
 }
 
 // The view.
 
 impl Quick {
-    /// The panel: the main page or the Wi-Fi networks.
-    pub fn view<'a>(&'a self, user: &'a str) -> Element<'a, Message> {
-        match self.page {
-            Page::Main => self.view_main(user),
-            Page::Networks => self.view_networks(),
-        }
+    /// The panel: the main page or the Wi-Fi networks, sliding in when it changes.
+    /// `battery` goes next to « Énergie ».
+    pub fn view<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
+        self.page_motion
+            .page(self.page_forward, || match self.page {
+                Page::Main => self.view_main(user, battery),
+                Page::Networks => self.view_networks(),
+            })
     }
 
     /// The short word that replaces the line of `service` after its last action failed.
@@ -787,7 +905,7 @@ impl Quick {
         }
     }
 
-    fn view_main<'a>(&'a self, user: &'a str) -> Element<'a, Message> {
+    fn view_main<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
         let tiles = column![
             row![self.wifi_tile(), self.bluetooth_tile()].spacing(panels::TILE_GAP),
             row![self.do_not_disturb_tile(), game_tile()].spacing(panels::TILE_GAP),
@@ -801,8 +919,12 @@ impl Quick {
             tiles,
             self.volume_row(),
             self.brightness_row(),
-            group(words::GPU, Some(words::SOON), panels::segmented(gpu)),
-            self.energy_group(),
+            group(
+                words::GPU,
+                Some(words::SOON.to_owned()),
+                panels::segmented(gpu)
+            ),
+            self.energy_group(battery),
             space::vertical(),
             self.footer(user),
         ]
@@ -835,26 +957,26 @@ impl Quick {
             Glyph::Wifi,
             words::WIFI,
             line,
-            on,
+            self.lit[0].value(self.now),
             enabled.then_some(Message::ToggleWifi),
             more,
         )
     }
 
     fn bluetooth_tile(&self) -> Element<'_, Message> {
-        let (on, line, enabled) = match &self.bluetooth {
-            Load::Loading => (false, words::LOADING.to_owned(), false),
-            Load::Failed(_) => (false, words::UNAVAILABLE.to_owned(), false),
-            Load::Ready(read) if !read.powered => (false, words::OFF.to_owned(), true),
-            Load::Ready(read) if read.connected > 0 => (true, words::devices(read.connected), true),
-            Load::Ready(_) => (true, words::ON.to_owned(), true),
+        let (line, enabled) = match &self.bluetooth {
+            Load::Loading => (words::LOADING.to_owned(), false),
+            Load::Failed(_) => (words::UNAVAILABLE.to_owned(), false),
+            Load::Ready(read) if !read.powered => (words::OFF.to_owned(), true),
+            Load::Ready(read) if read.connected > 0 => (words::devices(read.connected), true),
+            Load::Ready(_) => (words::ON.to_owned(), true),
         };
         let line = self.failed(Service::Bluetooth).map_or(line, str::to_owned);
         panels::quick_tile(
             Glyph::Bluetooth,
             words::BLUETOOTH,
             line,
-            on,
+            self.lit[1].value(self.now),
             enabled.then_some(Message::ToggleBluetooth),
             None,
         )
@@ -872,7 +994,7 @@ impl Quick {
             Glyph::Moon,
             words::DO_NOT_DISTURB,
             line.to_owned(),
-            on,
+            self.lit[2].value(self.now),
             enabled.then_some(Message::ToggleDoNotDisturb),
             None,
         )
@@ -925,12 +1047,17 @@ impl Quick {
         panels::slider_row(icon, value.unwrap_or(0), on_change)
     }
 
-    fn energy_group(&self) -> Element<'_, Message> {
+    /// « Énergie »: the profiles, and the battery with its time left on the right of the
+    /// label, but when the service failed.
+    fn energy_group(&self, battery: Option<Battery>) -> Element<'_, Message> {
         let (state, note) = match &self.energy {
             Load::Ready(state) => (Some(state), self.failed(Service::Energy)),
             Load::Loading => (None, None),
             Load::Failed(_) => (None, Some(words::ENERGY_ABSENT)),
         };
+        let note = note
+            .map(str::to_owned)
+            .or_else(|| battery.map(battery_line));
         let choices = Profile::ALL
             .into_iter()
             .zip(words::PROFILES)
@@ -1074,7 +1201,7 @@ fn game_tile<'a>() -> Element<'a, Message> {
         Glyph::Gamepad,
         words::GAME_MODE,
         words::SOON.to_owned(),
-        false,
+        0.0,
         None,
         None,
     )
@@ -1084,17 +1211,35 @@ fn game_tile<'a>() -> Element<'a, Message> {
 /// control below.
 fn group<'a>(
     label: &'a str,
-    note: Option<&'a str>,
+    note: Option<String>,
     control: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let small = |s: &'a str| text(s).font(typography::UI).size(typography::SMALL_SIZE);
-    let mut head = row![small(label).style(panels::secondary_text)];
+    let mut head = row![
+        text(label)
+            .font(typography::UI)
+            .size(typography::SMALL_SIZE)
+            .style(panels::secondary_text)
+    ];
     if let Some(note) = note {
-        head = head
-            .push(space::horizontal())
-            .push(small(note).style(panels::weekday_text));
+        head = head.push(space::horizontal()).push(
+            text(note)
+                .font(typography::UI)
+                .size(typography::SMALL_SIZE)
+                .style(panels::weekday_text),
+        );
     }
     column![head, control].spacing(panels::GROUP_GAP).into()
+}
+
+/// The battery as « Énergie » says it.
+fn battery_line(battery: Battery) -> String {
+    use words::Charging;
+    let charging = match battery.charge {
+        Charge::Discharging => Charging::No(battery.minutes),
+        Charge::Charging => Charging::Yes(battery.minutes),
+        Charge::Full | Charge::Idle => Charging::Plugged,
+    };
+    words::battery(battery.percent, charging)
 }
 
 /// A short line in the middle of an empty page.
@@ -1237,6 +1382,59 @@ mod tests {
         assert!(matches!(blocked.failure, Some((Service::DoNotDisturb, _))));
         assert_eq!(blocked.failed(Service::DoNotDisturb), Some(words::FAILED));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_burst_of_changes_reads_a_service_twice_at_most() {
+        let mut quick = Quick::default();
+        // A first read goes out, the next ones of the burst wait for it.
+        assert!(quick.update(Message::Changed(Service::Bluetooth)).units() > 0);
+        for _ in 0..50 {
+            assert_eq!(
+                quick.update(Message::Changed(Service::Bluetooth)).units(),
+                0
+            );
+        }
+        let absent = || Load::Failed(Problem::Absent(String::from("test")));
+        // It ends: one more read for all of them, then nothing.
+        assert!(quick.update(Message::Bluetooth(absent())).units() > 0);
+        assert_eq!(quick.update(Message::Bluetooth(absent())).units(), 0);
+        assert!(quick.update(Message::Changed(Service::Bluetooth)).units() > 0);
+        // Another service is not held back.
+        assert!(quick.update(Message::Changed(Service::Energy)).units() > 0);
+    }
+
+    #[test]
+    fn a_switched_tile_mixes_its_colors_then_rests() {
+        let ms = Duration::from_millis;
+        let mut quick = Quick {
+            now: ms(1000),
+            ..Quick::default()
+        };
+        let bluetooth = |powered| {
+            Message::Bluetooth(Load::Ready(Bluetooth {
+                adapter: String::from("/org/bluez/hci0"),
+                powered,
+                connected: 0,
+            }))
+        };
+        // The first state read shows at once.
+        let _ = quick.update(bluetooth(false));
+        assert_eq!(quick.lit[1].value(quick.now), 0.0);
+        assert!(!quick.running());
+        let _ = quick.update(bluetooth(true));
+        assert!(quick.running());
+        quick.tick(ms(1060));
+        let halfway = quick.lit[1].value(quick.now);
+        assert!(halfway > 0.0 && halfway < 1.0, "{halfway}");
+        quick.tick(ms(1000) + panels::TILE_FADE);
+        assert_eq!(quick.lit[1].value(quick.now), 1.0);
+        assert!(!quick.running(), "no frame at rest");
+        // The Wi-Fi page slides in, then rests too.
+        let _ = quick.update(Message::ShowNetworks(true));
+        assert!(quick.running());
+        quick.tick(ms(3000));
+        assert!(!quick.running());
     }
 
     #[test]

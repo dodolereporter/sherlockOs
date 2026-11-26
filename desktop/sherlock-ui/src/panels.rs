@@ -4,7 +4,7 @@
 //! the rules of the visual identity. Tokens, colors, styles and the French texts.
 
 use crate::color::{Color, Palette};
-use crate::{metrics, typography};
+use crate::{metrics, motion, typography};
 
 // Geometry, in logical pixels.
 
@@ -57,6 +57,25 @@ pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + 28.0
     + 2.0 * (17.0 + 6.0 + 36.0)
     + (metrics::BORDER_WIDTH + 12.0 + 34.0);
+
+/// The notification centre under the calendar, in the panel of the clock: its height. The
+/// list scrolls inside it.
+pub const CENTER_HEIGHT: f32 = 280.0;
+
+// Motion (D-20c): the panels unfold from the bar like a window opens, and fold back the same
+// way.
+
+/// Opening and closing of a panel: the spring of a window opening, from 96 % of its size and 8
+/// higher, around its top right corner, under the bar's end; the fade of a hover.
+pub const OPEN_SPRING: motion::Spring = motion::OPEN_SPRING;
+pub const OPEN_SCALE: f32 = 0.96;
+pub const OPEN_RISE: f32 = 8.0;
+pub const OPEN_FADE: std::time::Duration = motion::FADE;
+/// A page that replaces another in a panel (the Wi-Fi networks): it slides in from 24 on its
+/// side, on the same spring and fade.
+pub const PAGE_SLIDE: f32 = 24.0;
+/// A tile switched on or off: its colors mix over a hover's duration.
+pub const TILE_FADE: std::time::Duration = motion::FADE;
 
 /// Calendar: one day cell, the radius of the mark of today, gap below the month row and
 /// below the weekday row, the agenda slot.
@@ -305,6 +324,39 @@ pub mod text {
     pub const POWER_OFF: &str = "Éteindre";
     pub const CONFIRM: &str = "Reclique pour confirmer";
 
+    /// What the battery is doing, for `battery`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Charging {
+        /// On its own, `Some` minutes left.
+        No(Option<u32>),
+        /// Charging, full in `Some` minutes.
+        Yes(Option<u32>),
+        /// Plugged in, full or not charging.
+        Plugged,
+    }
+
+    /// The battery next to « Énergie »: « 82 % · 3 h 12 restantes », « 54 % · pleine dans
+    /// 45 min », « 100 % · branchée ».
+    pub fn battery(percent: u8, charging: Charging) -> String {
+        let value = crate::strings::percent(percent);
+        match charging {
+            Charging::No(Some(left)) => format!("{value} · {} restantes", duration(left)),
+            Charging::Yes(Some(left)) => format!("{value} · pleine dans {}", duration(left)),
+            Charging::Yes(None) => format!("{value} · en charge"),
+            Charging::Plugged => format!("{value} · branchée"),
+            Charging::No(None) => value,
+        }
+    }
+
+    /// « 45 min », « 3 h 12 », « 2 h ».
+    fn duration(minutes: u32) -> String {
+        match (minutes / 60, minutes % 60) {
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} h"),
+            (h, m) => format!("{h} h {m:02}"),
+        }
+    }
+
     /// Bluetooth devices connected.
     pub fn devices(count: usize) -> String {
         if count == 1 {
@@ -521,14 +573,15 @@ mod styles {
         glyph_sized(glyph, tint, GLYPH)
     }
 
-    /// Background of a tile: green when on, veiled when off, fainter when it can do nothing.
-    fn tile_back(on: bool, enabled: bool) -> impl Fn(&Theme) -> container::Style {
+    /// Background of a tile: green when on (`lit` 1), veiled when off, fainter when it can do
+    /// nothing.
+    fn tile_back(lit: f32, enabled: bool) -> impl Fn(&Theme) -> container::Style {
         move |theme| {
             let p = theme::palette(theme);
-            let back = match (enabled, on) {
-                (false, _) => p.disabled,
-                (true, true) => p.accent,
-                (true, false) => Colors::of(p).control,
+            let back = if enabled {
+                Colors::of(p).control.lerp(p.accent, lit)
+            } else {
+                p.disabled
             };
             container::Style {
                 background: fill(back),
@@ -560,20 +613,28 @@ mod styles {
     /// A tile of the grid: its glyph, its title and the line under it. `on_press` switches it;
     /// without it the tile is faded and does nothing. `more`: a chevron on its right, with its
     /// label, which opens a page of its own.
+    ///
+    /// `lit` is how much it is on, from 0 to 1: a tile switched goes from one to the other
+    /// over `TILE_FADE`, its colors mixed.
     pub fn quick_tile<'a, Message: Clone + 'a>(
         glyph_of: Glyph,
         title: &'a str,
         line: String,
-        on: bool,
+        lit: f32,
         on_press: Option<Message>,
         more: Option<(&'a str, Message)>,
     ) -> Element<'a, Message> {
         let p = crate::color::palette();
         let enabled = on_press.is_some();
-        let (ink, under) = match (enabled, on) {
-            (false, _) => (p.text_tertiary, p.text_tertiary),
-            (true, true) => (p.text_on_accent, Colors::of(p).tile_on_line),
-            (true, false) => (p.text_primary, p.text_secondary),
+        let lit = if enabled { lit.clamp(0.0, 1.0) } else { 0.0 };
+        let on = lit >= 0.5;
+        let (ink, under) = if enabled {
+            (
+                p.text_primary.lerp(p.text_on_accent, lit),
+                p.text_secondary.lerp(Colors::of(p).tile_on_line, lit),
+            )
+        } else {
+            (p.text_tertiary, p.text_tertiary)
         };
         let texts = iced::widget::column![
             text(title)
@@ -610,7 +671,7 @@ mod styles {
         container(line)
             .width(Length::Fill)
             .height(TILE_HEIGHT)
-            .style(tile_back(on, enabled))
+            .style(tile_back(lit, enabled))
             .into()
     }
 
@@ -814,13 +875,16 @@ mod tests {
     fn the_panels_sit_where_the_board_puts_them() {
         let bar = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT;
         assert_eq!(bar + BELOW_BAR, 54.0);
-        // The notification centre at 756, the quick settings at 1092, 12 from the right edge.
+        // The quick settings at 1092, 12 from the right edge.
         let right = metrics::REFERENCE_SCREEN.0 - metrics::TOP_BAR_MARGIN_SIDE;
         assert_eq!(right - QUICK_WIDTH, 1092.0);
-        assert_eq!(right - QUICK_WIDTH - PANEL_GAP - CENTER_WIDTH, 756.0);
-        // The control centre stays clear of the dock on the reference screen.
+        // The control centre, and the calendar over the notifications, stay clear of the dock
+        // on the reference screen.
         let bottom = bar + BELOW_BAR + CONTROL_HEIGHT;
         assert!(bottom < metrics::REFERENCE_SCREEN.1 - 150.0, "{bottom}");
+        let clock = bar + BELOW_BAR + CALENDAR_HEIGHT + PANEL_GAP + CENTER_HEIGHT;
+        assert!(clock < metrics::REFERENCE_SCREEN.1 - 150.0, "{clock}");
+        const { assert!(CALENDAR_WIDTH <= CENTER_WIDTH) };
         const { assert!(CALENDAR_HEIGHT < CONTROL_HEIGHT) };
     }
 
@@ -873,5 +937,28 @@ mod tests {
         assert_eq!(text::more(4), "4 autres notifications");
         assert_eq!(text::devices(1), "1 appareil");
         assert_eq!(text::devices(2), "2 appareils");
+    }
+
+    #[test]
+    fn the_battery_says_its_level_and_its_time() {
+        use text::Charging;
+        assert_eq!(
+            text::battery(82, Charging::No(Some(192))),
+            "82\u{202F}% · 3 h 12 restantes"
+        );
+        assert_eq!(
+            text::battery(54, Charging::Yes(Some(45))),
+            "54\u{202F}% · pleine dans 45 min"
+        );
+        assert!(text::battery(54, Charging::Yes(Some(120))).ends_with("dans 2 h"));
+        assert_eq!(
+            text::battery(54, Charging::Yes(None)),
+            "54\u{202F}% · en charge"
+        );
+        assert_eq!(
+            text::battery(100, Charging::Plugged),
+            "100\u{202F}% · branchée"
+        );
+        assert_eq!(text::battery(7, Charging::No(None)), "7\u{202F}%");
     }
 }

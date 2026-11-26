@@ -333,7 +333,7 @@ fn the_shown_names_are_those_of_sherlock_ui() {
         assert!(kde.contains(&format!("\nName={shown}\n")), "{kde}");
         for line in index.lines().chain(kde.lines()) {
             if line.starts_with("Name=") || line.starts_with("Comment=") {
-                assert!(!line.contains("NOM_OS"), "{line}");
+                assert!(!line.contains("SherlockOS-"), "the technical name: {line}");
             }
         }
     }

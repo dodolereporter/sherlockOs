@@ -53,6 +53,7 @@ fn sample() -> Bar {
         Message::Battery(Some(Battery {
             percent: 82,
             charge: Charge::Discharging,
+            minutes: Some(192),
         })),
         Message::Network(Network::Connected {
             link: Link::Wifi,
@@ -336,11 +337,10 @@ fn board_quick(state: &mut Bar) {
     state.quick.settings = Some(PathBuf::from("notifications.conf"));
 }
 
-/// The calendar and the control centre in each theme: `calendar`, `control-centre` (the
-/// board's notifications and quick settings), `control-centre-empty` (no notification, no
-/// service: what a machine without NetworkManager, BlueZ, backlight nor power-profiles-daemon
-/// shows), `wifi-networks` (the network page, a password asked), then their `-light`
-/// versions.
+/// The panels in each theme: `calendar` (the calendar over the board's notifications),
+/// `control-centre` (the board's quick settings), `control-centre-empty` (no service: what a
+/// machine without NetworkManager, BlueZ, backlight nor power-profiles-daemon shows),
+/// `wifi-networks` (the network page, a password asked), then their `-light` versions.
 #[test]
 fn the_panels_render_in_both_themes() {
     for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
@@ -351,12 +351,12 @@ fn the_panels_render_in_both_themes() {
                 year: 2026,
                 month: 11,
             });
+            state.history = board_history();
             let size = panel_size(&state, Panel::Calendar);
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
             assert_written(capture(ui, &format!("calendar{suffix}")));
 
             let size = panel_size(&state, Panel::Control);
-            state.history = History::Ready(Vec::new());
             let absent = || Problem::Absent(String::from("test"));
             for message in [
                 quick::Message::Wifi(Load::Failed(absent())),
@@ -370,12 +370,13 @@ fn the_panels_render_in_both_themes() {
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("control-centre-empty{suffix}")));
 
-            state.history = board_history();
             board_quick(&mut state);
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("control-centre{suffix}")));
 
             let _ = state.quick.update(quick::Message::ShowNetworks(true));
+            // The page slid in.
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
             let maison = state.quick.wifi.ready().map(|w| w.networks[0].clone());
             let mut other = maison.unwrap();
             other.active = false;
@@ -405,7 +406,7 @@ fn the_calendar_marks_today_and_walks_the_months() {
     // button of the month row, at the right of the panel, under its padding.
     let inset = sherlock_ui::panels::PADDING + sherlock_ui::metrics::BORDER_WIDTH;
     let button = sherlock_ui::metrics::ICON_BUTTON;
-    let x = sherlock_ui::panels::CALENDAR_WIDTH - inset - button / 2.0;
+    let x = Panel::Calendar.size().0 - inset - button / 2.0;
     let y = state.panel_margins.top + inset + sherlock_ui::panels::MONTH_ROW / 2.0;
     ui.point_at(iced::Point::new(x, y));
     ui.simulate(iced_test::simulator::click());
@@ -430,16 +431,19 @@ fn the_calendar_marks_today_and_walks_the_months() {
 fn the_centre_runs_an_action_and_clears() {
     let mut state = sample();
     state.panel_margins = panel::margins(false);
-    state.history = board_history();
-    let size = panel_size(&state, Panel::Control);
-    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-    for text in [
-        "Notifications",
-        "Build terminé",
-        "Conteneurs",
-        "21:31",
-        "Mises à jour",
-    ] {
+    // The containers' card alone: under the calendar, the list shows the first card or two.
+    state.history = match board_history() {
+        History::Ready(groups) => History::Ready(
+            groups
+                .into_iter()
+                .filter(|g| g.app == "Conteneurs")
+                .collect(),
+        ),
+        other => other,
+    };
+    let size = panel_size(&state, Panel::Calendar);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    for text in ["novembre 2026", "Notifications", "Conteneurs", "21:31"] {
         assert!(ui.find(text).is_ok(), "{text} missing from the centre");
     }
     ui.click("Relancer").expect("action found");
@@ -485,6 +489,7 @@ fn the_quick_settings_answer_their_clicks() {
         "Haut-parleurs intégrés",
         "Équilibré",
         "Camille",
+        "82\u{202F}% · 3 h 12 restantes",
     ] {
         assert!(
             ui.find(text).is_ok(),
@@ -508,4 +513,41 @@ fn the_quick_settings_answer_their_clicks() {
     ui.click("Mode jeu").expect("tile found");
     ui.click("NVIDIA").expect("segment found");
     assert_eq!(ui.into_messages().count(), 0);
+}
+
+/// The battery of the bar at 5, 50 and 100 % on its own, charging at 54 %, plugged in and
+/// full, and low at 12 %: `battery`, then `battery-light`.
+#[test]
+fn the_battery_fills_with_its_level_in_both_themes() {
+    use bar::source::battery::LOW_PERCENT;
+    use sherlock_ui::component as ui;
+    use sherlock_ui::icon::BatteryMark;
+    let states = [
+        (5, BatteryMark::None),
+        (50, BatteryMark::None),
+        (100, BatteryMark::None),
+        (54, BatteryMark::Charging),
+        (100, BatteryMark::Plugged),
+        (12, BatteryMark::None),
+    ];
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let p = color::palette();
+            let gauges = states.map(|(percent, mark)| {
+                let low = mark == BatteryMark::None && percent < LOW_PERCENT;
+                let tint = if low { p.amber_text } else { p.text_secondary };
+                let value = Some(sherlock_ui::strings::percent(percent));
+                ui::battery::<Message>(percent, mark, value, tint)
+            });
+            let line = iced::widget::Row::with_children(gauges)
+                .spacing(metrics::STATUS_GAP)
+                .padding(8);
+            let back = iced::widget::container(line).style(sherlock_ui::theme::top_bar_shaped(
+                0.0,
+                metrics::TOP_BAR_RADIUS,
+            ));
+            let ui = Simulator::with_size(bar::settings(), (420.0, 36.0), back);
+            assert_written(capture(ui, &format!("battery{suffix}")));
+        });
+    }
 }

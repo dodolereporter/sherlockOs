@@ -44,7 +44,7 @@ and write the same file without pulling iced or zbus.
 | `Notify` | Returns the id. `replaces_id` naming a notification of the same sender (its unique bus name), open or in the history, keeps its id and updates the bubble in place, timer restarted unless the pointer holds it; any other value, another application's id included, gets a new id |
 | `CloseNotification` | Closes it and sends `NotificationClosed` with reason 3. An unknown or closed id, or one of another sender, gets the empty error the specification asks for (`org.freedesktop.DBus.Error.Failed`) |
 | `GetCapabilities` | `actions`, `body`, `body-markup`, `icon-static` |
-| `GetServerInformation` | `notifications`, `NOM_OS` (the OS has no name yet), the crate version, `1.2` |
+| `GetServerInformation` | `notifications`, `SherlockOS` (the OS has no name yet), the crate version, `1.2` |
 | `NotificationClosed` | Reason 1 when it expires, 2 when the user closes it (click, action), 3 on `CloseNotification`, 4 when the daemon closes it itself (too many waiting, hidden by Do not disturb) |
 | `ActionInvoked` | A button, or `default` for a click on the bubble |
 
@@ -178,8 +178,8 @@ history is lost when the daemon stops.
 ## History over D-Bus
 
 The notification centre of the top bar (`docs/bar.md`, Panels) reads the history through a
-small private interface of the daemon, `org.nomos.Notifications.History`, served under the
-same well-known name, `org.freedesktop.Notifications`, at `/org/nomos/Notifications`
+small private interface of the daemon, `org.sherlockos.Notifications.History`, served under the
+same well-known name, `org.freedesktop.Notifications`, at `/org/sherlockos/Notifications`
 (`history.rs`).
 
 | Member | Behavior |

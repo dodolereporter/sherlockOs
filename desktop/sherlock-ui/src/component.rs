@@ -879,6 +879,31 @@ pub fn status<'a, Message: 'a>(
     line.into()
 }
 
+/// The battery of the bar, filled to `percent` with its mark (`icon::battery_svg`), and its
+/// value, in `tint`. The same document for the same state: iced draws it once.
+pub fn battery<'a, Message: 'a>(
+    percent: u8,
+    mark: crate::icon::BatteryMark,
+    value: Option<String>,
+    tint: Color,
+) -> Element<'a, Message> {
+    let gauge = svg(svg::Handle::from_memory(
+        crate::icon::battery_svg(percent, mark).into_bytes(),
+    ))
+    .width(metrics::ICON_SIZE)
+    .height(metrics::ICON_SIZE)
+    .style(move |_, _| svg::Style {
+        color: Some(tint.into()),
+    });
+    let mut line = row![gauge]
+        .spacing(metrics::STATUS_ICON_GAP)
+        .align_y(Alignment::Center);
+    if let Some(value) = value {
+        line = line.push(body(value).color(tint));
+    }
+    line.into()
+}
+
 /// Menu header: the color logo in its night blue square, title and subtitle.
 pub fn menu_header<'a, Message: 'a>(
     title: impl text::IntoFragment<'a>,

@@ -17,12 +17,12 @@ fn custom(name: &'static str, p: &Palette, background: Color) -> Theme {
     Theme::custom(
         name,
         theme::Palette {
-            background: background.into(),
-            text: p.text_primary.into(),
-            primary: p.accent.into(),
-            success: p.accent.into(),
-            warning: p.amber.into(),
-            danger: p.salmon.into(),
+            background: background.exact(),
+            text: p.text_primary.exact(),
+            primary: p.accent.exact(),
+            success: p.accent.exact(),
+            warning: p.amber.exact(),
+            danger: p.salmon.exact(),
         },
     )
 }
@@ -79,12 +79,12 @@ pub fn window_theme() -> Theme {
 pub fn palette(theme: &Theme) -> &'static Palette {
     let text = theme.palette().text;
     let shown = color::palette();
-    if text == iced::Color::from(shown.text_primary) {
+    if text == shown.text_primary.exact() {
         return shown;
     }
     (0..=color::MIX_STEPS)
         .map(Palette::at_step)
-        .find(|p| text == iced::Color::from(p.text_primary))
+        .find(|p| text == p.text_primary.exact())
         .unwrap_or(&Palette::DARK)
 }
 

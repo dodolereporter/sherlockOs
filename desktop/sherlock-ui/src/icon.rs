@@ -192,9 +192,68 @@ impl Icon {
     }
 }
 
+/// What the battery gauge shows over its level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatteryMark {
+    None,
+    /// A bolt: it charges.
+    Charging,
+    /// A plug: plugged in, full or not charging.
+    Plugged,
+}
+
+/// The inside of the battery outline, which its level fills from the left: x, y, width,
+/// height on the 24 grid.
+pub const BATTERY_INSIDE: (f32, f32, f32, f32) = (5.0, 9.0, 12.0, 6.0);
+
+/// The battery of the bar, drawn rather than chosen: the outline of `Icon::Battery`, filled
+/// from the left to `percent`, its mark cut out of the level and filled outside it (even-odd
+/// rule), so that it shows at every level in the single color of the icon.
+pub fn battery_svg(percent: u8, mark: BatteryMark) -> String {
+    let (x, y, width, height) = BATTERY_INSIDE;
+    let level = width * f32::from(percent.min(100)) / 100.0;
+    let mut fill = if level > 0.0 {
+        format!("M{x} {y}h{level:.1}v{height}H{x}z")
+    } else {
+        String::new()
+    };
+    fill.push_str(match mark {
+        BatteryMark::None => "",
+        BatteryMark::Charging => "M11.8 8.4L8.9 12.3h2.5l-1 3.3 3.1-4.1H11z",
+        BatteryMark::Plugged => "M8 11.3h1.5v-1.3h2.6a1.3 1.3 0 0 1 1.3 1.3v.2h1.6v.9h-1.6v.2a1.3 1.3 0 0 1-1.3 1.3H9.5v-1.3H8z",
+    });
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {grid} {grid}\">\
+         <path d=\"{outline}\" fill=\"none\" stroke=\"#000\" stroke-width=\"{stroke}\" \
+         stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\
+         <path d=\"{fill}\" fill=\"#000\" fill-rule=\"evenodd\"/></svg>",
+        grid = metrics::ICON_GRID,
+        stroke = metrics::ICON_STROKE,
+        outline = Icon::Battery.path(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_battery_fills_with_its_level_and_shows_its_mark() {
+        let level = |svg: &str| {
+            svg.split("M5 9h")
+                .nth(1)
+                .and_then(|rest| rest.split('v').next())
+                .and_then(|n| n.parse::<f32>().ok())
+        };
+        assert_eq!(level(&battery_svg(5, BatteryMark::None)), Some(0.6));
+        assert_eq!(level(&battery_svg(50, BatteryMark::None)), Some(6.0));
+        assert_eq!(level(&battery_svg(100, BatteryMark::Plugged)), Some(12.0));
+        assert_eq!(level(&battery_svg(0, BatteryMark::None)), None);
+        let charging = battery_svg(54, BatteryMark::Charging);
+        assert!(charging.contains("M11.8 8.4") && charging.contains("evenodd"));
+        assert!(!battery_svg(54, BatteryMark::None).contains("M11.8"));
+        assert!(battery_svg(100, BatteryMark::Plugged).contains("M8 11.3"));
+    }
 
     #[test]
     fn every_icon_stays_in_the_grid() {

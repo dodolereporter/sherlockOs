@@ -20,7 +20,7 @@ const USAGE: &str =
     "usage: sherlockd --demo | --claude-code <request> | --proxy | --test-server [case]";
 
 const SYSTEM: &str =
-    "Tu es Sherlock, l'agent de NOM_OS. Réponds en français, en tutoyant, par phrases courtes.";
+    "Tu es Sherlock, l'agent de SherlockOS. Réponds en français, en tutoyant, par phrases courtes.";
 
 fn main() -> anyhow::Result<()> {
     // Logs on standard error: standard output carries the MCP protocol or the conversation.
