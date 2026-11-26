@@ -1548,16 +1548,16 @@ mod tests {
     fn a_device_is_connected_paired_or_forgotten_one_at_a_time() {
         use crate::system::bluetooth::{Asked, Pairing};
         let mut quick = with_devices();
-        let souris = String::from("/org/bluez/hci0/dev_2");
-        assert!(quick.update(Message::Device(souris.clone())).units() > 0);
-        assert_eq!(quick.device_busy.as_deref(), Some(souris.as_str()));
+        let mouse = String::from("/org/bluez/hci0/dev_2");
+        assert!(quick.update(Message::Device(mouse.clone())).units() > 0);
+        assert_eq!(quick.device_busy.as_deref(), Some(mouse.as_str()));
         // Another click waits for the first one.
-        let clavier = String::from("/org/bluez/hci0/dev_3");
-        assert_eq!(quick.update(Message::Device(clavier.clone())).units(), 0);
+        let keyboard = String::from("/org/bluez/hci0/dev_3");
+        assert_eq!(quick.update(Message::Device(keyboard.clone())).units(), 0);
         let _ = quick.update(Message::Done(Service::Bluetooth, Ok(())));
         assert_eq!(quick.device_busy, None);
         // A device found pairs; the agent asks, the panel answers what the user clicks.
-        assert!(quick.update(Message::Device(clavier.clone())).units() > 0);
+        assert!(quick.update(Message::Device(keyboard.clone())).units() > 0);
         let (sender, answer) = iced::futures::channel::oneshot::channel();
         let reply = crate::system::bluetooth::Reply::new(sender);
         let asked = Asked::Confirm(String::from("123456"));
@@ -1570,11 +1570,11 @@ mod tests {
         assert_eq!(quick.device_busy, None);
         assert_eq!(quick.failed(Service::Bluetooth), Some(words::REFUSED));
         // « Oublier » asks first; « Annuler » keeps the device.
-        let _ = quick.update(Message::Forget(souris.clone()));
-        assert_eq!(quick.forgetting.as_deref(), Some(souris.as_str()));
+        let _ = quick.update(Message::Forget(mouse.clone()));
+        assert_eq!(quick.forgetting.as_deref(), Some(mouse.as_str()));
         assert_eq!(quick.update(Message::ConfirmForget(false)).units(), 0);
         assert_eq!(quick.forgetting, None);
-        let _ = quick.update(Message::Forget(souris));
+        let _ = quick.update(Message::Forget(mouse));
         assert!(quick.update(Message::ConfirmForget(true)).units() > 0);
     }
 

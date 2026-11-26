@@ -275,19 +275,19 @@ mod tests {
     }
 
     const ADAPTER: &str = "/org/bluez/hci0";
-    const CASQUE: &str = "/org/bluez/hci0/dev_01";
-    const SOURIS: &str = "/org/bluez/hci0/dev_02";
-    const CLAVIER: &str = "/org/bluez/hci0/dev_03";
-    const MONTRE: &str = "/org/bluez/hci0/dev_04";
-    const ANONYME: &str = "/org/bluez/hci0/dev_05";
+    const HEADSET: &str = "/org/bluez/hci0/dev_01";
+    const MOUSE: &str = "/org/bluez/hci0/dev_02";
+    const KEYBOARD: &str = "/org/bluez/hci0/dev_03";
+    const WATCH: &str = "/org/bluez/hci0/dev_04";
+    const NAMELESS: &str = "/org/bluez/hci0/dev_05";
 
     /// BlueZ with one adapter: « Casque » paired and connected at 80 %, « Souris » paired,
     /// « Clavier » and « Montre » found (the watch never answers), and an unnamed device.
     fn bluez(bus: &mut Bus, state: &Shared) {
-        let mut casque = Gadget::new(state, "Casque", "audio-headset", true);
-        casque.connected = true;
-        let mut montre = Gadget::new(state, "Montre", "", false);
-        montre.answers = false;
+        let mut headset = Gadget::new(state, "Casque", "audio-headset", true);
+        headset.connected = true;
+        let mut watch = Gadget::new(state, "Montre", "", false);
+        watch.answers = false;
         let connection = zbus::blocking::connection::Builder::address(bus.address.as_str())
             .unwrap()
             .serve_at("/", zbus::fdo::ObjectManager)
@@ -296,20 +296,20 @@ mod tests {
             .unwrap()
             .serve_at(ADAPTER, Adapter(Arc::clone(state)))
             .unwrap()
-            .serve_at(CASQUE, casque)
+            .serve_at(HEADSET, headset)
             .unwrap()
-            .serve_at(CASQUE, Battery(80))
+            .serve_at(HEADSET, Battery(80))
             .unwrap()
-            .serve_at(SOURIS, Gadget::new(state, "Souris", "input-mouse", true))
+            .serve_at(MOUSE, Gadget::new(state, "Souris", "input-mouse", true))
             .unwrap()
             .serve_at(
-                CLAVIER,
+                KEYBOARD,
                 Gadget::new(state, "Clavier", "input-keyboard", false),
             )
             .unwrap()
-            .serve_at(MONTRE, montre)
+            .serve_at(WATCH, watch)
             .unwrap()
-            .serve_at(ANONYME, Nameless)
+            .serve_at(NAMELESS, Nameless)
             .unwrap()
             .build()
             .unwrap();
@@ -353,15 +353,15 @@ mod tests {
         let names: Vec<_> = read.devices.iter().map(|d| d.name.as_str()).collect();
         // Connected, then paired, then found; the unnamed device is not shown.
         assert_eq!(names, ["Casque", "Souris", "Clavier", "Montre"]);
-        let casque = device(&read, CASQUE);
-        assert_eq!((casque.kind, casque.connected), (Kind::Audio, true));
-        assert_eq!(casque.battery, Some(80));
-        let souris = device(&read, SOURIS);
+        let headset = device(&read, HEADSET);
+        assert_eq!((headset.kind, headset.connected), (Kind::Audio, true));
+        assert_eq!(headset.battery, Some(80));
+        let mouse = device(&read, MOUSE);
         assert_eq!(
-            (souris.kind, souris.paired, souris.battery),
+            (mouse.kind, mouse.paired, mouse.battery),
             (Kind::Mouse, true, None)
         );
-        assert!(!device(&read, CLAVIER).paired);
+        assert!(!device(&read, KEYBOARD).paired);
         assert_eq!(read.connected, 1);
     }
 
@@ -371,11 +371,11 @@ mod tests {
         let state = Shared::default();
         bluez(&mut bus, &state);
         let client = bus.connect();
-        zbus::block_on(bluetooth::connect(&client, SOURIS)).unwrap();
-        zbus::block_on(bluetooth::disconnect(&client, CASQUE)).unwrap();
+        zbus::block_on(bluetooth::connect(&client, MOUSE)).unwrap();
+        zbus::block_on(bluetooth::disconnect(&client, HEADSET)).unwrap();
         let read = read(&client);
-        assert!(device(&read, SOURIS).connected);
-        assert!(!device(&read, CASQUE).connected);
+        assert!(device(&read, MOUSE).connected);
+        assert!(!device(&read, HEADSET).connected);
         zbus::block_on(bluetooth::discover(&client, ADAPTER, true)).unwrap();
         zbus::block_on(bluetooth::discover(&client, ADAPTER, false)).unwrap();
         assert_eq!(lock(&state).scanning, [true, false]);
@@ -388,24 +388,24 @@ mod tests {
         bluez(&mut bus, &state);
         let client = bus.connect();
         // « Annuler »: not paired, the agent gone.
-        let (asked, result) = pair(&client, CLAVIER, false);
+        let (asked, result) = pair(&client, KEYBOARD, false);
         assert_eq!(asked, [Asked::Confirm(String::from("123456"))]);
         assert!(result.is_err(), "{result:?}");
-        assert!(!device(&read(&client), CLAVIER).paired);
+        assert!(!device(&read(&client), KEYBOARD).paired);
         assert!(lock(&state).agent.is_none());
         // « Confirmer »: paired, trusted, connected; the agent registered for this pairing only.
-        let (asked, result) = pair(&client, CLAVIER, true);
+        let (asked, result) = pair(&client, KEYBOARD, true);
         assert_eq!(asked, [Asked::Confirm(String::from("123456"))]);
         assert_eq!(result, Ok(()));
         let read = read(&client);
-        let clavier = device(&read, CLAVIER);
-        assert!(clavier.paired && clavier.connected);
+        let keyboard = device(&read, KEYBOARD);
+        assert!(keyboard.paired && keyboard.connected);
         assert_eq!(lock(&state).unregistered, 2);
         assert!(lock(&state).agent.is_none());
         let trusted: bool = zbus::block_on(bar::system::get(
             &client,
             bluetooth::SERVICE,
-            CLAVIER,
+            KEYBOARD,
             bluetooth::DEVICE,
             "Trusted",
         ))
@@ -419,7 +419,7 @@ mod tests {
         let state = Shared::default();
         bluez(&mut bus, &state);
         let start = Instant::now();
-        let (asked, result) = pair(&bus.connect(), MONTRE, true);
+        let (asked, result) = pair(&bus.connect(), WATCH, true);
         assert!(asked.is_empty());
         assert!(result.is_err(), "{result:?}");
         assert!(
@@ -440,12 +440,12 @@ mod tests {
         let state = Shared::default();
         bluez(&mut bus, &state);
         let client = bus.connect();
-        zbus::block_on(bluetooth::forget(&client, ADAPTER, SOURIS)).unwrap();
-        assert_eq!(lock(&state).removed, [SOURIS]);
+        zbus::block_on(bluetooth::forget(&client, ADAPTER, MOUSE)).unwrap();
+        assert_eq!(lock(&state).removed, [MOUSE]);
         let read = read(&client);
-        assert!(read.devices.iter().all(|d| d.path != SOURIS));
-        let path = ObjectPath::try_from(CASQUE).unwrap();
-        assert_eq!(path.as_str(), CASQUE);
+        assert!(read.devices.iter().all(|d| d.path != MOUSE));
+        let path = ObjectPath::try_from(HEADSET).unwrap();
+        assert_eq!(path.as_str(), HEADSET);
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod tests {
         let bus = Bus::start("absent");
         let read = zbus::block_on(bluetooth::read(&bus.connect()));
         assert!(matches!(read, Err(Problem::Absent(_))), "{read:?}");
-        let result = zbus::block_on(bluetooth::connect(&bus.connect(), CASQUE));
+        let result = zbus::block_on(bluetooth::connect(&bus.connect(), HEADSET));
         assert!(matches!(result, Err(Problem::Absent(_))), "{result:?}");
     }
 }
