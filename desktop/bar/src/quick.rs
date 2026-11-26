@@ -1,6 +1,8 @@
 //! The quick settings of the control centre (Panels board): Wi-Fi, Bluetooth, Do not disturb,
-//! game mode, volume, brightness, graphics card, energy, and the session. Their state, their
-//! messages, the calls to the services (`system`), and their view.
+//! game mode, volume, brightness, keyboard backlight, graphics card, energy, and the session.
+//! Their state, their messages, the calls to the services (`system`), and their view. While
+//! the panel is open, the volume and the brightnesses follow what changes elsewhere (`watch`,
+//! lot D-35d), but for a slider held under the pointer.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -24,8 +26,10 @@ use crate::source::battery::{Battery, Charge};
 use crate::system::audio::{Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
+use crate::system::keyboard::{self, KeyboardLight};
 use crate::system::network::{self, Network, Security, Wifi};
 use crate::system::power::{self, Power, Profile};
+use crate::system::watch;
 use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
@@ -66,6 +70,8 @@ pub enum Service {
     Energy,
     DoNotDisturb,
     Session,
+    /// The keyboard backlight, when the machine has one.
+    Keyboard,
 }
 
 /// One read of a service at a time: one asked meanwhile runs once the first ends, however
@@ -161,6 +167,11 @@ pub struct Throttle {
 }
 
 impl Throttle {
+    /// A call is under way.
+    pub fn busy(&self) -> bool {
+        self.busy
+    }
+
     /// The value to send now, if no call is under way.
     pub fn want(&mut self, value: u8) -> Option<u8> {
         if self.busy {
@@ -240,6 +251,11 @@ pub enum SoundCall {
 }
 
 impl SoundQueue {
+    /// A call is under way.
+    pub fn busy(&self) -> bool {
+        self.busy
+    }
+
     /// `call` now, if no call is under way; else it waits, replacing one of its kind.
     pub fn push(&mut self, call: SoundCall) -> Option<SoundCall> {
         if !self.busy {
@@ -274,6 +290,7 @@ pub struct Quick {
     pub bluetooth: Load<Bluetooth>,
     pub sound: Load<Output>,
     pub brightness: Load<Backlight>,
+    pub keyboard: Load<KeyboardLight>,
     pub energy: Load<Power>,
     pub do_not_disturb: Option<bool>,
     pub page: Page,
@@ -291,8 +308,12 @@ pub struct Quick {
     pub pactl: Pactl,
     pub settings: Option<PathBuf>,
     pub sysfs: PathBuf,
+    pub leds: PathBuf,
     sound_calls: SoundQueue,
     light: Throttle,
+    keyboard_calls: Throttle,
+    /// The slider held under the pointer: a change made elsewhere does not move it.
+    pub held: Option<Service>,
     pub reads: Reads,
     /// The instant of the animations (`animated::clock`), given by the bar.
     pub now: Duration,
@@ -321,6 +342,7 @@ pub enum Message {
     Bluetooth(Load<Bluetooth>),
     Sound(Load<Output>),
     Brightness(Load<Backlight>),
+    Keyboard(Load<KeyboardLight>),
     Energy(Load<Power>),
     ToggleWifi,
     ShowNetworks(bool),
@@ -345,6 +367,9 @@ pub enum Message {
     Volume(u8),
     Mute,
     Light(u8),
+    KeyboardLight(u8),
+    /// The slider of a service let go.
+    Release(Service),
     Profile(Profile),
     Session(Command),
     /// An action ended.
@@ -420,6 +445,7 @@ impl Quick {
             commands: Commands(commands),
             settings: notifications_config::path(),
             sysfs: PathBuf::from(backlight::SYSFS),
+            leds: PathBuf::from(keyboard::LEDS),
             ..Self::default()
         }
     }
@@ -430,6 +456,7 @@ impl Quick {
         self.page = Page::Main;
         self.armed = None;
         self.failure = None;
+        self.held = None;
         self.do_not_disturb = self.settings.as_deref().map(|path| {
             NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
         });
@@ -439,6 +466,7 @@ impl Quick {
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
             self.read(Service::Brightness),
+            self.read(Service::Keyboard),
             self.read(Service::Energy),
         ])
     }
@@ -473,6 +501,13 @@ impl Quick {
                 blocking(
                     move || backlight::find(&root),
                     |r| Message::Brightness(Load::from_result(r)),
+                )
+            }
+            Service::Keyboard => {
+                let leds = self.leds.clone();
+                on_system(
+                    move |bus| async move { keyboard::read(&bus, &leds).await },
+                    |r| Message::Keyboard(Load::from_result(r)),
                 )
             }
             Service::DoNotDisturb | Service::Session => Task::none(),
@@ -526,6 +561,7 @@ impl Quick {
                 | Message::Bluetooth(_)
                 | Message::Sound(_)
                 | Message::Brightness(_)
+                | Message::Keyboard(_)
                 | Message::Energy(_)
         );
         if !passive {
@@ -555,13 +591,33 @@ impl Quick {
                 };
                 return Task::batch([scan, self.read_ended(Service::Bluetooth)]);
             }
-            Message::Sound(read) => {
+            Message::Sound(mut read) => {
+                // A slider held, or a value on its way to the server, stays where it is.
+                if let (Load::Ready(new), Some(old)) = (&mut read, self.sound.ready())
+                    && self.settling(Service::Sound)
+                {
+                    new.sound = old.sound;
+                }
                 self.sound = read;
                 return self.read_ended(Service::Sound);
             }
-            Message::Brightness(read) => {
+            Message::Brightness(mut read) => {
+                if let (Load::Ready(new), Some(old)) = (&mut read, self.brightness.ready())
+                    && self.settling(Service::Brightness)
+                {
+                    new.brightness = old.brightness;
+                }
                 self.brightness = read;
                 return self.read_ended(Service::Brightness);
+            }
+            Message::Keyboard(mut read) => {
+                if let (Load::Ready(new), Some(old)) = (&mut read, self.keyboard.ready())
+                    && self.settling(Service::Keyboard)
+                {
+                    new.brightness = old.brightness;
+                }
+                self.keyboard = read;
+                return self.read_ended(Service::Keyboard);
             }
             Message::Energy(read) => {
                 self.energy = read;
@@ -615,6 +671,7 @@ impl Quick {
             }
             Message::ToggleDoNotDisturb => self.toggle_do_not_disturb(),
             Message::Volume(value) => {
+                self.held = Some(Service::Sound);
                 if let Load::Ready(output) = &mut self.sound {
                     output.sound.volume = u16::from(value);
                 }
@@ -632,12 +689,29 @@ impl Quick {
                 }
             }
             Message::Light(value) => {
+                self.held = Some(Service::Brightness);
                 if let Load::Ready(light) = &mut self.brightness {
                     light.brightness = light.raw(value);
                 }
                 if let Some(value) = self.light.want(value) {
                     return self.send_light(value);
                 }
+            }
+            Message::KeyboardLight(value) => {
+                self.held = Some(Service::Keyboard);
+                if let Load::Ready(light) = &mut self.keyboard {
+                    light.brightness = light.raw(value);
+                }
+                if let Some(value) = self.keyboard_calls.want(value) {
+                    return self.send_keyboard(value);
+                }
+            }
+            Message::Release(service) => {
+                if self.held == Some(service) {
+                    self.held = None;
+                }
+                // What changed elsewhere while it was held shows now.
+                return self.read(service);
             }
             Message::Profile(profile) => {
                 if let Load::Ready(state) = &self.energy {
@@ -690,6 +764,7 @@ impl Quick {
         let next = match service {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
+            Service::Keyboard => self.keyboard_calls.done().map(|v| self.send_keyboard(v)),
             _ => None,
         };
         match next {
@@ -718,6 +793,26 @@ impl Quick {
         self.forgetting = None;
         self.stop_pairing();
         self.stop_scan()
+    }
+
+    /// A read of `service` must not move its slider: it is held, or a value is on its way.
+    fn settling(&self, service: Service) -> bool {
+        self.held == Some(service)
+            || match service {
+                Service::Sound => self.sound_calls.busy(),
+                Service::Brightness => self.light.busy(),
+                Service::Keyboard => self.keyboard_calls.busy(),
+                _ => false,
+            }
+    }
+
+    fn send_keyboard(&self, value: u8) -> Task<Message> {
+        let Some(light) = self.keyboard.ready().cloned() else {
+            return Task::none();
+        };
+        act(Service::Keyboard, move |bus| async move {
+            keyboard::set(&bus, &light, light.raw(value)).await
+        })
     }
 
     fn send_light(&self, value: u8) -> Task<Message> {
@@ -828,11 +923,12 @@ impl Quick {
     }
 }
 
-/// The changes the services announce on the system bus while the control centre is open:
+/// The changes the services announce while the control centre is open: on the system bus,
 /// NetworkManager's main object and the states of its devices, BlueZ's adapters,
-/// power-profiles-daemon. Nothing when the bus cannot be reached (logged once).
+/// power-profiles-daemon and UPower's keyboard backlight (nothing when the bus cannot be
+/// reached, logged once); the sound and the screen brightness changed elsewhere (`local`).
 pub fn watch() -> BoxStream<'static, Service> {
-    stream::once(async {
+    let bus = stream::once(async {
         match changes().await {
             Ok(changes) => changes,
             Err(problem) => {
@@ -841,8 +937,33 @@ pub fn watch() -> BoxStream<'static, Service> {
             }
         }
     })
-    .flatten()
-    .boxed()
+    .flatten();
+    let local = local(Pactl::default().program, PathBuf::from(backlight::SYSFS));
+    stream::select(bus, local).boxed()
+}
+
+/// The sound (`pactl subscribe`, or a stand-in) and the brightness of the backlight under
+/// `sysfs` changed elsewhere, a key or another application, for as long as the stream lives
+/// (lot D-35d, `system_services::watch`).
+pub fn local(pactl: std::ffi::OsString, sysfs: PathBuf) -> BoxStream<'static, Service> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let tell = |service| {
+        let sender = sender.clone();
+        move || sender.unbounded_send(service).is_ok()
+    };
+    let alive = || {
+        let sender = sender.clone();
+        move || !sender.is_closed()
+    };
+    let sound = watch::sound(pactl, tell(Service::Sound), alive());
+    if let Err(error) = sound {
+        tracing::warn!(%error, "the volume will not follow the sound");
+    }
+    let light = watch::brightness(sysfs, tell(Service::Brightness), alive());
+    if let Err(error) = light {
+        tracing::warn!(%error, "the brightness will not follow the screen");
+    }
+    receiver.boxed()
 }
 
 /// The streams of `watch`, on the system bus.
@@ -935,6 +1056,16 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
     for (name, _, _) in power::NAMES {
         rules.push((properties(name)?, Service::Energy));
     }
+    // UPower tells of a change of the keyboard backlight, from a key or elsewhere.
+    rules.push((
+        zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender(keyboard::UPOWER)?
+            .interface(keyboard::INTERFACE)?
+            .member("BrightnessChanged")?
+            .build(),
+        Service::Keyboard,
+    ));
     let mut streams = Vec::new();
     for (rule, service) in rules {
         let messages = zbus::MessageStream::for_match_rule(rule, bus, None).await?;
@@ -1002,7 +1133,7 @@ impl Quick {
         column![
             tiles,
             self.volume_row(),
-            self.brightness_row(),
+            self.lights(),
             group(
                 words::GPU,
                 Some(words::SOON.to_owned()),
@@ -1103,10 +1234,11 @@ impl Quick {
         };
         let mute = volume.map(|_| Message::Mute);
         let on_change: Option<fn(u8) -> Message> = volume.map(|_| Message::Volume as fn(u8) -> _);
-        let control = panels::slider_row(
+        let control = panels::held_slider_row(
             panels::glyph_button(glyph, label, mute),
             volume.unwrap_or(0),
             on_change,
+            Some(Message::Release(Service::Sound)),
         );
         let caption = ui::ellipsis(line)
             .size(typography::SMALL_SIZE)
@@ -1125,7 +1257,32 @@ impl Quick {
         let icon = container(panels::glyph(Glyph::Sun, color::palette().text_secondary))
             .center(panels::ROW_BUTTON);
         let on_change: Option<fn(u8) -> Message> = value.map(|_| Message::Light as fn(u8) -> _);
-        panels::slider_row(icon, value.unwrap_or(0), on_change)
+        let release = Some(Message::Release(Service::Brightness));
+        panels::held_slider_row(icon, value.unwrap_or(0), on_change, release)
+    }
+
+    /// The brightness, and under it the keyboard backlight when the machine has one.
+    fn lights(&self) -> Element<'_, Message> {
+        match self.keyboard_row() {
+            Some(keyboard) => column![self.brightness_row(), keyboard]
+                .spacing(metrics::GAP_SECTION)
+                .into(),
+            None => self.brightness_row(),
+        }
+    }
+
+    fn keyboard_row(&self) -> Option<Element<'_, Message>> {
+        let light = self.keyboard.ready()?;
+        let glyph = panels::glyph(Glyph::Keyboard, color::palette().text_secondary);
+        let icon = container(glyph).center(panels::ROW_BUTTON);
+        let on_change = Some(Message::KeyboardLight as fn(u8) -> _);
+        let release = Some(Message::Release(Service::Keyboard));
+        Some(panels::held_slider_row(
+            icon,
+            light.percent(),
+            on_change,
+            release,
+        ))
     }
 
     /// « Énergie »: the profiles, and the battery with its time left on the right of the
@@ -1335,6 +1492,102 @@ fn notice(line: &str) -> Element<'_, Message> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// Quick settings whose `pactl` is nowhere: never the machine's sound.
+    fn without_sound() -> Quick {
+        let pactl = Pactl {
+            program: std::ffi::OsString::from("/nonexistent/pactl"),
+        };
+        Quick {
+            pactl,
+            ..Quick::default()
+        }
+    }
+
+    fn output(volume: u16) -> Load<Output> {
+        Load::Ready(Output {
+            sound: crate::system::audio::Sound {
+                volume,
+                muted: false,
+            },
+            name: String::from("Haut-parleurs intégrés"),
+        })
+    }
+
+    fn volume(quick: &Quick) -> u16 {
+        quick.sound.ready().map_or(0, |o| o.sound.volume)
+    }
+
+    #[test]
+    fn a_held_slider_does_not_jump_under_a_change_made_elsewhere() {
+        let mut quick = without_sound();
+        let _ = quick.update(Message::Sound(output(40)));
+        let _ = quick.update(Message::Volume(70));
+        let _ = quick.update(Message::Done(Service::Sound, Ok(())));
+        // A key moved the volume meanwhile: the slider under the pointer stays.
+        let _ = quick.update(Message::Sound(output(55)));
+        assert_eq!(volume(&quick), 70);
+        // Let go, the change made elsewhere shows.
+        let _ = quick.update(Message::Release(Service::Sound));
+        assert_eq!(quick.held, None);
+        let _ = quick.update(Message::Sound(output(55)));
+        assert_eq!(volume(&quick), 55);
+        // A value still on its way to the server is not undone by an older read either.
+        let _ = quick.update(Message::Volume(20));
+        let _ = quick.update(Message::Release(Service::Sound));
+        let _ = quick.update(Message::Sound(output(55)));
+        assert_eq!(volume(&quick), 20);
+    }
+
+    #[test]
+    fn the_keyboard_backlight_has_a_slider_only_when_the_machine_has_one() {
+        let mut quick = without_sound();
+        assert!(quick.keyboard_row().is_none());
+        let absent = Problem::Absent(String::from("no keyboard backlight"));
+        let _ = quick.update(Message::Keyboard(Load::Failed(absent)));
+        assert!(quick.keyboard_row().is_none());
+        let light = KeyboardLight {
+            brightness: 1,
+            max: 3,
+            through: keyboard::Through::UPower,
+        };
+        let _ = quick.update(Message::Keyboard(Load::Ready(light.clone())));
+        assert!(quick.keyboard_row().is_some());
+        assert!(quick.update(Message::KeyboardLight(100)).units() > 0);
+        assert_eq!(quick.keyboard.ready().map(|l| l.brightness), Some(3));
+        // UPower tells of a key meanwhile: the held slider stays.
+        let _ = quick.update(Message::Keyboard(Load::Ready(light)));
+        assert_eq!(quick.keyboard.ready().map(|l| l.brightness), Some(3));
+    }
+
+    #[test]
+    fn the_sound_and_the_brightness_changed_elsewhere_are_followed() {
+        use iced::futures::executor::block_on;
+        let dir = std::env::temp_dir().join(format!("quick-local-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let light = dir.join("backlight/amdgpu_bl1");
+        std::fs::create_dir_all(&light).unwrap();
+        for (file, value) in [("brightness", "51"), ("actual_brightness", "51")] {
+            std::fs::write(light.join(file), value).unwrap();
+        }
+        std::fs::write(light.join("max_brightness"), "255").unwrap();
+        // A fake `pactl subscribe`: one change of the output, then nothing.
+        let pactl = dir.join("pactl");
+        let script = "#!/bin/sh\necho \"Event 'change' on sink #1\"\nexec sleep 30\n";
+        std::fs::write(&pactl, script).unwrap();
+        let chmod = std::process::Command::new("chmod")
+            .arg("+x")
+            .arg(&pactl)
+            .status();
+        assert!(chmod.unwrap().success());
+        let mut changes = local(pactl.into_os_string(), dir.join("backlight"));
+        assert_eq!(block_on(changes.next()), Some(Service::Sound));
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::write(light.join("actual_brightness"), "200").unwrap();
+        assert_eq!(block_on(changes.next()), Some(Service::Brightness));
+        drop(changes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_slider_sends_one_value_at_a_time_the_latest_winning() {
