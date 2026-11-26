@@ -6,9 +6,10 @@
 # The programs are looked for next to this script (`just install-session` puts them in
 # /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
 # session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
-# NOM_OS_XWAYLAND=1 starts XWayland too (off by default: see "Real session" in
-# docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus, NOM_OS_DATA the
-# folder of the application icons (see below). The log of the session goes to
+# XWayland starts too, for X11 applications; NOM_OS_XWAYLAND=0 leaves it out (see "Real session"
+# in docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus, NOM_OS_DATA the
+# folder of the application icons and of the portal setting (see below), NOM_OS_POLKIT_AGENTS
+# the polkit agents to try (see "Everyday services" in docs/compositor.md). The log of the session goes to
 # $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
 # session with it.
@@ -64,6 +65,50 @@ mkdir -p "$state"
 if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"
 fi
+note() {
+	printf 'session: %s\n' "$*" >>"$log"
+}
+
+# Secrets (lot D-35b): applications keep their passwords through the Secret Service on the
+# session bus. gnome-keyring-daemon serves it, started here on the bus of this session; it
+# prints the variables that lead to it. Without it, kwalletd6 starts once the display is there
+# (below). On a bus of its own, the keyring of a Plasma session open beside this one is not
+# reachable: this session has its own, which asks for its password the first time.
+keyring=none
+if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+	if found=$(gnome-keyring-daemon --start --components=secrets 2>>"$log"); then
+		keyring=gnome-keyring-daemon
+		for line in $found; do
+			case "$line" in
+			[A-Z]*=*) export "$line" ;;
+			esac
+		done
+	else
+		note "gnome-keyring-daemon did not start"
+	fi
+elif command -v kwalletd6 >/dev/null 2>&1; then
+	keyring=kwalletd6
+fi
+note "keyring: $keyring"
+export NOM_OS_KEYRING="$keyring"
+
+# The first polkit agent installed, which asks for the password when an action needs one (lot
+# D-35b): started with the shell, below.
+agents="${NOM_OS_POLKIT_AGENTS:-/usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1 /usr/libexec/polkit-kde-authentication-agent-1 /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1 lxpolkit}"
+agent=""
+for candidate in $agents; do
+	case "$candidate" in
+	/*) [ -x "$candidate" ] && agent=$candidate ;;
+	*) agent=$(command -v "$candidate" 2>/dev/null || true) ;;
+	esac
+	[ -n "$agent" ] && break
+done
+if [ -n "$agent" ]; then
+	note "polkit agent: $agent"
+else
+	note "warning: no polkit agent installed (polkit-kde-agent-1, policykit-1-gnome or lxpolkit): actions that need a password are refused"
+fi
+export NOM_OS_POLKIT_AGENT="$agent"
 
 # Once `just install-themes` ran, third-party applications take the colors of the desktop
 # (docs/third-party-theming.md): the GTK settings live in a dconf database of the session's own,
@@ -117,12 +162,18 @@ keep_log() {
 # log.
 shell='
 compositor=$PPID
-# On a bus of its own, the services it starts (portals) learn the display of this session.
+# The services the bus starts (the portals, kwalletd6) learn the display of this session, its
+# name (the portals read NOM_OS-portals.conf for it) and its data folders (where that file is).
+# On the shared bus of the user, those systemd starts learn it too.
+systemd=--systemd
 if [ "${NOM_OS_OWN_BUS:-0}" = 1 ]; then
 	echo "session: D-Bus session bus of its own" >&2
-	dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY ||
-		echo "session: the activation environment of the bus is not updated" >&2
+	systemd=""
 fi
+# shellcheck disable=SC2086 # $systemd is empty or one word.
+dbus-update-activation-environment $systemd WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP \
+	XDG_SESSION_DESKTOP XDG_SESSION_TYPE XDG_DATA_DIRS ||
+	echo "session: the activation environment of the bus is not updated" >&2
 keep() {
 	stops=""
 	delay=1
@@ -148,13 +199,17 @@ keep() {
 keep "$0/bar" &
 keep "$0/dock" &
 keep "$0/notifications" &
+# The polkit agent, started again like the shell programs, and kwalletd6 without
+# gnome-keyring-daemon (lot D-35b).
+[ -n "${NOM_OS_POLKIT_AGENT:-}" ] && keep "$NOM_OS_POLKIT_AGENT" &
+[ "${NOM_OS_KEYRING:-}" = kwalletd6 ] && kwalletd6 &
 # Switches the GTK theme and the Qt palette with the appearance file.
 [ -n "${NOM_OS_THEMES:-}" ] && keep "$NOM_OS_THEMES/toolkit-theme" follow &
 wait
 '
-xwayland=""
-if [ "${NOM_OS_XWAYLAND:-0}" = 1 ]; then
-	xwayland=--xwayland
+xwayland=--xwayland
+if [ "${NOM_OS_XWAYLAND:-1}" = 0 ]; then
+	xwayland=""
 fi
 # shellcheck disable=SC2086 # $xwayland is empty or one word.
 "$bin/compositor" $xwayland sh -c "$shell" "$bin" 2>&1 | keep_log

@@ -1446,7 +1446,7 @@ How it works (`src/udev.rs`):
   every EGL client would otherwise load NVIDIA's first); a user who set the variable keeps
   their own value. A game meant for the NVIDIA card has to be launched with the variable unset,
   for now by hand.
-- **XWayland: off unless asked for (`--xwayland`).** Smithay starts Xwayland with an empty
+- **XWayland: with `--xwayland`, which the start script gives by default (lot D-35b).** Smithay starts Xwayland with an empty
   environment; `src/mesa.rs` gives it the EGL restriction and `GBM_BACKENDS_PATH` pointing to
   `$XDG_RUNTIME_DIR/nom-os/gbm-backends`, a folder of links to the system's GBM backends without
   NVIDIA's (`nvidia-drm_gbm.so`), so that libgbm falls back to Mesa's. Measured with
@@ -1465,10 +1465,14 @@ How it works (`src/udev.rs`):
   Xwayland still opens the NVIDIA card's node at startup, whatever it is given, and opening it
   may wake the card. The feedback, which the real session now offers, names the AMD node; lot
   D-06 saw XWayland open no NVIDIA device with it in nested mode, but that is not measured in
-  the real session yet. So the real session starts XWayland only with `--xwayland`
-  (`NOM_OS_XWAYLAND=1` for the start script): without it, X11 applications do not show up, and
-  the launched command gets no `DISPLAY`. Nested mode starts it as before, with the same
-  environment.
+  the real session yet. The compositor starts XWayland only with `--xwayland`: without it, X11
+  applications do not show up, and the launched command gets no `DISPLAY`. Since lot D-35b the
+  start script gives `--xwayland` by default, for Steam and the X11 builds of some applications
+  (Discord); `NOM_OS_XWAYLAND=0` leaves it out. Nothing else in the session stands against it:
+  the compositor already ran XWayland in nested mode and with `--xwayland`. Whether Xwayland
+  keeps off the NVIDIA card in the real session is still to be seen on the reference laptop
+  (lot D-35b asks for that test before its merge). Nested mode starts it as before, with the
+  same environment.
 - **Screens.** Every connector with a screen gets a CRTC, its preferred mode and a
   `DrmCompositor` (GBM buffers, `XRGB8888`). They sit side by side in the space, in the order
   the card lists them; `--scale S` sets their scale, one per screen in order, the last one
@@ -1529,8 +1533,8 @@ it.
    Or the whole session, as the login screen starts it:
    `NOM_OS_BIN=$PWD/target/release NOM_OS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
    (`NOM_OS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
-   With `--xwayland` after `compositor` (`NOM_OS_XWAYLAND=1` for the script), X11 applications
-   too, at the risk of waking the NVIDIA card (see above).
+   With `--xwayland` after `compositor`, X11 applications too (the script gives it unless
+   `NOM_OS_XWAYLAND=0`), at the risk of waking the NVIDIA card (see above).
 
 4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
    Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
@@ -1548,7 +1552,10 @@ running them:
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
   launcher find it; it runs `evidence`, which the session finds in its `PATH`;
 - the application icons, a hicolor theme, go to `/usr/local/share/nom-os/icons/` (D-03);
-- `sudo apt install libseat1` is added when libseat is missing.
+- the portal setting `NOM_OS-portals.conf` goes to `/usr/local/share/nom-os/xdg-desktop-portal/`
+  (D-35b, see "Everyday services");
+- `sudo apt install libseat1` is added when libseat is missing, and `sudo apt install` of the
+  portals, the keyring and the polkit agent that are missing (D-35b).
 
 At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
@@ -1605,6 +1612,53 @@ for Plasma's theme, which the Qt theme batch may pick), since it would leave the
 daemon and the single-instance applications in the other session. Not checked yet: the
 session started from SDDM while Plasma runs on another console, which takes the same path.
 
+### Everyday services (lot D-35b)
+
+What a desktop needs besides its own programs, started by `sherlockos-session` when it is
+installed. Each choice is written in the session log (`~/.local/state/nom-os/session.log`).
+
+- **Polkit agent.** The window that asks for the password when an action needs one (mounting a
+  disk, a setting of the system). The script starts the first one installed, in this order:
+  `polkit-kde-authentication-agent-1` (`/usr/lib/x86_64-linux-gnu/libexec/` on Debian, or
+  `/usr/libexec/`), `polkit-gnome-authentication-agent-1` (`/usr/lib/policykit-1-gnome/` or
+  `/usr/libexec/`), then `lxpolkit` from `PATH`. It starts with the shell programs, once the
+  display is there, and starts again like them when it stops. `NOM_OS_POLKIT_AGENTS` replaces
+  the list (paths, or names looked for in `PATH`). Without any, the log says
+  `session: warning: no polkit agent installed`, and polkit refuses what needs a password. The
+  agent registers with polkit for this login session only: the Plasma session beside it keeps
+  its own.
+- **Keyring.** Applications keep their passwords through the Secret Service on the session bus.
+  `gnome-keyring-daemon --start --components=secrets` starts before the compositor, on the bus
+  of the session, and the variables it prints (`GNOME_KEYRING_CONTROL`…) are exported to the
+  whole session. Without it, `kwalletd6` starts with the shell programs. On a bus of its own
+  (see "D-Bus session bus"), the session does not reach the keyring or the wallet of a Plasma
+  session open beside it: it has its own keyring, whose password is asked the first time it is
+  unlocked (nothing unlocks it at login: the login screen's PAM module is not set up for this
+  session). Alone on the machine, the session uses the user's bus, and the keyring already
+  running there, if any.
+- **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
+  file chooser from Flatpak or Firefox, for instance). It reads `NOM_OS-portals.conf`
+  (`desktop/compositor/session/`), which `just install-session` puts in
+  `/usr/local/share/nom-os/xdg-desktop-portal/`: GTK's backend for everything (it works
+  without GNOME or Plasma running), gnome-keyring for the secrets. So that the portal finds this
+  file and the display, the script gives the activation environment of the bus
+  `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `XDG_SESSION_TYPE`
+  and `XDG_DATA_DIRS`, with `--systemd` on the user's shared bus (the portals are systemd user
+  services there). The setting is never written into the home folder. Reading it from
+  `XDG_DATA_DIRS` needs xdg-desktop-portal 1.18 or later (Debian 13 has 1.20).
+- **Screen sharing and screenshots** through the portals are not there yet: the
+  `xdg-desktop-portal-wlr` backend needs the `wlr-screencopy` protocol (or
+  `ext-image-copy-capture`), which Smithay 0.7 does not provide, and which this lot leaves to a
+  lot of its own. The screenshots of the compositor itself (Print Screen) come with lot D-35c.
+
+Debian packages to install for all of it (the author installs them; `just install-session`
+prints the line for those missing): `xdg-desktop-portal`, `xdg-desktop-portal-gtk`,
+`gnome-keyring`, `polkit-kde-agent-1` (or `policykit-1-gnome`, or `lxpolkit`).
+
+The script is tested with fake programs under `env -i` (`tests/session.rs`): XWayland given by
+default and left out with `NOM_OS_XWAYLAND=0`, the keyring started and its variables exported,
+the first agent found started, the warning without any, the activation environment.
+
 ### When something goes wrong
 
 - **Nothing answers.** Ctrl + Alt + Backspace stops the compositor, and the session with it: SDDM
@@ -1641,8 +1695,10 @@ theme. Each console switch logs `session paused` and `session active again`.
 - Screens plugged in again after the last one was unplugged: windows keep their place, and
   those outside the new screens are not brought back (no crash: the pointer and the layout
   handle having no screen).
-- XWayland in the real session by default, once the author's test with `--xwayland` shows
-  Xwayland keeping off the NVIDIA card with the dmabuf feedback.
+- The author's test of Xwayland in the real session, now on by default (lot D-35b): does it keep
+  off the NVIDIA card with the dmabuf feedback?
+- Screen sharing and screenshots through the portals: the compositor offers no capture
+  protocol yet (see "Everyday services").
 - `DmabufBlocker` in the real session (see "GPU buffers").
 
 ### Frames of the real session (lot P-01)

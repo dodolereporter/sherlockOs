@@ -39,6 +39,8 @@ sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
+# Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
+sudo install -D -m 644 $q/desktop/compositor/session/NOM_OS-portals.conf $data/xdg-desktop-portal/NOM_OS-portals.conf
 # The cursor themes, their aliases kept as links:
 sudo install -d $icons
 sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
@@ -61,4 +63,20 @@ if [ -n "$ldconfig" ] && ! "$ldconfig" -p | grep -q 'libseat\.so\.1 '; then
 	echo
 	echo "# libseat is missing:"
 	echo "sudo apt install libseat1"
+fi
+
+# What the session starts when it is there (see "Everyday services" in docs/compositor.md).
+missing=""
+have() {
+	command -v "$1" >/dev/null 2>&1 || [ -x "$2" ]
+}
+have xdg-desktop-portal /usr/libexec/xdg-desktop-portal || missing="$missing xdg-desktop-portal"
+have xdg-desktop-portal-gtk /usr/libexec/xdg-desktop-portal-gtk || missing="$missing xdg-desktop-portal-gtk"
+have gnome-keyring-daemon /usr/bin/gnome-keyring-daemon || missing="$missing gnome-keyring"
+have polkit-kde-authentication-agent-1 /usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1 ||
+	missing="$missing polkit-kde-agent-1"
+if [ -n "$missing" ]; then
+	echo
+	echo "# For the portals, the keyring and the polkit agent of the session:"
+	echo "sudo apt install$missing"
 fi
