@@ -54,6 +54,10 @@ mod tests {
             wl_surface::WlSurface,
         },
     };
+    use wayland_protocols::xdg::decoration::zv1::client::{
+        zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+        zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1,
+    };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::XdgToplevel,
@@ -163,6 +167,8 @@ mod tests {
         }
     }
 
+    delegate_noop!(Client: ZxdgDecorationManagerV1);
+    delegate_noop!(Client: ignore ZxdgToplevelDecorationV1);
     delegate_noop!(Client: WlCompositor);
     delegate_noop!(Client: WlRegion);
     delegate_noop!(Client: ignore WlSurface);
@@ -394,7 +400,8 @@ mod tests {
             )
         }
 
-        /// Ten windows of 800 × 600, the bar at the top, the dock at the bottom.
+        /// Ten windows of 800 × 600 with the title bar of the compositor (lot D-08), the bar at
+        /// the top, the dock at the bottom.
         fn show_desktop(&mut self) {
             let qh = self.queue.handle();
             self.conn.display().get_registry(&qh, ());
@@ -404,12 +411,14 @@ mod tests {
             let compositor: WlCompositor = self.bind();
             let wm_base: XdgWmBase = self.bind();
             let layer_shell: ZwlrLayerShellV1 = self.bind();
+            let decorations: ZxdgDecorationManagerV1 = self.bind();
             for i in 0..WINDOWS {
                 let surface = compositor.create_surface(&qh, ());
                 let toplevel = wm_base
                     .get_xdg_surface(&surface, &qh, ())
                     .get_toplevel(&qh, ());
                 toplevel.set_title(format!("window {i}"));
+                decorations.get_toplevel_decoration(&toplevel, &qh, ());
                 surface.commit();
                 self.pump_until("the configure", |c, _| c.configures > i);
                 let (buffer, file) = self.buffer(WINDOW);
@@ -625,6 +634,7 @@ mod tests {
             Item::Window {
                 surface,
                 rect,
+                clip,
                 geometry,
                 alpha,
                 radius,
@@ -634,7 +644,7 @@ mod tests {
                     y: f64::from(rect.size.h) / f64::from(geometry.size.h),
                 };
                 let origin = rect.loc - geometry.loc.to_physical(1);
-                let clip = rect.to_f64();
+                let clip = clip.to_f64();
                 surfaces(renderer, &surface, origin, rect.loc, stretch, alpha)
                     .into_iter()
                     .map(|probe| match probe {
@@ -650,6 +660,9 @@ mod tests {
                 key, shadow, alpha, ..
             } => paint(ids, key, shadow.area, alpha),
             Item::Wallpaper => Vec::new(),
+            Item::Decoration {
+                key, rect, alpha, ..
+            } => paint(ids, key, rect, alpha),
         }
     }
 
@@ -703,6 +716,29 @@ mod tests {
         let frames: Vec<Frame> = (0..5).filter_map(|_| bench.tick()).collect();
         assert_eq!(frames.len(), 1, "one frame, then rest again");
         assert_eq!(bounds(&frames[0].damage), Some(bench.rect_of_window(3)));
+    }
+
+    #[test]
+    fn a_title_bar_is_drawn_again_only_when_it_changes() {
+        let mut bench = Bench::start(false);
+        bench.settle();
+        // The pointer comes on the close button of the window on top: its bar alone is drawn
+        // again, with the button lit.
+        let window = bench.state.space.elements().last().unwrap().clone();
+        let r = bench.state.space.element_geometry(&window).unwrap();
+        let close = (r.loc.x + r.size.w - 9 - 14, r.loc.y - 42 + 21);
+        let close = (f64::from(close.0), f64::from(close.1));
+        bench.state.pointer_motion(close.into(), 0);
+        let frames: Vec<Frame> = (0..5).filter_map(|_| bench.tick()).collect();
+        assert_eq!(frames.len(), 1, "one frame, then rest again");
+        let bar = Rectangle::new((r.loc.x, r.loc.y - 42).into(), (r.size.w, 42).into());
+        assert_eq!(bounds(&frames[0].damage), Some(bar));
+        // Still on the button: a frame for the motion, nothing to draw.
+        bench
+            .state
+            .pointer_motion((close.0 + 1.0, close.1).into(), 1);
+        let frames: Vec<Frame> = (0..5).filter_map(|_| bench.tick()).collect();
+        assert!(frames.iter().all(|f| f.damage.is_empty()));
     }
 
     #[test]

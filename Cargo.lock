@@ -570,6 +570,7 @@ dependencies = [
 name = "compositor"
 version = "0.0.0"
 dependencies = [
+ "ab_glyph",
  "appearance-config",
  "cursor-theme",
  "desktop-config",
@@ -578,10 +579,12 @@ dependencies = [
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
+ "tiny-skia",
  "tracing",
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "x11rb",
  "xcursor",
