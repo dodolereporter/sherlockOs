@@ -92,10 +92,17 @@ above the bar. The keyboard comes on demand (`OnDemand`), on a click
 into the dock, for its keyboard navigation.
 
 The surface is taller and wider than the bar: the magnified icons grow above the bar (88 at
-most, 101 above the bottom), the label sits 108 above it, and the widest magnified bar needs
-room on the sides. `layout::surface_size` computes it from the number of icons: the widest bar
-over every pointer position, plus `dock::SURFACE_SLACK` (52) on each side for the label, by
-the label's top in height (132), plus the gap of 8 (140). With five icons: 529 by 140.
+most, 101 above the bottom), the label sits 108 above it, an icon bounces above its place
+(see Animations), and the widest magnified bar needs room on the sides.
+`layout::surface_size` computes it from the number of icons: the widest bar over every pointer
+position, plus `dock::SURFACE_SLACK` (52) on each side for the label; in height, the farther of
+the label's top (132) and the top of the highest bounce (`Geometry::bounce_reach`), plus the
+gap of 8. The highest bounce is that of the icon under the pointer, magnified, past the 7.8 %
+overshoot of its spring, lifted by half its side: 13 + 52 × 1.7 × 1.078 × 1.5 = 156. With five
+icons: 529 by 164. Before lot D-18d the surface stopped at the label (140 deep), and an icon
+clicked under the pointer bounced out of its top: its upper part was cut. Only the surface
+grows for the bounce: the exclusive zone stays 84, and the input region never reaches past the
+label (the 24 pixels above it let clicks through).
 
 **Input region.** The surface only takes the pointer where the dock is
 (`Geometry::input_region`, sent with `wl_surface.set_input_region`, rounded out to whole
@@ -138,20 +145,22 @@ wl_surface#28.set_input_region(wl_region#41)
 
 | Mode | The dock |
 | --- | --- |
-| `smart` (default) | Shown with its exclusive zone, except while a maximized or fullscreen window is on its screen |
+| `smart` (default) | Shown with its exclusive zone, except while a maximized, fullscreen or snapped window is on its screen |
 | `always` | Hidden, without exclusive zone |
 | `never` | Always shown, with its exclusive zone |
 
-Whether a maximized or fullscreen window is on the dock's screen comes from the `output` event
-of `sherlock_shell_v1` (only the windows of the active workspace count), matched by name with
-the screen iced_exwlshell reports for the dock's surface. A window on another screen changes
+Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
+screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
+(only the windows of the active workspace count), matched by name with the screen
+iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
-- **A window is maximized.** The dock gives up its exclusive zone at once: -1, so that the
-  compositor places it against the screen edge itself, never against what another surface
+- **A window is maximized or snapped.** The dock gives up its exclusive zone at once: -1, so
+  that the compositor places it against the screen edge itself, never against what another surface
   reserves (a dock at the top would otherwise hide under the top bar's zone, its band below
   the bar). The compositor gives the maximized window the whole screen below the bar, the
-  dock's room included (recomputing that geometry is batch D-18c1). Then the dock slides off
+  dock's room included (recomputing that geometry is batch D-18c1), and a snapped one the
+  whole height below the bar, 8 from the edges (lot D-18d). Then the dock slides off
   the screen with the spring of the top bar (`dock::HIDE_SPRING`): only its margin moves, from
   0 to `HIDE_STRIP − depth`, one commit per whole pixel. Hidden, `HIDE_STRIP` (2) pixels of the
   surface stay on the screen, its side away from the edge; its input region shrinks to that
@@ -165,8 +174,8 @@ nothing; a screen not known yet counts as uncovered.
   pointer came back, a menu is open or an icon is held. While a menu is open or an icon held,
   nothing counts and no frame is asked for; the delay starts when the menu closes or the icon
   is let go.
-- **No maximized window any more.** The dock slides back, and takes its exclusive zone again
-  once in place: the compositor reserves the zone plus the margin, negative while the dock is
+- **No maximized nor snapped window any more.** The dock slides back, and takes its exclusive
+  zone again once in place: the compositor reserves the zone plus the margin, negative while the dock is
   still sliding in, so the zone waits for the margin to be 8 again.
 
 Frames are asked for while the dock slides and while it waits to hide. On the left and right
@@ -705,6 +714,12 @@ X focus): the keyboard steps were checked in the nested KWin.
   before, a menu holds it; `always` hidden from the start, `never` never; the icon rectangles
   on the screen, Sherlock owning no window, unchanged while the pointer magnifies or the dock
   hides, sent again when an icon comes.
+- **Bounce room** (`layout.rs`, lot D-18d): on the four edges, with icons of 52 magnified 1.7
+  times, of 96 magnified 2 times and of 32 without magnification, the icon under the pointer,
+  its spring at its peak, at the top of its bounce, fits whole in the surface; the input
+  region does not grow for it; 164 deep at the bottom by default.
+- **Snapped windows** (`tests/shell.rs`): a screen with the `snapped` state counts as covered,
+  like a maximized one.
 - **Pinned order** (`dock-config`): `move_pinned` before another id, at the end, unchanged.
 - **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, on
   the left edge, with an open application after the separator, and of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning

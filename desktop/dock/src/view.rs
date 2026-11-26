@@ -207,15 +207,8 @@ fn drawn(
     lift: f32,
     opacity: f32,
 ) -> Element<'static, Message> {
-    let side = rect.width * scale;
-    let grow = rect.width - side;
-    let (x, y) = match edge {
-        Edge::Bottom => (rect.x + grow / 2.0, rect.y + grow - lift),
-        Edge::Top => (rect.x + grow / 2.0, rect.y + lift),
-        Edge::Left => (rect.x + lift, rect.y + grow / 2.0),
-        Edge::Right => (rect.x + grow - lift, rect.y + grow / 2.0),
-    };
-    place(glyph(glyph_of, side, opacity), x, y)
+    let at = crate::layout::drawn(rect, edge, scale, lift);
+    place(glyph(glyph_of, at.width, opacity), at.x, at.y)
 }
 
 /// An icon of side `side`, at `opacity`.
