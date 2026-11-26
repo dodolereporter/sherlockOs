@@ -196,14 +196,14 @@ impl Bounce {
 pub struct Launch {
     pub target: Target,
     pub bounce: Bounce,
-    /// For each source of windows, the number of windows of the application when it started:
-    /// one more is its window. `None` while the source said nothing yet.
-    pub before: [Option<usize>; 2],
+    /// The number of windows of the application when it started: one more is its window.
+    /// `None` while the source of windows said nothing yet.
+    pub before: Option<usize>,
 }
 
 impl Launch {
-    /// Started at `now`, while the sources count `before` windows of the application.
-    pub fn new(target: Target, now: Duration, before: [Option<usize>; 2]) -> Self {
+    /// Started at `now`, while the source counts `before` windows of the application.
+    pub fn new(target: Target, now: Duration, before: Option<usize>) -> Self {
         Self {
             target,
             bounce: Bounce::new(now),
@@ -211,12 +211,10 @@ impl Launch {
         }
     }
 
-    /// Source `source` now counts `count` windows of the application. Stops the bounce at
-    /// `now` when one more than at the start came; returns whether it did.
-    pub fn windows(&mut self, source: usize, count: usize, now: Duration) -> bool {
-        let Some(slot) = self.before.get_mut(source) else {
-            return false;
-        };
+    /// The source now counts `count` windows of the application. Stops the bounce at `now`
+    /// when one more than at the start came; returns whether it did.
+    pub fn windows(&mut self, count: usize, now: Duration) -> bool {
+        let slot = &mut self.before;
         match *slot {
             Some(before) if count > before => {
                 self.bounce.stop(now);
@@ -337,15 +335,12 @@ mod tests {
 
     #[test]
     fn a_launch_ends_with_one_more_window() {
-        // Source 0 knew one window of the application, source 1 nothing yet.
-        let mut launch = Launch::new(Target::App(String::from("a")), ms(0), [Some(1), None]);
-        assert!(
-            !launch.windows(1, 1, ms(10)),
-            "the first count is the start"
-        );
-        assert!(!launch.windows(0, 1, ms(20)));
-        assert!(!launch.windows(0, 0, ms(30)), "one closed");
-        assert!(launch.windows(0, 1, ms(40)), "the new one");
+        // The source said nothing yet: its first count is the start.
+        let mut launch = Launch::new(Target::App(String::from("a")), ms(0), None);
+        assert!(!launch.windows(1, ms(10)), "the first count is the start");
+        assert!(!launch.windows(1, ms(20)));
+        assert!(!launch.windows(0, ms(30)), "one closed");
+        assert!(launch.windows(1, ms(40)), "the new one");
         assert!(launch.bounce.stopping());
     }
 }

@@ -33,7 +33,7 @@ wallpapers output="target/wallpapers":
 
 # Builds the session (compositor, bar, dock), then prints the sudo commands that install it for the login screen, without running them
 install-session:
-    cargo build --release -p compositor -p bar -p dock
+    cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence
     desktop/compositor/session/install.sh "$PWD"
 
 # Installs Evidence for the user, without root: its binary in ~/.local/bin and its desktop entry, which the dock pins and the launcher lists

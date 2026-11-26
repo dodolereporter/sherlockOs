@@ -1,9 +1,11 @@
 #!/bin/sh
 # Starts a NOM_OS session, from the login screen (sherlockos.desktop) or from a text console:
-# the compositor on the screens of the machine, then the bar and the dock inside it.
+# the compositor on the screens of the machine, then the bar, the dock and the notification
+# daemon inside it.
 #
 # The programs are looked for next to this script (`just install-session` puts them in
-# /usr/local/libexec/nom-os), or in NOM_OS_BIN. NOM_OS_XWAYLAND=1 starts XWayland too (off by
+# /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
+# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`. NOM_OS_XWAYLAND=1 starts XWayland too (off by
 # default: see "Real session" in docs/compositor.md). The log of the session goes to
 # $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
@@ -18,6 +20,7 @@ if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"
 fi
 
+export PATH="$PATH:$bin"
 export XDG_CURRENT_DESKTOP=NOM_OS
 export XDG_SESSION_DESKTOP=NOM_OS
 export XDG_SESSION_TYPE=wayland
@@ -35,9 +38,10 @@ keep_log() {
 }
 
 # The compositor launches this command once it is ready, with WAYLAND_DISPLAY (and DISPLAY
-# with XWayland). The bar and the dock start again when they stop (ADR 0005), as long as the
-# compositor, their parent's parent, is there: after 1, 2, 4, 8 then 16 seconds. A program that
-# stopped 5 times within 60 seconds is given up, with a line in the log.
+# with XWayland). The bar, the dock and the notification daemon start again when they stop
+# (ADR 0005), as long as the compositor, their parent's parent, is there: after 1, 2, 4, 8 then
+# 16 seconds. A program that stopped 5 times within 60 seconds is given up, with a line in the
+# log.
 shell='
 compositor=$PPID
 keep() {
@@ -64,6 +68,7 @@ keep() {
 }
 keep "$0/bar" &
 keep "$0/dock" &
+keep "$0/notifications" &
 wait
 '
 xwayland=""

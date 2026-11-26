@@ -248,7 +248,11 @@ fn dragging_a_pinned_icon_reorders_and_writes_the_file() {
     assert_eq!(dock.pinned, order);
     // It flies from the pointer to its place.
     let t0 = dock.now();
-    assert!((dock.layout(t0).icons[4].center_x() - end.x).abs() < 0.5);
+    let flying = dock.layout(t0).icons[4];
+    assert!(
+        (flying.center_x() - end.x).abs() < 0.5,
+        "{flying:?} {end:?}"
+    );
     let t1 = settle(&mut dock);
     let place = Layout::new(dock.geometry, dock.surface_size, &[52.0; 5], None).icons[4];
     assert!((dock.layout(t1).icons[4].x - place.x).abs() < 0.5);
@@ -368,7 +372,7 @@ fn quick_app(name: &str) -> PathBuf {
 }
 
 fn shell(app_ids: &[&str]) -> Message {
-    Message::Shell(Windows {
+    Message::Windows(Windows {
         list: app_ids
             .iter()
             .map(|a| Window {
@@ -376,7 +380,7 @@ fn shell(app_ids: &[&str]) -> Message {
                 activated: false,
             })
             .collect(),
-        controllable: false,
+        ..Windows::default()
     })
 }
 

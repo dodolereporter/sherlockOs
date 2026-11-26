@@ -1,12 +1,14 @@
-//! The windows of our compositor, read through `sherlock_shell_v1` on its shell socket (ADR
-//! 0021), for the bounce of an application that starts: it ends when the application's first
-//! window comes.
+//! The windows of our compositor, read and acted on through `sherlock_shell_v1` on its shell
+//! socket (ADR 0021): the dots, the active application, the screens a maximized window covers
+//! (for `AutoHide=smart`), a click that brings forward or minimizes, « Quitter », and the
+//! rectangle of each window's icon (`set_rectangle`, for the minimize animation).
 //!
-//! Read only, for now: the dots, a click that brings forward or minimizes, and « Quitter »
-//! over this protocol are batch D-18c. The source says its windows cannot be acted on, so
-//! nothing of the dock depends on it beyond the bounce.
+//! Requests go out on the watching connection, from any thread, while the watching thread
+//! waits for events: nothing waits for the compositor, a click never blocks.
 
+use std::collections::BTreeMap;
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use shell_protocol::client::sherlock_shell_manager_v1::{self as manager, SherlockShellManagerV1};
 use shell_protocol::client::sherlock_shell_toplevel_v1::{
@@ -16,12 +18,25 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, event_created_child};
 
-use crate::windows::{Source, SourceError, Window, Windows};
+use crate::windows::{Control, Owns, Place, Request, Source, SourceError, Window, Windows};
+
+/// The control of the running shell source, for `windows::Auto`.
+static CONTROL: Mutex<Option<ShellControl>> = Mutex::new(None);
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The control of the running shell source, if one runs.
+pub fn control() -> Option<ShellControl> {
+    lock(&CONTROL).clone()
+}
 
 /// The windows of the compositor's shell socket.
 pub struct Shell {
     queue: EventQueue<Toplevels>,
     toplevels: Toplevels,
+    control: ShellControl,
     _manager: SherlockShellManagerV1,
 }
 
@@ -39,24 +54,42 @@ impl Shell {
         let manager = globals
             .bind(&queue.handle(), 1..=1, ())
             .map_err(SourceError::NoShellProtocol)?;
-        let mut toplevels = Toplevels::default();
+        let control = ShellControl {
+            connection,
+            shared: Arc::new(Mutex::new(Shared::default())),
+        };
+        let mut toplevels = Toplevels {
+            control: Some(control.clone()),
+            ..Toplevels::default()
+        };
         queue.roundtrip(&mut toplevels)?;
         // The windows already open are the first `read`; `wait` waits for what comes next.
         toplevels.changed = false;
         Ok(Self {
             queue,
             toplevels,
+            control,
             _manager: manager,
         })
     }
+
+    /// Acts on the windows of this connection, from any thread.
+    pub fn control(&self) -> ShellControl {
+        self.control.clone()
+    }
 }
 
-/// The shell source, if the compositor has a shell socket; otherwise nothing.
+/// The shell source, if the compositor has a shell socket; otherwise nothing. Its control
+/// becomes the one of `windows::Auto`.
 pub fn source() -> Option<Box<dyn Source>> {
     match Shell::connect() {
-        Ok(shell) => Some(Box::new(shell)),
+        Ok(shell) => {
+            *lock(&CONTROL) = Some(shell.control());
+            tracing::info!("open windows from the shell protocol");
+            Some(Box::new(shell))
+        }
         Err(error) => {
-            tracing::info!(%error, "no shell protocol: a started application bounces until its timeout");
+            tracing::info!(%error, "no shell protocol");
             None
         }
     }
@@ -74,9 +107,17 @@ impl Source for Shell {
                 activated: t.activated,
             })
             .collect();
+        let covered = self
+            .toplevels
+            .outputs
+            .iter()
+            .filter(|(_, covered)| **covered)
+            .map(|(name, _)| name.clone())
+            .collect();
         Ok(Windows {
             list,
-            controllable: false,
+            controllable: true,
+            covered,
         })
     }
 
@@ -84,6 +125,7 @@ impl Source for Shell {
         loop {
             if let Err(error) = self.queue.blocking_dispatch(&mut self.toplevels) {
                 tracing::warn!(%error, "shell window list lost");
+                lock(&CONTROL).take();
                 return false;
             }
             if std::mem::take(&mut self.toplevels.changed) {
@@ -93,12 +135,104 @@ impl Source for Shell {
     }
 }
 
-/// The windows as the protocol describes them, applied at each `done` of the manager.
-#[derive(Debug, Default)]
+/// Sends requests on the watching connection.
+#[derive(Clone)]
+pub struct ShellControl {
+    connection: Connection,
+    shared: Arc<Mutex<Shared>>,
+}
+
+/// What the requests need, kept by the watching thread at each `done`.
+#[derive(Default)]
+struct Shared {
+    /// The described windows.
+    windows: Vec<Handle>,
+    /// The icons, from the last `place`.
+    places: Vec<Place>,
+}
+
+struct Handle {
+    toplevel: SherlockShellToplevelV1,
+    app_id: String,
+    /// The screen and rectangle last sent with `set_rectangle`.
+    sent: Option<(String, (i32, i32, i32, i32))>,
+}
+
+impl Shared {
+    /// Sends the rectangle of each window whose icon moved, appeared or went.
+    fn place(&mut self) {
+        for window in &mut self.windows {
+            let wanted = self
+                .places
+                .iter()
+                .find(|p| (p.owns)(&window.app_id))
+                .map(|p| (p.output.clone(), p.rectangle));
+            if wanted == window.sent {
+                continue;
+            }
+            match (&wanted, &window.sent) {
+                (Some((output, (x, y, width, height))), _) => {
+                    window
+                        .toplevel
+                        .set_rectangle(output.clone(), *x, *y, *width, *height);
+                }
+                // No icon any more: a size of 0 removes the rectangle.
+                (None, Some((output, _))) => {
+                    window.toplevel.set_rectangle(output.clone(), 0, 0, 0, 0);
+                }
+                (None, None) => {}
+            }
+            window.sent = wanted;
+        }
+    }
+}
+
+impl ShellControl {
+    fn flush(&self) {
+        if let Err(error) = self.connection.flush() {
+            tracing::warn!(%error, "cannot send to the compositor");
+        }
+    }
+}
+
+impl Control for ShellControl {
+    fn send(&self, request: Request, owns: Owns) {
+        let shared = lock(&self.shared);
+        let mut count = 0;
+        for window in shared.windows.iter().filter(|w| owns(&w.app_id)) {
+            match request {
+                Request::Activate => window.toplevel.activate(),
+                Request::Minimize => window.toplevel.minimize(),
+                Request::Close => window.toplevel.close(),
+            }
+            count += 1;
+        }
+        drop(shared);
+        self.flush();
+        tracing::info!(?request, count, "windows asked");
+    }
+
+    fn place(&self, places: Vec<Place>) {
+        let mut shared = lock(&self.shared);
+        shared.places = places;
+        shared.place();
+        drop(shared);
+        self.flush();
+    }
+}
+
+/// The windows and screens as the protocol describes them, applied at each `done` of the
+/// manager.
+#[derive(Default)]
 struct Toplevels {
     list: Vec<Toplevel>,
+    /// Each screen, and whether a maximized or fullscreen window covers it.
+    outputs: BTreeMap<String, bool>,
+    /// Screens changed in this batch; `None` for a screen gone.
+    pending_outputs: BTreeMap<String, Option<bool>>,
     /// A `done` came since the last `wait`: only it publishes the state.
     changed: bool,
+    control: Option<ShellControl>,
 }
 
 #[derive(Debug)]
@@ -112,12 +246,37 @@ struct Toplevel {
     described: bool,
 }
 
-/// Whether a `state` array, `u32` values in the machine's byte order, holds `activated`.
-fn is_activated(state: &[u8]) -> bool {
+impl Toplevels {
+    /// The batch is complete: the windows the requests act on, and their rectangles.
+    fn settle(&mut self) {
+        let Some(control) = &self.control else {
+            return;
+        };
+        let mut shared = lock(&control.shared);
+        let mut old = std::mem::take(&mut shared.windows);
+        shared.windows = self
+            .list
+            .iter()
+            .filter(|t| t.described)
+            .map(|t| Handle {
+                toplevel: t.handle.clone(),
+                app_id: t.app_id.clone(),
+                sent: old
+                    .iter_mut()
+                    .find(|h| h.toplevel == t.handle)
+                    .and_then(|h| h.sent.take()),
+            })
+            .collect();
+        shared.place();
+        drop(shared);
+        control.flush();
+    }
+}
+
+/// Whether a `state` array, `u32` values in the machine's byte order, holds `value`.
+fn holds(state: &[u8], value: u32) -> bool {
     let (values, _) = state.as_chunks::<4>();
-    values
-        .iter()
-        .any(|c| u32::from_ne_bytes(*c) == toplevel::State::Activated as u32)
+    values.iter().any(|c| u32::from_ne_bytes(*c) == value)
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for Toplevels {
@@ -150,6 +309,14 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                 pending_activated: None,
                 described: false,
             }),
+            manager::Event::Output { name, state: flags } => {
+                let covered = holds(&flags, manager::OutputState::Maximized as u32)
+                    || holds(&flags, manager::OutputState::Fullscreen as u32);
+                state.pending_outputs.insert(name, Some(covered));
+            }
+            manager::Event::OutputRemoved { name } => {
+                state.pending_outputs.insert(name, None);
+            }
             manager::Event::Done => {
                 for toplevel in &mut state.list {
                     if let Some(app_id) = toplevel.pending_app_id.take() {
@@ -160,6 +327,13 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                     }
                     toplevel.described = true;
                 }
+                for (name, covered) in std::mem::take(&mut state.pending_outputs) {
+                    match covered {
+                        Some(covered) => state.outputs.insert(name, covered),
+                        None => state.outputs.remove(&name),
+                    };
+                }
+                state.settle();
                 state.changed = true;
             }
             _ => {}
@@ -187,7 +361,8 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Toplevels {
         match event {
             toplevel::Event::AppId { app_id } => toplevel.pending_app_id = Some(app_id),
             toplevel::Event::State { state: flags } => {
-                toplevel.pending_activated = Some(is_activated(&flags));
+                let activated = holds(&flags, toplevel::State::Activated as u32);
+                toplevel.pending_activated = Some(activated);
             }
             // Gone, but published with the rest of its batch: only `done` makes a consistent
             // state (a window closing and another opening must not read as one window less).

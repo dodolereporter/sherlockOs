@@ -1264,7 +1264,7 @@ it.
 
 ### From a text console
 
-1. Build: `cargo build --release -p compositor -p bar -p dock`.
+1. Build: `cargo build --release -p compositor -p bar -p dock -p notifications`.
 2. Switch to a free console: Ctrl + Alt + F3, and log in.
 3. Launch, with the log in a file:
 
@@ -1285,21 +1285,25 @@ it.
 
 ### From the login screen (SDDM)
 
-`just install-session` builds the compositor, the bar and the dock in release, then **prints**
-the commands that install the session, without running them:
+`just install-session` builds the compositor, the bar, the dock, the launcher, the notification
+daemon and Evidence in release, then **prints** the commands that install the session, without
+running them:
 
-- the three programs and the start script `sherlockos-session` go to `/usr/local/libexec/nom-os/`;
+- the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/nom-os/`;
 - the entry `sherlockos.desktop` (`Name=NOM_OS`) goes to `/usr/share/wayland-sessions/`, where
   SDDM lists the Wayland sessions;
+- Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
+  launcher find it; it runs `evidence`, which the session finds in its `PATH`;
 - `sudo apt install libseat1` is added when libseat is missing.
 
 At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
-then launches the compositor, which launches the bar and the dock once it is ready. The bar and
-the dock start again when they stop (ADR 0005), as long as the compositor is there, after 1, 2,
-4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given up, with a line in the
-log (`session: … given up`).
-To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop`.
+adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
+there), then launches the compositor, which launches the bar, the dock and the notification
+daemon once it is ready. They start again when they stop (ADR 0005), as long as the compositor
+is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
+up, with a line in the log (`session: … given up`).
+To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
 shell built from this workspace, and are tried on the author's Debian before the base exists.
