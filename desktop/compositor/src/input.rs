@@ -99,9 +99,15 @@ pub(crate) enum Hit {
     Layer(WlSurface, WlSurface, Point<f64, Logical>),
 }
 
-/// Compositor shortcut: gesture key and an arrow.
+/// Compositor shortcut: gesture key and an arrow or a digit, or a key of the session.
 #[derive(Debug, Clone, Copy)]
 enum Shortcut {
+    /// 1 to 9: goes to that workspace (its index, from 0).
+    Workspace(usize),
+    /// Shift + 1 to 9: sends the window that has the keyboard to that workspace.
+    SendToWorkspace(usize),
+    /// Ctrl + Left or Right arrow: goes to the workspace on that side.
+    NeighborWorkspace(isize),
     /// Up arrow: maximizes, or restores the previous place.
     ToggleMaximized,
     /// Left or right arrow: half of the screen.
@@ -124,6 +130,27 @@ impl Shortcut {
             _ if nested => None,
             Keysym::BackSpace | Keysym::Terminate_Server if m.ctrl && m.alt => Some(Self::Quit),
             _ if vt < 12 => Some(Self::SwitchVt(vt as i32 + 1)),
+            _ => None,
+        }
+    }
+
+    /// Workspace keys: the gesture key with 1 to 9, Shift + 1 to 9, Ctrl + Left or Right.
+    /// The digits are the keys of the top row, whatever the layout: on AZERTY they give
+    /// `&`, `é`, `"`… without Shift.
+    fn for_workspaces(nested: bool, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
+        let other = if nested { m.logo } else { m.alt };
+        if !gesture_modifier_held(nested, m) || other {
+            return None;
+        }
+        // xkb codes of the keys 1 to 9 of the top row: evdev KEY_1 (2) to KEY_9 (10), plus 8.
+        let digit = (10..=18)
+            .contains(&key.raw())
+            .then(|| key.raw() as usize - 10);
+        match (m.ctrl, m.shift, digit, sym) {
+            (false, false, Some(index), _) => Some(Self::Workspace(index)),
+            (false, true, Some(index), _) => Some(Self::SendToWorkspace(index)),
+            (true, false, None, Keysym::Left) => Some(Self::NeighborWorkspace(-1)),
+            (true, false, None, Keysym::Right) => Some(Self::NeighborWorkspace(1)),
             _ => None,
         }
     }
@@ -366,6 +393,11 @@ impl State {
         self.gesture.is_some()
     }
 
+    /// Window being moved or resized.
+    pub(crate) fn gesture_window(&self) -> Option<Window> {
+        self.gesture.as_ref().map(|g| g.window.clone())
+    }
+
     /// Rectangle where the moved window will be snapped if dropped now, for the preview.
     pub fn snap_preview(&self) -> Option<Rectangle<i32, Logical>> {
         let (zone, output) = self.gesture.as_ref()?.zone.as_ref()?;
@@ -400,18 +432,18 @@ impl State {
     }
 
     fn window_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
-        let under = self.space.element_under(pos);
-        for window in self.space.elements().rev() {
-            if let Some((top, loc)) = under
-                && top == window
-            {
-                let (surface, origin) =
-                    window.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)?;
-                return Some(Hit::Surface(
-                    window.clone(),
-                    surface,
-                    (origin + loc).to_f64(),
-                ));
+        // Hidden windows (other workspaces, minimized) are skipped, which the space does not do.
+        for window in self.space.elements().rev().filter(|w| self.is_visible(w)) {
+            let loc = self
+                .space
+                .element_location(window)
+                .map(|l| l - window.geometry().loc);
+            let under = loc.and_then(|loc| {
+                let surface = window.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL);
+                surface.map(|(surface, origin)| (surface, origin + loc))
+            });
+            if let Some((surface, origin)) = under {
+                return Some(Hit::Surface(window.clone(), surface, origin.to_f64()));
             }
             let edges = self
                 .space
@@ -446,11 +478,14 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
-            if let Some(shortcut) = Shortcut::for_session(state.nested, mods, sym.modified_sym()) {
+            let sym = sym.modified_sym();
+            let shortcut = Shortcut::for_session(state.nested, mods, sym)
+                .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym));
+            if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
             }
-            match Shortcut::for_key(sym.modified_sym()) {
+            match Shortcut::for_key(sym) {
                 Some(shortcut) if gesture_modifier_alone(state.nested, mods) => {
                     state.intercepted_keys.push(key);
                     FilterResult::Intercept(Some(shortcut))
@@ -475,6 +510,23 @@ impl State {
             Shortcut::Quit => {
                 tracing::info!("Ctrl + Alt + Backspace: the compositor stops");
                 self.loop_signal.stop();
+                return;
+            }
+            Shortcut::Workspace(index) => {
+                if let Some(id) = self.workspaces().id_at(index).map(str::to_owned) {
+                    self.activate_workspace(&id);
+                }
+                return;
+            }
+            Shortcut::NeighborWorkspace(steps) => {
+                self.activate_workspace_by(steps);
+                return;
+            }
+            Shortcut::SendToWorkspace(index) => {
+                let id = self.workspaces().id_at(index).map(str::to_owned);
+                if let (Some(window), Some(id)) = (self.focused_window(), id) {
+                    self.move_to_workspace(&window, &id);
+                }
                 return;
             }
             _ => {}
@@ -663,6 +715,42 @@ mod tests {
             alt,
             ..ModifiersState::default()
         }
+    }
+
+    #[test]
+    fn workspace_keys_are_the_top_row_whatever_the_layout() {
+        let key = |m: &ModifiersState, code, sym| {
+            Shortcut::for_workspaces(false, m, Keycode::new(code), sym)
+        };
+        let logo = ModifiersState {
+            logo: true,
+            ..ModifiersState::default()
+        };
+        let shift = ModifiersState {
+            shift: true,
+            ..logo
+        };
+        let ctrl = ModifiersState { ctrl: true, ..logo };
+        // Top row of AZERTY: `&` on key 1, `ç` on key 9.
+        let one = key(&logo, 10, Keysym::ampersand);
+        assert!(matches!(one, Some(Shortcut::Workspace(0))));
+        let nine = key(&logo, 18, Keysym::ccedilla);
+        assert!(matches!(nine, Some(Shortcut::Workspace(8))));
+        let send = key(&shift, 11, Keysym::_2);
+        assert!(matches!(send, Some(Shortcut::SendToWorkspace(1))));
+        let right = key(&ctrl, 114, Keysym::Right);
+        assert!(matches!(right, Some(Shortcut::NeighborWorkspace(1))));
+        let left = key(&ctrl, 113, Keysym::Left);
+        assert!(matches!(left, Some(Shortcut::NeighborWorkspace(-1))));
+        // Key 0, or without the gesture key, or with Ctrl and a digit: for the client.
+        assert!(key(&logo, 19, Keysym::agrave).is_none());
+        assert!(key(&mods(false, false), 10, Keysym::ampersand).is_none());
+        assert!(key(&ctrl, 10, Keysym::ampersand).is_none());
+        // In nested mode, Alt is the gesture key and Super goes to the client.
+        let alt = mods(false, true);
+        let nested = Shortcut::for_workspaces(true, &alt, Keycode::new(10), Keysym::ampersand);
+        assert!(matches!(nested, Some(Shortcut::Workspace(0))));
+        assert!(key(&ModifiersState { alt: true, ..logo }, 10, Keysym::ampersand).is_none());
     }
 
     #[test]

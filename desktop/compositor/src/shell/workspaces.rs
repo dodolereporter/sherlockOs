@@ -1,10 +1,9 @@
 //! Workspaces: the model the compositor keeps, and `ext-workspace-v1` for the bar.
 //!
 //! Workspaces are shared by every screen (ADR 0021): one group holding every screen, and one
-//! active workspace for all of them. For now there is a single workspace, `1`, holding every
-//! window. Lot D-18w fills `Workspaces` (a fixed number, 3 by default) and shows only the
-//! windows of the active one; the protocols already carry the list, the active workspace, the
-//! workspace of each window, and the requests to switch and to move a window.
+//! active workspace for all of them. There are `DEFAULT_COUNT` of them unless the session sets
+//! another number, each window belongs to one, and only the windows of the active one are
+//! shown (lot D-18w, `State::activate_workspace`).
 
 use smithay::{
     output::Output,
@@ -38,19 +37,23 @@ pub struct Workspaces {
     active: usize,
 }
 
+/// Number of workspaces of a session that sets none.
+pub const DEFAULT_COUNT: usize = 3;
+/// At most as many workspaces as there are shortcuts to reach them: Super + 1 to 9.
+pub const MAX_COUNT: usize = 9;
+
 impl Default for Workspaces {
-    /// A single workspace.
     fn default() -> Self {
         Self {
-            list: numbered(1),
+            list: numbered(DEFAULT_COUNT),
             active: 0,
         }
     }
 }
 
-/// `count` workspaces, at least one, each with its number for id and name.
+/// `count` workspaces, from one to `MAX_COUNT`, each with its number for id and name.
 fn numbered(count: usize) -> Vec<Workspace> {
-    (1..=count.max(1))
+    (1..=count.clamp(1, MAX_COUNT))
         .map(|n| Workspace {
             id: n.to_string(),
             name: n.to_string(),
@@ -77,13 +80,28 @@ impl Workspaces {
         self.list.get(self.active).map_or("", |w| &w.id)
     }
 
+    /// Index of the active workspace, from 0.
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Index of the workspace `id`, from 0.
+    pub fn index(&self, id: &str) -> Option<usize> {
+        self.list.iter().position(|w| w.id == id)
+    }
+
+    /// Id of the workspace at `index`, from 0.
+    pub fn id_at(&self, index: usize) -> Option<&str> {
+        self.list.get(index).map(|w| w.id.as_str())
+    }
+
     pub fn contains(&self, id: &str) -> bool {
-        self.list.iter().any(|w| w.id == id)
+        self.index(id).is_some()
     }
 
     /// Makes the workspace `id` active. `false` for an unknown id.
     pub(super) fn activate(&mut self, id: &str) -> bool {
-        match self.list.iter().position(|w| w.id == id) {
+        match self.index(id) {
             Some(i) => {
                 self.active = i;
                 true
@@ -321,19 +339,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_workspace_until_lot_d_18w() {
+    fn three_workspaces_by_default_from_one_to_nine() {
         let mut model = Workspaces::default();
-        assert_eq!(model.list().len(), 1);
+        assert_eq!(model.list().len(), DEFAULT_COUNT);
         assert_eq!(model.active(), "1");
-        assert!(model.contains("1") && !model.contains("2"));
-        assert!(!model.activate("2"), "an unknown workspace was activated");
-        assert!(model.activate("1"));
-        assert_eq!(model.active(), "1");
-        model.set_count(3);
+        assert!(model.contains("3") && !model.contains("4"));
+        assert!(!model.activate("4"), "an unknown workspace was activated");
         assert!(model.activate("3"));
+        assert_eq!((model.active(), model.active_index()), ("3", 2));
+        assert_eq!((model.index("2"), model.id_at(1)), (Some(1), Some("2")));
         model.set_count(2);
         assert_eq!(model.active(), "1", "the first one becomes active");
         model.set_count(0);
         assert_eq!(model.list().len(), 1, "never without a workspace");
+        model.set_count(12);
+        assert_eq!(model.list().len(), MAX_COUNT);
     }
 }

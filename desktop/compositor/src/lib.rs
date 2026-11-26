@@ -31,7 +31,10 @@ use std::{
     fmt,
     os::unix::net::UnixStream,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -78,7 +81,7 @@ use crate::{
 pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
-         [command [arguments…]]"
+         [--workspaces N] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -186,6 +189,9 @@ struct WindowData {
     resize: Cell<Option<Resize>>,
     /// Animated opening and geometry changes.
     motion: RefCell<anim::WindowMotion>,
+    /// When the window was last given the keyboard, as a count of `State::focus` calls; 0 if
+    /// never.
+    focused_at: Cell<u64>,
 }
 
 fn window_data(window: &Window) -> &WindowData {
@@ -367,12 +373,13 @@ impl State {
         }
     }
 
-    /// Topmost window, X11 menus aside: the one that takes the keyboard back.
+    /// The shown window that last had the keyboard, X11 menus aside: the one that takes the
+    /// keyboard back. Among windows that never had it, the topmost one.
     pub(crate) fn top_window(&self) -> Option<Window> {
         self.space
             .elements()
-            .rev()
-            .find(|w| !is_override_redirect(w))
+            .filter(|w| !is_override_redirect(w) && self.is_visible(w))
+            .max_by_key(|w| window_data(w).focused_at.get())
             .cloned()
     }
 
@@ -395,8 +402,13 @@ impl State {
 
     /// Gives the keyboard to a window and raises it, or takes the keyboard away from everyone.
     pub fn focus(&mut self, window: Option<Window>) {
+        static FOCUS_COUNT: AtomicU64 = AtomicU64::new(1);
         match &window {
-            Some(window) => self.space.raise_element(window, true),
+            Some(window) => {
+                let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
+                window_data(window).focused_at.set(count);
+                self.space.raise_element(window, true);
+            }
             None => self.space.elements().for_each(|w| {
                 w.set_activated(false);
             }),

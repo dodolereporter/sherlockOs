@@ -458,7 +458,7 @@ mod tests {
         let surface = window.x11_surface().unwrap().clone();
         h.state.minimize(&window);
         assert!(h.state.is_minimized(&window) && surface.is_minimized());
-        assert!(x11_window(&h.state, false).is_none());
+        assert!(!h.state.is_visible(&window));
         commands.send(Command::Withdraw).unwrap();
         h.run_until("the minimized window withdrawn", |s| {
             !s.is_minimized(&window) && !surface.is_mapped()
