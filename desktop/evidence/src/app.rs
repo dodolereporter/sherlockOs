@@ -10,6 +10,7 @@ use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
 use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
+use sherlock_ui::evidence as more;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::texts::evidence as texts;
 use sherlock_ui::{metrics, typography};
@@ -18,6 +19,7 @@ use crate::devices::{DeviceError, DeviceSource, Volume};
 use crate::git::{self, Repo};
 use crate::icons::AppIcon;
 use crate::listing::{self, Column, Entry, Kind, Sort};
+use crate::menu::{Closing, MenuMotion};
 use crate::ops;
 use crate::places::{self, Place};
 use crate::preview::{self, Preview};
@@ -151,6 +153,18 @@ pub enum Command {
     DeviceOpen,
     DeviceUnmount,
     DeviceEject,
+    /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
+    SortBy(Column),
+    /// The list view, from the « Vue » submenu: the only view so far.
+    ViewList,
+}
+
+/// The submenus of the right-click menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sub {
+    OpenWith,
+    SortBy,
+    View,
 }
 
 /// An entry of the right-click menu.
@@ -163,8 +177,8 @@ pub enum MenuItem {
         danger: bool,
         checked: bool,
     },
-    /// Opens the « Ouvrir avec » submenu.
-    OpenWith,
+    /// Opens a submenu: « Ouvrir avec », « Trier par », « Vue ».
+    Submenu(Sub),
     /// An application of the « Ouvrir avec » submenu, by its place in `App::open_with`.
     App(usize),
     /// Planned, not available yet.
@@ -184,7 +198,7 @@ impl MenuItem {
     }
 
     fn selectable(self) -> bool {
-        matches!(self, Self::Action { .. } | Self::OpenWith | Self::App(_))
+        matches!(self, Self::Action { .. } | Self::Submenu(_) | Self::App(_))
     }
 }
 
@@ -195,7 +209,7 @@ pub struct Menu {
     pub at: Point,
     /// Opened on the selection, or on the background of the listing.
     pub on_selection: bool,
-    pub submenu: bool,
+    pub submenu: Option<Sub>,
     /// Entry highlighted from the keyboard, in the menu or in the submenu.
     pub highlight: Option<usize>,
 }
@@ -230,8 +244,12 @@ pub enum Message {
     Sort(Column),
     Search(String),
     Run(Command),
-    Submenu(bool),
+    Submenu(Option<Sub>),
     CloseMenu,
+    /// A right click while the menu is open: it opens again where the pointer is.
+    Reopen,
+    /// What a closing menu's entries send: nothing.
+    Inert,
     /// Click on the background of the listing.
     Blank,
     Key(keyboard::Event),
@@ -327,6 +345,9 @@ pub struct App {
     /// Item being renamed and its new name.
     pub(crate) renaming: Option<(usize, String)>,
     pub(crate) menu: Option<Menu>,
+    /// The menu unfolding or folding back, and the menu that is closing.
+    pub(crate) menu_motion: MenuMotion,
+    pub(crate) closing: Option<Closing>,
     pub(crate) confirm_empty: bool,
     pub(crate) notice: Option<Notice>,
     pub(crate) busy: usize,
@@ -399,6 +420,8 @@ impl App {
             clipboard: None,
             renaming: None,
             menu: None,
+            menu_motion: MenuMotion::default(),
+            closing: None,
             confirm_empty: false,
             notice: None,
             busy: 0,
@@ -504,6 +527,7 @@ impl App {
         let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
         self.theme.running()
             || self.lasso_speed() != 0.0
+            || ((self.menu.is_some() || self.closing.is_some()) && self.menu_motion.running(now))
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
@@ -514,14 +538,33 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.menu_motion = MenuMotion::default();
+        self.closing = None;
         if let Some(target) = self.highlight.as_ref().map(Animation::target) {
             self.highlight = Some(Animation::new(motion::PREVIEW_SPRING, target, target, now));
         }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // What the open menu shows, to draw it while it folds back if this message closes it.
+        let shown = self.menu.as_ref().map(|menu| Closing {
+            menu: menu.clone(),
+            items: self.menu_items(menu.on_selection),
+            sub: menu
+                .submenu
+                .map(|s| self.submenu_items(s))
+                .unwrap_or_default(),
+        });
         let task = self.handle(message);
         let now = self.now();
+        if self.menu.is_some() {
+            self.closing = None;
+        } else if shown.is_some() {
+            self.closing = shown;
+            self.menu_motion.close(now);
+        } else if self.closing.is_some() && self.menu_motion.gone(now) {
+            self.closing = None;
+        }
         // The highlight follows the item when it is selected alone.
         let target = self.selection.single().map(|i| {
             f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT)
@@ -639,16 +682,10 @@ impl App {
                 }
                 return self.run(command);
             }
-            Message::Submenu(open) => {
-                if open {
-                    self.prepare_open_with();
-                }
-                if let Some(menu) = &mut self.menu {
-                    menu.submenu = open;
-                    menu.highlight = None;
-                }
-            }
+            Message::Submenu(sub) => self.open_submenu(sub, None),
             Message::CloseMenu => self.menu = None,
+            Message::Reopen => return self.reopen(),
+            Message::Inert => {}
             Message::Blank => {
                 self.menu = None;
                 self.renaming = None;
@@ -1195,7 +1232,7 @@ impl App {
 
     /// Menu entries: on the selection or on the background, in a folder or the trash.
     pub fn menu_items(&self, on_selection: bool) -> Vec<MenuItem> {
-        use MenuItem::{Action, OpenWith, Separator};
+        use MenuItem::{Action, Separator, Submenu};
         if let Some(volume) = self.menu_volume() {
             let open = if volume.mount_point.is_some() {
                 texts::OPEN
@@ -1218,7 +1255,10 @@ impl App {
             }
             return items;
         }
-        let paste = MenuItem::action(texts::PASTE, Some(texts::KEY_PASTE), Command::Paste);
+        let paste = match self.clipboard {
+            Some(_) => MenuItem::action(texts::PASTE, Some(texts::KEY_PASTE), Command::Paste),
+            None => MenuItem::Disabled(texts::PASTE),
+        };
         let empty = Action {
             label: texts::EMPTY_TRASH,
             keys: None,
@@ -1235,21 +1275,26 @@ impl App {
             (Location::Trash, false) => vec![empty],
             (Location::Folder(_), true) => vec![
                 MenuItem::action(texts::OPEN, Some(texts::KEY_OPEN), Command::Open),
-                OpenWith,
+                Submenu(Sub::OpenWith),
                 Separator,
                 MenuItem::action(texts::COPY, Some(texts::KEY_COPY), Command::Copy),
                 MenuItem::action(texts::CUT, Some(texts::KEY_CUT), Command::Cut),
+                paste,
+                Separator,
                 MenuItem::action(texts::RENAME, Some(texts::KEY_RENAME), Command::Rename),
                 MenuItem::action(
                     texts::DUPLICATE,
                     Some(texts::KEY_DUPLICATE),
                     Command::Duplicate,
                 ),
+                // Not in Evidence yet: shown, greyed.
+                MenuItem::Disabled(more::COMPRESS),
                 MenuItem::action(
                     texts::COPY_PATH,
                     Some(texts::KEY_COPY_PATH),
                     Command::CopyPath,
                 ),
+                MenuItem::Disabled(more::PROPERTIES),
                 Separator,
                 Action {
                     label: texts::MOVE_TO_TRASH,
@@ -1274,14 +1319,55 @@ impl App {
                     danger: false,
                     checked: self.show_hidden,
                 },
+                Submenu(Sub::SortBy),
+                Submenu(Sub::View),
             ],
         }
     }
 
-    /// Entries of the « Ouvrir avec » submenu: the applications that open the selected file's
+    /// Entries of a submenu.
+    pub fn submenu_items(&self, sub: Sub) -> Vec<MenuItem> {
+        match sub {
+            Sub::OpenWith => self.open_with_items(),
+            Sub::SortBy => {
+                let in_trash = self.location == Location::Trash;
+                let columns = [
+                    (texts::COLUMN_NAME, Column::Name),
+                    (texts::COLUMN_MODIFIED, Column::Modified),
+                    (texts::COLUMN_SIZE, Column::Size),
+                    (texts::COLUMN_KIND, Column::Kind),
+                    (texts::COLUMN_GIT, Column::Git),
+                ];
+                columns
+                    .into_iter()
+                    .filter(|(_, column)| !(in_trash && *column == Column::Git))
+                    .map(|(label, column)| MenuItem::Action {
+                        label,
+                        keys: None,
+                        command: Command::SortBy(column),
+                        danger: false,
+                        checked: self.sort.column == column,
+                    })
+                    .collect()
+            }
+            Sub::View => vec![
+                MenuItem::Action {
+                    label: more::VIEW_LIST,
+                    keys: None,
+                    command: Command::ViewList,
+                    danger: false,
+                    checked: true,
+                },
+                MenuItem::Disabled(more::VIEW_GRID),
+                MenuItem::Disabled(more::VIEW_COLUMNS),
+            ],
+        }
+    }
+
+    /// Entries of the « Ouvrir avec » submenu: the applications that open the selected files'
     /// type, the default first and checked, then a terminal here, the chooser of every
     /// application, and the "always" switch.
-    pub fn submenu_items(&self) -> Vec<MenuItem> {
+    fn open_with_items(&self) -> Vec<MenuItem> {
         let mut items: Vec<MenuItem> = (0..self.open_with.len()).map(MenuItem::App).collect();
         if self.open_with.is_empty() {
             items.push(MenuItem::action(texts::DEFAULT_APP, None, Command::Open));
@@ -1309,15 +1395,16 @@ impl App {
         items
     }
 
-    /// MIME type of the selected file, from its name.
+    /// MIME type of the selected files, from their names, when they all share it.
     fn selected_type(&self) -> Option<String> {
-        let entry = self.single()?;
         let catalog = self.catalog.as_ref()?;
-        Some(
-            catalog
-                .mime
-                .type_of(&entry.path, entry.kind == Kind::Folder),
-        )
+        let mut types = self
+            .selection
+            .iter()
+            .filter_map(|i| self.entries.get(i))
+            .map(|e| catalog.mime.type_of(&e.path, e.kind == Kind::Folder));
+        let first = types.next()?;
+        types.all(|t| t == first).then_some(first)
     }
 
     /// Fills the « Ouvrir avec » submenu for the selection, at most eight applications.
@@ -1348,7 +1435,8 @@ impl App {
     /// Opens the selection with an application; with "always" on, makes it the default for
     /// the selection's type in mimeapps.list first.
     fn open_with_app(&mut self, id: &str) -> Task<Message> {
-        let (Some(catalog), Some(entry)) = (self.catalog.clone(), self.single().cloned()) else {
+        let paths = self.selected_paths();
+        let Some(catalog) = self.catalog.clone().filter(|_| !paths.is_empty()) else {
             return Task::none();
         };
         let Some(app) = catalog.application(id).cloned() else {
@@ -1368,7 +1456,7 @@ impl App {
             }
             _ => Task::none(),
         };
-        let launch = match catalog.command(&app, &[entry.path]) {
+        let launch = match catalog.command(&app, &paths) {
             Some((program, args)) => {
                 let mut command = Process::new(program);
                 command.args(args);
@@ -1395,18 +1483,19 @@ impl App {
     fn open_menu(&mut self, at: Point) {
         let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
-        let width = metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
-        let width = width + metrics::OPEN_WITH_WIDTH;
+        // Inside the window; a submenu opens on the left when the right has no room.
         let at = Point::new(
-            at.x.min(self.size.width - width).max(0.0),
+            at.x.min(self.size.width - metrics::CONTEXT_MENU_WIDTH)
+                .max(0.0),
             at.y.min(self.size.height - height).max(0.0),
         );
         self.menu = Some(Menu {
             at,
             on_selection,
-            submenu: false,
+            submenu: None,
             highlight: None,
         });
+        self.menu_motion = MenuMotion::opening(self.now());
     }
 
     /// Opens the menu from the keyboard, under the cursor row.
@@ -1422,15 +1511,36 @@ impl App {
         self.open_menu(Point::new(left, top + row - self.scroll.0));
     }
 
+    /// A right click while the menu is open: on a row of the listing, or its background, the
+    /// menu opens again there, as in any file manager; elsewhere it only closes.
+    fn reopen(&mut self) -> Task<Message> {
+        self.menu = None;
+        let origin = Self::list_origin();
+        let preview = if self.show_preview {
+            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
+        } else {
+            0.0
+        };
+        let right = self.size.width - preview - metrics::LIST_PADDING;
+        let (x, y) = (self.pointer.x, self.pointer.y);
+        let inside = x >= origin.x && x < right && y >= origin.y;
+        if !inside || y >= origin.y + self.list_height() {
+            return Task::none();
+        }
+        let (_, in_list) = self.in_list(self.pointer);
+        let row = ((in_list - metrics::LIST_TOP_GAP) / metrics::LIST_ROW_HEIGHT).floor();
+        let index = (row >= 0.0 && (row as usize) < self.entries.len()).then_some(row as usize);
+        self.handle(Message::RightClick(index))
+    }
+
     /// Arrows, Enter and Escape in the open menu.
     fn menu_key(&mut self, key: &Key) -> Task<Message> {
         let Some(menu) = &self.menu else {
             return Task::none();
         };
-        let items = if menu.submenu {
-            self.submenu_items()
-        } else {
-            self.menu_items(menu.on_selection)
+        let items = match menu.submenu {
+            Some(sub) => self.submenu_items(sub),
+            None => self.menu_items(menu.on_selection),
         };
         let selectable: Vec<usize> = (0..items.len())
             .filter(|&i| items[i].selectable())
@@ -1452,15 +1562,17 @@ impl App {
         let Some(menu) = &mut self.menu else {
             return Task::none();
         };
-        let mut open_submenu = false;
+        let mut open_submenu = None;
         match key {
             Key::Named(Named::ArrowDown) => menu.highlight = step(true),
             Key::Named(Named::ArrowUp) => menu.highlight = step(false),
-            Key::Named(Named::ArrowRight) if highlighted == Some(MenuItem::OpenWith) => {
-                open_submenu = true;
+            Key::Named(Named::ArrowRight) => {
+                if let Some(MenuItem::Submenu(sub)) = highlighted {
+                    open_submenu = Some(sub);
+                }
             }
-            Key::Named(Named::ArrowLeft) if menu.submenu => {
-                menu.submenu = false;
+            Key::Named(Named::ArrowLeft) if menu.submenu.is_some() => {
+                menu.submenu = None;
                 menu.highlight = None;
             }
             Key::Named(Named::Escape) => self.menu = None,
@@ -1476,19 +1588,26 @@ impl App {
                     self.menu = None;
                     return id.map_or_else(Task::none, |id| self.open_with_app(&id));
                 }
-                Some(MenuItem::OpenWith) => open_submenu = true,
+                Some(MenuItem::Submenu(sub)) => open_submenu = Some(sub),
                 _ => {}
             },
             _ => {}
         }
-        if open_submenu {
-            self.prepare_open_with();
-            if let Some(menu) = &mut self.menu {
-                menu.submenu = true;
-                menu.highlight = Some(0);
-            }
+        if open_submenu.is_some() {
+            self.open_submenu(open_submenu, Some(0));
         }
         Task::none()
+    }
+
+    /// Opens a submenu, or closes it, with an entry highlighted from the keyboard.
+    fn open_submenu(&mut self, sub: Option<Sub>, highlight: Option<usize>) {
+        if sub == Some(Sub::OpenWith) {
+            self.prepare_open_with();
+        }
+        if let Some(menu) = &mut self.menu {
+            menu.submenu = sub;
+            menu.highlight = highlight;
+        }
     }
 
     // Keyboard.
@@ -1654,6 +1773,11 @@ impl App {
                 self.confirm_empty = !self.empty_ids.is_empty();
             }
             Command::Refresh => return self.load(&[]),
+            Command::SortBy(column) => {
+                self.sort = self.sort.toggle(column);
+                self.refilter();
+            }
+            Command::ViewList => {}
             Command::TogglePreview => self.show_preview = !self.show_preview,
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {

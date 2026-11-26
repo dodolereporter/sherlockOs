@@ -10,6 +10,7 @@ pub mod devices;
 pub mod git;
 pub mod icons;
 pub mod listing;
+pub mod menu;
 pub mod ops;
 pub mod places;
 pub mod preview;

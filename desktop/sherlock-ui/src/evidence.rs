@@ -1,5 +1,6 @@
-//! Tokens of Evidence, the file manager, added with its multiple selection (lot E-01): the
-//! lasso dragged on the background of the listing. No board draws it: its look is the
+//! Tokens of Evidence, the file manager, added with its multiple selection and its fuller
+//! right-click menu (lot E-01): the lasso dragged on the background of the listing, and the
+//! new menu entries. No board draws it: its look is the
 //! selection's blue, lighter, with a border. The other tokens of Evidence are in `texts`
 //! and `metrics`. See `docs/evidence.md`.
 
@@ -32,6 +33,17 @@ pub fn lasso_fill() -> Color {
 pub fn lasso_border() -> Color {
     color::palette().blue
 }
+
+/// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
+pub const COMPRESS: &str = "Compresser";
+pub const PROPERTIES: &str = "Propriétés";
+/// The submenus of the menu on the background: the sort, and the view with its three kinds
+/// (only the list exists so far).
+pub const SORT_BY: &str = "Trier par";
+pub const VIEW: &str = "Vue";
+pub const VIEW_LIST: &str = "Liste";
+pub const VIEW_GRID: &str = "Grille";
+pub const VIEW_COLUMNS: &str = "Colonnes";
 
 #[cfg(feature = "iced")]
 pub use style::lasso;

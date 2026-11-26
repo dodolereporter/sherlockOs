@@ -343,9 +343,9 @@ fn right_click_menu_is_driven_by_the_keyboard() {
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowRight);
-    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu.is_some()));
     bench.press(Named::ArrowLeft);
-    assert!(bench.app.menu.as_ref().is_some_and(|m| !m.submenu));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu.is_none()));
     bench.press(Named::Escape);
     assert!(bench.app.menu.is_none());
     // The menu stays inside the window.
@@ -436,7 +436,7 @@ fn window_renders_headless() {
         Message::Click(docker),
         Message::Cursor(iced::Point::new(450.0, 406.0)),
         Message::RightClick(Some(docker)),
-        Message::Submenu(true),
+        Message::Submenu(Some(crate::app::Sub::OpenWith)),
     ] {
         let task = app.update(message);
         drain(&mut app, task);
@@ -469,7 +469,7 @@ fn window_renders_headless() {
     let scale = picture.width() as f32 / width;
     let menu = app.menu.clone().expect("menu open");
     let main_items = app.menu_items(menu.on_selection);
-    let sub_items = app.submenu_items();
+    let sub_items = app.submenu_items(crate::app::Sub::OpenWith);
     let check = |left: f32, top: f32, items: &[crate::app::MenuItem], what: &str| {
         let mut y = top + metrics::MENU_PADDING + metrics::BORDER_WIDTH;
         for item in items {
@@ -492,18 +492,12 @@ fn window_renders_headless() {
         }
     };
     check(menu.at.x, menu.at.y, &main_items, "menu");
-    let before = main_items
-        .iter()
-        .position(|item| *item == crate::app::MenuItem::OpenWith)
-        .unwrap_or_default();
-    let offset = App::menu_height(&main_items[..before])
-        - 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
-    let sub_x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
+    let sub_at = crate::menu::submenu_at(&menu, &main_items, &sub_items, app.size);
     assert!(
-        sub_x >= menu.at.x + metrics::CONTEXT_MENU_WIDTH,
+        sub_at.x >= menu.at.x + metrics::CONTEXT_MENU_WIDTH,
         "submenu overlaps the menu"
     );
-    check(sub_x, menu.at.y + offset, &sub_items, "submenu");
+    check(sub_at.x, sub_at.y, &sub_items, "submenu");
 
     // The same window in the light theme, `evidence-light-<renderer>.png`, to compare with
     // FichiersClair.
@@ -822,7 +816,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     drain(&mut bench.app, task);
     bench.select("notes.txt");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     let names: Vec<&str> = bench
         .app
         .open_with
@@ -851,7 +845,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     assert!(!bench.app.always);
     bench.select("readme.md");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     assert!(!bench.app.always);
     bench.send(Message::OpenWithApp("kate.desktop".into()));
     let after = fs::read_to_string(xdg.config_home.join("mimeapps.list")).expect("mimeapps.list");
@@ -861,7 +855,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     );
     // Turning the switch on, then closing the menu, turns it off again.
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     bench.send(Message::Run(crate::app::Command::ToggleAlways));
     assert!(bench.app.always);
     bench.press(Named::Escape);
@@ -1102,4 +1096,266 @@ fn following_selected_rows_form_one_block() {
         assert_eq!(pixel(x, top + 4.5 * row), background, "{name}: rows apart");
         assert_eq!(pixel(x, top + 5.5 * row), selected, "{name}: second block");
     }
+}
+
+/// The labels of menu entries, `-` before a greyed one; submenus by their label.
+fn menu_labels(items: &[crate::app::MenuItem]) -> Vec<String> {
+    use crate::app::{MenuItem, Sub};
+    use sherlock_ui::evidence as more;
+    use sherlock_ui::texts::evidence as t;
+    items
+        .iter()
+        .filter_map(|item| match item {
+            MenuItem::Action { label, .. } => Some((*label).to_owned()),
+            MenuItem::Disabled(label) => Some(format!("-{label}")),
+            MenuItem::Submenu(Sub::OpenWith) => Some(t::OPEN_WITH.to_owned()),
+            MenuItem::Submenu(Sub::SortBy) => Some(more::SORT_BY.to_owned()),
+            MenuItem::Submenu(Sub::View) => Some(more::VIEW.to_owned()),
+            MenuItem::App(_) | MenuItem::Separator => None,
+        })
+        .collect()
+}
+
+/// The entries of the open menu, or of its open submenu.
+fn open_menu(bench: &Bench) -> Vec<String> {
+    let menu = bench.app.menu.clone().expect("menu open");
+    match menu.submenu {
+        Some(sub) => menu_labels(&bench.app.submenu_items(sub)),
+        None => menu_labels(&bench.app.menu_items(menu.on_selection)),
+    }
+}
+
+#[test]
+fn the_menu_offers_what_fits_its_target() {
+    let mut bench = bench_with_files("menu-target", 2);
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    let on_item = [
+        "Ouvrir",
+        "Ouvrir avec",
+        "Copier",
+        "Couper",
+        "-Coller",
+        "Renommer",
+        "Dupliquer",
+        "-Compresser",
+        "Copier le chemin",
+        "-Propriétés",
+        "Mettre à la corbeille",
+    ];
+    assert_eq!(open_menu(&bench), on_item);
+    // The keyboard passes over greyed entries.
+    let items = bench.app.menu_items(true);
+    for _ in 0..items.len() * 2 {
+        bench.press(Named::ArrowDown);
+        let lit = bench.app.menu.as_ref().and_then(|m| m.highlight);
+        let lit = lit.and_then(|i| items.get(i)).expect("an entry is lit");
+        assert!(!matches!(lit, crate::app::MenuItem::Disabled(_)), "{lit:?}");
+    }
+    bench.press(Named::Escape);
+    // Something copied: « Coller » answers. Several items: the same menu.
+    bench.ctrl("c");
+    bench.ctrl("a");
+    bench.send(Message::RightClick(Some(1)));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.on_selection));
+    assert_eq!(
+        bench.selected().len(),
+        4,
+        "a right click inside keeps the selection"
+    );
+    assert!(open_menu(&bench).contains(&"Coller".to_owned()));
+    bench.press(Named::Escape);
+    // On the background.
+    bench.send(Message::RightClick(None));
+    assert_eq!(
+        open_menu(&bench),
+        [
+            "Nouveau dossier",
+            "Coller",
+            "Fichiers cachés",
+            "Trier par",
+            "Vue"
+        ]
+    );
+}
+
+#[test]
+fn the_background_menu_sorts_and_shows_the_views() {
+    use crate::app::{MenuItem, Sub};
+    let mut bench = bench_with_files("menu-sort", 2);
+    fs::write(bench.path("projet/f00.txt"), "a longer content").expect("write");
+    bench.press(Named::F5);
+    bench.send(Message::RightClick(None));
+    // Down to « Trier par », then Right opens it, its first entry lit.
+    while bench.app.menu.as_ref().and_then(|m| m.highlight)
+        != bench
+            .app
+            .menu_items(false)
+            .iter()
+            .position(|i| *i == MenuItem::Submenu(Sub::SortBy))
+    {
+        bench.press(Named::ArrowDown);
+    }
+    bench.press(Named::ArrowRight);
+    assert_eq!(
+        open_menu(&bench),
+        ["Nom", "Modifié", "Taille", "Type", "Git"]
+    );
+    let checked = |bench: &Bench| {
+        bench
+            .app
+            .submenu_items(Sub::SortBy)
+            .iter()
+            .position(|i| matches!(i, MenuItem::Action { checked: true, .. }))
+    };
+    assert_eq!(checked(&bench), Some(0), "by name");
+    bench.press(Named::ArrowDown);
+    bench.press(Named::ArrowDown);
+    bench.press(Named::Enter);
+    assert!(bench.app.menu.is_none());
+    assert_eq!(bench.app.sort.column, crate::listing::Column::Size);
+    assert_eq!(checked(&bench), Some(2));
+    // Folders first, then the smallest file first.
+    assert_eq!(bench.names(), ["src", "f01.txt", "a.txt", "f00.txt"]);
+    // The view: the list, checked; the grid and the columns do not exist yet.
+    bench.send(Message::RightClick(None));
+    bench.send(Message::Submenu(Some(Sub::View)));
+    assert_eq!(open_menu(&bench), ["Liste", "-Grille", "-Colonnes"]);
+}
+
+#[test]
+fn a_right_click_with_the_menu_open_opens_it_on_the_new_target() {
+    let mut bench = Bench::new("menu-reopen");
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    // Over the first row, src.
+    let row = |i: f32| {
+        iced::Point::new(
+            metrics::SIDEBAR_WIDTH + 100.0,
+            metrics::TITLE_BAR_HEIGHT
+                + metrics::TOOLBAR_HEIGHT
+                + metrics::LIST_HEADER_HEIGHT
+                + 3.0 * metrics::BORDER_WIDTH
+                + metrics::LIST_TOP_GAP
+                + (i + 0.5) * metrics::LIST_ROW_HEIGHT,
+        )
+    };
+    bench.send(Message::Cursor(row(0.0)));
+    bench.send(Message::Reopen);
+    let menu = bench.app.menu.clone().expect("open again");
+    assert!(menu.on_selection);
+    assert_eq!(bench.selected(), ["src"]);
+    assert!((menu.at.y - row(0.0).y).abs() < 1.0, "where the pointer is");
+    // Below the rows: the menu of the background.
+    bench.send(Message::Cursor(row(5.0)));
+    bench.send(Message::Reopen);
+    assert!(bench.app.menu.as_ref().is_some_and(|m| !m.on_selection));
+    // Over the sidebar: it only closes.
+    bench.send(Message::Cursor(iced::Point::new(40.0, 200.0)));
+    bench.send(Message::Reopen);
+    assert!(bench.app.menu.is_none());
+}
+
+#[test]
+fn the_menu_unfolds_and_folds_back() {
+    let mut bench = Bench::new("menu-motion");
+    bench.app.settle();
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    let now = bench.app.now();
+    assert!(bench.app.animating(now), "frames while it unfolds");
+    assert!(bench.app.menu_motion.opacity(now) < 1.0);
+    bench.press(Named::Escape);
+    assert!(bench.app.menu.is_none());
+    assert!(bench.app.closing.is_some(), "drawn while it folds back");
+    std::thread::sleep(sherlock_ui::panels::OPEN_FADE + Duration::from_millis(30));
+    bench.send(Message::Frame(std::time::Instant::now()));
+    assert!(bench.app.closing.is_none());
+    let now = bench.app.now();
+    assert!(!bench.app.menu_motion.running(now), "no frame at rest");
+}
+
+/// Renders the window, writes `target/tmp/<name>-<renderer>.png`, returns the picture and its
+/// scale.
+fn capture(app: &App, name: &str) -> (::image::RgbImage, f32) {
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let (width, height) = metrics::REFERENCE_WINDOW;
+    let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());
+    let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = dir.join(format!("{name}-{renderer}.png"));
+    let _ = fs::remove_file(&written);
+    assert!(
+        snapshot
+            .matches_image(dir.join(format!("{name}.png")))
+            .expect("writing the capture")
+    );
+    println!("capture: {}", written.display());
+    let picture = ::image::open(&written).expect("capture").to_rgb8();
+    let scale = picture.width() as f32 / width;
+    (picture, scale)
+}
+
+/// Captures of the menu on several items and on the background with « Trier par » open, dark
+/// and light, in `target/tmp/evidence-menu-*.png`, and of the menu while it unfolds.
+#[test]
+fn menu_captures() {
+    use crate::app::Sub;
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = crate::testing::in_theme(which);
+        let mut bench = bench_with_files("menu-capture", 4);
+        click_with(&mut bench, "a.txt", Modifiers::empty());
+        click_with(&mut bench, "f01.txt", Modifiers::SHIFT);
+        bench.ctrl("c");
+        bench.send(Message::Cursor(iced::Point::new(520.0, 230.0)));
+        bench.send(Message::RightClick(Some(2)));
+        bench.app.settle();
+        let (picture, scale) = capture(&bench.app, &format!("evidence-menu-selection-{name}"));
+        let menu = bench.app.menu.clone().expect("menu open");
+        // The menu is drawn where it was opened, on its glass.
+        let inside = picture.get_pixel(
+            ((menu.at.x + 20.0) * scale) as u32,
+            ((menu.at.y + 15.0) * scale) as u32,
+        );
+        let outside = picture.get_pixel(
+            ((menu.at.x - 30.0) * scale) as u32,
+            ((menu.at.y + 300.0) * scale) as u32,
+        );
+        assert_ne!(inside, outside, "{name}: the menu shows");
+
+        bench.press(Named::Escape);
+        bench.send(Message::Cursor(iced::Point::new(700.0, 480.0)));
+        bench.send(Message::RightClick(None));
+        bench.send(Message::Submenu(Some(Sub::SortBy)));
+        bench.app.settle();
+        capture(&bench.app, &format!("evidence-menu-background-{name}"));
+    }
+    // Halfway through unfolding, in the software renderer: drawn whole, faded, never the black
+    // block a misdrawn shadow once left (see Animations).
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = bench_with_files("menu-opening", 4);
+    bench.send(Message::Cursor(iced::Point::new(520.0, 230.0)));
+    bench.send(Message::RightClick(Some(2)));
+    bench.app.settle();
+    let now = bench.app.now();
+    let start = now.saturating_sub(sherlock_ui::panels::OPEN_FADE / 3);
+    bench.app.menu_motion = crate::menu::MenuMotion::opening(start);
+    let (picture, scale) = capture(&bench.app, "evidence-menu-opening");
+    let menu = bench.app.menu.clone().expect("menu open");
+    let items = bench.app.menu_items(true);
+    let height = App::menu_height(&items) * bench.app.menu_motion.scale(now);
+    let mut dark = 0;
+    for step in 1..10 {
+        let y = menu.at.y + height * step as f32 / 10.0;
+        let pixel = picture.get_pixel(((menu.at.x + 8.0) * scale) as u32, (y * scale) as u32);
+        dark += usize::from(pixel.0.iter().all(|&c| c < 12));
+    }
+    assert_eq!(dark, 0, "no black block in the unfolding menu");
 }
