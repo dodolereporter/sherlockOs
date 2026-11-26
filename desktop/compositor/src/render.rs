@@ -2,15 +2,17 @@
 //!
 //! Elements go from front to back, as Smithay expects them: the anchored surfaces of the
 //! overlay and top layers, the snap preview, then each window, from the topmost to the lowest,
-//! with its menus, its border, its content clipped to a rounded rectangle and its shadow, the
-//! anchored surfaces of the bottom and background layers, and last the wallpaper, or the
-//! background discs without one. The desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
+//! with its menus, its border, its title bar when the compositor draws it (`decorations`), its
+//! content clipped to a rounded rectangle and its shadow, the anchored surfaces of the bottom
+//! and background layers, and last the wallpaper, or the background discs without one. The
+//! desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
 //! scale. See "Rendering" in `docs/compositor.md`.
 
-use std::time::Duration;
+use std::{cell::RefCell, time::Duration};
 
 use sherlock_ui::{
     color::{self, Color},
+    decorations::{self as ui_decorations, Colors},
     metrics, window as ui,
 };
 use smithay::{
@@ -39,6 +41,7 @@ use crate::{
     State,
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
+    decorations::{self, Bar, Look},
     is_override_redirect,
     output::View,
     wallpaper, window_data,
@@ -54,6 +57,7 @@ render_elements! {
     Window=RoundedSurface,
     Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Wallpaper=TextureRenderElement<GlesTexture>,
+    Decoration=Stamped<TextureRenderElement<GlesTexture>>,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -61,6 +65,8 @@ pub struct Scene {
     shape: GlesPixelProgram,
     shadow: GlesPixelProgram,
     clip: GlesTexProgram,
+    /// Textures of the title bars the compositor draws (lot D-08).
+    bars: RefCell<decorations::Textures>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -76,10 +82,12 @@ pub enum Item {
         alpha: f32,
     },
     /// The surface tree of a window, whose geometry starts at `geometry` in its buffer,
-    /// stretched into `rect` and clipped to its rounded rectangle.
+    /// stretched into `rect` and clipped to the rounded rectangle `clip`: the whole window,
+    /// with its title bar when the compositor draws one.
     Window {
         surface: WlSurface,
         rect: Rectangle<i32, Physical>,
+        clip: Rectangle<i32, Physical>,
         geometry: Rectangle<i32, Logical>,
         alpha: f32,
         radius: f32,
@@ -104,12 +112,19 @@ pub enum Item {
     },
     /// The wallpaper of the screen.
     Wallpaper,
+    /// The title bar the compositor draws above a window, in `rect` (lot D-08).
+    Decoration {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        look: Look,
+        alpha: f32,
+    },
 }
 
 impl Item {
-    /// Hash of what a shape or a shadow draws, for `Ids::stamp`. The opacity is in it too,
-    /// although the damage tracker sees it: an element of the tests, which has none, still
-    /// changes with it.
+    /// Hash of what a shape, a shadow or a title bar draws, for `Ids::stamp`. The opacity is
+    /// in it too, although the damage tracker sees it: an element of the tests, which has none,
+    /// still changes with it.
     pub fn params(&self) -> u64 {
         match self {
             Item::Shape {
@@ -129,6 +144,7 @@ impl Item {
                 let scalars = [*radius, shadow.sigma, *alpha];
                 params_hash(&[&shadow.caster[..], &shadow.window, &scalars].concat())
             }
+            Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -167,6 +183,7 @@ impl Scene {
             shape,
             shadow,
             clip,
+            bars: RefCell::default(),
         })
     }
 
@@ -202,6 +219,7 @@ impl Scene {
             screens.push(elements);
         }
         ids.sweep();
+        self.bars.borrow_mut().sweep();
         let used: Vec<_> = state
             .views()
             .iter()
@@ -249,6 +267,7 @@ impl Scene {
             Item::Window {
                 surface,
                 rect,
+                clip,
                 geometry,
                 alpha,
                 radius,
@@ -271,7 +290,7 @@ impl Scene {
                         SceneElement::Window(RoundedSurface {
                             inner: RescaleRenderElement::from_element(surface, rect.loc, stretch),
                             program: self.clip.clone(),
-                            clip: rect.to_f64(),
+                            clip: clip.to_f64(),
                             radius,
                             frame_size: view.frame_size,
                         })
@@ -328,6 +347,18 @@ impl Scene {
                 .map(|texture| SceneElement::Wallpaper(wallpaper::element(texture, mode, view)))
                 .into_iter()
                 .collect(),
+            Item::Decoration {
+                key,
+                rect,
+                look,
+                alpha,
+            } => {
+                let mut bars = self.bars.borrow_mut();
+                let bar = bars.element(renderer, key.clone(), (&look, look.hash()), rect, alpha);
+                bar.map(|bar| SceneElement::Decoration(ids.stamp(key, params, bar)))
+                    .into_iter()
+                    .collect()
+            }
         }
     }
 }
@@ -375,7 +406,8 @@ pub fn items(
         };
         visual.rect.loc.x += shift;
         animating |= window_data(window).motion.borrow().is_animating();
-        push_window(&mut items, window, visual, view, own);
+        let bar = state.decoration_bar(window);
+        push_window(&mut items, (window, bar), visual, view, own);
     }
     push_layers(
         &mut items,
@@ -452,7 +484,13 @@ fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, p
     });
 }
 
-fn push_window(items: &mut Vec<Item>, window: &Window, visual: Visual, view: &View, shadow: bool) {
+fn push_window(
+    items: &mut Vec<Item>,
+    (window, bar): (&Window, Option<Bar>),
+    visual: Visual,
+    view: &View,
+    shadow: bool,
+) {
     let Some(surface) = window.wl_surface() else {
         return;
     };
@@ -485,12 +523,21 @@ fn push_window(items: &mut Vec<Item>, window: &Window, visual: Visual, view: &Vi
     let decoration = visual.decoration;
     let decorated = decoration > 0.0;
     let scale = view.scale as f32;
-    let radius = corner_radius(visual.rect.size.to_i32_round()) * scale * decoration;
+    // The title bar the compositor draws sits above the content: the corners, the border, the
+    // shadow and the clip go around both.
+    let inset = bar
+        .as_ref()
+        .map_or(0.0, |_| f64::from(ui_decorations::INSET));
+    let mut whole = visual.rect;
+    whole.loc.y -= inset;
+    whole.size.h += inset;
+    let frame = view.rect(whole);
+    let radius = corner_radius(whole.size.to_i32_round()) * scale * decoration;
     let owner = Some(surface.id());
     if decorated {
         items.push(Item::Shape {
             key: Key::of(owner.clone(), Part::Border),
-            rect,
+            rect: frame,
             fill: NO_FILL,
             border: color::BORDER.premultiplied(),
             border_width: metrics::BORDER_WIDTH * scale,
@@ -500,9 +547,27 @@ fn push_window(items: &mut Vec<Item>, window: &Window, visual: Visual, view: &Vi
     }
     // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's scale,
     // and the animation's if there is one.
+    if let Some(bar) = bar {
+        whole.size.h = inset;
+        let rect = view.rect(whole);
+        let look = Look {
+            bar,
+            size: (rect.size.w.max(1) as u32, rect.size.h.max(1) as u32),
+            scale,
+            radius,
+            colors: Colors::of(color::palette()),
+        };
+        items.push(Item::Decoration {
+            key: Key::of(owner.clone(), Part::TitleBar),
+            rect,
+            look,
+            alpha: visual.opacity,
+        });
+    }
     items.push(Item::Window {
         surface: surface.clone(),
         rect,
+        clip: frame,
         geometry,
         alpha: visual.opacity,
         radius,
@@ -510,7 +575,7 @@ fn push_window(items: &mut Vec<Item>, window: &Window, visual: Visual, view: &Vi
     if decorated && shadow {
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
-            shadow: Shadow::of(rect, view.scale),
+            shadow: Shadow::of(frame, view.scale),
             radius,
             alpha: visual.opacity * decoration,
         });
