@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 
-use sherlock_3d::animator::{FADE, GAZE_LIMIT, PEEK_TILT};
+use sherlock_3d::animator::{FADE, GAZE_LIMIT, PEEK_OPENING, PEEK_TILT};
 use sherlock_3d::{Animator, Model, Mood, Pose};
 
 fn animator() -> Option<Animator> {
@@ -53,13 +53,23 @@ fn peek_closes_the_right_eye_only_and_tilts_the_head() {
     animator.set_mood(Mood::Peek);
     play(&mut animator, 1.0);
     let pose = animator.pose();
-    assert!(
-        eyelid(&pose, &model, "eyelid_R") < 0.2,
-        "the right eye is closed"
+    assert_eq!(
+        eyelid(&pose, &model, "eyelid_R"),
+        0.0,
+        "the right eye is hidden"
     );
-    let left = eyelid(&pose, &model, "eyelid_L");
-    assert!(left > 0.3 && left < 0.6, "the left eye is ajar: {left}");
-    assert_eq!(animator.closure(), [0.6, 1.0]);
+    // The left eye is half open: flattened to the height asked, as wide as an open eye.
+    let left = pose.transforms[node(&model, "eyelid_L")].scale;
+    assert!(
+        (left.z - PEEK_OPENING).abs() < 0.02,
+        "the left eye is ajar: {left}"
+    );
+    assert!(
+        left.x > 0.99 && left.y > 0.99,
+        "the left eye keeps its width: {left}"
+    );
+    let [open, _] = animator.openness();
+    assert!((open - PEEK_OPENING).abs() < 0.02);
     // The rest of the body still plays `repos`; the head leans to the side.
     assert_eq!(animator.action(), Some("repos"));
     let roll = pose.transforms[head].rotation.angle_between(before);
@@ -88,7 +98,7 @@ fn closed_eyes_hold_then_reopen_by_a_fade() {
     let half = eyelid(&animator.pose(), &model, "eyelid_L");
     assert!(half > 0.2 && half < 0.9, "half way: {half}");
     play(&mut animator, FADE);
-    assert_eq!(animator.closure(), [0.0, 0.0]);
+    assert!(animator.openness().iter().all(|h| (h - 1.0).abs() < 1e-4));
     assert!(eyelid(&animator.pose(), &model, "eyelid_L") > 0.9);
 }
 
@@ -153,4 +163,86 @@ fn the_eyes_turn_toward_a_point_within_a_limit() {
             .angle_between(ahead)
             < 0.01
     );
+}
+
+/// Whether the arc of a closed eye is out of the skin (its translation goes from 0.71 to 0.85).
+fn arc_out(pose: &Pose, model: &Model, name: &str) -> bool {
+    pose.transforms[node(model, name)].translation.y > 0.84
+}
+
+/// On every frame where an arc of a closed eye shows, the eye it replaces is hidden, gaze or
+/// not: a dot of pupil or of reflection never stays beside the arc.
+fn only_arcs_when_closed(mood: Mood, eyes: &[(&str, &str)], gaze: Option<glam::Vec3>) {
+    let Some(mut animator) = animator() else {
+        return;
+    };
+    let model = animator.model().clone();
+    play(&mut animator, 0.5);
+    animator.look_at(gaze);
+    animator.set_mood(mood);
+    let mut closed_frames = 0;
+    for frame in 0..90 {
+        let pose = animator.pose();
+        for (lid, arc) in eyes {
+            if arc_out(&pose, &model, arc) {
+                closed_frames += 1;
+                let scale = pose.transforms[node(&model, lid)].scale;
+                assert_eq!(
+                    scale,
+                    glam::Vec3::ZERO,
+                    "frame {frame}: {lid} shows beside its arc"
+                );
+            }
+        }
+        animator.advance(1.0 / 30.0);
+    }
+    assert!(
+        closed_frames > 80 * eyes.len(),
+        "the eyes close: {closed_frames}"
+    );
+}
+
+#[test]
+fn closed_eyes_show_only_their_arcs_on_every_frame() {
+    let both = [("eyelid_L", "eye_happy_L"), ("eyelid_R", "eye_happy_R")];
+    only_arcs_when_closed(Mood::EyesClosed, &both, None);
+    only_arcs_when_closed(
+        Mood::EyesClosed,
+        &both,
+        Some(glam::Vec3::new(-3.0, -4.0, 4.0)),
+    );
+    only_arcs_when_closed(
+        Mood::Peek,
+        &both[1..],
+        Some(glam::Vec3::new(1.0, -4.0, 4.0)),
+    );
+}
+
+#[test]
+fn the_ajar_eye_shows_no_arc() {
+    let Some(mut animator) = animator() else {
+        return;
+    };
+    let model = animator.model().clone();
+    animator.set_mood(Mood::Peek);
+    for _ in 0..60 {
+        animator.advance(1.0 / 30.0);
+        assert!(!arc_out(&animator.pose(), &model, "eye_happy_L"));
+    }
+}
+
+#[test]
+fn from_closed_to_peek_the_left_eye_opens_half_way() {
+    let Some(mut animator) = animator() else {
+        return;
+    };
+    let model = animator.model().clone();
+    animator.set_mood(Mood::EyesClosed);
+    play(&mut animator, 1.0);
+    animator.set_mood(Mood::Peek);
+    play(&mut animator, 1.0);
+    let pose = animator.pose();
+    let left = pose.transforms[node(&model, "eyelid_L")].scale;
+    assert!((left.z - PEEK_OPENING).abs() < 0.02, "{left}");
+    assert_eq!(eyelid(&pose, &model, "eyelid_R"), 0.0);
 }

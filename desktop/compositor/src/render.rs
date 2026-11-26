@@ -491,6 +491,10 @@ pub fn items(
     wallpaper: bool,
     now: Duration,
 ) -> (Vec<Item>, bool) {
+    // Locked: the lock surfaces only, or the plain background (lot D-25a).
+    if state.is_locked() {
+        return crate::lock::items(state, (output, view));
+    }
     let mut items = Vec::new();
     let mut animating = preview.is_some();
     let scale = view.scale as f32;

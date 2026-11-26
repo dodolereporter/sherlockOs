@@ -92,8 +92,16 @@ pub fn init(
                     // A client may change its cursor without the pointer moving.
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
                     let frame = (&*scene, &mut ids, &mut textures, &mut preview);
-                    if let Err(err) = render(&mut backend, frame, state) {
-                        tracing::warn!("render: {err}");
+                    let locked = state.is_locked();
+                    match render(&mut backend, frame, state) {
+                        // The host window shows every screen at once (lot D-25a).
+                        Ok(()) if locked => {
+                            for output in state.outputs() {
+                                state.lock_frame_shown(&output);
+                            }
+                        }
+                        Ok(()) => {}
+                        Err(err) => tracing::warn!("render: {err}"),
                     }
                     send_frames(state);
                     backend.window().request_redraw();
@@ -143,7 +151,8 @@ fn enable_dmabuf(state: &mut State, backend: &Rc<RefCell<WinitGraphicsBackend<Gl
     }
 }
 
-/// One frame per frame of the host window, for each surface: windows and anchored surfaces.
+/// One frame per frame of the host window, for each surface: windows, anchored surfaces and
+/// lock surfaces.
 fn send_frames(state: &State) {
     let time = state.start_time.elapsed();
     let outputs = state.outputs();
@@ -157,6 +166,7 @@ fn send_frames(state: &State) {
         for layer in layer_map_for_output(output).layers() {
             layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
         }
+        state.send_lock_frames(output, time);
     }
 }
 

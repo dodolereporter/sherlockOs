@@ -13,6 +13,7 @@ pub mod backlight;
 pub mod keyboard;
 pub mod mpris;
 pub mod notify;
+pub mod secret;
 pub mod watch;
 
 use zbus::DBusError;

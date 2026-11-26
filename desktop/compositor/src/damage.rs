@@ -54,6 +54,10 @@ pub enum Part {
     CaptureDim,
     /// The ring of a click shown (lot C-01), by its number.
     Click(u64),
+    /// The background of a locked screen, and the pills of the rescue screen, by their index
+    /// (lot D-25a).
+    LockBackground,
+    LockLabel(usize),
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

@@ -35,7 +35,7 @@ use smithay::{
     wayland::seat::WaylandFocus as _,
 };
 
-pub use label::{Label, Labels};
+pub use label::{Label, Labels, width as label_width};
 pub use layout::RectF;
 
 use crate::{
