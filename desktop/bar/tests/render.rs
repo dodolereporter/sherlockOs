@@ -311,6 +311,7 @@ fn board_quick(state: &mut Bar) {
             adapter: String::from("/org/bluez/hci0"),
             powered: false,
             connected: 0,
+            devices: Vec::new(),
         })),
         quick::Message::Sound(Load::Ready(Output {
             sound: Sound {
@@ -548,6 +549,67 @@ fn the_battery_fills_with_its_level_in_both_themes() {
             ));
             let ui = Simulator::with_size(bar::settings(), (420.0, 36.0), back);
             assert_written(capture(ui, &format!("battery{suffix}")));
+        });
+    }
+}
+
+/// The Bluetooth devices of fictitious devices, in each theme: `bluetooth-devices` (« Casque »
+/// connected at 80 %, « Souris » paired, « Clavier » found while the scan runs), then
+/// `bluetooth-pairing` (« Clavier » pairing, the agent asking to confirm its code), and their
+/// `-light` versions.
+#[test]
+fn the_bluetooth_devices_render_in_both_themes() {
+    use bar::system::bluetooth::{Asked, Device, Kind, Pairing, Reply};
+    let device = |path: &str, name: &str, kind, paired, connected, battery| Device {
+        path: format!("/org/bluez/hci0/{path}"),
+        name: String::from(name),
+        kind,
+        paired,
+        connected,
+        battery,
+    };
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            board_quick(&mut state);
+            let _ = state
+                .quick
+                .update(quick::Message::Bluetooth(Load::Ready(Bluetooth {
+                    adapter: String::from("/org/bluez/hci0"),
+                    powered: true,
+                    connected: 1,
+                    devices: vec![
+                        device("dev_1", "Casque", Kind::Audio, true, true, Some(80)),
+                        device("dev_2", "Souris", Kind::Mouse, true, false, None),
+                        device("dev_3", "Clavier", Kind::Keyboard, false, false, None),
+                    ],
+                })));
+            let _ = state.quick.update(quick::Message::ShowDevices(true));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let size = panel_size(&state, Panel::Control);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("bluetooth-devices{suffix}")));
+
+            let _ = state.quick.update(quick::Message::Device(String::from(
+                "/org/bluez/hci0/dev_3",
+            )));
+            let (sender, _answer) = iced::futures::channel::oneshot::channel();
+            let asked = Asked::Confirm(String::from("482913"));
+            let event = Pairing::Ask(asked, Reply::new(sender));
+            let _ = state.quick.update(quick::Message::Pairing(event));
+            let mut ui =
+                Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            for text in [
+                "MES APPAREILS",
+                "Casque",
+                "Connecté · 80\u{202F}%",
+                "Clavier",
+                "482913",
+            ] {
+                assert!(ui.find(text).is_ok(), "{text} missing from the devices");
+            }
+            assert_written(capture(ui, &format!("bluetooth-pairing{suffix}")));
         });
     }
 }
