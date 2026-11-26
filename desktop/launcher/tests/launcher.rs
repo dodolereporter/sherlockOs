@@ -11,7 +11,7 @@ use iced::{Element, Event, Length, Point, keyboard};
 use iced_test::simulator::Simulator;
 use launcher::app::{self, Launcher, Message};
 use launcher::apps::Apps;
-use launcher::source::{Action, Command, Source};
+use launcher::source::{Action, Command, Query, Source};
 use mime_apps::{DesktopEntry, Dirs};
 use sherlock_ui::launcher::{self as look, text as texts};
 use sherlock_ui::theme;
@@ -35,8 +35,7 @@ fn apps() -> Apps {
 }
 
 fn titles(apps: &Apps, query: &str) -> Vec<String> {
-    let terms = launcher::search::terms(query);
-    apps.search(&terms, 50)
+    apps.search(&Query::new(query), 50)
         .into_iter()
         .map(|h| h.title)
         .collect()
@@ -204,7 +203,9 @@ fn arrows_choose_and_escape_closes() {
     assert_eq!(launcher.selected, count - 1, "the last stays last");
     let chosen = launcher.hits().nth(count - 1).cloned().expect("hit");
     let _ = launcher.update(key(keyboard::key::Named::Enter).expect("a launcher key"));
-    let Action::Start(command) = chosen.action;
+    let Action::Start(command) = chosen.action else {
+        panic!("an application starts");
+    };
     assert_eq!(started.lock().expect("record").as_slice(), [command]);
     // A new query brings the choice back to the first result.
     let (mut other, started) = recorded();
@@ -301,8 +302,7 @@ fn searching_500_applications_takes_less_than_50_ms() {
     assert_eq!(apps.len(), 500);
     for query in ["e", "ki", "edit web", "numero 42", "zzz", "o t l"] {
         let start = Instant::now();
-        let terms = launcher::search::terms(query);
-        let _ = apps.search(&terms, look::MAX_RESULTS);
+        let _ = apps.search(&Query::new(query), look::MAX_RESULTS);
         let spent = start.elapsed();
         assert!(spent < Duration::from_millis(50), "{query}: {spent:?}");
     }
@@ -366,4 +366,15 @@ fn the_panel_renders_its_results() {
     let surface = launcher::surface(launcher.height());
     assert_eq!(surface.margin.top, look::TOP as i32);
     assert_eq!(surface.exclusive_zone, -1);
+}
+
+#[test]
+fn the_surface_is_resized_when_the_rows_change() {
+    let (mut launcher, _) = recorded();
+    let _ = launcher.update(Message::Surface(Id::unique()));
+    // From nothing to « Aucun résultat »: one row more, a resize.
+    assert!(launcher.update(Message::Query("zzz".into())).units() > 0);
+    // Still nothing: the same height, no resize.
+    assert_eq!(launcher.update(Message::Query("zzzz".into())).units(), 0);
+    assert!(launcher.update(Message::Query("k".into())).units() > 0);
 }

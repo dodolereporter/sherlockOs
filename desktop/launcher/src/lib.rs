@@ -4,10 +4,14 @@
 
 pub mod app;
 pub mod apps;
+pub mod ask;
+pub mod calc;
+pub mod files;
 pub mod instance;
 pub mod launch;
 pub mod search;
 pub mod source;
+pub mod system;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,8 +22,9 @@ use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
 use sherlock_ui::{color, launcher, theme, typography};
 
-use app::{Launcher, Message};
+use app::{Clipboard, Launcher, Message};
 use apps::Apps;
+use iced::futures::channel::oneshot;
 
 /// Name of the layer-shell surface, readable by the compositor.
 const NAMESPACE: &str = "launcher";
@@ -84,30 +89,83 @@ pub fn locales() -> Vec<String> {
     }
 }
 
-/// The sources of results, in the order of their sections.
-pub fn sources() -> Vec<Box<dyn source::Source>> {
+/// The current desktop names, lower case, for the desktop-specific `mimeapps.list`.
+fn desktops() -> Vec<String> {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// The sources of results, in the order of their sections, and what tells when the files
+/// are walked.
+pub fn sources() -> (Vec<Box<dyn source::Source>>, oneshot::Receiver<usize>) {
     let home = std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from);
     let dirs = mime_apps::Dirs::from_env(&home);
     let terminal = mime_apps::pick_terminal(std::env::var("TERMINAL").ok().as_deref());
-    let apps = Apps::load(&dirs, &locales(), terminal);
-    tracing::info!(applications = apps.len(), "launcher sources");
-    vec![Box::new(apps)]
+    let data: Vec<PathBuf> = dirs.data().cloned().collect();
+    let theme = icon_theme::user_theme(&dirs.config_home);
+    let icons =
+        icon_theme::Lookup::new(&data, Some(&home), theme.as_deref()).context("Applications");
+    let locales = locales();
+    let apps = Apps::load(&dirs, &locales, terminal.clone()).with_icons(icons);
+    tracing::info!(applications = apps.len(), ?theme, "launcher sources");
+    let (catalog_dirs, catalog_terminal) = (dirs.clone(), terminal.clone());
+    let (files, walked) = files::Files::start(home, move || {
+        mime_apps::Catalog::load_with_terminal(
+            catalog_dirs,
+            &desktops(),
+            &locales,
+            catalog_terminal,
+        )
+    });
+    let ask = ask::Ask::new(terminal, ask::ASK_OPTION);
+    (arrange(apps, files, ask), walked)
+}
+
+/// The sources in the order of their sections: the calculator, whose single result is the
+/// most precise answer, the applications, then the system commands where the board has its
+/// settings, the files, and « Demander à Sherlock » last, as on the board. System commands
+/// found by a keyword only come after the files.
+pub fn arrange(apps: Apps, files: files::Files, ask: ask::Ask) -> Vec<Box<dyn source::Source>> {
+    use system::{Placement, System};
+    vec![
+        Box::new(calc::Calculator),
+        Box::new(apps),
+        Box::new(System::new(Placement::ByName)),
+        Box::new(files),
+        Box::new(System::new(Placement::ByKeyword)),
+        Box::new(ask),
+    ]
+}
+
+/// The launcher for this session: its sources, `launch::spawn`, systemd, `wl-copy` when
+/// installed.
+fn launcher() -> (Launcher, oneshot::Receiver<usize>) {
+    let (sources, walked) = sources();
+    let launcher = Launcher::new(sources, Arc::new(launch::spawn))
+        .with_session(Arc::new(system::Systemd::from_env()))
+        .with_clipboard(Clipboard::detect());
+    (launcher, walked)
 }
 
 /// Runs the launcher until a program starts or Escape closes it.
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     apply_theme();
-    let launcher = Launcher::new(sources(), Arc::new(launch::spawn));
-    let layer = surface(launcher.height());
+    let started = launcher();
+    let layer = surface(started.0.height());
     // The daemon wants a boot function it may call again: the launcher is handed over once.
-    let first = std::sync::Mutex::new(Some(launcher));
+    let first = std::sync::Mutex::new(Some(started));
     let boot = move || {
-        let launcher = first
+        let (launcher, walked) = first
             .lock()
             .ok()
             .and_then(|mut l| l.take())
-            .unwrap_or_else(|| Launcher::new(sources(), Arc::new(launch::spawn)));
-        (launcher, iced::Task::none())
+            .unwrap_or_else(launcher);
+        // Once the files are walked, the query typed meanwhile is searched again.
+        (launcher, iced::Task::perform(walked, |_| Message::Refresh))
     };
     iced_exwlshell::daemon(boot, namespace, Launcher::update, Launcher::view)
         .theme(|_: &Launcher, _| Some(theme::theme()))
