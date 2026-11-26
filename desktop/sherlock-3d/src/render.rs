@@ -59,6 +59,19 @@ impl Camera {
         let projection = Mat4::perspective_rh(self.fov_y, aspect.max(0.01), 0.1, 100.0);
         projection * view
     }
+
+    /// The point of the plane `z = depth` (in the space of the model) seen at `ndc`, from -1 to
+    /// 1, x to the right and y up: where a point of the screen lies in front of the mascot.
+    pub fn unproject(&self, ndc: glam::Vec2, aspect: f32, depth: f32) -> Vec3 {
+        let inverse = self.view_projection(aspect).inverse();
+        let near = inverse.project_point3(ndc.extend(0.0));
+        let far = inverse.project_point3(ndc.extend(1.0));
+        let ray = far - near;
+        if ray.z.abs() < 1e-6 {
+            return near;
+        }
+        near + ray * ((depth - near.z) / ray.z)
+    }
 }
 
 /// The shape the mascot is cut to.
@@ -513,8 +526,8 @@ impl Renderer {
         }
     }
 
-    /// Lays the scene over the target of `pass`, whose viewport and scissor the caller set to
-    /// the area.
+    /// Lays the scene over the target of `pass`, at the `origin` given to `prepare`. It covers
+    /// the whole target: the caller limits it with a scissor rectangle.
     pub fn composite(&self, pass: &mut wgpu::RenderPass<'_>) {
         let Some(targets) = &self.targets else {
             return;

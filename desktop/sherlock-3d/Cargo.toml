@@ -21,17 +21,35 @@ bytemuck = { version = "=1.25.2", features = ["derive"] }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 # The version iced 0.14 pulls, with its Vulkan backend only, like sherlock-ui (ADR 0018).
 wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
+# The widget (ADR 0018, ADR 0024): the `shader` widget and its wgpu primitives
+# (`wgpu-bare`), the still picture in software (`tiny-skia`, `image-without-codecs`: the PNG is
+# decoded by `image` above), `advanced` for the widget that picks between them.
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "wgpu-bare",
+    "image-without-codecs",
+] }
+# Tells which renderer iced picked, as sherlock-ui does. Already pulled in by iced.
+iced_renderer = { version = "=0.14.0", default-features = false }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 
 [dev-dependencies]
-# The choice of the GPU (ADR 0018) for the off-screen tests, without iced.
-sherlock-ui = { path = "../sherlock-ui", default-features = false }
+# The choice of the GPU (ADR 0018) and the palettes, for the tests and the viewer.
+sherlock-ui = { path = "../sherlock-ui" }
 
 # Changes the process environment to pick the Vulkan driver: one thread, so no libtest harness.
 [[test]]
 name = "offscreen"
 harness = false
+
+[[test]]
+name = "captures"
+harness = false
+
+[[example]]
+name = "viewer"
 
 [lints]
 workspace = true

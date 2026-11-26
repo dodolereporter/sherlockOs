@@ -3367,6 +3367,8 @@ dependencies = [
  "bytemuck",
  "glam",
  "gltf",
+ "iced",
+ "iced_renderer",
  "image",
  "sherlock-ui",
  "thiserror 2.0.21",

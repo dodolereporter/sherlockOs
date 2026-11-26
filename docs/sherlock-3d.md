@@ -46,6 +46,8 @@ Never change the model here: it is produced by Blender scripts in its own reposi
 | `clip` | Samples a channel (LINEAR, STEP, CUBICSPLINE), lays a clip over a pose with a weight per bone, cross-fades two poses, computes the skinning matrices |
 | `render` | The wgpu renderer: scene pass and composite pass, camera, round cut, off-screen capture |
 | `headless` | A wgpu device without a window (Vulkan backend only) |
+| `animator` | The moods (`Mood`) and the `Animator` that plays them frame after frame (lot D-30b) |
+| `widget` | `Sherlock3d`, the iced widget (lot D-30b) |
 
 ## Playing the clips
 
@@ -60,6 +62,61 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
 - `yeux_fermes` ends with the eyes closed: hold its last frame, then fade back.
 - A mask closes one eye alone: `yeux_fermes` on `eyelid_R` at full weight, on `eyelid_L` at 0.6
   (the eye stays 40 % open).
+
+## Moods
+
+`Animator` plays a `Mood` by those rules; `set_mood` changes it, `look_at` aims the eyes,
+`advance(dt)` moves time on, `pose` and `joints` give the frame.
+
+| Mood | Body | Face |
+| --- | --- | --- |
+| `Idle` | `repos` | `cligne` every 2.5 to 6 s |
+| `Wave` | `salut` once, then `repos` | |
+| `EyesClosed` | `repos` | `yeux_fermes`, last frame held |
+| `Peek` | `repos`, head rolled by 0.14 rad | `yeux_fermes` on the right eye; the left one 40 % open |
+| `Sorry` | `desole` once, then `repos` | |
+| `Success` | `reussite` once, then `repos` | |
+| `Sleep` | `dort_entree`, then `dort`, its exit clip when it ends | |
+| `Think` | `reflechit_entree`, then `reflechit`, its exit clip when it ends | |
+
+- A loop already playing goes on: `Idle`, `EyesClosed` and `Peek` share `repos`, so going from
+  one to the other only moves the eyes.
+- Every change of body action cross-fades from the pose shown, eased, over `FADE` (0.25 s).
+- The eyes close along `yeux_fermes` and reopen by a fade from its last frame. The arcs of
+  closed eyes (`eye_happy_*`) only rise when an eye is nearly shut, so the ajar eye of `Peek`
+  shows no arc. Blinks only come while both eyes are open.
+- `look_at(Some(point))` turns `eye_L` and `eye_R` toward a point of the model's space, by
+  `GAZE_LIMIT` (0.22 rad) at most, smoothed; `None` looks ahead again.
+
+## The widget
+
+```rust
+let mascot = Sherlock3d::new(model.clone()) // Option<Arc<Model>>
+    .mood(Mood::Peek)
+    .look_at(Some(field_center))            // relative to the widget, may lie outside
+    .background(palette.system_discs[1].into())
+    .width(side)
+    .height(side);
+```
+
+- On the GPU, it is an `iced::widget::shader`: its `Program` keeps an `Animator` in the
+  widget state and moves it on each `RedrawRequested`; its `Primitive` uploads the frame in
+  `prepare` and draws the two passes in `render`, the composite limited by a scissor to the
+  widget's area; its `Pipeline` keeps one renderer per widget and drops those not drawn in a
+  frame (`trim`).
+- It asks for the next frame `FRAME` (1/30 s) later: 30 frames per second at most. Out of the
+  view it gets no event and asks for nothing; `.paused(true)` stops on the frame shown and asks
+  for nothing either.
+- `.cut(Cut::Circle { radius })` cuts the bubble (by default, radius 1: the disc touches the
+  smaller side); `Cut::None` keeps the rectangle. `.camera(Camera::FULL_BODY)` shows the whole
+  mascot.
+- In software (tiny-skia), or without the model file, it shows the still picture of the design
+  boards (`docs/design/images/sherlock-neutre.png`), cropped to its top square and rounded, and
+  asks for no frame. It knows the renderer when drawing, as `sherlock_ui::surface` does.
+- The gaze point is projected on a plane in front of the face (`Camera::unproject`).
+
+`examples/viewer` goes through the moods, one every three seconds. It opens a window: never run
+it in the CI.
 
 ## Rendering
 
@@ -91,10 +148,12 @@ cargo test -p sherlock-3d
 | --- | --- |
 | `tests/model.rs` | Counts of bones, clips, primitives, materials, textures; no clip drives the eyes; sampling on and between keys; `yeux_fermes` ends closed; the bone mask closes one eye; cross-fade; skinning |
 | `tests/offscreen.rs` | Renders off screen and checks pixels: transparent corners, opaque face, antialiased edges, nothing outside the bubble, its background inside |
+| `tests/animator.rs` | `repos` at start with the accessories hidden; `Peek` closes `eyelid_R` only, `eyelid_L` ajar, head tilted; closed eyes hold, then reopen by a fade; a reaction fades in without a jump and `repos` comes back; `Sleep` enters, loops and leaves by its exit; the gaze turns within its limit |
+| `tests/captures.rs` | Captures rest, wave (mid-gesture), eyes closed, peek and sorry in the bubble, dark and light, at 170 and 340 pixels, and checks that the eyes differ |
 
 Without the model, or without a Vulkan driver, the tests say why and pass.
 `SHERLOCK_3D_REQUIRE=1` turns that into a failure: the CI sets it, downloads the model with
 `just mascot` and installs Mesa's software Vulkan driver (lavapipe). `tests/offscreen.rs` picks
 the AMD chip as the shell does, or else lavapipe, never another driver; it runs without libtest's
-harness since it changes the environment. Captures go to `target/tmp/sherlock-3d/`, never into
-the repository.
+harness since it changes the environment, like `tests/captures.rs`. Captures go to
+`target/tmp/sherlock-3d/`, never into the repository.
