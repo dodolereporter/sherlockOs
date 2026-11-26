@@ -138,15 +138,12 @@ mod tests {
             snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
         }
         color::set_active(color::Theme::Dark);
-    }
-
-    #[test]
-    fn the_screen_fits_every_size() {
+        // The screen fits every size, in the same test: the theme is a global.
         for (size, name) in [
             ((1366.0, 768.0), "1366x768"),
             ((1920.0, 1080.0), "1920x1080"),
-            ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-at-1.5"),
-            ((1920.0, 1080.0), "3840x2160-at-2"),
+            ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-scale-150"),
+            ((1920.0, 1080.0), "3840x2160-scale-200"),
         ] {
             let s = screen(size);
             snapshot(&s.lock, s.primary, size, &format!("rest-{name}"));

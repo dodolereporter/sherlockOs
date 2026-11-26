@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iced::futures::channel::{mpsc, oneshot};
-use iced::widget::{Space, button, column, container, image, row, text, text_input};
+use iced::widget::{Space, button, column, container, image, row, svg, text, text_input};
 use iced::{
-    Alignment, Background, Border, Color as IcedColor, Element, Event, Font, Length, Padding,
-    Radians, Size, Subscription, Task, keyboard, mouse, window,
+    Alignment, Background, Border, Color as IcedColor, Element, Event, Font, Length, Padding, Size,
+    Subscription, Task, keyboard, mouse, window,
 };
 use iced_exwlshell::to_exwlshell_message;
 use sherlock_ui::color::{self, Color};
@@ -19,7 +19,7 @@ use sherlock_ui::component;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::screen::{self as ui, Colors};
 use sherlock_ui::motion::Animation;
-use sherlock_ui::{strings, typography};
+use sherlock_ui::{metrics, motion, strings, typography};
 use system_services::secret::Secret;
 
 use crate::machine::{Armed, Machine, Runner};
@@ -328,11 +328,9 @@ impl Lock {
                         .unwrap_or_default()
                 )
                 .size(ui::DATE_SIZE)
-                .font(weight(ui::DATE_WEIGHT))
                 .color(fade(colors.text, self.presence(0))),
                 text(strings::clock(self.clock.hour, self.clock.minute))
                     .size(ui::clock_size(height))
-                    .font(weight(ui::CLOCK_WEIGHT))
                     .color(fade(colors.text, self.presence(0))),
             ]
             .align_x(Alignment::Center),
@@ -353,7 +351,10 @@ impl Lock {
                 .push(rise(
                     text(self.user.as_str())
                         .size(ui::NAME_SIZE)
-                        .font(weight(typography::WEIGHT_SEMIBOLD))
+                        .font(Font {
+                            weight: iced::font::Weight::Semibold,
+                            ..typography::UI
+                        })
                         .color(fade(colors.text, self.presence(2))),
                     self.presence(2),
                 ))
@@ -418,10 +419,7 @@ impl Lock {
         };
         let width = ui::FIELD_WIDTH + (ui::FIELD_HEIGHT - ui::FIELD_WIDTH) * shrink.clamp(0.0, 1.0);
         let content: Element<'_, Message> = if let Phase::Checking(at) = self.phase {
-            let turns = (t.saturating_sub(at)).as_secs_f32() / ui::SPIN.as_secs_f32();
-            component::icon(Icon::Spinner, ui::FIELD_ICON, colors.text)
-                .rotation(Radians(turns * std::f32::consts::TAU))
-                .into()
+            spinner(t.saturating_sub(at), colors.text)
         } else {
             let text_color = fade(colors.text, presence);
             let placeholder = fade(colors.placeholder, presence);
@@ -569,19 +567,26 @@ fn rise<'a>(element: impl Into<Element<'a, Message>>, presence: f32) -> Element<
         .into()
 }
 
-fn weight(weight: u16) -> Font {
-    let weight = match weight {
-        0..=150 => iced::font::Weight::Thin,
-        151..=250 => iced::font::Weight::ExtraLight,
-        251..=350 => iced::font::Weight::Light,
-        351..=450 => iced::font::Weight::Normal,
-        451..=550 => iced::font::Weight::Medium,
-        _ => iced::font::Weight::Semibold,
-    };
-    Font {
-        weight,
-        ..typography::UI
-    }
+/// The spinner, `elapsed` after it started: the arc turned by one of `SPIN_STEPS` steps, drawn
+/// into the SVG itself (one document per step, which iced keeps), since the rotation of the
+/// SVG widget draws nothing with tiny-skia.
+fn spinner<'a>(elapsed: Duration, tint: Color) -> Element<'a, Message> {
+    let steps = motion::SPIN_STEPS;
+    let turn = elapsed.as_secs_f32() / ui::SPIN.as_secs_f32();
+    let step = (turn.fract() * steps as f32) as u32 % steps;
+    let angle = step as f32 * 360.0 / steps as f32;
+    let center = metrics::ICON_GRID / 2.0;
+    let document = Icon::Spinner.svg().replace(
+        "<path ",
+        &format!("<path transform=\"rotate({angle} {center} {center})\" "),
+    );
+    svg(svg::Handle::from_memory(document.into_bytes()))
+        .width(ui::FIELD_ICON)
+        .height(ui::FIELD_ICON)
+        .style(move |_, _| svg::Style {
+            color: Some(tint.into()),
+        })
+        .into()
 }
 
 /// A color of the palette, its opacity times `presence`.

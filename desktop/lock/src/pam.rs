@@ -328,8 +328,8 @@ mod tests {
             .map(|i| {
                 // SAFETY: `converse` filled `messages.len()` answers.
                 let resp = unsafe { (*answers.add(i)).resp };
-                // SAFETY: a string from strdup, or null.
                 (!resp.is_null()).then(|| {
+                    // SAFETY: a string from strdup, not null.
                     unsafe { CStr::from_ptr(resp) }
                         .to_string_lossy()
                         .into_owned()

@@ -41,7 +41,7 @@ pub fn hex(color: Color) -> String {
 }
 
 /// The lock screen, `sherlockos-lock` (lot D-25a): macOS-like, as the author asked (no board
-/// draws it, the Connexion board inspires it). The time and the date at the top, then at the
+/// draws it, the board of the login screen inspires it). The time and the date at the top, then at the
 /// bottom middle the bubble of Sherlock, the name of the user and the password pill, and the
 /// machine buttons under them. Every size is in logical pixels and follows the screen: the
 /// `fit` helpers keep them between a minimum and a maximum, from a 1366 × 768 laptop to a 4K
@@ -64,11 +64,10 @@ pub mod screen {
     pub fn top(height: f32) -> f32 {
         fit(height, 0.08, 28.0, 112.0)
     }
-    /// The date, above the time.
+    /// The date, above the time. Both take the regular weight of Inter: iced 0.14 draws the
+    /// variable font at its default instance only, and a thin or medium weight falls back to
+    /// another font of the system.
     pub const DATE_SIZE: f32 = 20.0;
-    /// Weight of the time: thin, as on macOS.
-    pub const CLOCK_WEIGHT: u16 = 250;
-    pub const DATE_WEIGHT: u16 = 500;
 
     /// The bubble of Sherlock: its diameter, the gap under it, the name under that.
     pub fn bubble(height: f32) -> f32 {
@@ -146,7 +145,7 @@ pub mod screen {
                 button: palette.glass,
                 button_hover: palette.hover,
                 armed: palette.amber_soft,
-                error: palette.salmon,
+                error: palette.salmon_text,
             }
         }
     }
