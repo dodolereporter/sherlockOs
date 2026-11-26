@@ -2,8 +2,8 @@
 //!
 //! - `zxdg_decoration_manager_v1` (xdg-decoration), which Qt 6 and winit use. A new decoration,
 //!   or a client that gives up its preference, gets `server_side`. A client that asks for
-//!   `client_side` keeps its own decoration: Chromium and Electron draw their tabs in it, and
-//!   would get a bar of ours on top of theirs.
+//!   `client_side` keeps its own decoration: Chromium draws its tabs in it, and
+//!   would get a bar of ours on top of its own.
 //! - `org_kde_kwin_server_decoration_manager`, KDE's older protocol, which GTK 3 and the Qt 5 of
 //!   KDE use: `Server` by default, and the mode the client asks for afterwards.
 //!
