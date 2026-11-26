@@ -60,7 +60,7 @@ pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
 
 /// The notification centre under the calendar, in the panel of the clock: its height. The
 /// list scrolls inside it.
-pub const CENTER_HEIGHT: f32 = 360.0;
+pub const CENTER_HEIGHT: f32 = 280.0;
 
 // Motion (D-20c): the panels unfold from the bar like a window opens, and fold back the same
 // way.

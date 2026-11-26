@@ -328,8 +328,9 @@ in iced tasks, never on the interface thread. The interface is described in
 `docs/notifications.md` (History over D-Bus).
 
 The board shows the centre next to the quick settings, both 54 from the top. Since D-20c it is
-under the calendar instead, in the panel of the clock, 320 wide like on the board and 360 high
-(`panels::CENTER_HEIGHT`); its list scrolls inside it. The calendar takes the same width, its
+under the calendar instead, in the panel of the clock, 320 wide like on the board and 280 high
+(`panels::CENTER_HEIGHT`): the panel ends at 729 on the 1440 × 900 reference screen, above the
+150 kept for the dock. Its list scrolls inside it. The calendar takes the same width, its
 grid centred.
 
 ### Quick settings

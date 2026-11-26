@@ -461,17 +461,21 @@ impl Quick {
         self.page_motion.tick(now);
     }
 
-    /// A tile switched by an action or by a read: its colors mix towards its new state.
+    /// A tile switched by an action or by a read: its colors mix towards its new state. A
+    /// service not read, or not there, starts from nothing: its first state shows at once.
     fn relight(&mut self) {
         let on = [
             self.wifi
                 .ready()
-                .is_some_and(|w| w.enabled && w.device.is_some() && !w.hardware_off),
-            self.bluetooth.ready().is_some_and(|b| b.powered),
-            self.do_not_disturb == Some(true),
+                .map(|w| w.enabled && w.device.is_some() && !w.hardware_off),
+            self.bluetooth.ready().map(|b| b.powered),
+            self.do_not_disturb,
         ];
         for (lit, on) in self.lit.iter_mut().zip(on) {
-            lit.set(on, self.now);
+            match on {
+                Some(on) => lit.set(on, self.now),
+                None => *lit = Lit::default(),
+            }
         }
     }
 

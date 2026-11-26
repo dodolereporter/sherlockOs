@@ -375,6 +375,8 @@ fn the_panels_render_in_both_themes() {
             assert_written(capture(ui, &format!("control-centre{suffix}")));
 
             let _ = state.quick.update(quick::Message::ShowNetworks(true));
+            // The page slid in.
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
             let maison = state.quick.wifi.ready().map(|w| w.networks[0].clone());
             let mut other = maison.unwrap();
             other.active = false;
@@ -429,17 +431,19 @@ fn the_calendar_marks_today_and_walks_the_months() {
 fn the_centre_runs_an_action_and_clears() {
     let mut state = sample();
     state.panel_margins = panel::margins(false);
-    state.history = board_history();
+    // The containers' card alone: under the calendar, the list shows the first card or two.
+    state.history = match board_history() {
+        History::Ready(groups) => History::Ready(
+            groups
+                .into_iter()
+                .filter(|g| g.app == "Conteneurs")
+                .collect(),
+        ),
+        other => other,
+    };
     let size = panel_size(&state, Panel::Calendar);
     let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
-    for text in [
-        "novembre 2026",
-        "Notifications",
-        "Build terminé",
-        "Conteneurs",
-        "21:31",
-        "Mises à jour",
-    ] {
+    for text in ["novembre 2026", "Notifications", "Conteneurs", "21:31"] {
         assert!(ui.find(text).is_ok(), "{text} missing from the centre");
     }
     ui.click("Relancer").expect("action found");
