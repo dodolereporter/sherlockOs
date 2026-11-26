@@ -200,12 +200,17 @@ impl<Message: Clone> Widget<Message, Theme, Renderer> for Focusable<'_, Message>
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(
+        let inner = self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
             cursor,
             viewport,
             renderer,
+        );
+        crate::pointer::control(
+            inner,
+            cursor.is_over(layout.bounds()),
+            self.on_activate.is_some(),
         )
     }
 

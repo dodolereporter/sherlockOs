@@ -18,6 +18,9 @@ pub struct Visual {
     /// Share of the corners, border and shadow drawn: 1 for a floating or snapped window, 0
     /// for a maximized or fullscreen one, in between while it changes.
     pub decoration: f32,
+    /// Scale of the whole window while it opens (1 at rest): its title bar, corners and shadow
+    /// follow it (lot C-01).
+    pub scale: f64,
 }
 
 /// `rect` scaled by `scale` around its center.
@@ -25,6 +28,22 @@ pub fn scaled(rect: RectF, scale: f64) -> RectF {
     let size = rect.size.upscale(scale);
     let loc = rect.loc + (rect.size.to_point() - size.to_point()).downscale(2.0);
     Rectangle::new(loc, size)
+}
+
+/// The content `rect` of a window with a title bar of `inset` above it, when the whole window,
+/// bar included, is scaled by `scale` around its center: the bar shrinks with the content and
+/// stays on it.
+pub fn scaled_whole(rect: RectF, inset: f64, scale: f64) -> RectF {
+    let whole = Rectangle::new(
+        (rect.loc.x, rect.loc.y - inset).into(),
+        (rect.size.w, rect.size.h + inset).into(),
+    );
+    let whole = scaled(whole, scale);
+    let inset = inset * scale;
+    Rectangle::new(
+        (whole.loc.x, whole.loc.y + inset).into(),
+        (whole.size.w, whole.size.h - inset).into(),
+    )
 }
 
 fn parts(rect: RectF) -> [f64; 4] {
@@ -76,13 +95,14 @@ impl AnimatedRect {
 /// that size, before following its real geometry again (a client that refuses the size).
 pub const SIZE_WAIT: Duration = Duration::from_secs(1);
 
-/// Motion of a window: opening (scale and opacity), then geometry changes announced by
+/// Motion of a window: opening (scale and opacity, from its first content), then geometry changes announced by
 /// `animate_next_change` or `animate_to`, and its decoration (corners, border, shadow). Other
 /// changes, like those of a drag or a resize, are followed without delay.
 #[derive(Debug, Default)]
 pub struct WindowMotion {
-    /// Opening: scale and opacity. `None` once finished.
-    open: Option<(Animation, Fade)>,
+    /// Opening: its progress from 0 to 1, on `motion::WINDOW_OPEN_EASE`, which gives the
+    /// opacity and the scale. `None` once finished.
+    open: Option<Fade>,
     opened: bool,
     /// Shown at once at its first frame: fullscreen, or window animations off (lot D-34).
     no_opening: bool,
@@ -187,9 +207,12 @@ impl WindowMotion {
         let target = target.to_f64();
         let first = !self.opened;
         if first && !self.no_opening {
-            self.open = Some((
-                Animation::new(motion::WINDOW_OPEN_SPRING, motion::OPEN_SCALE, 1.0, now),
-                Fade::new(0.0, 1.0, now, motion::WINDOW_OPEN_FADE),
+            self.open = Some(Fade::eased(
+                0.0,
+                1.0,
+                now,
+                motion::WINDOW_OPEN,
+                motion::WINDOW_OPEN_EASE,
             ));
         }
         self.opened = true;
@@ -215,22 +238,20 @@ impl WindowMotion {
         };
         self.last = Some(rect);
 
-        let (scale, opacity) = match self.open {
-            Some((scale, fade))
-                if !(scale.is_done(now, motion::SCALE_PRECISION) && fade.is_done(now)) =>
-            {
-                (scale.value(now), fade.value(now))
-            }
+        let progress = match self.open {
+            Some(open) if !open.is_done(now) => open.value(now),
             _ => {
                 self.open = None;
-                (1.0, 1.0)
+                1.0
             }
         };
+        let start = motion::WINDOW_OPEN_SCALE;
         Visual {
-            rect: scaled(rect, scale),
-            opacity,
+            rect,
+            opacity: progress,
             moving: self.geometry.is_some() || self.expected.is_some(),
             decoration,
+            scale: start + (1.0 - start) * f64::from(progress),
         }
     }
 
@@ -287,6 +308,7 @@ impl PreviewMotion {
             opacity: fade.value(now),
             moving: false,
             decoration: 1.0,
+            scale: 1.0,
         })
     }
 }
@@ -413,39 +435,56 @@ mod tests {
         let place = rect(100, 100, 400, 300);
         let first = motion.frame(ms(0), place);
         assert_eq!(first.opacity, 0.0);
-        let expected = scaled(place.to_f64(), motion::OPEN_SCALE);
-        assert!((first.rect.size.w - expected.size.w).abs() < 1e-9);
-        assert!((first.rect.loc.y - expected.loc.y).abs() < 1e-9);
-        // Centered on its place during the whole opening.
+        assert_eq!(first.scale, motion::WINDOW_OPEN_SCALE);
+        // The place is the real one: the scale is applied around the whole window, title bar
+        // included (`scaled_whole`).
+        assert_eq!(first.rect, place.to_f64());
         let midway = motion.frame(ms(60), place);
         assert!(midway.opacity > 0.0 && midway.opacity < 1.0);
-        let center = |r: RectF| r.loc + r.size.to_point().downscale(2.0);
-        assert!((center(midway.rect) - center(place.to_f64())).x.abs() < 1e-9);
+        assert!(midway.scale > motion::WINDOW_OPEN_SCALE && midway.scale < 1.0);
         assert!(motion.is_animating());
         let end = motion.frame(ms(1000), place);
-        assert_eq!(end.rect, place.to_f64());
-        assert_eq!(end.opacity, 1.0);
+        assert_eq!(
+            (end.rect, end.opacity, end.scale),
+            (place.to_f64(), 1.0, 1.0)
+        );
         assert!(!motion.is_animating());
     }
 
     #[test]
-    fn the_opening_grows_and_fades_in_over_about_200_ms() {
+    fn the_opening_grows_and_fades_in_over_250_ms_without_a_bounce() {
         let mut motion = WindowMotion::default();
         let place = rect(100, 100, 400, 300);
-        let steps: Vec<Visual> = [0, 50, 100, 150, 199]
+        let steps: Vec<Visual> = [0, 50, 100, 150, 200, 249]
             .map(|t| motion.frame(ms(t), place))
             .to_vec();
-        // Scale and opacity only grow, without a bounce, and are still moving at 150 ms.
+        // Scale and opacity only grow, together, and are still moving at 200 ms.
         for pair in steps.windows(2) {
-            assert!(pair[1].rect.size.w > pair[0].rect.size.w);
+            assert!(pair[1].scale > pair[0].scale);
             assert!(pair[1].opacity > pair[0].opacity);
         }
-        let at_150 = steps[3];
-        assert!(at_150.opacity < 1.0 && at_150.rect.size.w < 400.0);
-        assert!(at_150.rect.size.w > 400.0 * 0.98, "nearly there");
+        assert!(steps[1].opacity > 0.45, "a frank ease-out");
+        let at_200 = steps[4];
+        assert!(at_200.opacity < 1.0 && at_200.scale < 1.0);
+        assert!(at_200.scale > 0.99, "nearly there");
+        assert!(steps.iter().all(|v| v.scale <= 1.0 && v.opacity <= 1.0));
         assert!(motion.is_animating());
-        assert_eq!(motion.frame(ms(400), place).rect, place.to_f64());
+        assert_eq!(motion.frame(ms(250), place).scale, 1.0);
         assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn the_title_bar_scales_with_the_window_around_the_center_of_both() {
+        let place = rect(100, 142, 400, 300).to_f64();
+        let drawn = scaled_whole(place, 42.0, 0.9);
+        // The whole window, 342 high from 100, scaled around its middle at 271.
+        let top = drawn.loc.y - 42.0 * 0.9;
+        assert!((top - (271.0 - 342.0 * 0.9 / 2.0)).abs() < 1e-9);
+        assert!((drawn.loc.y + drawn.size.h - (271.0 + 342.0 * 0.9 / 2.0)).abs() < 1e-9);
+        assert!((drawn.size.w - 360.0).abs() < 1e-9);
+        assert!((drawn.size.h - 270.0).abs() < 1e-9);
+        // Without a bar: the content around its own center.
+        assert_eq!(scaled_whole(place, 0.0, 0.9), scaled(place, 0.9));
     }
 
     #[test]
@@ -454,7 +493,10 @@ mod tests {
         let place = rect(0, 0, 800, 600);
         motion.skip_opening();
         let first = motion.frame(ms(0), place);
-        assert_eq!((first.rect, first.opacity), (place.to_f64(), 1.0));
+        assert_eq!(
+            (first.rect, first.opacity, first.scale),
+            (place.to_f64(), 1.0, 1.0)
+        );
         assert!(!motion.is_animating());
         // Too late once drawn: nothing changes.
         motion.skip_opening();

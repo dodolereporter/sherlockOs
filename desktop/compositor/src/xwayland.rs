@@ -24,7 +24,7 @@ use smithay::{
         calloop::EventLoop,
         wayland_server::{backend::DisconnectReason, protocol::wl_surface::WlSurface},
     },
-    utils::{Logical, Rectangle},
+    utils::{Logical, Rectangle, Size},
     wayland::{
         selection::{
             SelectionTarget,
@@ -209,10 +209,14 @@ impl XwmHandler for State {
             tracing::warn!("mapping the X11 window: {err}");
             return;
         }
-        let size = surface.geometry().size;
         let window = Window::new_x11_window(surface.clone());
-        let loc = self
-            .output_area()
+        let area = self.output_area();
+        // Never larger than the work area: its edges and corners stay in reach (lot C-01).
+        let mut size = surface.geometry().size;
+        if let Some(room) = area.map(|area| crate::handlers::room(&window, area)) {
+            size = Size::from((size.w.min(room.w), size.h.min(room.h)));
+        }
+        let loc = area
             .map(|area| decorations::centered(&window, area, size))
             .unwrap_or_default();
         tracing::debug!(title = surface.title(), ?loc, ?size, "X11 window");
