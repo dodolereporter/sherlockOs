@@ -1,5 +1,5 @@
-// Lays the resolved scene over the target, inside a round (or rectangular) cut, over an
-// optional background. Premultiplied alpha, like iced.
+// Lays the resolved scene over the target, inside a round (or rectangular) cut, over a soft
+// drop shadow of the mascot and an optional background. Premultiplied alpha, like iced.
 
 struct Params {
     // Top left corner of the area in the target, in pixels.
@@ -14,10 +14,33 @@ struct Params {
     pad1: f32,
     // Linear, premultiplied.
     background: vec4<f32>,
+    // Where the shadow falls from the mascot, its blur radius, in pixels, and its opacity.
+    shadow_offset: vec2<f32>,
+    shadow_blur: f32,
+    shadow_opacity: f32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var scene_sampler: sampler;
+
+// Taps of the shadow's blur, spread on a disc along the golden angle.
+const TAPS: u32 = 24u;
+
+// How much of the mascot's silhouette, blurred, covers `local`.
+fn shadow(local: vec2<f32>, size: vec2<f32>) -> f32 {
+    let origin = local - params.shadow_offset;
+    var sum = 0.0;
+    for (var i = 0u; i < TAPS; i = i + 1u) {
+        let r = sqrt((f32(i) + 0.5) / f32(TAPS)) * params.shadow_blur;
+        let a = f32(i) * 2.3999632;
+        let at = (origin + vec2<f32>(cos(a), sin(a)) * r) / size;
+        if all(at >= vec2<f32>(0.0)) && all(at <= vec2<f32>(1.0)) {
+            sum = sum + textureSampleLevel(scene, scene_sampler, at, 0.0).a;
+        }
+    }
+    return sum / f32(TAPS) * params.shadow_opacity;
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -40,7 +63,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(scene));
     let texel = vec2<i32>(clamp(floor(local), vec2<f32>(0.0), size - 1.0));
     let sherlock = textureLoad(scene, texel, 0);
-    var color = sherlock + params.background * (1.0 - sherlock.a);
+    let dark = shadow(local, size);
+    let ground = vec4<f32>(0.0, 0.0, 0.0, dark) + params.background * (1.0 - dark);
+    var color = sherlock + ground * (1.0 - sherlock.a);
     if params.radius >= 0.0 {
         // One pixel of antialiasing on the edge of the bubble.
         let coverage = clamp(params.radius - distance(local, params.center) + 0.5, 0.0, 1.0);

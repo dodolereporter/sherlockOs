@@ -3,7 +3,8 @@
 //! 1. The scene: the skinned mesh in a texture of its own, multisampled ×4 with a depth
 //!    buffer, on a transparent background, then resolved.
 //! 2. The composite: the resolved texture laid over the target in premultiplied alpha, cut
-//!    round (the bubble) or not, over an optional background.
+//!    round (the bubble) or not, over an optional background, with a soft drop shadow of the
+//!    mascot under him.
 //!
 //! iced draws a custom primitive into its own single-sampled pass without depth, hence the
 //! scene of its own. The same code serves iced (`widget`, lot D-30b) and the off-screen
@@ -20,6 +21,12 @@ pub const SAMPLES: u32 = 4;
 const MAX_JOINTS: usize = 32;
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The drop shadow: offset to the right and down, then blur radius, as shares of the smaller
+/// side of the frame; then opacity. The light of the model's reference renders comes from the
+/// top left.
+const SHADOW_OFFSET: [f32; 2] = [0.025, 0.045];
+const SHADOW_BLUR: f32 = 0.05;
+const SHADOW_OPACITY: f32 = 0.28;
 
 /// Where the camera stands. It looks at `target` along -Z (the mascot faces +Z), from a bit
 /// above when `pitch` is positive.
@@ -34,11 +41,11 @@ pub struct Camera {
 }
 
 impl Camera {
-    /// The top of the body: head, cap and scarf, legs out of the frame. Made for a round
-    /// bubble.
+    /// The top of the body: head, cap and scarf, legs out of the frame, with a margin between
+    /// the pompom and the top of the frame. Made for a round bubble.
     pub const UPPER_BODY: Self = Self {
-        target: Vec3::new(0.0, 2.0, 0.0),
-        distance: 8.8,
+        target: Vec3::new(0.0, 2.15, 0.0),
+        distance: 10.4,
         fov_y: 0.30,
         pitch: 0.06,
     };
@@ -133,6 +140,9 @@ struct Params {
     encode_srgb: f32,
     padding: [f32; 2],
     background: [f32; 4],
+    shadow_offset: [f32; 2],
+    shadow_blur: f32,
+    shadow_opacity: f32,
 }
 
 struct Draw {
@@ -163,6 +173,8 @@ pub struct Renderer {
     draws: Vec<Draw>,
     params: wgpu::Buffer,
     composite_layout: wgpu::BindGroupLayout,
+    /// Linear filtering, for the taps of the drop shadow.
+    composite_sampler: wgpu::Sampler,
     targets: Option<Targets>,
     encode_srgb: bool,
 }
@@ -223,7 +235,16 @@ impl Renderer {
         });
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("sherlock-3d composite"),
-            entries: &[uniform(0, wgpu::ShaderStages::FRAGMENT), texture(1)],
+            entries: &[
+                uniform(0, wgpu::ShaderStages::FRAGMENT),
+                texture(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
 
         let scene = device.create_shader_module(wgpu::include_wgsl!("scene.wgsl"));
@@ -421,6 +442,13 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        let composite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sherlock-3d shadow"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         Self {
             opaque,
             blended,
@@ -433,6 +461,7 @@ impl Renderer {
             draws,
             params,
             composite_layout,
+            composite_sampler,
             targets: None,
             encode_srgb: !format.is_srgb(),
         }
@@ -475,6 +504,9 @@ impl Renderer {
             encode_srgb: if self.encode_srgb { 1.0 } else { 0.0 },
             padding: [0.0; 2],
             background: linear_premultiplied(frame.background),
+            shadow_offset: SHADOW_OFFSET.map(|share| share * w.min(h)),
+            shadow_blur: SHADOW_BLUR * w.min(h),
+            shadow_opacity: SHADOW_OPACITY,
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
     }
@@ -693,6 +725,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&resolved),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.composite_sampler),
                 },
             ],
         });
