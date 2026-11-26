@@ -25,12 +25,18 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   of the screen's logical height, kept between a minimum and a maximum (`screen::fit`); the
   rest has fixed logical sizes, which the screen's scale multiplies. Tried on 1366 × 768,
   1920 × 1080, 2560 × 1600 at 1.5 and 3840 × 2160 at 2.
-- **Background** (lot D-25b): `background = /absolute/path` in `~/.config/sherlockos/lock.conf`
-  (`desktop_config::lock`), or else the wallpaper of the desktop in the active theme (its
-  smallest variant), blurred and darkened by this program: once, at start, on a thread of its
-  own, on a copy reduced to 320 pixels wide (Gaussian blur, then ×0.55), drawn back at the size
-  of each screen, which blurs it further. The plain background of the system screens shows
-  until it is ready, or if nothing can be read.
+- **Background** (lot D-25b), in this order: `background = /absolute/path` in
+  `~/.config/sherlockos/lock.conf` (`desktop_config::lock`), shown as is; else the pictures of
+  the lock given by the author, `assets/lock/lock-dark.jpg` and `lock-light.jpg` (a desk seen
+  from above, the middle left free for the time and the bubble), which `just install-session`
+  puts in `/usr/local/share/sherlockos/lock/` and which are looked for in the data folders of
+  the desktop, one per theme; else the wallpaper of the desktop, blurred and darkened. Each
+  picture is decoded once, on a thread, once the size of the screens is known, and reduced to
+  cover the largest one in pixels (logical size times its scale): centered, neither stretched
+  nor banded, never kept at 4K for a small screen. It follows the theme of the appearance
+  file, with its fade (the light picture fades in over the dark one). The middle of the pictures
+  is plain enough: no veil is laid behind the time or the field. The plain background of the
+  system screens shows until the picture is ready.
 
 ## Behavior
 

@@ -1,8 +1,8 @@
 //! The lock screen drawn without a screen, with a fake PAM and a fake `systemctl`: never the
-//! system's PAM, never a real password. The screenshots go to `target/tmp/lock/`, on the blurred
-//! wallpaper of the collection: each state (rest without the form, the form shown, typing, the
-//! password shown, spinner, error) in the dark and the light theme on a 1920 × 1080 screen, the
-//! rest and the form on the four screens of the brief (1366 × 768, 1920 × 1080, 2560 × 1600 at
+//! system's PAM, never a real password. The screenshots go to `target/tmp/lock/`, on the
+//! pictures of the lock: each state (rest without the form, the form shown, typing, the
+//! password shown, spinner, error) in the dark and the light theme on 1920 × 1080 and 1366 × 768
+//! screens, the rest and the form on the four screens of the brief (1366 × 768, 1920 × 1080, 2560 × 1600 at
 //! 1.5, 3840 × 2160 at 2, drawn at their logical size), and a second screen, which shows the
 //! time only. In software, Sherlock is his still picture.
 
@@ -76,12 +76,15 @@ mod tests {
             hour: 22,
             minute: 47,
         });
-        let wallpaper = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/wallpapers/first-clue.jpg"
-        );
-        let picture = lock::background::blurred(std::path::Path::new(wallpaper)).unwrap();
-        let _ = lock.update(Message::Background(picture));
+        // The pictures of the lock, at the size of the snapshot (drawn at scale 2).
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/lock");
+        let pixels = ((size.0 * 2.0) as u32, (size.1 * 2.0) as u32);
+        let fitted = |name| lock::background::fitted(&assets.join(name), pixels).unwrap();
+        let pictures = lock::background::Pictures {
+            dark: fitted(lock::background::DARK),
+            light: fitted(lock::background::LIGHT),
+        };
+        let _ = lock.update(Message::Background(pictures));
         lock.set_now(Instant::now() + Duration::from_secs(2));
         Screen {
             lock,
@@ -136,8 +139,13 @@ mod tests {
 
     #[test]
     fn the_states_render_in_both_themes() {
-        let size = (1920.0, 1080.0);
-        for (which, suffix) in [(color::Theme::Dark, ""), (color::Theme::Light, "-light")] {
+        let themes = [(color::Theme::Dark, ""), (color::Theme::Light, "-light")];
+        let sizes = [((1920.0, 1080.0), ""), ((1366.0, 768.0), "-1366x768")];
+        for ((which, theme), (size, name)) in themes
+            .into_iter()
+            .flat_map(|t| sizes.into_iter().map(move |s| (t, s)))
+        {
+            let suffix = format!("{name}{theme}");
             color::set_active(which);
             let mut s = screen(size);
             snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
@@ -166,10 +174,8 @@ mod tests {
             snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
         }
         color::set_active(color::Theme::Dark);
-        // The screen fits every size, in the same test: the theme is a global.
+        // The two other screens of the brief, in the same test: the theme is a global.
         for (size, name) in [
-            ((1366.0, 768.0), "1366x768"),
-            ((1920.0, 1080.0), "1920x1080"),
             ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-scale-150"),
             ((1920.0, 1080.0), "3840x2160-scale-200"),
         ] {

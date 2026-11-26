@@ -19,30 +19,32 @@ use sherlock_ui::{color, theme, typography};
 
 use crate::app::{Lock, Mascot, Message};
 
-/// Runs `work` on a thread of its own and hands its result to the program as a message; `None`
-/// when the thread cannot start or ends without an answer.
-fn in_background<T: Send + 'static>(
-    name: &str,
+/// Runs `work` on a thread of its own once the runtime runs the task (never in the tests, which
+/// only call `update`), and hands its result to the program as a message.
+pub(crate) fn in_background<T: Send + 'static>(
+    name: &'static str,
     work: impl FnOnce() -> Option<T> + Send + 'static,
     message: impl Fn(Option<T>) -> Option<Message> + Send + 'static,
 ) -> iced::Task<Message> {
-    let (sender, receiver) = iced::futures::channel::oneshot::channel();
-    let spawned = std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || {
-            let _ = sender.send(work());
-        });
-    if let Err(err) = spawned {
-        tracing::warn!("{err}");
-        return iced::Task::none();
-    }
-    iced::Task::perform(receiver, move |result| message(result.ok().flatten()))
-        .and_then(iced::Task::done)
+    let answer = async move {
+        let (sender, receiver) = iced::futures::channel::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let _ = sender.send(work());
+            });
+        if let Err(err) = spawned {
+            tracing::warn!("{name}: {err}");
+            return None;
+        }
+        receiver.await.ok().flatten()
+    };
+    iced::Task::perform(answer, message).and_then(iced::Task::done)
 }
 
-/// What starts with the screen: the lock, the model of Sherlock and the background, both read
-/// on threads of their own (the screen shows at once, the still picture and the plain
-/// background until they are ready).
+/// What starts with the screen: the lock and the model of Sherlock, read on a thread of its own
+/// (the still picture until it is ready). The background is read once the size of the screens
+/// is known (`app`).
 fn start() -> iced::Task<Message> {
     let mascot = in_background(
         "mascot",
@@ -54,12 +56,7 @@ fn start() -> iced::Task<Message> {
         },
         |model| Some(Message::Mascot(model.map(|m| Mascot(Arc::new(m))))),
     );
-    let background = in_background(
-        "background",
-        || background::load(|key| std::env::var_os(key)),
-        |picture| picture.map(Message::Background),
-    );
-    iced::Task::batch([iced::Task::done(Message::Lock), mascot, background])
+    iced::Task::batch([iced::Task::done(Message::Lock), mascot])
 }
 
 /// The fonts of the design system, Inter by default.

@@ -24,7 +24,7 @@ use sherlock_ui::motion::Animation;
 use sherlock_ui::{metrics, motion, strings, typography};
 use system_services::secret::Secret;
 
-use crate::background::Picture;
+use crate::background::{Picture, Pictures};
 use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
@@ -67,8 +67,13 @@ pub enum Message {
     Frame(Instant),
     /// The model of Sherlock, read on a thread at start; `None` without it (the still picture).
     Mascot(Option<Mascot>),
-    /// The picture behind the screen, blurred on a thread at start.
-    Background(Picture),
+    /// The pictures behind the screen, dark and light, read on a thread once the size of the
+    /// screens is known.
+    Background(Pictures),
+    /// The scale of a surface's screen.
+    Rescaled(f32),
+    /// The theme of the appearance file.
+    Theme(color::Theme),
 }
 
 /// The time shown, to the minute.
@@ -139,7 +144,13 @@ pub struct Lock {
     /// « Veille » was confirmed: Sherlock sleeps until the next input.
     asleep: bool,
     mascot: Option<Mascot>,
-    background: Option<image::Handle>,
+    /// The dark and light pictures behind the screen.
+    background: Option<(image::Handle, image::Handle)>,
+    /// The size, in pixels, the background was asked for.
+    asked: Option<(u32, u32)>,
+    /// The largest scale of the screens.
+    scale: f32,
+    theme: color::ThemeFade,
     authenticator: Arc<dyn Authenticator>,
     runner: Arc<dyn Runner>,
 }
@@ -169,6 +180,9 @@ impl Lock {
             asleep: false,
             mascot: None,
             background: None,
+            asked: None,
+            scale: 1.0,
+            theme: color::ThemeFade::default(),
             authenticator,
             runner,
         }
@@ -246,7 +260,31 @@ impl Lock {
             Phase::Refused(at, _) => t < at + ui::SHAKE + Duration::from_millis(400),
             Phase::Leaving(_) => true,
         };
-        entrance || form || phase
+        entrance || form || phase || self.theme.running()
+    }
+
+    /// Reads the background once the screens are known, or again for a larger screen: at the
+    /// size of the largest one, in pixels.
+    fn ask_background(&mut self) -> Task<Message> {
+        let (w, h) = self.sizes.values().fold((0.0f32, 0.0f32), |(w, h), size| {
+            (w.max(size.width), h.max(size.height))
+        });
+        let needed = (
+            (w * self.scale).ceil() as u32,
+            (h * self.scale).ceil() as u32,
+        );
+        let covered = self
+            .asked
+            .is_some_and(|(aw, ah)| aw >= needed.0 && ah >= needed.1);
+        if needed.0 == 0 || needed.1 == 0 || covered {
+            return Task::none();
+        }
+        self.asked = Some(needed);
+        crate::in_background(
+            "background",
+            move || crate::background::load(|key| std::env::var_os(key), needed),
+            |pictures| pictures.map(Message::Background),
+        )
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -260,9 +298,14 @@ impl Lock {
         } else {
             Subscription::none()
         };
+        let appearance = match appearance_config::path() {
+            Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
+            None => Subscription::none(),
+        };
         Subscription::batch([
             frames,
             ticks,
+            appearance,
             Subscription::run(clock).map(Message::Clock),
             iced::event::listen_with(on_event),
         ])
@@ -279,7 +322,13 @@ impl Lock {
             }
             Message::Resized(id, size) => {
                 self.sizes.insert(id, size);
+                return self.ask_background();
             }
+            Message::Rescaled(scale) => {
+                self.scale = self.scale.max(scale);
+                return self.ask_background();
+            }
+            Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Here(id) => {
                 if self.primary != Some(id) && self.surfaces.contains(&id) {
                     self.primary = Some(id);
@@ -331,16 +380,18 @@ impl Lock {
                 }
             }
             Message::Mascot(mascot) => self.mascot = mascot,
-            Message::Background(picture) => {
-                let Picture {
-                    width,
-                    height,
-                    rgba,
-                } = picture;
-                self.background = Some(image::Handle::from_rgba(width, height, rgba));
+            Message::Background(Pictures { dark, light }) => {
+                let handle =
+                    |Picture {
+                         width,
+                         height,
+                         rgba,
+                     }| image::Handle::from_rgba(width, height, rgba);
+                self.background = Some((handle(dark), handle(light)));
             }
             Message::Frame(now) => {
                 self.now = now;
+                self.theme.tick(now);
                 if let Phase::Leaving(at) = self.phase
                     && self.elapsed() >= at + ui::EXIT
                 {
@@ -510,15 +561,24 @@ impl Lock {
                 background: Some(Background::Color(fill.into())),
                 ..container::Style::default()
             });
-        let picture = self.background.as_ref().map(|handle| {
-            image(handle.clone())
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .content_fit(ContentFit::Cover)
-        });
         let mut layers = stack![plain];
-        if let Some(picture) = picture {
-            layers = layers.push(picture);
+        // The picture of the dark theme, and that of the light one over it, as opaque as the
+        // light palette is mixed in: the fade of the theme fades them too.
+        if let Some((dark, light)) = &self.background {
+            let light_share = f32::from(color::mix_step()) / f32::from(color::MIX_STEPS);
+            let cover = |handle: &image::Handle, opacity: f32| {
+                image(handle.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(ContentFit::Cover)
+                    .opacity(opacity)
+            };
+            if light_share < 1.0 {
+                layers = layers.push(cover(dark, 1.0));
+            }
+            if light_share > 0.0 {
+                layers = layers.push(cover(light, light_share));
+            }
         }
         layers
             .push(page)
@@ -788,6 +848,7 @@ fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
             Some(Message::Input(id, Input::Pointer))
         }
         Event::Window(window::Event::Focused) => Some(Message::Here(id)),
+        Event::Window(window::Event::Rescaled(scale)) => Some(Message::Rescaled(scale)),
         Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
             Some(Message::Resized(id, size))
         }
@@ -803,6 +864,18 @@ fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
         }
         _ => None,
     }
+}
+
+/// The themes of the appearance file, followed on a thread of its own.
+fn appearance(path: &std::path::Path) -> mpsc::UnboundedReceiver<color::Theme> {
+    let (sender, receiver) = mpsc::unbounded();
+    let follow = appearance_config::follow_themes(path.to_path_buf(), move |theme| {
+        sender.unbounded_send(theme).is_ok()
+    });
+    if let Err(error) = follow {
+        tracing::warn!(%error, "the lock screen will not follow the appearance file");
+    }
+    receiver
 }
 
 /// A tick every second, from a thread of its own, while the subscription lives.
