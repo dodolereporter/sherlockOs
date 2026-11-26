@@ -328,6 +328,27 @@ impl State {
         self.queue_redraw();
     }
 
+    /// `window` goes away: the motion of its buttons, and what the pointer had of it, go
+    /// with it at once.
+    pub(crate) fn forget_decoration(&mut self, window: &Window) {
+        let decorations = &mut self.decorations;
+        decorations.motions.retain(|(w, _)| w != window);
+        let pointer = &mut decorations.pointer;
+        if pointer.hovered.as_ref().is_some_and(|(w, _)| w == window) {
+            pointer.hovered = None;
+        }
+        if pointer.pressed.as_ref().is_some_and(|(w, _)| w == window) {
+            pointer.pressed = None;
+        }
+        if pointer
+            .last_press
+            .as_ref()
+            .is_some_and(|(w, ..)| w == window)
+        {
+            pointer.last_press = None;
+        }
+    }
+
     /// The buttons of a window are moving at `now`: a frame at each blank.
     pub(crate) fn decorations_animating(&self, now: Duration) -> bool {
         let motions = &self.decorations.motions;

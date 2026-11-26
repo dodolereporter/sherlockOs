@@ -301,6 +301,8 @@ pub struct Quick {
     /// The page coming in, and whether it comes from the right.
     pub page_motion: Unfold,
     page_forward: bool,
+    /// The page the one shown replaced: it slides out while the new one comes in.
+    page_from: Page,
     /// The Bluetooth device a connection, a disconnection or a pairing is under way for.
     pub device_busy: Option<String>,
     /// The question of the BlueZ agent while a device pairs.
@@ -575,11 +577,7 @@ impl Quick {
             }
             Message::ShowNetworks(show) => {
                 let page = if show { Page::Networks } else { Page::Main };
-                if page != self.page {
-                    self.page_motion = Unfold::opening(self.now);
-                    self.page_forward = show;
-                }
-                self.page = page;
+                self.turn_page(page, show);
                 self.joining = None;
                 self.password.wipe();
                 let device = self.wifi.ready().and_then(|w| w.device.clone());
@@ -952,12 +950,34 @@ impl Quick {
     /// The panel: the main page or the Wi-Fi networks, sliding in when it changes.
     /// `battery` goes next to « Énergie ».
     pub fn view<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
-        self.page_motion
-            .page(self.page_forward, || match self.page {
-                Page::Main => self.view_main(user, battery),
-                Page::Networks => self.view_networks(),
-                Page::Devices => self.view_devices(),
-            })
+        let page = move |page: Page| match page {
+            Page::Main => self.view_main(user, battery),
+            Page::Networks => self.view_networks(),
+            Page::Devices => self.view_devices(),
+        };
+        let forward = self.page_forward;
+        let coming = self.page_motion.page(forward, || page(self.page));
+        // The page it replaces slides out under it; at rest, an empty layer in its place keeps
+        // the tree of the page shown (its scroll, its field) from one frame to the next.
+        let leaving = if self.page_motion.running() && self.page_from != self.page {
+            self.page_motion
+                .leaving_page(forward, || page(self.page_from))
+        } else {
+            // A stack takes the size of its first layer.
+            space().width(Length::Fill).height(Length::Fill).into()
+        };
+        iced::widget::stack![leaving, coming].into()
+    }
+
+    /// Shows `page`, sliding in from the right (`forward`) or from the left, the page shown
+    /// sliding out the other way.
+    pub(crate) fn turn_page(&mut self, page: Page, forward: bool) {
+        if page != self.page {
+            self.page_motion = Unfold::opening(self.now);
+            self.page_forward = forward;
+            self.page_from = self.page;
+        }
+        self.page = page;
     }
 
     /// The short word that replaces the line of `service` after its last action failed.

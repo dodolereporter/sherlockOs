@@ -6,7 +6,8 @@
 pub mod anim;
 pub mod capture;
 pub mod card;
-mod cursor;
+pub mod clicks;
+pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
@@ -16,6 +17,7 @@ pub mod gestures;
 mod handlers;
 mod input;
 pub mod keyboard;
+pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod media_keys;
@@ -169,6 +171,8 @@ pub struct State {
     gestures: gestures::Gestures,
     /// Touchpad setting and the touchpads it applies to (lot D-31).
     touchpad: touchpad::Touchpad,
+    /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
+    clicks: clicks::Clicks,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -185,6 +189,10 @@ pub struct State {
     xwm: Option<X11Wm>,
     /// Number of the X11 display (`DISPLAY=:N`), once XWayland is ready.
     pub x_display: Option<u32>,
+    /// The Wayland socket the programs the compositor starts connect to (`WAYLAND_DISPLAY`).
+    socket_name: Option<OsString>,
+    /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
+    launcher_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
     xwayland: Option<RegistrationToken>,
     /// Listening Wayland socket in the loop, removed by `shutdown`.
@@ -230,6 +238,9 @@ struct WindowData {
     /// The window has received its first content and has been placed. An X11 window is placed
     /// on its map request, and shown when XWayland associates its Wayland surface with it.
     shown: Cell<bool>,
+    /// An X11 window shown before its first buffer: it takes the keyboard at that buffer
+    /// (lot C-01).
+    focus_on_content: Cell<bool>,
     /// Its first content was larger than the work area: it was asked to fit, and shows at its
     /// next content, whatever its size then (lot C-01).
     fitting: Cell<bool>,
@@ -325,6 +336,7 @@ impl State {
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
+            clicks: clicks::Clicks::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -333,6 +345,8 @@ impl State {
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
+            socket_name: None,
+            launcher_program: None,
             xwayland: None,
             listener: None,
             shell: shell::Shell::new(&dh),
@@ -367,6 +381,7 @@ impl State {
             .unwrap_or_default();
         tracing::info!(socket = ?name, "Wayland socket open");
         self.accept_on(socket, event_loop)?;
+        self.socket_name = Some(name.clone());
         if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
             self.listen_shell_next_to(&PathBuf::from(dir).join(&name), event_loop);
         }
@@ -382,6 +397,7 @@ impl State {
     ) -> Result<(), Error> {
         let socket = ListeningSocket::bind_absolute(path.clone())?;
         self.accept_on(socket, event_loop)?;
+        self.socket_name = Some(path.clone().into_os_string());
         self.listen_shell_next_to(&path, event_loop);
         Ok(())
     }
@@ -629,6 +645,7 @@ impl State {
         self.popups.cleanup();
         self.end_minimize_effects();
         self.end_closings();
+        self.end_clicks();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
@@ -653,7 +670,7 @@ impl State {
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The client has given `window` a buffer: it has something to show.
-fn has_buffer(window: &Window) -> bool {
+pub(crate) fn has_buffer(window: &Window) -> bool {
     window
         .wl_surface()
         .is_some_and(|surface| layer::has_content(&surface))

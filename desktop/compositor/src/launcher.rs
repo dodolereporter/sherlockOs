@@ -1,0 +1,91 @@
+//! The keyboard shortcut of the launcher (lot C-01): Super + Space, or Alt + Space in nested
+//! mode, starts `launcher` with the compositor's Wayland socket (and its X11 display). The
+//! launcher is started on demand: started again while open, it closes the open one, so the
+//! same shortcut opens and closes it (`docs/launcher.md`). The program is
+//! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
+//! otherwise.
+
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use crate::State;
+
+/// Name of the program.
+pub const PROGRAM: &str = "launcher";
+
+/// The folder of the session's programs, as `sherlockos-session` exports it.
+pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
+
+/// The launcher to start: `PROGRAM` in the folder `var` gives for `BIN_VAR` if it is there,
+/// else `PROGRAM` alone, looked for in the `PATH`.
+pub fn program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    var(BIN_VAR)
+        .map(|dir| Path::new(&dir).join(PROGRAM))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PROGRAM.into())
+}
+
+impl State {
+    /// Replaces the program the shortcut starts (the tests, or another launcher).
+    pub fn set_launcher_program(&mut self, program: PathBuf) {
+        self.launcher_program = Some(program);
+    }
+
+    /// Starts the launcher, or closes it if it is open: a second launcher closes the first.
+    pub(crate) fn start_launcher(&mut self) {
+        let program = self
+            .launcher_program
+            .clone()
+            .unwrap_or_else(|| program(|key| std::env::var_os(key)));
+        let mut command = Command::new(&program);
+        if let Some(socket) = &self.socket_name {
+            command.env("WAYLAND_DISPLAY", socket);
+        }
+        match self.x_display {
+            Some(n) => command.env("DISPLAY", format!(":{n}")),
+            None => command.env_remove("DISPLAY"),
+        };
+        match command.spawn() {
+            Ok(mut child) => {
+                tracing::info!(program = %program.display(), "launcher started");
+                // A thread waits for it, so that it does not stay a zombie.
+                let spawned =
+                    std::thread::Builder::new()
+                        .name("launcher".into())
+                        .spawn(move || {
+                            if let Err(err) = child.wait() {
+                                tracing::warn!("waiting for the launcher: {err}");
+                            }
+                        });
+                if let Err(err) = spawned {
+                    tracing::warn!("launcher: no thread to wait for it: {err}");
+                }
+            }
+            Err(err) => tracing::warn!(program = %program.display(), "launcher: {err}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launcher_is_found_beside_the_programs_then_in_the_path() {
+        let dir = std::env::temp_dir().join(format!("launcher-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let var = |dir: &Path| {
+            let dir = dir.as_os_str().to_owned();
+            move |key: &str| (key == BIN_VAR).then(|| dir.clone())
+        };
+        // Not there: the PATH.
+        assert_eq!(program(var(&dir)), PathBuf::from(PROGRAM));
+        assert_eq!(program(|_| None), PathBuf::from(PROGRAM));
+        std::fs::write(dir.join(PROGRAM), b"").unwrap();
+        assert_eq!(program(var(&dir)), dir.join(PROGRAM));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

@@ -279,7 +279,7 @@ fn board_history() -> History {
 }
 
 fn panel_size(state: &Bar, which: Panel) -> (f32, f32) {
-    let (width, height) = panel::surface_size(which, state.panel_margins);
+    let (width, height) = panel::surface_size(which, state.panel_margins, state.panel_shared);
     (width as f32, height as f32)
 }
 
@@ -406,6 +406,48 @@ fn the_panels_render_in_both_themes() {
             // Selectors still find the whole name.
             assert!(ui.find(long).is_ok());
             assert_written(capture(ui, &format!("control-centre-long-name{suffix}")));
+        });
+    }
+}
+
+/// The motions inside a panel, caught halfway (UI-01): `page-sliding`, the Wi-Fi networks
+/// coming in over the main page going out, both cut to the glass; `panels-switching`, the
+/// control centre turning into the calendar in the surface both share on the GPU, a mask going
+/// from one height to the other. Then their `-light` versions.
+#[test]
+fn the_motions_of_the_panels_stay_inside_them() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            state.month = Some(Month {
+                year: 2026,
+                month: 11,
+            });
+            state.history = board_history();
+            board_quick(&mut state);
+            let _ = state.quick.update(quick::Message::ShowNetworks(true));
+            state
+                .quick
+                .tick(state.quick.now + Duration::from_millis(60));
+            assert!(state.quick.running());
+            let size = panel_size(&state, Panel::Control);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("page-sliding{suffix}")));
+
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let _ = state.quick.update(quick::Message::ShowNetworks(false));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            state.panel_shared = true;
+            // The surface of the GPU, with the room for the shadow.
+            state.panel_margins = panel::margins(true);
+            let start = Duration::from_secs(1);
+            let mut motion = bar::unfold::Unfold::opening(start);
+            motion.tick(start + Duration::from_millis(35));
+            state.swap = Some((Panel::Control, motion));
+            let size = panel_size(&state, Panel::Calendar);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+            assert_written(capture(ui, &format!("panels-switching{suffix}")));
         });
     }
 }

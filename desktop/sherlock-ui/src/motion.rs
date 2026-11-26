@@ -249,6 +249,11 @@ pub const GLYPH_FADE: Duration = FADE;
 /// One step of an icon that cycles while it waits: the arcs of a Wi-Fi connecting (UI-01).
 pub const PULSE: Duration = Duration::from_millis(400);
 
+/// One turn of a loading indicator (UI-01).
+pub const SPIN: Duration = Duration::from_millis(900);
+/// The positions of a turn of the loading indicator: one every 10°.
+pub const SPIN_STEPS: u32 = 36;
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
@@ -273,6 +278,10 @@ pub const WINDOW_CLOSE_SCALE: f64 = 0.92;
 /// Curve of the closing: an ease-in, close to CSS `ease-in`. The window leaves slowly, then
 /// faster: it never lingers once nearly transparent.
 pub const WINDOW_CLOSE_EASE: Ease = Ease::InQuad;
+
+/// Menus and popups of the windows appear with this fade, without moving: short, so that a
+/// menu is readable at once (lot C-01). The lower end of a hover.
+pub const MENU_FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.0);
 
 /// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
 /// scale fallback. About half a second in lot D-19, found slow on the machine: 300 ms since

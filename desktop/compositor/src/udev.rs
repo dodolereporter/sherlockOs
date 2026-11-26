@@ -231,6 +231,10 @@ pub fn init(
         desktop_config::wallpaper::config_file(var),
         desktop_config::wallpaper::dirs(var),
     )?;
+    state.watch_pointer(
+        &event_loop.handle(),
+        desktop_config::pointer::config_file(var),
+    )?;
     state.watch_touchpad(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
@@ -662,11 +666,18 @@ impl Backend {
         let mut elements: Vec<SessionElement> = Vec::new();
         let pointer = state.seat.get_pointer().map(|p| p.current_location());
         self.cursors.follow(state.theme());
-        if let (Some(icon), Some(at)) = (state.cursor_icon(), pointer)
+        // The pointer sinks at a click shown (lot C-01).
+        let (press, sinking) = state.click_sink(now);
+        animating |= sinking;
+        if let (Some(icon), Some(at)) = (state.cursor_shape(), pointer)
             && state.space.output_under(at).any(|o| *o == output)
-            && let Some((cursor, next)) =
-                self.cursors
-                    .element(&mut self.renderer, icon, view.point(at), view.scale, now)
+            && let Some((cursor, next)) = self.cursors.element(
+                &mut self.renderer,
+                icon,
+                view.point(at),
+                (view.scale, press),
+                now,
+            )
         {
             elements.push(SessionElement::Cursor(cursor));
             // A transition of the cursor draws at each blank; a turning cursor only when its

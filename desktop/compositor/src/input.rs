@@ -124,6 +124,8 @@ enum Shortcut {
     Restore,
     /// Tab: opens or closes Mission Control (lot D-33).
     ToggleOverview,
+    /// Space: starts the launcher, or closes it (lot C-01).
+    Launcher,
     /// Escape while Mission Control is open: closes it.
     CloseOverview,
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
@@ -180,6 +182,7 @@ impl Shortcut {
             Keysym::Right => Some(Self::Snap(Zone::Right)),
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
+            Keysym::space => Some(Self::Launcher),
             _ => None,
         }
     }
@@ -459,14 +462,23 @@ impl State {
         let Gesture {
             window,
             source,
+            button: gesture_button,
             initial,
             edges,
             last_size,
+            moved,
             floating,
             zone,
             ..
         } = gesture;
         tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "gesture end");
+        if let (GestureSource::Modifier, None, BTN_LEFT, false) =
+            (source, edges, gesture_button, moved)
+        {
+            // Super + click: Sherlock will explain what is under the pointer. The action is
+            // reserved: the shape shows it, the agent is not plugged in yet.
+            tracing::info!("gesture key + click: for Sherlock, not plugged in yet");
+        }
         let Some(edges) = edges else {
             if let Some((zone, output)) = zone {
                 // Dropped against an edge: snapped. It will return to its place from before the
@@ -580,7 +592,13 @@ impl State {
             return Some(CursorIcon::Default);
         }
         if let Some(gesture) = &self.gesture {
-            return Some(gesture.edges.map_or(CursorIcon::Move, resize_cursor));
+            // A window taken by its title bar is held in the closed hand; moved with the
+            // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
+            let moving = match gesture.source {
+                GestureSource::Modifier => CursorIcon::Move,
+                _ => CursorIcon::Grabbing,
+            };
+            return Some(gesture.edges.map_or(moving, resize_cursor));
         }
         let location = self.seat.get_pointer()?.current_location();
         match (self.hit(location), &self.cursor_status) {
@@ -593,6 +611,23 @@ impl State {
         }
     }
 
+    /// The shape the real session draws: `cursor_icon`, or the Sherlock cursor while the
+    /// gesture key and the left button are held on a window that has not moved yet. Released
+    /// there, it is a Super + click, which asks Sherlock about what is under the pointer
+    /// (cursor boards); dragged, it becomes the move of the window.
+    pub fn cursor_shape(&self) -> Option<crate::cursor::Shape> {
+        let sherlock = self.gesture.as_ref().is_some_and(|g| {
+            matches!(g.source, GestureSource::Modifier)
+                && g.edges.is_none()
+                && g.button == BTN_LEFT
+                && !g.moved
+        });
+        match sherlock {
+            true => Some(crate::cursor::Shape::Sherlock),
+            false => self.cursor_icon().map(crate::cursor::Shape::Icon),
+        }
+    }
+
     /// What is under the pointer at `pos`. The band of a window comes before the windows it
     /// covers, not before those above it. Overlay and top anchored
     /// surfaces come before the windows, bottom and background ones after.
@@ -602,11 +637,33 @@ impl State {
             .or_else(|| self.layer_hit(pos, &[Layer::Bottom, Layer::Background]))
     }
 
+    /// What a press with the gesture key reaches at `pos`: the window under the top bar or
+    /// the dock themselves, the way back for a window lost there. The overlay layer (lock
+    /// screen), and the panels and menus of the top layer (the popups of the bar), keep their
+    /// presses.
+    fn gesture_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
+        if let Some(hit) = self.layer_hit(pos, &[Layer::Overlay]) {
+            return Some(hit);
+        }
+        match self.layer_hit(pos, &[Layer::Top]) {
+            Some(Hit::Layer(main, surface, origin)) if main != surface => {
+                Some(Hit::Layer(main, surface, origin))
+            }
+            top => self.window_hit(pos).or(top).or_else(|| self.hit(pos)),
+        }
+    }
+
     fn window_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
         // Hidden windows (other workspaces, minimized) are skipped, which the space does not do,
         // and so are those of a minimize effect, whose drawing is not their place (lot D-19).
         let now = self.now();
-        let shown = |w: &&Window| self.is_visible(w) && self.minimize_progress(w, now).is_none();
+        // A window without content (an X11 window before its first buffer) is not drawn: it
+        // takes no click either.
+        let shown = |w: &&Window| {
+            self.is_visible(w)
+                && self.minimize_progress(w, now).is_none()
+                && (crate::has_buffer(w) || is_override_redirect(w))
+        };
         for window in self.space.elements().rev().filter(shown) {
             let loc = self
                 .space
@@ -731,6 +788,10 @@ impl State {
             }
             Shortcut::CloseOverview => {
                 self.close_overview();
+                return;
+            }
+            Shortcut::Launcher => {
+                self.start_launcher();
                 return;
             }
             Shortcut::Media(media, code) => {
@@ -869,6 +930,10 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        if state == ButtonState::Pressed {
+            // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
+            self.click_at(location);
+        }
         if self.picking_area() {
             // The area of a screenshot: the click goes to no client (lot D-35c).
             pointer.button(self, &event);
@@ -909,10 +974,7 @@ impl State {
             // With the gesture key, a window under the top bar or the dock can still be moved:
             // the way back for a window lost there. The overlay (lock screen) keeps its clicks.
             let hit = match held {
-                true => self
-                    .layer_hit(location, &[Layer::Overlay])
-                    .or_else(|| self.window_hit(location))
-                    .or_else(|| self.hit(location)),
+                true => self.gesture_hit(location),
                 false => self.hit(location),
             };
             // An open menu closes on a click on another client; the click still goes through.

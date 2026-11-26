@@ -120,7 +120,9 @@ Moving and resizing:
   zone covers (the bar starting after it) comes down under it.
 - **The way back for a lost window.** With the gesture key, a press goes to the window under
   an anchored surface of the top layer (bar, dock) instead of the surface: gesture key + drag
-  takes back a window under the bar. The overlay layer (lock screen) keeps its presses.
+  takes back a window under the bar. The overlay layer (lock screen) keeps its presses, and so
+  do the panels and menus of the top layer (the popups of the bar): a press on an open panel
+  never reaches the window below (`State::gesture_hit`, lot C-01b).
 - **Never larger than the screen.** The first configure gives the work area, less the title
   bar, as the bounds of the window (`xdg_toplevel.configure_bounds`). A first content larger
   than that (Konsole keeps a size per screen size, and opened 1450 × 888 on a screen of
@@ -150,6 +152,10 @@ Snapping:
   a double click on a title bar the client draws (GTK 4 unmaximizes at the second press, the
   pointer still) restores it, and a move that has not shifted the window yet goes on from that
   place.
+- Gesture key + Space starts the launcher, and closes it when pressed again (lot C-01, see
+  `docs/launcher.md`): `$SHERLOCKOS_BIN/launcher`, or `launcher` in the session's `PATH`.
+  Neither the Space nor its release go to the client, and the gesture key, no longer alone,
+  does not open Mission Control.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -174,8 +180,10 @@ Snapping:
 
 Cursors:
 
-- Over the band, the cursor takes the shape of the edge or corner. During a move, it takes the
-  "move" shape, and during a resize that of the pulled edge.
+- Over the band, the cursor takes the shape of the edge or corner. During a move by the title
+  bar or the client, it is the closed hand (`grabbing`, lot C-01); with the gesture key, the
+  "move" shape; during a resize, that of the pulled edge. The real session shows the Sherlock
+  cursor while the gesture key and the button are held without moving (see `docs/cursor.md`).
 - Over a client, the cursor is the one it names through the cursor shape protocol
   (`wp_cursor_shape_v1`, which Qt 6 uses). A client that draws its cursor image itself
   (`wl_pointer.set_cursor` with a surface) gets the arrow: the image is not shown. Elsewhere,
@@ -1038,7 +1046,9 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
 - **An empty window could open.** The opening started at the first frame of a window shown,
   and an X11 window is shown when XWayland gives it its surface, before its first buffer: its
   title bar opened alone. Nothing is drawn of a window before its client has given a buffer;
-  the opening starts with that first content.
+  the opening starts with that first content. A window without content takes no click either,
+  on its bar or its edges, and an X11 window takes the keyboard at its first buffer, not
+  before (lot C-01b).
 - **Curves.** The opening was a critically damped spring (no bounce) for the scale with a
   200 ms fade, and the closing a 150 ms ease-out: it left fast and lingered nearly
   transparent. Now one timed curve each, an ease-out to open and an ease-in to close.
@@ -1059,9 +1069,14 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
   withdrawn while shown too (`tests/xwayland.rs`).
 - **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
   pointer goes through it to what is below. A window that opens takes input at once, as before.
-- **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
-  override-redirect windows, anchored surfaces (bar, dock), fullscreen windows, a window closing
-  on another workspace, minimized, or while Mission Control is open.
+- **Menus and popups (lot C-01).** The menus and popups of a window (`xdg_popup`) appear with
+  a fade of `MENU_FADE` (110 ms), without moving: from their first drawing with content, a
+  frame at each blank meanwhile. They go at once: when a menu is closed, its client has
+  already taken its content away, and keeping its last image (as for a window) would leave a
+  ghost over what the click reaches; the menus of the bar and the dock (their own surfaces)
+  have their own animations. X11 menus (override-redirect windows) appear at once.
+- **Not animated:** X11 override-redirect windows, anchored surfaces (bar, dock), fullscreen
+  windows, a window closing on another workspace, minimized, or while Mission Control is open.
 - **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
   animation for `pacing::Pacing`), nothing at rest. The ghost is one element under a stable
   identity (`damage::Part::Closing`): the damage is its old and new area, inside the window's.

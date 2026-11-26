@@ -8,12 +8,17 @@
 //! desktop color fills the rest. Each screen has its own elements, in frame pixels, at its
 //! scale. See "Rendering" in `docs/compositor.md`.
 
-use std::{cell::RefCell, time::Duration};
+use std::{
+    cell::RefCell,
+    time::{Duration, Instant},
+};
 
 use sherlock_ui::{
     color::{self, Color},
     decorations::{self as ui_decorations, Colors},
-    metrics, window as ui,
+    metrics,
+    motion::{self, Fade},
+    window as ui,
 };
 use smithay::{
     backend::renderer::Frame as _,
@@ -34,7 +39,7 @@ use smithay::{
     output::Output,
     reexports::wayland_server::{Resource as _, protocol::wl_surface::WlSurface},
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
-    wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
+    wayland::{compositor::with_states, seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 
 use crate::{
@@ -491,6 +496,8 @@ pub fn items(
     let scale = view.scale as f32;
     // The area of a screenshot being chosen, then the on-screen display of the media keys, in
     // front of everything (lot D-35).
+    // The rings of the clicks shown, in front of everything (lot C-01).
+    animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
     crate::capture::push_area(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
     push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
@@ -535,6 +542,7 @@ pub fn items(
         };
         visual.rect.loc.x += shift;
         animating |= window_data(window).motion.borrow().is_animating();
+        animating |= popups_appearing(window);
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
     }
@@ -638,12 +646,13 @@ pub(crate) fn push_window(
         push_surface(items, surface, at, false);
         return;
     }
-    // Menus go in front, without clipping or scaling.
+    // Menus go in front, without clipping or scaling. They appear with a short fade, without
+    // moving (lot C-01).
     for (popup, offset) in PopupManager::popups_for_surface(surface) {
         let at = Placement {
             view,
             loc: visual.rect.loc + (offset - popup.geometry().loc).to_f64(),
-            alpha: visual.opacity,
+            alpha: visual.opacity * popup_alpha(popup.wl_surface()).0,
         };
         push_surface(items, popup.wl_surface(), at, false);
     }
@@ -723,6 +732,34 @@ pub(crate) fn push_window(
             alpha: visual.opacity * decoration,
         });
     }
+}
+
+/// When a menu or popup of a window was first drawn with content.
+struct PopupShown(Instant);
+
+/// The opacity of the menu or popup `surface` now, and whether it is still appearing: from
+/// transparent to opaque over `motion::MENU_FADE` from its first drawing with content.
+fn popup_alpha(surface: &WlSurface) -> (f32, bool) {
+    if !crate::layer::has_content(surface) {
+        return (1.0, false);
+    }
+    let shown = with_states(surface, |states| {
+        states
+            .data_map
+            .get_or_insert(|| PopupShown(Instant::now()))
+            .0
+    });
+    let since = shown.elapsed();
+    let fade = Fade::new(0.0, 1.0, Duration::ZERO, motion::MENU_FADE);
+    (fade.value(since), since < motion::MENU_FADE)
+}
+
+/// A menu or popup of `window` is appearing: a frame at each blank.
+fn popups_appearing(window: &Window) -> bool {
+    let Some(surface) = window.wl_surface() else {
+        return false;
+    };
+    PopupManager::popups_for_surface(&surface).any(|(popup, _)| popup_alpha(popup.wl_surface()).1)
 }
 
 /// Where a surface tree is drawn: the screen it is drawn for, its origin in the space, its
