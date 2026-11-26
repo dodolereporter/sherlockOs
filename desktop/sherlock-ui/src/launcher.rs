@@ -48,8 +48,6 @@ pub const MAX_SECTIONS: usize = 5;
 /// Least time between arming a session command (« Se déconnecter », « Redémarrer »,
 /// « Éteindre ») and confirming it: longer than a double click and than a key bounce.
 pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
-/// Width of the ring around the selected Sherlock row, which keeps its cream.
-pub const SHERLOCK_RING: f32 = 2.0;
 
 /// Height of the panel holding `sections` section labels and `rows` result rows: its border
 /// and padding, the search row and the line under it, the labels, the rows.
@@ -69,7 +67,9 @@ pub fn panel_height(sections: usize, rows: usize) -> f32 {
 /// The launcher's own colors, for one theme; the rest comes from the palette.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Colors {
-    /// Glass of the panel (`0.88`, denser than the other panels) and its border.
+    /// Glass of the panel (`0.96`: nearly opaque until the compositor blurs what is behind,
+    /// lot D-37, so that a busy wallpaper never makes the results hard to read; UI-03) and
+    /// its border.
     pub panel: Color,
     pub border: Color,
     /// Line under the search row.
@@ -85,16 +85,11 @@ pub struct Colors {
     pub system_tile: Color,
     pub file_tile: Color,
     pub tile_glyph: Color,
-    /// The « Demander à Sherlock » row: cream, its title, its line, the ring when selected.
-    pub sherlock_row: Color,
-    pub sherlock_title: Color,
-    pub sherlock_line: Color,
-    pub sherlock_ring: Color,
 }
 
 impl Colors {
     pub const DARK: Self = Self {
-        panel: Color::rgba(16, 26, 44, 0.88),
+        panel: Color::rgba(16, 26, 44, 0.96),
         border: Color::rgba(255, 255, 255, 0.12),
         divider: Color::rgba(255, 255, 255, 0.08),
         key: Color::rgba(255, 255, 255, 0.10),
@@ -104,15 +99,11 @@ impl Colors {
         system_tile: color::TILE_SETTINGS,
         file_tile: color::TILE_FILES,
         tile_glyph: color::CREAM,
-        sherlock_row: color::CREAM,
-        sherlock_title: color::TEXT_ON_CREAM,
-        sherlock_line: Color::rgb(0x2B, 0x3A, 0x54),
-        sherlock_ring: color::BLUE_BRIGHT,
     };
 
     /// The light board: white glass, night blue veils at the same opacity.
     pub const LIGHT: Self = Self {
-        panel: Color::rgba(255, 255, 255, 0.88),
+        panel: Color::rgba(255, 255, 255, 0.96),
         border: Color::rgba(20, 35, 59, 0.12),
         divider: Color::rgba(20, 35, 59, 0.08),
         key: Color::rgba(20, 35, 59, 0.10),
@@ -122,10 +113,6 @@ impl Colors {
         system_tile: color::TILE_SETTINGS,
         file_tile: color::TILE_FILES,
         tile_glyph: color::CREAM,
-        sherlock_row: color::CREAM,
-        sherlock_title: color::TEXT_ON_CREAM,
-        sherlock_line: Color::rgb(0x2B, 0x3A, 0x54),
-        sherlock_ring: color::BLUE_BRIGHT,
     };
 
     /// The colors that go with `palette`.
@@ -350,24 +337,6 @@ mod styles {
         }
     }
 
-    /// The « Demander à Sherlock » row: always cream, a ring when it is selected.
-    pub fn sherlock_row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-        move |theme, _| {
-            let c = colors(theme);
-            let edge = if selected {
-                border::width(SHERLOCK_RING).color(c.sherlock_ring)
-            } else {
-                Border::default()
-            };
-            button::Style {
-                background: Some(Background::Color(c.sherlock_row.into())),
-                text_color: c.sherlock_title.into(),
-                border: edge.rounded(ROW_RADIUS),
-                ..button::Style::default()
-            }
-        }
-    }
-
     /// The search field itself: no box of its own, the panel is its frame.
     pub fn query(
         theme: &Theme,
@@ -406,9 +375,6 @@ mod tests {
             let key = colors.key_row.over(selected);
             assert!(palette.text_secondary.contrast(key) >= 4.5);
             assert!(colors.tile_letter.contrast(colors.tile) >= 4.5);
-            for line in [colors.sherlock_title, colors.sherlock_line] {
-                assert!(line.contrast(colors.sherlock_row) >= 4.5);
-            }
             // The glyphs are not text: 3 to 1 is enough for them.
             for glyph in Glyph::ALL {
                 let (tile, stroke) = colors.glyph_tile(glyph);
