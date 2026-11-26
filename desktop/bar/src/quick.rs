@@ -29,6 +29,8 @@ use crate::system::power::{self, Power, Profile};
 use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
+mod devices;
+
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Load<T> {
@@ -131,6 +133,8 @@ pub enum Page {
     Main,
     /// The Wi-Fi networks around.
     Networks,
+    /// The Bluetooth devices, paired and found (`devices.rs`).
+    Devices,
 }
 
 /// What runs the session commands: the launcher's.
@@ -297,6 +301,14 @@ pub struct Quick {
     /// The page coming in, and whether it comes from the right.
     pub page_motion: Unfold,
     page_forward: bool,
+    /// The Bluetooth device a connection, a disconnection or a pairing is under way for.
+    pub device_busy: Option<String>,
+    /// The question of the BlueZ agent while a device pairs.
+    pub asked: Option<(bluetooth::Asked, bluetooth::Reply)>,
+    /// A paired device whose « Oublier » waits for its confirmation.
+    pub forgetting: Option<String>,
+    /// The adapter a scan runs on while the device list is open.
+    pub scanning: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +326,15 @@ pub enum Message {
     Password(Secret),
     SubmitPassword,
     ToggleBluetooth,
+    ShowDevices(bool),
+    /// A device of the list: connected or disconnected when paired, else paired.
+    Device(String),
+    Pairing(bluetooth::Pairing),
+    /// « Confirmer » or « Annuler » under a question of the agent.
+    Answer(bool),
+    /// « Oublier » a paired device, then its confirmation.
+    Forget(String),
+    ConfirmForget(bool),
     ToggleDoNotDisturb,
     Volume(u8),
     Mute,
@@ -399,7 +420,7 @@ impl Quick {
 
     /// Reads every service: when the panel opens.
     pub fn open(&mut self) -> Task<Message> {
-        self.close();
+        let stopped = self.close();
         self.page = Page::Main;
         self.armed = None;
         self.failure = None;
@@ -407,6 +428,7 @@ impl Quick {
             NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
         });
         Task::batch([
+            stopped,
             self.read(Service::Wifi),
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
@@ -490,6 +512,7 @@ impl Quick {
         let passive = matches!(
             message,
             Message::Session(_)
+                | Message::Pairing(_)
                 | Message::Done(..)
                 | Message::Changed(_)
                 | Message::Wifi(_)
@@ -517,7 +540,13 @@ impl Quick {
             }
             Message::Bluetooth(read) => {
                 self.bluetooth = read;
-                return self.read_ended(Service::Bluetooth);
+                // Switched on while the list is open: the scan starts.
+                let scan = if self.page == Page::Devices {
+                    self.start_scan()
+                } else {
+                    Task::none()
+                };
+                return Task::batch([scan, self.read_ended(Service::Bluetooth)]);
             }
             Message::Sound(read) => {
                 self.sound = read;
@@ -615,6 +644,12 @@ impl Quick {
                     });
                 }
             }
+            Message::ShowDevices(show) => return self.show_devices(show),
+            Message::Device(path) => return self.device(path),
+            Message::Pairing(event) => return self.pairing(event),
+            Message::Answer(yes) => return self.answer(yes),
+            Message::Forget(path) => self.forgetting = Some(path),
+            Message::ConfirmForget(yes) => return self.forget(yes),
             Message::Session(command) => self.session(command),
             Message::Done(service, done) => return self.done(service, done),
             Message::Changed(service) => return self.read(service),
@@ -648,6 +683,9 @@ impl Quick {
                 }
             }
         }
+        if service == Service::Bluetooth {
+            self.device_busy = None;
+        }
         let next = match service {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
@@ -672,10 +710,15 @@ impl Quick {
     }
 
     /// The panel closed, whichever way: the password typed is wiped, the network chosen
-    /// forgotten.
-    pub fn close(&mut self) {
+    /// forgotten, a scan for Bluetooth devices stopped, a question of the agent cancelled.
+    pub fn close(&mut self) -> Task<Message> {
         self.password.wipe();
         self.joining = None;
+        self.forgetting = None;
+        if let Some((_, reply)) = self.asked.take() {
+            reply.send(false);
+        }
+        self.stop_scan()
     }
 
     fn send_light(&self, value: u8) -> Task<Message> {
@@ -870,6 +913,25 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
             Service::Wifi,
         ),
         (properties(bluetooth::SERVICE)?, Service::Bluetooth),
+        // Devices found by a scan, and forgotten.
+        (
+            zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(bluetooth::SERVICE)?
+                .interface("org.freedesktop.DBus.ObjectManager")?
+                .member("InterfacesAdded")?
+                .build(),
+            Service::Bluetooth,
+        ),
+        (
+            zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(bluetooth::SERVICE)?
+                .interface("org.freedesktop.DBus.ObjectManager")?
+                .member("InterfacesRemoved")?
+                .build(),
+            Service::Bluetooth,
+        ),
     ];
     for (name, _, _) in power::NAMES {
         rules.push((properties(name)?, Service::Energy));
@@ -893,6 +955,7 @@ impl Quick {
             .page(self.page_forward, || match self.page {
                 Page::Main => self.view_main(user, battery),
                 Page::Networks => self.view_networks(),
+                Page::Devices => self.view_devices(),
             })
     }
 
@@ -972,13 +1035,14 @@ impl Quick {
             Load::Ready(_) => (words::ON.to_owned(), true),
         };
         let line = self.failed(Service::Bluetooth).map_or(line, str::to_owned);
+        let more = enabled.then_some((words::BLUETOOTH_DEVICES, Message::ShowDevices(true)));
         panels::quick_tile(
             Glyph::Bluetooth,
             words::BLUETOOTH,
             line,
             self.lit[1].value(self.now),
             enabled.then_some(Message::ToggleBluetooth),
-            None,
+            more,
         )
     }
 
@@ -1284,7 +1348,7 @@ mod tests {
         assert_eq!(quick.password.as_str(), typed);
         assert!(!format!("{quick:?}").contains(typed), "{quick:?}");
         assert!(format!("{quick:?}").contains("***"));
-        quick.close();
+        let _ = quick.close();
         assert!(quick.password.is_empty());
         assert!(quick.joining.is_none());
         let mut secret = Secret::new(typed.to_owned());
@@ -1416,6 +1480,7 @@ mod tests {
                 adapter: String::from("/org/bluez/hci0"),
                 powered,
                 connected: 0,
+                devices: Vec::new(),
             }))
         };
         // The first state read shows at once.
@@ -1435,6 +1500,82 @@ mod tests {
         assert!(quick.running());
         quick.tick(ms(3000));
         assert!(!quick.running());
+    }
+
+    /// The control centre with three fictitious devices: « Casque » paired and connected at
+    /// 80 %, « Souris » paired, « Clavier » found by a scan.
+    pub(super) fn with_devices() -> Quick {
+        use crate::system::bluetooth::{Device, Kind};
+        let device = |path: &str, name: &str, kind, paired, connected, battery| Device {
+            path: format!("/org/bluez/hci0/{path}"),
+            name: String::from(name),
+            kind,
+            paired,
+            connected,
+            battery,
+        };
+        let mut quick = Quick::default();
+        let _ = quick.update(Message::Bluetooth(Load::Ready(Bluetooth {
+            adapter: String::from("/org/bluez/hci0"),
+            powered: true,
+            connected: 1,
+            devices: vec![
+                device("dev_1", "Casque", Kind::Audio, true, true, Some(80)),
+                device("dev_2", "Souris", Kind::Mouse, true, false, None),
+                device("dev_3", "Clavier", Kind::Keyboard, false, false, None),
+            ],
+        })));
+        quick
+    }
+
+    #[test]
+    fn the_device_list_scans_while_open_and_stops_when_it_closes() {
+        let mut quick = with_devices();
+        assert!(quick.update(Message::ShowDevices(true)).units() > 0);
+        assert_eq!(quick.page, Page::Devices);
+        assert_eq!(quick.scanning.as_deref(), Some("/org/bluez/hci0"));
+        // Back to the main page: the scan stops.
+        assert!(quick.update(Message::ShowDevices(false)).units() > 0);
+        assert_eq!(quick.scanning, None);
+        // The panel closes with the list open: the scan stops too.
+        let _ = quick.update(Message::ShowDevices(true));
+        assert!(quick.close().units() > 0);
+        assert_eq!(quick.scanning, None);
+        assert_eq!(quick.close().units(), 0, "stopped once");
+    }
+
+    #[test]
+    fn a_device_is_connected_paired_or_forgotten_one_at_a_time() {
+        use crate::system::bluetooth::{Asked, Pairing};
+        let mut quick = with_devices();
+        let souris = String::from("/org/bluez/hci0/dev_2");
+        assert!(quick.update(Message::Device(souris.clone())).units() > 0);
+        assert_eq!(quick.device_busy.as_deref(), Some(souris.as_str()));
+        // Another click waits for the first one.
+        let clavier = String::from("/org/bluez/hci0/dev_3");
+        assert_eq!(quick.update(Message::Device(clavier.clone())).units(), 0);
+        let _ = quick.update(Message::Done(Service::Bluetooth, Ok(())));
+        assert_eq!(quick.device_busy, None);
+        // A device found pairs; the agent asks, the panel answers what the user clicks.
+        assert!(quick.update(Message::Device(clavier.clone())).units() > 0);
+        let (sender, answer) = iced::futures::channel::oneshot::channel();
+        let reply = crate::system::bluetooth::Reply::new(sender);
+        let asked = Asked::Confirm(String::from("123456"));
+        let _ = quick.update(Message::Pairing(Pairing::Ask(asked, reply)));
+        assert!(quick.asked.is_some());
+        let _ = quick.update(Message::Answer(true));
+        assert_eq!(iced::futures::executor::block_on(answer), Ok(true));
+        let refused = Err(Problem::Refused(String::from("Rejected")));
+        let _ = quick.update(Message::Pairing(Pairing::Done(refused)));
+        assert_eq!(quick.device_busy, None);
+        assert_eq!(quick.failed(Service::Bluetooth), Some(words::REFUSED));
+        // « Oublier » asks first; « Annuler » keeps the device.
+        let _ = quick.update(Message::Forget(souris.clone()));
+        assert_eq!(quick.forgetting.as_deref(), Some(souris.as_str()));
+        assert_eq!(quick.update(Message::ConfirmForget(false)).units(), 0);
+        assert_eq!(quick.forgetting, None);
+        let _ = quick.update(Message::Forget(souris));
+        assert!(quick.update(Message::ConfirmForget(true)).units() > 0);
     }
 
     #[test]

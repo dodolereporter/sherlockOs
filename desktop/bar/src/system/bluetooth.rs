@@ -1,16 +1,70 @@
-//! Bluetooth through BlueZ on the system bus: whether the adapter is powered, how many devices
-//! are connected, and switching it on or off.
+//! Bluetooth through BlueZ on the system bus: the adapter and whether it is powered, its
+//! devices (paired, and found by a scan), connecting, disconnecting, pairing with an agent that
+//! asks the user, and forgetting a device.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use iced::futures::channel::{mpsc, oneshot};
+use iced::futures::stream::{self, BoxStream};
+use iced::futures::{FutureExt, StreamExt};
 use zbus::Connection;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 use super::{Problem, Result, set};
 
 pub const SERVICE: &str = "org.bluez";
 pub const ADAPTER: &str = "org.bluez.Adapter1";
-const DEVICE: &str = "org.bluez.Device1";
+pub const DEVICE: &str = "org.bluez.Device1";
+const BATTERY: &str = "org.bluez.Battery1";
+const AGENT_MANAGER: &str = "org.bluez.AgentManager1";
+/// Where the bar serves its agent, only while it pairs a device.
+pub const AGENT_PATH: &str = "/org/sherlockos/bar/agent";
+/// What the agent can do: show a code, ask for a yes or a no.
+const CAPABILITY: &str = "KeyboardDisplay";
+/// Devices found by a scan listed at most, besides the paired ones.
+pub const MAX_FOUND: usize = 12;
+
+/// What a device is, from its BlueZ `Icon` (a freedesktop icon name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Audio,
+    Mouse,
+    Keyboard,
+    Phone,
+    Computer,
+    Gamepad,
+    Other,
+}
+
+impl Kind {
+    pub fn of(icon: &str) -> Self {
+        match icon {
+            "audio-headset" | "audio-headphones" | "audio-card" | "multimedia-player" => {
+                Self::Audio
+            }
+            "input-mouse" | "input-tablet" => Self::Mouse,
+            "input-keyboard" => Self::Keyboard,
+            "phone" => Self::Phone,
+            "computer" => Self::Computer,
+            "input-gaming" => Self::Gamepad,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A device of the adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device {
+    pub path: String,
+    pub name: String,
+    pub kind: Kind,
+    pub paired: bool,
+    pub connected: bool,
+    /// Its battery, 0 to 100, when it says (`org.bluez.Battery1`).
+    pub battery: Option<u8>,
+}
 
 /// The first Bluetooth adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,20 +73,55 @@ pub struct Bluetooth {
     pub powered: bool,
     /// Devices connected through it.
     pub connected: usize,
+    /// The paired devices, connected ones first, then the named ones a scan found.
+    pub devices: Vec<Device>,
 }
 
-type Objects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
+type Interfaces = HashMap<String, HashMap<String, OwnedValue>>;
+type Objects = HashMap<OwnedObjectPath, Interfaces>;
 
-/// A boolean property, false when it is missing.
-fn flag(properties: &HashMap<String, OwnedValue>, name: &str) -> bool {
+fn property<T: TryFrom<OwnedValue>>(
+    properties: &HashMap<String, OwnedValue>,
+    name: &str,
+) -> Option<T> {
     properties
         .get(name)
         .and_then(|v| v.try_clone().ok())
-        .and_then(|v| bool::try_from(v).ok())
-        .unwrap_or(false)
+        .and_then(|v| T::try_from(v).ok())
 }
 
-/// Reads the first adapter; `Problem::Absent` without one.
+/// A boolean property, false when it is missing.
+fn flag(properties: &HashMap<String, OwnedValue>, name: &str) -> bool {
+    property(properties, name).unwrap_or(false)
+}
+
+/// A device of the objects, if it has a name to show: a device found without one would only
+/// show its address.
+fn device(path: &str, interfaces: &Interfaces) -> Option<Device> {
+    let properties = interfaces.get(DEVICE)?;
+    let paired = flag(properties, "Paired");
+    let named: Option<String> = property(properties, "Name");
+    let name = match named {
+        Some(name) => name,
+        None if paired => property(properties, "Alias")?,
+        None => return None,
+    };
+    let icon: Option<String> = property(properties, "Icon");
+    let battery = interfaces
+        .get(BATTERY)
+        .and_then(|b| property::<u8>(b, "Percentage"))
+        .map(|p| p.min(100));
+    Some(Device {
+        path: path.to_owned(),
+        name,
+        kind: Kind::of(icon.as_deref().unwrap_or_default()),
+        paired,
+        connected: flag(properties, "Connected"),
+        battery,
+    })
+}
+
+/// Reads the first adapter and its devices; `Problem::Absent` without one.
 pub async fn read(bus: &Connection) -> Result<Bluetooth> {
     let reply = bus
         .call_method(
@@ -58,20 +147,313 @@ pub async fn read(bus: &Connection) -> Result<Bluetooth> {
         return Err(Problem::Absent(String::from("no Bluetooth adapter")));
     };
     let prefix = format!("{adapter}/");
-    let connected = objects
+    let mut devices: Vec<Device> = objects
         .iter()
         .filter(|(path, _)| path.as_str().starts_with(&prefix))
-        .filter_map(|(_, interfaces)| interfaces.get(DEVICE))
-        .filter(|device| flag(device, "Connected"))
-        .count();
+        .filter_map(|(path, interfaces)| device(path.as_str(), interfaces))
+        .collect();
+    devices.sort_by(|a, b| {
+        (b.paired, b.connected)
+            .cmp(&(a.paired, a.connected))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    let paired = devices.iter().filter(|d| d.paired).count();
+    devices.truncate(paired + MAX_FOUND);
     Ok(Bluetooth {
         adapter: adapter.to_owned(),
         powered,
-        connected,
+        connected: devices.iter().filter(|d| d.connected).count(),
+        devices,
     })
 }
 
 /// Powers the adapter on or off.
 pub async fn power(bus: &Connection, adapter: &str, on: bool) -> Result<()> {
     set(bus, SERVICE, adapter, ADAPTER, "Powered", Value::from(on)).await
+}
+
+async fn call(bus: &Connection, path: &str, interface: &str, method: &str) -> Result<()> {
+    bus.call_method(Some(SERVICE), path, Some(interface), method, &())
+        .await?;
+    Ok(())
+}
+
+/// Looks for devices around (`on`), or stops looking.
+pub async fn discover(bus: &Connection, adapter: &str, on: bool) -> Result<()> {
+    let method = if on {
+        "StartDiscovery"
+    } else {
+        "StopDiscovery"
+    };
+    call(bus, adapter, ADAPTER, method).await
+}
+
+pub async fn connect(bus: &Connection, device: &str) -> Result<()> {
+    call(bus, device, DEVICE, "Connect").await
+}
+
+pub async fn disconnect(bus: &Connection, device: &str) -> Result<()> {
+    call(bus, device, DEVICE, "Disconnect").await
+}
+
+/// Stops a pairing under way.
+pub async fn cancel_pairing(bus: &Connection, device: &str) -> Result<()> {
+    call(bus, device, DEVICE, "CancelPairing").await
+}
+
+/// Forgets a paired device: BlueZ removes it and its keys.
+pub async fn forget(bus: &Connection, adapter: &str, device: &str) -> Result<()> {
+    let device = ObjectPath::try_from(device).map_err(|e| Problem::Failed(e.to_string()))?;
+    bus.call_method(
+        Some(SERVICE),
+        adapter,
+        Some(ADAPTER),
+        "RemoveDevice",
+        &(device,),
+    )
+    .await?;
+    Ok(())
+}
+
+/// What the agent asks the user while a device pairs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// Both sides show this code: « Confirmer » if they match.
+    Confirm(String),
+    /// The code to type on the device, then « Confirmer ».
+    Type(String),
+    /// The code the device asks to be typed on it; nothing to answer.
+    Show(String),
+    /// The device asks to pair, without a code.
+    Authorize,
+}
+
+/// The answer to a question of the agent, once: `true` for « Confirmer ». Dropped unanswered,
+/// it cancels.
+#[derive(Clone, Default)]
+pub struct Reply(Arc<Mutex<Option<oneshot::Sender<bool>>>>);
+
+impl Reply {
+    pub fn new(sender: oneshot::Sender<bool>) -> Self {
+        Self(Arc::new(Mutex::new(Some(sender))))
+    }
+
+    pub fn send(&self, yes: bool) {
+        let sender = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(sender) = sender {
+            let _ = sender.send(yes);
+        }
+    }
+}
+
+impl fmt::Debug for Reply {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Reply")
+    }
+}
+
+/// What happens while a device pairs.
+#[derive(Debug, Clone)]
+pub enum Pairing {
+    Ask(Asked, Reply),
+    /// BlueZ cancelled its question.
+    Canceled,
+    Done(Result<()>),
+}
+
+/// The errors BlueZ expects from an agent.
+#[derive(Debug, zbus::DBusError)]
+#[zbus(prefix = "org.bluez.Error")]
+enum Refusal {
+    Rejected,
+    Canceled,
+}
+
+/// The agent of the bar: each question goes to the panel, and waits for its answer there.
+struct Agent {
+    events: mpsc::UnboundedSender<Pairing>,
+    device: String,
+}
+
+impl Agent {
+    async fn ask(&self, asked: Asked) -> std::result::Result<(), Refusal> {
+        let (sender, answer) = oneshot::channel();
+        self.events
+            .unbounded_send(Pairing::Ask(asked, Reply::new(sender)))
+            .map_err(|_| Refusal::Canceled)?;
+        match answer.await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(Refusal::Rejected),
+            Err(_) => Err(Refusal::Canceled),
+        }
+    }
+
+    fn show(&self, code: String) {
+        let _ = self
+            .events
+            .unbounded_send(Pairing::Ask(Asked::Show(code), Reply::default()));
+    }
+}
+
+/// A code of six digits, from the kernel's random numbers.
+fn fresh_code() -> u32 {
+    use std::io::Read as _;
+    let mut bytes = [0u8; 4];
+    let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
+    if read.is_err() {
+        tracing::warn!("no random numbers: the pairing code is drawn from the clock");
+        bytes = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or_default()
+            .to_le_bytes();
+    }
+    u32::from_le_bytes(bytes) % 1_000_000
+}
+
+fn code(passkey: u32) -> String {
+    format!("{passkey:06}")
+}
+
+#[zbus::interface(name = "org.bluez.Agent1")]
+impl Agent {
+    fn release(&self) {}
+
+    async fn request_pin_code(
+        &self,
+        _device: OwnedObjectPath,
+    ) -> std::result::Result<String, Refusal> {
+        let pin = code(fresh_code());
+        self.ask(Asked::Type(pin.clone())).await?;
+        Ok(pin)
+    }
+
+    fn display_pin_code(&self, _device: OwnedObjectPath, pincode: String) {
+        self.show(pincode);
+    }
+
+    async fn request_passkey(&self, _device: OwnedObjectPath) -> std::result::Result<u32, Refusal> {
+        let passkey = fresh_code();
+        self.ask(Asked::Type(code(passkey))).await?;
+        Ok(passkey)
+    }
+
+    fn display_passkey(&self, _device: OwnedObjectPath, passkey: u32, _entered: u16) {
+        self.show(code(passkey));
+    }
+
+    async fn request_confirmation(
+        &self,
+        _device: OwnedObjectPath,
+        passkey: u32,
+    ) -> std::result::Result<(), Refusal> {
+        self.ask(Asked::Confirm(code(passkey))).await
+    }
+
+    async fn request_authorization(
+        &self,
+        _device: OwnedObjectPath,
+    ) -> std::result::Result<(), Refusal> {
+        self.ask(Asked::Authorize).await
+    }
+
+    /// Only the services of the device being paired.
+    fn authorize_service(
+        &self,
+        device: OwnedObjectPath,
+        _uuid: String,
+    ) -> std::result::Result<(), Refusal> {
+        if device.as_str() == self.device {
+            Ok(())
+        } else {
+            Err(Refusal::Rejected)
+        }
+    }
+
+    fn cancel(&self) {
+        let _ = self.events.unbounded_send(Pairing::Canceled);
+    }
+}
+
+/// Pairs `device`, then trusts it and connects it. The agent is served and registered for this
+/// pairing only; its questions come in the stream, which ends with `Done`. `bus` has the time
+/// limit of the actions: a device that does not answer ends in an error, never in a wait.
+pub fn pair(bus: Connection, device: String) -> BoxStream<'static, Pairing> {
+    let (events, questions) = mpsc::unbounded();
+    let done = events.clone();
+    let agent = Agent {
+        events,
+        device: device.clone(),
+    };
+    let work = async move {
+        let result = pair_with(&bus, &device, agent).await;
+        let _ = done.unbounded_send(Pairing::Done(result));
+    };
+    // The questions end once the agent and `done` are dropped: after `Done`.
+    let driven = work.into_stream().filter_map(|()| async { None });
+    stream::select(questions, driven).boxed()
+}
+
+async fn pair_with(bus: &Connection, device: &str, agent: Agent) -> Result<()> {
+    let server = bus.object_server();
+    server.at(AGENT_PATH, agent).await?;
+    let path = ObjectPath::from_static_str_unchecked(AGENT_PATH);
+    let registered = bus
+        .call_method(
+            Some(SERVICE),
+            "/org/bluez",
+            Some(AGENT_MANAGER),
+            "RegisterAgent",
+            &(&path, CAPABILITY),
+        )
+        .await;
+    let paired = match registered {
+        Ok(_) => pair_trust_connect(bus, device).await,
+        Err(error) => Err(Problem::from(error)),
+    };
+    let _ = bus
+        .call_method(
+            Some(SERVICE),
+            "/org/bluez",
+            Some(AGENT_MANAGER),
+            "UnregisterAgent",
+            &(&path,),
+        )
+        .await;
+    let _ = server.remove::<Agent, _>(AGENT_PATH).await;
+    paired
+}
+
+async fn pair_trust_connect(bus: &Connection, device: &str) -> Result<()> {
+    call(bus, device, DEVICE, "Pair").await?;
+    set(bus, SERVICE, device, DEVICE, "Trusted", Value::from(true)).await?;
+    connect(bus, device).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_kind_of_a_device_comes_from_its_icon() {
+        assert_eq!(Kind::of("audio-headset"), Kind::Audio);
+        assert_eq!(Kind::of("input-mouse"), Kind::Mouse);
+        assert_eq!(Kind::of("input-keyboard"), Kind::Keyboard);
+        assert_eq!(Kind::of("phone"), Kind::Phone);
+        assert_eq!(Kind::of(""), Kind::Other);
+        assert_eq!(code(42), "000042");
+        assert!(fresh_code() < 1_000_000);
+    }
+
+    #[test]
+    fn a_reply_answers_once_and_a_dropped_one_cancels() {
+        let (sender, answer) = oneshot::channel();
+        let reply = Reply::new(sender);
+        reply.send(true);
+        reply.send(false);
+        assert_eq!(iced::futures::executor::block_on(answer), Ok(true));
+        let (sender, answer) = oneshot::channel::<bool>();
+        drop(Reply::new(sender));
+        assert!(iced::futures::executor::block_on(answer).is_err());
+    }
 }

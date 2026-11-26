@@ -125,6 +125,9 @@ pub const SEGMENT_GAP: f32 = 2.0;
 pub const SEGMENT_HEIGHT: f32 = 30.0;
 pub const SEGMENT_RADIUS: f32 = 8.0;
 pub const SEGMENTED_RADIUS: f32 = 11.0;
+/// The code a Bluetooth device pairs with, in the question of the agent (D-20d).
+pub const CODE_SIZE: f32 = typography::TITLE_SMALL_SIZE + 5.0;
+
 /// The user row: the room under the line above it, the round buttons and their gap.
 pub const FOOTER_GAP: f32 = 12.0;
 pub const ROUND_BUTTON: f32 = 34.0;
@@ -150,10 +153,16 @@ pub enum Glyph {
     Reboot,
     PowerOff,
     Padlock,
+    /// The kinds of Bluetooth devices (D-20d).
+    Headphones,
+    Mouse,
+    Keyboard,
+    Phone,
+    Computer,
 }
 
 impl Glyph {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::Wifi,
         Self::Bluetooth,
         Self::Moon,
@@ -167,6 +176,11 @@ impl Glyph {
         Self::Reboot,
         Self::PowerOff,
         Self::Padlock,
+        Self::Headphones,
+        Self::Mouse,
+        Self::Keyboard,
+        Self::Phone,
+        Self::Computer,
     ];
 
     /// Path on the 24 grid.
@@ -191,6 +205,17 @@ impl Glyph {
             Self::Reboot => Launcher::Reboot.path(),
             Self::PowerOff => Launcher::PowerOff.path(),
             Self::Padlock => Icon::Lock.path(),
+            Self::Headphones => {
+                "M4 15v-3a8 8 0 0 1 16 0v3M4 15h3v5H5a1 1 0 0 1-1-1zM20 15h-3v5h2a1 1 0 0 0 1-1z"
+            }
+            Self::Mouse => "M12 3a6 6 0 0 0-6 6v6a6 6 0 0 0 12 0V9a6 6 0 0 0-6-6zM12 7v3",
+            Self::Keyboard => {
+                "M3 7h18v10H3zM6.5 10h.01M9.5 10h.01M12.5 10h.01M15.5 10h.01M17.5 10h.01M8 14h8"
+            }
+            Self::Phone => {
+                "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2"
+            }
+            Self::Computer => "M4 5h16v10H4zM2 19h20",
         }
     }
 
@@ -355,6 +380,46 @@ pub mod text {
             (h, 0) => format!("{h} h"),
             (h, m) => format!("{h} h {m:02}"),
         }
+    }
+
+    // The Bluetooth devices (D-20d).
+    pub const BLUETOOTH_DEVICES: &str = "Appareils Bluetooth";
+    pub const MY_DEVICES: &str = "Mes appareils";
+    pub const OTHER_DEVICES: &str = "Autres appareils";
+    pub const SEARCHING: &str = "Recherche…";
+    pub const NO_DEVICE: &str = "Aucun appareil à proximité.";
+    pub const BLUETOOTH_OFF_LINE: &str = "Le Bluetooth est coupé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const PAIRING: &str = "Appairage…";
+    pub const CONFIRM_BUTTON: &str = "Confirmer";
+    pub const CANCEL: &str = "Annuler";
+    pub const FORGET: &str = "Oublier";
+
+    /// The battery of a device, after its state: « Connecté · 80 % ».
+    pub fn device_line(connected: bool, battery: Option<u8>) -> String {
+        let state = if connected { CONNECTED } else { "" };
+        match battery {
+            Some(level) if connected => format!("{state} · {}", crate::strings::percent(level)),
+            Some(level) => crate::strings::percent(level),
+            None => state.to_owned(),
+        }
+    }
+
+    /// What the panel says while a device pairs, and the code it shows.
+    pub fn confirm_code(name: &str) -> String {
+        format!("{name} affiche-t-il ce code ?")
+    }
+
+    pub fn type_code(name: &str) -> String {
+        format!("Tape ce code sur {name}, puis Entrée.")
+    }
+
+    pub fn authorize(name: &str) -> String {
+        format!("Appairer {name} ?")
+    }
+
+    pub fn forget_question(name: &str) -> String {
+        format!("Oublier {name} ? Il faudra l’appairer de nouveau.")
     }
 
     /// Bluetooth devices connected.
@@ -837,6 +902,53 @@ mod styles {
                 ..button::Style::default()
             }
         }
+    }
+
+    /// A Bluetooth device of the list (D-20d), as a menu entry: its glyph and its name, its
+    /// state on the right (« Connecté · 80 % »), then `more` (« Oublier »). `on_press`
+    /// connects, disconnects or pairs it.
+    pub fn device_row<'a, Message: Clone + 'a>(
+        glyph_of: Glyph,
+        name: &'a str,
+        line: String,
+        on_press: Option<Message>,
+        more: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let p = crate::color::palette();
+        let start = iced::widget::row![
+            glyph(glyph_of, p.text_secondary),
+            crate::component::body(name).wrapping(text::Wrapping::None),
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(iced::Alignment::Center);
+        let end = text(line)
+            .font(typography::UI)
+            .size(typography::SMALL_SIZE)
+            .color(p.text_tertiary)
+            .wrapping(text::Wrapping::None);
+        let content = iced::widget::row![container(start).width(Length::Fill).clip(true), end]
+            .spacing(metrics::GAP_INLINE)
+            .align_y(iced::Alignment::Center)
+            .height(Length::Fill);
+        let mut entry = Control::new(
+            content,
+            theme::menu_item,
+            on_press,
+            metrics::MENU_ITEM_RADIUS,
+        );
+        entry.button = entry
+            .button
+            .width(Length::Fill)
+            .height(metrics::MENU_ITEM_HEIGHT)
+            .padding([0.0, metrics::MENU_ITEM_PADDING]);
+        let mut line = iced::widget::Row::new()
+            .push(entry)
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(iced::Alignment::Center);
+        if let Some(more) = more {
+            line = line.push(more);
+        }
+        line.into()
     }
 
     /// A button of the user row (« Verrouiller », « Éteindre »…). `label` names it.
