@@ -7,6 +7,7 @@ pub mod app;
 pub mod config;
 pub mod drag;
 pub mod entry;
+pub mod hide;
 pub mod icons;
 pub mod items;
 pub mod launch;
@@ -24,7 +25,7 @@ use iced::{Settings, Size};
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, Margin};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
-use sherlock_ui::{color, dock, theme, typography};
+use sherlock_ui::{color, theme, typography};
 
 use app::{Dock, Message, Sources};
 use entry::Catalog;
@@ -34,34 +35,41 @@ use layout::Geometry;
 /// Name of the layer-shell surface, readable by the compositor.
 const NAMESPACE: &str = "dock";
 
-/// Surface settings for a dock on `geometry.position`: anchored to that edge only, so
-/// centered along it, 8 away from it. The surface is deeper than the bar, for the magnified
-/// icons and the label; the exclusive zone is the bar's thickness, so maximized windows stop
-/// just past it. The keyboard comes on a click.
+/// Surface settings for a dock on `geometry.position`, shown: anchored to that edge only, so
+/// centered along it, against it; the bar is drawn 8 away from the edge, inside the surface
+/// (`Geometry::gap`). The surface is deeper than the bar, for the magnified icons and the
+/// label; the exclusive zone is the gap and the bar's thickness, so maximized windows stop just
+/// past it. The keyboard comes on a click. A hiding dock changes the margin and the zone
+/// (`hide`).
 pub fn surface(geometry: Geometry, size: Size) -> LayerShellSettings {
-    let gap = dock::MARGIN_BOTTOM as i32;
-    let (anchor, margin) = match geometry.position {
-        Position::Bottom => (Anchor::Bottom, (0, 0, gap, 0)),
-        Position::Top => (Anchor::Top, (gap, 0, 0, 0)),
-        Position::Left => (Anchor::Left, (0, 0, 0, gap)),
-        Position::Right => (Anchor::Right, (0, gap, 0, 0)),
+    let anchor = match geometry.position {
+        Position::Bottom => Anchor::Bottom,
+        Position::Top => Anchor::Top,
+        Position::Left => Anchor::Left,
+        Position::Right => Anchor::Right,
     };
-    let (top, right, bottom, left) = margin;
     LayerShellSettings {
         anchor,
         layer: Layer::Top,
         size: LayerSize::px(size.width as u32, size.height as u32),
-        exclusive_zone: geometry.bar_thickness().round() as i32,
-        margin: Margin {
-            top,
-            right,
-            bottom,
-            left,
-        },
+        exclusive_zone: (geometry.bar_thickness() + geometry.gap).round() as i32,
+        margin: margin(geometry.position, 0),
         keyboard_interactivity: KeyboardInteractivity::OnDemand,
         start_mode: StartMode::Active,
         ..LayerShellSettings::default()
     }
+}
+
+/// The margin that puts the surface `distance` away from the `position` edge.
+pub fn margin(position: Position, distance: i32) -> Margin {
+    let mut margin = Margin::default();
+    match position {
+        Position::Bottom => margin.bottom = distance,
+        Position::Top => margin.top = distance,
+        Position::Left => margin.left = distance,
+        Position::Right => margin.right = distance,
+    }
+    margin
 }
 
 /// iced settings: sherlock-ui fonts and interface text size.
@@ -106,7 +114,7 @@ impl Sources {
             data_dirs,
             home,
             gtk_theme,
-            control: std::sync::Arc::new(windows::WlrControl),
+            control: std::sync::Arc::new(windows::Auto),
         }
     }
 }
@@ -119,8 +127,10 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
     if let Some(path) = appearance_config::path() {
         color::set_active(appearance_config::theme_now(&path));
     }
-    let dock = Dock::new(Sources::load());
-    let layer = surface(dock.geometry, dock.surface_size);
+    // iced_exwlshell reports there the screen of the surface.
+    let (broadcast, screens) = iced_exwlshell::shell::channel();
+    let dock = Dock::new(Sources::load()).with_screens(screens.clone());
+    let layer = dock.layer_settings();
     // The daemon wants a boot function it may call again: the first dock is handed over once.
     let first = std::sync::Mutex::new(Some(dock));
     let boot = move || {
@@ -128,7 +138,7 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
             .lock()
             .ok()
             .and_then(|mut d| d.take())
-            .unwrap_or_else(|| Dock::new(Sources::load()));
+            .unwrap_or_else(|| Dock::new(Sources::load()).with_screens(screens.clone()));
         (dock, iced::Task::none())
     };
     iced_exwlshell::daemon(boot, namespace, Dock::update, Dock::view)
@@ -144,6 +154,7 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         .settings(settings())
         .wl_settings(ExWlSettings {
             layer_settings: layer,
+            shell_broadcast: broadcast,
             ..ExWlSettings::default()
         })
         .run()

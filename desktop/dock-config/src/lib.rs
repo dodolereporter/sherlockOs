@@ -9,7 +9,7 @@
 //! IconSize=52
 //! Magnification=true
 //! MagnificationFactor=1.7
-//! AutoHide=never
+//! AutoHide=smart
 //! Position=bottom
 //! ```
 //!
@@ -70,11 +70,11 @@ impl Position {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AutoHide {
     /// Always shown, with its exclusive zone.
-    #[default]
     Never,
     /// Hidden until the pointer touches its edge.
     Always,
-    /// Hidden only while a window overlaps it.
+    /// Hidden only while a maximized or fullscreen window is on its screen.
+    #[default]
     Smart,
 }
 
@@ -135,7 +135,7 @@ impl Default for DockConfig {
             icon_size: metrics::DOCK_ICON,
             magnification: true,
             magnification_factor: metrics::DOCK_MAGNIFICATION,
-            auto_hide: AutoHide::Never,
+            auto_hide: AutoHide::Smart,
             position: Position::Bottom,
             file: KeyFile::default(),
         }
@@ -427,7 +427,7 @@ mod tests {
     fn every_setting_is_read() {
         let (config, problems) = DockConfig::parse(
             "[Dock]\nPinned=a.desktop;b;\nIconTheme=breeze\nIconSize=64\nMagnification=false\n\
-             MagnificationFactor=1.5\nAutoHide=Smart\nPosition=left\n",
+             MagnificationFactor=1.5\nAutoHide=Always\nPosition=left\n",
         );
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(config.pinned, Some(vec!["a".to_owned(), "b".to_owned()]));
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(config.icon_size, 64.0);
         assert!(!config.magnification);
         assert_eq!(config.magnification_factor, 1.5);
-        assert_eq!(config.auto_hide, AutoHide::Smart);
+        assert_eq!(config.auto_hide, AutoHide::Always);
         assert_eq!(config.position, Position::Left);
     }
 
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(config.icon_size, 52.0);
         assert!(config.magnification);
         assert_eq!(config.magnification_factor, 1.7);
-        assert_eq!(config.auto_hide, AutoHide::Never);
+        assert_eq!(config.auto_hide, AutoHide::Smart);
         assert_eq!(config.position, Position::Bottom);
         let keys: Vec<&str> = problems.iter().map(|p| p.key).collect();
         assert_eq!(

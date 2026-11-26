@@ -322,7 +322,7 @@ fn a_new_configuration_moves_and_resizes_the_dock() {
     assert_ne!(dock.surface_size, bottom);
     let layout = dock.layout(Duration::ZERO);
     assert_eq!(layout.icons[0].width, 40.0);
-    assert_eq!(layout.bar.x, 0.0, "against the left edge");
+    assert_eq!(layout.bar.x, 8.0, "the gap of 8 from the left edge");
     // Without magnification nothing grows under the pointer.
     let mut config = DockConfig::default();
     config.magnification = false;

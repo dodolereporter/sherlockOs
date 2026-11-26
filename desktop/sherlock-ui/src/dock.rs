@@ -98,6 +98,17 @@ pub const DRAG_THRESHOLD: f32 = 4.0;
 /// Opacity of an icon dragged out of the dock, where letting it go removes it.
 pub const DRAG_OUT_OPACITY: f32 = 0.5;
 
+// Hiding (batch D-18c2): `AutoHide`, `docs/dock.md`.
+
+/// Band along the screen edge where a hidden dock still takes the pointer, to come back.
+pub const HIDE_STRIP: f32 = 2.0;
+/// A dock that came back over a maximized window hides again this long after the pointer left
+/// it.
+pub const HIDE_DELAY: Duration = Duration::from_millis(300);
+/// The dock sliding off the screen and back: it answers a window being maximized or restored,
+/// like the top bar, so it moves with the same spring.
+pub const HIDE_SPRING: Spring = motion::TOP_BAR_SPRING;
+
 // Colors. The dock bar, its label, dots and separator take the palette shown
 // (`theme::palette`); the tiles keep their colors in both themes (`docs/design/THEME-CLAIR.md`).
 

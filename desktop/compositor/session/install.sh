@@ -6,8 +6,10 @@ set -eu
 repo="${1:-$PWD}"
 dest=/usr/local/libexec/nom-os
 sessions=/usr/share/wayland-sessions
+applications=/usr/local/share/applications
+programs="compositor bar dock launcher notifications evidence"
 
-for program in compositor bar dock; do
+for program in $programs; do
 	if [ ! -x "$repo/target/release/$program" ]; then
 		echo "missing $repo/target/release/$program: cargo build --release -p $program" >&2
 		exit 1
@@ -19,13 +21,14 @@ q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
 cat <<EOF
 # Run as root to install the NOM_OS session (shown by the login screen as "NOM_OS"):
 
-sudo install -d $dest
-sudo install -m 755 $q/target/release/compositor $q/target/release/bar $q/target/release/dock $dest/
+sudo install -d $dest $applications
+sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
 sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
+sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 
 # To remove it:
-#   sudo rm -r $dest $sessions/sherlockos.desktop
+#   sudo rm -r $dest $sessions/sherlockos.desktop $applications/evidence.desktop
 EOF
 
 # The compositor needs libseat at run time (seatd or logind behind it). ldconfig is in the
