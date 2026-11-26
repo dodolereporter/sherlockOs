@@ -1,6 +1,6 @@
 //! Sound of the default output, read with the `pactl` command (PulseAudio or PipeWire).
 
-use super::{Monitor, Source, SourceError, run};
+use super::{Monitor, Source, SourceError};
 
 pub use system_services::audio::Sound;
 
@@ -22,9 +22,11 @@ impl Default for Pactl {
         Self {
             // Only changes of an output or of the server (default output) matter, not those of
             // application streams.
-            monitor: Monitor::new("pactl", &["subscribe"], |line| {
-                line.contains(" on sink #") || line.contains(" on server")
-            }),
+            monitor: Monitor::new(
+                "pactl",
+                &["subscribe"],
+                system_services::watch::sound_changed,
+            ),
         }
     }
 }
@@ -32,10 +34,16 @@ impl Default for Pactl {
 impl Source for Pactl {
     type State = Sound;
 
+    /// Read through `system_services`, each call killed past its time limit: a sound server
+    /// that hangs never holds the icon (lot D-35d).
     fn read(&mut self) -> Result<Sound, SourceError> {
-        let volume = run("pactl", &["get-sink-volume", "@DEFAULT_SINK@"])?;
-        let mute = run("pactl", &["get-sink-mute", "@DEFAULT_SINK@"])?;
-        parse(&format!("{volume}{mute}"))
+        let pactl = system_services::audio::Pactl::default();
+        pactl
+            .sound(system_services::audio::Device::Output)
+            .map_err(|e| SourceError::Parse {
+                command: "pactl",
+                detail: e.to_string(),
+            })
     }
 
     fn wait(&mut self) -> bool {

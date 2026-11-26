@@ -1,6 +1,6 @@
 [package]
 name = "system-services"
-description = "Sound, brightness and media players, shared by the quick settings and the media keys"
+description = "Sound, brightness, keyboard backlight and media players, shared by the quick settings and the media keys"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,9 @@ publish.workspace = true
 # and features the bar, the notification daemon and Evidence pin (blocking API, its own small
 # executor, no tokio).
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# poll(2) and inotify(7) on the backlight's file, prctl(PR_SET_PDEATHSIG) for `pactl subscribe`
+# (lot D-35d): the version the bar already pins.
+libc = "=0.2.191"
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 

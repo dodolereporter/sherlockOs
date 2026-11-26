@@ -19,6 +19,7 @@ use bar::system::Problem;
 use bar::system::audio::Output;
 use bar::system::backlight::Backlight;
 use bar::system::bluetooth::Bluetooth;
+use bar::system::keyboard::{KeyboardLight, Through};
 use bar::system::network::{Network as WifiNetwork, Security, Wifi};
 use bar::system::power::{Power, Profile};
 use iced_test::simulator::Simulator;
@@ -339,7 +340,8 @@ fn board_quick(state: &mut Bar) {
 }
 
 /// The panels in each theme: `calendar` (the calendar over the board's notifications),
-/// `control-centre` (the board's quick settings), `control-centre-empty` (no service: what a
+/// `control-centre` (the board's quick settings), `control-centre-keyboard` (the same with a
+/// keyboard backlight), `control-centre-empty` (no service: what a
 /// machine without NetworkManager, BlueZ, backlight nor power-profiles-daemon shows),
 /// `wifi-networks` (the network page, a password asked), then their `-light` versions.
 #[test]
@@ -374,6 +376,19 @@ fn the_panels_render_in_both_themes() {
             board_quick(&mut state);
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("control-centre{suffix}")));
+
+            // A machine with a keyboard backlight: its slider under the brightness (D-35d).
+            let light = KeyboardLight {
+                brightness: 1,
+                max: 3,
+                through: Through::UPower,
+            };
+            let _ = state
+                .quick
+                .update(quick::Message::Keyboard(Load::Ready(light)));
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("control-centre-keyboard{suffix}")));
+            state.quick.keyboard = Load::Loading;
 
             let _ = state.quick.update(quick::Message::ShowNetworks(true));
             // The page slid in.
