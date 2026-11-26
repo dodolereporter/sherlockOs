@@ -179,25 +179,36 @@ there (`shell_protocol::socket_from_env`), on the source's thread, and binds:
 
 - **`ext-workspace-v1`**: the groups and the screens they hold, each workspace with its `id`,
   `name`, `coordinates` (its order) and `active` state. The bar shows the group holding the
-  screen it sits on, the first group when it does not know its screen yet. Workspaces are
-  shared by every screen for now: a single group.
+  screen it sits on, the first group while it does not know its screen yet, and none for a
+  screen no group holds. Workspaces are shared by every screen for now: a single group.
 - **`sherlock_shell_v1`**: the windows, with their workspace and states, and per screen the
   `output` state (a maximized or fullscreen window is on it). A workspace with no window has a
   bare chip, without the veil; minimized windows count. The name on the left is the title of
   the `activated` window, its `app_id` when it has no title, cut where the left half of the
-  bar ends.
+  bar ends. A window keeps its states on a workspace that is not shown: only an active window
+  of an active workspace names the application.
 
-A click on a workspace (or Enter on its ringed chip) sends `activate` then `commit`, on a
-second connection of its own, so the watching one stays blocked on its events: the bar
-changes when the compositor says the workspace changed, not before. The active workspace
-does nothing. A workspace named after its number shows the number alone.
+**Batches.** Each protocol's events stay pending until the `done` of that protocol's manager,
+which settles them; the bar only reads settled batches. A half sent batch of one protocol is
+never read because the other one ended a batch.
+
+A click on a workspace (or Enter on its ringed chip) sends `activate` then `commit` on the
+watching connection itself (`shell::Switcher`): requests can go from the interface thread
+while the source's thread waits for events, and nothing waits for the compositor, so a click
+never blocks, even on a compositor that hangs. The bar changes when the compositor says the
+workspace changed, not before. The active workspace does nothing. A workspace named after its
+number shows the number alone.
 
 The bar's own screen comes from iced_exwlshell (`shell_broadcast`, `WindowOutputChanged`): the
 `wl_output` name of its surface, the name both protocols use.
 
 **Elsewhere** (Plasma, another compositor, no shell socket), the bar logs it once at start,
 `placeholder workspaces, no active application`, with the reason, and keeps the
-`Placeholder` source: three numbered workspaces, the first one active, all veiled, no active
+`Placeholder` source. When the shell socket is missing or nobody listens on it yet, the
+source tries it again every 3 s (`shell::RETRY`), quietly: the unchanged placeholder is not
+sent again, so no frame is asked for; once the socket answers, the compositor's workspaces
+replace the placeholder. Any other error (the protocols not offered) stops the tries. The
+placeholder: three numbered workspaces, the first one active, all veiled, no active
 application, the bar always floating. A click is logged. The two variables force the
 placeholder even on our compositor, to compare with the design board:
 
@@ -345,11 +356,14 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Sources**: `watch` only sends changes; `Fixed` yields its state once.
 - **Placeholder workspaces** and **user name**; the group and the cover of each screen.
 - **Shell protocols** (`tests/shell.rs`): a fake compositor with three workspaces, two
-  screens, two windows (one active and maximized on `eDP-1`, one on workspace 3): the list,
-  names, active and empty workspaces, the active window's title; the bar attached on `eDP-1`
-  and floating on `DP-1`; a click names the workspace, `activate` then `commit` reach the
-  compositor, the bar sees the switch and floats again; without the protocols, the
-  placeholder.
+  screens, two windows (one active and maximized on `eDP-1`, one on workspace 3), driven by
+  commands from the test: the list, names, active and empty workspaces, the active window's
+  title; the bar attached on `eDP-1` and floating on `DP-1`; a click names the workspace,
+  `activate` then `commit` reach the compositor, the bar sees the switch, floats again and
+  loses the title of a window left on another workspace. A half batch of either protocol is
+  not read while the other one ends a batch; a window that closes, a workspace removed, a
+  compositor that goes. Without the protocols, the placeholder; a shell socket that appears
+  after start is picked up. Every wait fails the test after 5 s instead of hanging.
 - **Shape** (`shape.rs`): both geometries and their reserved height (46, 36), the clipped
   overshoot, the spring there and back, turned back halfway without a jump.
 - **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the

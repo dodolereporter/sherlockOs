@@ -83,13 +83,16 @@ impl Desktop {
         }
     }
 
-    /// The group of the screen `output`: the one holding it, the first one otherwise.
+    /// The group of the screen `output`: the one holding it. A bar that does not know its
+    /// screen yet takes the first group; a screen no group holds has none.
     pub fn group(&self, output: Option<&str>) -> Option<&Group> {
-        let holds = |g: &&Group| output.is_some_and(|o| g.outputs.iter().any(|n| n == o));
-        self.groups
-            .iter()
-            .find(holds)
-            .or_else(|| self.groups.first())
+        match output {
+            Some(output) => self
+                .groups
+                .iter()
+                .find(|g| g.outputs.iter().any(|n| n == output)),
+            None => self.groups.first(),
+        }
     }
 
     /// Whether a maximized or fullscreen window is on the screen `output`. A bar that does not
@@ -178,11 +181,8 @@ mod tests {
         };
         let id = |output| d.group(output).map(|g| g.workspaces[0].id.as_str());
         assert_eq!(id(Some("eDP-1")), Some("b"));
-        assert_eq!(
-            id(Some("HDMI-A-1")),
-            Some("a"),
-            "unknown screen: the first group"
-        );
+        assert_eq!(id(Some("HDMI-A-1")), None, "no group holds that screen");
+        assert_eq!(id(None), Some("a"), "screen not known yet: the first group");
         assert!(d.covers(Some("eDP-1")) && !d.covers(Some("DP-1")));
         assert!(
             !d.covers(None),

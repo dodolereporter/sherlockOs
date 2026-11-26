@@ -3,13 +3,15 @@
 //! maximized window covers. Our compositor offers both on its shell socket only, next to the
 //! session's (`shell_protocol::socket_from_env`): the bar opens a connection of its own there.
 //!
-//! Events are applied as they come; a `done` of either manager ends a batch, after which the
-//! state is read.
+//! Each protocol's events are kept pending, then settled at the `done` of that protocol's
+//! manager: the bar only ever reads settled batches, never half of one.
 
 use std::collections::BTreeSet;
-use std::io;
+use std::io::{self, ErrorKind};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use shell_protocol::client::sherlock_shell_manager_v1::{self as shell, SherlockShellManagerV1};
 use shell_protocol::client::sherlock_shell_toplevel_v1::{
@@ -33,6 +35,10 @@ use super::{Source, SourceError};
 
 /// `wl_output` version that gives the screen's name.
 const OUTPUT_VERSION: u32 = 4;
+/// `wl_output` version that has `release`.
+const OUTPUT_RELEASE: u32 = 3;
+/// Delay between two tries of a shell socket that does not exist yet.
+pub const RETRY: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShellError {
@@ -50,6 +56,14 @@ pub enum ShellError {
     Dispatch(#[from] DispatchError),
 }
 
+impl ShellError {
+    /// The shell socket is not there, or nobody listens on it yet: it may come later.
+    pub fn may_come(&self) -> bool {
+        matches!(self, Self::Socket { source, .. }
+            if matches!(source.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused))
+    }
+}
+
 /// A connection to the shell socket of the session.
 pub fn connect() -> Result<Connection, ShellError> {
     let path = shell_protocol::socket_from_env().ok_or(ShellError::NoSession)?;
@@ -58,11 +72,18 @@ pub fn connect() -> Result<Connection, ShellError> {
     Ok(Connection::from_socket(stream)?)
 }
 
+/// The workspaces of the last settled batch, by id, for `Switcher`.
+type Handles = Arc<Mutex<Vec<(String, ExtWorkspaceHandleV1)>>>;
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// The workspaces and windows of the compositor, kept up to date.
 pub struct Shell {
     queue: EventQueue<Objects>,
     objects: Objects,
-    manager: ExtWorkspaceManagerV1,
+    switcher: Switcher,
 }
 
 impl Shell {
@@ -80,10 +101,17 @@ impl Shell {
         let manager = globals.bind(&handle, 1..=1, ())?;
         let _: SherlockShellManagerV1 = globals.bind(&handle, 1..=1, ())?;
         queue.roundtrip(&mut objects)?;
+        // The first batches are read right away: `wait` waits for the next ones.
+        objects.changed = false;
+        let switcher = Switcher {
+            connection,
+            manager,
+            handles: Arc::clone(&objects.handles),
+        };
         Ok(Self {
             queue,
             objects,
-            manager,
+            switcher,
         })
     }
 
@@ -91,7 +119,12 @@ impl Shell {
         self.objects.desktop()
     }
 
-    /// Waits for the next batch of changes. `false` once the compositor is gone.
+    /// Switches workspaces on this connection, from any thread.
+    pub fn switcher(&self) -> Switcher {
+        self.switcher.clone()
+    }
+
+    /// Waits for the next settled batch. `false` once the compositor is gone.
     pub fn wait(&mut self) -> bool {
         loop {
             if let Err(error) = self.queue.blocking_dispatch(&mut self.objects) {
@@ -103,57 +136,86 @@ impl Shell {
             }
         }
     }
+}
 
-    /// Makes the workspace `id` active: `activate`, then `commit`. `false` for an unknown id.
-    pub fn activate(&mut self, id: &str) -> Result<bool, ShellError> {
-        let Some(found) = self.objects.workspaces.iter().find(|w| w.id == id) else {
-            return Ok(false);
+/// Sends `activate` then `commit` on the watching connection. Requests can go from any thread
+/// while the watching one waits for events, and nothing waits for the compositor: a click never
+/// blocks, even on a compositor that hangs.
+#[derive(Clone)]
+pub struct Switcher {
+    connection: Connection,
+    manager: ExtWorkspaceManagerV1,
+    handles: Handles,
+}
+
+impl Switcher {
+    /// Asks for the workspace `id`. `false` for an unknown id or a lost connection.
+    pub fn activate(&self, id: &str) -> bool {
+        let handles = lock(&self.handles);
+        let Some((_, handle)) = handles.iter().find(|(known, _)| known == id) else {
+            return false;
         };
-        found.handle.activate();
+        handle.activate();
         self.manager.commit();
-        // The compositor has the requests before the connection goes.
-        self.queue.roundtrip(&mut self.objects)?;
-        Ok(true)
+        match self.connection.flush() {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(id, %error, "cannot switch workspaces");
+                false
+            }
+        }
     }
 }
 
-/// Switches to the workspace `id`, on a thread and a connection of its own: the watching
-/// connection stays on its thread, blocked waiting for events.
-pub fn switch_to(id: String) {
-    let spawned = std::thread::Builder::new()
-        .name(String::from("workspace-switch"))
-        .spawn(move || {
-            match connect()
-                .and_then(Shell::with_connection)
-                .and_then(|mut s| s.activate(&id))
-            {
-                Ok(true) => tracing::debug!(id, "workspace asked"),
-                Ok(false) => tracing::warn!(id, "no such workspace"),
-                Err(error) => tracing::warn!(id, %error, "cannot switch workspaces"),
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::warn!(%error, "cannot start the workspace switch");
+/// The switcher of the source the bar watches, once connected.
+static SWITCHER: Mutex<Option<Switcher>> = Mutex::new(None);
+
+/// Switches to the workspace `id` through the bar's connection.
+pub fn switch_to(id: &str) {
+    match lock(&SWITCHER).as_ref() {
+        Some(switcher) if switcher.activate(id) => tracing::debug!(id, "workspace asked"),
+        Some(_) => tracing::warn!(id, "no such workspace"),
+        None => tracing::warn!(id, "not connected to the compositor's workspaces"),
     }
 }
+
+/// How `Auto` reaches the compositor.
+type Open = Box<dyn FnMut() -> Result<Shell, ShellError> + Send>;
 
 /// The source of the bar: the compositor's shell protocols, or the placeholder when they are
 /// not offered or when its variables are set. It connects on the source's thread, at the first
-/// read, with `open`.
+/// read. When the shell socket is not there yet, it tries again every `retry`, quietly: an
+/// unchanged placeholder sends nothing, and so asks for no frame.
 pub struct Auto {
-    open: fn() -> Result<Shell, ShellError>,
+    open: Open,
+    retry: Duration,
     source: Option<Result<Shell, Placeholder>>,
+    /// The shell socket may still come.
+    retrying: bool,
 }
 
 impl Auto {
-    pub fn new(open: fn() -> Result<Shell, ShellError>) -> Self {
-        Self { open, source: None }
+    pub fn new(
+        open: impl FnMut() -> Result<Shell, ShellError> + Send + 'static,
+        retry: Duration,
+    ) -> Self {
+        Self {
+            open: Box::new(open),
+            retry,
+            source: None,
+            retrying: false,
+        }
+    }
+
+    fn connected(&mut self, shell: Shell) {
+        *lock(&SWITCHER) = Some(shell.switcher());
+        self.source = Some(Ok(shell));
     }
 }
 
 impl Default for Auto {
     fn default() -> Self {
-        Self::new(|| Shell::with_connection(connect()?))
+        Self::new(|| Shell::with_connection(connect()?), RETRY)
     }
 }
 
@@ -161,33 +223,53 @@ impl Source for Auto {
     type State = Desktop;
 
     fn read(&mut self) -> Result<Desktop, SourceError> {
-        let open = self.open;
-        let source = self.source.get_or_insert_with(|| {
+        if self.source.is_none() {
             if Placeholder::asked() {
                 tracing::info!("workspaces from the placeholder variables");
-                return Err(Placeholder);
+                self.source = Some(Err(Placeholder));
+            } else {
+                match (self.open)() {
+                    Ok(shell) => self.connected(shell),
+                    Err(error) => {
+                        self.retrying = error.may_come();
+                        let retrying = self.retrying;
+                        tracing::info!(%error, retrying, "placeholder workspaces, no active application");
+                        self.source = Some(Err(Placeholder));
+                    }
+                }
             }
-            open()
-                .inspect_err(|error| {
-                    tracing::info!(%error, "placeholder workspaces, no active application");
-                })
-                .map_err(|_| Placeholder)
-        });
-        match source {
-            Ok(shell) => Ok(shell.desktop()),
-            Err(placeholder) => placeholder.read(),
+        }
+        match &mut self.source {
+            Some(Ok(shell)) => Ok(shell.desktop()),
+            _ => Placeholder.read(),
         }
     }
 
     fn wait(&mut self) -> bool {
         match &mut self.source {
             Some(Ok(shell)) => shell.wait(),
+            Some(Err(_)) if self.retrying => {
+                std::thread::sleep(self.retry);
+                match (self.open)() {
+                    Ok(shell) => {
+                        tracing::info!("workspaces and windows from the compositor");
+                        self.connected(shell);
+                    }
+                    Err(error) if error.may_come() => {}
+                    Err(error) => {
+                        tracing::info!(%error, "placeholder workspaces for good");
+                        self.retrying = false;
+                    }
+                }
+                true
+            }
             _ => false,
         }
     }
 }
 
-/// The protocol objects of the connection and what they said.
+/// The protocol objects of the connection: what they said since the last `done` of their
+/// protocol (pending), and the batches settled at those `done` events.
 #[derive(Default)]
 struct Objects {
     /// Each screen: its registry name, object and name.
@@ -196,7 +278,14 @@ struct Objects {
     workspaces: Vec<WorkspaceObject>,
     windows: Vec<Window>,
     covered: BTreeSet<String>,
-    /// A batch ended since the last `wait`.
+    /// Settled by `ext-workspace-v1`: the groups, window counts left out.
+    settled_groups: Vec<Group>,
+    /// Settled by `ext-workspace-v1`, for `Switcher`.
+    handles: Handles,
+    /// Settled by `sherlock_shell_v1`: each window's workspace, name, and whether it is active.
+    settled_windows: Vec<(String, String, bool)>,
+    settled_covered: BTreeSet<String>,
+    /// A batch was settled since the last `wait`.
     changed: bool,
 }
 
@@ -234,39 +323,79 @@ impl Objects {
         self.outputs.push((name, output, String::new()));
     }
 
-    fn desktop(&self) -> Desktop {
+    /// The `done` of `ext-workspace-v1`.
+    fn settle_workspaces(&mut self) {
         let output_name =
             |o: &WlOutput| self.outputs.iter().find(|e| &e.1 == o).map(|e| e.2.clone());
-        let groups = self.groups.iter().map(|g| {
-            let mut list: Vec<_> = self
-                .workspaces
-                .iter()
-                .filter(|w| g.workspaces.contains(&w.handle))
-                .collect();
-            list.sort_by(|a, b| a.coordinates.cmp(&b.coordinates));
-            let workspaces = list.iter().enumerate().map(|(i, w)| Workspace {
-                id: w.id.clone(),
-                name: Some(w.name.clone()).filter(|n| !n.is_empty() && *n != (i + 1).to_string()),
-                active: w.active,
-                windows: Some(self.windows.iter().filter(|t| t.workspace == w.id).count()),
-            });
-            Group {
-                outputs: g.outputs.iter().filter_map(output_name).collect(),
-                workspaces: workspaces.collect(),
+        let mut handles = Vec::new();
+        self.settled_groups = self
+            .groups
+            .iter()
+            .map(|g| {
+                let mut list: Vec<_> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| g.workspaces.contains(&w.handle))
+                    .collect();
+                list.sort_by(|a, b| a.coordinates.cmp(&b.coordinates));
+                handles.extend(list.iter().map(|w| (w.id.clone(), w.handle.clone())));
+                let workspaces = list.iter().enumerate().map(|(i, w)| Workspace {
+                    id: w.id.clone(),
+                    name: Some(w.name.clone())
+                        .filter(|n| !n.is_empty() && *n != (i + 1).to_string()),
+                    active: w.active,
+                    windows: None,
+                });
+                Group {
+                    outputs: g.outputs.iter().filter_map(output_name).collect(),
+                    workspaces: workspaces.collect(),
+                }
+            })
+            .collect();
+        *lock(&self.handles) = handles;
+        self.changed = true;
+    }
+
+    /// The `done` of `sherlock_shell_v1`.
+    fn settle_windows(&mut self) {
+        self.settled_windows = self
+            .windows
+            .iter()
+            .map(|w| {
+                let name = if w.title.trim().is_empty() {
+                    &w.app_id
+                } else {
+                    &w.title
+                };
+                (w.workspace.clone(), name.trim().to_owned(), w.activated)
+            })
+            .collect();
+        self.settled_covered = self.covered.clone();
+        self.changed = true;
+    }
+
+    fn desktop(&self) -> Desktop {
+        let mut groups = self.settled_groups.clone();
+        let mut active = BTreeSet::new();
+        for workspace in groups.iter_mut().flat_map(|g| &mut g.workspaces) {
+            let on = self.settled_windows.iter().filter(|w| w.0 == workspace.id);
+            workspace.windows = Some(on.count());
+            if workspace.active {
+                active.insert(workspace.id.as_str());
             }
-        });
-        let active = self.windows.iter().find(|w| w.activated);
-        let app = active.map(|w| {
-            if w.title.trim().is_empty() {
-                &w.app_id
-            } else {
-                &w.title
-            }
-        });
+        }
+        // A window keeps its states on a workspace that is not shown: only the active
+        // workspaces' active window names the application.
+        let app = self
+            .settled_windows
+            .iter()
+            .find(|w| w.2 && active.contains(w.0.as_str()))
+            .map(|w| w.1.clone())
+            .filter(|name| !name.is_empty());
         Desktop {
-            groups: groups.collect(),
-            app: app.map(|a| a.trim().to_owned()).filter(|a| !a.is_empty()),
-            covered: self.covered.clone(),
+            groups,
+            app,
+            covered: self.settled_covered.clone(),
             live: true,
         }
     }
@@ -298,7 +427,14 @@ impl Dispatch<WlRegistry, GlobalListContents> for Objects {
             } if interface == WlOutput::interface().name => {
                 state.bind_output(registry, name, version, qh);
             }
-            wl_registry::Event::GlobalRemove { name } => state.outputs.retain(|o| o.0 != name),
+            wl_registry::Event::GlobalRemove { name } => {
+                if let Some(index) = state.outputs.iter().position(|o| o.0 == name) {
+                    let (_, output, _) = state.outputs.remove(index);
+                    if output.version() >= OUTPUT_RELEASE {
+                        output.release();
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -345,7 +481,7 @@ impl Dispatch<ExtWorkspaceManagerV1, ()> for Objects {
                 coordinates: Vec::new(),
                 active: false,
             }),
-            workspaces::Event::Done => state.changed = true,
+            workspaces::Event::Done => state.settle_workspaces(),
             _ => {}
         }
     }
@@ -440,7 +576,7 @@ impl Dispatch<SherlockShellManagerV1, ()> for Objects {
             shell::Event::OutputRemoved { name } => {
                 state.covered.remove(&name);
             }
-            shell::Event::Done => state.changed = true,
+            shell::Event::Done => state.settle_windows(),
             _ => {}
         }
     }

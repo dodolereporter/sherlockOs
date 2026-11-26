@@ -179,7 +179,7 @@ impl Bar {
                 return self.close_menu();
             }
             Message::SelectWorkspace(index) => match self.to_activate(index) {
-                Some(id) => shell::switch_to(id.to_owned()),
+                Some(id) => shell::switch_to(id),
                 None if self.desktop.as_ref().is_some_and(|d| !d.live) => {
                     tracing::info!(index, "placeholder workspaces: nothing to switch");
                 }
@@ -212,6 +212,7 @@ impl Bar {
             }
             Message::Closed(id) => {
                 // The compositor closes the menu on a click elsewhere (popup_done).
+                self.outputs.remove(&id);
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
