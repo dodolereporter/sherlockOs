@@ -24,11 +24,15 @@ pub const SNAP_CORNER: i32 = 64;
 /// work area. The compositor's `--snap-gap` replaces it.
 pub const SNAP_GAP: i32 = 8;
 
-/// Background of the snap preview: that of an active entry.
-pub const SNAP_PREVIEW_FILL: Color = color::ACTIVE_ENTRY;
+/// Background of the snap preview: that of an active entry, in the palette shown.
+pub fn snap_preview_fill() -> Color {
+    color::palette().active_entry
+}
 
-/// Border of the snap preview.
-pub const SNAP_PREVIEW_BORDER: Color = color::ACCENT;
+/// Border of the snap preview: the green of the active state, in the palette shown.
+pub fn snap_preview_border() -> Color {
+    color::palette().accent
+}
 
 /// Width of the snap preview border.
 pub const SNAP_PREVIEW_BORDER_WIDTH: i32 = 2;

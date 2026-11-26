@@ -444,6 +444,7 @@ fn push_genie(
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
             shadow: Shadow::of(rect, view.scale),
+            color: sherlock_ui::color::palette().shadow.premultiplied(),
             radius,
             alpha: fade,
         });

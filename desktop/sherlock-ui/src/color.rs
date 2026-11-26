@@ -449,9 +449,8 @@ impl ThemeFade {
     }
 }
 
-/// Every color of a theme, named by its role. The module constants above are the dark values,
-/// kept for the compositor, which does not follow the theme yet (lot D-05c): new code reads
-/// `palette()`.
+/// Every color of a theme, named by its role. The module constants above are the dark values;
+/// code that draws reads `palette()`, which follows the theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub desktop: Color,

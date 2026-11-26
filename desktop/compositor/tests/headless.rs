@@ -1898,4 +1898,201 @@ mod tests {
         }
         color::set_active(Theme::Dark);
     }
+
+    /// The desktop of `h` drawn into a texture of `w` × `ht` with the software renderer, at the
+    /// compositor's time; its RGBA pixels, top row first.
+    fn software_frame(
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+        (scene, ids, textures): (
+            &compositor::render::Scene,
+            &mut compositor::damage::Ids,
+            &mut compositor::wallpaper::Textures,
+        ),
+        h: &mut Harness,
+        (w, ht): (i32, i32),
+    ) -> Vec<u8> {
+        use smithay::backend::{
+            allocator::Fourcc,
+            renderer::{
+                Bind as _, ExportMem as _, Offscreen as _, TextureMapping as _,
+                damage::OutputDamageTracker, gles::GlesTexture,
+            },
+        };
+        use smithay::utils::Transform;
+        let views = h.state.views();
+        let now = h.state.now();
+        let drawn = scene.screens(renderer, ids, &mut h.state, textures, &views, None, now);
+        let elements = drawn.0.into_iter().next().unwrap();
+        let mut texture: GlesTexture = renderer
+            .create_buffer(Fourcc::Abgr8888, (w, ht).into())
+            .unwrap();
+        let mut target = renderer.bind(&mut texture).unwrap();
+        let mut tracker = OutputDamageTracker::new((w, ht), 1.0, Transform::Normal);
+        let background = sherlock_ui::color::palette().desktop.premultiplied();
+        tracker
+            .render_output(renderer, &mut target, 0, &elements, background)
+            .unwrap();
+        let region = Rectangle::from_size((w, ht).into());
+        let mapping = renderer
+            .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+            .unwrap();
+        let pixels = renderer.map_texture(&mapping).unwrap().to_vec();
+        if mapping.flipped() {
+            return pixels;
+        }
+        // GL reads the rows from the bottom up.
+        pixels
+            .chunks(w as usize * 4)
+            .rev()
+            .flatten()
+            .copied()
+            .collect()
+    }
+
+    /// Captures of the desktop, dark then light, the change made by rewriting `Theme=` in the
+    /// appearance file while everything runs: the default wallpaper and its pendant, a
+    /// decorated window, and the real dock (`target/debug/dock`), hovered over Sherlock. The
+    /// scene of a screen as the real session draws it, into a texture with Mesa's software
+    /// renderer: `screenshots/desktop-dark.png`, then `desktop-light.png`.
+    #[test]
+    #[ignore = "needs Mesa's EGL and `cargo build -p dock`; writes the captures"]
+    fn captures_of_the_desktop_in_both_themes() {
+        use compositor::{damage::Ids, render::Scene, theme, wallpaper};
+        use sherlock_ui::color::{self, Theme};
+        use smithay::backend::{
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::gles::GlesRenderer,
+        };
+        use smithay::desktop::layer_map_for_output;
+        use std::{path::PathBuf, process::Command};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dock = root.join("target/debug/dock");
+        assert!(dock.is_file(), "build the dock first: cargo build -p dock");
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("desktop-captures");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("config/appearance")).unwrap();
+        let file = dir.join("config/appearance/appearance.conf");
+        let write_theme = |theme: &str| {
+            let new = file.with_extension("new");
+            std::fs::write(&new, format!("[Appearance]\nTheme={theme}\n")).unwrap();
+            std::fs::rename(&new, &file).unwrap();
+        };
+        write_theme("dark");
+        // The default pair, reduced from the originals to the screen.
+        let data = dir.join("data");
+        for id in ["first-clue", "first-clue-light"] {
+            let original = root.join(format!("assets/wallpapers/{id}.jpg"));
+            let image = image::open(&original).unwrap().thumbnail(1067, 600);
+            let folder = data.join("wallpapers").join(id);
+            std::fs::create_dir_all(&folder).unwrap();
+            let size = format!("{}x{}.png", image.width(), image.height());
+            image.to_rgb8().save(folder.join(size)).unwrap();
+        }
+
+        let mut device = EGLDevice::enumerate().unwrap();
+        let device = device
+            .find(EGLDevice::is_software)
+            .expect("no software EGL device");
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let scene = Scene::new(&mut renderer).unwrap();
+        let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+
+        let mut h = Harness::start();
+        let handle = h.event_loop.handle();
+        theme::follow_at(&handle, &mut h.state, file.clone());
+        h.state.wallpaper = wallpaper::Wallpaper::start(&handle, None, vec![data]).unwrap();
+        let socket = dir.join("wayland-capture");
+        h.state.listen_at(socket.clone(), &h.event_loop).unwrap();
+        let fill = |theme: Theme| theme.palette().window;
+        let (shown, _decoration) = h.show_decorated_in(fill(Theme::Dark));
+        // The dock, on the same appearance file, never on the session's display. In software
+        // rendering, its buffers have no alpha (softbuffer's `XRGB8888`, see "Layer-shell
+        // toolkit of the shell"): the room around its glass comes out black.
+        let mut child = Command::new(&dock)
+            .env_clear()
+            .env("XDG_RUNTIME_DIR", &dir)
+            .env("WAYLAND_DISPLAY", "wayland-capture")
+            .env("XDG_CONFIG_HOME", dir.join("config"))
+            .env("HOME", &dir)
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("RUST_LOG", "warn")
+            // Software rendering, as the compositor here: no GPU is asked anything.
+            .env("ICED_BACKEND", "tiny-skia")
+            .spawn()
+            .unwrap();
+        // Runs the compositor, the test client and the dock for `ms`, a frame every 16 ms;
+        // returns the last frame.
+        let mut run = |h: &mut Harness, ms: u64| {
+            let end = std::time::Instant::now() + Duration::from_millis(ms);
+            let mut frame = Vec::new();
+            while std::time::Instant::now() < end {
+                h.conn.flush().unwrap();
+                h.event_loop
+                    .dispatch(Some(Duration::from_millis(16)), &mut h.state)
+                    .unwrap();
+                h.state.refresh();
+                if let Some(guard) = h.queue.prepare_read() {
+                    let _ = guard.read();
+                }
+                h.queue.dispatch_pending(&mut h.client).unwrap();
+                let pass = (&scene, &mut ids, &mut textures);
+                frame = software_frame(&mut renderer, pass, h, (800, 600));
+                let output = h.state.space.outputs().next().unwrap().clone();
+                let time = h.state.now();
+                for layer in layer_map_for_output(&output).layers() {
+                    layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| {
+                        Some(output.clone())
+                    });
+                }
+            }
+            frame
+        };
+        run(&mut h, 3000);
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let docked = !layer_map_for_output(&output)
+            .layers()
+            .collect::<Vec<_>>()
+            .is_empty();
+        assert!(docked, "the dock is anchored");
+        // The pointer over Sherlock, in the middle of the dock: its label shows.
+        h.state.pointer_motion((400.0, 568.0).into(), 1);
+        run(&mut h, 1500);
+        let save = |pixels: &[u8], name: &str| {
+            let path = format!("{}/screenshots/{name}.png", env!("CARGO_MANIFEST_DIR"));
+            image::save_buffer(&path, pixels, 800, 600, image::ColorType::Rgba8).unwrap();
+        };
+        let dark = run(&mut h, 16);
+        save(&dark, "desktop-dark");
+
+        // Light: the file changes, everything follows; the application redraws in its colors.
+        write_theme("light");
+        let at = |pixels: &[u8], x: usize, y: usize| pixels[(y * 800 + x) * 4..][..3].to_vec();
+        run(&mut h, 3000);
+        assert_eq!(h.state.theme(), Theme::Light);
+        let mut file = shm_file(400 * 300 * 4);
+        let light = fill(Theme::Light);
+        file.write_all(&[light.b, light.g, light.r, 255].repeat(400 * 300))
+            .unwrap();
+        let qh = h.queue.handle();
+        let pool = shown.shm.create_pool(file.as_fd(), 400 * 300 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
+        shown.surface.attach(Some(&buffer), 0, 0);
+        shown.surface.damage(0, 0, 400, 300);
+        shown.surface.commit();
+        let light = run(&mut h, 1000);
+        save(&light, "desktop-light");
+        let _ = child.kill();
+        let _ = child.wait();
+        h.state.shutdown();
+        // The title bar took the light palette, and the wallpaper changed under the window.
+        let bar = color::palette().title_bar;
+        assert_eq!(at(&light, 400, 140), [bar.r, bar.g, bar.b]);
+        assert_ne!(at(&dark, 40, 300), at(&light, 40, 300));
+        color::set_active(Theme::Dark);
+    }
 }

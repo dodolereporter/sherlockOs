@@ -42,8 +42,8 @@ fn main() -> Result<(), Error> {
 
     let mut event_loop = EventLoop::try_new()?;
     let mut state = State::new(&event_loop)?;
-    // The decorations follow the theme of the appearance file.
-    compositor::decorations::follow_theme(&event_loop);
+    // Everything the compositor draws follows the theme of the appearance file.
+    compositor::theme::follow(&event_loop.handle(), &mut state);
     if options.measure {
         state.frame_stats = Some(FrameStats::default());
     }

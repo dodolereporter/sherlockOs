@@ -26,6 +26,7 @@ pub mod perf;
 pub mod render;
 mod shell;
 pub mod stats;
+pub mod theme;
 pub mod touchpad;
 pub mod udev;
 pub mod wallpaper;
@@ -200,6 +201,8 @@ pub struct State {
     pub perf: perf::LoopStats,
     /// Server-side decorations: their protocols, the pointer on them (lot D-08).
     decorations: decorations::Decorations,
+    /// The theme of the appearance file and the fade towards it (lot D-05c).
+    themes: theme::Themes,
     /// Mission Control (lot D-33).
     overview: mission_control::Overview,
 }
@@ -316,6 +319,7 @@ impl State {
             shell_epoch: None,
             perf: perf::LoopStats::default(),
             decorations: decorations::Decorations::new(&dh),
+            themes: theme::Themes::default(),
             overview: mission_control::Overview::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
