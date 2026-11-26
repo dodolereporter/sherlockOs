@@ -289,7 +289,8 @@ mod tests {
         let animation = Animation::with_velocity(SNAP_SPRING, 0.5, 0.0, 2.0, ms(100));
         assert_eq!(animation.value(ms(100)), 0.5);
         let first = animation.value(ms(101)) - 0.5;
-        assert!((first - 0.002).abs() < 1e-4, "{first}");
+        // 2 × 0.001, a little less from the spring pulling back.
+        assert!(first < 0.002 && first > 0.0017, "{first}");
         assert!(animation.value(ms(110)) > 0.5);
         assert!(animation.is_done(ms(1000), 1e-3));
         assert!((animation.value(ms(1000))).abs() < 1e-3);
