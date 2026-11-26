@@ -36,11 +36,30 @@ use crate::damage::Key;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Bar {
     pub title: String,
-    pub hovered: Option<Button>,
-    /// Held down, with the pointer still on it.
-    pub pressed: Option<Button>,
+    /// The three buttons, from left to right, as their motion has them now.
+    pub buttons: [ButtonLook; 3],
+    /// Share of the shown color of the icons, out of 255: the pointer is on the pill.
+    pub pill: u8,
     /// The maximize button shows the restore icon.
     pub maximized: bool,
+}
+
+/// A button as drawn: rounded so that a settled button gives the same texture every frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ButtonLook {
+    /// Share of its hover color, out of 255.
+    pub lit: u8,
+    /// Its scale, in thousandths.
+    pub scale: u16,
+}
+
+impl Default for ButtonLook {
+    fn default() -> Self {
+        Self {
+            lit: 0,
+            scale: 1000,
+        }
+    }
 }
 
 /// Everything a bar texture depends on.
@@ -63,7 +82,16 @@ impl Look {
         self.size.hash(&mut hasher);
         let c = &self.colors;
         for color in [
-            c.bar, c.divider, c.title, c.controls, c.hover, c.pressed, c.icon,
+            c.bar,
+            c.divider,
+            c.title,
+            c.controls,
+            c.hover,
+            c.pressed,
+            c.icon,
+            c.icon_shown,
+            c.close_hover,
+            c.close_icon,
         ] {
             (color.r, color.g, color.b, color.a.to_bits()).hash(&mut hasher);
         }
@@ -215,24 +243,37 @@ pub fn draw(look: &Look, font: Option<&FontRef<'_>>) -> Option<Pixmap> {
         rounded(pill, ui::CONTROLS_RADIUS * s, ui::CONTROLS_RADIUS * s),
         c.controls,
     );
-    for (button, rect) in super::buttons(width) {
-        let rect = px(rect);
-        let veil = match (look.bar.pressed, look.bar.hovered) {
-            (Some(b), _) if b == button => Some(c.pressed),
-            (_, Some(b)) if b == button => Some(c.hover),
-            _ => None,
+    let shown = f32::from(look.bar.pill) / 255.0;
+    for ((button, rect), state) in super::buttons(width).into_iter().zip(look.bar.buttons) {
+        let (x, y, w, h) = px(rect);
+        let center = (x + w / 2.0, y + h / 2.0);
+        // Grown or sunk around its center.
+        let k = f32::from(state.scale) / 1000.0;
+        let rect = (center.0 - w * k / 2.0, center.1 - h * k / 2.0, w * k, h * k);
+        let lit = f32::from(state.lit) / 255.0;
+        // Sunk below its rest size: held down.
+        let down = k < 1.0;
+        let (veil, icon) = match button {
+            Button::Close => (c.close_hover, c.close_icon),
+            _ if down => (c.pressed, c.icon_shown),
+            _ => (c.hover, c.icon_shown),
         };
-        if let Some(veil) = veil {
-            let r = ui::BUTTON_RADIUS * s;
+        if lit > 0.0 {
+            let r = ui::BUTTON_RADIUS * s * k;
+            let veil = Color {
+                a: veil.a * lit,
+                ..veil
+            };
             fill(&mut pixmap, rounded(rect, r, r), veil);
         }
-        let center = (rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0);
+        // The icons at rest, all three shown on the pill, then the button's own.
+        let color = c.icon.lerp(c.icon_shown, shown).lerp(icon, lit);
         stroke_icon(
             &mut pixmap,
             button.icon(look.bar.maximized),
             center,
-            s,
-            c.icon,
+            s * k,
+            color,
         );
     }
     if let Some(font) = font {
@@ -299,7 +340,7 @@ fn stroke_icon(pixmap: &mut Pixmap, d: &str, center: (f32, f32), s: f32, color: 
     let (x, y) = (center.0 - size / 2.0, center.1 - size / 2.0);
     let transform = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, x, y);
     let stroke = Stroke {
-        width: metrics::ICON_STROKE,
+        width: ui::ICON_STROKE,
         line_cap: LineCap::Round,
         line_join: LineJoin::Round,
         ..Stroke::default()

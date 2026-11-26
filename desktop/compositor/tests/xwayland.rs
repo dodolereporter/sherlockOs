@@ -528,6 +528,36 @@ mod tests {
         assert!(!h.state.is_minimized(&window) && !surface.is_minimized());
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));
 
+        // Dragged up with the gesture key, its title bar stops at the top of the screen (lot
+        // C-01).
+        h.run_until("the window content", |s| {
+            s.window_visual(&window, Duration::ZERO).is_some()
+        });
+        let place = places(&h.state, &window).0;
+        h.motion(400.0, f64::from(place.loc.y) + 20.0);
+        h.key(KEY_SUPER, KeyState::Pressed);
+        h.button(ButtonState::Pressed);
+        h.motion(400.0, 100.0);
+        h.motion(400.0, 20.0);
+        h.button(ButtonState::Released);
+        h.key(KEY_SUPER, KeyState::Released);
+        let (space, server) = places(&h.state, &window);
+        assert_eq!((space.loc.y, server.loc.y), (42, 42));
+
+        // Withdrawn while shown, it closes with its animation, like a Wayland window.
+        commands.send(Command::Withdraw).unwrap();
+        h.run_until("the window withdrawn", |_| !surface.is_mapped());
+        assert_eq!(
+            h.state.closing_windows().0,
+            1,
+            "an X11 window closes animated"
+        );
+        commands.send(Command::Map).unwrap();
+        h.run_until("the window mapped again", |s| {
+            x11_window(s, false).is_some_and(|w| w.wl_surface().is_some())
+        });
+        let window = x11_window(&h.state, false).unwrap();
+
         // A window that asks for no decoration (`_MOTIF_WM_HINTS`) loses its title bar.
         commands.send(Command::Undecorate).unwrap();
         h.run_until("the title bar gone", |_| !decorations::server_side(&window));
