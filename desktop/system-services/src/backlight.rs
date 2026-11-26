@@ -11,7 +11,7 @@ use crate::{Problem, Result};
 pub const SERVICE: &str = "org.freedesktop.login1";
 /// The caller's own session.
 pub const SESSION: &str = "/org/freedesktop/login1/session/auto";
-const INTERFACE: &str = "org.freedesktop.login1.Session";
+pub const INTERFACE: &str = "org.freedesktop.login1.Session";
 /// Where the kernel lists the backlights.
 pub const SYSFS: &str = "/sys/class/backlight";
 /// Lowest brightness the slider and the keys give, in percent: a black screen is not a
@@ -110,12 +110,13 @@ pub fn step(percent: u8, up: bool) -> u8 {
 }
 
 /// `steps` steps of the backlight found under `root`, up when positive, down when negative,
-/// set at once through logind. Returns the new brightness, in percent.
-pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<u8> {
+/// set at once through logind. Returns the new brightness, in percent, and whether a step pushed
+/// against the end (`crate::press`).
+pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<(u8, bool)> {
     let backlight = find(root)?;
-    let percent = (0..steps.unsigned_abs()).fold(backlight.percent(), |p, _| step(p, steps > 0));
+    let (percent, pushed) = crate::press(backlight.percent(), steps, step);
     set(bus, &backlight, percent).await?;
-    Ok(percent)
+    Ok((percent, pushed))
 }
 
 #[cfg(test)]

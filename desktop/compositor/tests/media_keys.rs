@@ -1,7 +1,7 @@
-//! The media keys against fake services (lot D-35): a fake `pactl` that keeps its volume in a
-//! file, and a private bus started by the test (its own `dbus-daemon`, never the machine's
-//! buses) with a fake logind, whose `SetBrightness` writes a fake sysfs folder, and a fake media
-//! player. The keys go through `State::keyboard_key` as the real session sends them; what they
+//! The media keys against fake services (lots D-35, D-35d): a fake `pactl` that keeps its
+//! volume in a file, and a private bus started by the test (its own `dbus-daemon`, never the
+//! machine's buses) with a fake logind, whose `SetBrightness` writes a fake sysfs folder, a fake
+//! UPower keyboard backlight, and a fake media player. The keys go through `State::keyboard_key` as the real session sends them; what they
 //! changed shows in the on-screen display.
 
 // Test module: clippy allows unwrap and expect there, as in unit tests.
@@ -28,7 +28,10 @@ mod tests {
     const VOLUME_UP: u32 = 115 + 8;
     const MUTE: u32 = 113 + 8;
     const MIC_MUTE: u32 = 248 + 8;
+    const VOLUME_DOWN: u32 = 114 + 8;
     const BRIGHTNESS_UP: u32 = 225 + 8;
+    const KEYBOARD_TOGGLE: u32 = 228 + 8;
+    const KEYBOARD_UP: u32 = 230 + 8;
     const PLAY_PAUSE: u32 = 164 + 8;
 
     /// A private bus: its own `dbus-daemon`, socket in the test folder, killed on drop.
@@ -91,7 +94,8 @@ mod tests {
 
     type Calls = Arc<Mutex<Vec<String>>>;
 
-    /// logind's session: `SetBrightness` writes the fake sysfs file.
+    /// logind's session: `SetBrightness` writes the fake sysfs file, under `backlight` or
+    /// `leds`.
     struct Session {
         sysfs: PathBuf,
         calls: Calls,
@@ -100,12 +104,34 @@ mod tests {
     #[zbus::interface(name = "org.freedesktop.login1.Session")]
     impl Session {
         fn set_brightness(&self, subsystem: String, name: String, value: u32) {
-            let file = self.sysfs.join(&name).join("brightness");
+            let file = self.sysfs.join(&subsystem).join(&name).join("brightness");
             std::fs::write(file, value.to_string()).unwrap();
             self.calls
                 .lock()
                 .unwrap()
                 .push(format!("{subsystem} {name} {value}"));
+        }
+    }
+
+    /// UPower's keyboard backlight, 3 levels.
+    struct Keyboard {
+        level: Arc<Mutex<i32>>,
+        calls: Calls,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.UPower.KbdBacklight")]
+    impl Keyboard {
+        fn get_brightness(&self) -> i32 {
+            *self.level.lock().unwrap()
+        }
+
+        fn get_max_brightness(&self) -> i32 {
+            3
+        }
+
+        fn set_brightness(&self, value: i32) {
+            *self.level.lock().unwrap() = value;
+            self.calls.lock().unwrap().push(value.to_string());
         }
     }
 
@@ -158,31 +184,51 @@ mod tests {
         state: State,
         dir: PathBuf,
         brightness: Calls,
+        keyboard: Calls,
         player: Calls,
         _bus: Bus,
     }
 
     impl Harness {
         fn start(name: &str) -> Self {
+            Self::with_upower(name, true)
+        }
+
+        /// With UPower's keyboard backlight, or with a keyboard LED that logind sets.
+        fn with_upower(name: &str, upower: bool) -> Self {
             let dir =
                 std::env::temp_dir().join(format!("media-keys-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             // A raw backlight at 20 %.
-            let sysfs = dir.join("backlight");
-            let light = sysfs.join("amdgpu_bl1");
+            let backlights = dir.join("backlight");
+            let light = backlights.join("amdgpu_bl1");
             std::fs::create_dir_all(&light).unwrap();
             std::fs::write(light.join("type"), "raw").unwrap();
             std::fs::write(light.join("brightness"), "51").unwrap();
             std::fs::write(light.join("max_brightness"), "255").unwrap();
+            // A keyboard LED, off, of 2 levels.
+            let leds = dir.join("leds");
+            let led = leds.join("tpacpi::kbd_backlight");
+            std::fs::create_dir_all(&led).unwrap();
+            std::fs::write(led.join("brightness"), "0").unwrap();
+            std::fs::write(led.join("max_brightness"), "2").unwrap();
             let mut bus = Bus::start(&dir);
             let (brightness, player) = (Calls::default(), Calls::default());
+            let keyboard = Calls::default();
             let session = Session {
-                sysfs: sysfs.clone(),
+                sysfs: dir.clone(),
                 calls: brightness.clone(),
             };
             let path = system_services::backlight::SESSION;
             bus.serve(system_services::backlight::SERVICE, path, session);
+            if upower {
+                let level = Arc::new(Mutex::new(1));
+                let calls = keyboard.clone();
+                let path = system_services::keyboard::PATH;
+                let name = system_services::keyboard::UPOWER;
+                bus.serve(name, path, Keyboard { level, calls });
+            }
             let calls = player.clone();
             let name = "org.mpris.MediaPlayer2.test";
             bus.serve(name, "/org/mpris/MediaPlayer2", Player { calls });
@@ -192,7 +238,8 @@ mod tests {
             state.add_output((800, 600).into(), 1.0);
             state.enable_media_keys(Controls {
                 mixer: Mixer::Pactl(fake_pactl(&dir)),
-                backlights: sysfs,
+                backlights,
+                leds,
                 system_bus: Some(bus.address.clone()),
                 session_bus: Some(bus.address.clone()),
             });
@@ -201,6 +248,7 @@ mod tests {
                 state,
                 dir,
                 brightness,
+                keyboard,
                 player,
                 _bus: bus,
             }
@@ -269,8 +317,64 @@ mod tests {
         let shown = level(Kind::Microphone, 80, true);
         h.run_until("the microphone muted", |h| h.state.osd_level() == shown);
         assert!(h.pactl_log().contains("set-source-mute @DEFAULT_SOURCE@ 1"));
-        // The pill goes once the keys are left alone.
+        // The pill goes once the keys are left alone; then nothing asks for a frame.
         h.run_until("the pill gone", |h| h.state.osd_level().is_none());
+        h.run_for(sherlock_ui::osd::LEAVE + Duration::from_millis(100));
+        let epoch = h.state.redraw_epoch();
+        h.run_for(Duration::from_millis(500));
+        assert_eq!(h.state.redraw_epoch(), epoch, "nothing drawn at rest");
+    }
+
+    #[test]
+    fn a_key_that_insists_at_an_end_stretches_the_pill() {
+        let mut h = Harness::start("stretch");
+        std::fs::write(h.dir.join("volume"), "100").unwrap();
+        h.tap(VOLUME_UP);
+        let shown = level(Kind::Volume, 100, false);
+        h.run_until("the top pushed", |h| {
+            h.state.osd_level() == shown && h.state.osd_stretch() > 0.5
+        });
+        h.run_until("the pill back", |h| h.state.osd_stretch().abs() < 1e-3);
+        // Inside the range, no stretch.
+        h.tap(VOLUME_DOWN);
+        let shown = level(Kind::Volume, 95, false);
+        h.run_until("the volume down", |h| h.state.osd_level() == shown);
+        assert!(h.state.osd_stretch().abs() < 1e-3);
+        std::fs::write(h.dir.join("volume"), "0").unwrap();
+        h.tap(VOLUME_DOWN);
+        h.run_until("the bottom pushed", |h| h.state.osd_stretch() > 0.5);
+    }
+
+    #[test]
+    fn the_keyboard_backlight_goes_through_upower() {
+        let mut h = Harness::start("keyboard");
+        let keyboard = |percent| level(Kind::Keyboard, percent, false);
+        h.tap(KEYBOARD_UP);
+        h.run_until("a level up", |h| h.state.osd_level() == keyboard(67));
+        h.tap(KEYBOARD_UP);
+        h.run_until("the top", |h| h.state.osd_level() == keyboard(100));
+        h.tap(KEYBOARD_UP);
+        h.run_until("the top pushed", |h| h.state.osd_stretch() > 0.5);
+        // Off, then back on where it was.
+        h.tap(KEYBOARD_TOGGLE);
+        h.run_until("off", |h| h.state.osd_level() == keyboard(0));
+        h.tap(KEYBOARD_TOGGLE);
+        h.run_until("on again", |h| h.state.osd_level() == keyboard(100));
+        assert_eq!(*h.keyboard.lock().unwrap(), ["2", "3", "0", "3"]);
+        // Never through logind, never in the LED's file.
+        assert!(h.brightness.lock().unwrap().is_empty());
+        let led = h.dir.join("leds/tpacpi::kbd_backlight/brightness");
+        assert_eq!(std::fs::read_to_string(led).unwrap(), "0");
+    }
+
+    #[test]
+    fn without_upower_the_keyboard_backlight_goes_through_logind() {
+        let mut h = Harness::with_upower("keyboard-logind", false);
+        h.tap(KEYBOARD_UP);
+        let shown = level(Kind::Keyboard, 50, false);
+        h.run_until("a level up", |h| h.state.osd_level() == shown);
+        let calls = h.brightness.lock().unwrap().clone();
+        assert_eq!(calls, ["leds tpacpi::kbd_backlight 1"]);
     }
 
     #[test]

@@ -1,8 +1,10 @@
-//! The on-screen display of the media keys (lot D-35): a pill of glass in the bottom middle of
-//! the screen under the pointer, with the icon of the level and its gauge, in front of
-//! everything. It comes and goes on a spring, and goes `osd::VISIBLE` after the last key. Drawn
-//! on the processor like the titles of Mission Control, into one texture made again only when
-//! what it shows changes. See `docs/media-keys.md`.
+//! The on-screen display of the media keys (lots D-35, D-35d): a pill of glass in the bottom
+//! middle of the screen under the pointer, above the dock, with the icon of the level and its
+//! gauge, in front of everything. Its size follows the screen (`osd::fit`). It grows in and fades
+//! in, then the other way `osd::VISIBLE` after the last key; its gauge slides on a spring; a key
+//! that insists at the end stretches it, as on macOS and iOS. Drawn on the processor like the
+//! titles of Mission Control, into one texture made again only when what it shows changes. See
+//! `docs/media-keys.md`.
 
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
@@ -14,7 +16,7 @@ use ab_glyph::FontRef;
 use resvg::{tiny_skia as skia, usvg};
 use sherlock_ui::{
     color::{self, Color},
-    motion::{Animation, SCALE_PRECISION},
+    motion::{Animation, Fade, SCALE_PRECISION},
     osd::{self as ui, Kind},
 };
 use smithay::{
@@ -28,9 +30,10 @@ use smithay::{
             gles::{GlesRenderer, GlesTexture},
         },
     },
+    desktop::layer_map_for_output,
     output::Output,
     reexports::calloop::timer::{TimeoutAction, Timer},
-    utils::{Physical, Rectangle, Transform},
+    utils::{Logical, Physical, Rectangle, Transform},
 };
 use tiny_skia::{LineCap, Paint, Pixmap, Stroke};
 
@@ -51,6 +54,39 @@ pub struct Level {
     pub muted: bool,
 }
 
+/// The end of the gauge a key pushed against: « moins » at the bottom, « plus » at the top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Low,
+    High,
+}
+
+/// A key that insisted at an end: the pill stretches towards it, then comes back.
+#[derive(Debug, Clone, Copy)]
+struct Push {
+    edge: Edge,
+    /// Towards the full stretch, from the press on.
+    rise: Animation,
+    at: Duration,
+}
+
+impl Push {
+    /// The stretch at `now`: towards 1 until `STRETCH_HOLD` after the press, then back to 0 on
+    /// the same spring, with its speed.
+    fn animation(&self, now: Duration) -> Animation {
+        let release = self.at + ui::STRETCH_HOLD;
+        let mut stretch = self.rise;
+        if now >= release {
+            stretch.retarget(release, 0.0);
+        }
+        stretch
+    }
+
+    fn done(&self, now: Duration) -> bool {
+        now >= self.at + ui::STRETCH_HOLD && self.animation(now).is_done(now, SCALE_PRECISION)
+    }
+}
+
 /// The pill on a screen, coming, shown or going.
 struct Shown {
     level: Level,
@@ -58,7 +94,28 @@ struct Shown {
     /// Its gauge, from 0 to 1.
     gauge: Animation,
     /// 0 out of sight, 1 in place.
-    presence: Animation,
+    presence: Fade,
+    push: Option<Push>,
+}
+
+impl Shown {
+    fn stretch(&self, now: Duration) -> f64 {
+        self.push.map_or(0.0, |push| push.animation(now).value(now))
+    }
+
+    /// A key insisted at `edge`: the stretch aims at its full length again, from where it is,
+    /// never past it.
+    fn push(&mut self, edge: Edge, now: Duration) {
+        let rise = match self.push {
+            Some(push) if push.edge == edge => {
+                let mut rise = push.animation(now);
+                rise.retarget(now, 1.0);
+                rise
+            }
+            _ => Animation::new(ui::STRETCH_SPRING, 0.0, 1.0, now),
+        };
+        self.push = Some(Push { edge, rise, at: now });
+    }
 }
 
 #[derive(Default)]
@@ -71,30 +128,71 @@ fn fraction(level: &Level) -> f64 {
     f64::from(level.percent.min(100)) / 100.0
 }
 
+/// The pill at an instant, on its screen: what the renderer needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frame {
+    pub level: Level,
+    /// Where it is drawn, in logical pixels, scaled while it comes or goes.
+    pub rect: Rectangle<f64, Logical>,
+    /// Its size before that scale: stretched, never scaled.
+    pub size: (f64, f64),
+    /// The scale of the pill and of its content on its screen (`osd::fit`).
+    pub fit: f64,
+    pub alpha: f32,
+    /// Its gauge, from 0 to 1.
+    pub gauge: f64,
+    /// Something still moves: another frame is needed.
+    pub moving: bool,
+}
+
 impl Osd {
-    fn show(&mut self, level: Level, output: Option<Output>, now: Duration) {
+    /// Shows `level`, `against` an end when a key insisted there. The same kind of level keeps
+    /// the pill, still there or going, and slides its gauge; another kind replaces it.
+    pub fn show(
+        &mut self,
+        level: Level,
+        against: Option<Edge>,
+        output: Option<Output>,
+        now: Duration,
+    ) {
         let to = fraction(&level);
+        let presence = self.shown.as_ref().map_or(0.0, |s| s.presence.value(now));
+        let enter = Fade::eased(
+            presence,
+            1.0,
+            now,
+            ui::ENTER.mul_f32(1.0 - presence),
+            ui::ENTER_EASE,
+        );
         match &mut self.shown {
-            // The same level again: its gauge follows, the pill stays where it is.
-            Some(shown) if shown.level.kind == level.kind && shown.presence.target() > 0.5 => {
+            Some(shown) if shown.level.kind == level.kind && presence > 0.0 => {
                 shown.gauge.retarget(now, to);
                 shown.level = level;
+                if shown.presence.target() < 1.0 {
+                    shown.presence = enter;
+                }
             }
             shown => {
-                let presence = shown.as_ref().map_or(0.0, |s| s.presence.value(now));
                 *shown = Some(Shown {
                     level,
                     output,
                     gauge: Animation::new(ui::GAUGE_SPRING, to, to, now),
-                    presence: Animation::new(ui::SPRING, presence, 1.0, now),
+                    presence: enter,
+                    push: None,
                 });
             }
         }
+        if let (Some(shown), Some(edge)) = (&mut self.shown, against) {
+            shown.push(edge, now);
+        }
     }
 
-    fn hide(&mut self, now: Duration) {
+    /// The pill goes: it shrinks and fades out.
+    pub fn hide(&mut self, now: Duration) {
         if let Some(shown) = &mut self.shown {
-            shown.presence.retarget(now, 0.0);
+            let presence = shown.presence.value(now);
+            let duration = ui::LEAVE.mul_f32(presence);
+            shown.presence = Fade::eased(presence, 0.0, now, duration, ui::LEAVE_EASE);
         }
     }
 
@@ -105,15 +203,81 @@ impl Osd {
             .filter(|s| s.presence.target() > 0.5)
             .map(|s| s.level)
     }
+
+    /// How far the pill is stretched at `now`, 1 for `osd::STRETCH` of its length.
+    pub fn stretch(&self, now: Duration) -> f64 {
+        self.shown.as_ref().map_or(0.0, |s| s.stretch(now))
+    }
+
+    /// The pill at `now` on `screen`, whose dock reserves `reserved` logical pixels at the
+    /// bottom; `None` once it is gone.
+    pub fn frame(&self, now: Duration, screen: Rectangle<f64, Logical>, reserved: f64) -> Option<Frame> {
+        let shown = self.shown.as_ref()?;
+        let presence = f64::from(shown.presence.value(now).clamp(0.0, 1.0));
+        let moving = !shown.presence.is_done(now)
+            || !shown.gauge.is_done(now, SCALE_PRECISION)
+            || shown.push.is_some_and(|push| !push.done(now));
+        if presence <= 0.0 && !moving {
+            return None;
+        }
+        let fit = f64::from(ui::fit(screen.size.w as f32));
+        let (w, h) = (f64::from(ui::WIDTH) * fit, f64::from(ui::HEIGHT) * fit);
+        let bottom = ui::bottom(screen.size.h as f32, reserved as f32, fit as f32);
+        let middle = screen.loc.y + screen.size.h - f64::from(bottom) - h / 2.0;
+        let center = screen.loc.x + screen.size.w / 2.0;
+        let stretch = shown.stretch(now);
+        let (sw, sh) = (
+            w * (1.0 + ui::STRETCH * stretch),
+            h * (1.0 - ui::STRETCH * ui::STRETCH_THIN * stretch),
+        );
+        // The end away from the key stays; the other one goes out.
+        let left = match shown.push.map(|push| push.edge) {
+            Some(Edge::High) => center - w / 2.0,
+            Some(Edge::Low) => center + w / 2.0 - sw,
+            None => center - sw / 2.0,
+        };
+        let scale = ui::SCALE + (1.0 - ui::SCALE) * presence;
+        let (dw, dh) = (sw * scale, sh * scale);
+        let x = left + (sw - dw) / 2.0;
+        Some(Frame {
+            level: shown.level,
+            rect: Rectangle::new((x, middle - dh / 2.0).into(), (dw, dh).into()),
+            size: (sw, sh),
+            fit,
+            alpha: presence as f32,
+            gauge: shown.gauge.value(now).clamp(0.0, 1.0),
+            moving,
+        })
+    }
+}
+
+impl Frame {
+    /// The look of the pill drawn at `scale` (the screen's).
+    pub fn look(&self, scale: f64) -> Look {
+        let size = (
+            (self.size.0 * scale).round().max(1.0) as u32,
+            (self.size.1 * scale).round().max(1.0) as u32,
+        );
+        let s = (scale * self.fit) as f32;
+        let track = gauge_track(size.0 as f32, size.1 as f32, s);
+        Look {
+            kind: self.level.kind,
+            muted: self.level.muted,
+            fill: (track.2 * self.gauge as f32).round().max(0.0) as u32,
+            size,
+            scale: s,
+            palette: color::mix_step(),
+        }
+    }
 }
 
 impl State {
-    /// Shows `level` on the screen under the pointer, and hides it `osd::VISIBLE` after the
-    /// last one.
-    pub fn show_osd(&mut self, level: Level) {
+    /// Shows `level` on the screen under the pointer, `against` an end when a key insisted
+    /// there, and hides it `osd::VISIBLE` after the last one.
+    pub fn show_osd(&mut self, level: Level, against: Option<Edge>) {
         let now = self.now();
         let output = self.pointer_output();
-        self.osd.show(level, output, now);
+        self.osd.show(level, against, output, now);
         if let Some(token) = self.osd.hide.take() {
             self.loop_handle.remove(token);
         }
@@ -135,6 +299,11 @@ impl State {
     /// What the on-screen display shows, while it is on screen.
     pub fn osd_level(&self) -> Option<Level> {
         self.osd.level()
+    }
+
+    /// How far it is stretched now (`Osd::stretch`).
+    pub fn osd_stretch(&self) -> f64 {
+        self.osd.stretch(self.now())
     }
 }
 
@@ -167,40 +336,25 @@ pub fn push_item(items: &mut Vec<Item>, state: &State, (output, view): (&Output,
     let Some(shown) = &state.osd.shown else {
         return false;
     };
-    let now = state.now();
-    let presence = shown.presence.value(now).clamp(0.0, 1.0);
-    let animating =
-        !shown.presence.is_done(now, SCALE_PRECISION) || !shown.gauge.is_done(now, SCALE_PRECISION);
-    if shown.output.as_ref().is_some_and(|o| o != output) || presence < 0.01 && !animating {
-        return animating;
+    if shown.output.as_ref().is_some_and(|o| o != output) {
+        return false;
     }
     let Some(screen) = state.space.output_geometry(output) else {
-        return animating;
+        return false;
     };
-    let (w, h) = (f64::from(ui::WIDTH), f64::from(ui::HEIGHT));
-    let rise = f64::from(ui::RISE) * (1.0 - presence);
-    let x = f64::from(screen.loc.x) + (f64::from(screen.size.w) - w) / 2.0;
-    let y = f64::from(screen.loc.y + screen.size.h) - f64::from(ui::BOTTOM) - h + rise;
-    let rect = view.rect(Rectangle::new((x, y).into(), (w, h).into()));
-    let scale = view.scale as f32;
-    let track = gauge_track(rect.size.w as f32, rect.size.h as f32, scale);
-    let gauge = shown.gauge.value(now).clamp(0.0, 1.0) as f32;
-    let fill = (track.2 * gauge).round().max(0.0) as u32;
-    let look = Look {
-        kind: shown.level.kind,
-        muted: shown.level.muted,
-        fill,
-        size: (rect.size.w.max(1) as u32, rect.size.h.max(1) as u32),
-        scale,
-        palette: color::mix_step(),
+    // What the dock, or any surface anchored at the bottom, keeps from the windows.
+    let zone = layer_map_for_output(output).non_exclusive_zone();
+    let reserved = (screen.size.h - zone.loc.y - zone.size.h).max(0);
+    let Some(frame) = state.osd.frame(state.now(), screen.to_f64(), f64::from(reserved)) else {
+        return false;
     };
     items.push(Item::Osd {
         key: Key::of(None, Part::Osd),
-        rect,
-        look,
-        alpha: presence as f32,
+        rect: view.rect(frame.rect),
+        look: frame.look(view.scale),
+        alpha: frame.alpha,
     });
-    animating
+    frame.moving
 }
 
 /// Where the gauge goes in a pill of `w` by `h` pixels at scale `s`: left, middle, width.
@@ -423,8 +577,8 @@ mod tests {
             muted: false,
         };
         let t = Duration::from_secs(1);
-        osd.show(volume(50), None, t);
-        osd.show(volume(55), None, t + Duration::from_millis(40));
+        osd.show(volume(50), None, None, t);
+        osd.show(volume(55), None, None, t + Duration::from_millis(40));
         let shown = osd.shown.as_ref().unwrap();
         assert!((shown.gauge.target() - 0.55).abs() < 1e-9);
         assert_eq!(osd.level(), Some(volume(55)));
@@ -433,9 +587,144 @@ mod tests {
             percent: 120,
             muted: false,
         };
-        osd.show(light, None, t + Duration::from_millis(80));
+        osd.show(light, None, None, t + Duration::from_millis(80));
         assert!((osd.shown.as_ref().unwrap().gauge.target() - 1.0).abs() < 1e-9);
         osd.hide(t + Duration::from_secs(2));
         assert_eq!(osd.level(), None);
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn volume(percent: u16) -> Level {
+        Level {
+            kind: Kind::Volume,
+            percent,
+            muted: false,
+        }
+    }
+
+    /// A screen of 1920 by 1080 logical pixels, its dock reserving nothing.
+    fn screen() -> Rectangle<f64, Logical> {
+        Rectangle::new((0.0, 0.0).into(), (1920.0, 1080.0).into())
+    }
+
+    /// The pill settled at 100 %, then « plus » pressed again at `at`, against `edge`.
+    fn pushed(edge: Edge, at: Duration) -> Osd {
+        let mut osd = Osd::default();
+        osd.show(volume(100), None, None, ms(0));
+        osd.show(volume(100), Some(edge), None, at);
+        osd
+    }
+
+    /// The largest stretch from `from` for `span`, every millisecond.
+    fn peak(osd: &Osd, from: Duration, span: u64) -> f64 {
+        (0..span)
+            .map(|t| osd.stretch(from + ms(t)))
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn a_key_that_insists_at_the_top_stretches_the_pill_to_the_right() {
+        let osd = pushed(Edge::High, ms(1000));
+        let rest = osd.frame(ms(999), screen(), 0.0).unwrap();
+        let top = peak(&osd, ms(1000), 400);
+        // About 5 % of its length, then back to rest on the spring.
+        assert!(top > 0.9 && top < 1.1, "{top}");
+        let at = (0..400).map(|t| ms(1000 + t)).find(|t| osd.stretch(*t) >= top - 1e-9);
+        let frame = osd.frame(at.unwrap(), screen(), 0.0).unwrap();
+        let grown = frame.size.0 / rest.size.0 - 1.0;
+        assert!(grown > 0.04 && grown < 0.06, "{grown}");
+        assert!(frame.size.1 < rest.size.1, "it gets thinner");
+        // Towards the key: the left end stays, the right one goes out.
+        assert!((frame.rect.loc.x - rest.rect.loc.x).abs() < 0.5);
+        let right = |f: &Frame| f.rect.loc.x + f.rect.size.w;
+        assert!(right(&frame) - right(&rest) > 9.0);
+        // The gauge, full, stretches with it.
+        assert!(frame.look(1.0).fill > rest.look(1.0).fill);
+        assert!(osd.stretch(ms(1600)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_key_that_insists_at_the_bottom_stretches_it_to_the_left() {
+        let osd = pushed(Edge::Low, ms(1000));
+        let rest = osd.frame(ms(999), screen(), 0.0).unwrap();
+        let frame = osd.frame(ms(1000) + ui::STRETCH_HOLD, screen(), 0.0).unwrap();
+        let right = |f: &Frame| f.rect.loc.x + f.rect.size.w;
+        assert!((right(&frame) - right(&rest)).abs() < 0.5);
+        assert!(rest.rect.loc.x - frame.rect.loc.x > 6.0);
+    }
+
+    #[test]
+    fn presses_that_follow_each_other_do_not_add_up() {
+        let single = peak(&pushed(Edge::High, ms(1000)), ms(1000), 600);
+        // The held key: a press every 40 ms for a second.
+        let mut osd = pushed(Edge::High, ms(1000));
+        let mut highest: f64 = 0.0;
+        for press in 1..25 {
+            let at = ms(1000 + press * 40);
+            highest = highest.max(peak(&osd, at - ms(40), 40));
+            osd.show(volume(100), Some(Edge::High), None, at);
+        }
+        // Never past the full stretch but for the spring's slight overshoot.
+        assert!(highest < 1.05, "{highest} against {single} for one press");
+        assert!(highest > single * 0.9, "it keeps stretching: {highest}");
+        // Let go, it comes back.
+        assert!(osd.stretch(ms(2000) + ms(700)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_gauge_slides_to_its_new_level() {
+        let mut osd = Osd::default();
+        osd.show(volume(40), None, None, ms(0));
+        osd.show(volume(60), None, None, ms(500));
+        let gauge = |t| osd.frame(ms(t), screen(), 0.0).unwrap().gauge;
+        assert!((gauge(500) - 0.4).abs() < 1e-9, "no jump");
+        let values: Vec<f64> = (500..800).map(gauge).collect();
+        assert!(values.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "small moves");
+        assert!((gauge(900) - 0.6).abs() < 1e-3);
+        assert_eq!(osd.stretch(ms(600)), 0.0, "no stretch inside the range");
+    }
+
+    #[test]
+    fn it_grows_in_and_shrinks_out_and_draws_nothing_at_rest() {
+        let mut osd = Osd::default();
+        osd.show(volume(50), None, None, ms(0));
+        let first = osd.frame(ms(0), screen(), 0.0).unwrap();
+        let shown = osd.frame(ui::ENTER, screen(), 0.0).unwrap();
+        assert!((first.rect.size.w / shown.rect.size.w - ui::SCALE).abs() < 1e-6);
+        assert_eq!((first.alpha, shown.alpha), (0.0, 1.0));
+        // Around its center.
+        let center = |f: &Frame| f.rect.loc.x + f.rect.size.w / 2.0;
+        assert!((center(&first) - center(&shown)).abs() < 1e-6);
+        assert!(osd.frame(ms(100), screen(), 0.0).unwrap().moving);
+        // In place and still: drawn, but nothing moves, so no new frame is asked for.
+        assert!(!osd.frame(ui::ENTER + ms(300), screen(), 0.0).unwrap().moving);
+        osd.hide(ms(2000));
+        let going = osd.frame(ms(2000) + ui::LEAVE / 2, screen(), 0.0).unwrap();
+        assert!(going.moving && going.alpha < 1.0);
+        assert!(going.rect.size.w < shown.rect.size.w);
+        assert_eq!(osd.frame(ms(2000) + ui::LEAVE, screen(), 0.0), None);
+    }
+
+    #[test]
+    fn it_sits_above_the_dock_in_the_middle_of_its_screen() {
+        let mut osd = Osd::default();
+        osd.show(volume(50), None, None, ms(0));
+        let at = ui::ENTER;
+        let on = |w: f64, h: f64, reserved: f64| {
+            let screen = Rectangle::new((100.0, 0.0).into(), (w, h).into());
+            osd.frame(at, screen, reserved).unwrap().rect
+        };
+        let rect = on(1920.0, 1080.0, 0.0);
+        assert!((rect.loc.x + rect.size.w / 2.0 - 1060.0).abs() < 1e-6);
+        assert!((1080.0 - rect.loc.y - rect.size.h - f64::from(ui::BOTTOM)).abs() < 1e-6);
+        // A dock that reserves more pushes it up.
+        let higher = on(1920.0, 1080.0, 150.0);
+        assert!((rect.loc.y - higher.loc.y - (150.0 - f64::from(ui::DOCK_BAND))).abs() < 1e-6);
+        // Bounded on a small and on a wide screen.
+        assert!((on(1366.0, 768.0, 0.0).size.w - f64::from(ui::WIDTH_MIN)).abs() < 1e-6);
+        assert!((on(5120.0, 2880.0, 0.0).size.w - f64::from(ui::WIDTH_MAX)).abs() < 1e-6);
     }
 }
