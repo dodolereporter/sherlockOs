@@ -28,6 +28,7 @@ use crate::{
     dmabuf,
     render::Scene,
     wallpaper::{Textures, Wallpaper},
+    window_anim,
 };
 
 /// Opens the window, creates one screen per scale in `scales`, side by side in the window, and
@@ -49,8 +50,16 @@ pub fn init(
             state.add_output(backend.window_size(), *scale);
         }
         state.resize_frame(backend.window_size());
-        Scene::new(backend.renderer())?
+        Rc::new(Scene::new(backend.renderer())?)
     };
+    // The last image of a window that closes (lot D-34): drawn while the clients are read,
+    // never during a frame.
+    let (weak_backend, weak_scene) = (Rc::downgrade(&backend), Rc::downgrade(&scene));
+    state.set_snapshotter(Box::new(move |state, window| {
+        let (backend, scene) = (weak_backend.upgrade()?, weak_scene.upgrade()?);
+        let mut backend = backend.try_borrow_mut().ok()?;
+        window_anim::snapshot(&scene, backend.renderer(), state, window)
+    }));
     let var = |key: &str| std::env::var_os(key);
     state.wallpaper = Wallpaper::start(
         &event_loop.handle(),
@@ -77,7 +86,7 @@ pub fn init(
                 WinitEvent::Redraw => {
                     // A client may change its cursor without the pointer moving.
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
-                    let frame = (&scene, &mut ids, &mut textures, &mut preview);
+                    let frame = (&*scene, &mut ids, &mut textures, &mut preview);
                     if let Err(err) = render(&mut backend, frame, state) {
                         tracing::warn!("render: {err}");
                     }

@@ -232,6 +232,7 @@ impl XwmHandler for State {
     fn unmapped_window(&mut self, _xwm: XwmId, surface: X11Surface) {
         if let Some(window) = self.x11_window(&surface) {
             let focused = self.focused_window().as_ref() == Some(&window);
+            self.start_closing(&window);
             self.space.unmap_elem(&window);
             if focused {
                 self.focus(self.top_window());
