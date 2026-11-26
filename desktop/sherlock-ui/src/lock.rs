@@ -116,6 +116,21 @@ pub mod screen {
     /// One turn of the spinner.
     pub const SPIN: Duration = motion::SPIN;
 
+    /// The form (bubble, name, pill, machine buttons) shows only on demand, as on macOS: a key,
+    /// a click or the pointer bring it, and it leaves again after `FORM_TIMEOUT` without input.
+    pub const FORM_TIMEOUT: Duration = Duration::from_secs(20);
+    /// The bubble grows from this share of its size, on `SPRING`.
+    pub const BUBBLE_FROM: f32 = 0.6;
+    /// How long Sherlock is sorry after a refusal, before he rests.
+    pub const SORRY: Duration = Duration::from_millis(2500);
+
+    /// The picture behind the lock screen, blurred once at start: reduced to this width, blurred
+    /// with this deviation (in pixels of the reduced picture), then darkened by `DIM`. Drawn
+    /// back at the screen's size, the reduction blurs it further for free.
+    pub const BACKGROUND_WIDTH: u32 = 320;
+    pub const BLUR_SIGMA: f32 = 4.0;
+    pub const DIM: f32 = 0.55;
+
     /// The colors of the screen in a palette.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Colors {

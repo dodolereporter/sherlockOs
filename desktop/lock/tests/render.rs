@@ -1,8 +1,10 @@
 //! The lock screen drawn without a screen, with a fake PAM and a fake `systemctl`: never the
-//! system's PAM, never a real password. The screenshots go to `target/tmp/lock/`: each state
-//! (rest, typing, error, spinner) in the dark and the light theme on a 1920 × 1080 screen, the
-//! rest on the four screens of the brief (1366 × 768, 1920 × 1080, 2560 × 1600 at 1.5, 3840 ×
-//! 2160 at 2, drawn at their logical size), and a second screen, which shows the time only.
+//! system's PAM, never a real password. The screenshots go to `target/tmp/lock/`, on the blurred
+//! wallpaper of the collection: each state (rest without the form, the form shown, typing, the
+//! password shown, spinner, error) in the dark and the light theme on a 1920 × 1080 screen, the
+//! rest and the form on the four screens of the brief (1366 × 768, 1920 × 1080, 2560 × 1600 at
+//! 1.5, 3840 × 2160 at 2, drawn at their logical size), and a second screen, which shows the
+//! time only. In software, Sherlock is his still picture.
 
 // In a test module: the helpers may unwrap like the tests (clippy.toml).
 #[cfg(test)]
@@ -14,8 +16,10 @@ mod tests {
     use iced::{Size, window};
     use iced_test::simulator::Simulator;
     use lock::app::{Clock, Lock, Message, Phase};
+    use lock::form::{Input, Key};
     use lock::machine::{Machine, Runner};
     use lock::pam::{AuthError, Authenticator};
+    use sherlock_3d::Mood;
     use sherlock_ui::{color, theme};
     use system_services::secret::Secret;
 
@@ -72,6 +76,12 @@ mod tests {
             hour: 22,
             minute: 47,
         });
+        let wallpaper = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/wallpapers/first-clue.jpg"
+        );
+        let picture = lock::background::blurred(std::path::Path::new(wallpaper)).unwrap();
+        let _ = lock.update(Message::Background(picture));
         lock.set_now(Instant::now() + Duration::from_secs(2));
         Screen {
             lock,
@@ -98,6 +108,20 @@ mod tests {
         written
     }
 
+    /// The form comes with the pointer, and its animations end.
+    fn show_form(s: &mut Screen) {
+        let _ = s.lock.update(Message::Input(s.primary, Input::Pointer));
+        assert!(s.lock.form_shown());
+        s.lock.set_now(Instant::now() + Duration::from_secs(4));
+    }
+
+    fn key(s: &mut Screen, key: Key, text: &str) {
+        let text = Some(text.to_owned());
+        let _ = s
+            .lock
+            .update(Message::Input(s.primary, Input::Key { key, text }));
+    }
+
     /// Waits for the fake PAM's answer, as the runtime would.
     fn checked(s: &mut Screen, expected: Result<(), AuthError>) {
         for _ in 0..100 {
@@ -117,24 +141,28 @@ mod tests {
             color::set_active(which);
             let mut s = screen(size);
             snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
+            show_form(&mut s);
+            snapshot(&s.lock, s.primary, size, &format!("form{suffix}"));
             snapshot(&s.lock, s.other, size, &format!("other-screen{suffix}"));
 
-            let _ = s.lock.update(Message::Key);
             let _ = s
                 .lock
                 .update(Message::Typed(Secret::new("motdepas".into())));
             snapshot(&s.lock, s.primary, size, &format!("typing{suffix}"));
+            let _ = s.lock.update(Message::ShowPassword);
+            snapshot(&s.lock, s.primary, size, &format!("peek{suffix}"));
+            let _ = s.lock.update(Message::ShowPassword);
 
             let _ = s.lock.update(Message::Submit);
             assert!(matches!(s.lock.phase(), Phase::Checking(_)));
             assert_eq!(s.lock.password_len(), 0, "the field empties at once");
-            s.lock.set_now(Instant::now() + Duration::from_millis(2300));
+            s.lock.set_now(Instant::now() + Duration::from_millis(4300));
             snapshot(&s.lock, s.primary, size, &format!("spinner{suffix}"));
 
             checked(&mut s, Err(AuthError::Refused));
             assert!(matches!(s.lock.phase(), Phase::Refused(..)));
             // In the middle of the shake.
-            s.lock.set_now(Instant::now() + Duration::from_millis(2350));
+            s.lock.set_now(Instant::now() + Duration::from_millis(4350));
             snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
         }
         color::set_active(color::Theme::Dark);
@@ -145,8 +173,10 @@ mod tests {
             ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-scale-150"),
             ((1920.0, 1080.0), "3840x2160-scale-200"),
         ] {
-            let s = screen(size);
+            let mut s = screen(size);
             snapshot(&s.lock, s.primary, size, &format!("rest-{name}"));
+            show_form(&mut s);
+            snapshot(&s.lock, s.primary, size, &format!("form-{name}"));
             snapshot(&s.lock, s.other, size, &format!("other-screen-{name}"));
         }
     }
@@ -154,6 +184,7 @@ mod tests {
     #[test]
     fn the_right_password_unlocks_and_the_wrong_one_empties_the_field() {
         let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
         let _ = s.lock.update(Message::Typed(Secret::new("faux".into())));
         let _ = s.lock.update(Message::Submit);
         checked(&mut s, Err(AuthError::Refused));
@@ -165,8 +196,10 @@ mod tests {
         let _ = s.lock.update(Message::Submit);
         checked(&mut s, Ok(()));
         assert!(matches!(s.lock.phase(), Phase::Leaving(_)));
-        // An empty field sends nothing to PAM.
+        // An empty field sends nothing to PAM, nor a field hidden with the form.
         let mut s = screen((1920.0, 1080.0));
+        let _ = s.lock.update(Message::Submit);
+        show_form(&mut s);
         let _ = s.lock.update(Message::Submit);
         assert_eq!(s.lock.phase(), Phase::Typing);
         assert!(s.pam.0.lock().unwrap().is_empty());
@@ -174,7 +207,8 @@ mod tests {
 
     #[test]
     fn the_password_never_shows_in_a_message() {
-        let s = screen((1920.0, 1080.0));
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
         let mut ui =
             Simulator::with_size(lock::settings(), (1920.0, 1080.0), s.lock.view(s.primary));
         let _ = ui.click(sherlock_ui::lock::screen::PASSWORD);
@@ -245,5 +279,65 @@ mod tests {
             exit - leaving < 1200,
             "the exit is in the branch of the acceptance"
         );
+    }
+
+    #[test]
+    fn a_letter_brings_the_form_and_starts_the_password() {
+        let mut s = screen((1920.0, 1080.0));
+        assert!(!s.lock.form_shown());
+        key(&mut s, Key::Other, "p");
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 1, "the letter is not lost");
+        assert_eq!(s.lock.mood(), Mood::EyesClosed);
+        // Once shown, the keys go to the field itself, not twice.
+        key(&mut s, Key::Other, "a");
+        assert_eq!(s.lock.password_len(), 1);
+    }
+
+    #[test]
+    fn space_and_enter_only_bring_the_form() {
+        for (k, text) in [(Key::Space, " "), (Key::Enter, "\r")] {
+            let mut s = screen((1920.0, 1080.0));
+            key(&mut s, k, text);
+            assert!(s.lock.form_shown());
+            assert_eq!(s.lock.password_len(), 0);
+            assert_eq!(s.lock.phase(), Phase::Typing, "Enter sends nothing to PAM");
+            assert_eq!(s.lock.mood(), Mood::Wave);
+        }
+    }
+
+    #[test]
+    fn without_input_the_form_leaves_and_the_field_empties() {
+        let mut s = screen((1920.0, 1080.0));
+        key(&mut s, Key::Other, "p");
+        let _ = s.lock.update(Message::ShowPassword);
+        let quiet = sherlock_ui::lock::screen::FORM_TIMEOUT + Duration::from_secs(3);
+        let _ = s.lock.update(Message::Tick(Instant::now() + quiet));
+        assert!(!s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 0);
+        // Escape sends it away too.
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        key(&mut s, Key::Escape, "\u{1b}");
+        assert!(!s.lock.form_shown());
+    }
+
+    #[test]
+    fn sherlock_follows_the_field() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        assert_eq!(s.lock.mood(), Mood::Wave);
+        let _ = s.lock.update(Message::Typed(Secret::new("ab".into())));
+        assert_eq!(s.lock.mood(), Mood::EyesClosed);
+        let _ = s.lock.update(Message::ShowPassword);
+        assert_eq!(s.lock.mood(), Mood::Peek);
+        let _ = s.lock.update(Message::ShowPassword);
+        let _ = s.lock.update(Message::Typed(Secret::default()));
+        assert_eq!(s.lock.mood(), Mood::Idle, "eyes open again, on the field");
+        let _ = s.lock.update(Message::Typed(Secret::new(FAKE.into())));
+        let _ = s.lock.update(Message::Submit);
+        assert_eq!(s.lock.mood(), Mood::Think);
+        checked(&mut s, Ok(()));
+        assert_eq!(s.lock.mood(), Mood::Success);
     }
 }

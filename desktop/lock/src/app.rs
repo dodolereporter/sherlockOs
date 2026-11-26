@@ -1,19 +1,21 @@
-//! The lock screen: one lock surface per screen. The screen of the pointer (the one whose lock
-//! surface the compositor gives the keyboard to) shows the time, Sherlock, the user's name, the
-//! password pill and the machine buttons; the others show the background and the time. Every
-//! size follows the height of its screen (`sherlock_ui::lock::screen`).
+//! The lock screen: one lock surface per screen. At rest, every screen shows the background,
+//! the date and the time. A key, a click or the pointer bring the form, on the screen of the
+//! pointer (the one whose lock surface the compositor gives the keyboard to): Sherlock in 3D in
+//! his bubble, the user's name, the password pill and the machine buttons (`form`). Every size
+//! follows the height of its screen (`sherlock_ui::lock::screen`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iced::futures::channel::{mpsc, oneshot};
-use iced::widget::{Space, button, column, container, image, row, svg, text, text_input};
+use iced::widget::{Space, button, column, container, image, row, stack, svg, text, text_input};
 use iced::{
-    Alignment, Background, Border, Color as IcedColor, Element, Event, Font, Length, Padding, Size,
-    Subscription, Task, keyboard, mouse, window,
+    Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
+    Padding, Point, Size, Subscription, Task, keyboard, mouse, window,
 };
 use iced_exwlshell::to_exwlshell_message;
+use sherlock_3d::{Model, Sherlock3d};
 use sherlock_ui::color::{self, Color};
 use sherlock_ui::component;
 use sherlock_ui::icon::Icon;
@@ -22,11 +24,20 @@ use sherlock_ui::motion::Animation;
 use sherlock_ui::{metrics, motion, strings, typography};
 use system_services::secret::Secret;
 
+use crate::background::Picture;
+use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
 
-/// The picture of Sherlock in his bubble, until his 3D model comes (lot D-25b).
-const SHERLOCK: &[u8] = include_bytes!("../../../docs/design/images/sherlock-neutre.png");
+/// The model of Sherlock, once read (it is not part of `Message`'s `Debug`).
+#[derive(Clone)]
+pub struct Mascot(pub Arc<Model>);
+
+impl std::fmt::Debug for Mascot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Mascot")
+    }
+}
 
 /// The id of the password field.
 pub fn field() -> iced::widget::Id {
@@ -42,15 +53,22 @@ pub enum Message {
     Resized(window::Id, Size),
     /// The pointer or the keyboard is on that surface's screen.
     Here(window::Id),
-    /// A key pressed: the animations end at once.
-    Key,
+    /// A key, a click or the pointer on that surface: it may bring the form.
+    Input(window::Id, Input),
     Typed(Secret),
     Submit,
     Checked(Result<(), AuthError>),
-    Reveal,
+    /// The eye: shows or hides the password.
+    ShowPassword,
     Machine(Machine),
     Clock(Clock),
+    /// Every second while the form shows: it may leave.
+    Tick(Instant),
     Frame(Instant),
+    /// The model of Sherlock, read on a thread at start; `None` without it (the still picture).
+    Mascot(Option<Mascot>),
+    /// The picture behind the screen, blurred on a thread at start.
+    Background(Picture),
 }
 
 /// The time shown, to the minute.
@@ -112,8 +130,16 @@ pub struct Lock {
     /// When the screen came: the clock of the animations.
     start: Instant,
     now: Instant,
-    /// A key ended the entrance.
+    /// A key ended the entrance of what shows.
     entered: bool,
+    /// The form, shown on demand.
+    form: Form,
+    /// Something was typed since the form came.
+    typed: bool,
+    /// « Veille » was confirmed: Sherlock sleeps until the next input.
+    asleep: bool,
+    mascot: Option<Mascot>,
+    background: Option<image::Handle>,
     authenticator: Arc<dyn Authenticator>,
     runner: Arc<dyn Runner>,
 }
@@ -138,8 +164,43 @@ impl Lock {
             start: now,
             now,
             entered: false,
+            form: Form::default(),
+            typed: false,
+            asleep: false,
+            mascot: None,
+            background: None,
             authenticator,
             runner,
+        }
+    }
+
+    /// The form shows.
+    pub fn form_shown(&self) -> bool {
+        self.form.shown()
+    }
+
+    /// What Sherlock shows now.
+    pub fn mood(&self) -> sherlock_3d::Mood {
+        form::mood(self.field(), self.elapsed())
+    }
+
+    fn field(&self) -> form::Field {
+        form::Field {
+            phase: self.phase,
+            empty: self.password.is_empty(),
+            peek: self.reveal,
+            typed: self.typed,
+            asleep: self.asleep,
+        }
+    }
+
+    /// The form left: the field empties, the eye closes.
+    fn clear(&mut self) {
+        self.password = Secret::default();
+        (self.reveal, self.typed) = (false, false);
+        self.armed.disarm();
+        if matches!(self.phase, Phase::Refused(..)) {
+            self.phase = Phase::Typing;
         }
     }
 
@@ -175,13 +236,17 @@ impl Lock {
     fn animating(&self) -> bool {
         let t = self.elapsed();
         let entrance = !self.entered && t < Duration::from_millis(1200);
+        let form = self
+            .form
+            .changed()
+            .is_some_and(|at| t < at + Duration::from_millis(1200));
         let phase = match self.phase {
             Phase::Typing => false,
             Phase::Checking(_) => true,
             Phase::Refused(at, _) => t < at + ui::SHAKE + Duration::from_millis(400),
             Phase::Leaving(_) => true,
         };
-        entrance || phase
+        entrance || form || phase
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -190,8 +255,14 @@ impl Lock {
         } else {
             Subscription::none()
         };
+        let ticks = if self.form.shown() {
+            Subscription::run(ticks).map(Message::Tick)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             frames,
+            ticks,
             Subscription::run(clock).map(Message::Clock),
             iced::event::listen_with(on_event),
         ])
@@ -215,15 +286,16 @@ impl Lock {
                     return iced::widget::operation::focus(field());
                 }
             }
-            Message::Key => self.entered = true,
+            Message::Input(id, input) => return self.input(id, input),
             Message::Typed(typed) => {
-                if matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
+                if self.form.shown() && matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
+                    self.typed |= !typed.is_empty();
                     self.password = typed;
                     self.phase = Phase::Typing;
                     self.armed.disarm();
                 }
             }
-            Message::Reveal => self.reveal = !self.reveal,
+            Message::ShowPassword => self.reveal = !self.reveal,
             Message::Submit => return self.submit(),
             Message::Checked(Ok(())) => {
                 tracing::info!("unlocked");
@@ -243,12 +315,29 @@ impl Lock {
                 let now = Instant::now();
                 if self.armed.click(machine, now) {
                     tracing::info!(verb = machine.verb(), "machine command");
+                    self.asleep = machine == Machine::Sleep;
                     self.runner.run(machine);
                 }
             }
             Message::Clock(clock) => {
                 self.clock = clock;
                 self.armed.expire(Instant::now());
+            }
+            Message::Tick(now) => {
+                self.now = now;
+                let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
+                if self.form.tick(self.elapsed(), busy) {
+                    self.clear();
+                }
+            }
+            Message::Mascot(mascot) => self.mascot = mascot,
+            Message::Background(picture) => {
+                let Picture {
+                    width,
+                    height,
+                    rgba,
+                } = picture;
+                self.background = Some(image::Handle::from_rgba(width, height, rgba));
             }
             Message::Frame(now) => {
                 self.now = now;
@@ -269,8 +358,36 @@ impl Lock {
         Task::none()
     }
 
+    /// A key, a click or the pointer on the surface `id`.
+    fn input(&mut self, id: window::Id, input: Input) -> Task<Message> {
+        self.asleep = false;
+        let key = matches!(input, Input::Key { .. });
+        let mut task = Task::none();
+        if !key {
+            task = self.update(Message::Here(id));
+        }
+        match self.form.input(self.elapsed(), input) {
+            Outcome::Shown { typed } => {
+                self.entered = false;
+                self.typed = false;
+                if let Some(typed) = typed {
+                    // The key that brought the form starts the password.
+                    let mut text = std::mem::take(&mut self.password).as_str().to_owned();
+                    text.push_str(&typed);
+                    self.password = Secret::new(text);
+                    self.typed = true;
+                }
+                return Task::batch([task, iced::widget::operation::focus(field())]);
+            }
+            Outcome::Hidden => self.clear(),
+            // A key once the form shows ends its entrance.
+            Outcome::Nothing => self.entered |= key,
+        }
+        task
+    }
+
     fn submit(&mut self) -> Task<Message> {
-        if self.password.is_empty() || !matches!(self.phase, Phase::Typing) {
+        if !self.form.shown() || self.password.is_empty() || !matches!(self.phase, Phase::Typing) {
             return Task::none();
         }
         self.entered = true;
@@ -296,15 +413,23 @@ impl Lock {
         })
     }
 
-    /// Progress of the entrance of element `index` (0 for the time, then the bubble, the name,
-    /// the pill and the machine buttons), from 0 to 1, times the exit.
-    fn presence(&self, index: u32) -> f32 {
+    /// Progress of element `index` (0 for the time, then the bubble, the name, the pill and the
+    /// machine buttons), from 0 to 1, times the exit. The time enters with the screen; the
+    /// others come with the form, 70 ms apart, and leave with it in reverse order. A key ends
+    /// the entrance. Unclamped: the spring overshoots a little.
+    fn progress(&self, index: u32) -> f32 {
         let t = self.elapsed();
-        let entrance = if self.entered {
-            1.0
-        } else {
-            let start = ui::STAGGER * index;
-            Animation::new(ui::SPRING, 0.0, 1.0, start).value(t)
+        let entrance = match (index, self.form.changed()) {
+            (0, _) if self.entered => 1.0,
+            (0, _) => Animation::new(ui::SPRING, 0.0, 1.0, Duration::ZERO).value(t),
+            (_, None) => 0.0,
+            (_, Some(_)) if self.form.shown() && self.entered => 1.0,
+            (_, Some(at)) if self.form.shown() => {
+                Animation::new(ui::SPRING, 0.0, 1.0, at + ui::STAGGER * (index - 1)).value(t)
+            }
+            (_, Some(at)) => {
+                Animation::new(ui::SPRING, 1.0, 0.0, at + ui::STAGGER * (4 - index.min(4))).value(t)
+            }
         };
         let exit = match self.phase {
             Phase::Leaving(at) => {
@@ -314,7 +439,12 @@ impl Lock {
             }
             _ => 1.0,
         };
-        (entrance * exit).clamp(0.0, 1.0) as f32
+        (entrance * exit) as f32
+    }
+
+    /// `progress`, between 0 and 1: an opacity.
+    fn presence(&self, index: u32) -> f32 {
+        self.progress(index).clamp(0.0, 1.0)
     }
 
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
@@ -349,7 +479,8 @@ impl Lock {
         .align_x(Alignment::Center)
         .width(Length::Fill)
         .height(Length::Fill);
-        if primary {
+        let form = self.form.shown() || self.presence(1) > 0.01 || self.presence(4) > 0.01;
+        if primary && form {
             page = page
                 .push(rise(self.bubble(height, &colors), self.presence(1)))
                 .push(Space::new().height(ui::BUBBLE_GAP))
@@ -371,35 +502,54 @@ impl Lock {
                 .push(rise(self.machines(&colors), self.presence(4)))
                 .push(Space::new().height(ui::bottom(height)));
         }
-        let background = colors.background;
-        container(page)
+        let fill = colors.background;
+        let plain = container(Space::new())
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| container::Style {
-                background: Some(Background::Color(background.into())),
+                background: Some(Background::Color(fill.into())),
                 ..container::Style::default()
-            })
+            });
+        let picture = self.background.as_ref().map(|handle| {
+            image(handle.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(ContentFit::Cover)
+        });
+        let mut layers = stack![plain];
+        if let Some(picture) = picture {
+            layers = layers.push(picture);
+        }
+        layers
+            .push(page)
+            .width(Length::Fill)
+            .height(Length::Fill)
             .into()
     }
 
+    /// Sherlock in his bubble: in 3D on the GPU, the still picture in software or without the
+    /// model. The bubble grows from `BUBBLE_FROM` of its size on a spring, in a box of
+    /// constant size.
     fn bubble(&self, height: f32, colors: &Colors) -> Element<'_, Message> {
         let diameter = ui::bubble(height);
+        let grow = ui::BUBBLE_FROM + (1.0 - ui::BUBBLE_FROM) * self.progress(1).max(0.0);
+        let side = (diameter * grow).max(1.0);
         let fill = fade(colors.bubble, self.presence(1));
-        let picture = image(image::Handle::from_bytes(SHERLOCK))
-            .height(diameter * 1.15)
-            .opacity(self.presence(1));
-        container(picture)
-            .width(diameter)
-            .height(diameter)
-            .padding(Padding::default().top(diameter * 0.1))
-            .align_x(Alignment::Center)
-            .clip(true)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(fill)),
-                border: Border::default().rounded(diameter / 2.0),
-                ..container::Style::default()
-            })
-            .into()
+        let field = self.field();
+        // The field, under the bubble, the name and their gaps.
+        let below = Point::new(
+            diameter / 2.0,
+            diameter + ui::BUBBLE_GAP + ui::NAME_SIZE + ui::NAME_GAP + 2.0 * ui::RISE,
+        );
+        let gaze = form::gaze(field, self.elapsed()).then_some(below);
+        let mascot = Sherlock3d::new(self.mascot.as_ref().map(|m| m.0.clone()))
+            .mood(self.mood())
+            .look_at(gaze)
+            .background(fill)
+            .paused(!self.form.shown())
+            .width(side)
+            .height(side);
+        container(mascot).center(diameter).into()
     }
 
     /// The pill: the field, the eye and the arrow; a circle with the spinner while PAM checks.
@@ -428,10 +578,15 @@ impl Lock {
         } else {
             let text_color = fade(colors.text, presence);
             let placeholder = fade(colors.placeholder, presence);
+            // Read-only while the form leaves: no key goes into a field on its way out.
             let input = text_input(ui::PASSWORD, self.password.as_str())
                 .id(field())
                 .secure(!self.reveal)
-                .on_input(|typed| Message::Typed(Secret::new(typed)))
+                .on_input_maybe(
+                    self.form
+                        .shown()
+                        .then_some(|typed| Message::Typed(Secret::new(typed))),
+                )
                 .on_submit(Message::Submit)
                 .size(ui::FIELD_TEXT_SIZE)
                 .padding(Padding::default().left(ui::FIELD_RADIUS - 4.0))
@@ -446,7 +601,7 @@ impl Lock {
             let eye = if self.reveal { Icon::EyeOff } else { Icon::Eye };
             row![
                 input.width(Length::Fill),
-                self.field_button(eye, Message::Reveal, colors),
+                self.field_button(eye, Message::ShowPassword, colors),
                 self.field_button(Icon::ArrowRight, Message::Submit, colors),
             ]
             .align_y(Alignment::Center)
@@ -616,16 +771,42 @@ fn colors_selection() -> Color {
 
 fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
     match event {
-        Event::Mouse(mouse::Event::CursorEntered | mouse::Event::ButtonPressed(_)) => {
-            Some(Message::Here(id))
+        Event::Mouse(mouse::Event::CursorEntered) => Some(Message::Here(id)),
+        Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonPressed(_)) => {
+            Some(Message::Input(id, Input::Pointer))
         }
         Event::Window(window::Event::Focused) => Some(Message::Here(id)),
         Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
             Some(Message::Resized(id, size))
         }
-        Event::Keyboard(keyboard::Event::KeyPressed { .. }) => Some(Message::Key),
+        Event::Keyboard(keyboard::Event::KeyPressed { key, text, .. }) => {
+            let key = match key {
+                keyboard::Key::Named(keyboard::key::Named::Space) => form::Key::Space,
+                keyboard::Key::Named(keyboard::key::Named::Enter) => form::Key::Enter,
+                keyboard::Key::Named(keyboard::key::Named::Escape) => form::Key::Escape,
+                _ => form::Key::Other,
+            };
+            let text = text.map(|t| t.to_string());
+            Some(Message::Input(id, Input::Key { key, text }))
+        }
         _ => None,
     }
+}
+
+/// A tick every second, from a thread of its own, while the subscription lives.
+fn ticks() -> mpsc::UnboundedReceiver<Instant> {
+    let (sender, receiver) = mpsc::unbounded();
+    let spawned = std::thread::Builder::new()
+        .name("ticks".into())
+        .spawn(move || {
+            while sender.unbounded_send(Instant::now()).is_ok() {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    if let Err(err) = spawned {
+        tracing::warn!("ticks: {err}");
+    }
+    receiver
 }
 
 /// The time, read again every few seconds on a thread of its own: sent when the minute changes.

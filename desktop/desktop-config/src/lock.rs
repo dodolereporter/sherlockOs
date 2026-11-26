@@ -1,10 +1,13 @@
 //! The lock setting, `<config dir>/lock.conf`: after how long without input the compositor
-//! locks the session (lot D-25a). The compositor reads it at start and again when it changes;
-//! Control Room will write it.
+//! locks the session (lot D-25a), and the picture behind the lock screen (lot D-25b). The
+//! compositor and the lock screen read it; Control Room will write it.
 //!
 //! ```text
 //! # Minutes without input before the session locks; 0: never (5 by default).
 //! idle-minutes = 5
+//! # The picture behind the lock screen, an absolute path (by default, the wallpaper of the
+//! # desktop, blurred and darkened).
+//! background = /home/me/Pictures/lock.jpg
 //! ```
 
 use std::{
@@ -33,16 +36,19 @@ pub enum Error {
 }
 
 /// The lock setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Minutes without input before the lock; 0: never.
     pub idle_minutes: u32,
+    /// The picture behind the lock screen; `None`: the desktop's wallpaper.
+    pub background: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             idle_minutes: DEFAULT_IDLE_MINUTES,
+            background: None,
         }
     }
 }
@@ -79,6 +85,13 @@ impl Config {
                         .ok_or_else(|| {
                             error(format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}"))
                         })?;
+                }
+                "background" => {
+                    let path = PathBuf::from(value);
+                    if !path.is_absolute() {
+                        return Err(error(format!("expected an absolute path, not {value:?}")));
+                    }
+                    config.background = Some(path);
                 }
                 key => return Err(error(format!("unknown key {key:?}"))),
             }
@@ -129,6 +142,14 @@ mod tests {
         ] {
             assert!(Config::parse(wrong).is_err(), "{wrong}");
         }
+    }
+
+    #[test]
+    fn the_background_is_an_absolute_path() {
+        assert_eq!(Config::default().background, None);
+        let set = Config::parse("background = /srv/lock.jpg").unwrap();
+        assert_eq!(set.background, Some(PathBuf::from("/srv/lock.jpg")));
+        assert!(Config::parse("background = lock.jpg").is_err());
     }
 
     #[test]

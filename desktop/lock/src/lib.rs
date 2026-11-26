@@ -5,6 +5,8 @@
 //! `docs/lock.md`.
 
 pub mod app;
+pub mod background;
+pub mod form;
 pub mod machine;
 pub mod pam;
 
@@ -15,7 +17,50 @@ use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::ShellType;
 use sherlock_ui::{color, theme, typography};
 
-use crate::app::{Lock, Message};
+use crate::app::{Lock, Mascot, Message};
+
+/// Runs `work` on a thread of its own and hands its result to the program as a message; `None`
+/// when the thread cannot start or ends without an answer.
+fn in_background<T: Send + 'static>(
+    name: &str,
+    work: impl FnOnce() -> Option<T> + Send + 'static,
+    message: impl Fn(Option<T>) -> Option<Message> + Send + 'static,
+) -> iced::Task<Message> {
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            let _ = sender.send(work());
+        });
+    if let Err(err) = spawned {
+        tracing::warn!("{err}");
+        return iced::Task::none();
+    }
+    iced::Task::perform(receiver, move |result| message(result.ok().flatten()))
+        .and_then(iced::Task::done)
+}
+
+/// What starts with the screen: the lock, the model of Sherlock and the background, both read
+/// on threads of their own (the screen shows at once, the still picture and the plain
+/// background until they are ready).
+fn start() -> iced::Task<Message> {
+    let mascot = in_background(
+        "mascot",
+        || {
+            let path = sherlock_3d::locate::find()?;
+            sherlock_3d::Model::open(&path)
+                .inspect_err(|err| tracing::warn!(path = %path.display(), "mascot: {err}"))
+                .ok()
+        },
+        |model| Some(Message::Mascot(model.map(|m| Mascot(Arc::new(m))))),
+    );
+    let background = in_background(
+        "background",
+        || background::load(|key| std::env::var_os(key)),
+        |picture| picture.map(Message::Background),
+    );
+    iced::Task::batch([iced::Task::done(Message::Lock), mascot, background])
+}
 
 /// The fonts of the design system, Inter by default.
 pub fn settings() -> Settings {
@@ -39,6 +84,10 @@ pub enum Error {
 /// Takes the lock and shows the screen until the password is accepted.
 pub fn run() -> Result<(), Error> {
     let user = pam::session_user().ok_or(Error::NoUser)?;
+    // The theme of the session, light or dark, from its first frame.
+    if let Some(path) = appearance_config::path() {
+        color::set_active(appearance_config::theme_now(&path));
+    }
     // No clipboard: no second Wayland connection either. The compositor hands this program a
     // single connection (`WAYLAND_SOCKET`), the only one allowed to lock.
     iced_exwlshell::disable_clipboard();
@@ -58,7 +107,7 @@ pub fn run() -> Result<(), Error> {
                 Arc::new(machine::Systemctl),
             )
         });
-        (state, iced::Task::done(Message::Lock))
+        (state, start())
     };
     iced_exwlshell::daemon(boot, namespace, Lock::update, Lock::view)
         .theme(|_: &Lock, _| Some(theme::theme()))
