@@ -577,6 +577,7 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.end_minimize_effects();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
