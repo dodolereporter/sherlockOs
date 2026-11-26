@@ -702,6 +702,21 @@ Each one in its states, dark then light (`tests/gallery.rs`, `each_component_ren
 The gallery shows the new components live (« Composants ajoutés par UI-01 »), and its table of
 states gains the check box, the radio button and the workspace chip.
 
+## Icons that fade (UI-04)
+
+The author saw the control centre unfold on the GPU with its texts and tiles fading and its
+icons at full strength. Cause: iced's renderers, wgpu and tiny-skia alike, take only the red,
+green and blue of an SVG's color, never its alpha; `color::with_opacity`, which fades every
+color, could not reach an icon. The transformation of `animated::Reveal` already moved and scaled
+them (both renderers transform an SVG's bounds).
+
+Now every icon the library draws takes its opacity from `color::icon_opacity(tint)`, the tint's
+alpha times the opacity of the fade: `component::icon`, `logo`, `logo_square`, the Sherlock
+button, the glyphs of the panels (built inside the fade, like the texts), and
+`animated::GlyphFade` and the `controls` (drawn inside it). `tests/fade.rs` renders a square, an
+icon and a glyph at half opacity, moved by a `Reveal`: the icons are no brighter than the square
+and move with it.
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like
