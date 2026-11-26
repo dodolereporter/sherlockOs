@@ -163,8 +163,14 @@ mod tests {
                 String::from("/nowhere/agent absent-agent"),
             ),
             ("SHERLOCKOS_XWAYLAND", String::from("0")),
+            // No PAM service for the lock screen (lot D-25a).
+            ("SHERLOCKOS_PAM_DIR", String::from("/nowhere/pam.d")),
         ]);
         assert!(log.contains("warning: no polkit agent installed"), "{log}");
+        assert!(
+            log.contains("warning: /nowhere/pam.d/sherlockos-lock is missing"),
+            "{log}"
+        );
         assert!(log.contains("keyring: none"), "{log}");
         assert!(!s.out("args").contains("--xwayland"), "{}", s.out("args"));
         assert!(s.dir.join("out/bar").exists(), "{log}");

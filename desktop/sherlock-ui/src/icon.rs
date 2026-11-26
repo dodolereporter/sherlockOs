@@ -64,6 +64,16 @@ pub enum Icon {
     Brightness,
     /// Keyboard backlight: a keyboard under three rays (lot D-35d).
     KeyboardBrightness,
+    /// The password field of the lock screen (lot D-25a): show the password, hide it, send it.
+    Eye,
+    EyeOff,
+    ArrowRight,
+    /// The machine buttons of the lock screen: sleep (a moon), restart, power off.
+    Sleep,
+    Restart,
+    Power,
+    /// An open arc, turned while the password is checked.
+    Spinner,
     Bluetooth,
     Touchpad,
     Grid,
@@ -72,7 +82,7 @@ pub enum Icon {
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 46] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -108,6 +118,13 @@ impl Icon {
         Self::MicrophoneMuted,
         Self::Brightness,
         Self::KeyboardBrightness,
+        Self::Eye,
+        Self::EyeOff,
+        Self::ArrowRight,
+        Self::Sleep,
+        Self::Restart,
+        Self::Power,
+        Self::Spinner,
         Self::Bluetooth,
         Self::Touchpad,
         Self::Grid,
@@ -190,6 +207,17 @@ impl Icon {
             Self::KeyboardBrightness => {
                 "M4.5 11h15a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5v-6A1.5 1.5 0 0 1 4.5 11zM7 14h.01M10 14h.01M14 14h.01M17 14h.01M8.5 17h7M12 3.5v3M6.8 5.2l1.4 1.8M17.2 5.2l-1.4 1.8"
             }
+            Self::Eye => {
+                "M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z"
+            }
+            Self::EyeOff => {
+                "M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM4 4l16 16"
+            }
+            Self::ArrowRight => "M5 12h14M13 6l6 6-6 6",
+            Self::Sleep => "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+            Self::Restart => "M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4",
+            Self::Power => "M12 3v8M7.2 6.2a7.5 7.5 0 1 0 9.6 0",
+            Self::Spinner => "M12 4a8 8 0 1 1-8 8",
             // The Reglages board's.
             Self::Bluetooth => "M7 7l10 10-5 4V3l5 4L7 17",
             // A touchpad with its button line, drawn for Control Room.
