@@ -343,6 +343,50 @@ impl State {
         }
     }
 
+    /// The client leaves the maximized state itself (`unset_maximized`, or `_NET_WM_STATE` for
+    /// X11) while its window is held: some clients do so when their title bar is pulled,
+    /// before or after asking for the move. The window comes off under the pointer at its
+    /// previous size, as a move takes it out, instead of going back to its place from before
+    /// it was maximized (lot D-18d). `false` when the window is not held by a move or a
+    /// pressed button: the caller restores it to that place.
+    pub(crate) fn unmaximize_held(&mut self, window: &Window) -> bool {
+        if let Some(mut gesture) = self.gesture.take() {
+            let held = gesture.window == *window && gesture.edges.is_none();
+            if held {
+                self.detach_for_move(&mut gesture);
+            }
+            self.gesture = Some(gesture);
+            return held;
+        }
+        let start = self
+            .seat
+            .get_pointer()
+            .filter(|pointer| pointer.is_grabbed())
+            .and_then(|pointer| pointer.grab_start_data());
+        let Some(start) = start.filter(|start| {
+            let focus = start.focus.as_ref().map(|(focus, _)| focus);
+            let own = smithay::wayland::seat::WaylandFocus::wl_surface(window);
+            focus.is_some() && focus == own.as_deref()
+        }) else {
+            return false;
+        };
+        let current = self.space.element_geometry(window);
+        let Some(restore) = leave_arrangement(window) else {
+            return false;
+        };
+        window_data(window).motion.borrow_mut().follow();
+        let size = (!restore.size.is_empty()).then_some(restore.size);
+        self.request_size(window, size);
+        if let (Some(size), Some(current)) = (size, current) {
+            let loc = layout::unsnapped(current, size, start.location);
+            self.move_window(window, loc, false);
+        }
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.send_pending_configure();
+        }
+        true
+    }
+
     fn finish_gesture(&mut self, gesture: Gesture) {
         let Gesture {
             window,

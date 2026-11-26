@@ -510,7 +510,9 @@ impl XdgShellHandler for State {
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.surface_window(&surface) {
+        if let Some(window) = self.surface_window(&surface)
+            && !self.unmaximize_held(&window)
+        {
             self.rearrange(&window, |a, zone| {
                 a.maximized = false;
                 zone.set(None);
