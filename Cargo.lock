@@ -572,6 +572,7 @@ version = "0.0.0"
 dependencies = [
  "ab_glyph",
  "appearance-config",
+ "cursor-theme",
  "desktop-config",
  "image",
  "shell-protocol",
@@ -746,6 +747,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "cursor-theme"
+version = "0.0.0"
+dependencies = [
+ "resvg",
+ "sherlock-ui",
+ "xcursor",
+]
+
+[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -838,6 +848,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "libc",
  "shell-protocol",
  "sherlock-ui",
@@ -3302,6 +3313,7 @@ dependencies = [
  "iced_renderer",
  "iced_runtime",
  "iced_test",
+ "resvg",
  "wgpu",
 ]
 

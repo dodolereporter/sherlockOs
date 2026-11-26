@@ -61,7 +61,7 @@ use crate::{
     Error, HIDDEN_FRAME_INTERVAL, State,
     anim::PreviewMotion,
     card,
-    cursor::Cursors,
+    cursor::{Cursors, Next as CursorNext},
     damage::Ids,
     dmabuf,
     options::Options,
@@ -624,7 +624,7 @@ impl Backend {
         let now = state.start_time.elapsed();
         let preview = self.preview.frame(now, state.snap_preview());
         let screen = [(output.clone(), view)];
-        let (mut screens, animating) = self.scene.screens(
+        let (mut screens, mut animating) = self.scene.screens(
             &mut self.renderer,
             &mut head.ids,
             state,
@@ -637,11 +637,18 @@ impl Backend {
         let pointer = state.seat.get_pointer().map(|p| p.current_location());
         if let (Some(icon), Some(at)) = (state.cursor_icon(), pointer)
             && state.space.output_under(at).any(|o| *o == output)
-            && let Some(cursor) =
+            && let Some((cursor, next)) =
                 self.cursors
-                    .element(&mut self.renderer, icon, view.point(at), view.scale)
+                    .element(&mut self.renderer, icon, view.point(at), view.scale, now)
         {
             elements.push(SessionElement::Cursor(cursor));
+            // A transition of the cursor draws at each blank; a turning cursor only when its
+            // next image is due (lot D-07).
+            match next {
+                CursorNext::Frame => animating = true,
+                CursorNext::At(due) => self.cursors.wake_at(&self.handle, due, now),
+                CursorNext::Rest => {}
+            }
         }
         elements.extend(
             screens

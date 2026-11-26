@@ -100,7 +100,7 @@ impl Sources {
                 .unwrap_or_default();
             config::defaults(&catalog, &mimeapps)
         });
-        let gtk_theme = config_home.as_deref().and_then(icons::gtk_theme);
+        let gtk_theme = config_home.as_deref().and_then(icons::user_theme);
         let theme = config.icon_theme.clone().or_else(|| gtk_theme.clone());
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let lookup = IconLookup::new(&data_dirs, home.as_deref(), theme.as_deref());

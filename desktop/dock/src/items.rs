@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use iced::widget::svg;
+use sherlock_ui::app_icon::AppIcon;
 use sherlock_ui::dock;
 
 use crate::entry::{Catalog, DesktopEntry};
@@ -35,11 +36,9 @@ pub enum Target {
 /// How an icon is drawn.
 #[derive(Debug, Clone)]
 pub enum Glyph {
-    /// An icon file. A PNG goes through an SVG that embeds it: tiny-skia's SVG renderer draws
-    /// both, without iced's `image` feature and the decoders it would add.
+    /// An icon file, or Sherlock's tile. A PNG goes through an SVG that embeds it: tiny-skia's
+    /// SVG renderer draws both, without iced's `image` feature and the decoders it would add.
     File(svg::Handle),
-    /// The color logo of `sherlock-ui` on its night blue tile, until Sherlock has its icon.
-    Sherlock,
     /// No icon found: the initial of the name on a tile.
     Letter(char),
 }
@@ -59,7 +58,9 @@ impl Item {
         Self {
             kind: Kind::Sherlock,
             name: String::from(dock::text::SHERLOCK),
-            glyph: Glyph::Sherlock,
+            // The author's tile, from sherlock-ui rather than the icon theme: Sherlock has no
+            // desktop entry, and no theme can replace it.
+            glyph: Glyph::File(svg::Handle::from_memory(AppIcon::Sherlock.svg().as_bytes())),
             pinned: true,
         }
     }

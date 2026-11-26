@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="5 2.5">
+  <!-- « Pointeur » on the boards: the arrow, by default everywhere. Hotspot: its tip. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <path class="body edge" d="M5 2.5L5 19.5L9.2 15.6L11.9 21.6L14.6 20.4L12 14.6L17.8 14.6Z"
+        stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/>
+</svg>
