@@ -132,7 +132,7 @@ pub fn watch() -> BoxStream<'static, ()> {
             Err(error) => Err(error),
         };
         match watched {
-            Ok(changes) => changes.boxed(),
+            Ok(changes) => crate::bus::coalesce(changes.boxed(), crate::bus::SIGNAL_GAP),
             Err(error) => {
                 tracing::warn!(%error, "the notification centre will not follow the history");
                 stream::empty().boxed()
