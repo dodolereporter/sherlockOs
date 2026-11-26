@@ -84,8 +84,11 @@ pub struct Bar {
     pub swap: Option<(Panel, Unfold)>,
     /// The Sherlock menu unfolding from its button, or folding back before it closes.
     pub menu_unfold: Unfold,
-    /// Width of the bar surface, which the panels are placed from.
-    width: Option<f32>,
+    /// Width of each surface, as iced_exwlshell reports it: kept whoever comes first, the
+    /// surface's size or its id (UI-02a).
+    widths: HashMap<Id, f32>,
+    /// The logical width of the screen each surface is on, when the compositor gives it.
+    screens: HashMap<Id, f32>,
     /// The month the calendar shows.
     pub month: Option<Month>,
     /// What the notification centre shows.
@@ -129,8 +132,8 @@ pub enum Message {
     Network(Network),
     Sound(Sound),
     Desktop(Desktop),
-    /// The screen a surface is on.
-    Output(Id, Option<String>),
+    /// The screen a surface is on: its name and its logical width.
+    Output(Id, Option<String>, Option<f32>),
     /// The network as NetworkManager reports it on the system bus.
     Link(Option<Link>),
     /// The Bluetooth radio as BlueZ reports it.
@@ -270,8 +273,12 @@ impl Bar {
                 self.desktop = Some(desktop);
                 return self.reshape(Instant::now());
             }
-            Message::Output(id, name) => {
+            Message::Output(id, name, width) => {
                 self.outputs.insert(id, name);
+                match width {
+                    Some(width) => self.screens.insert(id, width),
+                    None => self.screens.remove(&id),
+                };
                 return self.reshape(Instant::now());
             }
             Message::ToggleMenu => return self.toggle_menu(),
@@ -286,9 +293,7 @@ impl Bar {
             }
             Message::ClosePanel => return self.close_panel(),
             Message::Resized(id, width) => {
-                if Some(id) == self.surface {
-                    self.width = Some(width);
-                }
+                self.widths.insert(id, width);
             }
             Message::ShowMonth(month) => self.month = Some(month),
             Message::Page(forward) => {
@@ -564,12 +569,7 @@ impl Bar {
         self.swap = None;
         let shared = self.panel_shared;
         let (width, height) = panel::surface_size(which, self.panel_margins, shared);
-        let bar_width = self
-            .width
-            .unwrap_or(metrics::REFERENCE_SCREEN.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE);
-        let side = self.applied.margin_side as f32;
-        let (x, y, anchor_width, anchor_height) =
-            panel::anchor_rect(which, self.panel_margins, bar_width, side, shared);
+        let (x, y, anchor_width, anchor_height) = self.panel_anchor(which);
         let settings = IcedNewPopupSettings::new(
             surface,
             PixelSize::px(width, height),
@@ -620,6 +620,36 @@ impl Bar {
             .chain(self.drop_menu())
             .chain(self.input_region(which, id))
             .chain(self.opened(which))
+    }
+
+    /// The width of the bar surface: as reported for it, else its screen's width less its
+    /// margins. Only without either the reference screen's, with a warning: a panel placed
+    /// from a width that is not the bar's lands far from its button (UI-02a).
+    pub fn bar_width(&self) -> f32 {
+        let surface = self.surface;
+        let reported = surface.and_then(|id| self.widths.get(&id).copied());
+        let side = self.applied.margin_side as f32;
+        let screen = surface
+            .and_then(|id| self.screens.get(&id).copied())
+            .map(|width| width - 2.0 * side);
+        reported.or(screen).unwrap_or_else(|| {
+            tracing::warn!("width of the bar unknown: panels placed for the reference screen");
+            metrics::REFERENCE_SCREEN.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE
+        })
+    }
+
+    /// The anchor rectangle of `which` in the bar surface, from the bar's real width: the
+    /// panel's right edge where the bar ends, under the indicators and the clock, whatever
+    /// the size and the scale of the screen.
+    pub fn panel_anchor(&self, which: Panel) -> (i32, i32, u32, u32) {
+        let side = self.applied.margin_side as f32;
+        panel::anchor_rect(
+            which,
+            self.panel_margins,
+            self.bar_width(),
+            side,
+            self.panel_shared,
+        )
     }
 
     /// What a panel reads when it opens.
@@ -1031,10 +1061,14 @@ pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
 /// The screen of a surface, from iced_exwlshell's reports.
 fn on_output(event: ShellEvent) -> Option<Message> {
     match event {
-        ShellEvent::WindowOutputChanged { window, output } => Some(Message::Output(
-            window,
-            output.and_then(|o| o.info.name.clone()),
-        )),
+        ShellEvent::WindowOutputChanged { window, output } => {
+            let name = output.as_ref().and_then(|o| o.info.name.clone());
+            let width = output
+                .as_ref()
+                .and_then(|o| o.info.logical_size)
+                .map(|(width, _)| width as f32);
+            Some(Message::Output(window, name, width))
+        }
         _ => None,
     }
 }
@@ -1368,6 +1402,52 @@ mod tests {
         let _ = bar.update(Message::ToggleMenu);
         let _ = bar.update(Message::TogglePanel(Panel::Calendar));
         assert!(!bar.menu_open());
+    }
+
+    /// The panels land under the end of the bar, at 54 from the top and 12 from the right edge,
+    /// on the reference screen and on the author's 1920 × 1080, in software and on the GPU,
+    /// whether the bar's size comes before or after its id, or only from its screen (UI-02a:
+    /// placed for 1440 on a 1920 screen, they opened near its middle).
+    #[test]
+    fn the_panels_open_under_the_end_of_the_bar_on_any_screen() {
+        let side = metrics::TOP_BAR_MARGIN_SIDE;
+        for screen in [1440.0, 1920.0] {
+            for (gpu, size_first, from_screen) in [
+                (false, true, false),
+                (true, false, false),
+                (true, true, true),
+            ] {
+                let mut bar = Bar {
+                    panel_motion: Some(gpu),
+                    ..Bar::default()
+                };
+                let id = Id::unique();
+                if from_screen {
+                    let _ = bar.update(Message::Output(id, None, Some(screen)));
+                    let _ = bar.update(Message::Surface(id));
+                } else if size_first {
+                    let _ = bar.update(Message::Resized(id, screen - 2.0 * side));
+                    let _ = bar.update(Message::Surface(id));
+                } else {
+                    let _ = bar.update(Message::Surface(id));
+                    let _ = bar.update(Message::Resized(id, screen - 2.0 * side));
+                }
+                bar.panel_margins = panel::margins(gpu);
+                bar.panel_shared = gpu;
+                for which in [Panel::Control, Panel::Calendar] {
+                    let (width, _) = panel::surface_size(which, bar.panel_margins, gpu);
+                    let (x, _, anchor, top) = bar.panel_anchor(which);
+                    // The popup is centred under its anchor rectangle, in the bar surface.
+                    let surface_left = side + (x as f32 + anchor as f32 / 2.0) - width as f32 / 2.0;
+                    let (ix, iy, iw, _) = panel::input_rect(which, bar.panel_margins, gpu);
+                    let left = surface_left + ix as f32;
+                    let case = format!("{which:?} on {screen}, gpu {gpu}");
+                    assert_eq!(left + iw as f32, screen - side, "{case}");
+                    let y = metrics::TOP_BAR_MARGIN_TOP + top as f32 + iy as f32;
+                    assert_eq!(y, 54.0, "{case}");
+                }
+            }
+        }
     }
 
     #[test]

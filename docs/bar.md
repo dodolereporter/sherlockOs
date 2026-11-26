@@ -350,6 +350,13 @@ board (`0 28px 70px`), cut on the right where the screen ends; the input region 
 alone. In software it holds the 8 under the bar, like the menu its 6. The anchor rectangle is
 the centre of the top edge of the surface, as for the menu (`panel::anchor_rect`).
 
+The width of the bar is kept for every surface iced_exwlshell reports (`Resized`), whether it
+comes before or after the bar learns its own surface id, and else taken from the logical width
+of its screen (`xdg-output`), less the side margins (UI-02a). Before, a size reported before the
+id was lost, and the panels were placed for the 1440 reference screen: on a 1920 screen they
+opened near its middle. Only without either does the bar fall back on the reference width, with
+a warning. A test places both panels at 1440 and 1920, in software and on the GPU.
+
 ### Notification centre
 
 The history of the notification daemon, newest first, a card per application (tile with its
