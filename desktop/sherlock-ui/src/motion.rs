@@ -218,8 +218,9 @@ pub const WINDOW_OPEN_FADE: Duration = Duration::from_millis(200);
 pub const WINDOW_CLOSE: Duration = Duration::from_millis(150);
 
 /// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
-/// scale fallback. The duration the brief of the lot gives, about half a second.
-pub const MINIMIZE: Duration = Duration::from_millis(450);
+/// scale fallback. About half a second in lot D-19, found slow on the machine: 300 ms since
+/// lot Q-14, the phases keeping their shares.
+pub const MINIMIZE: Duration = Duration::from_millis(300);
 /// Scale of a window at the end of the minimize fallback, at the bottom of its screen.
 pub const MINIMIZE_SCALE: f64 = 0.2;
 
