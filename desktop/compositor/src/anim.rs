@@ -15,6 +15,9 @@ pub struct Visual {
     pub opacity: f32,
     /// The geometry is still sliding towards its real place.
     pub moving: bool,
+    /// Share of the corners, border and shadow drawn: 1 for a floating or snapped window, 0
+    /// for a maximized or fullscreen one, in between while it changes.
+    pub decoration: f32,
 }
 
 /// `rect` scaled by `scale` around its center.
@@ -69,9 +72,13 @@ impl AnimatedRect {
     }
 }
 
+/// How long a window waits for its client to take the size it was given, drawn stretched at
+/// that size, before following its real geometry again (a client that refuses the size).
+pub const SIZE_WAIT: Duration = Duration::from_secs(1);
+
 /// Motion of a window: opening (scale and opacity), then geometry changes announced by
-/// `animate_next_change`. Other changes, like those of a drag or a resize, are followed without
-/// delay.
+/// `animate_next_change` or `animate_to`, and its decoration (corners, border, shadow). Other
+/// changes, like those of a drag or a resize, are followed without delay.
 #[derive(Debug, Default)]
 pub struct WindowMotion {
     /// Opening: scale and opacity. `None` once finished.
@@ -82,6 +89,14 @@ pub struct WindowMotion {
     /// Last geometry drawn, before the opening scale.
     last: Option<RectF>,
     animate_next: bool,
+    /// Size the client was asked for, not taken yet, and until when to wait for it (set at the
+    /// first frame that sees it).
+    expected: Option<(RectF, Option<Duration>)>,
+    /// Maximized or fullscreen: the decoration goes away.
+    bare: bool,
+    /// Decoration drawn at the last frame, and its animation towards the state.
+    decoration: f64,
+    decoration_motion: Option<Animation>,
 }
 
 impl WindowMotion {
@@ -91,30 +106,94 @@ impl WindowMotion {
         self.animate_next = true;
     }
 
+    /// The window slides to `rect`, the place and size it was just given: from the next frame
+    /// on, without waiting for the client to take the size. Its content is stretched there
+    /// until the client draws at that size, for at most `SIZE_WAIT`.
+    pub fn animate_to(&mut self, rect: Rectangle<i32, Logical>) {
+        self.animate_next = true;
+        self.expected = Some((rect.to_f64(), None));
+    }
+
     /// Stops the geometry animation: a gesture starts, the window follows the pointer.
     pub fn follow(&mut self) {
         self.geometry = None;
         self.animate_next = false;
+        self.expected = None;
+    }
+
+    /// The window is maximized or fullscreen (`bare`): its corners, border and shadow go away
+    /// on `DECORATION_SPRING`, and come back when it leaves that state.
+    pub fn set_bare(&mut self, bare: bool) {
+        self.bare = bare;
+    }
+
+    /// Where to draw the window whose real geometry is `target`: there, or at the size it was
+    /// given while its client has not taken it yet. Its place is always the real one, which
+    /// the compositor sets at once.
+    fn goal(&mut self, now: Duration, target: RectF) -> RectF {
+        let Some((rect, mut until)) = self.expected else {
+            return target;
+        };
+        let until = *until.get_or_insert(now + SIZE_WAIT);
+        if self.last.is_none() || target.size == rect.size {
+            // Never drawn, or taken: the real geometry.
+            self.expected = None;
+            return target;
+        }
+        if now >= until {
+            // Refused: the window slides back to the size its client kept.
+            self.expected = None;
+            self.animate_next = true;
+            return target;
+        }
+        self.expected = Some((rect, Some(until)));
+        Rectangle::new(target.loc, rect.size)
+    }
+
+    /// Decoration to draw at `now`: settled on the state, or on its way there.
+    fn decoration(&mut self, now: Duration, first: bool) -> f64 {
+        let goal = if self.bare { 0.0 } else { 1.0 };
+        match &mut self.decoration_motion {
+            _ if first => self.decoration = goal,
+            Some(animation) if animation.target() != goal => animation.retarget(now, goal),
+            None if self.decoration != goal => {
+                let from = self.decoration;
+                let animation = Animation::new(motion::DECORATION_SPRING, from, goal, now);
+                self.decoration_motion = Some(animation);
+            }
+            _ => {}
+        }
+        self.decoration = match self.decoration_motion {
+            Some(a) if !a.is_done(now, motion::SCALE_PRECISION) => a.value(now).clamp(0.0, 1.0),
+            _ => {
+                self.decoration_motion = None;
+                goal
+            }
+        };
+        self.decoration
     }
 
     /// What to draw at time `now` for a window whose real geometry is `target`. The first call
     /// starts the opening.
     pub fn frame(&mut self, now: Duration, target: Rectangle<i32, Logical>) -> Visual {
         let target = target.to_f64();
-        if !self.opened {
+        let first = !self.opened;
+        if first {
             self.opened = true;
             self.open = Some((
                 Animation::new(motion::OPEN_SPRING, motion::OPEN_SCALE, 1.0, now),
                 Fade::new(0.0, 1.0, now, motion::FADE),
             ));
         }
+        let decoration = self.decoration(now, first) as f32;
+        let goal = self.goal(now, target);
         // The flag is consumed on every frame, whether an animation starts or not: otherwise the
-        // next drag or resize would be animated.
-        let animate = std::mem::take(&mut self.animate_next);
+        // next drag or resize would be animated. A size still awaited keeps it.
+        let animate = std::mem::take(&mut self.animate_next) || self.expected.is_some();
         match (&mut self.geometry, self.last) {
-            (Some(geometry), _) => geometry.retarget(now, target),
-            (None, Some(last)) if animate && last != target => {
-                self.geometry = Some(AnimatedRect::new(motion::SNAP_SPRING, last, target, now));
+            (Some(geometry), _) => geometry.retarget(now, goal),
+            (None, Some(last)) if animate && last != goal => {
+                self.geometry = Some(AnimatedRect::new(motion::SNAP_SPRING, last, goal, now));
             }
             // Never drawn: nothing to start from, it will appear at its place.
             _ => {}
@@ -123,7 +202,7 @@ impl WindowMotion {
             Some(geometry) if !geometry.is_done(now) => geometry.value(now),
             _ => {
                 self.geometry = None;
-                target
+                goal
             }
         };
         self.last = Some(rect);
@@ -142,13 +221,17 @@ impl WindowMotion {
         Visual {
             rect: scaled(rect, scale),
             opacity,
-            moving: self.geometry.is_some(),
+            moving: self.geometry.is_some() || self.expected.is_some(),
+            decoration,
         }
     }
 
     /// An animation is running: the drawn geometry is not the real geometry.
     pub fn is_animating(&self) -> bool {
-        self.open.is_some() || self.geometry.is_some()
+        self.open.is_some()
+            || self.geometry.is_some()
+            || self.expected.is_some()
+            || self.decoration_motion.is_some()
     }
 }
 
@@ -195,6 +278,7 @@ impl PreviewMotion {
             rect: rect.value(now),
             opacity: fade.value(now),
             moving: false,
+            decoration: 1.0,
         })
     }
 }
@@ -342,6 +426,76 @@ mod tests {
         assert!(motion.frame(ms(2030), left).moving);
         motion.follow();
         assert_eq!(motion.frame(ms(2040), right).rect, right.to_f64());
+    }
+
+    #[test]
+    fn a_new_size_slides_without_waiting_for_the_client() {
+        // Maximized under a dock that goes away: same place, 76 more in height.
+        let (under_dock, whole) = (rect(0, 0, 800, 524), rect(0, 0, 800, 600));
+        let mut motion = WindowMotion::default();
+        motion.frame(ms(0), under_dock);
+        motion.frame(ms(1000), under_dock);
+        motion.animate_to(whole);
+        // The client has not answered yet: the window grows all the same, without a jump.
+        let growing = motion.frame(ms(1010), under_dock).rect;
+        assert_eq!(growing, under_dock.to_f64());
+        let growing = motion.frame(ms(1050), under_dock).rect;
+        assert!(growing.size.h > 524.0 && growing.size.h < 600.0);
+        // Settled at the size given while the client is still drawing.
+        assert_eq!(motion.frame(ms(1500), under_dock).rect, whole.to_f64());
+        assert!(motion.is_animating());
+        // The client takes it: nothing moves, and the wait is over.
+        assert_eq!(motion.frame(ms(1600), whole).rect, whole.to_f64());
+        assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn a_refused_size_is_not_awaited_forever() {
+        let (small, whole) = (rect(0, 0, 300, 200), rect(0, 0, 800, 600));
+        let mut motion = WindowMotion::default();
+        motion.frame(ms(0), small);
+        motion.frame(ms(1000), small);
+        motion.animate_to(whole);
+        motion.frame(ms(1010), small);
+        assert_eq!(motion.frame(ms(1900), small).rect, whole.to_f64());
+        // Past the wait, the window slides back to the size its client kept.
+        let back = motion.frame(ms(1010) + SIZE_WAIT, small).rect;
+        assert_eq!(back, whole.to_f64(), "no jump");
+        assert_eq!(motion.frame(ms(5000), small).rect, small.to_f64());
+        assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn maximized_windows_lose_their_decoration_on_a_spring() {
+        let place = rect(100, 100, 400, 300);
+        let mut motion = WindowMotion::default();
+        // Maximized from the start: never decorated, nothing animated.
+        motion.set_bare(true);
+        assert_eq!(motion.frame(ms(0), place).decoration, 0.0);
+        let mut motion = WindowMotion::default();
+        assert_eq!(motion.frame(ms(0), place).decoration, 1.0);
+        motion.frame(ms(1000), place);
+        motion.set_bare(true);
+        let decorations: Vec<f32> = (1000..1400)
+            .step_by(10)
+            .map(|t| motion.frame(ms(t), place).decoration)
+            .collect();
+        assert_eq!(decorations[0], 1.0);
+        assert!(
+            decorations.windows(2).all(|d| d[1] <= d[0]),
+            "it goes one way"
+        );
+        assert!(decorations.iter().any(|d| *d > 0.1 && *d < 0.9), "no jump");
+        assert_eq!(motion.frame(ms(2000), place).decoration, 0.0);
+        assert!(!motion.is_animating());
+        // Restored halfway back: it turns around from where it is.
+        motion.set_bare(false);
+        motion.frame(ms(2000), place);
+        let midway = motion.frame(ms(2040), place).decoration;
+        motion.set_bare(true);
+        let turned = motion.frame(ms(2041), place).decoration;
+        assert!((turned - midway).abs() < 0.05 && turned > 0.0);
+        assert_eq!(motion.frame(ms(3000), place).decoration, 0.0);
     }
 
     #[test]

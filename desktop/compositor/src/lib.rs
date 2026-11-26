@@ -41,6 +41,7 @@ use std::{
 use smithay::{
     desktop::{PopupManager, Space, Window, layer_map_for_output},
     input::{Seat, SeatState, keyboard::Keycode, pointer::CursorImageStatus},
+    output::Output,
     reexports::{
         calloop::{
             EventLoop, Interest, LoopHandle, LoopSignal, Mode as LoopMode, PostAction,
@@ -81,7 +82,7 @@ use crate::{
 pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
-         [--workspaces N] [command [arguments…]]"
+         [--workspaces N] [--snap-gap PX] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -172,6 +173,8 @@ pub struct State {
     listener: Option<RegistrationToken>,
     /// Windows, screens and workspaces for the shell programs (ADR 0021).
     shell: shell::Shell,
+    /// Margin around snapped windows (`--snap-gap`, `SNAP_GAP` by default).
+    snap_gap: i32,
 }
 
 /// Data attached to each window.
@@ -272,6 +275,7 @@ impl State {
             xwayland: None,
             listener: None,
             shell: shell::Shell::new(&dh),
+            snap_gap: sherlock_ui::window::SNAP_GAP,
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -464,12 +468,39 @@ impl State {
                 rect: geometry.to_f64(),
                 opacity: 1.0,
                 moving: false,
+                decoration: 0.0,
             });
         }
         if !window_data(window).shown.get() {
             return None;
         }
-        Some(window_data(window).motion.borrow_mut().frame(now, geometry))
+        let arrangement = handlers::Arrangement::of(window);
+        let mut motion = window_data(window).motion.borrow_mut();
+        motion.set_bare(arrangement.maximized || arrangement.fullscreen);
+        Some(motion.frame(now, geometry))
+    }
+
+    /// Changes the margin around snapped windows; those already snapped take it at once.
+    pub fn set_snap_gap(&mut self, gap: i32) {
+        self.snap_gap = gap.max(0);
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            self.reflow(output);
+        }
+    }
+
+    /// Frame callbacks of `window`, drawn on `output`, at `time` from startup. A window out
+    /// of view (minimized, or on another workspace) gets one per `HIDDEN_FRAME_INTERVAL` only:
+    /// it saves the battery, and a client that waits for its callback before drawing again
+    /// (Mesa's EGL in `eglSwapBuffers`) is slowed down, never blocked.
+    pub fn send_window_frame(&self, window: &Window, output: &Output, time: Duration) {
+        if self.workspace_shift(window, time).is_some() {
+            window.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        } else {
+            window.send_frame(output, time, Some(HIDDEN_FRAME_INTERVAL), |_, _| None);
+        }
     }
 
     /// Cleanup after each loop iteration: dead windows, popups, flush to the clients.
@@ -490,6 +521,9 @@ impl State {
         }
     }
 }
+
+/// Pace of the frame callbacks of a window out of view.
+pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
 
 /// X11 window that bypasses the window manager: menu, tooltip, drop-down list.
 pub(crate) fn is_override_redirect(window: &Window) -> bool {

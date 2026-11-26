@@ -401,7 +401,7 @@ impl State {
     /// Rectangle where the moved window will be snapped if dropped now, for the preview.
     pub fn snap_preview(&self) -> Option<Rectangle<i32, Logical>> {
         let (zone, output) = self.gesture.as_ref()?.zone.as_ref()?;
-        Some(zone.geometry(self.work_area(output)?))
+        Some(zone.geometry(self.work_area(output)?, self.snap_gap))
     }
 
     /// Cursor shape, `None` to hide it. During a gesture and over the grab band, the compositor

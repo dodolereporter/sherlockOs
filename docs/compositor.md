@@ -20,7 +20,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
-| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, the command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches |
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
@@ -112,6 +112,11 @@ Snapping:
   with Ctrl, Left and Right change workspace (see "Workspaces"). These keys, press and release alike, do not go to the client. They have no effect in
   fullscreen. If the host window loses the keyboard between the press and the release, the
   compositor forgets the interception.
+- A half or a quarter keeps a margin of 8 pixels (`window::SNAP_GAP`) from the edges of the work
+  area, and between two snapped windows: two halves side by side leave 8 pixels between them.
+  `--snap-gap PX` (0 to 64) changes it, and `State::set_snap_gap` while the session runs, which
+  places the snapped windows again. A maximized window takes the whole work area, without a
+  margin. The snap preview shows the zone with its margins.
 - Maximized is the xdg-shell `maximized` state, which the client knows about. A half or a
   quarter is only an imposed size: the `tiled` states are not sent.
 - Zones are taken from the work area of a screen: what the exclusive zones of anchored surfaces
@@ -308,14 +313,20 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   animation of lot D-19 (`State::icon_rectangle`), and forgotten with its window; a negative
   size, or `x + width` or `y + height` past the 32-bit range, is the protocol error
   `invalid_rectangle`. Requests on a window that is gone do nothing.
-- **Minimize requested by the application.** Not honored yet (`xdg_toplevel.set_minimized`,
-  `_NET_WM_STATE_HIDDEN`): until the dock can bring a window back (lot D-18c), a minimize
-  button would lose the window.
+- **Minimize requested by the application** (lot D-18c1). Honored, like the shell's `minimize`,
+  now that the dock brings windows back: `xdg_toplevel.set_minimized` for a Wayland window
+  (smithay advertises the `minimize` capability), `WM_CHANGE_STATE` with `IconicState` for an X11
+  one (what `XIconifyWindow` sends, used by GTK, Qt and xdotool), which also gets
+  `_NET_WM_STATE_HIDDEN`. A window without content yet, or being dragged, stays. A client asking
+  for `_NET_WM_STATE_HIDDEN` through `_NET_WM_STATE` is not heard: smithay 0.7 drops that
+  request, and EWMH tells window managers to ignore it (the state follows minimizing, it does
+  not cause it). Coming back (`WM_CHANGE_STATE` with `NormalState`) is left to the dock and the
+  keys, as for Wayland, which has no such request.
 - **`WM_STATE` of a minimized X11 window.** It stays `NormalState`, where the ICCCM expects
   `IconicState`. smithay 0.7 only sets `IconicState` through `X11Surface::set_mapped(false)`,
   which also unmaps the frame: XWayland then drops the window's surface, which the compositor
-  reads as the application withdrawing it. To take up with D-18c, if X11 applications go on
-  drawing while minimized.
+  reads as the application withdrawing it. X11 applications see `_NET_WM_STATE_HIDDEN` and
+  receive one frame callback a second, which is enough so far.
 
 ### Workspaces
 
@@ -335,8 +346,8 @@ D-18w gives them their behavior.
 - **Hidden windows stay in the space.** The windows of the other workspaces and the minimized
   ones keep their place, their screen, their commits and their arrangement: a change of the work
   area or a screen unplugged rearranges them like the others. Rendering, hit testing and the
-  choice of the window that takes the keyboard back skip them (`State::is_visible`). They keep
-  receiving frame callbacks.
+  choice of the window that takes the keyboard back skip them (`State::is_visible`). They
+  receive one frame callback a second (see "Frame callbacks of hidden windows").
 - **Switching** (`State::activate_workspace`): the windows of the arriving workspace show up,
   the others hide, open menus close, the keyboard goes to the window of the arriving workspace
   that had it last (to none if it is empty), and the pointer to what is under it now. A window
@@ -363,8 +374,8 @@ D-18w gives them their behavior.
   Refused during a gesture, which would go on with a hidden window.
 - **Who changes workspace.** Only the user, by the keys, and the shell, by `activate` (of a
   workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
-  no `xdg-activation`, does not honor `xdg_toplevel.set_minimized` nor `_NET_WM_STATE_HIDDEN`,
-  and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. A new window opens on the active workspace and
+  no `xdg-activation`, and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. An
+  application may minimize its own window (lot D-18c1), never bring it back. A new window opens on the active workspace and
   takes the keyboard.
 - **Anchored surfaces** (bar, dock) are not windows: they stay on every workspace.
 
@@ -392,9 +403,16 @@ From the review of D-18a. Lot D-18w settled the workspace of a new window, set w
 and the minimized windows out of reach of `rearrange` and of their commits: they now stay in
 the space.
 
-- **Frame callbacks of hidden windows.** They keep coming, at the pace of the screen. Throttling
-  them, or sending the xdg-shell `suspended` state, would save the battery; to check against
-  clients that wait for their callback before drawing again (Mesa's EGL with a swap interval).
+- **Frame callbacks of hidden windows** (lot D-18c1). A window out of view (minimized, or on a
+  workspace that is not shown, the slide aside) gets one frame callback a second
+  (`HIDDEN_FRAME_INTERVAL`), through smithay's throttle, instead of one per frame of the screen
+  (`State::send_window_frame`, used by both backends). A client that animates draws once a
+  second instead of sixty times. A client that waits for its callback before drawing again
+  (Mesa's EGL with a swap interval, in `eglSwapBuffers`) is slowed down, never blocked: its
+  thread wakes up every second, and its window is up to date within a second when it shows
+  again. The xdg-shell `suspended` state is not sent: smithay 0.7 can send it, but it is only a
+  hint, and every workspace switch would then cost a configure and a redraw to each window
+  that leaves or arrives; the throttle alone does not depend on the client.
 - **Cost of `snapshot`.** Without a shell client, nothing is read. With one, each loop
   iteration (so at the pace of the pointer) allocates the title, `app_id`, screen and
   workspace of every window and locks two mutexes per window: about O(windows × managers +
@@ -453,6 +471,17 @@ ordinary socket, and a shell program.
   to the window behind; `activate` and `commit` of `ext-workspace-v1` switch, windows and
   keyboard follow; `activate` on a window of another workspace goes there. From 3 workspaces
   to 2 while on the third: its window and the active state go to the first; then to 5.
+- **Minimized by the application** (lot D-18c1). `xdg_toplevel.set_minimized`: the window is
+  hidden, the one behind takes the keyboard, the shell sees `minimized`; its `activate` brings
+  it back with the keyboard.
+- **Exclusive zone and maximized window.** A maximized window drawn at 800 × 600 has no
+  decoration. A dock of 76 arrives: the window is given 800 × 524 and is drawn shrinking from
+  the next frame on, settled at 800 × 524 before its application draws at that size. The dock
+  gives its zone back (0): the window grows from 524 to 600 the same way. Snapped left above the
+  dock, a window is 388 × 508 in (8, 8), keeps its corners, and takes 400 × 524 once the gap is
+  set to 0.
+- **Frame callbacks.** A shown window gets one at every frame; minimized, none at 17 and 484 ms,
+  one after a second.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
   a dock with an exclusive zone appears.
 - **Keyboard after a close.** A window closing on a hidden workspace while nothing has the
@@ -468,7 +497,9 @@ model from 1 to 9 workspaces (`src/shell/workspaces.rs`).
 
 `tests/xwayland.rs` also checks that the real XWayland is not a shell client, that the shell
 socket goes away with the compositor, and that an X11 window minimized by the shell, then
-withdrawn by its application and mapped again, is no longer hidden (`_NET_WM_STATE_HIDDEN`).
+withdrawn by its application and mapped again, is no longer hidden (`_NET_WM_STATE_HIDDEN`). Iconified by
+its application (`WM_CHANGE_STATE`), the window is minimized and hidden for the X server, and
+`activate` brings it back with the keyboard.
 
 ## Screens and scale
 
@@ -760,9 +791,15 @@ window and, while drawing it, replaces Smithay's texture program with `clip.frag
 computed from `gl_FragCoord`, in frame pixels: it holds for subsurfaces as for the main surface,
 at any scale. The windowed backend flips the frame (`Flipped180`); `clip_in_frame` applies the
 same transform to the clip rectangle. What the client draws outside its geometry (GTK
-client-side shadows) is cut: the compositor draws the shadow. A fullscreen window has no
-corners, border or shadow: it keeps them while it slides towards the whole screen and loses them
-on arrival, when it already covers the screen. A maximized or snapped window keeps them.
+client-side shadows) is cut: the compositor draws the shadow.
+
+**Maximized and fullscreen (lot D-18c1).** A maximized or fullscreen window has no corners,
+border or shadow: it fills its area edge to edge. A snapped window (half, quarter) and a floating
+one keep them. The change is animated: `Visual::decoration` goes from 1 to 0 on
+`DECORATION_SPRING`, and back when the window leaves that state; the radius is multiplied by it,
+the border and the shadow fade by it. The spring is critically damped: the radius never goes
+below 0, the shadow never above its own. A window maximized before it shows is drawn without
+them from its first frame, without animation.
 
 **Shadow.** Like `box-shadow`: the window rectangle, shifted 28 down, blurred by a Gaussian with
 a standard deviation of 35 (half the blur, as browsers do). The element extends 70 around that
@@ -793,6 +830,7 @@ that the compositor and the shell share the same springs:
 | `SNAP_SPRING` | stiffness 500, damping 33.5 | 0.75, 3 % overshoot | Snap, maximize, restore |
 | `OPEN_SPRING` | stiffness 450, damping 34 | 0.80, 2 % overshoot | Scale at opening, from `OPEN_SCALE` (0.92) to 1 |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 | 0.79 | Snap preview |
+| `DECORATION_SPRING` | stiffness 700, damping 53 | 1.0, no overshoot | Corners, border and shadow of a window maximized, fullscreen, or leaving it |
 | `FADE` | 150 ms | | Opacity at opening, preview appearing and fading out |
 
 `docs/contexte.md` only gives « ressorts » (springs), « léger dépassement » (slight overshoot)
@@ -811,8 +849,15 @@ lasts one hover.
   simply changes target. The target then follows the real geometry: the position changes right
   away, the size when the client answers, and the spring carries on without a jolt. During the
   animation, the client buffer is stretched into the animated rectangle
-  (`RescaleRenderElement`). Once settled, it is drawn at scale 1. Limit: a snap that only
-  changes the size, the position staying the same, is not animated.
+  (`RescaleRenderElement`). Once settled, it is drawn at scale 1.
+- **Size given, not taken yet (lot D-18c1).** `rearrange` tells the motion the rectangle it gives
+  the window (`animate_to`). From the next frame on, the window slides to that rectangle without
+  waiting for the client: a change of the size alone (an exclusive zone that comes or goes under
+  a maximized window) is animated too, and no frame shows the old size at the new place. Until
+  the client draws at that size, its buffer is stretched there. A client that keeps another size
+  for `anim::SIZE_WAIT` (1 s) is no longer waited for: the window slides back to the size it
+  drew. Restored to a size its client chooses, the window slides once that size is known, as
+  before.
 - **Drag and resize.** They are never animated: the start of a gesture stops any geometry
   animation (`WindowMotion::follow`), and the window follows the pointer without delay. A
   snapped or maximized window pulled out by dragging it gets its previous size back at once,
@@ -1385,10 +1430,10 @@ just verify
 
 | Test | What it checks |
 | --- | --- |
-| `src/layout.rs` | Centering, moving, resizing by each edge, opposite corner fixed during the whole gesture, client minimum and maximum sizes. Grab band: each side, each corner, wider at the corners, nothing inside, narrow window. Snapping: top, left and right edges, four corners, geometry of each zone, return to the previous size under the pointer |
+| `src/layout.rs` | Centering, moving, resizing by each edge, opposite corner fixed during the whole gesture, client minimum and maximum sizes. Grab band: each side, each corner, wider at the corners, nothing inside, narrow window. Snapping: top, left and right edges, four corners, geometry of each zone with and without the gap, return to the previous size under the pointer |
 | `sherlock-ui/src/color.rs` | Colors premultiplied by their opacity |
 | `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
-| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. Preview that appears, slides and fades out |
+| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
 | `src/render.rs` | Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/stats.rs` | Frame rate, late frames, summary of animated frames |
 | `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders and its pendant after `set_theme`, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
@@ -1458,6 +1503,8 @@ The tests in `tests/headless.rs`:
   area is the one for new windows. The window, dragged with the gesture key to the right edge
   of the second screen, is shown the right half of that screen in the preview and takes it
   (400 × 600 in (1200, 0)); maximized by the shortcut, it fills the second screen.
+- **Snapping gap.** The tests above give the zones with their 8 pixel margins: the left half of
+  800 × 600 is 388 × 584 in (8, 8), the bottom right quarter 388 × 288 in (404, 304).
 - **A screen unplugged.** A window dragged onto a second screen comes back centered on the
   first when the second is removed, with the pointer. Plugged in again, the second screen is
   back on the right; the window, maximized on it, is maximized on the first when it goes away

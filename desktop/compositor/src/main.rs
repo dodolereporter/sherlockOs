@@ -10,7 +10,8 @@
 //! end. The session then stops with the command.
 //! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
 //! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
-//! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default).
+//! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default). `--snap-gap PX`
+//! sets the margin around snapped windows, from 0 to 64 (8 by default).
 
 use std::{
     ffi::{OsStr, OsString},
@@ -45,6 +46,9 @@ fn main() -> Result<(), Error> {
     }
     if let Some(count) = options.workspaces {
         state.set_workspace_count(count);
+    }
+    if let Some(gap) = options.snap_gap {
+        state.set_snap_gap(gap);
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.

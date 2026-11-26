@@ -181,6 +181,9 @@ pub const OPEN_SPRING: Spring = Spring::new(450.0, 34.0);
 pub const TOP_BAR_SPRING: Spring = SNAP_SPRING;
 /// Snap preview, brisker than the window it announces (ratio 0.79).
 pub const PREVIEW_SPRING: Spring = Spring::new(700.0, 42.0);
+/// Corners, border and shadow of a window that becomes maximized or fullscreen, or leaves it
+/// (ratio 1.0: no overshoot, so the radius never goes below 0 nor the shadow above its own).
+pub const DECORATION_SPRING: Spring = Spring::new(700.0, 53.0);
 
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
@@ -263,6 +266,16 @@ mod tests {
         assert!(animation.value(ms(51)) - before.0 > 0.0);
         assert!((animation.value(ms(51)) - before.1).abs() < 0.1);
         assert!((animation.value(ms(3000)) + 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_decoration_spring_is_quick_without_overshoot() {
+        let values = trajectory(DECORATION_SPRING, 1000);
+        assert!(values.iter().all(|v| *v <= 1.0 + 1e-9));
+        let first_90 = values.iter().position(|v| *v >= 0.9).unwrap();
+        assert!(first_90 < 150, "90 % at {first_90} ms");
+        let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
+        assert!(settled < 300, "settled at {settled} ms");
     }
 
     #[test]

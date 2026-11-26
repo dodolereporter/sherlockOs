@@ -19,6 +19,11 @@ pub const SNAP_EDGE: i32 = 8;
 /// quarter of the screen.
 pub const SNAP_CORNER: i32 = 64;
 
+/// Margin around a window snapped into a half or a quarter of the screen: from the edges of the
+/// work area, and between two snapped windows (lot D-18c1). Maximized windows take the whole
+/// work area. The compositor's `--snap-gap` replaces it.
+pub const SNAP_GAP: i32 = 8;
+
 /// Background of the snap preview: that of an active entry.
 pub const SNAP_PREVIEW_FILL: Color = color::ACTIVE_ENTRY;
 

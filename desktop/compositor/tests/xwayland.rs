@@ -114,6 +114,8 @@ mod tests {
         Withdraw,
         /// Map the managed window again.
         Map,
+        /// Iconify the managed window, as `XIconifyWindow` does (`WM_CHANGE_STATE`).
+        Iconify,
         Quit,
     }
 
@@ -174,6 +176,7 @@ mod tests {
         let targets = atom(&conn, "TARGETS");
         let utf8 = atom(&conn, "UTF8_STRING");
         let moveresize = atom(&conn, "_NET_WM_MOVERESIZE");
+        let change_state = atom(&conn, "WM_CHANGE_STATE");
         loop {
             while let Some(event) = conn.poll_for_event().unwrap() {
                 if let Event::SelectionRequest(req) = event {
@@ -225,6 +228,13 @@ mod tests {
                 }
                 Ok(Command::Map) => {
                     conn.map_window(window).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Iconify) => {
+                    // 3 is IconicState (ICCCM 4.1.4).
+                    let event = ClientMessageEvent::new(32, window, change_state, [3, 0, 0, 0, 0]);
+                    let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+                    conn.send_event(false, root, mask, event).unwrap();
                     conn.flush().unwrap();
                 }
                 Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -472,6 +482,18 @@ mod tests {
             x11_window(s, false).is_some_and(|w| w.wl_surface().is_some())
         });
         assert!(!surface.is_minimized(), "the window mapped again is hidden");
+
+        // The application iconifies its window: minimized like by the shell, hidden for the X
+        // server, and the dock brings it back.
+        let window = x11_window(&h.state, false).unwrap();
+        commands.send(Command::Iconify).unwrap();
+        h.run_until("the window iconified by its application", |s| {
+            s.is_minimized(&window) && surface.is_minimized()
+        });
+        assert!(!h.state.is_visible(&window));
+        h.state.activate(&window);
+        assert!(!h.state.is_minimized(&window) && !surface.is_minimized());
+        assert_eq!(h.state.focused_window().as_ref(), Some(&window));
 
         // Closing: the client leaves, its windows go away and nobody has the keyboard.
         commands.send(Command::Quit).unwrap();

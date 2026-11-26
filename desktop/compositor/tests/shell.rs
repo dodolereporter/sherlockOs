@@ -23,13 +23,14 @@ mod tests {
         backend::input::{ButtonState, KeyState},
         input::keyboard::Keycode,
         reexports::calloop::EventLoop,
-        utils::Rectangle,
+        utils::{Logical, Rectangle},
         wayland::seat::WaylandFocus,
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child,
         protocol::{
             wl_buffer::WlBuffer,
+            wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
             wl_output::WlOutput,
             wl_registry,
@@ -108,6 +109,8 @@ mod tests {
         group_outputs: usize,
         workspaces: Vec<(ExtWorkspaceHandleV1, SeenWorkspace)>,
         workspaces_done: usize,
+        /// Frame callbacks done.
+        frames: usize,
     }
 
     fn values(bytes: &[u8]) -> Vec<u32> {
@@ -351,6 +354,21 @@ mod tests {
         }
     }
 
+    impl Dispatch<WlCallback, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlCallback,
+            event: wl_callback::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_callback::Event::Done { .. } = event {
+                client.frames += 1;
+            }
+        }
+    }
+
     impl Dispatch<ZwlrLayerSurfaceV1, ()> for Client {
         fn event(
             client: &mut Self,
@@ -582,6 +600,34 @@ mod tests {
         fn focused_title(&self) -> Option<String> {
             self.state.focused_window().and_then(|w| State::title(&w))
         }
+
+        /// A dock of the shell client, anchored at the bottom, 76 high, with an exclusive zone
+        /// of 76.
+        fn dock(&mut self) -> (WlSurface, ZwlrLayerSurfaceV1) {
+            let qh = self.shell.queue.handle();
+            let compositor: WlCompositor = self.shell.bind();
+            let layer_shell: ZwlrLayerShellV1 = self.shell.bind();
+            let surface = compositor.create_surface(&qh, ());
+            let dock =
+                layer_shell.get_layer_surface(&surface, None, Layer::Top, "dock".into(), &qh, ());
+            dock.set_anchor(Anchor::Bottom | Anchor::Left | Anchor::Right);
+            dock.set_size(0, 76);
+            dock.set_exclusive_zone(76);
+            surface.commit();
+            self.run_until("the dock configure", |h| h.shell.client.layer_configured);
+            self.shell.draw(&surface, 800, 76);
+            (surface, dock)
+        }
+    }
+
+    fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<f64, Logical> {
+        Rectangle::new((x, y).into(), (w, h).into()).to_f64()
+    }
+
+    /// Size the compositor gives the window, sent or about to be.
+    fn pending(window: &smithay::desktop::Window) -> Option<(i32, i32)> {
+        let size = window.toplevel()?.with_pending_state(|s| s.size)?;
+        Some((size.w, size.h))
     }
 
     #[test]
@@ -1241,5 +1287,142 @@ mod tests {
         assert_eq!(top.and_then(|w| State::title(&w)).as_deref(), Some("Float"));
         h.keys(&[KEY_SUPER], KEY_1);
         assert_eq!(h.focused_title().as_deref(), Some("Float"));
+    }
+
+    #[test]
+    fn an_application_minimizes_its_window() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        h.open_window("Behind");
+        let (toplevel, _surface) = h.open_window("Front");
+        let front = h.titled("Front");
+        // Its minimize button: hidden like the shell does it, the window behind takes the
+        // keyboard, and the dock learns it.
+        toplevel.set_minimized();
+        h.run_until("minimized by its application", |h| {
+            h.state.is_minimized(&front)
+        });
+        assert!(!h.state.is_visible(&front));
+        assert_eq!(h.focused_title().as_deref(), Some("Behind"));
+        let id = |h: &Harness| {
+            let seen = h.shell.client.toplevels.iter();
+            seen.map(|t| &t.1).find(|t| t.title == "Front")?.id
+        };
+        h.run_until("the shell told", |h| {
+            id(h).is_some_and(|id| h.shell.client.has(id, Flag::Minimized))
+        });
+        // The dock brings it back.
+        let id = id(&h).unwrap();
+        h.shell.client.handle(id).activate();
+        h.run_until("back", |h| !h.state.is_minimized(&front));
+        assert_eq!(h.focused_title().as_deref(), Some("Front"));
+    }
+
+    #[test]
+    fn maximized_windows_follow_an_exclusive_zone_without_a_jump() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Max");
+        toplevel.set_maximized();
+        surface.commit();
+        let window = h.only_window();
+        h.run_until("maximized", |_| pending(&window) == Some((800, 600)));
+        h.app.draw(&surface, 800, 600);
+        let size = |h: &Harness| h.state.space.element_geometry(&window).map(|g| g.size);
+        h.run_until("drawn maximized", |h| size(h) == Some((800, 600).into()));
+        let drawn = |h: &Harness, t: u64| {
+            let now = Duration::from_millis(t);
+            h.state.window_visual(&window, now).unwrap()
+        };
+        drawn(&h, 0);
+        let settled = drawn(&h, 1000);
+        assert_eq!(settled.rect, rect(0, 0, 800, 600));
+        assert_eq!(settled.decoration, 0.0, "maximized, with corners or shadow");
+
+        // The dock arrives: the window shrinks at once, before its application has drawn at
+        // the new size, without a jump.
+        let (dock_surface, dock) = h.dock();
+        h.run_until("the work area", |_| pending(&window) == Some((800, 524)));
+        assert_eq!(drawn(&h, 1010).rect, rect(0, 0, 800, 600));
+        let shrinking = drawn(&h, 1050).rect;
+        assert!(shrinking.size.h < 600.0 && shrinking.size.h > 524.0);
+        assert_eq!(drawn(&h, 1500).rect, rect(0, 0, 800, 524));
+        h.app.draw(&surface, 800, 524);
+        h.run_until("drawn above the dock", |h| {
+            size(h) == Some((800, 524).into())
+        });
+        assert_eq!(drawn(&h, 1600).rect, rect(0, 0, 800, 524));
+
+        // The dock hides and gives its zone back: the window grows at once, from where it is.
+        dock.set_exclusive_zone(0);
+        dock_surface.commit();
+        h.run_until("the whole screen again", |_| {
+            pending(&window) == Some((800, 600))
+        });
+        assert_eq!(drawn(&h, 1610).rect, rect(0, 0, 800, 524));
+        let growing = drawn(&h, 1650).rect;
+        assert!(growing.size.h > 524.0 && growing.size.h < 600.0);
+        assert_eq!(drawn(&h, 2200).rect, rect(0, 0, 800, 600));
+        assert_eq!(drawn(&h, 2200).decoration, 0.0);
+    }
+
+    #[test]
+    fn snapped_windows_keep_their_gap_with_the_dock() {
+        let mut h = Harness::start();
+        h.dock();
+        h.open_window("Left");
+        h.keys(&[KEY_SUPER], KEY_LEFT);
+        let window = h.titled("Left");
+        // 8 from the screen edges and from the dock, which leaves 524 of height.
+        h.run_until("snapped", |_| pending(&window) == Some((388, 508)));
+        let place = h.state.space.element_geometry(&window).map(|g| g.loc);
+        assert_eq!(place, Some((8, 8).into()));
+        // A wider gap applies at once to the snapped window; 0 puts it against the edges.
+        h.state.set_snap_gap(0);
+        h.run_until("without gap", |_| pending(&window) == Some((400, 524)));
+        let drawn = h.state.window_visual(&window, Duration::from_secs(9));
+        assert_eq!(
+            drawn.map(|v| v.decoration),
+            Some(1.0),
+            "snapped, its corners kept"
+        );
+    }
+
+    #[test]
+    fn hidden_windows_get_one_frame_a_second() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Window");
+        let window = h.only_window();
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let qh = h.app.queue.handle();
+        // The application asks for its next frame, as it does after each drawing.
+        let ask = |h: &mut Harness| {
+            surface.frame(&qh, ());
+            surface.commit();
+            h.turn();
+        };
+        // The screen draws a frame at `ms`: callbacks done so far.
+        let frame = |h: &mut Harness, ms: u64| {
+            let time = Duration::from_millis(ms);
+            h.state.send_window_frame(&window, &output, time);
+            for _ in 0..3 {
+                h.turn();
+            }
+            h.app.client.frames
+        };
+        // Shown: one at every frame of the screen.
+        ask(&mut h);
+        assert_eq!(frame(&mut h, 10_000), 1);
+        ask(&mut h);
+        assert_eq!(frame(&mut h, 10_016), 2);
+        // Minimized: one a second, never none.
+        toplevel.set_minimized();
+        h.turn();
+        assert!(h.state.is_minimized(&h.only_window()));
+        ask(&mut h);
+        assert_eq!(frame(&mut h, 10_033), 2);
+        assert_eq!(frame(&mut h, 10_500), 2);
+        assert_eq!(frame(&mut h, 11_100), 3);
+        ask(&mut h);
+        assert_eq!(frame(&mut h, 11_116), 3);
     }
 }

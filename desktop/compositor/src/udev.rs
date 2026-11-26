@@ -610,7 +610,7 @@ fn send_frames(state: &State, output: &Output) {
     let throttle = Some(Duration::ZERO);
     for window in state.space.elements() {
         if state.window_output(window).as_ref() == Some(output) {
-            window.send_frame(output, time, throttle, |_, _| Some(output.clone()));
+            state.send_window_frame(window, output, time);
         }
     }
     for layer in layer_map_for_output(output).layers() {
