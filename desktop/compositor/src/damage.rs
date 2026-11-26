@@ -35,10 +35,16 @@ pub enum Part {
     /// The title bar the compositor draws above a window (lot D-08).
     TitleBar,
     /// Mission Control (lot D-33): the dim over the wallpaper, the accent border of the window
-    /// under the pointer, the title under a window.
+    /// under the pointer, the title under a window, the title bar of a window in a thumbnail.
     Dim,
     Highlight,
     Label,
+    MiniBar,
+    /// Mission Control: the background, the border and the name of the thumbnail of a
+    /// workspace, by its index.
+    Thumbnail(usize),
+    ThumbnailBorder(usize),
+    ThumbnailLabel(usize),
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

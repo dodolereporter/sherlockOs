@@ -401,8 +401,8 @@ D-18w gives them their behavior.
 - **Moving a window** (`State::move_to_workspace`): out of the active workspace, it hides
   without being followed, and if it was the active window, the keyboard goes back as above.
   Refused during a gesture, which would go on with a hidden window.
-- **Who changes workspace.** Only the user, by the keys and the three finger swipe (see
-  "Touchpad"), and the shell, by `activate` (of a
+- **Who changes workspace.** Only the user, by the keys, the three finger swipe (see
+  "Touchpad") and Mission Control, and the shell, by `activate` (of a
   workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
   no `xdg-activation`, and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. An
   application may minimize its own window (lot D-18c1), never bring it back. A new window opens on the active workspace and
@@ -1656,7 +1656,7 @@ gives no two finger swipe, but a device that would is passed on.
 | Fingers | Gesture | Effect |
 | --- | --- | --- |
 | 3 | Left or right | The row of workspaces follows the fingers, then lands on the neighbour or comes back |
-| 3 | Up | Opens Mission Control (see "Mission Control") |
+| 3 | Up | Opens Mission Control, which follows the fingers (see "Mission Control") |
 | 3 | Down | Closes Mission Control; out of it, nothing, or minimizes the window that has the keyboard with `swipe-down = minimize` |
 | 3 | Pinch, hold | Reserved |
 | 4 and more | Any | Reserved |
@@ -1735,9 +1735,9 @@ libinput events to `State::process_input_event`:
 
 ## Mission Control
 
-Lot D-33a: every window of the active workspace side by side, as macOS does, in the style of
-the desktop. The strip of the workspaces, dragging a window to another workspace and the view
-that follows the fingers come with lot D-33b. No board draws it: the measures are choices of the
+Lots D-33a and D-33b: every window of the active workspace side by side, under the strip of the
+workspaces, as macOS does, in the style of the desktop. D-33b adds the strip, dragging a window
+to another workspace, and the view that follows the fingers. No board draws it: the measures are choices of the
 lot (`sherlock_ui::mission_control`), to review with the design.
 
 ![Mission Control, dark](../desktop/compositor/screenshots/mission-control-dark.png)
@@ -1751,19 +1751,24 @@ lot (`sherlock_ui::mission_control`), to review with the design.
 | Super alone, pressed then released with nothing in between | Opens, or closes |
 | Super + Tab | Opens, or closes |
 | Escape | Closes |
-| Three fingers up | Opens |
-| Three fingers down | Closes |
+| Three fingers up | Opens; the view follows the fingers |
+| Three fingers down | Closes; the view follows the fingers |
 | A click on nothing | Closes |
 | A click on a window | That window comes on top with the keyboard, and the view closes |
+| A click on a thumbnail | Goes to that workspace, and the view closes |
 
 Super is not alone if another key or a mouse button is pressed before it is released: Super + 1,
 Super + drag, Super + arrow never open the view. The client under the keyboard still sees the
 press and the release of Super, as before. Super + Tab was free; Tab and Escape, like the other
 shortcuts, do not reach the client.
 
-**Three fingers.** A vertical three finger swipe (see "Touchpad") acts when the fingers lift,
-past 100 units (`VERTICAL_DISTANCE`), unless libinput cancelled it: up opens, down closes. Three
-fingers down on the desktop do what `swipe-down` says, nothing by default.
+**Following the fingers.** Once a three finger swipe picks the vertical direction (see
+"Touchpad"), the view is held where the fingers put it: 300 units up open it fully
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
+past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
+closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
+leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
 surface keeps the keyboard (a lock screen).
@@ -1771,8 +1776,8 @@ surface keeps the keyboard (a lock screen).
 ### The view
 
 - **The windows** of the active workspace, not minimized, X11 menus aside, each on the screen
-  under its center: each screen shows its own. They fill the work area, with a margin of 32
-  (`MARGIN`).
+  under its center: each screen shows its own. They fill the work area under the strip, with a
+  margin of 32 (`MARGIN`).
 - **The grid** (`layout::arrange`, pure computation): every window takes the same scale, so that
   their sizes compare as on the desktop, at most 0.8 (`MAX_SCALE`): even alone, a window shrinks
   a little. Each number of rows from 1 to n is tried; the windows are cut into rows by the
@@ -1787,10 +1792,23 @@ surface keeps the keyboard (a lock screen).
   window gets its corners back as it shrinks.
 - **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
   opens. No blur: the compositor has none yet (see "What rendering does not do yet").
+- **The strip**, at the top of the work area: one thumbnail per workspace, as wide as the screen
+  for 84 of height (smaller if they do not fit), with the wallpaper, the windows of that
+  workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
+  workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
+  over. The strip comes down from above the screen as the view opens.
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
-  as the view opens, and back as it closes, on `mission_control::SPRING` (the snap spring); the
-  titles and the dim fade with it. A
+  as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
+
+### Dragging to another workspace
+
+A window pressed and moved past the drag threshold (4 px) follows the pointer, in front of
+everything, without its title. Dropped on a thumbnail, it moves to that workspace
+(`State::move_to_workspace`) and leaves the grid; the view stays open. Dropped elsewhere, it
+goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
+row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
+The bar follows through `ext-workspace-v1`, as for any switch.
 
 ### Input while it is open
 
@@ -1810,8 +1828,10 @@ surface keeps the keyboard (a lock screen).
 The thumbnails are the windows' own surfaces, scaled by the renderer (`render::Item::Window`
 with a smaller rectangle): no copy on the processor. The title bar is the texture of the desktop
 (`decorations::Textures`), stretched, made again only if its look changes; the titles are
-textures of their own (`mission_control::Labels`), made once per text. X11 and Wayland windows
-go through the same items.
+textures of their own (`mission_control::Labels`), made once per text. The wallpaper of a
+thumbnail is the screen's texture, drawn into the thumbnail and cut to its rounded corners by
+the clip program (`render::RoundedSurface` over a texture). X11 and Wayland windows go through
+the same items.
 
 `mission_control::push_items` takes the place of the windows in `render::items`, behind the bar
 and the dock: the bar and the dock stay as they are, undimmed. While the view opens or closes,
@@ -1830,18 +1850,22 @@ windows on a screen of 1440 × 900:
 - **Keys.** Super alone opens (animated, then fully open) and takes the keyboard; Escape closes
   and gives it back; Super + Tab opens and closes; Super with A or with a click between is not
   alone; Super alone twice opens and closes.
-- **Three fingers.** 50 units up, or 150 cancelled: nothing; 150 up opens, takes the keyboard;
-  up again stays open; down closes and gives the keyboard back; down on the desktop does
-  nothing.
+- **Three fingers.** 150 units up: half open, held without an animation, following the fingers
+  back down; lifted past the trigger, it opens the rest of the way from there; 30 down stays
+  open; 150 down closes and gives the keyboard back; 40 up, or cancelled, stays closed.
 - **Click.** The left window is on the left; a click on it raises it with the keyboard and
   closes the view; a click on nothing closes it.
 - **Input.** Keys typed and a click on a window during the view: the client receives no key,
   no button, has neither keyboard nor pointer; the cursor is the arrow; closed, keys go through.
+- **Drag.** A window dragged onto the second thumbnail goes to workspace 2 and leaves the grid,
+  the view open; a click on that thumbnail goes there, without a slide, the window with the
+  keyboard.
 - **Windows that come and go.** A window opened in the view joins the grid without the
   keyboard, one closed leaves it; closed, the view gives the keyboard to the new window.
 - **No frame at rest.** The scene animates while the view opens and not once it is open; the
   epoch does not move with time alone.
-- **Two screens.** Each shows its own window; a click on the second screen's window chooses it.
+- **Two screens.** Each shows its own window and its strip; a click on the second screen's
+  window chooses it.
 
 `tests/xwayland.rs` opens the view with the X11 window: it is in the grid, its menu is not, and a
 click gives it the keyboard back. `tests/gestures.rs`: three fingers down minimize only with
@@ -1856,20 +1880,21 @@ decorated windows, the pointer on one, into `screenshots/mission-control-dark.pn
 
 1. Start the session (nested: `--nested`, the gesture key is then Alt), open four or five
    windows, Konsole (Qt), a GTK application and an X11 one (`xterm`).
-2. Super alone: the windows shrink into the grid on a spring, titles below, the wallpaper
-   dims. Hover: the accent border follows the pointer. Click a window: it
+2. Super alone: the windows shrink into the grid on a spring, titles below, the strip comes
+   down, the wallpaper dims. Hover: the accent border follows the pointer. Click a window: it
    comes on top with the keyboard, the others go back to their place.
 3. Super + Tab, then Escape. Typing in the view reaches no application.
-4. Three fingers up: the view opens. Three fingers down: it closes.
-5. With two screens, each shows its windows.
-6. `RUST_LOG=compositor=debug`: the log says when the view opens and closes.
+4. Three fingers up slowly, stop halfway: the windows stay halfway. Lift: the view opens. Three
+   fingers down: it closes.
+5. Drag a window onto the second thumbnail: it leaves the grid. Click the second thumbnail: the
+   bar shows workspace 2, the window there has the keyboard.
+6. With two screens, each shows its windows.
+7. `RUST_LOG=compositor=debug`: the log says when the view opens and closes.
 
 ### Left for later
 
 - **The grid moves at once** when a window opens or closes in the view: the others jump to
   their new slot instead of sliding there.
-- **The strip of the workspaces**, dragging a window to another workspace, and the view that
-  follows the fingers: lot D-33b.
 - **Keyboard navigation** in the view (arrows, Enter) and the search that filters the windows
   (proposition 2.3) are not there.
 - **Blur** of the wallpaper: the dim stands for it until the compositor blurs (lot D-11b).

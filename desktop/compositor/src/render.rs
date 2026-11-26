@@ -59,6 +59,7 @@ render_elements! {
     Wallpaper=TextureRenderElement<GlesTexture>,
     Genie=Stamped<genie::GenieElement>,
     Decoration=Stamped<TextureRenderElement<GlesTexture>>,
+    Thumbnail=RoundedSurface<TextureRenderElement<GlesTexture>>,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -131,6 +132,12 @@ pub enum Item {
         rect: Rectangle<i32, Physical>,
         label: mission_control::Label,
         alpha: f32,
+    },
+    /// The wallpaper of the screen in `rect`, cut to its rounded corners: a workspace thumbnail
+    /// of Mission Control.
+    Thumbnail {
+        rect: Rectangle<i32, Physical>,
+        radius: f32,
     },
 }
 
@@ -401,6 +408,22 @@ impl Scene {
                     .into_iter()
                     .collect()
             }
+            Item::Thumbnail { rect, radius } => wallpaper
+                .map(|texture| {
+                    let inside = View {
+                        frame: rect,
+                        ..*view
+                    };
+                    SceneElement::Thumbnail(RoundedSurface {
+                        inner: wallpaper::element(texture, mode, &inside),
+                        program: self.clip.clone(),
+                        clip: rect.to_f64(),
+                        radius,
+                        frame_size: view.frame_size,
+                    })
+                })
+                .into_iter()
+                .collect(),
         }
     }
 }
@@ -753,10 +776,10 @@ pub fn rounded_opaque(
         .collect()
 }
 
-/// A client surface clipped by the rounded rectangle of its window. The texture program
-/// replaces Smithay's while the surface is drawn.
-pub struct RoundedSurface {
-    inner: RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+/// A client surface clipped by the rounded rectangle of its window, or the wallpaper by that of
+/// a workspace thumbnail. The texture program replaces Smithay's while it is drawn.
+pub struct RoundedSurface<E = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>> {
+    inner: E,
     program: GlesTexProgram,
     /// Clip rectangle, in the frame, before its transform.
     clip: Rectangle<f64, Physical>,
@@ -764,7 +787,7 @@ pub struct RoundedSurface {
     frame_size: Size<i32, Physical>,
 }
 
-impl Element for RoundedSurface {
+impl<E: Element> Element for RoundedSurface<E> {
     fn id(&self) -> &Id {
         self.inner.id()
     }
@@ -819,7 +842,7 @@ impl Element for RoundedSurface {
     }
 }
 
-impl RenderElement<GlesRenderer> for RoundedSurface {
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for RoundedSurface<E> {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,

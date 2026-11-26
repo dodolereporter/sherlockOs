@@ -1,6 +1,7 @@
 //! Mission Control (lot D-33), without a screen or backend: a client opens decorated windows,
-//! the view opens and closes by the keys and by three fingers, a click chooses a window, and
-//! the client receives nothing while the view is open. The captures are drawn with Mesa's software renderer.
+//! the view opens and closes by the keys and by three fingers, a click chooses a window or a
+//! workspace, a window dragged onto a thumbnail changes workspace, and the client receives
+//! nothing while the view is open. The captures are drawn with Mesa's software renderer.
 
 // Test module: clippy allows unwrap and expect there, as in unit tests.
 #[cfg(test)]
@@ -13,7 +14,7 @@ mod tests {
         time::Duration,
     };
 
-    use compositor::{State, render};
+    use compositor::{State, mission_control::Target, render};
     use sherlock_ui::color::Color;
     use smithay::{
         backend::input::{ButtonState, KeyState},
@@ -429,34 +430,50 @@ mod tests {
     }
 
     #[test]
-    fn three_fingers_up_open_the_view_and_down_close_it() {
+    fn the_view_follows_three_fingers_up_and_down() {
         let (mut h, _shown) = two_windows();
-        let swipe = |s: &mut State, dy: f64, cancelled: bool| {
-            s.gesture_swipe_begin(3, 0);
-            for i in 1..=10 {
-                s.gesture_swipe_update(i * 10, (0.0, dy).into());
-            }
-            s.gesture_swipe_end(100, cancelled);
-        };
-        // Not far enough, or cancelled: nothing.
-        swipe(&mut h.state, -5.0, false);
-        swipe(&mut h.state, -15.0, true);
-        assert!(!h.state.overview_open());
-        // Up: it opens on its spring.
-        swipe(&mut h.state, -15.0, false);
-        assert!(h.state.overview_open());
-        assert!(h.state.overview_animating(h.state.now()));
-        assert!(h.state.focused_window().is_none());
-        // Up again: it stays open. Down: it closes, the keyboard back.
-        swipe(&mut h.state, -15.0, false);
-        assert!(h.state.overview_open());
-        swipe(&mut h.state, 15.0, false);
-        assert!(!h.state.overview_open());
+        let s = &mut h.state;
+        // Up, 150 units: half open, held by the fingers, no animation.
+        s.gesture_swipe_begin(3, 0);
+        for i in 1..=10 {
+            s.gesture_swipe_update(i * 10, (0.0, -15.0).into());
+        }
+        assert!(s.overview_open());
+        let half = 150.0 / compositor::gestures::OVERVIEW_DISTANCE;
+        assert!((s.overview_progress(s.now()) - half).abs() < 1e-9);
+        assert!(!s.overview_animating(s.now()));
+        s.gesture_swipe_update(110, (0.0, 15.0).into());
+        let back = 135.0 / compositor::gestures::OVERVIEW_DISTANCE;
+        assert!((s.overview_progress(s.now()) - back).abs() < 1e-9);
+        // Lifted past the trigger: it opens the rest of the way, on its spring.
+        s.gesture_swipe_end(120, false);
+        assert!(s.overview_open());
+        assert!(s.overview_animating(s.now()));
+        assert!((s.overview_progress(s.now()) - back).abs() < 0.05);
+        assert_eq!(s.overview_progress(s.now() + Duration::from_secs(5)), 1.0);
+        // Down, not far enough: it stays open.
+        s.gesture_swipe_begin(3, 200);
+        s.gesture_swipe_update(210, (0.0, 30.0).into());
+        s.gesture_swipe_end(220, false);
+        assert!(s.overview_open());
+        // Down, far enough: it closes, and the keyboard is back.
+        s.gesture_swipe_begin(3, 300);
+        for i in 1..=10 {
+            s.gesture_swipe_update(300 + i * 10, (0.0, 15.0).into());
+        }
+        s.gesture_swipe_end(400, false);
+        assert!(!s.overview_open());
         assert_eq!(h.focused_title().as_deref(), Some("Front"));
-        // Down on the desktop: nothing, by default.
-        swipe(&mut h.state, 15.0, false);
-        assert!(!h.state.overview_open());
-        assert!(!h.state.is_minimized(&h.window("Front")));
+        // Up, not far enough: it comes back closed; cancelled, too.
+        let s = &mut h.state;
+        s.gesture_swipe_begin(3, 500);
+        s.gesture_swipe_update(510, (0.0, -40.0).into());
+        s.gesture_swipe_end(520, false);
+        assert!(!s.overview_open());
+        s.gesture_swipe_begin(3, 600);
+        s.gesture_swipe_update(610, (0.0, -200.0).into());
+        s.gesture_swipe_end(620, true);
+        assert!(!s.overview_open());
     }
 
     #[test]
@@ -467,7 +484,8 @@ mod tests {
         let (back, front) = (h.slot("Back"), h.slot("Front"));
         assert!(back.x < front.x);
         h.state.pointer_motion(back, 20);
-        assert_eq!(h.state.overview_window_at(back), Some(h.window("Back")));
+        let hovered = h.state.overview_target(back);
+        assert_eq!(hovered, Some(Target::Window(h.window("Back"))));
         h.click(back);
         assert!(!h.state.overview_open());
         assert_eq!(h.focused_title().as_deref(), Some("Back"));
@@ -492,11 +510,11 @@ mod tests {
         assert!(!h.client.pointer_in && !h.client.keyboard_in);
         let buttons = h.client.buttons;
         h.tap(KEY_A);
-        // A press on a window, released away from it: nothing is chosen.
+        // A press then a release on a window that only moves it a little.
         let front = h.slot("Front");
         h.state.pointer_motion(front, 30);
         h.button(true);
-        h.state.pointer_motion((5.0, 890.0).into(), 31);
+        h.state.pointer_motion(front + Point::from((40.0, 0.0)), 31);
         h.button(false);
         h.state.pointer_motion((700.0, 450.0).into(), 32);
         h.sync();
@@ -514,6 +532,39 @@ mod tests {
         h.sync();
         assert!(h.client.keyboard_in);
         assert_eq!(h.client.keys, [(KEY_A - 8, true), (KEY_A - 8, false)]);
+    }
+
+    #[test]
+    fn a_window_dragged_onto_a_thumbnail_changes_workspace() {
+        let (mut h, _shown) = two_windows();
+        h.state.open_overview();
+        let output = h.output(0);
+        let strip = h.state.overview_strip(&output);
+        assert_eq!(strip.len(), 3);
+        let second = strip[1].loc + strip[1].size.downscale(2.0).to_point();
+        let back = h.slot("Back");
+        h.state.pointer_motion(back, 40);
+        h.button(true);
+        h.state
+            .pointer_motion(back + Point::from((10.0, -10.0)), 41);
+        h.state.pointer_motion(second, 42);
+        assert_eq!(h.state.overview_target(second), Some(Target::Workspace(1)));
+        h.button(false);
+        // Still open, on the first workspace, without the window.
+        assert!(h.state.overview_open());
+        assert_eq!(h.state.workspace_of(&h.window("Back")), "2");
+        assert_eq!(h.state.workspaces().active(), "1");
+        let tiles = h.state.overview_tiles(&output, None);
+        assert_eq!(tiles.len(), 1);
+        // A click on the thumbnail goes to that workspace and closes the view.
+        h.click(second);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.state.workspaces().active(), "2");
+        assert!(
+            !h.state.workspaces_sliding(h.state.now()),
+            "no slide under the view"
+        );
+        assert_eq!(h.focused_title().as_deref(), Some("Back"));
     }
 
     #[test]
@@ -575,6 +626,7 @@ mod tests {
         assert_eq!(titles(&second), ["Right"]);
         let right = h.slot("Right");
         assert!(right.x > 1280.0);
+        assert_eq!(h.state.overview_strip(&second).len(), 3);
         h.click(right);
         assert_eq!(h.focused_title().as_deref(), Some("Right"));
     }

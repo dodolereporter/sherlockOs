@@ -2,11 +2,11 @@
 //!
 //! Gestures of three fingers or more belong to the compositor. Three fingers left or right move
 //! the row of workspaces with the fingers, then let it go with their velocity on the spring of
-//! the workspace slide (`anim::WorkspaceSlide`); up opens Mission Control and down closes it;
-//! down on the desktop is the setting `swipe-down`, nothing by default. Four fingers and more,
-//! and pinches of three fingers or more, are reserved: taken, without effect. Gestures of fewer
-//! fingers go to the client under the pointer, through `zwp_pointer_gestures_v1`: pinch to
-//! zoom, holds.
+//! the workspace slide (`anim::WorkspaceSlide`); up opens Mission Control, which follows the
+//! fingers, and down closes it; down on the desktop is the setting `swipe-down`, nothing by
+//! default. Four fingers and more, and pinches of three fingers or more, are reserved: taken,
+//! without effect. Gestures of fewer fingers go to the client under the pointer, through
+//! `zwp_pointer_gestures_v1`: pinch to zoom, holds.
 
 use std::collections::VecDeque;
 
@@ -38,6 +38,8 @@ pub const LOCK_DISTANCE: f64 = 16.0;
 pub const WORKSPACE_DISTANCE: f64 = 400.0;
 /// Travel up or down that triggers the vertical swipe.
 pub const VERTICAL_DISTANCE: f64 = 100.0;
+/// Travel up that opens Mission Control fully while the fingers hold it (lot D-33).
+pub const OVERVIEW_DISTANCE: f64 = 300.0;
 /// The velocity is measured over the last movements of this window, in milliseconds: fingers
 /// that stopped before lifting throw nothing.
 pub const VELOCITY_WINDOW: u32 = 100;
@@ -161,6 +163,11 @@ impl Swipe {
         projected.round().clamp(self.bounds.0, self.bounds.1) as usize
     }
 
+    /// Vertical travel of the fingers since the start, up being negative.
+    pub fn vertical(&self) -> f64 {
+        self.travel.y
+    }
+
     /// The fingers travelled far enough up or down for the vertical swipe.
     pub fn reached(&self) -> bool {
         self.travel.y.abs() >= VERTICAL_DISTANCE
@@ -280,6 +287,10 @@ impl State {
             Some(Route::Swipe(swipe)) => {
                 if let Some(view) = swipe.update(time, delta) {
                     self.hold_workspaces(view);
+                } else if matches!(swipe.direction(), Some(Direction::Up | Direction::Down)) {
+                    // Mission Control follows the fingers (lot D-33).
+                    let travel = swipe.vertical();
+                    self.follow_overview(travel);
                 }
             }
             Some(Route::Reserved) | None => {}
@@ -314,9 +325,8 @@ impl State {
             Some(Direction::Horizontal) => {
                 self.release_workspaces(swipe.landing(time), swipe.velocity(time));
             }
-            // Mission Control (lot D-33).
-            Some(Direction::Up) if done => self.open_overview(),
-            Some(Direction::Down) if done && self.overview_open() => self.close_overview(),
+            Some(direction @ (Direction::Up | Direction::Down))
+                if self.release_overview(direction == Direction::Up, done) => {}
             Some(Direction::Down)
                 if done && self.touchpad.config().swipe_down == SwipeDown::Minimize =>
             {
