@@ -12,6 +12,8 @@ sherlock-ui = { path = "../sherlock-ui", default-features = false }
 # inotify, timerfd, poll and the local time (localtime_r, mktime): the version the bar and
 # Evidence already pin.
 libc = "=0.2.191"
+# What goes wrong with the file is logged the same way in every program (`follow_themes`).
+tracing = "=0.1.44"
 
 [lints]
 workspace = true

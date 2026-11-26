@@ -93,6 +93,7 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "sherlock-ui",
+ "tracing",
 ]
 
 [[package]]
@@ -290,6 +291,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "bar"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
@@ -566,6 +568,7 @@ version = "0.0.0"
 dependencies = [
  "desktop-config",
  "image",
+ "shell-protocol",
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
@@ -822,6 +825,7 @@ dependencies = [
 name = "dock"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "dock-config",
  "iced",
  "iced_exwlshell",
@@ -1016,6 +1020,7 @@ dependencies = [
 name = "evidence"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "futures",
  "iced",
  "iced_runtime",
@@ -3261,6 +3266,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "shell-protocol"
+version = "0.0.0"
+dependencies = [
+ "wayland-backend",
+ "wayland-client",
+ "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

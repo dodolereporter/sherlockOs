@@ -53,11 +53,21 @@ Surface):
 | `windows.rs` | Open windows behind the `Source` trait: placeholder and `zwlr_foreign_toplevel_manager_v1` |
 
 Every color, size and text comes from `sherlock-ui`: `metrics::DOCK_*` (already there since
-D-01), `color::DOCK_GLASS` and `DOCK_BORDER`, and the new module `sherlock_ui::dock` (one new
-file, a `pub mod` line in `lib.rs`): padding, edge margin, dot, label, separator, menu width
-and gap, the bounds of the settings, the magnification spring `dock::SPRING`, the label fade,
-the label, dot and separator colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and
-`ring`, and the texts `dock::text`.
+D-01), the palette (`dock_glass`, `dock_border`, `dock_separator`, `logo_dot`, `cream`), and the
+module `sherlock_ui::dock`: padding, edge margin, dot, label, separator, menu width and gap, the
+bounds of the settings, the magnification spring `dock::SPRING`, the label fade, the tile
+colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and `ring`, and the texts
+`dock::text`.
+
+**Theme.** The dock reads the theme of the appearance file before its first frame, then follows
+the file live and fades from one theme to the other
+(D-05b, see "Following the theme" in `docs/sherlock-ui.md`): its styles read the palette of the
+iced theme. The tiles keep their colors in both themes. Unlike the DockClair board, the dot
+under an open application is night blue in the light theme: cream would read at 1.1 to 1 on
+the light glass.
+
+![The dock in the light theme](../desktop/dock/screenshots/dock-hover-light.png)
+![An icon's menu in the light theme](../desktop/dock/screenshots/dock-menu-light.png)
 
 The configuration file is read and written by its own crate, `desktop/dock-config`, standard
 library and sherlock-ui tokens only, so that the settings application (Control Room, D-26)
@@ -249,10 +259,23 @@ count). An id that is not installed is skipped and logged. An empty `Pinned=` is
 Sherlock alone.
 
 Without `Pinned`, the dock fills five roles with what is installed and shown in menus: files,
-terminal, editor, browser, games. For each, the default application of its type in
+terminal, editor, browser, games. For each, our own application (Evidence, desktop file id
+`evidence`, for files), else the default application of its type in
 `$XDG_CONFIG_HOME/mimeapps.list` (`inode/directory`, `text/plain`, `x-scheme-handler/https`),
-else a preferred one (`evidence` for files, Konsole or GNOME's terminals, Steam), else the first
-one of its category (`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Nothing is
+else a preferred one (Konsole or GNOME's terminals, Steam), else the first one of its category
+(`FileManager`, `TerminalEmulator`, `TextEditor`, `WebBrowser`). Evidence comes before
+`mimeapps`, which often gives folders to the file manager of another desktop: for the files
+role, the `inode/directory` choice of `mimeapps.list` is ignored as long as Evidence is
+installed, even when the user made it on purpose. This only concerns the default pins: a
+`Pinned` list already written is kept as it is.
+
+Evidence is pinned only when its desktop entry is installed in a data directory
+(`$XDG_DATA_HOME/applications`, then those of `$XDG_DATA_DIRS`); otherwise the files role falls
+back to another file manager, Nautilus on the author's laptop. `just install-evidence` builds it
+and installs it for the user, without root: the binary in `~/.local/bin`, and
+`desktop/evidence/evidence.desktop` in `~/.local/share/applications` with that absolute path in
+`Exec`. A dock that already wrote its `Pinned` list keeps it: « Garder dans le dock » on an open
+Evidence window adds it there. The OS packages will install both in `/usr`. Nothing is
 written until the list changes. « Retirer du dock » and « Garder dans le dock » write the file.
 
 ### Edges
@@ -486,6 +509,10 @@ X focus): the keyboard steps were checked in the nested KWin.
   again, two missing folder levels at the start.
 - **Desktop entries**: `%k`, `Hidden` (deleted, and masking the same id further down),
   missing `TryExec`.
+- **Default pins**: the real `desktop/evidence/evidence.desktop`, installed beside the fixtures,
+  is found by its id `evidence` and pinned first, before the file manager `mimeapps` names.
+- **Theme**: the dock fades to the light palette over the frames; captures at rest, hovered and
+  of an icon's menu in the light theme (`dock-*-light-tiny-skia.png`).
 - **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
   the longest magnified bar up to the label while hovered, on the bottom and right edges;
   rounding to whole pixels never shrinks it.

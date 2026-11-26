@@ -1,6 +1,7 @@
 //! Rendering the bar and the Sherlock menu without a screen, from fake sources.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use bar::app::{Bar, Message};
 use bar::menu;
@@ -10,7 +11,20 @@ use bar::source::network::{Link, Network};
 use bar::source::sound::Sound;
 use bar::source::workspaces::Workspaces;
 use iced_test::simulator::Simulator;
+use sherlock_ui::color::{self, Theme};
 use sherlock_ui::{metrics, theme};
+
+/// A capture sets the active theme: one at a time.
+static THEME: Mutex<()> = Mutex::new(());
+
+/// Runs `capture` in `which`, then goes back to the dark theme.
+fn in_theme<R>(which: Theme, capture: impl FnOnce() -> R) -> R {
+    let _one = THEME.lock().unwrap_or_else(PoisonError::into_inner);
+    color::set_active(which);
+    let result = capture();
+    color::set_active(Theme::Dark);
+    result
+}
 
 /// The bar of the Main design board: three workspaces, the first one active, the editor
 /// focused.
@@ -85,19 +99,21 @@ fn menu_size(state: &Bar) -> (f32, f32) {
     (width as f32, height as f32)
 }
 
+/// The bar and its menu in each theme: `bar`, `sherlock-menu`, then `bar-light` and
+/// `sherlock-menu-light`, compared with the Main, Menus, MainClair and MenusClair boards.
 #[test]
-fn the_bar_renders_without_a_screen() {
-    let state = sample();
-    let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
-    assert_written(capture(ui, "bar"));
-}
-
-#[test]
-fn the_menu_renders_without_a_screen() {
-    let mut state = sample();
-    state.cursor = Some(1);
-    let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
-    assert_written(capture(ui, "sherlock-menu"));
+fn the_bar_and_its_menu_render_in_both_themes() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+            assert_written(capture(ui, &format!("bar{suffix}")));
+            state.cursor = Some(1);
+            let size = menu_size(&state);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_menu());
+            assert_written(capture(ui, &format!("sherlock-menu{suffix}")));
+        });
+    }
 }
 
 #[test]
@@ -105,10 +121,12 @@ fn the_menu_surface_sized_for_the_gpu_renders() {
     // The surface the GPU gets, with room for the shadow. Tests render in software, which
     // draws the crisp shadow: this only checks that the capture is written. The blurred shadow
     // shows with `ICED_TEST_BACKEND=wgpu` and the variables of ADR 0018 (docs/bar.md).
-    let mut state = sample();
-    state.menu_margins = menu::margins(true);
-    let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
-    assert_written(capture(ui, "sherlock-menu-shadow"));
+    in_theme(Theme::Dark, || {
+        let mut state = sample();
+        state.menu_margins = menu::margins(true);
+        let ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
+        assert_written(capture(ui, "sherlock-menu-shadow"));
+    });
 }
 
 #[test]

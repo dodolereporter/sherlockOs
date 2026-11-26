@@ -55,6 +55,11 @@ A pull request is green only if `verify` and `test-boot` both are.
   a comment. To upgrade one, replace the digest and the comment together.
 - **Machine.** `ubuntu-24.04`, named explicitly rather than `ubuntu-latest`, so that an image change
   does not break the CI by surprise.
+- **Disk.** The `target` folder of the whole workspace no longer fits on the runner's disk with
+  full debug information (lot D-14 brought the real session's dependencies: `ld` died with a bus
+  error, the next run with `No space left on device`). The CI builds with
+  `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, which keeps file and line in backtraces, and
+  `CARGO_INCREMENTAL=0`.
 - **Maximum duration.** 15 minutes. Beyond that, the run is stopped and counts as a failure.
 
 ## Running it locally

@@ -1,19 +1,16 @@
 //! Local clock. The standard library does not know the time zone: local time comes from the
-//! `date` command, run once a minute.
+//! C library (`localtime_r`), read once a minute.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sherlock_ui::strings;
 
-use super::{Source, SourceError, run};
+use super::{Source, SourceError};
 
 /// Longest sleep between two looks at the clock. The thread wakes up more often than once a
-/// minute so it does not lag behind after a suspend; it only runs `date` once the minute
-/// changed.
+/// minute so it does not lag behind after a suspend; it only reads the local time once the
+/// minute changed.
 const MAX_SLEEP: Duration = Duration::from_secs(5);
-
-/// Format given to `date`: day of the week (1 is Monday), day, month, hour, minute.
-const DATE_FORMAT: &str = "+%u %d %m %H %M";
 
 /// Local time, to the minute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,35 +34,34 @@ impl LocalTime {
     }
 }
 
-/// Parses the output of `date "+%u %d %m %H %M"`.
-pub fn parse(output: &str) -> Result<LocalTime, SourceError> {
-    let error = || SourceError::Parse {
-        command: "date",
-        detail: output.trim().to_owned(),
-    };
-    let fields: Vec<u8> = output
-        .split_whitespace()
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .map_err(|_| error())?;
-    let [weekday, day, month, hour, minute] = fields[..] else {
-        return Err(error());
-    };
-    let valid = (1..=7).contains(&weekday)
-        && (1..=31).contains(&day)
-        && (1..=12).contains(&month)
-        && hour < 24
-        && minute < 60;
-    if !valid {
-        return Err(error());
+impl LocalTime {
+    /// The fields of a C `struct tm`: day of the week from 0 (Sunday), day, month from 0, hour,
+    /// minute.
+    pub fn from_tm(wday: i32, mday: i32, mon: i32, hour: i32, min: i32) -> Option<Self> {
+        let field = |v: i32, range: std::ops::RangeInclusive<i32>| {
+            range.contains(&v).then(|| u8::try_from(v).ok()).flatten()
+        };
+        Some(Self {
+            // Monday is 1 and Sunday 7, as in `strings::short_date`.
+            weekday: field(wday, 0..=6).map(|d| if d == 0 { 7 } else { d })?,
+            day: field(mday, 1..=31)?,
+            month: field(mon + 1, 1..=12)?,
+            hour: field(hour, 0..=23)?,
+            minute: field(min, 0..=59)?,
+        })
     }
-    Ok(LocalTime {
-        weekday,
-        day,
-        month,
-        hour,
-        minute,
-    })
+}
+
+/// Local time of `epoch`, in seconds since 1970, from `localtime_r`
+/// (`appearance_config::local`, which reads the time zone again first).
+pub fn local(epoch: i64) -> Result<LocalTime, SourceError> {
+    let error = |detail: String| SourceError::Parse {
+        command: "localtime_r",
+        detail,
+    };
+    let tm = appearance_config::local(epoch).map_err(|e| error(e.to_string()))?;
+    LocalTime::from_tm(tm.tm_wday, tm.tm_mday, tm.tm_mon, tm.tm_hour, tm.tm_min)
+        .ok_or_else(|| error(format!("{epoch} is out of range")))
 }
 
 /// The system clock.
@@ -87,7 +83,7 @@ impl Source for SystemClock {
 
     fn read(&mut self) -> Result<LocalTime, SourceError> {
         self.minute = epoch_minute();
-        parse(&run("date", &[DATE_FORMAT])?)
+        local(i64::try_from(self.minute * 60).unwrap_or(i64::MAX))
     }
 
     fn wait(&mut self) -> bool {
@@ -107,26 +103,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn date_output_gives_the_time_of_the_design_board() {
-        // Output of `date "+%u %d %m %H %M"` on Tuesday 24 November 2026 at 21:46.
-        let time = parse("2 24 11 21 46\n").unwrap();
+    fn the_fields_of_the_c_library_give_the_time_of_the_design_board() {
+        // Tuesday 24 November 2026 at 21:46: day 2 of the week, month 10 from 0.
+        let time = LocalTime::from_tm(2, 24, 10, 21, 46).unwrap();
         assert_eq!(time.date(), "mar. 24 nov.");
         assert_eq!(time.time(), "21:46");
     }
 
     #[test]
-    fn midnight_and_small_numbers_keep_two_digits() {
-        let time = parse("7 01 08 00 05").unwrap();
+    fn sunday_midnight_and_small_numbers_keep_two_digits() {
+        let time = LocalTime::from_tm(0, 1, 7, 0, 5).unwrap();
+        assert_eq!(time.weekday, 7);
         assert_eq!(time.date(), "dim. 1 août");
         assert_eq!(time.time(), "00:05");
     }
 
     #[test]
-    fn unexpected_output_is_rejected() {
-        assert!(parse("").is_err());
-        assert!(parse("2 24 11 21").is_err());
-        assert!(parse("8 24 11 21 46").is_err());
-        assert!(parse("2 24 11 24 00").is_err());
-        assert!(parse("mar. 24 nov.").is_err());
+    fn fields_out_of_range_are_rejected() {
+        assert!(LocalTime::from_tm(7, 24, 10, 21, 46).is_none());
+        assert!(LocalTime::from_tm(2, 0, 10, 21, 46).is_none());
+        assert!(LocalTime::from_tm(2, 24, 12, 21, 46).is_none());
+        assert!(LocalTime::from_tm(2, 24, 10, 24, 0).is_none());
+        assert!(LocalTime::from_tm(2, 24, 10, 21, 60).is_none());
+    }
+
+    #[test]
+    fn the_local_time_follows_the_clock_of_the_machine() {
+        // 2026-11-24 20:46 UTC: the local time is a whole number of quarter hours away, within
+        // a day, and the minute stays.
+        let time = local(1_795_553_160).unwrap();
+        assert_eq!(time.minute % 15, 46 % 15);
+        assert!((23..=25).contains(&time.day), "{time:?}");
+        let mut clock = SystemClock::default();
+        assert!(clock.read().is_ok());
     }
 }

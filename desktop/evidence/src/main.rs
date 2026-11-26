@@ -15,10 +15,14 @@ fn main() -> iced::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     tracing::info!(?renderer, "renderer");
+    // The theme of the file before the first frame; the subscription follows it afterwards.
+    if let Some(path) = appearance_config::path() {
+        sherlock_ui::color::set_active(appearance_config::theme_now(&path));
+    }
     let (width, height) = metrics::REFERENCE_WINDOW;
     let app = iced::application(|| App::new(Config::from_env()), App::update, App::view)
         .title(App::title)
-        .theme(theme::window_theme())
+        .theme(|_: &App| theme::window_theme())
         .subscription(App::subscription)
         .default_font(typography::UI)
         .window(iced::window::Settings {

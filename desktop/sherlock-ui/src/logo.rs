@@ -1,6 +1,8 @@
 //! Logo of the OS, with no text nor name. The SVGs and their PNGs are in `logo/`, written by
 //! `logo/export.py`; the construction is described in `docs/sherlock-ui.md`.
 
+use crate::color::{Color, Palette};
+
 /// The three versions of the logo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Logo {
@@ -35,6 +37,17 @@ impl Logo {
             Self::Cream => include_str!("../logo/logo-cream-transparent.svg"),
             Self::Night => include_str!("../logo/logo-night-transparent.svg"),
         }
+    }
+
+    /// The bare color logo with the ring and dot of `palette`: in the light theme, the top bar
+    /// darkens both, which would not show on its light glass.
+    pub fn bare_in(palette: &Palette) -> String {
+        let hex = |c: Color| format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b);
+        let dark = &Palette::DARK;
+        Self::Color
+            .bare()
+            .replace(&hex(dark.logo_ring), &hex(palette.logo_ring))
+            .replace(&hex(dark.logo_dot), &hex(palette.logo_dot))
     }
 
     /// Versions with a square: large, optical 32 px, optical 16 px.
@@ -107,6 +120,15 @@ mod tests {
             let y = number_after(svg, &format!("d=\"M{x} "));
             assert_eq!((x - 256).pow(2) + (y - 256).pow(2), r.pow(2), "{svg}");
         }
+    }
+
+    #[test]
+    fn the_bar_logo_takes_the_ring_and_dot_of_the_palette() {
+        assert_eq!(Logo::bare_in(&Palette::DARK), Logo::Color.bare());
+        let light = Logo::bare_in(&Palette::LIGHT);
+        assert!(light.contains(&hex(Palette::LIGHT.logo_ring)));
+        assert!(light.contains(&hex(Palette::LIGHT.logo_dot)));
+        assert!(!light.contains(&hex(color::CREAM)) && !light.contains(&hex(color::ACCENT)));
     }
 
     #[test]

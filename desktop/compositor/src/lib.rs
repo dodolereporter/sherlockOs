@@ -17,6 +17,7 @@ pub mod mesa;
 pub mod options;
 pub mod output;
 pub mod render;
+mod shell;
 pub mod stats;
 pub mod udev;
 pub mod wallpaper;
@@ -166,6 +167,8 @@ pub struct State {
     xwayland: Option<RegistrationToken>,
     /// Listening Wayland socket in the loop, removed by `shutdown`.
     listener: Option<RegistrationToken>,
+    /// Windows, screens and workspaces for the shell programs (ADR 0021).
+    shell: shell::Shell,
 }
 
 /// Data attached to each window.
@@ -262,6 +265,7 @@ impl State {
             x_display: None,
             xwayland: None,
             listener: None,
+            shell: shell::Shell::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -280,6 +284,9 @@ impl State {
             .unwrap_or_default();
         tracing::info!(socket = ?name, "Wayland socket open");
         self.accept_on(socket, event_loop)?;
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            self.listen_shell_next_to(&PathBuf::from(dir).join(&name), event_loop);
+        }
         Ok(name)
     }
 
@@ -290,8 +297,10 @@ impl State {
         path: PathBuf,
         event_loop: &EventLoop<'static, State>,
     ) -> Result<(), Error> {
-        let socket = ListeningSocket::bind_absolute(path)?;
-        self.accept_on(socket, event_loop)
+        let socket = ListeningSocket::bind_absolute(path.clone())?;
+        self.accept_on(socket, event_loop)?;
+        self.listen_shell_next_to(&path, event_loop);
+        Ok(())
     }
 
     fn accept_on(
@@ -320,6 +329,7 @@ impl State {
     /// loop, so the loop, and every source in it, is never freed. Removing a source drops it.
     pub fn shutdown(&mut self) {
         self.stop_xwayland();
+        self.stop_shell_socket();
         if let Some(token) = self.listener.take() {
             self.loop_handle.remove(token);
         }
@@ -462,6 +472,7 @@ impl State {
             self.popup_grab = None;
         }
         self.update_scales();
+        self.refresh_shell();
         if let Err(err) = self.display_handle.flush_clients() {
             tracing::warn!("flushing Wayland clients: {err}");
         }
@@ -479,6 +490,8 @@ pub(crate) fn is_override_redirect(window: &Window) -> bool {
 #[derive(Default)]
 pub struct ClientState {
     compositor_state: CompositorClientState,
+    /// Connected through the shell socket: sees the globals of the shell (ADR 0021).
+    shell: bool,
 }
 
 impl ClientData for ClientState {

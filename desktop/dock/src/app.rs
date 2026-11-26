@@ -1,17 +1,19 @@
 //! Dock state, messages and update. The views are in `view.rs`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dock_config::{DockConfig, Position as Edge};
+use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::window::Id;
 use iced::{Point, Size, Subscription, Task};
 use iced::{keyboard, mouse, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION};
@@ -56,6 +58,8 @@ pub enum Message {
     MenuHover(usize),
     MenuPick(Entry),
     Closed(Id),
+    /// The theme of the appearance file, at start then at each change.
+    Theme(Theme),
 }
 
 /// What the dock reads at startup.
@@ -104,6 +108,8 @@ pub struct Dock {
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
+    /// The theme of the appearance file, shown with a fade.
+    pub theme: ThemeFade,
 }
 
 impl Dock {
@@ -131,6 +137,7 @@ impl Dock {
             menu: None,
             frames: 0,
             frames_since: Duration::ZERO,
+            theme: ThemeFade::default(),
         };
         dock.rebuild();
         dock
@@ -165,7 +172,8 @@ impl Dock {
 
     /// Whether something still moves: the subscription to frames lives only that long.
     pub fn animating(&self) -> bool {
-        !self.label.is_done(self.now)
+        self.theme.running()
+            || !self.label.is_done(self.now)
             || self
                 .sizes
                 .iter()
@@ -185,7 +193,12 @@ impl Dock {
             }
             None => Subscription::none(),
         };
+        let appearance = match appearance_config::path() {
+            Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
+            None => Subscription::none(),
+        };
         Subscription::batch([
+            appearance,
             Subscription::run(|| windows::watch(windows::source)).map(Message::Windows),
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
@@ -210,7 +223,11 @@ impl Dock {
                 let now = self.origin.elapsed();
                 return self.pointer(event, now);
             }
-            Message::Frame(instant) => self.frame(instant.saturating_duration_since(self.origin)),
+            Message::Frame(instant) => {
+                self.theme.tick(instant);
+                self.frame(instant.saturating_duration_since(self.origin));
+            }
+            Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Windows(windows) => {
                 self.windows = Some(windows);
                 return self.refresh(self.geometry);
@@ -680,4 +697,16 @@ fn on_key(event: keyboard::Event) -> Option<Message> {
     focus::tab(event.clone())
         .map(Message::Focus)
         .or_else(|| menu::key(event).map(Message::Key))
+}
+
+/// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
+pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let follow = appearance_config::follow_themes(path.to_path_buf(), move |theme| {
+        sender.unbounded_send(theme).is_ok()
+    });
+    if let Err(error) = follow {
+        tracing::warn!(%error, "the dock will not follow the appearance file");
+    }
+    receiver
 }

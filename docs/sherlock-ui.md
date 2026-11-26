@@ -393,11 +393,12 @@ green, amber, salmon, cream and blues do not change, nor the selection, the acti
 the soft badges, as in the light boards. Where a vivid color colors a text, the palette has a
 role of its own: `accent_text`, `amber_text`, `salmon_text`.
 
-A program sets its theme with `color::set_active` and returns `theme::theme()` from its iced
-`theme` function. The styles read the palette of the iced theme they are given
-(`theme::palette`), the constructors of `component` read `color::palette()`: no component
-tests the theme. The module constants of `color` stay, with the dark values, for the programs
-that do not follow the theme yet (D-05b, D-05c). The file and the automatic mode are in
+A program sets its theme with `color::set_active` (at once) or a `color::ThemeFade` (with a
+fade, see below) and returns `theme::theme()` from its iced `theme` function. The styles read
+the palette of the iced theme they are given (`theme::palette`), the constructors of
+`component` read `color::palette()`: no component tests the theme. The module constants of
+`color` stay, with the dark values, for the compositor, which follows the theme in D-05c; the
+shell programs no longer use them. The file and the automatic mode are in
 `docs/appearance.md`.
 
 The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch
@@ -423,15 +424,19 @@ Choices the table does not make:
 | --- | --- | --- |
 | `focus_ring` | `#1F64A0` | The light blue `#8FC1E8` reads at 1.9 to 1 on white: the dark variant of the table |
 | Knob of a toggle that is on | `#F6F8FB` (`deepest`) | As in the light « Réglages » board |
-| `toggle_off_hover` | `rgba(20,35,59,0.16)` | 0.26 capped at 0.16: same as at rest, the hover no longer shows |
+| `toggle_off` | `rgba(20,35,59,0.12)` | 0.18 capped at 0.16 would equal its hover: one step below, the 0.12 of `pressed` (D-05b) |
+| `toggle_off_hover` | `rgba(20,35,59,0.16)` | 0.26 capped at 0.16 |
 | `shadow_base` | `rgba(20,35,59,0.33)` | Its opacity scales each step of `surface::Shadowed`'s crisp shadow (wired by D-02) |
 | `logo_ring` | `#2E7D4F` | Ring of the color logo in the bar, the icon green of the table (author's decision) |
+| `logo_dot` | `#14233B` | Dot of the bar logo and of an open application in the dock: cream reads at 1.1 to 1 on the light glass; the light text color (D-05b) |
+| `dock_separator` | `rgba(20,35,59,0.16)` | The dark `rgba(255,255,255,0.28)` by the rule, as on the DockClair board |
 
 ### Contrasts of the light table
 
 The contrast test runs on both palettes and requires 4.5 to 1 for every text, 3 to 1 for the
-logo ring, the tile icon and the focus ring. Other non-text elements are not checked: the track
-of an off toggle reads at 1.37 to 1 in light and 1.75 in dark, its knob carries the state. With
+logo ring and dot, the tile icon and the focus ring. Other non-text elements are not checked:
+the track of an off toggle reads at 1.26 to 1 at rest and 1.37 hovered in light, 1.75 in dark,
+its knob carries the state. With
 the values of the table, five text colors of the light theme stayed below 4.5 on some
 backgrounds; the author chose darker values, listed in `docs/appearance.md`. The color logo of
 the bar takes the icon green `#2E7D4F` for its ring in the light theme (`logo_ring`): the fill
@@ -439,10 +444,47 @@ green reads at 1.4 to 1 on the light bar.
 
 Two light colors fail on a selected row: the green and the amber of texts (4.06 and 3.90 on a
 card). No component lays them there, since badges move to the darkest background on a selected
-row; a test keeps the gap visible.
+row; a test keeps the gap visible, between 3.8 and 4.5. The day they pass, it asks for 4.5 in
+both themes and for this paragraph to go.
 
 The cream bubbles of Sherlock read at 1.01 to 1 on the light desktop: no bubble component
 exists yet, to settle in D-05b or the lot of the bubble (a border or a shadow, for the author).
+
+## Following the theme (D-05b)
+
+The top bar, Evidence and the dock follow the appearance file live, mode `auto` included, and
+fade from one theme to the other over `motion::THEME_FADE`, 250 ms: a choice of D-05b, the
+0.25 s of the cross-fades between two animations of Sherlock, longer than a hover since every
+surface changes at once.
+
+- `color::ThemeFade` takes each theme of the file (`set`): the first one at once, the one the
+  program starts in, the next ones with a fade that `tick` advances on each frame, as long as
+  `running`. A fade turned back halfway comes back from where it stands.
+- The palette shown is a step between the two (`color::set_mix`, `mix_step`), out of
+  `color::MIX_STEPS`, 32: `Palette::at_step` builds each mixed palette once (`Palette::mix`,
+  `Color::lerp`, opacity included), and `theme::theme()` and `window_theme()` return the iced
+  theme of the step. `theme::palette` finds the step back by its text color, which differs
+  at every step (tested). At rest, the step is 0 or 32: the exact palettes.
+- Each program subscribes to `appearance_config::follow_themes`, asks for frames while the fade
+  runs, and reads every color from the palette: `color::palette()` in its views, its styles
+  through the iced theme. Evidence returns `window_theme()` from a closure, read again at every
+  redraw.
+- The Sherlock button draws the color logo with the ring and dot of the palette
+  (`Logo::bare_in`): green ring and cream dot in dark, `#2E7D4F` and `#14233B` in light, as the
+  light boards want a dark dot. The menu avatar and the dock tile keep the logo in its night
+  blue square, the same in both themes.
+- The dock styles (`dock::bar`, `label`, `separator`, `dot`, `ring`) read the palette of their
+  iced theme. The tiles (`SHERLOCK_TILE`, `FALLBACK_TILE`, `FALLBACK_LETTER`) keep their colors:
+  « les fonds colorés des icônes du dock » do not change (`THEME-CLAIR.md`).
+
+Captures, rendered without a screen by the tests of each program, next to the light boards:
+`desktop/bar/screenshots/bar-light.png` and `menu-light.png`,
+`desktop/dock/screenshots/dock-hover-light.png` and `dock-menu-light.png`,
+`docs/evidence/evidence-light.png`.
+
+Differences with the light boards: the dot under an open application of the dock is cream on
+DockClair, where it reads at 1.1 to 1; it takes `logo_dot`, night blue. The bar's Sherlock
+button has no cream pill: as in the dark theme, the logo sits on the glass (D-20).
 
 ## What the lot does not do
 

@@ -9,7 +9,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length, Padding, Theme};
 
-use crate::color::{self, Color};
+use crate::color::{self, Color, Palette};
 use crate::focus::Focusable;
 use crate::icon::Icon;
 use crate::logo::Logo;
@@ -823,13 +823,25 @@ pub fn logo_square<'a>(version: Logo, size: f32) -> Svg<'a> {
         .height(size)
 }
 
-/// Sherlock button of the top bar: the color logo symbol, green ring and cream dot.
+/// Sherlock button of the top bar: the color logo symbol, its ring and dot in the colors of
+/// the palette shown.
 pub fn sherlock_button<'a, Message: Clone + 'a>(
     open: bool,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
     let (width, height) = metrics::SHERLOCK_BUTTON;
-    let content = container(logo(Logo::Color, metrics::SHERLOCK_GLYPH)).center(Length::Fill);
+    // One logo per step of a fade, built once.
+    static LOGOS: std::sync::OnceLock<Vec<svg::Handle>> = std::sync::OnceLock::new();
+    let logos = LOGOS.get_or_init(|| {
+        (0..=color::MIX_STEPS)
+            .map(|s| svg::Handle::from_memory(Logo::bare_in(Palette::at_step(s)).into_bytes()))
+            .collect()
+    });
+    let step = usize::from(color::mix_step().min(color::MIX_STEPS));
+    let glyph = svg(logos[step].clone())
+        .width(metrics::SHERLOCK_GLYPH)
+        .height(metrics::SHERLOCK_GLYPH);
+    let content = container(glyph).center(Length::Fill);
     let mut control = Control::new(
         content,
         theme::sherlock_button(open),

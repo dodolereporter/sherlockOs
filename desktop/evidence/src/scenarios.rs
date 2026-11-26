@@ -11,6 +11,7 @@ use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::{Event, Pixels, Settings, Task};
 use iced_runtime::Action;
 use iced_test::simulator;
+use sherlock_ui::color::{self, Palette, Theme};
 use sherlock_ui::{metrics, theme, typography};
 
 use crate::app::{App, Config, Location, Message};
@@ -365,6 +366,7 @@ fn mockup_folder() -> (TempDir, PathBuf) {
 /// docs/evidence.md.
 #[test]
 fn window_renders_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
     let (tmp, dir) = mockup_folder();
     let config = Config {
         home: tmp.path().to_path_buf(),
@@ -460,6 +462,25 @@ fn window_renders_headless() {
     );
     check(sub_x, menu.at.y + offset, &sub_items, "submenu");
 
+    // The same window in the light theme, `evidence-light-<renderer>.png`, to compare with
+    // FichiersClair.
+    color::set_active(Theme::Light);
+    let mut ui = simulator::Simulator::with_size(settings.clone(), (width, height), app.view());
+    let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+    let light = written.with_file_name(format!("evidence-light-{renderer}.png"));
+    let _ = fs::remove_file(&light);
+    assert!(
+        snapshot
+            .matches_image(dir.join("evidence-light.png"))
+            .expect("writing")
+    );
+    let picture = ::image::open(&light).expect("capture").to_rgb8();
+    assert!(
+        picture.get_pixel(4, picture.height() / 2)[0] > 200,
+        "a light window"
+    );
+    color::set_active(Theme::Dark);
+
     // A click on a menu entry runs its command.
     let messages: Vec<_> = {
         let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());
@@ -473,6 +494,27 @@ fn window_renders_headless() {
         ),
         "{messages:?}"
     );
+}
+
+#[test]
+fn a_new_theme_fades_the_window() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = Bench::new("theme");
+    let _ = bench.app.update(Message::Theme(Theme::Dark));
+    let start = std::time::Instant::now();
+    let _ = bench.app.update(Message::Theme(Theme::Light));
+    assert!(
+        bench.app.animating(bench.app.now()),
+        "frames are asked for the fade"
+    );
+    let fade = sherlock_ui::motion::THEME_FADE;
+    let _ = bench.app.update(Message::Frame(start + fade / 3));
+    assert_ne!(color::palette(), &Palette::DARK);
+    assert_ne!(color::palette(), &Palette::LIGHT);
+    let _ = bench.app.update(Message::Frame(start + fade * 2));
+    assert_eq!(color::palette(), &Palette::LIGHT);
+    assert_eq!(theme::palette(&theme::window_theme()), &Palette::LIGHT);
+    color::set_active(Theme::Dark);
 }
 
 /// Cost of one frame with 5,000 entries: view, layout, then software rendering. Run with

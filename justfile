@@ -36,6 +36,24 @@ install-session:
     cargo build --release -p compositor -p bar -p dock
     desktop/compositor/session/install.sh "$PWD"
 
+# Installs Evidence for the user, without root: its binary in ~/.local/bin and its desktop entry, which the dock pins and the launcher lists
+install-evidence:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p evidence
+    exe="$HOME/.local/bin/evidence"
+    install -D -m 755 "${CARGO_TARGET_DIR:-target}/release/evidence" "$exe"
+    # Exec quoted as the desktop entry specification wants: \ " ` $ escaped inside the quotes,
+    # then every backslash doubled by the string escape, and % doubled.
+    quoted=$(printf '%s' "$exe" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')
+    entry=$(while IFS= read -r line; do
+        case "$line" in
+            "Exec=evidence "*) printf 'Exec="%s" %s\n' "$quoted" "${line#Exec=evidence }" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done < desktop/evidence/evidence.desktop)
+    printf '%s\n' "$entry" | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/evidence.desktop"
+
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
     python3 distro/tests/check-language.py --self-test
