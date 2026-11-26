@@ -7,8 +7,8 @@
 //! `<style id="theme">` block: `body`, `edge`, `ink`, `track`. A group `id="spin"` with a
 //! `data-center="x y"` turns, for the waiting cursors. Replacing a drawing is copying its SVG.
 //!
-//! The generator (`cursor-theme`, feature `render`) writes two themes: `nom-os` for the dark
-//! desktop and `nom-os-light` for the light one. See `docs/cursor.md`.
+//! The generator (`cursor-theme`, feature `render`) writes two themes: `sherlockos` for the dark
+//! desktop and `sherlockos-light` for the light one. See `docs/cursor.md`.
 
 pub mod xcursor;
 
@@ -20,9 +20,9 @@ use sherlock_ui::{
 };
 
 /// Theme of the dark desktop, the default: cream cursors.
-pub const THEME: &str = "nom-os";
+pub const THEME: &str = "sherlockos";
 /// Theme of the light desktop: night blue cursors.
-pub const LIGHT_THEME: &str = "nom-os-light";
+pub const LIGHT_THEME: &str = "sherlockos-light";
 
 /// Side of the drawing grid of the SVGs.
 pub const GRID: u32 = 24;

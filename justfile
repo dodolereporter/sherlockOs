@@ -31,7 +31,7 @@ build:
 wallpapers output="target/wallpapers":
     cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
 
-# Generates the cursor themes nom-os and nom-os-light from the SVGs of assets/cursors
+# Generates the cursor themes sherlockos and sherlockos-light from the SVGs of assets/cursors
 cursors output="target/cursors":
     cargo run --release -p cursor-theme --features render -- build assets/cursors {{ quote(output) }}
 

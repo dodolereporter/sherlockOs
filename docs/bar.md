@@ -295,7 +295,7 @@ from the gaps, so the bar looks the same as before.
 | --- | --- |
 | `panel.rs` | Which panel, its size, its place under the bar, its input region; the views of the centre and of the calendar |
 | `calendar.rs` | Months, leap years, the weekday of a date, the six weeks of a month from Monday |
-| `history.rs` | Client of `org.nomos.Notifications.History`: list, group by application, clear, run an action, `Changed` |
+| `history.rs` | Client of `org.sherlockos.Notifications.History`: list, group by application, clear, run an action, `Changed` |
 | `bus.rs` | The session bus, opened on first use and shared; `coalesce`, which calms the signals |
 | `unfold.rs` | The spring and the fade of a panel that unfolds or folds back, and of a page that comes in |
 

@@ -1,4 +1,4 @@
-//! The notification centre's side of `org.nomos.Notifications.History`, the private interface
+//! The notification centre's side of `org.sherlockos.Notifications.History`, the private interface
 //! of the notification daemon (`docs/notifications.md`): the history, grouped by application,
 //! « Tout effacer », the actions of a notification still open, and `Changed`.
 
@@ -8,8 +8,8 @@ use zbus::Connection;
 
 /// Where the daemon serves the interface.
 pub const NAME: &str = "org.freedesktop.Notifications";
-pub const PATH: &str = "/org/nomos/Notifications";
-pub const INTERFACE: &str = "org.nomos.Notifications.History";
+pub const PATH: &str = "/org/sherlockos/Notifications";
+pub const INTERFACE: &str = "org.sherlockos.Notifications.History";
 
 /// What `List` sends for one notification (see the daemon's `history::Entry`).
 type Wire = (
