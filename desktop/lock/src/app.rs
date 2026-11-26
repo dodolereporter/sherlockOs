@@ -549,7 +549,17 @@ impl Lock {
             .paused(!self.form.shown())
             .width(side)
             .height(side);
-        container(mascot).center(diameter).into()
+        // The round cream bubble, clipped: the still picture of software fills it like the 3D.
+        let bubble = container(mascot)
+            .width(side)
+            .height(side)
+            .clip(true)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(fill)),
+                border: Border::default().rounded(side / 2.0),
+                ..container::Style::default()
+            });
+        container(bubble).center(diameter).into()
     }
 
     /// The pill: the field, the eye and the arrow; a circle with the spinner while PAM checks.
@@ -746,6 +756,8 @@ fn spinner<'a>(elapsed: Duration, tint: Color) -> Element<'a, Message> {
         .style(move |_, _| svg::Style {
             color: Some(tint.into()),
         })
+        // The renderers ignore the alpha of an SVG's color: the opacity carries it.
+        .opacity(tint.a)
         .into()
 }
 
