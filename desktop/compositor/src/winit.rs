@@ -24,6 +24,7 @@ use smithay::{
 use crate::{
     Error, State,
     anim::PreviewMotion,
+    damage::Ids,
     dmabuf,
     render::Scene,
     wallpaper::{Textures, Wallpaper},
@@ -57,6 +58,9 @@ pub fn init(
         desktop_config::data_dirs(var),
     )?;
     let mut textures = Textures::default();
+    // The host frame is drawn in full every time: the identities only matter to the real
+    // session's damage trackers.
+    let mut ids = Ids::default();
     let mut preview = PreviewMotion::default();
     let mut cursor = Some(CursorIcon::Default);
 
@@ -73,7 +77,7 @@ pub fn init(
                 WinitEvent::Redraw => {
                     // A client may change its cursor without the pointer moving.
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
-                    let frame = (&scene, &mut textures, &mut preview);
+                    let frame = (&scene, &mut ids, &mut textures, &mut preview);
                     if let Err(err) = render(&mut backend, frame, state) {
                         tracing::warn!("render: {err}");
                     }
@@ -166,7 +170,7 @@ fn update_cursor(
 /// screen's slice: a window across two screens is drawn twice, once at each scale.
 fn render(
     backend: &mut WinitGraphicsBackend<GlesRenderer>,
-    (scene, textures, preview): (&Scene, &mut Textures, &mut PreviewMotion),
+    (scene, ids, textures, preview): (&Scene, &mut Ids, &mut Textures, &mut PreviewMotion),
     state: &mut State,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let now = state.start_time.elapsed();
@@ -177,7 +181,8 @@ fn render(
         // Counted after `bind`, which may wait for a buffer of the host window to be released.
         let started = Instant::now();
         let views = state.views();
-        let (screens, animating) = scene.screens(renderer, state, textures, &views, preview, now);
+        let (screens, animating) =
+            scene.screens(renderer, ids, state, textures, &views, preview, now);
         // GLES draws upside down: the frame is flipped to make up for it. Redrawn in full every
         // time.
         let mut frame = renderer.render(&mut framebuffer, size, Transform::Flipped180)?;

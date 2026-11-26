@@ -82,11 +82,17 @@ fn main() -> Result<(), Error> {
         spawn(&options.command, &socket, None, signal)?;
     }
 
-    event_loop.run(None, &mut state, State::refresh)?;
+    // Each iteration ends with the cleanup, and is measured from the end of the previous one:
+    // its wait for an event included (lot P-01).
+    event_loop.run(None, &mut state, |state| {
+        state.refresh();
+        state.perf.end_iteration();
+    })?;
     state.shutdown();
     if let Some(session) = session {
         session.close(&mut state);
     }
+    tracing::info!("event loop, whole session: {}", state.perf.session());
     if let Some(stats) = &state.frame_stats {
         tracing::info!("summary, all frames: {}", stats.all);
         tracing::info!("summary, animated frames: {}", stats.animated);

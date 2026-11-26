@@ -179,6 +179,9 @@ fn x11_edges(edge: ResizeEdge) -> Edges {
 
 impl XwmHandler for State {
     fn xwm_state(&mut self, xwm: XwmId) -> &mut X11Wm {
+        // Smithay asks for the window manager for each batch of X11 events: whatever they change
+        // (a window mapped, moved, renamed) may show.
+        self.queue_redraw();
         match self.xwm.as_mut() {
             Some(wm) => wm,
             // Smithay calls this from two places only: the X11Wm's own event source, which
