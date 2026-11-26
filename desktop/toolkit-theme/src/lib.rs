@@ -20,6 +20,15 @@ pub fn gtk_theme_name(theme: Theme) -> &'static str {
     }
 }
 
+/// Name of a variant as the theme pickers of GTK and KDE show it.
+pub fn shown_name(theme: Theme) -> &'static str {
+    use sherlock_ui::strings::toolkit_theme;
+    match theme {
+        Theme::Dark => toolkit_theme::DARK,
+        Theme::Light => toolkit_theme::LIGHT,
+    }
+}
+
 /// Short name of a variant in file names.
 pub fn variant(theme: Theme) -> &'static str {
     match theme {

@@ -317,3 +317,24 @@ fn switching_the_qt_palette_keeps_the_other_settings() {
         Some(qt::qtct_settings(light))
     );
 }
+
+#[test]
+fn the_shown_names_are_those_of_sherlock_ui() {
+    use sherlock_ui::strings::toolkit_theme as names;
+    for (theme, shown) in [(Theme::Dark, names::DARK), (Theme::Light, names::LIGHT)] {
+        let index = gtk::index(theme);
+        assert!(index.contains(&format!("\nName={shown}\n")), "{index}");
+        assert!(index.contains(&format!("\nComment={}\n", names::COMMENT)));
+        assert!(index.contains(&format!(
+            "\nGtkTheme={}\n",
+            toolkit_theme::gtk_theme_name(theme)
+        )));
+        let kde = qt::kde_colors(theme);
+        assert!(kde.contains(&format!("\nName={shown}\n")), "{kde}");
+        for line in index.lines().chain(kde.lines()) {
+            if line.starts_with("Name=") || line.starts_with("Comment=") {
+                assert!(!line.contains("NOM_OS"), "{line}");
+            }
+        }
+    }
+}

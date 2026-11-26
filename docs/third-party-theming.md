@@ -19,7 +19,7 @@ just uninstall-themes    # takes them away and puts the backups back
 | --- | --- |
 | `~/.local/share/themes/NOM_OS-{dark,light}/gtk-3.0/gtk.css` | GTK 3, when the session sets `gtk-theme` |
 | `~/.local/share/themes/NOM_OS-{dark,light}/gtk-4.0/gtk.css` | GTK 4 without libadwaita, the same way |
-| `~/.local/share/color-schemes/NOMOS{Dark,Light}.colors` | KDE: listed among the color schemes, applied nowhere |
+| `~/.local/share/color-schemes/NOMOS{Dark,Light}.colors` | KDE: listed among the color schemes as « SherlockOS sombre » and « SherlockOS clair », applied nowhere |
 | `~/.local/share/nom-os/themes/qt5ct/{dark,light}.conf` | qt5ct, palette of 21 roles |
 | `~/.local/share/nom-os/themes/qt6ct/{dark,light}.conf` | qt6ct, palette of 22 roles (`Accent` included) |
 | `~/.config/qt5ct/qt5ct.conf`, `~/.config/qt6ct/qt6ct.conf` | qt5ct and qt6ct: the palette, the Fusion style |
@@ -130,8 +130,8 @@ That choice is the author's.
 ## Limits
 
 - KDE applications read part of their colors through `KColorScheme`, from `kdeglobals`, and so
-  from Plasma's scheme. Most KDE applications can be given `NOMOSDark` from their own color
-  scheme menu, but that choice is kept in their own settings file, under Plasma too.
+  from Plasma's scheme. Most KDE applications can be given « SherlockOS sombre » (the
+  `NOMOSDark` scheme) from their own color scheme menu, but that choice is kept in their own settings file, under Plasma too.
 - The `nom_os` dconf database also holds every GTK setting changed while in the session (the
   preferences of Nautilus, the size of a window, for instance): they do not reach Plasma, and
   Plasma's later changes show in the session only where the session never set the key.
@@ -182,6 +182,7 @@ its default look, and GTK 3 is painted over its built-in Adwaita. Kvantum is not
 - the qt5ct and qt6ct palettes have 21 and 22 colors per group, in `#ffRRGGBB`, with the window,
   base, button and text roles of the palettes;
 - the KDE schemes have every group, twelve `r,g,b` keys each, and the palette's values;
+- the names shown by the theme pickers are those of `sherlock_ui::strings::toolkit_theme`;
 - switching the qt6ct palette keeps the other lines;
 - in a temporary home: installing backs up the user's qt6ct settings and leaves the GTK files
   of Plasma alone; removing gives the home back exactly as it was; installing twice keeps the

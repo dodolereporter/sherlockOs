@@ -164,10 +164,7 @@ pub fn kde_colors(theme: Theme) -> String {
         }
         out.push('\n');
     }
-    let name = match theme {
-        Theme::Dark => "NOM_OS dark",
-        Theme::Light => "NOM_OS light",
-    };
+    let name = crate::shown_name(theme);
     let scheme = kde_file_name(theme).trim_end_matches(".colors");
     let _ = writeln!(
         out,

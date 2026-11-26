@@ -195,9 +195,11 @@ pub fn stylesheet(base: &str, theme: Theme) -> String {
 
 /// `index.theme` of a theme folder.
 pub fn index(theme: Theme) -> String {
-    let name = crate::gtk_theme_name(theme);
+    let folder = crate::gtk_theme_name(theme);
+    let shown = crate::shown_name(theme);
+    let comment = sherlock_ui::strings::toolkit_theme::COMMENT;
     format!(
-        "[Desktop Entry]\nType=X-GNOME-Metatheme\nName={name}\nComment=Colors of the NOM_OS \
-         desktop\n\n[X-GNOME-Metatheme]\nGtkTheme={name}\n"
+        "[Desktop Entry]\nType=X-GNOME-Metatheme\nName={shown}\nComment={comment}\n\n\
+         [X-GNOME-Metatheme]\nGtkTheme={folder}\n"
     )
 }
