@@ -310,10 +310,23 @@ mod tests {
             }
         }
 
-        /// A new client, with the globals listed. Returns its index.
+        /// A new ordinary client, with the globals listed. Returns its index.
         fn connect(&mut self) -> usize {
+            self.connect_as(false)
+        }
+
+        /// A new client on a connection the compositor takes as the lock program's, as it does
+        /// for the program it starts.
+        fn connect_program(&mut self) -> usize {
+            self.connect_as(true)
+        }
+
+        fn connect_as(&mut self, program: bool) -> usize {
             let (server_side, client_side) = UnixStream::pair().unwrap();
-            self.state.insert_client(server_side);
+            match program {
+                true => self.state.insert_lock_program(server_side),
+                false => self.state.insert_client(server_side),
+            }
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
             let registry = conn.display().get_registry(&queue.handle(), ());
@@ -480,7 +493,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let app = h.connect();
         h.show_window(app);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
         assert!(h.state.is_locked());
         // The lock is confirmed once the screen has shown a locked frame.
@@ -520,7 +533,7 @@ mod tests {
     fn an_ordinary_client_cannot_show_anything_over_the_lock() {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let app = h.connect();
-        let locker = h.connect();
+        let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
         h.show_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
@@ -583,7 +596,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let app = h.connect();
         let window = h.show_window(app);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
         h.show_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
@@ -614,7 +627,7 @@ mod tests {
     #[test]
     fn an_unlock_before_locked_is_refused() {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
         // No frame shown yet: `locked` was not sent, the unlock is a protocol error.
         locking.lock.unlock_and_destroy();
@@ -630,7 +643,7 @@ mod tests {
         let mut h = Harness::start(&["true"], &["/nonexistent/swaylock"]);
         let app = h.connect();
         h.show_window(app);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
         h.show_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
@@ -665,9 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn once_locked_only_a_lock_program_started_by_the_compositor_takes_over() {
+    fn once_the_lock_program_is_dead_another_client_can_neither_lock_nor_unlock() {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
         h.show_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
@@ -675,16 +688,51 @@ mod tests {
         drop(killed);
         h.run_until("the lock surface gone", |h| !h.lock_surface_drawn());
 
-        // An ordinary client is refused.
+        // A client that connects after its death is refused, and its unlock is an error.
         let other = h.connect();
         assert!(h.lock(other).is_none());
+        let manager: ExtSessionLockManagerV1 = h.peers[other].bind();
+        let qh = h.peers[other].qh();
+        manager.lock(&qh, ()).unlock_and_destroy();
+        h.run_until("the error", |h| h.peers[other].dead());
         assert!(h.state.is_locked());
+        assert!(!h.lock_surface_drawn());
 
-        // A lock program is accepted, and confirmed at once: the screen already shows the lock.
-        h.state.trust_lock_client(std::process::id());
-        let program = h.connect();
+        // The next lock program is accepted, and confirmed at once: the screen already shows
+        // the lock.
+        let program = h.connect_program();
         let _locking = h.lock(program).unwrap();
         h.run_until("locked", |h| h.peers[program].seen.locked);
+    }
+
+    #[test]
+    fn an_ordinary_client_cannot_lock_the_session() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let other = h.connect();
+        assert!(h.lock(other).is_none(), "refused: finished");
+        assert!(!h.state.is_locked());
+        assert_eq!(h.window_items(), 1);
+    }
+
+    #[test]
+    fn the_surfaces_of_a_lock_given_up_before_locked_go_with_it() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        assert!(h.lock_surface_drawn());
+        // Destroying a lock before `locked` is allowed: the client stays connected.
+        locking.lock.destroy();
+        h.run_until("the surface no longer drawn", |h| !h.lock_surface_drawn());
+        assert!(h.state.is_locked());
+        h.peers[locker].seen.keys.clear();
+        h.key(KEY_A);
+        h.settle();
+        assert!(
+            h.peers[locker].seen.keys.is_empty(),
+            "no key for an orphan surface"
+        );
     }
 
     #[test]
@@ -727,7 +775,7 @@ mod tests {
     #[test]
     fn every_screen_gets_a_lock_surface_of_its_own_size() {
         let mut h = start_on_every_screen(&["sleep", "5"], &["false"]);
-        let locker = h.connect();
+        let locker = h.connect_program();
         let peer = &h.peers[locker];
         let qh = peer.qh();
         let manager: ExtSessionLockManagerV1 = peer.bind();

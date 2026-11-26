@@ -8,14 +8,20 @@
 //! any lock object, so the requests of `ext_session_lock_v1` are checked here first.
 //!
 //! If the lock program dies, the session stays locked: the compositor starts it again, then
-//! `swaylock` after `CLIENT_ATTEMPTS` failures, then draws a rescue screen itself. While locked,
-//! only a program the compositor started may take the lock over. See "Session lock" in
-//! `docs/compositor.md`.
+//! `swaylock` after `CLIENT_ATTEMPTS` failures, then draws a rescue screen itself. Only the lock
+//! program the compositor started, through a connection it opened itself (`WAYLAND_SOCKET`),
+//! may lock, the session locked or not; its identity is forgotten when it dies. See "Session
+//! lock" in `docs/compositor.md`.
 
 use std::{
     ffi::OsString,
+    os::{
+        fd::{AsRawFd, BorrowedFd},
+        unix::{net::UnixStream, process::CommandExt},
+    },
     path::{Path, PathBuf},
     process::{Child, Command},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -25,12 +31,14 @@ use smithay::{
         WindowSurfaceType,
         utils::{send_frames_surface_tree, under_from_surface_tree},
     },
+    input::pointer::CursorImageStatus,
     output::Output,
     reexports::{
         calloop::{
             RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
+        rustix,
         wayland_protocols::ext::session_lock::v1::server::{
             ext_session_lock_manager_v1::ExtSessionLockManagerV1,
             ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
@@ -38,7 +46,7 @@ use smithay::{
         },
         wayland_server::{
             Client, DataInit, Dispatch, DisplayHandle, Resource,
-            backend::ClientId,
+            backend::{ClientId, DisconnectReason},
             delegate_dispatch, delegate_global_dispatch,
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
         },
@@ -55,7 +63,7 @@ use smithay::{
 };
 
 use crate::{
-    State,
+    ClientState, State,
     damage::{Key, Part},
     focus::KeyboardFocus,
     launcher::BIN_VAR,
@@ -122,8 +130,10 @@ pub(crate) struct SessionLock {
     surfaces: Vec<Surface>,
     /// The lock whose request is being read: a new surface belongs to it.
     reading: Option<ExtSessionLockV1>,
-    /// Processes that may take over a lock already in place: the lock programs started.
-    trusted: Vec<u32>,
+    /// The connection of the lock program alive, which the compositor opened itself: the only
+    /// client that may lock. Never a pid, which a process of the session could take over once
+    /// the program is dead.
+    program: Option<ClientId>,
     /// Lock programs started since the session was locked.
     attempts: u32,
     child: Option<(Child, Instant)>,
@@ -145,7 +155,7 @@ impl SessionLock {
             shown: Vec::new(),
             surfaces: Vec::new(),
             reading: None,
-            trusted: Vec::new(),
+            program: None,
             attempts: 0,
             child: None,
             next_launch: None,
@@ -177,10 +187,15 @@ impl State {
         self.lock.programs = Some(programs);
     }
 
-    /// Lets the process `pid` take over the lock, as if the compositor had started it (the
-    /// tests, whose client runs in their own process).
-    pub fn trust_lock_client(&mut self, pid: u32) {
-        self.lock.trusted.push(pid);
+    /// Plugs in `stream` as the connection of the lock program, the only client that may lock:
+    /// what `launch_lock_program` does with the socket it gives the program (the tests, whose
+    /// client runs in their own process).
+    pub fn insert_lock_program(&mut self, stream: UnixStream) {
+        let data = Arc::new(ClientState::default());
+        match self.display_handle.insert_client(stream, data) {
+            Ok(client) => self.lock.program = Some(client.id()),
+            Err(err) => tracing::warn!("lock program refused: {err}"),
+        }
     }
 
     /// Locks the session now, and starts the lock program if no lock is held (Super + L).
@@ -230,6 +245,8 @@ impl State {
             self.pointer_motion(pointer.current_location(), time);
         }
         self.set_keyboard_focus(None);
+        // No shape asked for by a window stays: the lock surface names its own.
+        self.cursor_status = CursorImageStatus::default_named();
         let watch = self
             .loop_handle
             .insert_source(Timer::from_duration(WATCH), |_, _, state| {
@@ -248,7 +265,7 @@ impl State {
         (lock.locked, lock.rescue_screen) = (false, false);
         (lock.owner, lock.confirm, lock.next_launch) = (None, None, None);
         lock.surfaces.clear();
-        lock.trusted.clear();
+        lock.program = None;
         lock.attempts = 0;
         if let Some((mut child, _)) = lock.child.take() {
             // It leaves by itself once unlocked: a thread waits for it, so that it does not
@@ -301,15 +318,39 @@ impl State {
             self.queue_redraw();
             return;
         };
+        // The compositor opens the program's connection itself and hands it over through
+        // `WAYLAND_SOCKET`: that connection, and no other, may lock (ADR 0023).
+        let (ours, theirs) = match UnixStream::pair() {
+            Ok(pair) => pair,
+            Err(err) => {
+                tracing::warn!("lock program: no socket: {err}");
+                self.lock_program_failed();
+                return;
+            }
+        };
+        self.insert_lock_program(ours);
+        let fd = theirs.as_raw_fd();
         let mut child = Command::new(program);
-        child.args(arguments).env_remove("DISPLAY");
-        if let Some(socket) = &self.socket_name {
-            child.env("WAYLAND_DISPLAY", socket);
+        child
+            .args(arguments)
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("WAYLAND_SOCKET", fd.to_string());
+        // SAFETY: between fork and exec, only `fcntl` runs, which is async-signal-safe: it lets
+        // the child keep its end of the socket, which only it gets (the parent's copy keeps
+        // close-on-exec, so no other program inherits it).
+        unsafe {
+            child.pre_exec(move || {
+                let fd = BorrowedFd::borrow_raw(fd);
+                rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())
+                    .map_err(std::io::Error::from)
+            });
         }
-        match child.spawn() {
+        let spawned = child.spawn();
+        drop(theirs);
+        match spawned {
             Ok(child) => {
                 tracing::info!(program = ?program, pid = child.id(), "lock program started");
-                self.lock.trusted.push(child.id());
                 self.lock.child = Some((child, Instant::now()));
             }
             Err(err) => {
@@ -326,8 +367,19 @@ impl State {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.forget_lock_program();
         if self.lock.locked && self.lock.owner.is_none() {
             self.lock.next_launch = Some(Instant::now() + RELAUNCH_DELAY);
+        }
+    }
+
+    /// The lock program is gone: its connection is closed, and nothing may lock until the next
+    /// one starts.
+    fn forget_lock_program(&mut self) {
+        if let Some(id) = self.lock.program.take() {
+            self.display_handle
+                .backend_handle()
+                .kill_client(id, DisconnectReason::ConnectionClosed);
         }
     }
 
@@ -349,6 +401,7 @@ impl State {
                 Ok(Some(status)) => {
                     tracing::info!(%status, "lock program ended");
                     self.lock.child = None;
+                    self.forget_lock_program();
                 }
                 Ok(None) if !owned && started.elapsed() > START_TIMEOUT => {
                     tracing::warn!("lock program: no lock after {START_TIMEOUT:?}");
@@ -383,8 +436,10 @@ impl State {
         }
         tracing::warn!("the lock program left without unlocking: the session stays locked");
         (self.lock.owner, self.lock.confirm) = (None, None);
-        self.lock.surfaces.retain(|s| s.surface.alive());
+        // Its surfaces go with it, alive or not: none is drawn nor gets the keyboard any more.
+        self.lock.surfaces.clear();
         self.lock_program_failed();
+        self.set_keyboard_focus(None);
         self.queue_redraw();
     }
 
@@ -447,18 +502,16 @@ impl State {
 
     fn accept_lock(&mut self, locker: SessionLocker) {
         let lock = locker.ext_session_lock().clone();
-        let pid = lock
-            .client()
-            .and_then(|c| c.get_credentials(&self.display_handle).ok())
-            .and_then(|c| u32::try_from(c.pid).ok());
+        let client = lock.client().map(|c| c.id());
         let held = self.lock.owner.as_ref().is_some_and(Resource::is_alive);
-        let trusted = pid.is_some_and(|pid| self.lock.trusted.contains(&pid));
-        if held || (self.lock.locked && !trusted) {
-            // Dropping the locker sends `finished`.
-            tracing::warn!(?pid, held, "lock refused");
+        let program = client.is_some() && client == self.lock.program;
+        if held || !program {
+            // Dropping the locker sends `finished`. Only the lock program the compositor
+            // started may lock, the session locked or not (ADR 0023).
+            tracing::warn!(held, program, "lock refused");
             return;
         }
-        tracing::info!(?pid, "lock accepted");
+        tracing::info!("lock accepted");
         if !self.lock.locked {
             self.enter_lock();
         }

@@ -2193,8 +2193,10 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 `sherlock_ui::lock`.
 
 - **Locking.** Super + L locks the session at once, then starts the lock program,
-  `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). Any
-  client may also lock an unlocked session through the protocol, as `swaylock` does.
+  `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). The
+  compositor opens the program's connection itself (a socket pair, one end handed over through
+  `WAYLAND_SOCKET`) and accepts a lock only from that connection, the program alive: no other
+  client may lock, the session locked or not (`swaylock` started by hand is refused).
 - **What is drawn.** Each screen shows its lock surface, in front of the background of the
   system screens (`#0A1424` in the dark theme), or that background alone. Nothing else, except
   the on-screen display of the volume and brightness keys: no window, bar, dock, menu, Mission
@@ -2203,6 +2205,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   and frame callbacks like the other surfaces.
 - **`locked`.** Sent once every screen has shown a frame built while locked, at its vertical
   blank (nested mode: after the host frame). The console away, it waits for its return.
+- **Cursor.** The shape the lock surface under the pointer names, else the arrow: never the
+  resize arrows of the hidden windows.
 - **Input.** The keyboard goes only to a lock surface (that of the screen under the pointer,
   which a press on another screen changes), the pointer only to the lock surface under it.
   Grabs, menus, gestures and Mission Control are cancelled at the lock; touchpad gestures do
@@ -2213,8 +2217,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   was sent; any other is the `invalid_unlock` protocol error. A second lock is refused
   (`finished`).
 - **When the lock program dies.** The session stays locked on the background. The program is
-  started again after 500 ms; once locked, only a program the compositor started may take the
-  lock over (its connection's pid). A program that ends without locking, or does not lock
+  started again after 500 ms, on a new connection; the dead program's is forgotten. A lock given
+  up before `locked` takes its surfaces with it. A program that ends without locking, or does not lock
   within 10 seconds, is a failure. After 3 failures, `swaylock --color 0a1424`; if it is not
   there or fails too, the compositor draws its rescue screen: « Verrouillé » and « Appuie sur
   Entrée pour réessayer », Enter starting the programs again.
@@ -2225,8 +2229,10 @@ open; a window and an overlay surface with an exclusive keyboard created while l
 neither drawn nor given input; a refused lock cannot unlock, the lock that holds the session
 can, and the window gets the keyboard back; an unlock before `locked` is refused; a killed
 lock client leaves the session locked, the lock programs fail three times, the rescue program
-too, and the rescue screen shows, Enter trying again; an ordinary client cannot take a lock
-over, a lock program can; Super + L locks at once; on four screens side by side (1366 × 768,
+too, and the rescue screen shows, Enter trying again; an ordinary client cannot lock an
+unlocked session; once the lock program is dead, a client that connects can neither lock nor
+unlock, the next lock program can; the surfaces of a lock given up before `locked` are no
+longer drawn nor given keys; Super + L locks at once; on four screens side by side (1366 × 768,
 1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
 scale.

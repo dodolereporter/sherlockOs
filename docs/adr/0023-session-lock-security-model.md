@@ -1,6 +1,7 @@
 # ADR 0023: Security model of the session lock
 
-- Status: proposed (to be approved by the author before the merge of lot D-25a1)
+- Status: accepted (the author decided the two open questions on 2026-11-26, after the
+  security review of lot D-25a)
 - Date: 2026-11-26
 - Lot: D-25a
 
@@ -43,8 +44,8 @@ the policy to the compositor, and has two gaps for a strict use:
    cancelled at the lock. Touchpad gestures are dropped. The compositor's shortcuts are off,
    except:
    - Ctrl + Alt + F1 to F12, the console switch: the session stays locked on its console;
-   - Ctrl + Alt + Backspace, which stops the compositor: it closes the session, it does not
-     open it;
+   - Ctrl + Alt + Backspace, which stops the compositor: the emergency exit, kept by the
+     author's decision of 2026-11-26; it closes the session, it never unlocks it;
    - the volume and brightness keys (not the players);
    - Enter on the rescue screen (below).
    Power off and sleep through the power button belong to logind, not to the compositor.
@@ -53,15 +54,21 @@ the policy to the compositor, and has two gaps for a strict use:
    `invalid_unlock` (a protocol error, which disconnects the client) unless it comes from the
    lock the compositor accepted and confirmed. A surface created on a lock that was refused is
    never shown nor given input.
-5. **Who may lock.** While the session is unlocked, any client may lock it, as the protocol
-   wants (that is how `swaylock` works). While it is locked, a second lock is refused
-   (`finished`), and once the lock has no holder (its client died), only a process the
-   compositor started itself, recognized by the pid of its connection (`SO_PEERCRED`), may take
-   it over.
+5. **Who may lock: only our lock program** (the author's decision of 2026-11-26). The
+   compositor starts the lock program itself and opens its Wayland connection itself: a socket
+   pair, one end plugged into the display (`insert_client`), the other handed to the program
+   through `WAYLAND_SOCKET`, inherited by it alone. It recognizes the program by that
+   connection (its `ClientId`), never by a pid, which a process of the session could take over
+   once the program is dead. Only the connection of the last program started, alive, may lock,
+   the session locked or not; any other client's `lock` is refused (`finished`), so a program
+   of the session cannot show a lock screen of its own either. When the program dies or ends,
+   its connection is forgotten and closed. `swaylock`, the rescue, is started the same way. A
+   second lock while one is held is refused.
 6. **The client dies, the session stays locked.** If the lock object goes away without
    `unlock_and_destroy` (crash, kill, disconnection), the session stays locked on the plain
    background, and the compositor starts the lock program again (`sherlockos-lock`), after a
-   pause of 500 ms. A program that ends without locking, or does not lock within 10 seconds,
+   pause of 500 ms. A lock given up before `locked` takes its surfaces with it: they are no
+   longer drawn nor given the keyboard. A program that ends without locking, or does not lock within 10 seconds,
    counts as a failure. After 3 failures in a row, it starts `swaylock` on the same background
    color; if that fails too (not installed), it draws a rescue screen itself: « Verrouillé »,
    and Enter to try the programs again. The counter starts again at each unlock.
@@ -73,10 +80,14 @@ the policy to the compositor, and has two gaps for a strict use:
 - A crash of the lock screen never shows the desktop: at worst the user sees the rescue
   screen, and gets out of it with Enter, another console, or Ctrl + Alt + Backspace, which ends
   the session.
-- Any program of the session can still lock an unlocked session and show something of its
-  own as a lock screen (a fake lock screen that asks for the password). The protocol allows it;
-  restricting the global to the programs the compositor starts would close it, at the price of
-  `swaylock` started by hand. Left for later.
+- `swaylock` started by hand, or any other lock screen, cannot lock the session: only Super + L
+  and the triggers of the compositor do, with our program. A program of the session cannot
+  show a fake lock screen through the protocol.
+- The lock program exits cleanly only after PAM accepted the password: the toolkit
+  (`exwlshellev`) sends `unlock_and_destroy` on every clean exit, so an error must never end it
+  cleanly (it aborts, and the compositor keeps the session locked).
+- Within the session, a process of the user can still trace the lock program
+  (`kernel.yama.ptrace_scope` at 0 on Debian): the distribution will set it to 1.
 - The protocol is applied by smithay plus our checks: a new version of smithay that changes
   `session_lock` must be read again against this ADR.
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the
@@ -87,5 +98,3 @@ the policy to the compositor, and has two gaps for a strict use:
 - A crash of the compositor itself ends the session, and with it the lock: that is the case of
   every Wayland session. A watchdog that restarts the compositor locked would be a lot of its
   own.
-- If the fake lock screen above becomes a real concern, the `ext_session_lock_manager_v1`
-  global would be shown only to the processes the compositor starts.

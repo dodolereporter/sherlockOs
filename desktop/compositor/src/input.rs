@@ -618,6 +618,15 @@ impl State {
             return Some(gesture.edges.map_or(moving, resize_cursor));
         }
         let location = self.seat.get_pointer()?.current_location();
+        // Locked: the shape the lock surface under the pointer names, else the arrow. Never
+        // the edges of the windows hidden behind it (lot D-25a).
+        if self.is_locked() {
+            return match (self.lock_hit(location), &self.cursor_status) {
+                (Some(_), CursorImageStatus::Named(icon)) => Some(*icon),
+                (Some(_), CursorImageStatus::Hidden) => None,
+                _ => Some(CursorIcon::Default),
+            };
+        }
         match (self.hit(location), &self.cursor_status) {
             (Some(Hit::Border(_, edges)), _) => Some(resize_cursor(edges)),
             (Some(Hit::Surface(..) | Hit::Layer(..)), CursorImageStatus::Named(icon)) => {
