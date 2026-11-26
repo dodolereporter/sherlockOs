@@ -537,7 +537,7 @@ impl App {
             _ => color::palette().text_secondary,
         };
         let name: Element<'a, Message> = match &self.renaming {
-            Some((index, value)) if *index == i => {
+            Some((path, value)) if *path == entry.path => {
                 ui::text_field("", value, Some(Message::RenameInput))
                     .id(RENAME)
                     .on_submit(Message::RenameSubmit)

@@ -58,6 +58,23 @@ impl Selection {
         self.cursor
     }
 
+    /// The item an action on one item acts on: the cursor when it is selected, else the
+    /// first selected item. Never an item that is not selected: Ctrl+click can leave the
+    /// cursor on the item it just removed.
+    pub fn focus(&self) -> Option<usize> {
+        self.cursor
+            .filter(|c| self.items.contains(c))
+            .or_else(|| self.items.first().copied())
+    }
+
+    /// Puts the cursor on `index` if it is selected, the selection unchanged: a right click
+    /// on a selected item.
+    pub fn point(&mut self, index: usize) {
+        if self.items.contains(&index) {
+            self.cursor = Some(index);
+        }
+    }
+
     /// The selected item, when it is alone.
     pub fn single(&self) -> Option<usize> {
         match self.items.len() {
@@ -240,6 +257,21 @@ mod tests {
         assert_eq!(s.single(), Some(4));
         s.click(6, Click::Range);
         assert_eq!(items(&s), [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn the_focus_is_always_a_selected_item() {
+        let mut s = Selection::default();
+        s.click(1, Click::Only);
+        s.click(4, Click::Toggle);
+        s.click(4, Click::Toggle);
+        assert_eq!((s.cursor(), s.focus()), (Some(4), Some(1)));
+        s.point(4);
+        assert_eq!(s.cursor(), Some(4), "not selected: the cursor stays");
+        s.click(6, Click::Toggle);
+        s.point(1);
+        assert_eq!(s.focus(), Some(1));
+        assert_eq!(Selection::default().focus(), None);
     }
 
     #[test]

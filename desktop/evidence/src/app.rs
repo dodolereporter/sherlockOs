@@ -325,7 +325,7 @@ pub struct App {
     pub(crate) preview: Preview,
     clipboard: Option<(Clip, Vec<PathBuf>)>,
     /// Item being renamed and its new name.
-    pub(crate) renaming: Option<(usize, String)>,
+    pub(crate) renaming: Option<(PathBuf, String)>,
     pub(crate) menu: Option<Menu>,
     pub(crate) confirm_empty: bool,
     pub(crate) notice: Option<Notice>,
@@ -614,10 +614,10 @@ impl App {
             }
             Message::RightClick(index) => {
                 self.renaming = None;
-                if let Some(index) = index
-                    && !self.selection.contains(index)
-                {
-                    self.select_only(index);
+                match index {
+                    Some(index) if self.selection.contains(index) => self.selection.point(index),
+                    Some(index) => self.select_only(index),
+                    None => {}
                 }
                 if index.is_none() {
                     self.clear_selection();
@@ -1699,7 +1699,7 @@ impl App {
     }
 
     fn open(&mut self) -> Task<Message> {
-        let Some(entry) = self.selection.cursor().and_then(|i| self.entries.get(i)) else {
+        let Some(entry) = self.selection.focus().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
         if entry.kind == Kind::Folder && self.location != Location::Trash {
@@ -1717,7 +1717,7 @@ impl App {
         if let Some(id) = default {
             return self.open_with_app_once(&id);
         }
-        let Some(entry) = self.selection.cursor().and_then(|i| self.entries.get(i)) else {
+        let Some(entry) = self.selection.focus().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
         let mut open = Process::new("xdg-open");
@@ -1789,8 +1789,9 @@ impl App {
     }
 
     fn start_rename(&mut self) -> Task<Message> {
-        // With several items selected, F2 renames the one under the cursor, alone.
-        let Some(index) = self.selection.cursor() else {
+        // With several items selected, F2 renames the one under the cursor (or right-clicked),
+        // alone; never an item that is not selected.
+        let Some(index) = self.selection.focus() else {
             return Task::none();
         };
         let Some(entry) = self.entries.get(index).cloned() else {
@@ -1802,7 +1803,7 @@ impl App {
             (Kind::File, Some(dot)) if dot > 0 => entry.name[..dot].chars().count(),
             _ => entry.name.chars().count(),
         };
-        self.renaming = Some((index, entry.name));
+        self.renaming = Some((entry.path.clone(), entry.name));
         Task::batch([
             operation::focus(RENAME),
             operation::select_range(RENAME, 0, stem),
@@ -1810,13 +1811,11 @@ impl App {
     }
 
     fn finish_rename(&mut self) -> Task<Message> {
-        let Some((index, name)) = self.renaming.take() else {
+        // The item is kept by its path: a sort or a search during the rename moves the rows,
+        // never the target.
+        let Some((path, name)) = self.renaming.take() else {
             return Task::none();
         };
-        let Some(entry) = self.entries.get(index) else {
-            return Task::none();
-        };
-        let path = entry.path.clone();
         self.spawn(String::new(), move || {
             let renamed = ops::rename(&path, &name)?;
             Ok((String::new(), vec![renamed]))
