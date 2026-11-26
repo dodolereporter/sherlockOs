@@ -1131,7 +1131,7 @@ mod tests {
 
     #[test]
     fn a_notification_service_that_is_not_ours_leaves_the_centre_unavailable() {
-        // Plasma's daemon owns the name: `/org/nomos/Notifications` is unknown there.
+        // Plasma's daemon owns the name: `/org/sherlockos/Notifications` is unknown there.
         let mut bar = with_surface(false);
         let _ = bar.update(Message::TogglePanel(Panel::Calendar));
         assert_eq!(bar.history, History::Loading);

@@ -16,7 +16,7 @@ Le principe qui relie tout : chaque fonction du système est exposée par une AP
 
 Le système est construit depuis les sources. Il ne dérive pas d'une distribution existante. Il utilise glibc, systemd et le gestionnaire de paquets pacman.
 
-Le nom de l'OS n'est pas encore choisi. N'en invente pas. Là où il en faut un, écris `NOM_OS`.
+L'OS s'appelle SherlockOS. La façon de l'écrire (texte affiché, chemins, variables, noms D-Bus) est dans l'ADR 0022.
 
 Le travail avance en deux pistes parallèles. Le desktop et Sherlock se développent d'abord sur une Debian existante, en fenêtre puis en session réelle. Le système de base se construit à côté, dans un conteneur, et se teste dans QEMU. Les deux se rejoignent quand le desktop tourne sur notre base. Le détail des jalons et des lots est dans `docs/plan.md`.
 

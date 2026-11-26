@@ -328,9 +328,9 @@ the index of the first data folder that has one, and the other applications' ico
 would no longer be found.
 
 **Installed.** `just install-session` prints a copy of the theme to
-`/usr/local/share/nom-os/icons/hicolor/`, and `sherlockos-session` puts
-`/usr/local/share/nom-os` first in `XDG_DATA_DIRS` (another folder with `NOM_OS_DATA`, for
-instance `NOM_OS_DATA=$PWD/desktop/sherlock-ui` from the repository). Only the session sees it:
+`/usr/local/share/sherlockos/icons/hicolor/`, and `sherlockos-session` puts
+`/usr/local/share/sherlockos` first in `XDG_DATA_DIRS` (another folder with `SHERLOCKOS_DATA`, for
+instance `SHERLOCKOS_DATA=$PWD/desktop/sherlock-ui` from the repository). Only the session sees it:
 Plasma's own hicolor is not touched. `just install-evidence` also installs Evidence's icon in
 `~/.local/share/icons/hicolor/`, beside its desktop entry, where the dock and the launcher of a
 nested session find it.

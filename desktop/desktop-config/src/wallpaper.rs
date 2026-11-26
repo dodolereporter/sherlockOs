@@ -396,7 +396,10 @@ mod tests {
     #[test]
     fn the_settings_file_is_in_the_config_dir() {
         let var = |key: &str| (key == "XDG_CONFIG_HOME").then(|| "/cfg".into());
-        assert_eq!(config_file(var), Some("/cfg/nom-os/wallpaper.conf".into()));
+        assert_eq!(
+            config_file(var),
+            Some("/cfg/sherlockos/wallpaper.conf".into())
+        );
     }
 
     fn variant(w: u32, h: u32) -> Variant {

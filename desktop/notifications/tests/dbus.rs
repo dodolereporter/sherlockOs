@@ -226,7 +226,7 @@ mod tests {
         let info: (String, String, String, String) = reply.body().deserialize().unwrap();
         assert_eq!(
             (info.0.as_str(), info.1.as_str(), info.3.as_str()),
-            ("notifications", "NOM_OS", "1.2")
+            ("notifications", "SherlockOS", "1.2")
         );
     }
 
