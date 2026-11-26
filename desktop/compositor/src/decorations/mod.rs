@@ -326,8 +326,8 @@ mod tests {
         assert_eq!(maximize.1.loc, (767.0, 9.0).into());
         assert_eq!(close.1.loc, (797.0, 9.0).into());
         assert_eq!(close.1.size, (28.0, 24.0).into());
-        // The close button ends 9 before the right edge: the border, then the padding.
-        assert_eq!(close.1.loc.x + close.1.size.w, 836.0 - 9.0);
+        // The pill ends 9 before the right edge: the border, then the padding of 8.
+        assert_eq!(pill.loc.x + pill.size.w, 836.0 - 9.0);
     }
 
     #[test]

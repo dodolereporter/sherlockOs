@@ -1602,12 +1602,14 @@ mod tests {
         let states = h.wait_size("maximized", 800, 558);
         assert!(states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((0, 42).into()));
+        let _file = h.redraw(&shown, 800, 558);
 
         // Its maximize button, now the restore one, gives it back its size and place.
         h.click(745.0, 21.0, 2000);
         let states = h.wait_size("restored", 400, 300);
         assert!(!states.contains(&XdgState::Maximized));
         assert_eq!(location(&h.state), Some((220, 191).into()));
+        let _file = h.redraw(&shown, 400, 300);
 
         // Dropped at the top of the screen, it is maximized, like any moved window.
         h.state.pointer_motion((300.0, 170.0).into(), 3000);
@@ -1615,8 +1617,10 @@ mod tests {
         h.state.pointer_motion((300.0, 2.0).into(), 3001);
         h.release();
         h.wait_size("maximized by the drop", 800, 558);
+        let _file = h.redraw(&shown, 800, 558);
         h.click(745.0, 21.0, 4000);
         h.wait_size("restored again", 400, 300);
+        let _file = h.redraw(&shown, 400, 300);
 
         // A press that leaves its button does nothing.
         let (x, y) = (220.0 + 400.0 - 101.0 + 16.0, 191.0 - 42.0 + 21.0);
@@ -1704,7 +1708,8 @@ mod tests {
                 .copy_framebuffer(&target, region, Fourcc::Abgr8888)
                 .unwrap();
             let mut pixels = renderer.map_texture(&mapping).unwrap().to_vec();
-            if mapping.flipped() {
+            // GL reads the rows from the bottom up.
+            if !mapping.flipped() {
                 pixels = pixels
                     .chunks(w as usize * 4)
                     .rev()

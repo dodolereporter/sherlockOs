@@ -545,8 +545,6 @@ fn push_window(
             alpha: visual.opacity * decoration,
         });
     }
-    // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's scale,
-    // and the animation's if there is one.
     if let Some(bar) = bar {
         whole.size.h = inset;
         let rect = view.rect(whole);
@@ -564,6 +562,8 @@ fn push_window(
             alpha: visual.opacity,
         });
     }
+    // The content is drawn in `rect`, the drawn geometry, in frame pixels: the screen's scale,
+    // and the animation's if there is one.
     items.push(Item::Window {
         surface: surface.clone(),
         rect,
