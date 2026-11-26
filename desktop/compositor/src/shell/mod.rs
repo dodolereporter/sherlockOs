@@ -289,6 +289,31 @@ impl State {
         self.shell.slide.is_animating(now)
     }
 
+    /// Where the row of workspaces is shown at `now`, in workspaces: the index of the active
+    /// one at rest, in between during a slide or a swipe.
+    pub fn workspace_view(&self, now: std::time::Duration) -> f64 {
+        let active = self.shell.workspace_model.active_index();
+        self.shell.slide.position(now, active)
+    }
+
+    /// A swipe holds the row of workspaces at `view` (lot D-31).
+    pub(crate) fn hold_workspaces(&mut self, view: f64) {
+        self.queue_redraw();
+        self.shell.slide.hold(view);
+    }
+
+    /// The swipe lets go of the row with `velocity`, in workspaces per second, and lands on
+    /// the workspace at `index`, which becomes active.
+    pub(crate) fn release_workspaces(&mut self, index: usize, velocity: f64) {
+        self.queue_redraw();
+        let now = self.start_time.elapsed();
+        let model = &self.shell.workspace_model;
+        self.shell.slide.release(now, model.active_index(), velocity);
+        if let Some(id) = model.id_at(index).map(str::to_owned) {
+            self.activate_workspace(&id);
+        }
+    }
+
     /// The pointer goes to what is under it now that windows came or went.
     fn refresh_pointer_focus(&mut self) {
         if let Some(pointer) = self.seat.get_pointer() {

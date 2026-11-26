@@ -6,7 +6,7 @@
 //!   never opened. udev reports screens plugged in and out.
 //! - **Screens**: every connector with a screen, each driven by a `DrmCompositor` at its
 //!   preferred mode, drawn by the same GLES scene as the windowed backend (`render::Scene`).
-//! - **Input**: libinput (keyboard, mouse, touchpad with tap to click).
+//! - **Input**: libinput (keyboard, mouse, touchpad with its setting and gestures, lot D-31).
 //! - **Frames** (lot P-01): a screen draws only when something changed (`pacing`), at the pace
 //!   of its vertical blank, and redraws only what changed (`damage`).
 //!
@@ -231,6 +231,10 @@ pub fn init(
         desktop_config::wallpaper::config_file(var),
         desktop_config::data_dirs(var),
     )?;
+    state.watch_touchpad(
+        &event_loop.handle(),
+        desktop_config::touchpad::config_file(var),
+    )?;
     let mut switcher = session.clone();
     state.switch_vt = Some(Box::new(move |vt| {
         if let Err(err) = switcher.change_vt(vt) {
@@ -369,15 +373,9 @@ fn insert_sources(
 
 fn input_event(event: InputEvent<LibinputInputBackend>, state: &mut State) {
     match event {
-        InputEvent::DeviceAdded { mut device } => {
-            // Tap to click on touchpads, off by default in libinput.
-            if device.config_tap_finger_count() > 0
-                && let Err(err) = device.config_tap_set_enabled(true)
-            {
-                tracing::warn!(?err, "tap to click");
-            }
-            tracing::info!(name = device.name(), "input device");
-        }
+        // Touchpads take the touchpad setting (lot D-31).
+        InputEvent::DeviceAdded { device } => state.input_device_added(device),
+        InputEvent::DeviceRemoved { device } => state.input_device_removed(&device),
         // The mouse and the touchpad move the pointer by steps, kept on the screens.
         InputEvent::PointerMotion { event } => {
             let Some(pointer) = state.seat.get_pointer() else {

@@ -80,6 +80,21 @@ impl Animation {
         }
     }
 
+    /// Starts from `from` moving at `velocity` (units per second), at the instant `start`,
+    /// towards `to`: what a gesture let go of hands over (lot D-31).
+    pub fn with_velocity(
+        spring: Spring,
+        from: f64,
+        to: f64,
+        velocity: f64,
+        start: Duration,
+    ) -> Self {
+        Self {
+            velocity,
+            ..Self::new(spring, from, to, start)
+        }
+    }
+
     fn solve(&self, now: Duration) -> (f64, f64) {
         let t = now.saturating_sub(self.start).as_secs_f64();
         let (offset, speed) = self.spring.solve(self.from - self.to, self.velocity, t);
@@ -266,6 +281,18 @@ mod tests {
         assert!(animation.value(ms(51)) - before.0 > 0.0);
         assert!((animation.value(ms(51)) - before.1).abs() < 0.1);
         assert!((animation.value(ms(3000)) + 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_thrown_value_leaves_with_its_velocity() {
+        // Thrown away from its target at 2 units per second: it goes on that way first.
+        let animation = Animation::with_velocity(SNAP_SPRING, 0.5, 0.0, 2.0, ms(100));
+        assert_eq!(animation.value(ms(100)), 0.5);
+        let first = animation.value(ms(101)) - 0.5;
+        assert!((first - 0.002).abs() < 1e-4, "{first}");
+        assert!(animation.value(ms(110)) > 0.5);
+        assert!(animation.is_done(ms(1000), 1e-3));
+        assert!((animation.value(ms(1000))).abs() < 1e-3);
     }
 
     #[test]
