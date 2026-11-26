@@ -24,6 +24,14 @@ export PATH="$PATH:$bin"
 export XDG_CURRENT_DESKTOP=NOM_OS
 export XDG_SESSION_DESKTOP=NOM_OS
 export XDG_SESSION_TYPE=wayland
+# Once `just install-themes` ran, third-party applications take the colors of the desktop
+# (docs/third-party-theming.md): the GTK settings live in a dconf database of the session's own,
+# libadwaita reads them without the portal, Qt goes through qt6ct. Plasma sees none of it.
+themes="${XDG_DATA_HOME:-$HOME/.local/share}/nom-os/themes"
+if [ -f "$themes/dconf-profile" ] && [ -x "$themes/toolkit-theme" ]; then
+	export DCONF_PROFILE="$themes/dconf-profile" ADW_DISABLE_PORTAL=1 QT_QPA_PLATFORMTHEME=qt6ct
+	export NOM_OS_THEMES="$themes"
+fi
 
 # Copies its input to the log, which moves to .old beyond 5 MiB (checked every 100 lines).
 keep_log() {
@@ -69,6 +77,8 @@ keep() {
 keep "$0/bar" &
 keep "$0/dock" &
 keep "$0/notifications" &
+# Switches the GTK theme and the Qt palette with the appearance file.
+[ -n "${NOM_OS_THEMES:-}" ] && keep "$NOM_OS_THEMES/toolkit-theme" follow &
 wait
 '
 xwayland=""

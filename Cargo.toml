@@ -15,6 +15,7 @@ members = [
     "desktop/notifications-config",
     "desktop/sherlock-ui",
     "desktop/shell-protocol",
+    "desktop/toolkit-theme",
     "sherlock/sherlockd",
 ]
 
