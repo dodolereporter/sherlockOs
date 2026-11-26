@@ -43,17 +43,18 @@ is at 8.8 or more.
 An indicator that has not been read yet is not shown. Without a battery, the battery
 indicator disappears. A battery discharging below 15 % turns amber.
 
-**Indicators** (UI-01). Bluetooth, network, sound and battery are each a button of their own, with an
-18 px icon (`metrics::STATUS_ICON`, the board's 16 was found too small), 30 high and 7 on each
-side (`panels::BAR_BUTTON_HEIGHT`, `BAR_BUTTON_PADDING`): a pill fades in on hover and deepens on
-press, and the content shrinks a little while pressed. Each opens the control centre; the one
-it was opened from carries the open mark, a short green line under it, and the veil. A click on
-another indicator while the centre is open moves the mark there and leaves the centre open; a
-click on the same one closes it. The clock and the Sherlock button have the same pill, veil and
-mark. Tab reaches each indicator. The application name ends with « … » where the left half of
-the bar ends.
+**Indicators** (UI-01, UI-02). Bluetooth, network, sound and battery make one button, with one
+hit area, as in D-20b: they all open the same control centre, and one by one (UI-01) they only
+split it (the author's test, UI-02). Their icons are 18 px (`metrics::STATUS_ICON`, the board's
+16 was found too small), the button 30 high with 7 on each side (`panels::BAR_BUTTON_HEIGHT`,
+`BAR_BUTTON_PADDING`), the icons 14 apart inside it. One pill around the whole group fades in on
+hover and deepens on press, and the group shrinks a little while pressed; while the control
+centre is open, the group keeps the veil and a short green mark under its middle. A click
+anywhere on it, on an icon or between two, opens or closes the control centre. The clock and the
+Sherlock button have the same pill, veil and mark. Tab reaches the group once. The application
+name ends with « … » where the left half of the bar ends.
 
-![The control centre opened from the sound, its button marked](../desktop/bar/screenshots/bar-open.png)
+![The control centre open, the group of indicators marked](../desktop/bar/screenshots/bar-open.png)
 ![The same in the light theme](../desktop/bar/screenshots/bar-open-light.png)
 
 **Live icons** (UI-01). Each icon shows the real state, drawn from its level rather than
