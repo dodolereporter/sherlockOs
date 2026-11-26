@@ -39,6 +39,9 @@ pub enum Error {
 /// Takes the lock and shows the screen until the password is accepted.
 pub fn run() -> Result<(), Error> {
     let user = pam::session_user().ok_or(Error::NoUser)?;
+    // No clipboard: no second Wayland connection either. The compositor hands this program a
+    // single connection (`WAYLAND_SOCKET`), the only one allowed to lock.
+    iced_exwlshell::disable_clipboard();
     let first = Mutex::new(Some(Lock::new(
         user.clone(),
         Arc::new(pam::Pam),

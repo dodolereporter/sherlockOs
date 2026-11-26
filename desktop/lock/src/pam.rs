@@ -9,6 +9,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
 
 use system_services::secret::Secret;
+use zeroize::Zeroize;
 
 /// The PAM service of the lock: `/etc/pam.d/sherlockos-lock`.
 pub const SERVICE: &str = "sherlockos-lock";
@@ -55,7 +56,8 @@ pub enum AuthError {
     /// The password is wrong (or PAM refused it).
     #[error("authentication refused")]
     Refused,
-    /// Too many tries: PAM (pam_faillock) locks the account for a while.
+    /// Too many tries: PAM says so (`PAM_MAXTRIES`). The lock screen runs as the user, who cannot
+    /// write the counters of pam_faillock: only the delay of pam_faildelay slows the tries.
     #[error("too many tries")]
     TooManyTries,
     /// PAM itself could not run: no library, no service, an error of the system.
@@ -77,7 +79,7 @@ pub struct Pam;
 pub struct Conversation {
     user: CString,
     password: Option<Secret>,
-    /// The messages PAM showed (pam_faillock's « account locked », for instance).
+    /// The messages PAM showed.
     pub messages: Vec<String>,
 }
 
@@ -108,11 +110,9 @@ impl Conversation {
     }
 }
 
-/// Overwrites a C string with zeros.
+/// Overwrites a C string with zeros (volatile writes).
 fn wipe(text: CString) {
-    let mut bytes = text.into_bytes_with_nul();
-    bytes.fill(0);
-    std::hint::black_box(&bytes);
+    text.into_bytes_with_nul().zeroize();
 }
 
 /// The conversation function PAM calls: one answer per message, allocated with `malloc` for

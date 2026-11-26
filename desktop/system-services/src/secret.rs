@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use zeroize::Zeroize;
+
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Secret(String);
 
@@ -20,12 +22,9 @@ impl Secret {
         self.0.is_empty()
     }
 
-    /// Overwrites the password with zeros, then empties it.
+    /// Overwrites the password with zeros (volatile writes, `zeroize`), then empties it.
     pub fn wipe(&mut self) {
-        let mut bytes = std::mem::take(&mut self.0).into_bytes();
-        bytes.fill(0);
-        // Keeps the writes: the buffer is read after them.
-        std::hint::black_box(&bytes);
+        self.0.zeroize();
     }
 }
 

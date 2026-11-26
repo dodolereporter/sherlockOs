@@ -255,7 +255,12 @@ impl Lock {
                 if let Phase::Leaving(at) = self.phase
                     && self.elapsed() >= at + ui::EXIT
                 {
-                    // The lock ends, then the program.
+                    // The lock ends, then the program. THE ONLY CLEAN EXIT, AND IT UNLOCKS: the
+                    // toolkit (exwlshellev) sends `unlock_and_destroy` on every clean exit while
+                    // the lock is held, so `iced::exit()` and `UnLock` must never be reached but
+                    // after PAM accepted the password (`Checked(Ok)`). An error ends the program
+                    // without a clean exit (`main` aborts on a panic): the compositor keeps the
+                    // session locked. `tests/render.rs` checks it.
                     return Task::done(Message::UnLock).chain(iced::exit());
                 }
             }

@@ -202,4 +202,48 @@ mod tests {
         let _ = s.lock.update(Message::Machine(Machine::PowerOff));
         assert_eq!(*s.runner.0.lock().unwrap(), [Machine::PowerOff]);
     }
+
+    /// The toolkit unlocks on every clean exit: only PAM's acceptance may lead to `UnLock` and
+    /// `iced::exit()`. A refusal, too many tries or PAM unavailable never leave the screen, even
+    /// long after; and the source holds a single exit, in the branch of the acceptance.
+    #[test]
+    fn only_the_acceptance_of_pam_leaves_the_lock() {
+        for error in [
+            AuthError::Refused,
+            AuthError::TooManyTries,
+            AuthError::Unavailable("no PAM".into()),
+        ] {
+            let mut s = screen((1920.0, 1080.0));
+            let _ = s.lock.update(Message::Checked(Err(error)));
+            let later = Instant::now() + Duration::from_secs(60);
+            let _ = s.lock.update(Message::Frame(later));
+            assert!(matches!(s.lock.phase(), Phase::Refused(..)));
+        }
+        let mut s = screen((1920.0, 1080.0));
+        let _ = s.lock.update(Message::Checked(Ok(())));
+        assert!(matches!(s.lock.phase(), Phase::Leaving(_)));
+
+        let sources = [
+            include_str!("../src/app.rs"),
+            include_str!("../src/lib.rs"),
+            include_str!("../src/main.rs"),
+            include_str!("../src/machine.rs"),
+            include_str!("../src/pam.rs"),
+        ];
+        let count = |what: &str| {
+            sources
+                .iter()
+                .map(|s| s.matches(what).count())
+                .sum::<usize>()
+        };
+        assert_eq!(count("(iced::exit())"), 1, "a single clean exit");
+        assert_eq!(count("Message::UnLock"), 1, "a single unlock");
+        let app = sources[0];
+        let exit = app.find("(iced::exit())").unwrap();
+        let leaving = app[..exit].rfind("Phase::Leaving(at)").unwrap();
+        assert!(
+            exit - leaving < 1200,
+            "the exit is in the branch of the acceptance"
+        );
+    }
 }
