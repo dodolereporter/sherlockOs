@@ -525,6 +525,11 @@ mod tests {
 
         /// Runs until nothing is drawn for half a second: openings and the like are over.
         fn settle(&mut self) {
+            // Before lot P-01, the desktop is never at rest: the openings last 0.6 s at most.
+            if self.screen.before {
+                (0..40).for_each(|_| drop(self.tick()));
+                return;
+            }
             let mut quiet = 0;
             for _ in 0..300 {
                 let frame = self.tick();
@@ -648,20 +653,31 @@ mod tests {
         }
     }
 
-    /// Pixels drawn: the part of each element inside the damage.
+    /// Pixels drawn: the part of each element inside the damage and not hidden by the opaque
+    /// regions of the elements in front of it, as smithay draws them.
     fn drawn(elements: &[Probe], damage: &[Rectangle<i32, Physical>]) -> u64 {
         let mut disjoint: Vec<Rectangle<i32, Physical>> = Vec::new();
         for rect in damage {
             let pieces = rect.subtract_rects(disjoint.iter().copied());
             disjoint.extend(pieces);
         }
-        let screen = Rectangle::from_size(SCREEN.into());
-        elements
-            .iter()
-            .filter_map(|e| e.geometry(Scale::from(1.0)).intersection(screen))
-            .flat_map(|g| disjoint.iter().filter_map(move |d| d.intersection(g)))
-            .map(|r| (r.size.w * r.size.h) as u64)
-            .sum()
+        let scale = Scale::from(1.0);
+        let mut opaque: Vec<Rectangle<i32, Physical>> = Vec::new();
+        let mut total = 0;
+        for element in elements {
+            let geometry = element.geometry(scale);
+            let damaged = disjoint.iter().filter_map(|d| d.intersection(geometry));
+            let visible = Rectangle::subtract_rects_many(damaged, opaque.iter().copied());
+            total += visible
+                .iter()
+                .map(|r| (r.size.w * r.size.h) as u64)
+                .sum::<u64>();
+            opaque.extend(element.opaque_regions(scale).into_iter().map(|mut r| {
+                r.loc += geometry.loc;
+                r
+            }));
+        }
+        total
     }
 
     fn bounds(damage: &[Rectangle<i32, Physical>]) -> Option<Rectangle<i32, Physical>> {
