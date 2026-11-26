@@ -22,7 +22,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
-| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, the command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, `--window-animations`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches, the frame cycle of each screen |
 | `src/pacing.rs` | When a screen of the real session draws: only after a change or during an animation, at the pace of its vertical blank (lot P-01) |
 | `src/damage.rs` | Stable identity of the elements the compositor draws itself, so that only what changed is redrawn (lot P-01) |
@@ -51,6 +51,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
 | `src/shaders/` | The four GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag`, `genie.frag` |
 | `src/genie.rs` | Minimize effect (lot D-19): the genie into the dock icon, the scale effect without one, the setting |
+| `src/window_anim.rs` | Opening and closing of the windows (lot D-34): the last image of a closed window, its closing, the setting |
 | `src/anim.rs` | Motion of windows, of the preview and of the workspaces: springs applied to rectangles and to the row of workspaces. Pure computation |
 | `src/stats.rs` | Frame statistics for `--measure` |
 | `src/shell/` | Data and control for the shell programs, on the shell socket only (lot D-18a, ADR 0021): `sherlock_shell_v1` (`toplevels.rs`), workspaces through `ext-workspace-v1` (`workspaces.rs`); the workspaces themselves and minimizing (lot D-18w) |
@@ -875,10 +876,12 @@ that the compositor and the shell share the same springs:
 | Token | Value | Damping ratio | Use |
 | --- | --- | --- | --- |
 | `SNAP_SPRING` | stiffness 500, damping 33.5 | 0.75, 3 % overshoot | Snap, maximize, restore |
-| `OPEN_SPRING` | stiffness 450, damping 34 | 0.80, 2 % overshoot | Scale at opening, from `OPEN_SCALE` (0.92) to 1 |
+| `WINDOW_OPEN_SPRING` | stiffness 625, damping 50 | 1.0, no overshoot | Scale of a window opening, from `OPEN_SCALE` (0.92) to 1 (lot D-34) |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 | 0.79 | Snap preview |
 | `DECORATION_SPRING` | stiffness 700, damping 53 | 1.0, no overshoot | Corners, border and shadow of a window maximized, fullscreen, or leaving it |
-| `FADE` | 150 ms | | Opacity at opening, preview appearing and fading out |
+| `FADE` | 150 ms | | Opacity of the preview appearing and fading out |
+| `WINDOW_OPEN_FADE` | 200 ms | | Opacity of a window opening (lot D-34) |
+| `WINDOW_CLOSE` | 150 ms | | Scale and opacity of a window closing (lot D-34) |
 
 `docs/contexte.md` only gives « ressorts » (springs), « léger dépassement » (slight overshoot)
 and hovers of 110 to 150 ms: these values are choices of the lot. Each spring covers 90 % of the
@@ -888,7 +891,7 @@ lasts one hover.
 `anim.rs` applies them to windows:
 
 - **Opening.** At its first frame, the window grows from 0.92 to 1 around its center and goes
-  from transparent to opaque. Its shadow and its border follow.
+  from transparent to opaque. Its shadow and its border follow. See "Opening and closing".
 - **Snap and restore.** `rearrange` (snap, maximize, fullscreen, restore) calls
   `animate_next_change`. The flag only holds for the next frame, where it is consumed in every
   case: if the geometry has changed there, it starts from the last drawn geometry on four
@@ -973,14 +976,64 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
 the three choices, by these names (`genie::Effect` reads them). `none` hides and shows the window
 at once, as before this lot. A change applies to the next minimize; an effect running goes on.
 
+### Opening and closing (lot D-34)
+
+As on macOS: a window that opens grows from `OPEN_SCALE` (0.92) to 1 around its center on
+`WINDOW_OPEN_SPRING`, critically damped (no bounce, 90 % of the way in 155 ms, settled in about
+250), and fades in over `WINDOW_OPEN_FADE` (200 ms). A window that closes shrinks back to 0.92
+and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
+
+![A window halfway through its opening](../desktop/compositor/screenshots/window-opening.png)
+
+- **Before this lot** the opening was already there, on `OPEN_SPRING` and the 150 ms fade of a
+  hover. That fade is cubic, brisk at the start: the window was 70 % opaque after 50 ms, and
+  the spring had made most of its way, so the opening went by in three frames and did not show.
+- **Closing.** The client has already destroyed its window when the compositor learns it
+  (`toplevel_destroyed`, or the unmap of an X11 window): its buffer goes away with its surface.
+  Before the window leaves the space, the backend draws it as at rest into a texture of its size
+  in pixels, at the scale of its screen, corners, border and title bar included, through the
+  offscreen path of the genie (`genie::offscreen`). The `Snapshotter` the backend plugs into
+  the state (`State::set_snapshotter`) does it with its renderer, while the clients are read,
+  never during a frame. That texture, the ghost, is drawn in front of the other windows,
+  stretched (`render::Item::Snapshot`), with a shadow at its scale. A client that removed its
+  content before destroying its window (a null buffer) leaves nothing to draw: the window goes
+  at once.
+- **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
+  pointer goes through it to what is below. A window that opens takes input at once, as before.
+- **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
+  override-redirect windows, anchored surfaces (bar, dock), fullscreen windows, a window closing
+  on another workspace, minimized, or while Mission Control is open.
+- **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
+  animation for `pacing::Pacing`), nothing at rest. The ghost is one element under a stable
+  identity (`damage::Part::Closing`): the damage is its old and new area, inside the window's.
+  Its texture is freed by `State::end_closings` after each loop iteration once the closing is
+  over. The cursor plane (lot P-01) is untouched.
+
+**Setting.** `--window-animations on|off` (on by default), and `State::set_window_animations`
+while the session runs, for Control Room. Off, windows appear and go at once. A window already
+closing finishes.
+
+**Tests.** `anim.rs`: the opening grows and fades in without a bounce, still moving at 150 ms,
+settled by 400; a skipped opening shows at once. `window_anim.rs`: the closing shrinks and fades
+in 150 ms. `tests/headless.rs`: a window closing over another one takes no click, the one below
+does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
+and closes at once; so does any window with the setting off.
+`the_opening_and_the_closing_are_drawn_halfway` draws a decorated window halfway through its
+opening and through its closing with Mesa's software renderer, like the genie test, checks the
+pixels and that the ghost's texture is held then freed, and saves `window-opening.png` and
+`window-closing.png` in `target/tmp`.
+
+**Manual test.** Nested (`--nested`) or in the real session: open Konsole, a GTK application
+and `xterm`; each grows and fades in. Close them (Super + Q, or their close button): each
+shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
+`--window-animations off`, nothing is animated.
+
 ### What rendering does not do yet
 
 - **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
   was already over its size. Its place for anchored surfaces is ready (`Scene::push_backdrop`,
   lot D-12). It needs an offscreen render of what is behind the surface, at reduced
   resolution, then blur passes; the snap preview would be its first client.
-- **Animated closing.** When the client destroys its window, its buffer goes away with it.
-  Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 
@@ -1152,7 +1205,7 @@ original `<folder>/<id>/1920x1080.png`, `2560x1440.png` and `3840x2160.png`:
   way as the others are reduced.
 
 The variants are not versioned: the image factory will generate them and install them in
-`/usr/share/nom-os/wallpapers/` (lot of the session on our base). On the reference laptop, the
+`/usr/share/sherlockos/wallpapers/` (lot of the session on our base). On the reference laptop, the
 fifteen wallpapers take 174 seconds (8 to 13 per wallpaper, on one core) and 202 MB: 38 MB at
 1920, 64 MB at 2560, 99 MB at 3840. The dithered grain keeps PNG from compressing the reduced
 variants much, which is also why they are generated and not stored. Generating
@@ -1161,7 +1214,7 @@ costs nothing in the session.
 
 ### Setting
 
-`$XDG_CONFIG_HOME/nom-os/wallpaper.conf` (`~/.config/nom-os/…` by default). `nom-os` stands for
+`$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` (`~/.config/sherlockos/…` by default). `sherlockos` stands for
 the name of the OS, not chosen yet: it is written once, in `desktop_config::DIR`.
 
 ```text
@@ -1177,7 +1230,7 @@ mode = cover
 ```
 
 - Without a file, or without `path` and `wallpaper`: the default pair, which follows the theme.
-- A wallpaper of the collection is looked for in `$XDG_DATA_HOME/nom-os/wallpapers/<id>`, then
+- A wallpaper of the collection is looked for in `$XDG_DATA_HOME/sherlockos/wallpapers/<id>`, then
   in each `$XDG_DATA_DIRS`.
 - `Config::choice(variant)` (crate `desktop-config`) gives what to show in a theme: the user's
   path, or the installed wallpaper to look for. The compositor keeps the theme in
@@ -1270,12 +1323,12 @@ To try it, with the variants in a test folder:
 
 ```sh
 just wallpapers
-mkdir -p /tmp/wallpaper-test/share/nom-os
-ln -s "$PWD/target/wallpapers" /tmp/wallpaper-test/share/nom-os/wallpapers
+mkdir -p /tmp/wallpaper-test/share/sherlockos
+ln -s "$PWD/target/wallpapers" /tmp/wallpaper-test/share/sherlockos/wallpapers
 XDG_DATA_HOME=/tmp/wallpaper-test/share cargo run -p compositor -- --nested
 ```
 
-Then write `wallpaper = ring` and `mode = contain` in `~/.config/nom-os/wallpaper.conf`: the
+Then write `wallpaper = ring` and `mode = contain` in `~/.config/sherlockos/wallpaper.conf`: the
 wallpaper changes within 2 seconds.
 
 ## Theme (lot D-05c)
@@ -1289,7 +1342,7 @@ automatic mode, no polling) through a calloop channel, and calls `State::set_the
 | --- | --- |
 | Colors | A `color::ThemeFade` fades `color::palette()` over `motion::THEME_FADE` (250 ms), in 32 steps. Background, discs, window borders, shadows, snap preview and title bars read the palette shown when the frame is built: nothing else holds a color |
 | Wallpaper | `Wallpaper::set_theme`: a wallpaper that follows the theme takes its pendant, decoded then crossfaded (see "Wallpapers") |
-| Cursor | Real session: `Cursors::follow` reads the house theme of the new theme, `nom-os` or `nom-os-light`, at the next frame (see `docs/cursor.md`) |
+| Cursor | Real session: `Cursors::follow` reads the house theme of the new theme, `sherlockos` or `sherlockos-light`, at the next frame (see `docs/cursor.md`) |
 
 The fade is ticked at the start of each frame (`State::tick_theme`, in `Scene::screens`): while
 it runs, each screen draws at each blank; the frame where it ends draws the final palette, and
@@ -1448,7 +1501,7 @@ How it works (`src/udev.rs`):
   for now by hand.
 - **XWayland: with `--xwayland`, which the start script gives by default (lot D-35b).** Smithay starts Xwayland with an empty
   environment; `src/mesa.rs` gives it the EGL restriction and `GBM_BACKENDS_PATH` pointing to
-  `$XDG_RUNTIME_DIR/nom-os/gbm-backends`, a folder of links to the system's GBM backends without
+  `$XDG_RUNTIME_DIR/sherlockos/gbm-backends`, a folder of links to the system's GBM backends without
   NVIDIA's (`nvidia-drm_gbm.so`), so that libgbm falls back to Mesa's. Measured with
   `tests/xwayland.rs` on the reference laptop (Xwayland 24.1.6), sampling the descriptors of
   Xwayland every 10 ms:
@@ -1468,7 +1521,7 @@ How it works (`src/udev.rs`):
   the real session yet. The compositor starts XWayland only with `--xwayland`: without it, X11
   applications do not show up, and the launched command gets no `DISPLAY`. Since lot D-35b the
   start script gives `--xwayland` by default, for Steam and the X11 builds of some applications
-  (Discord); `NOM_OS_XWAYLAND=0` leaves it out. Nothing else in the session stands against it:
+  (Discord); `SHERLOCKOS_XWAYLAND=0` leaves it out. Nothing else in the session stands against it:
   the compositor already ran XWayland in nested mode and with `--xwayland`. Whether Xwayland
   keeps off the NVIDIA card in the real session is still to be seen on the reference laptop
   (lot D-35b asks for that test before its merge). Nested mode starts it as before, with the
@@ -1491,7 +1544,7 @@ How it works (`src/udev.rs`):
   there, so that moving the pointer draws nothing. A screen draws only when something changed,
   at the pace of its vertical blank, and only what changed (see "Frames of the real session").
   The cursor is drawn in
-  front of the scene, from the house cursor theme (`nom-os`, `nom-os-light` for the light
+  front of the scene, from the house cursor theme (`sherlockos`, `sherlockos-light` for the light
   desktop; the user's `XCURSOR_THEME` or the system's `default` when it is not installed;
   `XCURSOR_SIZE`, 24 by default, times the screen's scale, the nearest size above), in the
   shape `cursor_icon` asks for; a client that draws its own cursor image gets the arrow, as in
@@ -1531,10 +1584,10 @@ it.
    ```
 
    Or the whole session, as the login screen starts it:
-   `NOM_OS_BIN=$PWD/target/release NOM_OS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
-   (`NOM_OS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
+   `SHERLOCKOS_BIN=$PWD/target/release SHERLOCKOS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
+   (`SHERLOCKOS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
    With `--xwayland` after `compositor`, X11 applications too (the script gives it unless
-   `NOM_OS_XWAYLAND=0`), at the risk of waking the NVIDIA card (see above).
+   `SHERLOCKOS_XWAYLAND=0`), at the risk of waking the NVIDIA card (see above).
 
 4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
    Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
@@ -1546,26 +1599,26 @@ it.
 daemon and Evidence in release, then **prints** the commands that install the session, without
 running them:
 
-- the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/nom-os/`;
-- the entry `sherlockos.desktop` (`Name=NOM_OS`) goes to `/usr/share/wayland-sessions/`, where
+- the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/sherlockos/`;
+- the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
   launcher find it; it runs `evidence`, which the session finds in its `PATH`;
-- the application icons, a hicolor theme, go to `/usr/local/share/nom-os/icons/` (D-03);
-- the portal setting `NOM_OS-portals.conf` goes to `/usr/local/share/nom-os/xdg-desktop-portal/`
+- the application icons, a hicolor theme, go to `/usr/local/share/sherlockos/icons/` (D-03);
+- the portal setting `sherlockos-portals.conf` goes to `/usr/local/share/sherlockos/xdg-desktop-portal/`
   (D-35b, see "Everyday services");
 - `sudo apt install libseat1` is added when libseat is missing, and `sudo apt install` of the
   portals, the keyring and the polkit agent that are missing (D-35b).
 
-At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
-sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
+At the next login, SDDM offers « SherlockOS » next to Plasma in its session menu. The start script
+sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `SherlockOS`) and `XDG_SESSION_TYPE=wayland`,
 adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there) and `/usr/local/share/nom-os` at the start of `XDG_DATA_DIRS` (the icons), then
+there) and `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
 launches the compositor, which launches the bar, the dock and the notification daemon once it
 is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
 up, with a line in the log (`session: … given up`).
-To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/local/share/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
+To remove the session: `sudo rm -r /usr/local/libexec/sherlockos /usr/local/share/sherlockos /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
 shell built from this workspace, and are tried on the author's Debian before the base exists.
@@ -1577,7 +1630,7 @@ Started from a text console while Plasma stays open on another one, the session 
 Plasma's D-Bus session bus (`/run/user/1000/bus`: one bus per user, whatever the session).
 Konsole then took 25 to 50 seconds to show its window. The cause, found without a screen:
 
-- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `NOM_OS` it takes the generic
+- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `SherlockOS` it takes the generic
   theme, which gives each window a D-Bus global menu (`QDBusMenuBar`) as soon as the name
   `com.canonical.AppMenu.Registrar` has an owner on the bus. On the author's bus it does:
   `kded6`, the appmenu module of the X11 Plasma session (checked by asking the bus daemon for
@@ -1587,7 +1640,7 @@ Konsole then took 25 to 50 seconds to show its window. The cause, found without 
   author's session showed `Failed to register window menu, reason:
   org.freedesktop.DBus.Error.NoReply`.
 - Reproduced on a private bus with a headless KWin (`kwin_wayland --virtual`), Konsole 25.04.2
-  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=NOM_OS`: with a registrar that never answers (a script that
+  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=SherlockOS`: with a registrar that never answers (a script that
   owns the name), the window had no content after 40 s and Konsole logged the same `NoReply`;
   without the registrar, its first content came 0.42 s after the start, and Konsole made no
   other call that waits on Plasma.
@@ -1605,7 +1658,7 @@ portal started by Konsole crashed again and again, and Konsole waited 9 seconds 
 it, 0.42 s. Alone on the machine (the OS itself, or Plasma logged out), the session keeps the
 user's bus.
 
-`NOM_OS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
+`SHERLOCKOS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
 `session: D-Bus session bus of its own` when the session has one. Not chosen: disabling the
 global menu alone (Qt's generic theme has no switch for it; `KDE_NO_GLOBAL_MENU` only exists
 for Plasma's theme, which the Qt theme batch may pick), since it would leave the notification
@@ -1615,14 +1668,14 @@ session started from SDDM while Plasma runs on another console, which takes the 
 ### Everyday services (lot D-35b)
 
 What a desktop needs besides its own programs, started by `sherlockos-session` when it is
-installed. Each choice is written in the session log (`~/.local/state/nom-os/session.log`).
+installed. Each choice is written in the session log (`~/.local/state/sherlockos/session.log`).
 
 - **Polkit agent.** The window that asks for the password when an action needs one (mounting a
   disk, a setting of the system). The script starts the first one installed, in this order:
   `polkit-kde-authentication-agent-1` (`/usr/lib/x86_64-linux-gnu/libexec/` on Debian, or
   `/usr/libexec/`), `polkit-gnome-authentication-agent-1` (`/usr/lib/policykit-1-gnome/` or
   `/usr/libexec/`), then `lxpolkit` from `PATH`. It starts with the shell programs, once the
-  display is there, and starts again like them when it stops. `NOM_OS_POLKIT_AGENTS` replaces
+  display is there, and starts again like them when it stops. `SHERLOCKOS_POLKIT_AGENTS` replaces
   the list (paths, or names looked for in `PATH`). Without any, the log says
   `session: warning: no polkit agent installed`, and polkit refuses what needs a password. The
   agent registers with polkit for this login session only: the Plasma session beside it keeps
@@ -1637,9 +1690,9 @@ installed. Each choice is written in the session log (`~/.local/state/nom-os/ses
   session). Alone on the machine, the session uses the user's bus, and the keyring already
   running there, if any.
 - **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
-  file chooser from Flatpak or Firefox, for instance). It reads `NOM_OS-portals.conf`
+  file chooser from Flatpak or Firefox, for instance). It reads `sherlockos-portals.conf` (the name of `XDG_CURRENT_DESKTOP`, `SherlockOS`, in lower case)
   (`desktop/compositor/session/`), which `just install-session` puts in
-  `/usr/local/share/nom-os/xdg-desktop-portal/`: GTK's backend for everything (it works
+  `/usr/local/share/sherlockos/xdg-desktop-portal/`: GTK's backend for everything (it works
   without GNOME or Plasma running), gnome-keyring for the secrets. So that the portal finds this
   file and the display, the script gives the activation environment of the bus
   `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `XDG_SESSION_TYPE`
@@ -1656,7 +1709,7 @@ prints the line for those missing): `xdg-desktop-portal`, `xdg-desktop-portal-gt
 `gnome-keyring`, `polkit-kde-agent-1` (or `policykit-1-gnome`, or `lxpolkit`).
 
 The script is tested with fake programs under `env -i` (`tests/session.rs`): XWayland given by
-default and left out with `NOM_OS_XWAYLAND=0`, the keyring started and its variables exported,
+default and left out with `SHERLOCKOS_XWAYLAND=0`, the keyring started and its variables exported,
 the first agent found started, the warning without any, the activation environment.
 
 ### When something goes wrong
@@ -1683,7 +1736,7 @@ the first agent found started, the warning without any, the activation environme
 | Started from | Log |
 | --- | --- |
 | A console, `compositor` | Its standard error: `2> /tmp/compositor.log` as above |
-| `sherlockos-session` (SDDM or a console) | `~/.local/state/nom-os/session.log`; the previous session, or the first 5 MiB of a long one, in `session.log.old` |
+| `sherlockos-session` (SDDM or a console) | `~/.local/state/sherlockos/session.log`; the previous session, or the first 5 MiB of a long one, in `session.log.old` |
 | SDDM, before the script runs | `~/.local/share/sddm/wayland-session.log`, and `journalctl -b -u sddm` |
 
 The level follows `RUST_LOG`; the start-up lines name the card (`real session card=/dev/dri/…`),
@@ -1740,7 +1793,7 @@ Touchpad page will write, and gestures that follow the fingers.
 
 ### Setting
 
-`$XDG_CONFIG_HOME/nom-os/touchpad.conf` (`~/.config/nom-os/touchpad.conf`), read by
+`$XDG_CONFIG_HOME/sherlockos/touchpad.conf` (`~/.config/sherlockos/touchpad.conf`), read by
 `desktop_config::touchpad`, in the same `key = value` form as `wallpaper.conf`. Every key is
 optional; without the file, the defaults below apply.
 
@@ -1849,7 +1902,7 @@ libinput events to `State::process_input_event`:
    workspaces show, side by side, where the fingers are. Lift: it comes back. Flick: it goes to
    the next one. On the first workspace, three fingers right: it resists and springs back.
 5. Three fingers down on a window: nothing. Write `swipe-down = minimize` in
-   `~/.config/nom-os/touchpad.conf`: within 2 seconds the log shows the new setting, and the
+   `~/.config/sherlockos/touchpad.conf`: within 2 seconds the log shows the new setting, and the
    gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
 
 ## Mission Control
@@ -2053,11 +2106,11 @@ work:
    includes it too):
 
    ```sh
-   RUST_LOG=info,compositor::perf=debug NOM_OS_BIN=$PWD/target/release \
+   RUST_LOG=info,compositor::perf=debug SHERLOCKOS_BIN=$PWD/target/release \
      desktop/compositor/session/sherlockos-session
    ```
 
-   The log is `~/.local/state/nom-os/session.log`.
+   The log is `~/.local/state/sherlockos/session.log`.
 2. Use the desktop for a few minutes: rest without touching anything for 30 s, move the pointer,
    hover the dock, open Kate and Nautilus, snap and maximize them with Super + arrows, drag and
    resize a window, switch workspaces.

@@ -30,6 +30,7 @@ pub mod theme;
 pub mod touchpad;
 pub mod udev;
 pub mod wallpaper;
+pub mod window_anim;
 pub mod winit;
 mod xwayland;
 
@@ -92,7 +93,7 @@ pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
          [--workspaces N] [--snap-gap PX] [--minimize-effect genie|scale|none] \
-         [command [arguments…]]"
+         [--window-animations on|off] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -205,6 +206,8 @@ pub struct State {
     themes: theme::Themes,
     /// Mission Control (lot D-33).
     overview: mission_control::Overview,
+    /// Opening and closing of the windows (lot D-34).
+    window_anims: window_anim::WindowAnims,
 }
 
 /// Data attached to each window.
@@ -321,6 +324,7 @@ impl State {
             decorations: decorations::Decorations::new(&dh),
             themes: theme::Themes::default(),
             overview: mission_control::Overview::default(),
+            window_anims: window_anim::WindowAnims::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -524,6 +528,9 @@ impl State {
         let arrangement = handlers::Arrangement::of(window);
         let mut motion = window_data(window).motion.borrow_mut();
         motion.set_bare(arrangement.maximized || arrangement.fullscreen);
+        if self.opens_at_once(window) {
+            motion.skip_opening();
+        }
         Some(motion.frame(now, geometry))
     }
 
@@ -587,6 +594,7 @@ impl State {
         }
         self.popups.cleanup();
         self.end_minimize_effects();
+        self.end_closings();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;

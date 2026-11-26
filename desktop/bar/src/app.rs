@@ -12,10 +12,11 @@ use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{Margin, PixelSize, PopupAnchor, PopupGravity, Position};
 use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::animated;
 use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
-use sherlock_ui::icon::Icon;
+use sherlock_ui::icon::{BatteryMark, Icon};
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
@@ -32,6 +33,7 @@ use crate::source::shell::{self, Auto};
 use crate::source::sound::{Pactl, Sound};
 use crate::source::watch;
 use crate::source::workspaces::{Desktop, Group};
+use crate::unfold::Unfold;
 use crate::{bus, user};
 
 #[derive(Debug, Default)]
@@ -66,8 +68,13 @@ pub struct Bar {
     focus: Option<usize>,
     /// The theme of the appearance file, shown with a fade.
     pub theme: ThemeFade,
-    /// The panel open, and its surface.
+    /// The panel shown, and its surface: open, or folding back before it closes.
     panel: Option<(Panel, Id)>,
+    /// The panel unfolding from the bar, or folding back.
+    pub unfold: Unfold,
+    /// Whether the panels unfold: on the GPU only, where the surface around them is
+    /// transparent (in software it is black). `None`: the renderer decides; set by the tests.
+    pub panel_motion: Option<bool>,
     /// Room around the panel in its surface: the gap below the bar, and its shadow on the GPU.
     pub panel_margins: Padding,
     /// Width of the bar surface, which the panels are placed from.
@@ -154,9 +161,28 @@ impl Bar {
         self.menu.is_some()
     }
 
-    /// The panel open, if any.
+    /// The panel open, if any: not one folding back.
     pub fn panel_open(&self) -> Option<Panel> {
-        self.panel.map(|(panel, _)| panel)
+        self.panel
+            .filter(|_| !self.unfold.folding())
+            .map(|(panel, _)| panel)
+    }
+
+    /// The surface of the panel shown, open or folding back.
+    pub fn panel_surface(&self) -> Option<Id> {
+        self.panel.map(|(_, id)| id)
+    }
+
+    /// Something moves: frames are needed. At rest, none.
+    pub fn animating(&self) -> bool {
+        self.theme.running()
+            || self.shape.running()
+            || (self.panel.is_some() && (self.unfold.running() || self.quick.running()))
+    }
+
+    fn animates(&self) -> bool {
+        self.panel_motion
+            .unwrap_or_else(|| surface::gpu_drawn() == Some(true))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -164,19 +190,18 @@ impl Bar {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
-        let frames = if self.theme.running() || self.shape.running() {
+        let frames = if self.animating() {
             window::frames().map(Message::Frame)
         } else {
             Subscription::none()
         };
-        let history = if self.panel_open() == Some(Panel::Control) {
-            Subscription::batch([
-                Subscription::run(history::watch).map(|()| Message::HistoryChanged),
-                Subscription::run(quick::watch)
-                    .map(|service| Message::Quick(quick::Message::Changed(service))),
-            ])
-        } else {
-            Subscription::none()
+        let history = match self.panel_open() {
+            Some(Panel::Calendar) => {
+                Subscription::run(history::watch).map(|()| Message::HistoryChanged)
+            }
+            Some(Panel::Control) => Subscription::run(quick::watch)
+                .map(|service| Message::Quick(quick::Message::Changed(service))),
+            None => Subscription::none(),
         };
         Subscription::batch([
             appearance,
@@ -247,7 +272,7 @@ impl Bar {
                 tracing::warn!(%error, "cannot read the notification history");
                 self.history = History::Unavailable;
             }
-            Message::HistoryChanged if self.panel_open() == Some(Panel::Control) => {
+            Message::HistoryChanged if self.panel_open() == Some(Panel::Calendar) => {
                 return load_history();
             }
             Message::HistoryChanged => {}
@@ -264,6 +289,7 @@ impl Bar {
                 );
             }
             Message::Quick(message) => {
+                self.quick.now = animated::clock();
                 return self.quick.update(message).map(Message::Quick);
             }
             Message::HistoryDone(done) => {
@@ -274,14 +300,14 @@ impl Bar {
             }
             // Escape closes the panel; Enter and Space belong to the control that has the
             // focus in it.
-            Message::MenuKey(menu::Key::Close) if self.panel.is_some() => {
+            Message::MenuKey(menu::Key::Close) if self.panel_open().is_some() => {
                 return self.close_panel();
             }
             Message::MenuKey(menu::Key::First) if self.panel_open() == Some(Panel::Calendar) => {
                 self.month = panel::today(self.clock.as_ref()).map(Month::of);
             }
-            Message::MenuKey(_) if self.panel.is_some() => {}
-            Message::Focus(direction) if self.panel.is_some() => {
+            Message::MenuKey(_) if self.panel_open().is_some() => {}
+            Message::Focus(direction) if self.panel_open().is_some() => {
                 return focus::advance(direction);
             }
             Message::MenuKey(key) if self.menu_open() => match key {
@@ -336,7 +362,14 @@ impl Bar {
             Message::Frame(now) => {
                 self.theme.tick(now);
                 self.shape.tick(now);
-                return self.apply_shape();
+                let at = animated::at(now);
+                self.unfold.tick(at);
+                self.quick.tick(at);
+                let shape = self.apply_shape();
+                if self.unfold.folded() {
+                    return shape.chain(self.drop_panel());
+                }
+                return shape;
             }
             Message::Closed(id) => {
                 // The compositor closes the menu and the panels on a click elsewhere
@@ -346,8 +379,9 @@ impl Bar {
                     self.menu = None;
                     self.cursor = None;
                 }
-                if self.panel.is_some_and(|(_, panel)| panel == id) {
+                if self.panel_surface() == Some(id) {
                     self.panel = None;
+                    self.unfold = Unfold::default();
                     self.quick.close();
                 }
             }
@@ -440,12 +474,22 @@ impl Bar {
 
     /// Opens `panel` under the right end of the bar, or closes it when it is open. Another
     /// panel or the menu closes first.
+    ///
+    /// Clicked again while it folds back, it unfolds again from where it is, in the same
+    /// popup: a quick series of clicks never piles popups up nor closes one twice.
     fn toggle_panel(&mut self, which: Panel) -> Task<Message> {
-        let open = self.panel_open();
-        let closed = self.close_panel().chain(self.close_menu());
-        if open == Some(which) {
-            return closed;
+        let now = animated::clock();
+        match self.panel {
+            Some((shown, _)) if shown == which && !self.unfold.folding() => {
+                return self.close_panel();
+            }
+            Some((shown, _)) if shown == which => {
+                self.unfold.fold(now, true);
+                return self.close_menu().chain(self.opened(which));
+            }
+            _ => {}
         }
+        let closed = self.drop_panel().chain(self.close_menu());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the panel cannot open");
             return closed;
@@ -468,33 +512,56 @@ impl Bar {
         .gravity(PopupGravity::Bottom);
         let id = Id::unique();
         self.panel = Some((which, id));
+        self.unfold = if self.animates() {
+            Unfold::opening(now)
+        } else {
+            Unfold::default()
+        };
         let (x, y, width, height) = panel::input_rect(which, self.panel_margins);
         let region = RegionActionCB::new(move |region| {
             if let Err(error) = region.add(x, y, width, height) {
                 tracing::warn!(%error, "cannot limit the panel's input region");
             }
         });
-        let opened = closed
+        closed
             .chain(Task::done(Message::NewPopUp { settings, id }))
             .chain(Task::done(Message::SetInputRegion {
                 id,
                 callback: region,
-            }));
+            }))
+            .chain(self.opened(which))
+    }
+
+    /// What a panel reads when it opens.
+    fn opened(&mut self, which: Panel) -> Task<Message> {
         match which {
             Panel::Control => {
-                self.history = History::Loading;
-                let quick = self.quick.open().map(Message::Quick);
-                opened.chain(Task::batch([load_history(), quick]))
+                self.quick.now = animated::clock();
+                self.quick.open().map(Message::Quick)
             }
             Panel::Calendar => {
                 self.month = panel::today(self.clock.as_ref()).map(Month::of);
-                opened
+                self.history = History::Loading;
+                load_history()
             }
         }
     }
 
+    /// Closes the panel: it folds back first where it unfolds, and its popup closes once it
+    /// has faded out (`Message::Frame`).
     fn close_panel(&mut self) -> Task<Message> {
         self.quick.close();
+        if self.panel.is_some() && self.animates() {
+            self.unfold.fold(animated::clock(), false);
+            return Task::none();
+        }
+        self.drop_panel()
+    }
+
+    /// Closes the popup of the panel at once, whatever it was doing.
+    fn drop_panel(&mut self) -> Task<Message> {
+        self.quick.close();
+        self.unfold = Unfold::default();
         match self.panel.take() {
             Some((_, id)) => window::close(id),
             None => Task::none(),
@@ -505,7 +572,7 @@ impl Bar {
         if self.menu_open() {
             return self.close_menu();
         }
-        let closed = self.close_panel();
+        let closed = self.drop_panel();
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
@@ -561,28 +628,32 @@ impl Bar {
         }
     }
 
-    /// A panel in its surface.
+    /// A panel in its surface, as it unfolds or folds back.
     pub fn view_panel(&self, which: Panel) -> Element<'_, Message> {
-        let glasses = match which {
-            Panel::Control => vec![
-                panel::glass(panel::center(&self.history), which, panels::CENTER_WIDTH),
-                panel::glass(
-                    self.quick.view(&self.user).map(Message::Quick),
-                    which,
-                    panels::QUICK_WIDTH,
-                ),
-            ],
+        let content = color::with_opacity(self.unfold.opacity(), || match which {
+            Panel::Control => {
+                let battery = self.battery.flatten();
+                let quick = self.quick.view(&self.user, battery).map(Message::Quick);
+                let (width, height) = which.size();
+                panel::glass(quick, width, height)
+            }
             Panel::Calendar => {
                 let today = panel::today(self.clock.as_ref());
                 let month = self.month.or_else(|| today.map(Month::of));
-                let content = match month {
+                let calendar = match month {
                     Some(month) => panel::calendar(month, today),
                     None => iced::widget::space().into(),
                 };
-                vec![panel::glass(content, which, panels::CALENDAR_WIDTH)]
+                let width = panels::CENTER_WIDTH;
+                iced::widget::column![
+                    panel::glass(calendar, width, panels::CALENDAR_HEIGHT),
+                    panel::glass(panel::center(&self.history), width, panels::CENTER_HEIGHT),
+                ]
+                .spacing(panels::PANEL_GAP)
+                .into()
             }
-        };
-        panel::frame(glasses, self.panel_margins)
+        });
+        panel::frame(self.unfold.panel(content), self.panel_margins)
     }
 
     pub fn view_bar(&self) -> Element<'_, Message> {
@@ -711,13 +782,14 @@ impl Bar {
             items.push(ui::status(glyph, None, tint));
         }
         if let Some(Some(battery)) = &self.battery {
-            let glyph = match battery.charge {
-                Charge::Charging => Icon::BatteryCharging,
-                _ => Icon::Battery,
+            let mark = match battery.charge {
+                Charge::Charging => BatteryMark::Charging,
+                Charge::Full | Charge::Idle => BatteryMark::Plugged,
+                Charge::Discharging => BatteryMark::None,
             };
             let tint = if battery.is_low() { p.amber_text } else { tint };
             let value = strings::percent(battery.percent);
-            items.push(ui::status(glyph, Some(value), tint));
+            items.push(ui::battery(battery.percent, mark, Some(value), tint));
         }
         let mut clock_items = Vec::new();
         if let Some(clock) = &self.clock {
@@ -993,6 +1065,83 @@ mod tests {
         assert_eq!(bar.panel_open(), Some(Panel::Control));
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert_eq!(bar.panel_open(), None);
+    }
+
+    /// The bar with its surface, the panels unfolding (`motion`) or not.
+    fn with_surface(motion: bool) -> Bar {
+        let mut bar = Bar {
+            panel_motion: Some(motion),
+            ..with_workspaces()
+        };
+        let _ = bar.update(Message::Surface(Id::unique()));
+        bar
+    }
+
+    fn frame_in(bar: &mut Bar, later: std::time::Duration) -> Task<Message> {
+        bar.update(Message::Frame(Instant::now() + later))
+    }
+
+    /// The freeze the author saw after clicking the control centre again: a double click, and
+    /// quick series of clicks, must leave one popup at most, never close one twice, and end
+    /// at rest.
+    #[test]
+    fn a_double_click_and_quick_clicks_never_pile_popups_up() {
+        let second = std::time::Duration::from_secs(2);
+        // Unfolding: the clicks turn the same popup back and forth.
+        let mut bar = with_surface(true);
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        let first = bar.panel_surface();
+        assert!(first.is_some() && bar.animating());
+        for click in 1..=11 {
+            let _ = bar.update(Message::TogglePanel(Panel::Control));
+            assert_eq!(bar.panel_surface(), first, "click {click}: the same popup");
+            assert_eq!(bar.panel_open().is_some(), click % 2 == 0);
+        }
+        // Eleven more clicks: folding. The popup closes once it has faded out, once.
+        let closed = frame_in(&mut bar, second);
+        assert!(closed.units() > 0);
+        assert_eq!(bar.panel_surface(), None);
+        assert!(!bar.animating(), "no frame at rest");
+        assert_eq!(frame_in(&mut bar, second).units(), 0, "closed once");
+        // The compositor's close of that popup, late, changes nothing.
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        let next = bar.panel_surface();
+        let _ = bar.update(Message::Closed(first.unwrap()));
+        assert_eq!(bar.panel_surface(), next);
+        let _ = frame_in(&mut bar, second);
+        assert!(bar.panel_open().is_some() && !bar.animating());
+
+        // In software, without unfolding: each click opens or closes at once.
+        let mut bar = with_surface(false);
+        let mut popups = Vec::new();
+        for _ in 0..10 {
+            let _ = bar.update(Message::TogglePanel(Panel::Control));
+            if let Some(id) = bar.panel_surface() {
+                assert!(!popups.contains(&id), "a new popup each time");
+                popups.push(id);
+            }
+        }
+        assert_eq!((popups.len(), bar.panel_surface()), (5, None));
+        assert!(!bar.animating());
+        // The other panel replaces this one at once.
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert_eq!(bar.panel_open(), Some(Panel::Calendar));
+    }
+
+    #[test]
+    fn a_notification_service_that_is_not_ours_leaves_the_centre_unavailable() {
+        // Plasma's daemon owns the name: `/org/sherlockos/Notifications` is unknown there.
+        let mut bar = with_surface(false);
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert_eq!(bar.history, History::Loading);
+        let error = String::from("org.freedesktop.DBus.Error.UnknownObject");
+        let next = bar.update(Message::History(Err(error)));
+        assert_eq!(bar.history, History::Unavailable);
+        assert_eq!(next.units(), 0, "nothing read again in a loop");
+        // Closed, its changes read nothing.
+        let _ = bar.update(Message::ClosePanel);
+        assert_eq!(bar.update(Message::HistoryChanged).units(), 0);
     }
 
     #[test]

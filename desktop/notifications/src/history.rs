@@ -1,4 +1,4 @@
-//! `org.nomos.Notifications.History`: a small private interface of the daemon, for the
+//! `org.sherlockos.Notifications.History`: a small private interface of the daemon, for the
 //! notification centre of the top bar. It lists the history, empties it, and runs an action of
 //! a notification that is still open. `Changed` tells a listener to read the list again. See
 //! "History over D-Bus" in `docs/notifications.md`.
@@ -12,8 +12,8 @@ use crate::model::{Notification, Urgency};
 
 /// Object path and interface name. The daemon serves them on the same connection as
 /// `org.freedesktop.Notifications`, under the same well-known name.
-pub const PATH: &str = "/org/nomos/Notifications";
-pub const INTERFACE: &str = "org.nomos.Notifications.History";
+pub const PATH: &str = "/org/sherlockos/Notifications";
+pub const INTERFACE: &str = "org.sherlockos.Notifications.History";
 
 /// One notification of the history, as `List` sends it (`(usssa(ss)bxb)`): id, application,
 /// title, body as plain text, actions as key and label, whether it is still open, the time it
@@ -52,7 +52,7 @@ pub(crate) struct History {
     pub(crate) core: Arc<Core>,
 }
 
-#[zbus::interface(name = "org.nomos.Notifications.History")]
+#[zbus::interface(name = "org.sherlockos.Notifications.History")]
 impl History {
     /// The history, newest first.
     async fn list(&self) -> Vec<Entry> {

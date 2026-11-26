@@ -30,6 +30,8 @@ pub enum Part {
     Preview,
     /// A window during its minimize effect (lot D-19).
     Genie,
+    /// The last image of a window while it closes (lot D-34).
+    Closing,
     /// One of the background discs, by its index.
     Disc(usize),
     /// The title bar the compositor draws above a window (lot D-08).

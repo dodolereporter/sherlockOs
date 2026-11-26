@@ -86,15 +86,15 @@ mod tests {
                 .arg(format!("PATH={}", d.join("path").display()))
                 .arg(format!("HOME={}", d.join("home").display()))
                 .arg(format!("XDG_RUNTIME_DIR={}", d.join("run").display()))
-                .arg(format!("NOM_OS_BIN={}", d.join("bin").display()))
-                .arg(format!("NOM_OS_DATA={}", d.join("data").display()))
-                .arg("NOM_OS_SESSION_BUS=shared");
+                .arg(format!("SHERLOCKOS_BIN={}", d.join("bin").display()))
+                .arg(format!("SHERLOCKOS_DATA={}", d.join("data").display()))
+                .arg("SHERLOCKOS_SESSION_BUS=shared");
             for (key, value) in vars {
                 command.arg(format!("{key}={value}"));
             }
             let status = command.arg("sh").arg(SCRIPT).status().unwrap();
             assert!(status.success(), "{status}");
-            let log = d.join("home/.local/state/nom-os/session.log");
+            let log = d.join("home/.local/state/sherlockos/session.log");
             std::fs::read_to_string(log).unwrap_or_default()
         }
 
@@ -130,7 +130,7 @@ mod tests {
             "/nowhere/polkit-kde-authentication-agent-1 {}",
             agent.display()
         );
-        let log = s.run(&[("NOM_OS_POLKIT_AGENTS", agents)]);
+        let log = s.run(&[("SHERLOCKOS_POLKIT_AGENTS", agents)]);
         assert_eq!(s.out("args").split_whitespace().next(), Some("--xwayland"));
         assert_eq!(s.out("keyring").trim(), "--start --components=secrets");
         let env = s.out("env");
@@ -149,7 +149,7 @@ mod tests {
         for var in ["WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "XDG_DATA_DIRS"] {
             assert!(activation.contains(var), "{activation}");
         }
-        assert!(env.contains("XDG_CURRENT_DESKTOP=NOM_OS"), "{env}");
+        assert!(env.contains("XDG_CURRENT_DESKTOP=SherlockOS"), "{env}");
         let data = format!("XDG_DATA_DIRS={}:", s.dir.join("data").display());
         assert!(env.contains(&data), "{env}");
     }
@@ -159,10 +159,10 @@ mod tests {
         let s = Session::new("bare");
         let log = s.run(&[
             (
-                "NOM_OS_POLKIT_AGENTS",
+                "SHERLOCKOS_POLKIT_AGENTS",
                 String::from("/nowhere/agent absent-agent"),
             ),
-            ("NOM_OS_XWAYLAND", String::from("0")),
+            ("SHERLOCKOS_XWAYLAND", String::from("0")),
         ]);
         assert!(log.contains("warning: no polkit agent installed"), "{log}");
         assert!(log.contains("keyring: none"), "{log}");

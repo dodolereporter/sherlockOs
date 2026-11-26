@@ -736,6 +736,9 @@ mod tests {
             }
             | Item::Label {
                 key, rect, alpha, ..
+            }
+            | Item::Snapshot {
+                key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
             Item::Thumbnail { .. } => Vec::new(),
         }

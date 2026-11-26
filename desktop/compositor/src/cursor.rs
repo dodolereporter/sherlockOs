@@ -3,7 +3,7 @@
 //! (`docs/design/cursors-dark.html`, `docs/design/cursors-light.html`).
 //!
 //! - **Theme**: the house theme, generated from `assets/cursors/` and installed by
-//!   `just install-session`: `nom-os`, or `nom-os-light` while the desktop is light, followed
+//!   `just install-session`: `sherlockos`, or `sherlockos-light` while the desktop is light, followed
 //!   live (lot D-05c). Without it, the user's theme: `XCURSOR_THEME`, else the system's
 //!   `default`. A shape missing from the theme shows the arrow.
 //! - **Size**: `XCURSOR_SIZE` (24 by default) times the screen's scale. The image of the nearest

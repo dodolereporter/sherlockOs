@@ -1,8 +1,8 @@
 //! Generates the cursor themes from the SVGs of `assets/cursors/`, and the board that shows
 //! them.
 //!
-//! - `cursor-theme build <svg folder> <output folder>` writes `<output>/nom-os/` and
-//!   `<output>/nom-os-light/`: `index.theme`, one Xcursor file per shape in `cursors/`, with an
+//! - `cursor-theme build <svg folder> <output folder>` writes `<output>/sherlockos/` and
+//!   `<output>/sherlockos-light/`: `index.theme`, one Xcursor file per shape in `cursors/`, with an
 //!   image per size of `SIZES` (a turn of images per size for the waiting cursors), and a link
 //!   per alias.
 //! - `cursor-theme board <svg folder> <output.png> [names] [sizes]` draws the shapes `names`

@@ -4,16 +4,16 @@
 set -eu
 
 repo="${1:-$PWD}"
-dest=/usr/local/libexec/nom-os
+dest=/usr/local/libexec/sherlockos
 sessions=/usr/share/wayland-sessions
 applications=/usr/local/share/applications
 # The application icons, a hicolor theme that only the session sees (sherlockos-session puts
 # this folder first in XDG_DATA_DIRS).
-data=/usr/local/share/nom-os
+data=/usr/local/share/sherlockos
 programs="compositor bar dock launcher notifications evidence"
 
 icons=/usr/local/share/icons
-themes="nom-os nom-os-light"
+themes="sherlockos sherlockos-light"
 for theme in $themes; do
 	if [ ! -f "$repo/target/cursors/$theme/index.theme" ]; then
 		echo "missing $repo/target/cursors/$theme: just cursors" >&2
@@ -31,7 +31,7 @@ done
 # The repository path is quoted in the commands: it may hold spaces.
 q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
 cat <<EOF
-# Run as root to install the NOM_OS session (shown by the login screen as "NOM_OS"):
+# Run as root to install the SherlockOS session (shown by the login screen as "SherlockOS"):
 
 sudo install -d $dest $applications $data/icons
 sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
@@ -40,7 +40,7 @@ sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
-sudo install -D -m 644 $q/desktop/compositor/session/NOM_OS-portals.conf $data/xdg-desktop-portal/NOM_OS-portals.conf
+sudo install -D -m 644 $q/desktop/compositor/session/sherlockos-portals.conf $data/xdg-desktop-portal/sherlockos-portals.conf
 # The cursor themes, their aliases kept as links:
 sudo install -d $icons
 sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
