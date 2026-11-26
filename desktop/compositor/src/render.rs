@@ -162,15 +162,24 @@ impl Scene {
                 preview.opacity,
             )));
         }
+        animating |= state.workspaces_sliding(now);
         for window in state.space.elements().rev() {
-            let Some(visual) = state.window_visual(window, now) else {
+            // Minimized, or on a workspace out of view.
+            let Some(shift) = state.workspace_shift(window, now) else {
                 continue;
             };
-            animating |= window_data(window).motion.borrow().is_animating();
             // The shadow stays on the window's own screen: a maximized window does not cast it
-            // on the next one.
-            let shadow = state.window_output(window).as_ref() == Some(output);
-            self.push_window(renderer, &mut elements, window, visual, view, shadow);
+            // on the next one. While sliding, the window itself does not reach the next screen.
+            let own = state.window_output(window).as_ref() == Some(output);
+            let Some(mut visual) = state
+                .window_visual(window, now)
+                .filter(|_| own || shift == 0.0)
+            else {
+                continue;
+            };
+            visual.rect.loc.x += shift;
+            animating |= window_data(window).motion.borrow().is_animating();
+            self.push_window(renderer, &mut elements, window, visual, view, own);
         }
         let below = [Layer::Bottom, Layer::Background];
         self.push_layers(renderer, &mut elements, output, view, &below);

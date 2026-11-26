@@ -1,4 +1,4 @@
-//! Motion of the windows and of the snap preview: the springs and fades of
+//! Motion of the windows, of the snap preview and of the workspaces: the springs and fades of
 //! `sherlock_ui::motion` applied to rectangles. Pure computation, without rendering or Wayland.
 
 use std::time::Duration;
@@ -199,6 +199,66 @@ impl PreviewMotion {
     }
 }
 
+/// Slide from one workspace to another. The workspaces stand in a row, side by side; the view
+/// is a position along that row, in workspaces (0 is the first one), carried by `SNAP_SPRING`
+/// to the active one. Each screen shows its own part of the row: a workspace is shifted by its
+/// distance to the view times the width of the screen. Only the workspaces the slide goes
+/// through are drawn: the spring's overshoot does not show the next one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkspaceSlide {
+    view: Option<Animation>,
+    /// First and last index of the workspaces the slide goes through.
+    span: (usize, usize),
+}
+
+impl WorkspaceSlide {
+    /// Half a pixel on a screen 4096 wide, in workspaces.
+    const PRECISION: f64 = motion::GEOMETRY_PRECISION / 4096.0;
+
+    /// Slides from the workspace at `from` (the one shown at rest) to the one at `to`. During a
+    /// slide, the view leaves from where it is: nothing jumps.
+    pub fn go(&mut self, now: Duration, from: usize, to: usize) {
+        let span = match &mut self.view {
+            Some(view) if !view.is_done(now, Self::PRECISION) => {
+                let at = view.value(now).max(0.0);
+                view.retarget(now, to as f64);
+                (at.floor() as usize, at.ceil() as usize)
+            }
+            _ => {
+                let (from_f, to_f) = (from as f64, to as f64);
+                self.view = Some(Animation::new(motion::SNAP_SPRING, from_f, to_f, now));
+                (from, from)
+            }
+        };
+        self.span = (span.0.min(to), span.1.max(to));
+    }
+
+    /// Stops the slide: the active workspace is shown at once.
+    pub fn stop(&mut self) {
+        self.view = None;
+    }
+
+    pub fn is_animating(&self, now: Duration) -> bool {
+        self.view.is_some_and(|v| !v.is_done(now, Self::PRECISION))
+    }
+
+    /// Horizontal shift at `now` of the workspace at `index`, on a screen `width` wide, when
+    /// the one at `active` is the active one. `None` when it is out of the screen.
+    pub fn shift(&self, now: Duration, index: usize, active: usize, width: f64) -> Option<f64> {
+        let view = match self.view {
+            Some(view) if self.is_animating(now) => {
+                if index < self.span.0 || index > self.span.1 {
+                    return None;
+                }
+                view.value(now)
+            }
+            _ => active as f64,
+        };
+        let distance = index as f64 - view;
+        (distance.abs() < 1.0).then_some(distance * width)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +363,54 @@ mod tests {
         assert_eq!(fading.opacity, 1.0);
         assert!(preview.frame(ms(650), None).unwrap().opacity < 1.0);
         assert_eq!(preview.frame(ms(600) + motion::FADE, None), None);
+    }
+
+    #[test]
+    fn workspaces_slide_side_by_side() {
+        let mut slide = WorkspaceSlide::default();
+        let shift = |s: &WorkspaceSlide, now, index| s.shift(ms(now), index, 1, 800.0);
+        // At rest, only the active workspace is on the screen.
+        assert_eq!(shift(&slide, 0, 1), Some(0.0));
+        assert_eq!((shift(&slide, 0, 0), shift(&slide, 0, 2)), (None, None));
+        // From the first to the second: the first leaves to the left, the second comes in from
+        // the right, and both are on the screen together.
+        slide.go(ms(1000), 0, 1);
+        assert_eq!(shift(&slide, 1000, 0), Some(0.0));
+        assert_eq!(shift(&slide, 1000, 1), None, "not yet on the screen");
+        let (out, coming) = (shift(&slide, 1050, 0), shift(&slide, 1050, 1));
+        assert!(out.is_some_and(|x| x < 0.0 && x > -800.0));
+        assert!(coming.is_some_and(|x| x > 0.0 && x < 800.0));
+        assert!(
+            coming
+                .zip(out)
+                .is_some_and(|(c, o)| (c - o - 800.0).abs() < 1e-9)
+        );
+        assert!(slide.is_animating(ms(1050)));
+        assert_eq!(shift(&slide, 2000, 1), Some(0.0));
+        assert_eq!(shift(&slide, 2000, 0), None);
+        assert!(!slide.is_animating(ms(2000)));
+        // Back halfway: the view turns around from where it is.
+        slide.go(ms(3000), 1, 0);
+        let before = shift(&slide, 3050, 1);
+        slide.go(ms(3050), 1, 1);
+        assert_eq!(shift(&slide, 3050, 1), before);
+        slide.stop();
+        assert_eq!(shift(&slide, 3060, 1), Some(0.0));
+    }
+
+    #[test]
+    fn the_overshoot_does_not_show_the_next_workspace() {
+        let mut slide = WorkspaceSlide::default();
+        slide.go(ms(0), 0, 1);
+        let shift = |t, index| slide.shift(ms(t), index, 1, 1920.0);
+        assert!(
+            (0..2000).any(|t| shift(t, 1).is_some_and(|x| x < 0.0)),
+            "no overshoot"
+        );
+        assert_eq!(
+            (0..2000).find_map(|t| shift(t, 2)),
+            None,
+            "the third one was drawn"
+        );
     }
 }

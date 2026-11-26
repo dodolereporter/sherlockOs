@@ -2326,6 +2326,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "notifications"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "libc",
+ "notifications-config",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
+name = "notifications-config"
+version = "0.0.0"
+dependencies = [
+ "dock-config",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

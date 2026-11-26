@@ -1,0 +1,46 @@
+[package]
+name = "notifications"
+description = "Notification daemon of the desktop: org.freedesktop.Notifications and its bubbles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The theme of the appearance file, followed live (workspace crate).
+appearance-config = { path = "../appearance-config" }
+# The same as the bar and the dock (docs/bar.md). `image-without-codecs`, as Evidence: the
+# raw pixels of the `image-data` hint, without any decoder.
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+    "image-without-codecs",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# `O_NONBLOCK` and `O_NOCTTY`, to open an icon file without blocking on a FIFO: the version the
+# bar and the dock already pin.
+libc = "=0.2.191"
+# Do not disturb (workspace crate).
+notifications-config = { path = "../notifications-config" }
+sherlock-ui = { path = "../sherlock-ui" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+# The server on the session bus: the version and features Evidence pins (blocking API, its own
+# small executor, no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+# Headless rendering of the bubbles, like the bar and the dock.
+iced_test = "=0.14.0"
+
+[lints]
+workspace = true
