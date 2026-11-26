@@ -22,7 +22,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 # `kill`, to close the launcher already open: the version the bar and the dock already pin.
 libc = "=0.2.191"
-# The installed applications (workspace crate).
+# Application icons (workspace crate).
+icon-theme = { path = "../icon-theme" }
+# The installed applications, and the default application of a file (workspace crate).
 mime-apps = { path = "../mime-apps" }
 sherlock-ui = { path = "../sherlock-ui" }
 thiserror = "=2.0.21"
