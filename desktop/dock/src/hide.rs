@@ -2,9 +2,9 @@
 //!
 //! - `never`: always shown, with its exclusive zone.
 //! - `always`: hidden, with no exclusive zone.
-//! - `smart`, the default: like `never`, except while a maximized or fullscreen window is on
-//!   the dock's screen. That window takes the whole screen below the bar: the dock gives up its
-//!   exclusive zone and slides out.
+//! - `smart`, the default: like `never`, except while a maximized, fullscreen or snapped (half,
+//!   quarter) window is on the dock's screen. That window takes the whole height below the bar:
+//!   the dock gives up its exclusive zone and slides out.
 //!
 //! A hidden dock keeps a band of `dock::HIDE_STRIP` pixels on the screen, along its edge, that
 //! takes the pointer: touching it brings the dock back over the windows, still without an
@@ -23,7 +23,7 @@ const PRECISION: f64 = motion::GEOMETRY_PRECISION / 100.0;
 #[derive(Debug, Clone, Copy)]
 pub struct Hide {
     mode: AutoHide,
-    /// A maximized or fullscreen window is on the dock's screen.
+    /// A maximized, fullscreen or snapped window is on the dock's screen.
     covered: bool,
     /// Brought back by the pointer while it should hide.
     revealed: bool,

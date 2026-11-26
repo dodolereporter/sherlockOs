@@ -244,7 +244,7 @@ impl Dock {
             .and_then(Option::as_ref)
     }
 
-    /// A maximized or fullscreen window is on the dock's screen.
+    /// A maximized, fullscreen or snapped window is on the dock's screen.
     pub fn covered(&self) -> bool {
         let name = self.screen().and_then(|s| s.name.as_deref());
         match (name, &self.windows) {
