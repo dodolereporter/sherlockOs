@@ -385,3 +385,38 @@ fn the_surface_is_resized_when_the_rows_change() {
     assert_eq!(launcher.update(Message::Query("zzzz".into())).units(), 0);
     assert!(launcher.update(Message::Query("k".into())).units() > 0);
 }
+
+#[test]
+fn a_right_click_keeps_an_application_in_the_dock() {
+    let dir = std::env::temp_dir().join(format!("launcher-dock-{}", std::process::id()));
+    let path = dir.join("dock/dock.conf");
+    std::fs::create_dir_all(dir.join("dock")).expect("folder");
+    std::fs::write(&path, "[Dock]\nPinned=firefox;\n").expect("dock file");
+    let (launcher, _) = recorded();
+    let mut launcher = launcher.with_dock_file(path.clone());
+    let _ = launcher.update(Message::Query("kit".into()));
+    let _ = launcher.update(Message::Menu(0));
+    assert_eq!(launcher.menu, Some((0, false)));
+    let mut ui = Simulator::with_size(
+        launcher::settings(),
+        (look::WIDTH, launcher.height()),
+        launcher.view_panel(),
+    );
+    assert!(ui.find(sherlock_ui::dock::text::KEEP).is_ok());
+    drop(ui);
+    assert!(capture(&launcher, "launcher-menu").expect("screenshot written") > 2_000);
+    let _ = launcher.update(Message::Pin);
+    let text = std::fs::read_to_string(&path).expect("dock file");
+    assert_eq!(text, "[Dock]\nPinned=firefox;kitty;\n");
+    assert_eq!(launcher.menu, None);
+    // Pinned: « Retirer du Dock »; Escape closes the menu, not the launcher.
+    let _ = launcher.update(Message::Menu(0));
+    assert_eq!(launcher.menu, Some((0, true)));
+    let _ = launcher.update(Message::Key(app::Key::Escape));
+    assert_eq!(launcher.menu, None);
+    assert!(!launcher.closing);
+    // Without its menu, nothing is pinned.
+    let _ = launcher.update(Message::Pin);
+    assert_eq!(std::fs::read_to_string(&path).expect("dock file"), text);
+    let _ = std::fs::remove_dir_all(&dir);
+}

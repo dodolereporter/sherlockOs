@@ -48,6 +48,8 @@ pub const MAX_SECTIONS: usize = 5;
 /// Least time between arming a session command (« Se déconnecter », « Redémarrer »,
 /// « Éteindre ») and confirming it: longer than a double click and than a key bounce.
 pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+/// Width of the menu of an application (« Garder dans le Dock »), drawn inside its row.
+pub const MENU_WIDTH: f32 = 200.0;
 
 /// Height of the panel holding `sections` section labels and `rows` result rows: its border
 /// and padding, the search row and the line under it, the labels, the rows.

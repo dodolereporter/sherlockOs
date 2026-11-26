@@ -88,6 +88,7 @@ mod tests {
             home: None,
             gtk_theme: None,
             control: Arc::new(Recorder::default()),
+            applications: false,
         }
     }
 

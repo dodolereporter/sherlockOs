@@ -13,6 +13,7 @@ pub mod items;
 pub mod launch;
 pub mod layout;
 pub mod menu;
+pub mod pins;
 pub mod shell;
 mod view;
 pub mod watch;
@@ -115,6 +116,7 @@ impl Sources {
             home,
             gtk_theme,
             control: std::sync::Arc::new(windows::Auto),
+            applications: true,
         }
     }
 }

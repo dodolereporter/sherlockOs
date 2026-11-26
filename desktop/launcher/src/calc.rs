@@ -265,6 +265,7 @@ impl Source for Calculator {
             title: result.clone(),
             subtitle: Some(text::COPY.to_owned()),
             tile: Tile::Glyph(Glyph::Calculator),
+            app: None,
             action: Action::Copy(result),
         }]
     }

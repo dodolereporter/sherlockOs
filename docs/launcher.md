@@ -226,6 +226,15 @@ starts it too.
 the field through the headless simulator, then sends Enter. Another test checks that every
 application of the fixtures is the first result for two letters of its name.
 
+### Keeping an application in the dock
+
+A right click on an application opens its menu inside its row, on the right, so that it never
+leaves the panel: « Garder dans le Dock », or « Retirer du Dock » when it is pinned (D-41).
+Pinning goes through `dock::pins`, as in the applications view (`docs/apps.md`). Any other key
+or click closes the menu; Escape closes it alone.
+
+![The menu of an application](../desktop/launcher/screenshots/launcher-menu.png)
+
 ### Starting a program
 
 As in the dock: the `Exec` line is split and expanded by `mime-apps` (no files given, so file

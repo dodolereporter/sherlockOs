@@ -61,6 +61,8 @@ pub struct Hit {
     pub subtitle: Option<String>,
     pub tile: Tile,
     pub action: Action,
+    /// The desktop file id of an application, which its menu pins to the dock.
+    pub app: Option<String>,
 }
 
 /// A query: as typed, and folded into terms (`crate::search::terms`).

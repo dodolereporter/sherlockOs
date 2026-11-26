@@ -6,11 +6,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use iced::keyboard::{self, key::Named};
-use iced::widget::{Space, button, column, container, operation, row, svg, text, text_input};
+use iced::widget::{
+    Space, button, column, container, mouse_area, operation, row, svg, text, text_input,
+};
 use iced::window::Id;
 use iced::{Alignment, Element, Event, Length, Subscription, Task, event};
 use iced_exwlshell::to_layer_message;
-use sherlock_ui::component::{self as ui};
+use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::dock::text as dock_texts;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::launcher::{self as look, Glyph, text as texts};
 use sherlock_ui::logo::Logo;
@@ -41,6 +44,10 @@ pub enum Message {
     Pick(usize),
     /// A source has more to say (the files, once walked): search again.
     Refresh,
+    /// A right click on an application, by its place in the list: its menu.
+    Menu(usize),
+    /// « Garder dans le Dock » or « Retirer du Dock » in that menu.
+    Pin,
 }
 
 /// What starts a program: `launch::spawn`, or a recorder in tests.
@@ -85,6 +92,10 @@ pub struct Launcher {
     surface: Option<Id>,
     /// Asked to close: after a start, or on Escape.
     pub closing: bool,
+    /// The application whose menu is open, by its place in the list, and whether it is pinned.
+    pub menu: Option<(usize, bool)>,
+    /// The dock's configuration file, where the menu pins.
+    dock_file: Option<std::path::PathBuf>,
 }
 
 impl Launcher {
@@ -101,7 +112,15 @@ impl Launcher {
             selected: 0,
             surface: None,
             closing: false,
+            menu: None,
+            dock_file: dock_config::path(),
         }
+    }
+
+    /// Pins to the dock in the file at `path` instead of the user's (the tests).
+    pub fn with_dock_file(mut self, path: std::path::PathBuf) -> Self {
+        self.dock_file = Some(path);
+        self
     }
 
     /// Runs the system commands with `session`; without one, they are refused.
@@ -140,6 +159,25 @@ impl Launcher {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // Anything but its own entry closes the menu; Escape closes it alone.
+        let menu = self.menu.take();
+        match message {
+            Message::Menu(index) => {
+                let id = self.hits().nth(index).and_then(|h| h.app.clone());
+                if let (Some(id), Some(path)) = (id, self.dock_file.as_deref()) {
+                    self.menu = Some((index, dock::pins::is_pinned(path, &id)));
+                }
+                return Task::none();
+            }
+            Message::Pin => {
+                if let Some((index, pinned)) = menu {
+                    self.pin(index, !pinned);
+                }
+                return Task::none();
+            }
+            Message::Key(Key::Escape) if menu.is_some() => return Task::none(),
+            _ => {}
+        }
         match message {
             Message::Surface(id) => {
                 self.surface = Some(id);
@@ -188,6 +226,18 @@ impl Launcher {
             return self.resize();
         }
         Task::none()
+    }
+
+    /// Pins result `index` to the dock, or unpins it: the dock reads its file again at once.
+    fn pin(&self, index: usize, pinned: bool) {
+        let id = self.hits().nth(index).and_then(|h| h.app.clone());
+        let (Some(id), Some(path)) = (id, self.dock_file.as_deref()) else {
+            return;
+        };
+        match dock::pins::set(path, &id, pinned) {
+            Ok(_) => tracing::info!(id, pinned, "dock"),
+            Err(error) => tracing::error!(%error, "cannot write the dock's file"),
+        }
     }
 
     fn close(&mut self) -> Task<Message> {
@@ -381,7 +431,16 @@ impl Launcher {
         ]
         .spacing(look::GAP)
         .align_y(Alignment::Center);
-        if selected && hit.action != Action::Disabled {
+        if let Some((_, pinned)) = self.menu.filter(|(at, _)| *at == index) {
+            // The menu, inside the row on its right: it never leaves the panel.
+            let label = if pinned {
+                dock_texts::UNPIN
+            } else {
+                dock_texts::KEEP
+            };
+            let item = ui::menu_item(label, Trailing::None, Some(Message::Pin));
+            line = line.push(ui::floating_menu([item.into()], look::MENU_WIDTH));
+        } else if selected && hit.action != Action::Disabled {
             line = line.push(key_cap(texts::ENTER, true));
         }
         let row = button(line)
@@ -389,7 +448,12 @@ impl Launcher {
             .width(Length::Fill)
             .height(look::ROW_HEIGHT)
             .padding([0.0, look::ROW_PADDING]);
-        row.style(look::row(selected)).into()
+        let row: Element<'a, Message> = row.style(look::row(selected)).into();
+        if hit.app.is_some() {
+            mouse_area(row).on_right_press(Message::Menu(index)).into()
+        } else {
+            row
+        }
     }
 }
 
@@ -458,7 +522,7 @@ fn glyph_handle(glyph: Glyph) -> svg::Handle {
 
 /// An SVG icon as it is; a PNG inside a small SVG, which the SVG renderer reads by path, as
 /// the dock does: iced's `image` feature would bring its own decoders.
-fn icon_handle(path: &Path) -> svg::Handle {
+pub fn icon_handle(path: &Path) -> svg::Handle {
     if path.extension().is_some_and(|e| e == "svg") {
         return svg::Handle::from_path(path);
     }
