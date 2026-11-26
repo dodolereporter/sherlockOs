@@ -1,0 +1,13 @@
+[package]
+name = "icon-theme"
+description = "Icon lookup by name after the XDG Icon Theme specification: chosen theme, hicolor, pixmaps"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Standard library only: `index.theme` and the settings files are small key files.
+[dependencies]
+
+[lints]
+workspace = true
