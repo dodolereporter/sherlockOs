@@ -64,6 +64,7 @@ mod tests {
     const KEY_CTRL: u32 = 37;
     const KEY_LEFT: u32 = 113;
     const KEY_RIGHT: u32 = 114;
+    const KEY_DOWN: u32 = 116;
     const KEY_1: u32 = 10;
     const KEY_2: u32 = 11;
     const KEY_3: u32 = 12;
@@ -1385,6 +1386,61 @@ mod tests {
             Some(1.0),
             "snapped, its corners kept"
         );
+    }
+
+    /// Lot D-18d: a snapped window covers its screen for the dock (version 2), which then gives
+    /// up its zone: the window takes the whole height, still 8 from the edges. A client of
+    /// version 1 (the bar) is not told.
+    #[test]
+    fn a_snapped_window_covers_its_screen_and_takes_the_room_of_the_hidden_dock() {
+        use sherlock_shell_manager_v1::OutputState;
+        let mut h = Harness::start();
+        h.bind_manager();
+        // A second shell program that only knows version 1.
+        let (server, stream) = UnixStream::pair().unwrap();
+        h.state.insert_shell_client(server);
+        let mut old = Side::new(stream);
+        let turn = |h: &mut Harness, old: &mut Side| {
+            h.turn();
+            old.read();
+        };
+        for _ in 0..20 {
+            turn(&mut h, &mut old);
+        }
+        let (name, _, _) = old.client.globals.iter().find(|g| g.1 == MANAGER).unwrap();
+        let _v1: SherlockShellManagerV1 = old.registry.bind(*name, 1, &old.queue.handle(), ());
+        let (dock_surface, dock) = h.dock();
+        h.open_window("Left");
+        h.keys(&[KEY_SUPER], KEY_LEFT);
+        let window = h.titled("Left");
+        h.run_until("snapped above the dock", |_| {
+            pending(&window) == Some((388, 508))
+        });
+        h.run_until("the screen covered", |h| {
+            h.shell.client.output("virtual-1") == Some(&vec![OutputState::Snapped as u32])
+        });
+        for _ in 0..10 {
+            turn(&mut h, &mut old);
+        }
+        assert!(old.client.done > 0, "the version 1 client got its state");
+        assert_eq!(
+            old.client.output("virtual-1"),
+            Some(&Vec::new()),
+            "version 1 knows no snapped screen"
+        );
+
+        // The dock hides and gives up its zone: the half takes the whole height.
+        dock.set_exclusive_zone(-1);
+        dock_surface.commit();
+        h.run_until("the whole height", |_| pending(&window) == Some((388, 584)));
+        let place = h.state.space.element_geometry(&window).map(|g| g.loc);
+        assert_eq!(place, Some((8, 8).into()));
+
+        // Restored: the screen is uncovered, the dock comes back.
+        h.keys(&[KEY_SUPER], KEY_DOWN);
+        h.run_until("uncovered", |h| {
+            h.shell.client.output("virtual-1") == Some(&Vec::new())
+        });
     }
 
     #[test]

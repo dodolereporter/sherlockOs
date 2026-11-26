@@ -38,6 +38,14 @@ desktop-config = { path = "../desktop-config" }
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 # Private protocol of the shell, server side (lot D-18a, ADR 0021).
 shell-protocol = { path = "../shell-protocol", features = ["server"] }
+# Server-side decorations (lot D-08): ab_glyph lays out and rasterizes the window titles in
+# Inter, tiny-skia draws the bar, the pill and the stroked icons. Both are the versions and
+# features that smithay's winit backend already pulls (through sctk-adwaita): nothing new is
+# built.
+ab_glyph = "=0.2.32"
+tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
+# The theme of the appearance file, followed live by the decorations (workspace crate).
+appearance-config = { path = "../appearance-config" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.
@@ -54,6 +62,9 @@ smithay = { version = "=0.7.0", default-features = false, features = ["renderer_
 # its winit backend. `unstable` for the client side of `zwp_pointer_gestures_v1` (lot D-31).
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging", "unstable"] }
+# Client side of KDE's server decoration protocol, for the decoration test: the version that
+# smithay already pulls for the server side.
+wayland-protocols-misc = { version = "=0.3.12", features = ["client"] }
 # Client side of layer-shell, for the anchored surface of the integration test: the version
 # that smithay already pulls for the server side.
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }

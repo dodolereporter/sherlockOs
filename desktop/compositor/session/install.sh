@@ -7,6 +7,9 @@ repo="${1:-$PWD}"
 dest=/usr/local/libexec/nom-os
 sessions=/usr/share/wayland-sessions
 applications=/usr/local/share/applications
+# The application icons, a hicolor theme that only the session sees (sherlockos-session puts
+# this folder first in XDG_DATA_DIRS).
+data=/usr/local/share/nom-os
 programs="compositor bar dock launcher notifications evidence"
 
 for program in $programs; do
@@ -21,14 +24,15 @@ q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
 cat <<EOF
 # Run as root to install the NOM_OS session (shown by the login screen as "NOM_OS"):
 
-sudo install -d $dest $applications
+sudo install -d $dest $applications $data/icons
 sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
 sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
+sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
 
 # To remove it:
-#   sudo rm -r $dest $sessions/sherlockos.desktop $applications/evidence.desktop
+#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop
 EOF
 
 # The compositor needs libseat at run time (seatd or logind behind it). ldconfig is in the

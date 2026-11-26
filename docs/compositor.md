@@ -44,6 +44,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/decorations/` | Server-side decorations (lot D-08): who gets one (`protocol.rs`), the frame and its bar, the pointer on the bar and its buttons, the bar drawn into a texture (`raster.rs`) |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
 | `src/shaders/` | The three GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag` |
@@ -74,7 +75,8 @@ Behavior:
 - The gesture key is Super in a real session (lot D-14), and Alt in nested mode (`--nested`): the
   host session keeps Super for itself (under Plasma, the KWin window actions and the launcher).
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
-- Windows draw their title bar themselves: xdg-decoration is out of the lot.
+- Windows that ask for it get their title bar from the compositor (lot D-08, see
+  "Server-side decorations"); the others draw their own.
 - The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
   `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
   `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
@@ -112,6 +114,16 @@ Snapping:
   its first content, the client chooses its size. Resizing it removes the maximized or snapped
   state, and it starts from its current size.
 - A window snapped by a drop returns, when leaving its zone, to its place from before the drag.
+- Some clients leave the maximized state themselves (`xdg_toplevel.unset_maximized`, or
+  `_NET_WM_STATE` for X11) when their title bar is pulled, before or after asking for the move.
+  While the window is dragged, it then comes off under the pointer at its previous size, as a
+  move takes it out (`State::client_unmaximize`, lot D-18d). Dragged means a move of this
+  window, or a button held on it, with the pointer past the drag threshold (4 px) from the
+  press. Before, it went back to its place from before it was maximized, the pointer far from
+  it, and the move went on from there. Otherwise an unmaximize gives the window back its place:
+  a double click on a title bar the client draws (GTK 4 unmaximizes at the second press, the
+  pointer still) restores it, and a move that has not shifted the window yet goes on from that
+  place.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -126,8 +138,10 @@ Snapping:
 - Maximized is the xdg-shell `maximized` state, which the client knows about. A half or a
   quarter is only an imposed size: the `tiled` states are not sent.
 - Zones are taken from the work area of a screen: what the exclusive zones of anchored surfaces
-  leave (see below). A maximized or snapped window never covers the bar or the dock; a
-  fullscreen one covers the whole screen. Dropped by a drag, a window snaps on the screen under
+  leave (see below). A maximized or snapped window never covers the bar, nor the dock while it
+  keeps its zone; a fullscreen one covers the whole screen. Since lot D-18d the dock hides for
+  a snapped window as for a maximized one (`docs/dock.md`, Hiding): it gives up its zone, and
+  the snapped window takes the whole height below the bar, still 8 from the edges. Dropped by a drag, a window snaps on the screen under
   the pointer, against that screen's edges. A shortcut or a client request acts on the window's
   screen, the one under its center. Along the edge that two screens share, both edges snap:
   dragging a window from one screen to the other shows the preview of each side in turn.
@@ -297,9 +311,14 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
-- **Screens.** `output` gives, for each screen by its `wl_output` name, `maximized` and
-  `fullscreen` when such a window, not minimized and on the active workspace, is on it: what
-  the bar of lot D-18b reacts to.
+- **Screens.** `output` gives, for each screen by its `wl_output` name, `maximized`,
+  `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
+  on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
+  (all three, lot D-18d).
+- **Versions.** The global is offered at version 2 (lot D-18d), which adds `snapped` to the
+  states of a screen. A client that binds version 1 (the bar) never receives it: a screen with
+  only a snapped window is an empty state for it, as before. A toplevel has the version of its
+  manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -490,6 +509,10 @@ ordinary socket, and a shell program.
   gives its zone back (0): the window grows from 524 to 600 the same way. Snapped left above the
   dock, a window is 388 × 508 in (8, 8), keeps its corners, and takes 400 × 524 once the gap is
   set to 0.
+- **Snapped and the dock** (lot D-18d). A window snapped left above a dock covers its screen
+  with `snapped` for a manager of version 2, while a second shell client bound at version 1
+  sees an empty state; the dock gives up its zone and the half becomes 388 × 584 in (8, 8);
+  restored, the screen is uncovered.
 - **Frame callbacks.** A shown window gets one at every frame; minimized, none at 17 and 484 ms,
   one after a second.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
@@ -757,7 +780,8 @@ front to back, as Smithay expects them:
 1. anchored surfaces of the overlay and top layers, each with its menus in front;
 2. the snap preview: translucent green rounded rectangle, 2 px green border;
 3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
-   scaled), its border, its clipped content, its shadow;
+   scaled), its border, its title bar if the compositor draws it, its clipped content, its
+   shadow;
 4. anchored surfaces of the bottom and background layers;
 5. the wallpaper, or without one the three background discs (see "Wallpapers");
 6. the desktop color, which fills the rest.
@@ -894,6 +918,93 @@ drawn in the previous frame.
   Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
+
+## Server-side decorations (lot D-08)
+
+The compositor draws the title bar and the three buttons of the windows whose application
+leaves its decoration to it, in the style of the boards: Konsole and the other Qt and KDE
+applications no longer show Qt's fallback decoration, and X11 windows get a frame. The code is
+in `src/decorations/`; colors, measures and the double click delay in `sherlock_ui::decorations`.
+
+**Who gets one.**
+
+| Client | Protocol | Result |
+| --- | --- | --- |
+| Qt 6 (Konsole, KWrite) | `zxdg_decoration_manager_v1`, asks for `server_side` | Our bar |
+| GTK 3 without a header bar, Qt 5 of KDE | `org_kde_kwin_server_decoration_manager` | `Server`, the default mode: our bar |
+| Chromium, Evidence (winit, `decorations: false`) | xdg-decoration, `set_mode(client_side)` | Their own: no second bar |
+| Firefox (GTK 3, tabs in its title bar) | KDE's protocol, asks for `Client` | Its own |
+| GTK 4, libadwaita (Zenity) | Neither | Its own |
+| X11 window (xterm, xeyes, Konsole on X11) | `_MOTIF_WM_HINTS`, window type | A bar, unless it asks for none (Firefox on X11), places itself (override-redirect), or is a menu, tooltip, notification or splash screen |
+
+Tried on the author's machine (Debian 13, Qt 6.8.2, GTK 4.18.6, GTK 3.24.49), with the compositor
+running without a screen: each application above asked what the table says. Electron was not
+tried: none is installed.
+
+A new xdg decoration, or one whose client drops its preference (`unset_mode`), gets
+`server_side`; a client that asks for `client_side` keeps it: the compositor only forces its bar
+on clients that let it. The mode goes with the next configure. A window that gains or loses its
+bar while maximized or snapped is placed again.
+
+**Geometry.** The space keeps the geometry of the content, the one the client knows. The bar
+sits above it: 42 pixels, the window border (1), the bar (40) and its divider (1), as on the Main
+board. The whole window, the frame, is the content and its bar: it is what gets centered,
+maximized and snapped (the content takes the zone but the top 42), what the grab band surrounds,
+and what the corners, the border, the shadow and the clip of the content go around. A fullscreen
+window has no bar. Maximized, its corners are square (D-18c1), the bar included.
+
+**Look.** Like the title bar of Evidence and the boards: `title_bar` background, rounded top
+corners, `divider` line under it; the title on the left from 15 (border and padding of 14), Inter
+13 semibold in `text_primary`, cut with an ellipsis before the buttons; the pill (`controls`,
+radius 9, padding 2) of three buttons of 28 by 24 (radius 7, 2 apart), 9 from the right edge,
+with the icons of `sherlock_ui::icon` (14 px, stroke 1.7, `text_secondary`). A button under the
+pointer takes `hover`, held down `pressed`. Maximized, the maximize button shows the restore icon
+(`decorations::RESTORE_ICON`). The colors are those of the active palette: the compositor makes
+the theme of the appearance file active at start and follows it (`decorations::follow_theme`),
+without the fade of the shell programs.
+
+**Behavior.**
+
+- A click on a button minimizes, maximizes or restores, or asks the application to close
+  (`xdg_toplevel.close`, `WM_DELETE_WINDOW`). It acts on release, if the pointer is still on it.
+- A double click on the bar (two presses within 400 ms, `decorations::DOUBLE_CLICK`, less than
+  4 pixels apart) maximizes, or gives back the previous place.
+- Dragging the bar moves the window, with the snapping of every move: dropped at the top, it is
+  maximized; pulled out of a zone, it gets its size back with the pointer on its bar.
+- The client sees none of these presses. The cursor over the bar is the arrow.
+- A right click does nothing yet: the menu (minimize, maximize, always on top, move to a
+  workspace, close) is a follow-up.
+
+**Drawing and damage.** The bar is drawn on the processor into one texture (`raster.rs`):
+tiny-skia fills the shapes and strokes the icons, ab_glyph lays out and rasterizes the title.
+Both crates were already built into the compositor (smithay's winit backend pulls them, through
+sctk-adwaita): nothing new is compiled. cosmic-text, which iced uses, would shape and fall back
+on other fonts, but it is not in the compositor and its font system is much heavier for one line
+of text. ab_glyph kerns without shaping: enough for the scripts Inter covers. A glyph Inter lacks
+(CJK, emoji) shows as a box.
+
+The texture depends on its `Look`: size in pixels, scale, radius, title, buttons lit, colors.
+Each frame builds the look; the texture is made again only when it changes (a title, a hover,
+a resize, the corners while maximizing), one per window and scale. Its element keeps its
+identity under `Part::TitleBar` (see "Damage"), so a bar that did not change is not drawn
+again, and nothing is drawn at rest. Its opaque region is the bar but its top corners.
+
+**Tests.** `decorations` (unit): the buttons sit at their place of the Main board, the pointer
+finds them. `raster` (unit): the window icons are read, a long title ends with an ellipsis.
+`tests/headless.rs`: a client asking through xdg-decoration gets `server_side`, then
+`client_side` when it asks, KDE's protocol answers `Server`; a drag of the bar moves the window,
+a double click maximizes it under its bar (800 by 558), the restore button gives back its place,
+a drop at the top maximizes, a press that leaves its button does nothing, minimize then close.
+`tests/xwayland.rs`: the X11 window has its bar (content 42 lower, maximized at 42), the menu
+has none, `_MOTIF_WM_HINTS` without decorations removes it. `tests/perf.rs`: the ten windows of
+the bench have the bar; hovering a button redraws that bar only, and nothing at rest.
+`captures_of_a_decorated_window` (ignored, needs Mesa's EGL) renders the scene into a texture
+with the software renderer and writes `screenshots/decorations-dark.png` and
+`decorations-light.png`:
+
+```sh
+cargo test -p compositor --test headless -- --ignored captures_of_a_decorated_window
+```
 
 ## Wallpapers
 
@@ -1291,7 +1402,8 @@ it.
    ```
 
    Or the whole session, as the login screen starts it:
-   `NOM_OS_BIN=$PWD/target/release desktop/compositor/session/sherlockos-session`.
+   `NOM_OS_BIN=$PWD/target/release NOM_OS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
+   (`NOM_OS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
    With `--xwayland` after `compositor` (`NOM_OS_XWAYLAND=1` for the script), X11 applications
    too, at the risk of waking the NVIDIA card (see above).
 
@@ -1310,20 +1422,63 @@ running them:
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
   launcher find it; it runs `evidence`, which the session finds in its `PATH`;
+- the application icons, a hicolor theme, go to `/usr/local/share/nom-os/icons/` (D-03);
 - `sudo apt install libseat1` is added when libseat is missing.
 
 At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
 adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there), then launches the compositor, which launches the bar, the dock and the notification
-daemon once it is ready. They start again when they stop (ADR 0005), as long as the compositor
+there) and `/usr/local/share/nom-os` at the start of `XDG_DATA_DIRS` (the icons), then
+launches the compositor, which launches the bar, the dock and the notification daemon once it
+is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
 up, with a line in the log (`session: … given up`).
-To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
+To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/local/share/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
 shell built from this workspace, and are tried on the author's Debian before the base exists.
 The package recipes of `distro/` will install them from here.
+
+### D-Bus session bus (lot D-18d)
+
+Started from a text console while Plasma stays open on another one, the session used to share
+Plasma's D-Bus session bus (`/run/user/1000/bus`: one bus per user, whatever the session).
+Konsole then took 25 to 50 seconds to show its window. The cause, found without a screen:
+
+- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `NOM_OS` it takes the generic
+  theme, which gives each window a D-Bus global menu (`QDBusMenuBar`) as soon as the name
+  `com.canonical.AppMenu.Registrar` has an owner on the bus. On the author's bus it does:
+  `kded6`, the appmenu module of the X11 Plasma session (checked by asking the bus daemon for
+  the owner of the name; nothing was sent to `kded6`).
+- The window registers with `RegisterWindow` and waits for the answer (`waitForFinished`): the
+  default timeout of D-Bus, 25 seconds, then `UnregisterWindow` when it closes. The log of the
+  author's session showed `Failed to register window menu, reason:
+  org.freedesktop.DBus.Error.NoReply`.
+- Reproduced on a private bus with a headless KWin (`kwin_wayland --virtual`), Konsole 25.04.2
+  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=NOM_OS`: with a registrar that never answers (a script that
+  owns the name), the window had no content after 40 s and Konsole logged the same `NoReply`;
+  without the registrar, its first content came 0.42 s after the start, and Konsole made no
+  other call that waits on Plasma.
+
+The shared bus breaks other things too: the notification daemon finds
+`org.freedesktop.Notifications` taken by Plasma and stops (`docs/notifications.md`), and an
+application that keeps a single instance through the bus may open its window in the Plasma
+session instead (not tried). So `sherlockos-session` starts the session on a bus of its own
+(`dbus-run-session`) when logind lists another graphical session (type `x11`, `wayland` or
+`mir`, not closing) of the same user; the session it runs in does not count. The traffic was
+read with `dbus-monitor` on the private bus only: the author's bus is never listened to. Once the
+compositor is ready, `dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY` gives the
+display to the services the bus starts (the portals): without it, on a private bus, the
+portal started by Konsole crashed again and again, and Konsole waited 9 seconds for it. With
+it, 0.42 s. Alone on the machine (the OS itself, or Plasma logged out), the session keeps the
+user's bus.
+
+`NOM_OS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
+`session: D-Bus session bus of its own` when the session has one. Not chosen: disabling the
+global menu alone (Qt's generic theme has no switch for it; `KDE_NO_GLOBAL_MENU` only exists
+for Plasma's theme, which the Qt theme batch may pick), since it would leave the notification
+daemon and the single-instance applications in the other session. Not checked yet: the
+session started from SDDM while Plasma runs on another console, which takes the same path.
 
 ### When something goes wrong
 
@@ -1751,6 +1906,14 @@ The tests in `tests/headless.rs`:
   dragged afterwards is drawn under the pointer on every frame. Snapped left twice in a row,
   then resized by its band, it is drawn at its new size. Snapped then pulled out by dragging it
   fast, it stays under the pointer.
+- **Pulled out, it stays where it is dropped** (lot D-18d). Maximized, then snapped left, above
+  a dock of 76 that then hides (zone -1): pulled by its title bar, the window comes off at
+  100 × 80 under the pointer and stays where it is let go, also once the dock takes its zone
+  back; drawn at its place on every frame. A client that unmaximizes itself while its title
+  bar is dragged 14 px, before or after asking for the move, comes off under the pointer and
+  ends in (370, 190) after a drag to (420, 200), not from (350, 260) where it was before being
+  maximized (this test failed before the fix). A double click on its title bar, the client
+  unmaximizing at the second press without a move, puts it back in (350, 260).
 
 The integration test runs the compositor and the client in the same thread, over a pair of Unix
 sockets: it depends neither on a screen nor on `XDG_RUNTIME_DIR`. It loads `libwayland-client`

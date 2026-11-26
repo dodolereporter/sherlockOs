@@ -35,10 +35,11 @@ pub const SEPARATOR_MARGIN: f32 = 2.0;
 /// Room left on each side of the widest magnified dock, so that the label of an icon at the
 /// edge still fits in the surface.
 pub const SURFACE_SLACK: f32 = 52.0;
-/// The Sherlock logo in its tile, as a share of the tile: the ring of the logo in its square.
-pub const SHERLOCK_GLYPH_RATIO: f32 = 0.62;
 /// Initial of an application without icon, as a share of the tile.
 pub const LETTER_RATIO: f32 = 0.42;
+/// Scale the icon files are looked up for, as in the launcher: a scalable icon is drawn at the
+/// screen's own size, a fixed one is sharp on a scale 2 screen and scaled down on the others.
+pub const ICON_SCALE: u32 = 2;
 
 /// Dock menu (Menus board): width, gap above the bar, height of the header with the
 /// application name.
@@ -112,8 +113,6 @@ pub const HIDE_SPRING: Spring = motion::TOP_BAR_SPRING;
 // Colors. The dock bar, its label, dots and separator take the palette shown
 // (`theme::palette`); the tiles keep their colors in both themes (`docs/design/THEME-CLAIR.md`).
 
-/// Tile of the Sherlock icon: the night blue square of the color logo.
-pub const SHERLOCK_TILE: Color = Palette::DARK.desktop;
 /// Tile of an application whose icon is not found, and its initial (the « Fichiers » tile of the board).
 pub const FALLBACK_TILE: Color = Palette::DARK.blue_dark;
 pub const FALLBACK_LETTER: Color = Palette::DARK.cream;

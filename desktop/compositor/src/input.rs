@@ -14,7 +14,9 @@ use smithay::{
     desktop::{Window, WindowSurfaceType},
     input::{
         keyboard::{FilterResult, Keycode, Keysym, ModifiersState},
-        pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent},
+        pointer::{
+            AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, GrabStartData, MotionEvent,
+        },
     },
     output::Output,
     reexports::{
@@ -30,6 +32,7 @@ use smithay::{
 
 use crate::{
     State,
+    decorations::{self, Control},
     handlers::{Arrangement, is_fullscreen, is_maximized},
     is_override_redirect,
     layout::{self, Edges, Resize, Zone},
@@ -37,7 +40,7 @@ use crate::{
 };
 
 // Button codes, taken from linux/input-event-codes.h.
-const BTN_LEFT: u32 = 0x110;
+pub(crate) const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
 /// Gesture key of the compositor. Super in a real session. In nested mode, the host session
@@ -66,6 +69,8 @@ pub(crate) enum GestureSource {
     Border,
     /// Client request: `xdg_toplevel.move` or `xdg_toplevel.resize`.
     Client,
+    /// Drag of the title bar the compositor draws (lot D-08).
+    TitleBar,
 }
 
 /// Gesture in progress: the compositor moves or resizes a window.
@@ -94,6 +99,8 @@ pub(crate) enum Hit {
     Surface(Window, WlSurface, Point<f64, Logical>),
     /// The grab band around a window, and the edges it pulls.
     Border(Window, Edges),
+    /// The title bar the compositor draws above a window, or one of its buttons.
+    Decoration(Window, Control),
     /// An anchored surface (or one of its menus or subsurfaces): its main surface, the surface
     /// hit and the position of its origin.
     Layer(WlSurface, WlSurface, Point<f64, Logical>),
@@ -333,12 +340,97 @@ impl State {
         let size = (!restore.size.is_empty()).then_some(restore.size);
         self.request_size(&gesture.window, size);
         if let Some(size) = size {
-            let loc = layout::unsnapped(gesture.initial, size, gesture.start);
+            // The pointer keeps its place in the whole window, title bar included.
+            let inset = decorations::inset(&gesture.window);
+            let frame = decorations::frame(&gesture.window, gesture.initial);
+            let whole = Size::from((size.w, size.h + inset));
+            let loc = layout::unsnapped(frame, whole, gesture.start) + Point::from((0, inset));
             gesture.initial = Rectangle::new(loc, size);
             self.move_window(&gesture.window, loc, true);
         }
         gesture.floating = Rectangle::new(gesture.initial.loc, restore.size);
         if let Some(toplevel) = gesture.window.toplevel() {
+            toplevel.send_pending_configure();
+        }
+    }
+
+    /// The client leaves the maximized state itself (`unset_maximized`, or `_NET_WM_STATE` for
+    /// X11). Some clients do so when their title bar is pulled, before or after asking for the
+    /// move: while the window is being dragged, it comes off under the pointer at its previous
+    /// size, as a move takes it out, instead of going back to its place from before it was
+    /// maximized (lot D-18d). Dragged means a move of this window (the client's or the gesture
+    /// key's) or a button held on it, with the pointer past the drag threshold from the press:
+    /// a double click on a title bar that the client draws (GTK 4 unmaximizes at the second
+    /// press) restores the window to its place, as any other unmaximize does.
+    pub(crate) fn client_unmaximize(&mut self, window: &Window) {
+        if self.dragged(window) {
+            match self.gesture.take() {
+                Some(mut gesture) => {
+                    self.detach_for_move(&mut gesture);
+                    self.gesture = Some(gesture);
+                }
+                None => self.detach_held(window),
+            }
+            return;
+        }
+        self.rearrange(window, |a, zone| {
+            a.maximized = false;
+            zone.set(None);
+        });
+        // A move that has not shifted the window yet goes on from its restored place.
+        if let Some(gesture) = self.gesture.as_mut().filter(|g| g.window == *window)
+            && let Some(rect) = self.space.element_geometry(window)
+        {
+            gesture.initial = rect;
+        }
+    }
+
+    /// `window` is being dragged: a move of it, or a button held on it, and the pointer past
+    /// the drag threshold from where the button was pressed.
+    fn dragged(&self, window: &Window) -> bool {
+        let Some(pointer) = self.seat.get_pointer() else {
+            return false;
+        };
+        let start = match &self.gesture {
+            Some(gesture) if gesture.window == *window && gesture.edges.is_none() => {
+                Some(gesture.start)
+            }
+            Some(_) => None,
+            None => self.held_from(window).map(|start| start.location),
+        };
+        start.is_some_and(|start| {
+            let delta = pointer.current_location() - start;
+            delta.x.hypot(delta.y) >= f64::from(ui::DRAG_THRESHOLD)
+        })
+    }
+
+    /// The press that holds a button on `window`, if one does.
+    fn held_from(&self, window: &Window) -> Option<GrabStartData<State>> {
+        let pointer = self.seat.get_pointer().filter(|p| p.is_grabbed())?;
+        let start = pointer.grab_start_data()?;
+        let focus = start.focus.as_ref().map(|(focus, _)| focus);
+        let own = smithay::wayland::seat::WaylandFocus::wl_surface(window);
+        (focus.is_some() && focus == own.as_deref()).then_some(start)
+    }
+
+    /// A window held by a button and dragged, before the client asks for the move: it comes
+    /// off under the point where the button was pressed, at its previous size.
+    fn detach_held(&mut self, window: &Window) {
+        let Some(start) = self.held_from(window) else {
+            return;
+        };
+        let current = self.space.element_geometry(window);
+        let Some(restore) = leave_arrangement(window) else {
+            return;
+        };
+        window_data(window).motion.borrow_mut().follow();
+        let size = (!restore.size.is_empty()).then_some(restore.size);
+        self.request_size(window, size);
+        if let (Some(size), Some(current)) = (size, current) {
+            let loc = layout::unsnapped(current, size, start.location);
+            self.move_window(window, loc, false);
+        }
+        if let Some(toplevel) = window.toplevel() {
             toplevel.send_pending_configure();
         }
     }
@@ -445,9 +537,14 @@ impl State {
             if let Some((surface, origin)) = under {
                 return Some(Hit::Surface(window.clone(), surface, origin.to_f64()));
             }
+            if let Some(control) = self.decoration_at(window, pos) {
+                return Some(Hit::Decoration(window.clone(), control));
+            }
+            // The band surrounds the whole window, its title bar included.
             let edges = self
                 .space
                 .element_geometry(window)
+                .map(|r| decorations::frame(window, r))
                 .filter(|r| {
                     !r.size.is_empty() && !is_fullscreen(window) && !is_override_redirect(window)
                 })
@@ -595,9 +692,15 @@ impl State {
         // During a gesture, no client has the pointer.
         let under = if self.gesture_active() {
             self.update_gesture(location);
+            self.hover_decoration(None);
             None
         } else {
-            match self.hit(location) {
+            let hit = self.hit(location);
+            self.hover_decoration(match &hit {
+                Some(Hit::Decoration(window, control)) => Some((window.clone(), *control)),
+                _ => None,
+            });
+            match hit {
                 Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin)) => {
                     Some((surface, origin))
                 }
@@ -649,6 +752,9 @@ impl State {
             }
             return;
         }
+        if state == ButtonState::Released && button == BTN_LEFT {
+            self.release_decoration(location);
+        }
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
             let hit = self.hit(location);
             // An open menu closes on a click on another client; the click still goes through.
@@ -664,7 +770,9 @@ impl State {
                 }
             }
             let window = match &hit {
-                Some(Hit::Surface(window, ..) | Hit::Border(window, _)) => Some(window.clone()),
+                Some(
+                    Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
+                ) => Some(window.clone()),
                 Some(Hit::Layer(layer, ..)) => {
                     self.click_layer(layer);
                     pointer.button(self, &event);
@@ -682,6 +790,17 @@ impl State {
             self.focus(window.clone());
             let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
             let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
+            // The title bar and its buttons: the client does not see the press.
+            if let (false, Some(Hit::Decoration(window, control))) = (held, &hit) {
+                self.press_decoration(window.clone(), *control, button, (location, time));
+                if self.gesture_active() {
+                    self.pointer_motion(location, time);
+                    return;
+                }
+                pointer.button(self, &event);
+                pointer.frame(self);
+                return;
+            }
             let gesture = match (button, held, hit) {
                 // Gesture key + button: the client does not see the press.
                 (BTN_LEFT, true, _) => Some((None, GestureSource::Modifier)),

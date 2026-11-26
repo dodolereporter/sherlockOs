@@ -33,7 +33,7 @@ Surface):
 | Neighbours | Pushed by the flex layout | The bar widens on both sides, the gap of 8 stays |
 | Label | Cream pill 108 above the bar, the icon closest to the pointer, `opacity 120ms` | Same, centered on the icon, faded in 120 ms |
 | Dot | 5, cream, 9 below the icon | Same; green for the active application (see Differences) |
-| Sherlock | In the middle | In the middle, the color logo on its night blue tile |
+| Sherlock | In the middle | In the middle, the author's Sherlock tile (D-03) |
 
 ## Architecture
 
@@ -47,7 +47,7 @@ Surface):
 | `watch.rs` | Reloading the configuration when its file changes (inotify) |
 | `menu.rs` | Entries of an icon's menu, size of its surface, keyboard keys |
 | `entry.rs` | Key files and desktop entries: name, icon, `Exec`, « new window » action, window class |
-| `icons.rs` | Icon lookup in the themes, `hicolor`, then `pixmaps` |
+| `icons.rs` | Icon lookup through `icon-theme`: the themes, `hicolor`, then `pixmaps` |
 | `config.rs` | Default pinned applications |
 | `launch.rs` | Starting an application without a shell |
 | `windows.rs` | Open windows behind the `Source` trait, acting on them behind `Control`: placeholder, `zwlr_foreign_toplevel_manager_v1`, and the choice between the sources |
@@ -92,10 +92,17 @@ above the bar. The keyboard comes on demand (`OnDemand`), on a click
 into the dock, for its keyboard navigation.
 
 The surface is taller and wider than the bar: the magnified icons grow above the bar (88 at
-most, 101 above the bottom), the label sits 108 above it, and the widest magnified bar needs
-room on the sides. `layout::surface_size` computes it from the number of icons: the widest bar
-over every pointer position, plus `dock::SURFACE_SLACK` (52) on each side for the label, by
-the label's top in height (132), plus the gap of 8 (140). With five icons: 529 by 140.
+most, 101 above the bottom), the label sits 108 above it, an icon bounces above its place
+(see Animations), and the widest magnified bar needs room on the sides.
+`layout::surface_size` computes it from the number of icons: the widest bar over every pointer
+position, plus `dock::SURFACE_SLACK` (52) on each side for the label; in height, the farther of
+the label's top (132) and the top of the highest bounce (`Geometry::bounce_reach`), plus the
+gap of 8. The highest bounce is that of the icon under the pointer, magnified, past the 7.8 %
+overshoot of its spring, lifted by half its side: 13 + 52 × 1.7 × 1.078 × 1.5 = 156. With five
+icons: 529 by 164. Before lot D-18d the surface stopped at the label (140 deep), and an icon
+clicked under the pointer bounced out of its top: its upper part was cut. Only the surface
+grows for the bounce: the exclusive zone stays 84, and the input region never reaches past the
+label (the 24 pixels above it let clicks through).
 
 **Input region.** The surface only takes the pointer where the dock is
 (`Geometry::input_region`, sent with `wl_surface.set_input_region`, rounded out to whole
@@ -138,20 +145,22 @@ wl_surface#28.set_input_region(wl_region#41)
 
 | Mode | The dock |
 | --- | --- |
-| `smart` (default) | Shown with its exclusive zone, except while a maximized or fullscreen window is on its screen |
+| `smart` (default) | Shown with its exclusive zone, except while a maximized, fullscreen or snapped window is on its screen |
 | `always` | Hidden, without exclusive zone |
 | `never` | Always shown, with its exclusive zone |
 
-Whether a maximized or fullscreen window is on the dock's screen comes from the `output` event
-of `sherlock_shell_v1` (only the windows of the active workspace count), matched by name with
-the screen iced_exwlshell reports for the dock's surface. A window on another screen changes
+Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
+screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
+(only the windows of the active workspace count), matched by name with the screen
+iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
-- **A window is maximized.** The dock gives up its exclusive zone at once: -1, so that the
-  compositor places it against the screen edge itself, never against what another surface
+- **A window is maximized or snapped.** The dock gives up its exclusive zone at once: -1, so
+  that the compositor places it against the screen edge itself, never against what another surface
   reserves (a dock at the top would otherwise hide under the top bar's zone, its band below
   the bar). The compositor gives the maximized window the whole screen below the bar, the
-  dock's room included (recomputing that geometry is batch D-18c1). Then the dock slides off
+  dock's room included (recomputing that geometry is batch D-18c1), and a snapped one the
+  whole height below the bar, 8 from the edges (lot D-18d). Then the dock slides off
   the screen with the spring of the top bar (`dock::HIDE_SPRING`): only its margin moves, from
   0 to `HIDE_STRIP − depth`, one commit per whole pixel. Hidden, `HIDE_STRIP` (2) pixels of the
   surface stay on the screen, its side away from the edge; its input region shrinks to that
@@ -165,8 +174,8 @@ nothing; a screen not known yet counts as uncovered.
   pointer came back, a menu is open or an icon is held. While a menu is open or an icon held,
   nothing counts and no frame is asked for; the delay starts when the menu closes or the icon
   is let go.
-- **No maximized window any more.** The dock slides back, and takes its exclusive zone again
-  once in place: the compositor reserves the zone plus the margin, negative while the dock is
+- **No maximized nor snapped window any more.** The dock slides back, and takes its exclusive
+  zone again once in place: the compositor reserves the zone plus the margin, negative while the dock is
   still sliding in, so the zone waits for the margin to be 8 again.
 
 Frames are asked for while the dock slides and while it waits to hide. On the left and right
@@ -240,12 +249,15 @@ default roles, its open windows and « Nouvelle fenêtre », and this batch may 
 dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
 (and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
 
-Icons are looked up as the Icon Theme specification says, without the cache file: in the theme
-of `IconTheme` in the configuration, else the GTK one (`gtk-icon-theme-name` in
-`$XDG_CONFIG_HOME/gtk-3.0/settings.ini`, which Plasma writes too), with the themes it inherits,
-then `hicolor`, then `pixmaps`. In each theme, the `Applications` directory closest to 88 (a
-magnified icon) wins. An absolute `Icon` is taken as it is. Without an icon, the initial of the
-name on a blue tile.
+Icons are looked up by the shared `icon-theme` crate (`docs/icon-theme.md`, since D-03), as
+the Icon Theme specification says, without the cache file: in the theme of `IconTheme` in the
+configuration, else the user's (`gtk-icon-theme-name` in `$XDG_CONFIG_HOME/gtk-3.0/settings.ini`,
+which Plasma writes too, else Plasma's `kdeglobals`), with the themes it inherits, then
+`hicolor`, then `pixmaps`. Only the `Applications` directories count; the one that fits a
+magnified icon (88 by default) on a scale 2 screen (`dock::ICON_SCALE`) wins, else the closest.
+A scalable icon is then drawn at the size and scale of the screen. An absolute `Icon` is taken
+as it is. Without an icon, the initial of the name on a blue tile. Our applications' icons are
+in the hicolor theme of sherlock-ui (`docs/sherlock-ui.md`, Application icons).
 
 SVG and PNG both go through tiny-skia's SVG renderer: a PNG is drawn through a small SVG that
 embeds it by path. iced's `image` feature would add the `image` crate and its decoders; resvg
@@ -702,6 +714,12 @@ X focus): the keyboard steps were checked in the nested KWin.
   before, a menu holds it; `always` hidden from the start, `never` never; the icon rectangles
   on the screen, Sherlock owning no window, unchanged while the pointer magnifies or the dock
   hides, sent again when an icon comes.
+- **Bounce room** (`layout.rs`, lot D-18d): on the four edges, with icons of 52 magnified 1.7
+  times, of 96 magnified 2 times and of 32 without magnification, the icon under the pointer,
+  its spring at its peak, at the top of its bounce, fits whole in the surface; the input
+  region does not grow for it; 164 deep at the bottom by default.
+- **Snapped windows** (`tests/shell.rs`): a screen with the `snapped` state counts as covered,
+  like a maximized one.
 - **Pinned order** (`dock-config`): `move_pinned` before another id, at the end, unchanged.
 - **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, on
   the left edge, with an open application after the separator, and of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning
@@ -712,11 +730,16 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Glass, blur, shadow**: the glass is a translucent tint on black (opaque software surfaces,
   see Surface); blur is the compositor's job; the board's shadow (`0 18px 44px`) would overflow
   the surface: not drawn.
-- **Application icons**: the board draws our applications as line glyphs on colored tiles; they
-  do not exist yet. Installed applications show their theme icon as it is, without a tile.
-- **Sherlock**: the board shows the mascot on a cream tile. Until Sherlock has its icon, the
-  dock shows the color logo of `sherlock-ui` on its night blue tile at the dock radius (27 %),
-  since the cream dot of the logo would vanish on cream.
+- **Application icons**: the board draws our applications as line glyphs on colored tiles.
+  Since D-03 they are the author's icons, found in the hicolor theme of sherlock-ui; their tiles
+  have a radius of 22 % where the board has 27 %. Other applications show their theme icon as
+  it is, without a tile.
+- **Sherlock**: the board shows the mascot on a cream tile; since D-03 the dock draws the
+  author's Sherlock tile, which shows it so.
+
+![The dock with our application icons](../desktop/dock/screenshots/dock-app-icons.png)
+
+![Magnified over Sherlock](../desktop/dock/screenshots/dock-app-icons-hover.png)
 - **Active application**: the board draws only open ones. The dot of the active one takes the
   green of the active state.
 - **Label position**: the board's script puts it at `(i + 0.5) / n` of the bar width, which only

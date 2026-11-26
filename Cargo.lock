@@ -570,16 +570,20 @@ dependencies = [
 name = "compositor"
 version = "0.0.0"
 dependencies = [
+ "ab_glyph",
+ "appearance-config",
  "desktop-config",
  "image",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
  "thiserror 2.0.21",
+ "tiny-skia",
  "tracing",
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "x11rb",
  "xcursor",
@@ -834,6 +838,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "libc",
  "shell-protocol",
  "sherlock-ui",
@@ -3298,6 +3303,7 @@ dependencies = [
  "iced_renderer",
  "iced_runtime",
  "iced_test",
+ "resvg",
  "wgpu",
 ]
 
