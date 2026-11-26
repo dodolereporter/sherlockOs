@@ -9,7 +9,8 @@ use sherlock_ui::window as ui;
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
+        SwitchToggleEvent,
     },
     desktop::{Window, WindowSurfaceType},
     input::{
@@ -716,6 +717,7 @@ impl State {
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
+        self.note_input();
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -883,6 +885,7 @@ impl State {
                 self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event } => {
+                self.note_input();
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
@@ -900,13 +903,25 @@ impl State {
                 pointer.axis(self, frame);
                 pointer.frame(self);
             }
-            event => self.gesture_event(event),
+            // The lid closed: the session locks, whether logind puts the machine to sleep for
+            // it or not (lot D-25a3).
+            InputEvent::SwitchToggle { event } => {
+                if event.switch() == Some(Switch::Lid) && event.state() == SwitchState::On {
+                    tracing::info!("lid closed: the session locks");
+                    self.lock_session();
+                }
+            }
+            event => {
+                self.note_input();
+                self.gesture_event(event);
+            }
         }
     }
 
     /// The pointer is at `location`. Entry point of every backend, and of the tests.
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         self.queue_redraw();
+        self.note_input();
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -955,6 +970,7 @@ impl State {
     /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         self.queue_redraw();
+        self.note_input();
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;

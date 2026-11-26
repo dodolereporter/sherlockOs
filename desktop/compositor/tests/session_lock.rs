@@ -819,4 +819,183 @@ mod tests {
             assert!((height - 24.0).abs() <= 1.0, "{output:?}: {height}");
         }
     }
+
+    #[test]
+    fn the_session_locks_after_the_delay_without_input() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        // Never: a second and a half without input leaves it unlocked.
+        h.state.set_idle_lock(None);
+        let start = std::time::Instant::now();
+        h.run_until("a while", |_| start.elapsed() > Duration::from_millis(1500));
+        assert!(!h.state.is_locked());
+        h.state.set_idle_lock(Some(Duration::from_millis(300)));
+        h.run_until("the lock after the delay", |h| h.state.is_locked());
+    }
+
+    /// A private bus with a fake logind: its manager answers `GetSessionByPID` and `Inhibit`
+    /// (one end of a pipe; the other is kept, to see when the compositor lets it go).
+    struct FakeLogind {
+        daemon: std::process::Child,
+        address: String,
+        connection: zbus::blocking::Connection,
+        _dir: std::path::PathBuf,
+    }
+
+    impl Drop for FakeLogind {
+        fn drop(&mut self) {
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+            let _ = std::fs::remove_dir_all(&self._dir);
+        }
+    }
+
+    struct Manager(std::sync::Arc<std::sync::Mutex<Vec<std::io::PipeReader>>>);
+
+    const SESSION: &str = "/org/freedesktop/login1/session/test";
+
+    #[zbus::interface(name = "org.freedesktop.login1.Manager")]
+    impl Manager {
+        #[zbus(name = "GetSessionByPID")]
+        fn get_session_by_pid(&self, _pid: u32) -> zbus::zvariant::OwnedObjectPath {
+            SESSION.try_into().unwrap()
+        }
+
+        fn inhibit(
+            &self,
+            what: String,
+            _who: String,
+            _why: String,
+            mode: String,
+        ) -> zbus::zvariant::OwnedFd {
+            assert_eq!((what.as_str(), mode.as_str()), ("sleep", "delay"));
+            let (reader, writer) = std::io::pipe().unwrap();
+            self.0.lock().unwrap().push(reader);
+            std::os::fd::OwnedFd::from(writer).into()
+        }
+    }
+
+    fn fake_logind(name: &str) -> FakeLogind {
+        use std::io::BufRead as _;
+        let dir = std::env::temp_dir().join(format!("lock-logind-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("bus.conf");
+        std::fs::write(
+            &config,
+            format!(
+                "<busconfig><type>system</type><listen>unix:dir={}</listen>\
+                 <auth>EXTERNAL</auth><policy context=\"default\">\
+                 <allow send_destination=\"*\" eavesdrop=\"true\"/><allow eavesdrop=\"true\"/>\
+                 <allow own=\"*\"/></policy></busconfig>",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        let mut daemon = std::process::Command::new("dbus-daemon")
+            .arg(format!("--config-file={}", config.display()))
+            .args(["--nofork", "--print-address"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("dbus-daemon (package dbus-daemon) is needed by these tests");
+        let mut address = String::new();
+        std::io::BufReader::new(daemon.stdout.take().unwrap())
+            .read_line(&mut address)
+            .unwrap();
+        let address = address.trim().to_owned();
+        let connection = zbus::blocking::connection::Builder::address(address.as_str())
+            .unwrap()
+            .serve_at("/org/freedesktop/login1", Manager(Default::default()))
+            .unwrap()
+            .name("org.freedesktop.login1")
+            .unwrap()
+            .build()
+            .unwrap();
+        FakeLogind {
+            daemon,
+            address,
+            connection,
+            _dir: dir,
+        }
+    }
+
+    impl FakeLogind {
+        fn signal(&self, path: &str, interface: &str, name: &str, body: &impl serde_like::Body) {
+            body.emit(&self.connection, path, interface, name);
+        }
+    }
+
+    /// The bodies of the two signals: none, or a boolean.
+    mod serde_like {
+        pub trait Body {
+            fn emit(&self, c: &zbus::blocking::Connection, path: &str, iface: &str, name: &str);
+        }
+        impl Body for () {
+            fn emit(&self, c: &zbus::blocking::Connection, path: &str, iface: &str, name: &str) {
+                c.emit_signal(None::<&str>, path, iface, name, &()).unwrap();
+            }
+        }
+        impl Body for bool {
+            fn emit(&self, c: &zbus::blocking::Connection, path: &str, iface: &str, name: &str) {
+                c.emit_signal(None::<&str>, path, iface, name, &(*self,))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn logind_locks_the_session_of_this_process() {
+        let logind = fake_logind("lock");
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let handle = h.event_loop.handle();
+        h.state
+            .watch_logind(&handle, Some(logind.address.clone()))
+            .unwrap();
+        h.run_until("the sleep inhibitor", |h| h.state.holds_sleep_inhibitor());
+        // Another session's lock does nothing.
+        let session = "org.freedesktop.login1.Session";
+        logind.signal(
+            "/org/freedesktop/login1/session/other",
+            session,
+            "Lock",
+            &(),
+        );
+        h.settle();
+        assert!(!h.state.is_locked());
+        logind.signal(SESSION, session, "Lock", &());
+        h.run_until("the lock of logind", |h| h.state.is_locked());
+    }
+
+    #[test]
+    fn before_the_sleep_the_session_locks_then_lets_the_machine_sleep() {
+        let logind = fake_logind("sleep");
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let handle = h.event_loop.handle();
+        h.state
+            .watch_logind(&handle, Some(logind.address.clone()))
+            .unwrap();
+        h.run_until("the sleep inhibitor", |h| h.state.holds_sleep_inhibitor());
+        let manager = "org.freedesktop.login1.Manager";
+        logind.signal("/org/freedesktop/login1", manager, "PrepareForSleep", &true);
+        h.run_until("locked before the sleep", |h| h.state.is_locked());
+        assert_eq!(h.window_items(), 0);
+        // The inhibitor is held until the screen shows the lock.
+        assert!(h.state.holds_sleep_inhibitor());
+        h.show_frame();
+        h.run_until("the inhibitor released", |h| {
+            !h.state.holds_sleep_inhibitor()
+        });
+        // At wake-up, a new one is taken; the session is still locked.
+        logind.signal(
+            "/org/freedesktop/login1",
+            manager,
+            "PrepareForSleep",
+            &false,
+        );
+        h.run_until("a new inhibitor", |h| h.state.holds_sleep_inhibitor());
+        assert!(h.state.is_locked());
+    }
 }

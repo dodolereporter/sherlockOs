@@ -167,6 +167,15 @@ impl State {
         self.lock.locked && self.lock.owner.is_some() && self.lock.confirm.is_none()
     }
 
+    /// Every screen has shown a frame built while locked.
+    pub fn lock_shown_everywhere(&self) -> bool {
+        self.lock.locked
+            && self
+                .screens
+                .iter()
+                .all(|s| self.lock.shown.contains(&s.output))
+    }
+
     /// Every lock program failed: the compositor shows its rescue screen.
     pub fn lock_rescue_shown(&self) -> bool {
         self.lock.locked && self.lock.rescue_screen
@@ -260,6 +269,7 @@ impl State {
         if let Some(token) = lock.watch.take() {
             self.loop_handle.remove(token);
         }
+        self.note_input();
         let top = self.top_window();
         self.focus(top);
         if let Some(pointer) = self.seat.get_pointer() {

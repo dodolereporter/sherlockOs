@@ -242,6 +242,9 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
+    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
+    state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
+    state.watch_logind(&event_loop.handle(), None)?;
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();

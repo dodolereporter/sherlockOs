@@ -34,6 +34,7 @@ mod shell;
 pub mod stats;
 pub mod theme;
 pub mod touchpad;
+pub mod triggers;
 pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
@@ -228,6 +229,8 @@ pub struct State {
     capture: capture::Capture,
     /// The session lock (lot D-25a, ADR 0023).
     lock: lock::SessionLock,
+    /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
+    triggers: triggers::Triggers,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -367,6 +370,7 @@ impl State {
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
+            triggers: triggers::Triggers::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -662,6 +666,7 @@ impl State {
         }
         self.update_scales();
         self.refresh_lock();
+        self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {
             let since = self.perf.start();
