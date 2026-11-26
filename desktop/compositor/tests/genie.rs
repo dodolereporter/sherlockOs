@@ -2,7 +2,7 @@
 //! reached through an EGL device of its own, draws `genie.frag` into a texture, halfway between
 //! a window and its dock icon. The image is checked pixel by pixel and saved as
 //! `genie-half.png` in Cargo's temporary folder of the integration tests
-//! (`target/tmp`). Without Mesa's EGL the test has nothing to draw with: it says so, and fails
+//! (`target/tmp`), next to `genie-steps.png`, the whole way under a dock. Without Mesa's EGL the test has nothing to draw with: it says so, and fails
 //! on the CI, which installs it.
 
 #[cfg(test)]
@@ -19,7 +19,7 @@ mod tests {
                 gles::{GlesRenderer, GlesTexture},
             },
         },
-        utils::{Rectangle, Scale, Transform},
+        utils::{Physical, Rectangle, Scale, Transform},
     };
 
     const SCREEN: (i32, i32) = (480, 300);
@@ -75,8 +75,26 @@ mod tests {
         a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3)
     }
 
-    /// Draws `genie` over the desktop color, and reads the image back.
-    fn draw(renderer: &mut GlesRenderer, window: GlesTexture, genie: &Genie) -> Vec<u8> {
+    /// The dock, opaque here: its glass over the desktop color, and the icon in it, drawn in
+    /// front of the genie as the compositor does since lot Q-14.
+    fn dock(icon: Rectangle<i32, Physical>) -> [(Rectangle<i32, Physical>, color::Color); 2] {
+        let glass = color::DESKTOP.mix(color::CREAM, color::DOCK_GLASS.a);
+        let margin = 8;
+        let dock = Rectangle::new(
+            (icon.loc.x - 64, icon.loc.y - margin).into(),
+            (icon.size.w + 128, icon.size.h + 2 * margin).into(),
+        );
+        [(dock, glass), (icon, color::TILE_LAB)]
+    }
+
+    /// Draws `genie` over the desktop color, then what is in `front` of it, and reads the image
+    /// back.
+    fn draw(
+        renderer: &mut GlesRenderer,
+        window: GlesTexture,
+        genie: &Genie,
+        front: &[(Rectangle<i32, Physical>, color::Color)],
+    ) -> Vec<u8> {
         let program = Program::new(renderer).unwrap();
         let element = GenieElement::new(&program, window, genie, genie.alpha());
         let mut target: GlesTexture = renderer
@@ -96,6 +114,9 @@ mod tests {
             element
                 .draw(&mut frame, element.src(), dst, &damage, &[])
                 .unwrap();
+            for (rect, color) in front {
+                frame.clear(color.premultiplied().into(), &[*rect]).unwrap();
+            }
             frame.finish().unwrap().wait().unwrap();
         }
         let framebuffer = renderer.bind(&mut target).unwrap();
@@ -124,7 +145,7 @@ mod tests {
             icon: Rectangle::new((360.0, 256.0).into(), (32.0, 32.0).into()),
             progress: 0.5,
         };
-        let bytes = draw(&mut renderer, window.clone(), &genie);
+        let bytes = draw(&mut renderer, window.clone(), &genie, &[]);
         let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("genie-half.png");
         let size = (SCREEN.0 as u32, SCREEN.1 as u32);
         image::save_buffer(&path, &bytes, size.0, size.1, image::ColorType::Rgba8).unwrap();
@@ -148,12 +169,27 @@ mod tests {
         assert!(near(pixel(&bytes, 160.0, 22.0), desktop));
         assert!(near(pixel(&bytes, 376.0, 280.0), desktop));
 
-        // The whole way, side by side, for the eye: `genie-steps.png`.
+        // The whole way, side by side, for the eye: `genie-steps.png`, under the dock.
+        let front = dock(genie.icon.to_i32_round());
         let steps = [0.0, 0.2, 0.4, 0.6, 0.8, 0.95];
         let frames: Vec<Vec<u8>> = steps
             .iter()
-            .map(|&progress| draw(&mut renderer, window.clone(), &Genie { progress, ..genie }))
+            .map(|&progress| {
+                let step = Genie { progress, ..genie };
+                draw(&mut renderer, window.clone(), &step, &front)
+            })
             .collect();
+        // Under the dock: at the end, only the icon shows where the window went.
+        let last = frames.last().unwrap();
+        let (y, left, right) = Genie {
+            progress: 0.95,
+            ..genie
+        }
+        .row(0.5);
+        assert!(near(
+            pixel(last, (left + right) / 2.0, y),
+            rgba(color::TILE_LAB)
+        ));
         let row = 4 * SCREEN.0 as usize;
         let strip: Vec<u8> = (0..SCREEN.1 as usize)
             .flat_map(|y| {
