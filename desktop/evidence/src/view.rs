@@ -8,14 +8,17 @@ use iced::widget::{
 use iced::{Alignment, Element, Length, Padding};
 use std::time::Duration;
 
-use sherlock_ui::animated::hoverable;
+use sherlock_ui::animated::{hoverable, reveal};
 use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::texts::{self, evidence as t};
 use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 
-use crate::app::{App, Command, Location, Menu, MenuItem, Message, RENAME, SEARCH, WindowAction};
+use crate::app::{
+    App, Command, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, WindowAction,
+};
 use crate::clock;
 use crate::devices::Volume;
 use crate::git::GitStatus;
@@ -107,9 +110,15 @@ impl App {
         if let Some(menu) = &self.menu {
             let catcher = mouse_area(space().width(Length::Fill).height(Length::Fill))
                 .on_press(Message::CloseMenu)
-                .on_right_press(Message::CloseMenu);
+                .on_right_press(Message::Reopen);
             layers.push(opaque(catcher));
-            layers.push(self.context_menu(menu));
+            let items = self.menu_items(menu.on_selection);
+            let sub = menu.submenu.map(|s| self.submenu_items(s));
+            layers.push(self.context_menu(menu, &items, &sub.unwrap_or_default(), true));
+        } else if let Some(closing) = &self.closing {
+            // Folding back: drawn, its entries no longer answer.
+            let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
+            layers.push(self.context_menu(menu, items, sub, false));
         }
         if self.confirm_empty {
             layers.push(self.dialog());
@@ -117,7 +126,10 @@ impl App {
         if let Some(search) = &self.chooser {
             layers.push(self.chooser(search));
         }
-        stack(layers).into()
+        // The pointer is read here rather than from a subscription, whose message would come
+        // after a press of the same batch of events: a menu opened right after the pointer
+        // moved opens where it is.
+        mouse_area(stack(layers)).on_move(Message::Cursor).into()
     }
 
     fn title_bar(&self) -> Element<'_, Message> {
@@ -435,25 +447,76 @@ impl App {
             .extend((first..last).map(|i| self.row(i, &self.entries[i], name_chars)))
             .push(space().height(after))
             .width(Length::Fill);
-        // A single selection is drawn by a highlight that glides under the rows. It is the
-        // first layer of the stack, which sets the stack size, so it spans the whole list.
-        // Every other layer of a stack, and every clipped container, costs the software
-        // renderer a full clip mask: the rows are one layer, and nothing in them clips.
-        match &self.highlight {
-            Some(highlight) if self.selection.len() == 1 => {
-                let y = highlight.value(now) as f32 + slide;
-                let bar = container(space())
-                    .width(Length::Fill)
-                    .height(row_height)
-                    .style(theme::list_row(true));
-                let height = before + (total - first) as f32 * row_height;
-                let layer = column![space().height(y.max(0.0)), bar]
-                    .width(Length::Fill)
-                    .height(height);
-                stack![layer, rows].width(Length::Fill).into()
-            }
-            _ => rows.into(),
+        // The selection is drawn under the rows, in the first layer of the stack, which sets
+        // the stack size: it spans the whole list. Every other layer of a stack, and every
+        // clipped container, costs the software renderer a full clip mask: the rows are one
+        // layer, nothing in them clips, and the lasso adds one only while it is dragged.
+        let dragging = self.lasso.as_ref().is_some_and(|l| l.dragging);
+        if self.selection.is_empty() && !dragging {
+            return rows.into();
         }
+        let height = before + (total - first) as f32 * row_height;
+        let mut layers = vec![
+            self.selection_layer(now, first, last, slide, height),
+            rows.into(),
+        ];
+        if let Some(lasso) = self.lasso.as_ref().filter(|l| l.dragging) {
+            let (x, y, w, h) = lasso.rect();
+            let rect = container(space())
+                .width(w)
+                .height(h)
+                .style(sherlock_ui::evidence::lasso);
+            let layer = column![
+                space().height(y.max(0.0) + slide),
+                row![space().width(x.max(0.0)), rect]
+            ];
+            layers.push(layer.into());
+        }
+        stack(layers).width(Length::Fill).into()
+    }
+
+    /// The selection under the rows. An item selected alone is a highlight that glides from
+    /// row to row. Items that follow each other form one block, rounded at its two ends only,
+    /// so that a run of selected rows reads as one piece (lot E-01). Only the blocks within the
+    /// built rows are drawn; a block cut there ends among the rows built out of sight.
+    fn selection_layer(
+        &self,
+        now: Duration,
+        first: usize,
+        last: usize,
+        slide: f32,
+        height: f32,
+    ) -> Element<'_, Message> {
+        let row_height = metrics::LIST_ROW_HEIGHT;
+        let block = |h: f32| {
+            container(space())
+                .width(Length::Fill)
+                .height(h)
+                .style(theme::list_row(true))
+        };
+        let mut layer = Column::new().width(Length::Fill).height(height);
+        match (&self.highlight, self.selection.single()) {
+            (Some(highlight), Some(_)) => {
+                let y = highlight.value(now) as f32 + slide;
+                layer = layer
+                    .push(space().height(y.max(0.0)))
+                    .push(block(row_height));
+            }
+            _ => {
+                let mut y = 0.0;
+                for run in self.selection.runs() {
+                    let (start, end) = ((*run.start()).max(first), (*run.end() + 1).min(last));
+                    if start >= end {
+                        continue;
+                    }
+                    let top = metrics::LIST_TOP_GAP + start as f32 * row_height + slide;
+                    let size = (end - start) as f32 * row_height;
+                    layer = layer.push(space().height(top - y)).push(block(size));
+                    y = top + size;
+                }
+            }
+        }
+        layer.into()
     }
 
     /// Characters of a name that fit in the name column, estimated from the window width:
@@ -476,15 +539,14 @@ impl App {
     }
 
     fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
-        let selected = self.selection.contains(&i);
-        // A single selection is drawn by the gliding highlight.
-        let painted = selected && self.selection.len() > 1;
+        // The selection is drawn under the rows (`selection_layer`).
+        let selected = self.selection.contains(i);
         let tint = match entry.kind {
             Kind::Folder => color::palette().blue_light,
             _ => color::palette().text_secondary,
         };
         let name: Element<'a, Message> = match &self.renaming {
-            Some((index, value)) if *index == i => {
+            Some((path, value)) if *path == entry.path => {
                 ui::text_field("", value, Some(Message::RenameInput))
                     .id(RENAME)
                     .on_submit(Message::RenameSubmit)
@@ -530,7 +592,7 @@ impl App {
             .height(metrics::LIST_ROW_HEIGHT)
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
-            .style(theme::list_row(painted));
+            .style(theme::list_row(false));
         let line = hoverable(line, color::palette().hover, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))
@@ -667,38 +729,48 @@ impl App {
             .into()
     }
 
-    fn context_menu(&self, menu: &Menu) -> Element<'_, Message> {
-        let items = self.menu_items(menu.on_selection);
-        let entries = items.iter().enumerate().map(|(i, item)| {
-            let lit = !menu.submenu && menu.highlight == Some(i);
-            self.menu_entry(*item, lit, menu.submenu, true)
+    /// The menu and its submenu, unfolding or folding back from the menu's corner (lot E-01).
+    /// `live`: open; a closing menu's entries send nothing.
+    fn context_menu(
+        &self,
+        menu: &Menu,
+        items: &[MenuItem],
+        sub: &[MenuItem],
+        live: bool,
+    ) -> Element<'_, Message> {
+        let now = self.now();
+        let (opacity, scale) = (self.menu_motion.opacity(now), self.menu_motion.scale(now));
+        // Colors taken while the menu is built fade with it too.
+        let layers = color::with_opacity(opacity, || {
+            let entries = items.iter().enumerate().map(|(i, item)| {
+                let lit = menu.submenu.is_none() && menu.highlight == Some(i);
+                self.menu_entry(*item, lit, menu.submenu, true)
+            });
+            let main = ui::floating_menu(entries, metrics::CONTEXT_MENU_WIDTH);
+            let main = reveal(main).opacity(opacity).scale(scale, (0.0, 0.0));
+            let mut layers: Vec<Element<'_, Message>> =
+                vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
+            if menu.submenu.is_some() {
+                let at = crate::menu::submenu_at(menu, items, sub, self.size);
+                let entries = sub.iter().enumerate().map(|(i, item)| {
+                    self.menu_entry(*item, menu.highlight == Some(i), None, false)
+                });
+                let width = crate::menu::submenu_width(menu.submenu);
+                let panel = ui::floating_menu(entries, width);
+                let panel = reveal(panel).opacity(opacity).scale(scale, (0.0, 0.0));
+                layers.push(pin(panel).x(at.x).y(at.y).into());
+            }
+            layers
         });
-        // The menu appears at once: no scale animation (a transformed menu and the software
-        // renderer's partial redraws did not agree), and iced has no group opacity to fade it.
-        let main = ui::floating_menu(entries, metrics::CONTEXT_MENU_WIDTH);
-        let mut layers: Vec<Element<'_, Message>> =
-            vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
-        if menu.submenu {
-            let before = items
-                .iter()
-                .position(|item| *item == MenuItem::OpenWith)
-                .unwrap_or_default();
-            let offset = App::menu_height(&items[..before])
-                - 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
-            let sub = self.submenu_items();
-            let entries = sub
-                .iter()
-                .enumerate()
-                .map(|(i, item)| self.menu_entry(*item, menu.highlight == Some(i), false, false));
-            let x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
-            // Wider than the design board's 216: application names and the "always" switch.
-            let sub = ui::floating_menu(entries, metrics::OPEN_WITH_WIDTH);
-            layers.push(pin(sub).x(x).y(menu.at.y + offset).into());
-        }
-        stack(layers)
+        let menu: Element<'_, Message> = stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
-            .into()
+            .into();
+        if live {
+            menu
+        } else {
+            menu.map(|_| Message::Inert)
+        }
     }
 
     fn dialog(&self) -> Element<'_, Message> {
@@ -799,7 +871,7 @@ impl App {
         &'a self,
         item: MenuItem,
         lit: bool,
-        submenu_open: bool,
+        submenu_open: Option<Sub>,
         main: bool,
     ) -> Element<'a, Message> {
         let light = |control: ui::Control<'a, Message>| {
@@ -831,17 +903,20 @@ impl App {
                 );
                 light(control).into()
             }
-            MenuItem::OpenWith => {
-                let mut control = ui::menu_item(
-                    t::OPEN_WITH,
-                    Trailing::Submenu,
-                    Some(Message::Submenu(!submenu_open)),
-                );
-                if submenu_open {
+            MenuItem::Submenu(sub) => {
+                let label = match sub {
+                    Sub::OpenWith => t::OPEN_WITH,
+                    Sub::SortBy => more::SORT_BY,
+                    Sub::View => more::VIEW,
+                };
+                let open = submenu_open == Some(sub);
+                let toggle = Message::Submenu((!open).then_some(sub));
+                let mut control = ui::menu_item(label, Trailing::Submenu, Some(toggle));
+                if open {
                     control = ui::open(control);
                 }
                 mouse_area(light(control))
-                    .on_enter(Message::Submenu(true))
+                    .on_enter(Message::Submenu(Some(sub)))
                     .into()
             }
             MenuItem::Action {
@@ -861,8 +936,8 @@ impl App {
                     control = ui::danger(control);
                 }
                 let control = light(control);
-                if main && submenu_open {
-                    mouse_area(control).on_enter(Message::Submenu(false)).into()
+                if main && submenu_open.is_some() {
+                    mouse_area(control).on_enter(Message::Submenu(None)).into()
                 } else {
                     control.into()
                 }

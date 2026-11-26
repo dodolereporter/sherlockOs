@@ -101,7 +101,7 @@ impl Bench {
         self.app
             .selection
             .iter()
-            .map(|&i| self.app.entries[i].name.as_str())
+            .map(|i| self.app.entries[i].name.as_str())
             .collect()
     }
 
@@ -116,9 +116,9 @@ impl Bench {
     fn select(&mut self, name: &str) {
         self.press(Named::Home);
         while self.selected() != [name] {
-            let before = self.app.cursor;
+            let before = self.app.selection.cursor();
             self.press(Named::ArrowDown);
-            assert_ne!(before, self.app.cursor, "{name} not found");
+            assert_ne!(before, self.app.selection.cursor(), "{name} not found");
         }
     }
 }
@@ -343,9 +343,9 @@ fn right_click_menu_is_driven_by_the_keyboard() {
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowDown);
     bench.press(Named::ArrowRight);
-    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu.is_some()));
     bench.press(Named::ArrowLeft);
-    assert!(bench.app.menu.as_ref().is_some_and(|m| !m.submenu));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.submenu.is_none()));
     bench.press(Named::Escape);
     assert!(bench.app.menu.is_none());
     // The menu stays inside the window.
@@ -436,7 +436,7 @@ fn window_renders_headless() {
         Message::Click(docker),
         Message::Cursor(iced::Point::new(450.0, 406.0)),
         Message::RightClick(Some(docker)),
-        Message::Submenu(true),
+        Message::Submenu(Some(crate::app::Sub::OpenWith)),
     ] {
         let task = app.update(message);
         drain(&mut app, task);
@@ -469,7 +469,7 @@ fn window_renders_headless() {
     let scale = picture.width() as f32 / width;
     let menu = app.menu.clone().expect("menu open");
     let main_items = app.menu_items(menu.on_selection);
-    let sub_items = app.submenu_items();
+    let sub_items = app.submenu_items(crate::app::Sub::OpenWith);
     let check = |left: f32, top: f32, items: &[crate::app::MenuItem], what: &str| {
         let mut y = top + metrics::MENU_PADDING + metrics::BORDER_WIDTH;
         for item in items {
@@ -492,18 +492,12 @@ fn window_renders_headless() {
         }
     };
     check(menu.at.x, menu.at.y, &main_items, "menu");
-    let before = main_items
-        .iter()
-        .position(|item| *item == crate::app::MenuItem::OpenWith)
-        .unwrap_or_default();
-    let offset = App::menu_height(&main_items[..before])
-        - 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
-    let sub_x = menu.at.x + metrics::CONTEXT_MENU_WIDTH + metrics::SUBMENU_GAP;
+    let sub_at = crate::menu::submenu_at(&menu, &main_items, &sub_items, app.size);
     assert!(
-        sub_x >= menu.at.x + metrics::CONTEXT_MENU_WIDTH,
+        sub_at.x >= menu.at.x + metrics::CONTEXT_MENU_WIDTH,
         "submenu overlaps the menu"
     );
-    check(sub_x, menu.at.y + offset, &sub_items, "submenu");
+    check(sub_at.x, sub_at.y, &sub_items, "submenu");
 
     // The same window in the light theme, `evidence-light-<renderer>.png`, to compare with
     // FichiersClair.
@@ -822,7 +816,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     drain(&mut bench.app, task);
     bench.select("notes.txt");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     let names: Vec<&str> = bench
         .app
         .open_with
@@ -851,7 +845,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     assert!(!bench.app.always);
     bench.select("readme.md");
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     assert!(!bench.app.always);
     bench.send(Message::OpenWithApp("kate.desktop".into()));
     let after = fs::read_to_string(xdg.config_home.join("mimeapps.list")).expect("mimeapps.list");
@@ -861,7 +855,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     );
     // Turning the switch on, then closing the menu, turns it off again.
     bench.key(Key::Named(Named::F10), Modifiers::SHIFT);
-    bench.send(Message::Submenu(true));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
     bench.send(Message::Run(crate::app::Command::ToggleAlways));
     assert!(bench.app.always);
     bench.press(Named::Escape);
@@ -874,4 +868,552 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     assert!(bench.app.chooser.is_some());
     bench.press(Named::Escape);
     assert!(bench.app.chooser.is_none());
+}
+
+/// A bench whose `projet` folder also holds `n` text files, `f00.txt` onwards.
+fn bench_with_files(name: &str, n: usize) -> Bench {
+    let mut bench = Bench::new(name);
+    for i in 0..n {
+        fs::write(bench.path(&format!("projet/f{i:02}.txt")), "x").expect("write");
+    }
+    bench.press(Named::F5);
+    bench
+}
+
+/// Clicks the named item with these modifiers held.
+fn click_with(bench: &mut Bench, name: &str, modifiers: Modifiers) {
+    bench.send(Message::Modifiers(modifiers));
+    bench.click(name);
+    bench.send(Message::Modifiers(Modifiers::empty()));
+    // Far enough apart in time: never a double click.
+    bench.app.clicks = Default::default();
+}
+
+#[test]
+fn shift_and_ctrl_clicks_select_ranges_from_the_anchor() {
+    let mut bench = bench_with_files("ranges", 6);
+    click_with(&mut bench, "f01.txt", Modifiers::empty());
+    click_with(&mut bench, "f04.txt", Modifiers::SHIFT);
+    assert_eq!(
+        bench.selected(),
+        ["f01.txt", "f02.txt", "f03.txt", "f04.txt"]
+    );
+    // A second Shift+click starts from the same anchor.
+    click_with(&mut bench, "a.txt", Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt", "f01.txt"]);
+    // Ctrl+click adds an item and moves the anchor; Ctrl+Shift+click adds a range.
+    click_with(&mut bench, "f03.txt", Modifiers::CTRL);
+    click_with(&mut bench, "f05.txt", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(
+        bench.selected(),
+        [
+            "a.txt", "f00.txt", "f01.txt", "f03.txt", "f04.txt", "f05.txt"
+        ]
+    );
+    // Ctrl+click removes; a plain click selects one item again.
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    assert!(!bench.selected().contains(&"f00.txt"));
+    click_with(&mut bench, "src", Modifiers::empty());
+    assert_eq!(bench.selected(), ["src"]);
+    // A double click still opens, after ranges.
+    bench.click("src");
+    bench.click("src");
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}
+
+#[test]
+fn shift_and_arrows_extend_the_selection_and_escape_clears_it() {
+    let mut bench = bench_with_files("arrows", 4);
+    bench.select("f00.txt");
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["f00.txt", "f01.txt", "f02.txt"]);
+    bench.key(Key::Named(Named::ArrowUp), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["f00.txt", "f01.txt"]);
+    bench.key(Key::Named(Named::Home), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["src", "a.txt", "f00.txt"]);
+    // The preview shows nothing for several items; Delete trashes them all.
+    assert!(bench.app.single().is_none());
+    bench.ctrl("a");
+    assert_eq!(bench.selected().len(), 6);
+    bench.press(Named::Escape);
+    assert!(bench.selected().is_empty());
+    bench.select("f02.txt");
+    bench.key(Key::Named(Named::End), Modifiers::SHIFT);
+    bench.press(Named::Delete);
+    assert_eq!(bench.names(), ["src", "a.txt", "f00.txt", "f01.txt"]);
+    // F2 on several items renames the one under the cursor, alone.
+    bench.select("f00.txt");
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    bench.press(Named::F2);
+    assert_eq!(bench.selected(), ["f01.txt"]);
+    assert_eq!(
+        bench.app.renaming.as_ref().map(|(_, n)| n.as_str()),
+        Some("f01.txt")
+    );
+}
+
+#[test]
+fn a_lasso_on_the_background_selects_rows_and_scrolls_at_the_edge() {
+    let mut bench = bench_with_files("lasso", 40);
+    bench.app.settle();
+    let origin = |x: f32, y: f32| {
+        iced::Point::new(
+            metrics::SIDEBAR_WIDTH + metrics::LIST_PADDING + x,
+            metrics::TITLE_BAR_HEIGHT
+                + metrics::TOOLBAR_HEIGHT
+                + metrics::LIST_HEADER_HEIGHT
+                + 3.0 * metrics::BORDER_WIDTH
+                + y,
+        )
+    };
+    let row = metrics::LIST_ROW_HEIGHT;
+    // Pressed beside row 1, dragged down to row 3: rows 1 to 3.
+    bench.send(Message::Cursor(origin(600.0, row * 1.5)));
+    bench.send(Message::Blank);
+    bench.send(Message::Cursor(origin(601.0, row * 1.5 + 2.0)));
+    assert!(bench.selected().is_empty(), "a slip is not a lasso yet");
+    bench.send(Message::Cursor(origin(400.0, row * 3.5)));
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt", "f01.txt"]);
+    // Back up: the selection follows the rectangle.
+    bench.send(Message::Cursor(origin(400.0, row * 2.2)));
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt"]);
+    // Held near the bottom edge, the listing scrolls at each frame, and the lasso goes on
+    // with it.
+    let bottom = bench.app.size.height - metrics::STATUS_BAR_HEIGHT - 12.0;
+    bench.send(Message::Cursor(iced::Point::new(500.0, bottom)));
+    assert!(
+        bench.app.animating(bench.app.now()),
+        "frames for the scroll"
+    );
+    let before = bench.selected().len();
+    bench.send(Message::Scrolled(row * 3.0, bench.app.scroll.1));
+    assert!(bench.selected().len() > before);
+    bench.send(Message::Released);
+    assert!(bench.app.lasso.is_none());
+    assert!(
+        !bench.app.animating(bench.app.now()),
+        "no frame once released"
+    );
+    // With Ctrl held, a new lasso adds to the selection.
+    let kept = bench.selected().len();
+    bench.send(Message::Scrolled(0.0, bench.app.scroll.1));
+    bench.send(Message::Modifiers(Modifiers::CTRL));
+    bench.send(Message::Cursor(origin(600.0, row * 0.5)));
+    bench.send(Message::Blank);
+    bench.send(Message::Cursor(origin(600.0, row * 0.6 + 10.0)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected().len(), kept + 1);
+    // Without, a press on the background clears it.
+    bench.send(Message::Modifiers(Modifiers::empty()));
+    bench.send(Message::Blank);
+    bench.send(Message::Released);
+    assert!(bench.selected().is_empty());
+    // A press beside a name starts one too; on the name, it does not.
+    bench.send(Message::Cursor(origin(600.0, row * 1.5)));
+    bench.send(Message::Click(1));
+    bench.send(Message::Cursor(origin(600.0, row * 2.5)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt"]);
+    bench.app.clicks = Default::default();
+    bench.send(Message::Cursor(origin(40.0, row * 1.5)));
+    bench.send(Message::Click(1));
+    bench.send(Message::Cursor(origin(40.0, row * 3.5)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected(), ["a.txt"]);
+}
+
+/// Captures of a selection of two runs, dark and light, in
+/// `target/tmp/evidence-selection-<theme>.png`: each run is one block, rounded at its two
+/// ends only, with no seam between its rows.
+#[test]
+fn following_selected_rows_form_one_block() {
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = crate::testing::in_theme(which);
+        let mut bench = bench_with_files("runs", 6);
+        click_with(&mut bench, "a.txt", Modifiers::empty());
+        click_with(&mut bench, "f01.txt", Modifiers::SHIFT);
+        click_with(&mut bench, "f03.txt", Modifiers::CTRL);
+        click_with(&mut bench, "f04.txt", Modifiers::CTRL);
+        assert_eq!(bench.app.selection.runs().len(), 2);
+        bench.app.settle();
+        let settings = Settings {
+            fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+            default_font: typography::UI,
+            default_text_size: Pixels(typography::UI_SIZE),
+            ..Settings::default()
+        };
+        let (width, height) = metrics::REFERENCE_WINDOW;
+        let mut ui = simulator::Simulator::with_size(settings, (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        fs::create_dir_all(&dir).expect("captures folder");
+        let base = dir.join(format!("evidence-selection-{name}.png"));
+        let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+        let written = base.with_file_name(format!("evidence-selection-{name}-{renderer}.png"));
+        let _ = fs::remove_file(&written);
+        assert!(snapshot.matches_image(&base).expect("writing the capture"));
+        println!("capture: {}", written.display());
+
+        let picture = ::image::open(&written).expect("capture").to_rgb8();
+        let scale = picture.width() as f32 / width;
+        let top = metrics::TITLE_BAR_HEIGHT
+            + metrics::TOOLBAR_HEIGHT
+            + metrics::LIST_HEADER_HEIGHT
+            + 3.0 * metrics::BORDER_WIDTH
+            + metrics::LIST_TOP_GAP;
+        let left = metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING;
+        let row = metrics::LIST_ROW_HEIGHT;
+        let pixel = |x: f32, y: f32| *picture.get_pixel((x * scale) as u32, (y * scale) as u32);
+        // Blank, away from any text: between the names and the dates.
+        let x = left + 200.0;
+        let background = pixel(x, top + 0.5 * row);
+        let selected = pixel(x, top + 1.5 * row);
+        assert_ne!(background, selected, "{name}: the selection shows");
+        // Rows 1 and 2 (a.txt, f00.txt) are one block: the boundary between them is selected.
+        assert_eq!(
+            pixel(x, top + 2.0 * row),
+            selected,
+            "{name}: a seam in the run"
+        );
+        // The block's corners are rounded at its ends only: the very corner of its first row
+        // is background, the corner where two of its rows meet is filled.
+        let corner = left + 0.5;
+        assert_eq!(
+            pixel(corner, top + row + 0.5),
+            background,
+            "{name}: top corner"
+        );
+        assert_eq!(
+            pixel(corner, top + 2.0 * row),
+            selected,
+            "{name}: middle corner"
+        );
+        // Row 4 (f02.txt) is not selected: two blocks, not one.
+        assert_eq!(pixel(x, top + 4.5 * row), background, "{name}: rows apart");
+        assert_eq!(pixel(x, top + 5.5 * row), selected, "{name}: second block");
+    }
+}
+
+/// The labels of menu entries, `-` before a greyed one; submenus by their label.
+fn menu_labels(items: &[crate::app::MenuItem]) -> Vec<String> {
+    use crate::app::{MenuItem, Sub};
+    use sherlock_ui::evidence as more;
+    use sherlock_ui::texts::evidence as t;
+    items
+        .iter()
+        .filter_map(|item| match item {
+            MenuItem::Action { label, .. } => Some((*label).to_owned()),
+            MenuItem::Disabled(label) => Some(format!("-{label}")),
+            MenuItem::Submenu(Sub::OpenWith) => Some(t::OPEN_WITH.to_owned()),
+            MenuItem::Submenu(Sub::SortBy) => Some(more::SORT_BY.to_owned()),
+            MenuItem::Submenu(Sub::View) => Some(more::VIEW.to_owned()),
+            MenuItem::App(_) | MenuItem::Separator => None,
+        })
+        .collect()
+}
+
+/// The entries of the open menu, or of its open submenu.
+fn open_menu(bench: &Bench) -> Vec<String> {
+    let menu = bench.app.menu.clone().expect("menu open");
+    match menu.submenu {
+        Some(sub) => menu_labels(&bench.app.submenu_items(sub)),
+        None => menu_labels(&bench.app.menu_items(menu.on_selection)),
+    }
+}
+
+#[test]
+fn the_menu_offers_what_fits_its_target() {
+    let mut bench = bench_with_files("menu-target", 2);
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    let on_item = [
+        "Ouvrir",
+        "Ouvrir avec",
+        "Copier",
+        "Couper",
+        "-Coller",
+        "Renommer",
+        "Dupliquer",
+        "-Compresser",
+        "Copier le chemin",
+        "-Propriétés",
+        "Mettre à la corbeille",
+    ];
+    assert_eq!(open_menu(&bench), on_item);
+    // The keyboard passes over greyed entries.
+    let items = bench.app.menu_items(true);
+    for _ in 0..items.len() * 2 {
+        bench.press(Named::ArrowDown);
+        let lit = bench.app.menu.as_ref().and_then(|m| m.highlight);
+        let lit = lit.and_then(|i| items.get(i)).expect("an entry is lit");
+        assert!(!matches!(lit, crate::app::MenuItem::Disabled(_)), "{lit:?}");
+    }
+    bench.press(Named::Escape);
+    // Something copied: « Coller » answers. Several items: the same menu.
+    bench.ctrl("c");
+    bench.ctrl("a");
+    bench.send(Message::RightClick(Some(1)));
+    assert!(bench.app.menu.as_ref().is_some_and(|m| m.on_selection));
+    assert_eq!(
+        bench.selected().len(),
+        4,
+        "a right click inside keeps the selection"
+    );
+    assert!(open_menu(&bench).contains(&"Coller".to_owned()));
+    bench.press(Named::Escape);
+    // On the background.
+    bench.send(Message::RightClick(None));
+    assert_eq!(
+        open_menu(&bench),
+        [
+            "Nouveau dossier",
+            "Coller",
+            "Fichiers cachés",
+            "Trier par",
+            "Vue"
+        ]
+    );
+}
+
+#[test]
+fn the_background_menu_sorts_and_shows_the_views() {
+    use crate::app::{MenuItem, Sub};
+    let mut bench = bench_with_files("menu-sort", 2);
+    fs::write(bench.path("projet/f00.txt"), "a longer content").expect("write");
+    bench.press(Named::F5);
+    bench.send(Message::RightClick(None));
+    // Down to « Trier par », then Right opens it, its first entry lit.
+    while bench.app.menu.as_ref().and_then(|m| m.highlight)
+        != bench
+            .app
+            .menu_items(false)
+            .iter()
+            .position(|i| *i == MenuItem::Submenu(Sub::SortBy))
+    {
+        bench.press(Named::ArrowDown);
+    }
+    bench.press(Named::ArrowRight);
+    assert_eq!(
+        open_menu(&bench),
+        ["Nom", "Modifié", "Taille", "Type", "Git"]
+    );
+    let checked = |bench: &Bench| {
+        bench
+            .app
+            .submenu_items(Sub::SortBy)
+            .iter()
+            .position(|i| matches!(i, MenuItem::Action { checked: true, .. }))
+    };
+    assert_eq!(checked(&bench), Some(0), "by name");
+    bench.press(Named::ArrowDown);
+    bench.press(Named::ArrowDown);
+    bench.press(Named::Enter);
+    assert!(bench.app.menu.is_none());
+    assert_eq!(bench.app.sort.column, crate::listing::Column::Size);
+    assert_eq!(checked(&bench), Some(2));
+    // Folders first, then the smallest file first.
+    assert_eq!(bench.names(), ["src", "f01.txt", "a.txt", "f00.txt"]);
+    // The view: the list, checked; the grid and the columns do not exist yet.
+    bench.send(Message::RightClick(None));
+    bench.send(Message::Submenu(Some(Sub::View)));
+    assert_eq!(open_menu(&bench), ["Liste", "-Grille", "-Colonnes"]);
+}
+
+#[test]
+fn a_right_click_with_the_menu_open_opens_it_on_the_new_target() {
+    let mut bench = Bench::new("menu-reopen");
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    // Over the first row, src.
+    let row = |i: f32| {
+        iced::Point::new(
+            metrics::SIDEBAR_WIDTH + 100.0,
+            metrics::TITLE_BAR_HEIGHT
+                + metrics::TOOLBAR_HEIGHT
+                + metrics::LIST_HEADER_HEIGHT
+                + 3.0 * metrics::BORDER_WIDTH
+                + metrics::LIST_TOP_GAP
+                + (i + 0.5) * metrics::LIST_ROW_HEIGHT,
+        )
+    };
+    bench.send(Message::Cursor(row(0.0)));
+    bench.send(Message::Reopen);
+    let menu = bench.app.menu.clone().expect("open again");
+    assert!(menu.on_selection);
+    assert_eq!(bench.selected(), ["src"]);
+    assert!((menu.at.y - row(0.0).y).abs() < 1.0, "where the pointer is");
+    // Below the rows: the menu of the background.
+    bench.send(Message::Cursor(row(5.0)));
+    bench.send(Message::Reopen);
+    assert!(bench.app.menu.as_ref().is_some_and(|m| !m.on_selection));
+    // Over the sidebar: it only closes.
+    bench.send(Message::Cursor(iced::Point::new(40.0, 200.0)));
+    bench.send(Message::Reopen);
+    assert!(bench.app.menu.is_none());
+}
+
+#[test]
+fn the_menu_unfolds_and_folds_back() {
+    let mut bench = Bench::new("menu-motion");
+    bench.app.settle();
+    bench.select("a.txt");
+    bench.key(Key::Named(Named::ContextMenu), Modifiers::empty());
+    let now = bench.app.now();
+    assert!(bench.app.animating(now), "frames while it unfolds");
+    assert!(bench.app.menu_motion.opacity(now) < 1.0);
+    bench.press(Named::Escape);
+    assert!(bench.app.menu.is_none());
+    assert!(bench.app.closing.is_some(), "drawn while it folds back");
+    std::thread::sleep(sherlock_ui::panels::OPEN_FADE + Duration::from_millis(30));
+    bench.send(Message::Frame(std::time::Instant::now()));
+    assert!(bench.app.closing.is_none());
+    let now = bench.app.now();
+    assert!(!bench.app.menu_motion.running(now), "no frame at rest");
+}
+
+/// Renders the window, writes `target/tmp/<name>-<renderer>.png`, returns the picture and its
+/// scale.
+fn capture(app: &App, name: &str) -> (::image::RgbImage, f32) {
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let (width, height) = metrics::REFERENCE_WINDOW;
+    let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());
+    let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = dir.join(format!("{name}-{renderer}.png"));
+    let _ = fs::remove_file(&written);
+    assert!(
+        snapshot
+            .matches_image(dir.join(format!("{name}.png")))
+            .expect("writing the capture")
+    );
+    println!("capture: {}", written.display());
+    let picture = ::image::open(&written).expect("capture").to_rgb8();
+    let scale = picture.width() as f32 / width;
+    (picture, scale)
+}
+
+/// Captures of the menu on several items and on the background with « Trier par » open, dark
+/// and light, in `target/tmp/evidence-menu-*.png`, and of the menu while it unfolds.
+#[test]
+fn menu_captures() {
+    use crate::app::Sub;
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = crate::testing::in_theme(which);
+        let mut bench = bench_with_files("menu-capture", 4);
+        click_with(&mut bench, "a.txt", Modifiers::empty());
+        click_with(&mut bench, "f01.txt", Modifiers::SHIFT);
+        bench.ctrl("c");
+        bench.send(Message::Cursor(iced::Point::new(520.0, 230.0)));
+        bench.send(Message::RightClick(Some(2)));
+        bench.app.settle();
+        let (picture, scale) = capture(&bench.app, &format!("evidence-menu-selection-{name}"));
+        let menu = bench.app.menu.clone().expect("menu open");
+        // The menu is drawn where it was opened, on its glass.
+        let inside = picture.get_pixel(
+            ((menu.at.x + 20.0) * scale) as u32,
+            ((menu.at.y + 15.0) * scale) as u32,
+        );
+        let outside = picture.get_pixel(
+            ((menu.at.x - 30.0) * scale) as u32,
+            ((menu.at.y + 300.0) * scale) as u32,
+        );
+        assert_ne!(inside, outside, "{name}: the menu shows");
+
+        bench.press(Named::Escape);
+        bench.send(Message::Cursor(iced::Point::new(700.0, 480.0)));
+        bench.send(Message::RightClick(None));
+        bench.send(Message::Submenu(Some(Sub::SortBy)));
+        bench.app.settle();
+        capture(&bench.app, &format!("evidence-menu-background-{name}"));
+    }
+    // Halfway through unfolding, in the software renderer: drawn whole, faded, never the black
+    // block a misdrawn shadow once left (see Animations).
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = bench_with_files("menu-opening", 4);
+    bench.send(Message::Cursor(iced::Point::new(520.0, 230.0)));
+    bench.send(Message::RightClick(Some(2)));
+    bench.app.settle();
+    let now = bench.app.now();
+    let start = now.saturating_sub(sherlock_ui::panels::OPEN_FADE / 3);
+    bench.app.menu_motion = crate::menu::MenuMotion::opening(start);
+    let (picture, scale) = capture(&bench.app, "evidence-menu-opening");
+    let menu = bench.app.menu.clone().expect("menu open");
+    let items = bench.app.menu_items(true);
+    let height = App::menu_height(&items) * bench.app.menu_motion.scale(now);
+    let mut dark = 0;
+    for step in 1..10 {
+        let y = menu.at.y + height * step as f32 / 10.0;
+        let pixel = picture.get_pixel(((menu.at.x + 8.0) * scale) as u32, (y * scale) as u32);
+        dark += usize::from(pixel.0.iter().all(|&c| c < 12));
+    }
+    assert_eq!(dark, 0, "no black block in the unfolding menu");
+}
+
+/// The item a rename or an open acts on is always selected: Ctrl+click can leave the cursor
+/// on the item it just removed (review of E-01a).
+#[test]
+fn rename_and_open_act_on_a_selected_item_only() {
+    let mut bench = bench_with_files("focus", 2);
+    let index = |bench: &Bench, name: &str| bench.names().iter().position(|n| *n == name);
+    click_with(&mut bench, "a.txt", Modifiers::empty());
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    // A right click on the selected item, then « Renommer »: that item, not f00.txt.
+    bench.send(Message::RightClick(index(&bench, "a.txt")));
+    bench.send(Message::Run(crate::app::Command::Rename));
+    let renaming = bench.app.renaming.clone().expect("rename open");
+    assert_eq!(renaming.0, bench.path("projet/a.txt"));
+    bench.press(Named::Escape);
+    // F2 the same.
+    bench.press(Named::F2);
+    let renaming = bench.app.renaming.clone().expect("rename open");
+    assert_eq!(renaming.0, bench.path("projet/a.txt"));
+    bench.press(Named::Escape);
+    // Several selected: a right click on one of them puts the rename on it.
+    click_with(&mut bench, "f01.txt", Modifiers::CTRL);
+    bench.send(Message::RightClick(index(&bench, "a.txt")));
+    bench.send(Message::Run(crate::app::Command::Rename));
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.press(Named::Escape);
+    // Enter opens the selected folder, never the item the cursor was left on.
+    click_with(&mut bench, "src", Modifiers::empty());
+    click_with(&mut bench, "a.txt", Modifiers::CTRL);
+    click_with(&mut bench, "a.txt", Modifiers::CTRL);
+    bench.press(Named::Enter);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}
+
+/// A sort during a rename moves the rows, not the target: the item is kept by its path.
+#[test]
+fn a_sort_during_a_rename_renames_the_same_item() {
+    let mut bench = bench_with_files("rename-sort", 3);
+    bench.select("f00.txt");
+    bench.press(Named::F2);
+    bench.send(Message::Sort(crate::listing::Column::Name));
+    assert_eq!(
+        bench.names(),
+        ["src", "f02.txt", "f01.txt", "f00.txt", "a.txt"]
+    );
+    bench.send(Message::RenameInput("nouveau.txt".into()));
+    bench.send(Message::RenameSubmit);
+    assert!(bench.path("projet/nouveau.txt").exists());
+    assert!(!bench.path("projet/f00.txt").exists());
+    for kept in ["a.txt", "f01.txt", "f02.txt"] {
+        assert!(bench.path(&format!("projet/{kept}")).exists(), "{kept}");
+    }
 }

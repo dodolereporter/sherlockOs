@@ -29,6 +29,7 @@ renderer is several times slower (see Performance). Evidence logs the renderer i
 | `places` | Favourites from `user-dirs.dirs` | no |
 | `clock` | Local time (`localtime_r`, `mktime`) | no |
 | `probe` | `--measure`: smoothness measurement | no |
+| `selection` | Selected items, cursor and anchor; clicks with Ctrl and Shift, ranges, the lasso and its scrolling at the edges | no |
 | `app` | State, messages, keyboard, commands, animations | yes |
 | `view` | The window, after the design board | yes |
 | `scenarios` | End-to-end tests driven by the keyboard, headless capture | tests |
@@ -103,8 +104,27 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   application of its type (xdg-open when there is none). The switch applies to one choice
   only: it goes back off after that choice, and when the menu or the chooser closes, so an
   "open once with" never changes the defaults shared with the desktop. `Terminal=true`
-  applications open in the terminal (see `docs/mime-apps.md`). On the background: new folder,
-  paste, hidden files. In the trash: restore, empty. On a device: open or mount, unmount, eject.
+  applications open in the terminal (see `docs/mime-apps.md`). In the trash: restore, empty.
+  On a device: open or mount, unmount, eject.
+- The menu, as in Finder and Dolphin (lot E-01). On an item or a selection: « Ouvrir »,
+  « Ouvrir avec » (for several files of one type, the application gets them all), « Copier »,
+  « Couper », « Coller », « Renommer », « Dupliquer », « Compresser », « Copier le chemin »,
+  « Propriétés », « Mettre à la corbeille ». On the background: « Nouveau dossier », « Coller »,
+  « Fichiers cachés » (checked when shown), « Trier par » (name, modified, size, kind, git; the
+  checked one again reverses the order, like a column header), « Vue » (« Liste » checked).
+  « Coller » is greyed while nothing is copied. **Greyed because Evidence cannot do it yet**:
+  « Compresser », « Propriétés », and the « Grille » and « Colonnes » views.
+  The keyboard passes over greyed entries. A submenu opens on the left when the window has no
+  room on the right, and moves up to stay inside; the menu stays inside the window. A right
+  click while the menu is open opens it again on the row or background under the pointer
+  (it used to close only).
+
+  | Dark | Light |
+  | --- | --- |
+  | ![Menu on three items](evidence/menu-selection-dark.png) | ![Menu on three items, light](evidence/menu-selection-light.png) |
+  | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
+
+  Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.
@@ -132,6 +152,7 @@ field has the focus.
 | Keys | Action |
 | --- | --- |
 | Up, Down, Home, End | Move the selection |
+| Shift+Up, Shift+Down, Shift+Home, Shift+End | Extend the selection from its anchor, or shrink it back |
 | Enter | Open (folder: enter it; file: `xdg-open`) |
 | Backspace, Alt+Up | Parent folder, with the folder you came from selected |
 | Alt+Left, Alt+Right | Back, forward |
@@ -150,7 +171,45 @@ field has the focus.
 | Tab, Shift+Tab | Move the focus through buttons and fields |
 | Escape | Clear the search and the selection |
 
-Ctrl+click adds a row to the selection.
+## Selection
+
+As in Finder and Dolphin (lot E-01). The logic is in `selection`, without iced.
+
+| Mouse | Action |
+| --- | --- |
+| Click | Selects the item alone; it becomes the anchor |
+| Ctrl+click | Adds or removes the item; it becomes the anchor |
+| Shift+click | Selects the range from the anchor to the item, alone. Another Shift+click starts again from the same anchor |
+| Ctrl+Shift+click | Adds that range to the selection |
+| Drag on the background, or on a row beside its name | Lasso: selects the rows the rectangle crosses. With Ctrl or Shift held, adds them to the selection |
+| Double click | Opens the item (unchanged, `sherlock_ui::click`) |
+
+The lasso starts once the pointer is 4 px away from the press, so a click that slips stays a
+click. It can start on a row past its name, as in Dolphin's details view: a long folder has no
+background left. Held in the row-high band along the top or bottom edge of the listing (or past
+it), it scrolls the listing, faster the deeper the pointer, up to 1,000 px per second whatever
+the frame rate, and goes on selecting. The left button going up anywhere ends it (a subscription
+to the window's events, since the pointer may be outside the listing by then).
+
+The pointer is read by the view (a `mouse_area` around the window, `on_move`), not from a
+subscription: a subscription's message arrives after the messages of the widgets for the same
+batch of events, so a press right after a move used the previous position. The right-click
+menu opened where the pointer had been before.
+
+With several items selected, the preview shows nothing, Delete moves them all to the trash,
+Ctrl+C, Ctrl+X and Ctrl+D act on them all, and F2 renames the item under the cursor alone.
+
+**Drawing.** Selected items that follow each other form one block, rounded only at the top of the
+first and the bottom of the last, without a seam between rows: the selection is drawn as one
+rounded rectangle per run, in a layer under the rows, not as a rounded background per row. An
+item selected alone keeps its gliding highlight. Only the rows built (visible, plus four) are
+drawn; a run cut there has its end among the rows built out of sight. Evidence has no grid or
+column view yet: when they come, the grid should merge the selected items of a row the same
+way.
+
+| Dark | Light |
+| --- | --- |
+| ![Two runs selected](evidence/selection-dark.png) | ![Two runs selected, light](evidence/selection-light.png) |
 
 ## Animations
 
@@ -160,13 +219,15 @@ its animations runs (or during `--measure`), never at rest.
 | What | How |
 | --- | --- |
 | Hover of rows, menu entries, sidebar entries, icon and secondary buttons | 150 ms fade of the hover veil (`sherlock_ui::animated::Hoverable`, which requests its own frames) |
-| Selection | The highlight glides from row to row on `PREVIEW_SPRING` |
+| Selection | The highlight of an item selected alone glides from row to row on `PREVIEW_SPRING`; several items are drawn at once |
 | Opening a folder | The rows rise 8 px and fade in over 150 ms |
-| Context menu | Appears at once, with no animation (see below) |
+| Context menu | Unfolds from its corner and folds back when it closes (lot E-01): scale from `panels::OPEN_SCALE` to 1 on `panels::OPEN_SPRING`, and a 150 ms fade, like the bar's panels. Its last entries are drawn while it folds back, without answering |
 | Preview | Fades in over 150 ms when its content arrives |
 
 iced 0.14 has no group opacity. A fade is a veil of the background colour laid over the
-content and fading out. The context menu cannot use that trick (it floats over the list).
+content and fading out. The context menu cannot use that trick (it floats over the list):
+since lot E-01 it fades with `sherlock_ui::animated::Reveal` and `color::with_opacity`, which
+the bar's panels use.
 
 It used to open from its corner on a spring (`Scaled`, a transformation). Review 3 showed it
 broken in a real window: a black rounded block with a greenish halo hid every entry but the
@@ -177,7 +238,10 @@ transformation, the menu's shadow (`0 22px 54px`) came out as a large opaque blo
 the menu. Checked in an isolated Xephyr: with the scale removed and the blurred shadow kept,
 the menu draws correctly. Two changes, for safety beyond this case:
 
-- the menu has no scale animation any more (and `Scaled` is gone from sherlock-ui);
+- the menu has no scale animation any more (and `Scaled` is gone from sherlock-ui); lot E-01
+  brings one back through `Reveal`, now that no menu shadow is an iced shadow in software: a
+  capture halfway through unfolding, in the software renderer, checks that it has no black
+  block (`menu_captures`);
 - menus and floating panels no longer use iced shadows at all: `sherlock_ui::surface::Shadowed`
   draws a crisp, light shadow as a few plain offset rounded rectangles (ordinary quads,
   clipped and transformed like everything else), close to the design board's.
@@ -254,6 +318,8 @@ whole, over the design board's blurred shadow.
 ## Gaps with the design board
 
 - No grid or column views: list only.
+- No drag and drop of files, inside Evidence or to other applications. No renaming of several
+  items at once.
 - No "Ask Sherlock" button, Sherlock bubble, "Build the image" or "Run in a sandbox"
   buttons, no Dev section (Docker volumes, sandboxes): out of this lot's scope.
 - « Ouvrir avec » is wider than the design board's submenu (280 instead of 216): application names
@@ -268,7 +334,8 @@ whole, over the design board's blurred shadow.
   the context menu.
 - The design board has no Devices section: its entries use the sidebar's style, with an eject
   button in the style of sherlock-ui's icon buttons.
-- The context menu scales in but cannot fade (see Animations).
+- No board draws the menu on the background with « Trier par » and « Vue », nor greyed
+  entries: they take the style of the other entries and of a disabled control.
 
 ## Limits
 
@@ -315,6 +382,17 @@ user's; no test calls the real UDisks.
   `mimeapps.list`, a headless capture of the window, double clicks on a selected or
   unselected item, slow clicks and clicks on two items, and captures of the title bar in
   `target/tmp/evidence-header-dark.png` and `-light.png` with the icon in its badge.
+- The menu (lot E-01): its entries on an item, on several items and on the background, Coller
+  greyed then not, the keyboard passing over greyed entries, « Trier par » and « Vue », a right
+  click with the menu open, unfolding and folding back, the submenu on the left near the right
+  edge, and captures in `target/tmp/evidence-menu-selection-dark-tiny-skia.png`, `-light-`,
+  `evidence-menu-background-dark-` and `-light-` (« Trier par » open), and
+  `evidence-menu-opening-` (halfway through unfolding).
+- `selection` and its scenarios (lot E-01): clicks with Ctrl, Shift and both, ranges from the
+  anchor, Shift and the arrows, select all, the lasso (threshold, rows crossed, Ctrl, the
+  scroll at the edges, release, a press beside or on a name), Delete and F2 on several items,
+  and captures of two selected runs in `target/tmp/evidence-selection-dark-tiny-skia.png` and
+  `-light-` with pixels checked: no seam inside a run, rounded corners at its ends only.
 - `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.
