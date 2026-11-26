@@ -1,7 +1,6 @@
 //! Application state and the response to each message: navigation, selection, operations,
 //! keyboard. The view lives in `view`.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
@@ -12,8 +11,8 @@ use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
 use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::focus::{self, Direction};
-use sherlock_ui::metrics;
 use sherlock_ui::texts::evidence as texts;
+use sherlock_ui::{metrics, typography};
 
 use crate::devices::{DeviceError, DeviceSource, Volume};
 use crate::git::{self, Repo};
@@ -23,6 +22,7 @@ use crate::ops;
 use crate::places::{self, Place};
 use crate::preview::{self, Preview};
 use crate::probe::{Probe, Step};
+use crate::selection::{Click, Lasso, Selection, edge_scroll};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
@@ -236,7 +236,11 @@ pub enum Message {
     Blank,
     Key(keyboard::Event),
     Modifiers(Modifiers),
+    /// The pointer, in the window, read by the view itself: it arrives before a press in the
+    /// same batch of events, where a subscription's message would come after it.
     Cursor(Point),
+    /// The left button went up, wherever the pointer is: a lasso ends.
+    Released,
     Resized(Size),
     Scrolled(f32, f32),
     RenameInput(String),
@@ -308,8 +312,11 @@ pub struct App {
     /// The whole folder, then what the listing shows (search applied, sorted).
     all: Vec<Entry>,
     pub(crate) entries: Vec<Entry>,
-    pub(crate) selection: BTreeSet<usize>,
-    pub(crate) cursor: Option<usize>,
+    pub(crate) selection: Selection,
+    /// The rectangle being dragged on the background of the listing.
+    pub(crate) lasso: Option<Lasso>,
+    /// The last frame that scrolled under the lasso.
+    lasso_frame: Option<Instant>,
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
@@ -326,7 +333,7 @@ pub struct App {
     pointer: Point,
     /// Presses on the rows, by path, to recognise a double click whatever the first click
     /// changes in the view or a reload in the order of the rows.
-    clicks: DoubleClick<PathBuf>,
+    pub(crate) clicks: DoubleClick<PathBuf>,
     modifiers: Modifiers,
     pub(crate) size: Size,
     /// Scroll of the listing and visible height, to keep the cursor in view.
@@ -380,8 +387,9 @@ impl App {
             future: Vec::new(),
             all: Vec::new(),
             entries: Vec::new(),
-            selection: BTreeSet::new(),
-            cursor: None,
+            selection: Selection::default(),
+            lasso: None,
+            lasso_frame: None,
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
@@ -441,7 +449,9 @@ impl App {
                 Some(Message::Modifiers(modifiers))
             }
             Event::Keyboard(key) if status == event::Status::Ignored => Some(Message::Key(key)),
-            Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Cursor(position)),
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                Some(Message::Released)
+            }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             _ => None,
         });
@@ -493,6 +503,7 @@ impl App {
         };
         let fade = |f: &Option<Fade>| f.as_ref().is_some_and(|f| !f.is_done(now));
         self.theme.running()
+            || self.lasso_speed() != 0.0
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
@@ -511,13 +522,10 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         let now = self.now();
-        // The highlight follows the cursor when a single item is selected.
-        let target = match (self.selection.len(), self.cursor) {
-            (1, Some(i)) => Some(
-                f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT),
-            ),
-            _ => None,
-        };
+        // The highlight follows the item when it is selected alone.
+        let target = self.selection.single().map(|i| {
+            f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT)
+        });
         match (target, &mut self.highlight) {
             (None, _) => self.highlight = None,
             (Some(y), Some(anim)) if (anim.target() - y).abs() > f64::EPSILON => {
@@ -585,13 +593,13 @@ impl App {
             Message::Click(index) => {
                 self.menu = None;
                 self.renaming = None;
-                if self.modifiers.control() {
-                    if !self.selection.remove(&index) {
-                        self.selection.insert(index);
-                    }
-                    self.cursor = Some(index);
-                } else {
-                    self.select_only(index);
+                let base = self.lasso_base();
+                let how = Click::new(self.modifiers.command(), self.modifiers.shift());
+                self.selection.click(index, how);
+                // Beside the name, a press may start a lasso too, as in Dolphin: a long
+                // listing has no background left to start one from.
+                if self.beside_name(index) {
+                    self.lasso = Some(Lasso::new(self.in_list(self.pointer), base));
                 }
                 // The first click selects, which changes the view: the second is recognised
                 // here, not by the row widget, whose state that change may drop.
@@ -607,7 +615,7 @@ impl App {
             Message::RightClick(index) => {
                 self.renaming = None;
                 if let Some(index) = index
-                    && !self.selection.contains(&index)
+                    && !self.selection.contains(index)
                 {
                     self.select_only(index);
                 }
@@ -644,13 +652,28 @@ impl App {
             Message::Blank => {
                 self.menu = None;
                 self.renaming = None;
-                self.clear_selection();
+                // A press on the background may start a lasso; with Ctrl or Shift held, it
+                // adds to the selection.
+                let base = self.lasso_base();
+                self.selection = base.clone();
+                let at = self.in_list(self.pointer);
+                self.lasso = Some(Lasso::new(at, base));
+            }
+            Message::Released => {
+                self.lasso = None;
+                self.lasso_frame = None;
             }
             Message::Key(event) => return self.key(event),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
-            Message::Cursor(position) => self.pointer = position,
+            Message::Cursor(position) => {
+                self.pointer = position;
+                self.drag_lasso();
+            }
             Message::Resized(size) => self.size = size,
-            Message::Scrolled(offset, height) => self.scroll = (offset, height),
+            Message::Scrolled(offset, height) => {
+                self.scroll = (offset, height);
+                self.drag_lasso();
+            }
             Message::RenameInput(name) => {
                 if let Some((_, value)) = &mut self.renaming {
                     *value = name;
@@ -759,6 +782,27 @@ impl App {
     fn frame(&mut self, now: Instant) -> Task<Message> {
         // A finished animation is dropped: the frame subscription stops.
         let t = self.now();
+        // A lasso held near an edge of the listing scrolls it, at a pace in pixels per second
+        // whatever the frame rate.
+        let speed = self.lasso_speed();
+        let last = if speed == 0.0 {
+            self.lasso_frame.take()
+        } else {
+            self.lasso_frame.replace(now)
+        };
+        let step = last.map_or(Duration::ZERO, |t| now.saturating_duration_since(t));
+        let step = step
+            .min(sherlock_ui::evidence::LASSO_LONGEST_STEP)
+            .as_secs_f32();
+        let scroll = if speed == 0.0 || step == 0.0 {
+            Task::none()
+        } else {
+            let by = scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: speed * step,
+            };
+            operation::scroll_by(LIST, by)
+        };
         if self.content_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.content_fade = None;
         }
@@ -766,7 +810,7 @@ impl App {
             self.preview_fade = None;
         }
         let Some(probe) = &mut self.probe else {
-            return Task::none();
+            return scroll;
         };
         let target = Location::Folder(probe.target.clone());
         let loaded = self.location == target && !self.entries.is_empty();
@@ -784,8 +828,8 @@ impl App {
                 },
             ),
             Step::Select => {
-                let next = self.cursor.map_or(0, |c| c + 1) % self.entries.len().max(1);
-                self.move_cursor(next)
+                let next = self.selection.cursor().map_or(0, |c| c + 1);
+                self.move_cursor(next % self.entries.len().max(1), false)
             }
             Step::Wait | Step::Idle => Task::none(),
             Step::Exit => iced::exit(),
@@ -1011,47 +1055,45 @@ impl App {
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         self.selection
             .iter()
-            .filter_map(|&i| self.entries.get(i))
+            .filter_map(|i| self.entries.get(i))
             .map(|e| e.path.clone())
             .collect()
     }
 
     fn select_paths(&mut self, paths: &[PathBuf]) {
-        self.selection = self
-            .entries
-            .iter()
-            .enumerate()
+        let found = self.entries.iter().enumerate();
+        let found = found
             .filter(|(_, e)| paths.contains(&e.path))
-            .map(|(i, _)| i)
-            .collect();
-        self.cursor = self.selection.iter().next().copied();
+            .map(|(i, _)| i);
+        self.selection.set(found);
     }
 
     fn select_only(&mut self, index: usize) {
-        self.selection = BTreeSet::from([index]);
-        self.cursor = Some(index);
+        self.selection.only(index);
     }
 
     fn clear_selection(&mut self) {
         self.selection.clear();
-        self.cursor = None;
+        self.lasso = None;
     }
 
     /// The selected item, if it is alone.
     pub fn single(&self) -> Option<&Entry> {
-        match self.selection.len() {
-            1 => self.cursor.and_then(|i| self.entries.get(i)),
-            _ => None,
-        }
+        self.selection.single().and_then(|i| self.entries.get(i))
     }
 
-    /// Moves the cursor from the keyboard and keeps the row visible.
-    fn move_cursor(&mut self, to: usize) -> Task<Message> {
+    /// Moves the cursor from the keyboard, alone or extending the selection from its anchor
+    /// (Shift), and keeps the row visible.
+    fn move_cursor(&mut self, to: usize, extend: bool) -> Task<Message> {
         if self.entries.is_empty() {
             return Task::none();
         }
         let index = to.min(self.entries.len() - 1);
-        self.select_only(index);
+        if extend {
+            self.selection.extend_to(index);
+        } else {
+            self.select_only(index);
+        }
         let row = metrics::LIST_ROW_HEIGHT;
         let top = metrics::LIST_TOP_GAP + index as f32 * row;
         let (offset, height) = self.scroll;
@@ -1063,6 +1105,90 @@ impl App {
             return Task::none();
         };
         operation::scroll_to(LIST, scrollable::AbsoluteOffset { x: 0.0, y })
+    }
+
+    // Lasso.
+
+    /// Top left corner of the listing's rows in the window, below its column headers.
+    fn list_origin() -> Point {
+        Point::new(
+            metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING,
+            metrics::TITLE_BAR_HEIGHT
+                + metrics::TOOLBAR_HEIGHT
+                + metrics::LIST_HEADER_HEIGHT
+                + 3.0 * metrics::BORDER_WIDTH,
+        )
+    }
+
+    /// Height of the visible part of the listing.
+    fn list_height(&self) -> f32 {
+        let below = metrics::BORDER_WIDTH + metrics::STATUS_BAR_HEIGHT;
+        self.size.height - Self::list_origin().y - below
+    }
+
+    /// A point of the window in the content of the listing, scroll included.
+    fn in_list(&self, at: Point) -> (f32, f32) {
+        let origin = Self::list_origin();
+        (at.x - origin.x, at.y - origin.y + self.scroll.0)
+    }
+
+    /// What a lasso starting now keeps: the selection with Ctrl or Shift held, else nothing.
+    fn lasso_base(&self) -> Selection {
+        if self.modifiers.command() || self.modifiers.shift() {
+            self.selection.clone()
+        } else {
+            Selection::default()
+        }
+    }
+
+    /// The pointer is on the row `index` but past its icon and name.
+    fn beside_name(&self, index: usize) -> bool {
+        let Some(entry) = self.entries.get(index) else {
+            return false;
+        };
+        let name = entry.name.chars().count() as f32 * typography::UI_CHAR_WIDTH;
+        let end = metrics::LIST_ROW_PADDING + metrics::LIST_ICON + metrics::GAP_ICON + name;
+        self.in_list(self.pointer).0 > end
+    }
+
+    /// The lasso follows the pointer, and selects the rows it crosses once it is a drag.
+    fn drag_lasso(&mut self) {
+        let end = self.in_list(self.pointer);
+        let count = self.entries.len();
+        let Some(lasso) = &mut self.lasso else {
+            return;
+        };
+        lasso.end = end;
+        let (dx, dy) = (end.0 - lasso.start.0, end.1 - lasso.start.1);
+        lasso.dragging |= dx.hypot(dy) > sherlock_ui::evidence::LASSO_THRESHOLD;
+        if lasso.dragging {
+            let (top, row) = (metrics::LIST_TOP_GAP, metrics::LIST_ROW_HEIGHT);
+            self.selection = lasso.selection(top, row, count);
+        }
+    }
+
+    /// How fast the listing scrolls, in pixels per second, under a lasso held near one of its
+    /// edges.
+    fn lasso_speed(&self) -> f32 {
+        if !self.lasso.as_ref().is_some_and(|l| l.dragging) {
+            return 0.0;
+        }
+        let y = self.pointer.y - Self::list_origin().y;
+        let (offset, height) = (self.scroll.0, self.list_height());
+        let content = metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT;
+        let speed = edge_scroll(
+            y,
+            height,
+            sherlock_ui::evidence::LASSO_EDGE,
+            sherlock_ui::evidence::LASSO_SCROLL,
+        );
+        // Nothing left to scroll that way.
+        let room = if speed < 0.0 {
+            offset
+        } else {
+            content - height - offset
+        };
+        if room > 0.5 { speed } else { 0.0 }
     }
 
     // Right-click menu.
@@ -1285,7 +1411,8 @@ impl App {
 
     /// Opens the menu from the keyboard, under the cursor row.
     fn open_menu_at_cursor(&mut self) {
-        let row = self.cursor.map_or(0.0, |i| (i + 1) as f32) * metrics::LIST_ROW_HEIGHT;
+        let row =
+            self.selection.cursor().map_or(0.0, |i| (i + 1) as f32) * metrics::LIST_ROW_HEIGHT;
         let top = metrics::TITLE_BAR_HEIGHT
             + metrics::TOOLBAR_HEIGHT
             + metrics::LIST_HEADER_HEIGHT
@@ -1407,15 +1534,18 @@ impl App {
             Key::Named(Named::ArrowRight) if modifiers.alt() => self.update(Message::Forward),
             Key::Named(Named::ArrowUp) if modifiers.alt() => self.update(Message::Up),
             Key::Named(Named::ArrowDown) => {
-                let to = self.cursor.map_or(0, |c| c + 1);
-                self.move_cursor(to)
+                let to = self.selection.cursor().map_or(0, |c| c + 1);
+                self.move_cursor(to, shift)
             }
             Key::Named(Named::ArrowUp) => {
-                let to = self.cursor.map_or(last, |c| c.saturating_sub(1));
-                self.move_cursor(to)
+                let to = self
+                    .selection
+                    .cursor()
+                    .map_or(last, |c| c.saturating_sub(1));
+                self.move_cursor(to, shift)
             }
-            Key::Named(Named::Home) => self.move_cursor(0),
-            Key::Named(Named::End) => self.move_cursor(last),
+            Key::Named(Named::Home) => self.move_cursor(0, shift),
+            Key::Named(Named::End) => self.move_cursor(last, shift),
             Key::Named(Named::Backspace) => self.update(Message::Up),
             Key::Named(Named::Enter) => self.run(Command::Open),
             Key::Named(Named::F2) => self.run(Command::Rename),
@@ -1542,8 +1672,7 @@ impl App {
             }
             Command::ToggleAlways => self.always = !self.always,
             Command::SelectAll => {
-                self.selection = (0..self.entries.len()).collect();
-                self.cursor = self.selection.iter().next().copied();
+                self.selection.all(self.entries.len());
             }
             _ => {}
         }
@@ -1570,7 +1699,7 @@ impl App {
     }
 
     fn open(&mut self) -> Task<Message> {
-        let Some(entry) = self.cursor.and_then(|i| self.entries.get(i)) else {
+        let Some(entry) = self.selection.cursor().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
         if entry.kind == Kind::Folder && self.location != Location::Trash {
@@ -1588,7 +1717,7 @@ impl App {
         if let Some(id) = default {
             return self.open_with_app_once(&id);
         }
-        let Some(entry) = self.cursor.and_then(|i| self.entries.get(i)) else {
+        let Some(entry) = self.selection.cursor().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
         let mut open = Process::new("xdg-open");
@@ -1660,9 +1789,14 @@ impl App {
     }
 
     fn start_rename(&mut self) -> Task<Message> {
-        let Some((index, entry)) = self.cursor.zip(self.single().cloned()) else {
+        // With several items selected, F2 renames the one under the cursor, alone.
+        let Some(index) = self.selection.cursor() else {
             return Task::none();
         };
+        let Some(entry) = self.entries.get(index).cloned() else {
+            return Task::none();
+        };
+        self.select_only(index);
         // The name is selected without its extension, as everywhere else.
         let stem = match (entry.kind, entry.name.rfind('.')) {
             (Kind::File, Some(dot)) if dot > 0 => entry.name[..dot].chars().count(),

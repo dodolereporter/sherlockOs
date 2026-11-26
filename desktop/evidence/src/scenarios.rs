@@ -101,7 +101,7 @@ impl Bench {
         self.app
             .selection
             .iter()
-            .map(|&i| self.app.entries[i].name.as_str())
+            .map(|i| self.app.entries[i].name.as_str())
             .collect()
     }
 
@@ -116,9 +116,9 @@ impl Bench {
     fn select(&mut self, name: &str) {
         self.press(Named::Home);
         while self.selected() != [name] {
-            let before = self.app.cursor;
+            let before = self.app.selection.cursor();
             self.press(Named::ArrowDown);
-            assert_ne!(before, self.app.cursor, "{name} not found");
+            assert_ne!(before, self.app.selection.cursor(), "{name} not found");
         }
     }
 }
@@ -874,4 +874,232 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     assert!(bench.app.chooser.is_some());
     bench.press(Named::Escape);
     assert!(bench.app.chooser.is_none());
+}
+
+/// A bench whose `projet` folder also holds `n` text files, `f00.txt` onwards.
+fn bench_with_files(name: &str, n: usize) -> Bench {
+    let mut bench = Bench::new(name);
+    for i in 0..n {
+        fs::write(bench.path(&format!("projet/f{i:02}.txt")), "x").expect("write");
+    }
+    bench.press(Named::F5);
+    bench
+}
+
+/// Clicks the named item with these modifiers held.
+fn click_with(bench: &mut Bench, name: &str, modifiers: Modifiers) {
+    bench.send(Message::Modifiers(modifiers));
+    bench.click(name);
+    bench.send(Message::Modifiers(Modifiers::empty()));
+    // Far enough apart in time: never a double click.
+    bench.app.clicks = Default::default();
+}
+
+#[test]
+fn shift_and_ctrl_clicks_select_ranges_from_the_anchor() {
+    let mut bench = bench_with_files("ranges", 6);
+    click_with(&mut bench, "f01.txt", Modifiers::empty());
+    click_with(&mut bench, "f04.txt", Modifiers::SHIFT);
+    assert_eq!(
+        bench.selected(),
+        ["f01.txt", "f02.txt", "f03.txt", "f04.txt"]
+    );
+    // A second Shift+click starts from the same anchor.
+    click_with(&mut bench, "a.txt", Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt", "f01.txt"]);
+    // Ctrl+click adds an item and moves the anchor; Ctrl+Shift+click adds a range.
+    click_with(&mut bench, "f03.txt", Modifiers::CTRL);
+    click_with(&mut bench, "f05.txt", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(
+        bench.selected(),
+        [
+            "a.txt", "f00.txt", "f01.txt", "f03.txt", "f04.txt", "f05.txt"
+        ]
+    );
+    // Ctrl+click removes; a plain click selects one item again.
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    assert!(!bench.selected().contains(&"f00.txt"));
+    click_with(&mut bench, "src", Modifiers::empty());
+    assert_eq!(bench.selected(), ["src"]);
+    // A double click still opens, after ranges.
+    bench.click("src");
+    bench.click("src");
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}
+
+#[test]
+fn shift_and_arrows_extend_the_selection_and_escape_clears_it() {
+    let mut bench = bench_with_files("arrows", 4);
+    bench.select("f00.txt");
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["f00.txt", "f01.txt", "f02.txt"]);
+    bench.key(Key::Named(Named::ArrowUp), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["f00.txt", "f01.txt"]);
+    bench.key(Key::Named(Named::Home), Modifiers::SHIFT);
+    assert_eq!(bench.selected(), ["src", "a.txt", "f00.txt"]);
+    // The preview shows nothing for several items; Delete trashes them all.
+    assert!(bench.app.single().is_none());
+    bench.ctrl("a");
+    assert_eq!(bench.selected().len(), 6);
+    bench.press(Named::Escape);
+    assert!(bench.selected().is_empty());
+    bench.select("f02.txt");
+    bench.key(Key::Named(Named::End), Modifiers::SHIFT);
+    bench.press(Named::Delete);
+    assert_eq!(bench.names(), ["src", "a.txt", "f00.txt", "f01.txt"]);
+    // F2 on several items renames the one under the cursor, alone.
+    bench.select("f00.txt");
+    bench.key(Key::Named(Named::ArrowDown), Modifiers::SHIFT);
+    bench.press(Named::F2);
+    assert_eq!(bench.selected(), ["f01.txt"]);
+    assert_eq!(
+        bench.app.renaming.as_ref().map(|(_, n)| n.as_str()),
+        Some("f01.txt")
+    );
+}
+
+#[test]
+fn a_lasso_on_the_background_selects_rows_and_scrolls_at_the_edge() {
+    let mut bench = bench_with_files("lasso", 40);
+    bench.app.settle();
+    let origin = |x: f32, y: f32| {
+        iced::Point::new(
+            metrics::SIDEBAR_WIDTH + metrics::LIST_PADDING + x,
+            metrics::TITLE_BAR_HEIGHT
+                + metrics::TOOLBAR_HEIGHT
+                + metrics::LIST_HEADER_HEIGHT
+                + 3.0 * metrics::BORDER_WIDTH
+                + y,
+        )
+    };
+    let row = metrics::LIST_ROW_HEIGHT;
+    // Pressed beside row 1, dragged down to row 3: rows 1 to 3.
+    bench.send(Message::Cursor(origin(600.0, row * 1.5)));
+    bench.send(Message::Blank);
+    bench.send(Message::Cursor(origin(601.0, row * 1.5 + 2.0)));
+    assert!(bench.selected().is_empty(), "a slip is not a lasso yet");
+    bench.send(Message::Cursor(origin(400.0, row * 3.5)));
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt", "f01.txt"]);
+    // Back up: the selection follows the rectangle.
+    bench.send(Message::Cursor(origin(400.0, row * 2.2)));
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt"]);
+    // Held near the bottom edge, the listing scrolls at each frame, and the lasso goes on
+    // with it.
+    let bottom = bench.app.size.height - metrics::STATUS_BAR_HEIGHT - 12.0;
+    bench.send(Message::Cursor(iced::Point::new(500.0, bottom)));
+    assert!(
+        bench.app.animating(bench.app.now()),
+        "frames for the scroll"
+    );
+    let before = bench.selected().len();
+    bench.send(Message::Scrolled(row * 3.0, bench.app.scroll.1));
+    assert!(bench.selected().len() > before);
+    bench.send(Message::Released);
+    assert!(bench.app.lasso.is_none());
+    assert!(
+        !bench.app.animating(bench.app.now()),
+        "no frame once released"
+    );
+    // With Ctrl held, a new lasso adds to the selection.
+    let kept = bench.selected().len();
+    bench.send(Message::Scrolled(0.0, bench.app.scroll.1));
+    bench.send(Message::Modifiers(Modifiers::CTRL));
+    bench.send(Message::Cursor(origin(600.0, row * 0.5)));
+    bench.send(Message::Blank);
+    bench.send(Message::Cursor(origin(600.0, row * 0.6 + 10.0)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected().len(), kept + 1);
+    // Without, a press on the background clears it.
+    bench.send(Message::Modifiers(Modifiers::empty()));
+    bench.send(Message::Blank);
+    bench.send(Message::Released);
+    assert!(bench.selected().is_empty());
+    // A press beside a name starts one too; on the name, it does not.
+    bench.send(Message::Cursor(origin(600.0, row * 1.5)));
+    bench.send(Message::Click(1));
+    bench.send(Message::Cursor(origin(600.0, row * 2.5)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected(), ["a.txt", "f00.txt"]);
+    bench.app.clicks = Default::default();
+    bench.send(Message::Cursor(origin(40.0, row * 1.5)));
+    bench.send(Message::Click(1));
+    bench.send(Message::Cursor(origin(40.0, row * 3.5)));
+    bench.send(Message::Released);
+    assert_eq!(bench.selected(), ["a.txt"]);
+}
+
+/// Captures of a selection of two runs, dark and light, in
+/// `target/tmp/evidence-selection-<theme>.png`: each run is one block, rounded at its two
+/// ends only, with no seam between its rows.
+#[test]
+fn following_selected_rows_form_one_block() {
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = crate::testing::in_theme(which);
+        let mut bench = bench_with_files("runs", 6);
+        click_with(&mut bench, "a.txt", Modifiers::empty());
+        click_with(&mut bench, "f01.txt", Modifiers::SHIFT);
+        click_with(&mut bench, "f03.txt", Modifiers::CTRL);
+        click_with(&mut bench, "f04.txt", Modifiers::CTRL);
+        assert_eq!(bench.app.selection.runs().len(), 2);
+        bench.app.settle();
+        let settings = Settings {
+            fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+            default_font: typography::UI,
+            default_text_size: Pixels(typography::UI_SIZE),
+            ..Settings::default()
+        };
+        let (width, height) = metrics::REFERENCE_WINDOW;
+        let mut ui = simulator::Simulator::with_size(settings, (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        fs::create_dir_all(&dir).expect("captures folder");
+        let base = dir.join(format!("evidence-selection-{name}.png"));
+        let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+        let written = base.with_file_name(format!("evidence-selection-{name}-{renderer}.png"));
+        let _ = fs::remove_file(&written);
+        assert!(snapshot.matches_image(&base).expect("writing the capture"));
+        println!("capture: {}", written.display());
+
+        let picture = ::image::open(&written).expect("capture").to_rgb8();
+        let scale = picture.width() as f32 / width;
+        let top = metrics::TITLE_BAR_HEIGHT
+            + metrics::TOOLBAR_HEIGHT
+            + metrics::LIST_HEADER_HEIGHT
+            + 3.0 * metrics::BORDER_WIDTH
+            + metrics::LIST_TOP_GAP;
+        let left = metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING;
+        let row = metrics::LIST_ROW_HEIGHT;
+        let pixel = |x: f32, y: f32| *picture.get_pixel((x * scale) as u32, (y * scale) as u32);
+        // Blank, away from any text: between the names and the dates.
+        let x = left + 200.0;
+        let background = pixel(x, top + 0.5 * row);
+        let selected = pixel(x, top + 1.5 * row);
+        assert_ne!(background, selected, "{name}: the selection shows");
+        // Rows 1 and 2 (a.txt, f00.txt) are one block: the boundary between them is selected.
+        assert_eq!(
+            pixel(x, top + 2.0 * row),
+            selected,
+            "{name}: a seam in the run"
+        );
+        // The block's corners are rounded at its ends only: the very corner of its first row
+        // is background, the corner where two of its rows meet is filled.
+        let corner = left + 0.5;
+        assert_eq!(
+            pixel(corner, top + row + 0.5),
+            background,
+            "{name}: top corner"
+        );
+        assert_eq!(
+            pixel(corner, top + 2.0 * row),
+            selected,
+            "{name}: middle corner"
+        );
+        // Row 4 (f02.txt) is not selected: two blocks, not one.
+        assert_eq!(pixel(x, top + 4.5 * row), background, "{name}: rows apart");
+        assert_eq!(pixel(x, top + 5.5 * row), selected, "{name}: second block");
+    }
 }

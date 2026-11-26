@@ -117,7 +117,10 @@ impl App {
         if let Some(search) = &self.chooser {
             layers.push(self.chooser(search));
         }
-        stack(layers).into()
+        // The pointer is read here rather than from a subscription, whose message would come
+        // after a press of the same batch of events: a menu opened right after the pointer
+        // moved opens where it is.
+        mouse_area(stack(layers)).on_move(Message::Cursor).into()
     }
 
     fn title_bar(&self) -> Element<'_, Message> {
@@ -435,25 +438,76 @@ impl App {
             .extend((first..last).map(|i| self.row(i, &self.entries[i], name_chars)))
             .push(space().height(after))
             .width(Length::Fill);
-        // A single selection is drawn by a highlight that glides under the rows. It is the
-        // first layer of the stack, which sets the stack size, so it spans the whole list.
-        // Every other layer of a stack, and every clipped container, costs the software
-        // renderer a full clip mask: the rows are one layer, and nothing in them clips.
-        match &self.highlight {
-            Some(highlight) if self.selection.len() == 1 => {
-                let y = highlight.value(now) as f32 + slide;
-                let bar = container(space())
-                    .width(Length::Fill)
-                    .height(row_height)
-                    .style(theme::list_row(true));
-                let height = before + (total - first) as f32 * row_height;
-                let layer = column![space().height(y.max(0.0)), bar]
-                    .width(Length::Fill)
-                    .height(height);
-                stack![layer, rows].width(Length::Fill).into()
-            }
-            _ => rows.into(),
+        // The selection is drawn under the rows, in the first layer of the stack, which sets
+        // the stack size: it spans the whole list. Every other layer of a stack, and every
+        // clipped container, costs the software renderer a full clip mask: the rows are one
+        // layer, nothing in them clips, and the lasso adds one only while it is dragged.
+        let dragging = self.lasso.as_ref().is_some_and(|l| l.dragging);
+        if self.selection.is_empty() && !dragging {
+            return rows.into();
         }
+        let height = before + (total - first) as f32 * row_height;
+        let mut layers = vec![
+            self.selection_layer(now, first, last, slide, height),
+            rows.into(),
+        ];
+        if let Some(lasso) = self.lasso.as_ref().filter(|l| l.dragging) {
+            let (x, y, w, h) = lasso.rect();
+            let rect = container(space())
+                .width(w)
+                .height(h)
+                .style(sherlock_ui::evidence::lasso);
+            let layer = column![
+                space().height(y.max(0.0) + slide),
+                row![space().width(x.max(0.0)), rect]
+            ];
+            layers.push(layer.into());
+        }
+        stack(layers).width(Length::Fill).into()
+    }
+
+    /// The selection under the rows. An item selected alone is a highlight that glides from
+    /// row to row. Items that follow each other form one block, rounded at its two ends only,
+    /// so that a run of selected rows reads as one piece (lot E-01). Only the blocks within the
+    /// built rows are drawn; a block cut there ends among the rows built out of sight.
+    fn selection_layer(
+        &self,
+        now: Duration,
+        first: usize,
+        last: usize,
+        slide: f32,
+        height: f32,
+    ) -> Element<'_, Message> {
+        let row_height = metrics::LIST_ROW_HEIGHT;
+        let block = |h: f32| {
+            container(space())
+                .width(Length::Fill)
+                .height(h)
+                .style(theme::list_row(true))
+        };
+        let mut layer = Column::new().width(Length::Fill).height(height);
+        match (&self.highlight, self.selection.single()) {
+            (Some(highlight), Some(_)) => {
+                let y = highlight.value(now) as f32 + slide;
+                layer = layer
+                    .push(space().height(y.max(0.0)))
+                    .push(block(row_height));
+            }
+            _ => {
+                let mut y = 0.0;
+                for run in self.selection.runs() {
+                    let (start, end) = ((*run.start()).max(first), (*run.end() + 1).min(last));
+                    if start >= end {
+                        continue;
+                    }
+                    let top = metrics::LIST_TOP_GAP + start as f32 * row_height + slide;
+                    let size = (end - start) as f32 * row_height;
+                    layer = layer.push(space().height(top - y)).push(block(size));
+                    y = top + size;
+                }
+            }
+        }
+        layer.into()
     }
 
     /// Characters of a name that fit in the name column, estimated from the window width:
@@ -476,9 +530,8 @@ impl App {
     }
 
     fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
-        let selected = self.selection.contains(&i);
-        // A single selection is drawn by the gliding highlight.
-        let painted = selected && self.selection.len() > 1;
+        // The selection is drawn under the rows (`selection_layer`).
+        let selected = self.selection.contains(i);
         let tint = match entry.kind {
             Kind::Folder => color::palette().blue_light,
             _ => color::palette().text_secondary,
@@ -530,7 +583,7 @@ impl App {
             .height(metrics::LIST_ROW_HEIGHT)
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
-            .style(theme::list_row(painted));
+            .style(theme::list_row(false));
         let line = hoverable(line, color::palette().hover, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))

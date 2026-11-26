@@ -29,6 +29,7 @@ renderer is several times slower (see Performance). Evidence logs the renderer i
 | `places` | Favourites from `user-dirs.dirs` | no |
 | `clock` | Local time (`localtime_r`, `mktime`) | no |
 | `probe` | `--measure`: smoothness measurement | no |
+| `selection` | Selected items, cursor and anchor; clicks with Ctrl and Shift, ranges, the lasso and its scrolling at the edges | no |
 | `app` | State, messages, keyboard, commands, animations | yes |
 | `view` | The window, after the design board | yes |
 | `scenarios` | End-to-end tests driven by the keyboard, headless capture | tests |
@@ -132,6 +133,7 @@ field has the focus.
 | Keys | Action |
 | --- | --- |
 | Up, Down, Home, End | Move the selection |
+| Shift+Up, Shift+Down, Shift+Home, Shift+End | Extend the selection from its anchor, or shrink it back |
 | Enter | Open (folder: enter it; file: `xdg-open`) |
 | Backspace, Alt+Up | Parent folder, with the folder you came from selected |
 | Alt+Left, Alt+Right | Back, forward |
@@ -150,7 +152,45 @@ field has the focus.
 | Tab, Shift+Tab | Move the focus through buttons and fields |
 | Escape | Clear the search and the selection |
 
-Ctrl+click adds a row to the selection.
+## Selection
+
+As in Finder and Dolphin (lot E-01). The logic is in `selection`, without iced.
+
+| Mouse | Action |
+| --- | --- |
+| Click | Selects the item alone; it becomes the anchor |
+| Ctrl+click | Adds or removes the item; it becomes the anchor |
+| Shift+click | Selects the range from the anchor to the item, alone. Another Shift+click starts again from the same anchor |
+| Ctrl+Shift+click | Adds that range to the selection |
+| Drag on the background, or on a row beside its name | Lasso: selects the rows the rectangle crosses. With Ctrl or Shift held, adds them to the selection |
+| Double click | Opens the item (unchanged, `sherlock_ui::click`) |
+
+The lasso starts once the pointer is 4 px away from the press, so a click that slips stays a
+click. It can start on a row past its name, as in Dolphin's details view: a long folder has no
+background left. Held in the row-high band along the top or bottom edge of the listing (or past
+it), it scrolls the listing, faster the deeper the pointer, up to 1,000 px per second whatever
+the frame rate, and goes on selecting. The left button going up anywhere ends it (a subscription
+to the window's events, since the pointer may be outside the listing by then).
+
+The pointer is read by the view (a `mouse_area` around the window, `on_move`), not from a
+subscription: a subscription's message arrives after the messages of the widgets for the same
+batch of events, so a press right after a move used the previous position. The right-click
+menu opened where the pointer had been before.
+
+With several items selected, the preview shows nothing, Delete moves them all to the trash,
+Ctrl+C, Ctrl+X and Ctrl+D act on them all, and F2 renames the item under the cursor alone.
+
+**Drawing.** Selected items that follow each other form one block, rounded only at the top of the
+first and the bottom of the last, without a seam between rows: the selection is drawn as one
+rounded rectangle per run, in a layer under the rows, not as a rounded background per row. An
+item selected alone keeps its gliding highlight. Only the rows built (visible, plus four) are
+drawn; a run cut there has its end among the rows built out of sight. Evidence has no grid or
+column view yet: when they come, the grid should merge the selected items of a row the same
+way.
+
+| Dark | Light |
+| --- | --- |
+| ![Two runs selected](evidence/selection-dark.png) | ![Two runs selected, light](evidence/selection-light.png) |
 
 ## Animations
 
@@ -160,7 +200,7 @@ its animations runs (or during `--measure`), never at rest.
 | What | How |
 | --- | --- |
 | Hover of rows, menu entries, sidebar entries, icon and secondary buttons | 150 ms fade of the hover veil (`sherlock_ui::animated::Hoverable`, which requests its own frames) |
-| Selection | The highlight glides from row to row on `PREVIEW_SPRING` |
+| Selection | The highlight of an item selected alone glides from row to row on `PREVIEW_SPRING`; several items are drawn at once |
 | Opening a folder | The rows rise 8 px and fade in over 150 ms |
 | Context menu | Appears at once, with no animation (see below) |
 | Preview | Fades in over 150 ms when its content arrives |
@@ -254,6 +294,8 @@ whole, over the design board's blurred shadow.
 ## Gaps with the design board
 
 - No grid or column views: list only.
+- No drag and drop of files, inside Evidence or to other applications. No renaming of several
+  items at once.
 - No "Ask Sherlock" button, Sherlock bubble, "Build the image" or "Run in a sandbox"
   buttons, no Dev section (Docker volumes, sandboxes): out of this lot's scope.
 - « Ouvrir avec » is wider than the design board's submenu (280 instead of 216): application names
@@ -315,6 +357,11 @@ user's; no test calls the real UDisks.
   `mimeapps.list`, a headless capture of the window, double clicks on a selected or
   unselected item, slow clicks and clicks on two items, and captures of the title bar in
   `target/tmp/evidence-header-dark.png` and `-light.png` with the icon in its badge.
+- `selection` and its scenarios (lot E-01): clicks with Ctrl, Shift and both, ranges from the
+  anchor, Shift and the arrows, select all, the lasso (threshold, rows crossed, Ctrl, the
+  scroll at the edges, release, a press beside or on a name), Delete and F2 on several items,
+  and captures of two selected runs in `target/tmp/evidence-selection-dark-tiny-skia.png` and
+  `-light-` with pixels checked: no seam inside a run, rounded corners at its ends only.
 - `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.
