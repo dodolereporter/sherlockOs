@@ -86,6 +86,8 @@ pub const QUICK_TILE_RADIUS: f32 = 14.0;
 pub const TILE_GAP: f32 = 8.0;
 pub const TILE_PADDING: f32 = 10.0;
 pub const GLYPH: f32 = 18.0;
+/// The glyph of a tile: 2 under the board's 18, for the same room as its title.
+pub const TILE_GLYPH: f32 = 16.0;
 pub const TILE_ICON_GAP: f32 = 8.0;
 pub const CHEVRON: f32 = 28.0;
 /// A slider row: the button or icon on its left, the gap, the rail and handle; the room under
@@ -584,7 +586,8 @@ mod styles {
                 .color(under)
                 .wrapping(text::Wrapping::None),
         ];
-        let content = iced::widget::row![glyph(glyph_of, ink), container(texts).clip(true)]
+        let icon = glyph_sized(glyph_of, ink, TILE_GLYPH);
+        let content = iced::widget::row![icon, container(texts).clip(true)]
             .spacing(TILE_ICON_GAP)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);

@@ -377,6 +377,10 @@ confirmer » replaces the user's name; any other click cancels it.
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
 ![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
 ![The control centre without notification nor service](../desktop/bar/screenshots/control-centre-empty.png)
+![The same in the light theme](../desktop/bar/screenshots/control-centre-empty-light.png)
+
+The tiles keep 10 on their sides and 8 between their 16 px glyph and their texts, 2 under the
+board each: « Ne pas déranger » fits in the 149 a tile gets, as iced lays out Inter.
 
 ### Calendar
 
