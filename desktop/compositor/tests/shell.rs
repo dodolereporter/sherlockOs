@@ -1380,7 +1380,11 @@ mod tests {
         h.state.set_snap_gap(0);
         h.run_until("without gap", |_| pending(&window) == Some((400, 524)));
         let drawn = h.state.window_visual(&window, Duration::from_secs(9));
-        assert_eq!(drawn.map(|v| v.decoration), Some(1.0), "snapped, its corners kept");
+        assert_eq!(
+            drawn.map(|v| v.decoration),
+            Some(1.0),
+            "snapped, its corners kept"
+        );
     }
 
     #[test]

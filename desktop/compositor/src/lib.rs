@@ -480,11 +480,6 @@ impl State {
         Some(motion.frame(now, geometry))
     }
 
-    /// Margin around windows snapped into a half or a quarter of a screen.
-    pub fn snap_gap(&self) -> i32 {
-        self.snap_gap
-    }
-
     /// Changes the margin around snapped windows; those already snapped take it at once.
     pub fn set_snap_gap(&mut self, gap: i32) {
         self.snap_gap = gap.max(0);

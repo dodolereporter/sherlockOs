@@ -131,7 +131,7 @@ impl WindowMotion {
     /// given while its client has not taken it yet. Its place is always the real one, which
     /// the compositor sets at once.
     fn goal(&mut self, now: Duration, target: RectF) -> RectF {
-        let Some((rect, until)) = self.expected else {
+        let Some((rect, mut until)) = self.expected else {
             return target;
         };
         let until = *until.get_or_insert(now + SIZE_WAIT);

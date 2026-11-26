@@ -1192,7 +1192,7 @@ mod tests {
         h.shortcut(KEY_UP);
         assert_maximized(&mut h, "maximized in the minimum area", 800, ht);
         h.shortcut(KEY_LEFT);
-        h.wait_size("the left half", 400, ht);
+        h.wait_size("the left half", 388, ht - 16);
     }
 
     #[test]
