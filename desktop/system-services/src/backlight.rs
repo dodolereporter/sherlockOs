@@ -109,11 +109,11 @@ pub fn step(percent: u8, up: bool) -> u8 {
     }
 }
 
-/// One step up or down of the backlight found under `root`, through logind. Returns the new
-/// brightness, in percent.
-pub async fn step_from(bus: &Connection, root: &Path, up: bool) -> Result<u8> {
+/// `steps` steps of the backlight found under `root`, up when positive, down when negative,
+/// set at once through logind. Returns the new brightness, in percent.
+pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<u8> {
     let backlight = find(root)?;
-    let percent = step(backlight.percent(), up);
+    let percent = (0..steps.unsigned_abs()).fold(backlight.percent(), |p, _| step(p, steps > 0));
     set(bus, &backlight, percent).await?;
     Ok(percent)
 }

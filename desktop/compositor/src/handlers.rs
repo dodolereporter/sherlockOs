@@ -21,7 +21,7 @@ use smithay::{
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat, wl_surface::WlSurface},
         },
     },
-    utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Serial, Size},
     wayland::{
         buffer::BufferHandler,
         compositor::{self, CompositorClientState, CompositorHandler, CompositorState},
@@ -478,6 +478,11 @@ impl XdgShellHandler for State {
         if Seat::<State>::from_resource(&seat).as_ref() != Some(&self.seat) {
             PopupManager::dismiss_popup(&root, &popup).ok();
             return;
+        }
+        // A menu closed in the same batch as this one opens (a panel of the bar replaced by
+        // another) no longer holds the grab: the new one takes it.
+        if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
+            self.popup_grab = None;
         }
         // A submenu keeps the first menu of the chain: closing that one closes them all.
         if self

@@ -47,6 +47,8 @@ mod tests {
         zxdg_toplevel_decoration_v1::{self, Mode as DecorationMode, ZxdgToplevelDecorationV1},
     };
     use wayland_protocols::xdg::shell::client::{
+        xdg_popup::{self, XdgPopup},
+        xdg_positioner::XdgPositioner,
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
@@ -87,6 +89,23 @@ mod tests {
         kde_modes: Vec<u32>,
         /// The compositor asked the window to close.
         closed: bool,
+        /// Popups the compositor closed (`popup_done`), by protocol id.
+        popups_done: Vec<u32>,
+    }
+
+    impl Dispatch<XdgPopup, ()> for Client {
+        fn event(
+            client: &mut Self,
+            popup: &XdgPopup,
+            event: xdg_popup::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let xdg_popup::Event::PopupDone = event {
+                client.popups_done.push(popup.id().protocol_id());
+            }
+        }
     }
 
     impl Dispatch<ZxdgToplevelDecorationV1, ()> for Client {
@@ -310,6 +329,7 @@ mod tests {
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
     delegate_noop!(Client: WpFractionalScaleManagerV1);
+    delegate_noop!(Client: XdgPositioner);
 
     /// Shared memory for a buffer of `size` bytes, without a file left on disk.
     /// Tests run in parallel: each one has its own file name.
@@ -1074,6 +1094,74 @@ mod tests {
             s.output_area() != Some(rect(0, 0, 800, 600))
         });
         bar
+    }
+
+    /// What the bar needs to open its panels.
+    struct Panels {
+        compositor: WlCompositor,
+        wm_base: XdgWmBase,
+        seat: WlSeat,
+    }
+
+    fn panels(h: &mut Harness) -> Panels {
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals.iter().any(|g| g.1 == "xdg_wm_base")
+        });
+        Panels {
+            compositor: h.bind(&registry),
+            wm_base: h.bind(&registry),
+            seat: h.bind(&registry),
+        }
+    }
+
+    /// The bar opens a panel: a popup of its surface, under its right end, with a grab. Sent
+    /// only, as the bar sends it.
+    fn open_panel(h: &Harness, bar: &Anchored, with: &Panels) -> XdgPopup {
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(560, 0, 2, 36);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        popup.grab(&with.seat, 0);
+        surface.commit();
+        popup
+    }
+
+    #[test]
+    fn a_panel_opened_again_still_closes_on_a_click_elsewhere() {
+        let mut h = Harness::start();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let first = open_panel(&h, &bar, &with);
+        settle(&mut h);
+        // The bar closes its panel and opens another one in the same batch, as when it
+        // switches from the calendar to the control centre.
+        first.destroy();
+        let second = open_panel(&h, &bar, &with);
+        settle(&mut h);
+        h.click(400.0, 500.0, 10);
+        let id = second.id().protocol_id();
+        h.run_until("the panel closed by a click elsewhere", |c, _| {
+            c.popups_done.contains(&id)
+        });
+        // Closed, then opened again in another batch: the same.
+        second.destroy();
+        settle(&mut h);
+        let third = open_panel(&h, &bar, &with);
+        settle(&mut h);
+        h.click(400.0, 500.0, 20);
+        let id = third.id().protocol_id();
+        h.run_until(
+            "the panel opened again, closed by a click elsewhere",
+            |c, _| c.popups_done.contains(&id),
+        );
     }
 
     #[test]

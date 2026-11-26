@@ -212,7 +212,11 @@ size and margins, and computes the work area.
   another client, or on the desktop; the press still goes through. Presses on the client's own
   surfaces go to it, which closes its menu itself. The serial of the grab is not checked:
   iced opens its menus on release, with the serial of the press. The menu does not take the
-  keyboard: Escape and arrow keys go to the surface that has it.
+  keyboard: Escape and arrow keys go to the surface that has it. A grab whose menu is gone does
+  not hold any more: when the bar closes a panel and opens another in the same batch, the new
+  one takes the grab (Q-15; before, it kept none, and a click elsewhere left it open). A
+  headless test opens, closes and opens a panel again, in one batch and then in two, and
+  clicks elsewhere.
 - **Blur.** `Scene::push_backdrop` is the place where the blur behind glass surfaces comes, with
   lot D-11b: it is called for each anchored surface, behind it, with its rectangle in the
   frame. It draws nothing yet: a translucent surface shows a sharp desktop behind it.

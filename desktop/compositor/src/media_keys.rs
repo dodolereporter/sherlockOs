@@ -6,7 +6,15 @@
 //! to the loop and shows in the on-screen display (`osd`). The volume and brightness keys
 //! repeat while held, at the pace of the keyboard. See `docs/media-keys.md`.
 
-use std::{path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
 use sherlock_ui::osd::Kind;
 use smithay::{
@@ -93,10 +101,35 @@ impl Controls {
     }
 }
 
-/// The keys at work: the worker thread and the key held.
+/// The keys at work: the worker thread, whether it is at work, and the key held.
 pub struct MediaKeys {
     worker: mpsc::Sender<MediaKey>,
+    /// Set from a key sent until the worker has done everything it was given: a held key only
+    /// repeats when it is not set, so that a slow `pactl` never piles keys up.
+    busy: Arc<AtomicBool>,
     held: Option<(Keycode, RegistrationToken)>,
+}
+
+/// The keys waiting for the worker, in order, with the steps of the volume or of the
+/// brightness that follow each other merged into one: their sum, set at once.
+pub fn merge(keys: &[MediaKey]) -> Vec<(MediaKey, i32)> {
+    let axis = |key: MediaKey| match key {
+        MediaKey::VolumeUp => Some((MediaKey::VolumeUp, 1)),
+        MediaKey::VolumeDown => Some((MediaKey::VolumeUp, -1)),
+        MediaKey::BrightnessUp => Some((MediaKey::BrightnessUp, 1)),
+        MediaKey::BrightnessDown => Some((MediaKey::BrightnessUp, -1)),
+        _ => None,
+    };
+    let mut merged: Vec<(MediaKey, i32)> = Vec::new();
+    for &key in keys {
+        match (axis(key), merged.last_mut()) {
+            (Some((first, step)), Some((last, steps))) if *last == first => *steps += step,
+            (Some((first, step)), _) => merged.push((first, step)),
+            (None, _) => merged.push((key, 0)),
+        }
+    }
+    merged.retain(|(key, steps)| axis(*key).is_none() || *steps != 0);
+    merged
 }
 
 /// A bus, opened on first use and kept.
@@ -122,11 +155,12 @@ impl Bus {
     }
 }
 
-/// Does what `key` asks, on the worker thread. Returns what to show.
+/// Does what `key` asks, on the worker thread, `steps` times for the volume and the
+/// brightness (`VolumeUp` and `BrightnessUp`, negative steps going down). Returns what to show.
 fn act(
     controls: &Controls,
     buses: &mut (Bus, Bus),
-    key: MediaKey,
+    (key, steps): (MediaKey, i32),
 ) -> Result<Option<Level>, Problem> {
     let sound = |kind, sound: system_services::audio::Sound| Level {
         kind,
@@ -135,8 +169,7 @@ fn act(
     };
     Ok(Some(match key {
         MediaKey::VolumeUp | MediaKey::VolumeDown => {
-            let up = key == MediaKey::VolumeUp;
-            sound(Kind::Volume, controls.mixer.step_volume(up)?)
+            sound(Kind::Volume, controls.mixer.step_volume(steps)?)
         }
         MediaKey::Mute => sound(Kind::Volume, controls.mixer.toggle_mute(Device::Output)?),
         MediaKey::MicMute => sound(
@@ -144,9 +177,9 @@ fn act(
             controls.mixer.toggle_mute(Device::Microphone)?,
         ),
         MediaKey::BrightnessUp | MediaKey::BrightnessDown => {
-            let up = key == MediaKey::BrightnessUp;
             let bus = buses.0.get()?;
-            let percent = zbus::block_on(backlight::step_from(&bus, &controls.backlights, up))?;
+            let root = &controls.backlights;
+            let percent = zbus::block_on(backlight::step_from(&bus, root, steps))?;
             Level {
                 kind: Kind::Brightness,
                 percent: u16::from(percent),
@@ -162,8 +195,13 @@ fn act(
     }))
 }
 
-/// The worker: one key after the other, in the order pressed.
-fn work(controls: Controls, keys: mpsc::Receiver<MediaKey>, shown: channel::Sender<Level>) {
+/// The worker: the keys in the order pressed, those waiting taken together (`merge`).
+fn work(
+    controls: Controls,
+    keys: mpsc::Receiver<MediaKey>,
+    busy: Arc<AtomicBool>,
+    shown: channel::Sender<Level>,
+) {
     let bus = |address: &Option<String>, system| Bus {
         address: address.clone(),
         system,
@@ -173,16 +211,21 @@ fn work(controls: Controls, keys: mpsc::Receiver<MediaKey>, shown: channel::Send
         bus(&controls.system_bus, true),
         bus(&controls.session_bus, false),
     );
-    while let Ok(key) = keys.recv() {
-        match act(&controls, &mut buses, key) {
-            Ok(Some(level)) => {
-                if shown.send(level).is_err() {
-                    return;
+    while let Ok(first) = keys.recv() {
+        busy.store(true, Ordering::SeqCst);
+        let waiting: Vec<MediaKey> = std::iter::once(first).chain(keys.try_iter()).collect();
+        for key in merge(&waiting) {
+            match act(&controls, &mut buses, key) {
+                Ok(Some(level)) => {
+                    if shown.send(level).is_err() {
+                        return;
+                    }
                 }
+                Ok(None) => {}
+                Err(problem) => tracing::warn!(?key, "media key: {problem}"),
             }
-            Ok(None) => {}
-            Err(problem) => tracing::warn!(?key, "media key: {problem}"),
         }
+        busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -191,6 +234,8 @@ impl State {
     /// mode leaves them to the host session.
     pub fn enable_media_keys(&mut self, controls: Controls) {
         let (keys, worker_keys) = mpsc::channel();
+        let busy = Arc::new(AtomicBool::new(false));
+        let worker_busy = busy.clone();
         let (shown, levels) = channel::channel();
         let inserted = self.loop_handle.insert_source(levels, |event, _, state| {
             if let Event::Msg(level) = event {
@@ -203,13 +248,14 @@ impl State {
         }
         let spawned = std::thread::Builder::new()
             .name(String::from("media-keys"))
-            .spawn(move || work(controls, worker_keys, shown));
+            .spawn(move || work(controls, worker_keys, worker_busy, shown));
         if let Err(err) = spawned {
             tracing::warn!("media keys left to the clients: {err}");
             return;
         }
         self.media_keys = Some(MediaKeys {
             worker: keys,
+            busy,
             held: None,
         });
     }
@@ -225,18 +271,24 @@ impl State {
         let Some(keys) = &self.media_keys else {
             return;
         };
+        // A press always goes: the keys of a hand never pile up.
+        keys.busy.store(true, Ordering::SeqCst);
         let _ = keys.worker.send(key);
         if !key.repeats() {
             return;
         }
-        let worker = keys.worker.clone();
+        let (worker, busy) = (keys.worker.clone(), keys.busy.clone());
         let timer = Timer::from_duration(REPEAT_DELAY);
-        let token = self
-            .loop_handle
-            .insert_source(timer, move |_, _, _| match worker.send(key) {
+        let token = self.loop_handle.insert_source(timer, move |_, _, _| {
+            // A repeat only goes when the worker has done the keys before it.
+            if busy.swap(true, Ordering::SeqCst) {
+                return TimeoutAction::ToDuration(REPEAT_INTERVAL);
+            }
+            match worker.send(key) {
                 Ok(()) => TimeoutAction::ToDuration(REPEAT_INTERVAL),
                 Err(_) => TimeoutAction::Drop,
-            });
+            }
+        });
         match token {
             Ok(token) => {
                 if let Some(keys) = &mut self.media_keys {
@@ -280,5 +332,25 @@ mod tests {
         assert!(MediaKey::BrightnessDown.repeats());
         assert!(!MediaKey::Mute.repeats());
         assert!(REPEAT_INTERVAL < REPEAT_DELAY);
+    }
+
+    #[test]
+    fn the_steps_waiting_are_set_at_once() {
+        use MediaKey::*;
+        let play = Player(mpris::Command::PlayPause);
+        let keys = [
+            VolumeUp,
+            VolumeUp,
+            VolumeDown,
+            VolumeUp,
+            Mute,
+            BrightnessDown,
+            BrightnessDown,
+        ];
+        let merged = merge(&keys);
+        assert_eq!(merged, [(VolumeUp, 2), (Mute, 0), (BrightnessUp, -2)]);
+        // Steps that cancel out do nothing; other keys stay in their place.
+        assert_eq!(merge(&[VolumeUp, VolumeDown, play]), [(play, 0)]);
+        assert!(merge(&[]).is_empty());
     }
 }
