@@ -40,6 +40,9 @@ pub const CHIP_GAP: f32 = 4.0;
 /// Right-hand indicators: gap between two indicators, between an icon and its value.
 pub const STATUS_GAP: f32 = 14.0;
 pub const STATUS_ICON_GAP: f32 = 6.0;
+/// The icons of the bar's indicators (network, sound, battery). The board draws them at 16;
+/// UI-01 enlarges them, found too small on the reference laptop.
+pub const STATUS_ICON: f32 = 18.0;
 /// Gap between the bottom of the bar and a menu it opens (Menus board: 46 then 52).
 pub const TOP_BAR_MENU_GAP: f32 = 6.0;
 /// Sherlock menu header: side of the avatar (the logo in its square), top, side and bottom
@@ -209,6 +212,12 @@ pub const ICON_BUTTON_RADIUS: f32 = 8.0;
 pub const TOGGLE_WIDTH: f32 = 44.0;
 pub const TOGGLE_HEIGHT: f32 = 26.0;
 pub const TOGGLE_INSET: f32 = 3.0;
+/// How much wider the knob grows while the toggle is pressed (UI-01).
+pub const TOGGLE_KNOB_STRETCH: f32 = 4.0;
+/// The mark under a bar button whose panel is open (UI-01): width and height, and its distance
+/// to the bottom of the button.
+pub const OPEN_MARK: (f32, f32) = (14.0, 2.0);
+pub const OPEN_MARK_INSET: f32 = 2.0;
 /// Text field: height, radius, side padding.
 pub const FIELD_HEIGHT: f32 = 32.0;
 pub const FIELD_RADIUS: f32 = 9.0;

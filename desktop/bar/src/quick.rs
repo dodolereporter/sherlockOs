@@ -1088,17 +1088,13 @@ impl Quick {
             volume.unwrap_or(0),
             on_change,
         );
-        let caption = text(line)
-            .font(typography::UI)
+        let caption = ui::ellipsis(line)
             .size(typography::SMALL_SIZE)
-            .style(panels::secondary_text)
-            .wrapping(text::Wrapping::None);
-        let caption = container(caption)
-            .padding(Padding {
-                left: panels::SLIDER_INSET,
-                ..Padding::ZERO
-            })
-            .clip(true);
+            .style(panels::secondary_text);
+        let caption = container(caption).padding(Padding {
+            left: panels::SLIDER_INSET,
+            ..Padding::ZERO
+        });
         column![control, caption]
             .spacing(panels::CAPTION_GAP)
             .into()
@@ -1144,10 +1140,10 @@ impl Quick {
         };
         let name = row![
             panels::glyph(Glyph::User, p.text_secondary),
-            ui::body(line)
+            ui::ellipsis(line)
                 .font(typography::UI_SEMIBOLD)
                 .color(tint)
-                .wrapping(text::Wrapping::None),
+                .width(Length::Fill),
         ]
         .spacing(panels::HEADER_GAP)
         .align_y(Alignment::Center);
@@ -1162,7 +1158,7 @@ impl Quick {
             panels::round_button(glyph, label, armed, Some(Message::Session(command))).into()
         });
         let line = row![
-            container(name).width(Length::Fill).clip(true),
+            container(name).width(Length::Fill),
             iced::widget::Row::with_children(buttons).spacing(panels::ROUND_GAP),
         ]
         .align_y(Alignment::Center);
