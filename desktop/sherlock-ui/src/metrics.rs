@@ -218,6 +218,26 @@ pub const TOGGLE_KNOB_STRETCH: f32 = 4.0;
 /// to the bottom of the button.
 pub const OPEN_MARK: (f32, f32) = (14.0, 2.0);
 pub const OPEN_MARK_INSET: f32 = 2.0;
+/// Check box and radio button (UI-01, no board draws them): side of the box, radius of the
+/// box, width of its edge, diameter of the radio's dot.
+pub const CHECKBOX: f32 = 18.0;
+pub const CHECKBOX_RADIUS: f32 = 5.0;
+pub const CHECKBOX_EDGE: f32 = 1.5;
+pub const RADIO_DOT: f32 = 8.0;
+/// A check box or radio button with its label: gap, height, padding and radius of the row.
+pub const CHOICE_GAP: f32 = 10.0;
+pub const CHOICE_HEIGHT: f32 = 30.0;
+pub const CHOICE_PADDING: f32 = 6.0;
+pub const CHOICE_RADIUS: f32 = 8.0;
+/// Progress bar: the Demarrage board's 5 high, its track the pressed veil (`rgba(255,255,255,0.12)`).
+pub const PROGRESS_HEIGHT: f32 = 5.0;
+/// Loading indicator: its usual size, and the stroke of its arc (not an icon: bolder, to read
+/// as moving).
+pub const SPINNER: f32 = 20.0;
+pub const SPINNER_STROKE: f32 = 2.4;
+/// Entry of a list (UI-01): height with a second line, padding.
+pub const LIST_ITEM_HEIGHT: f32 = 44.0;
+
 /// Text field: height, radius, side padding.
 pub const FIELD_HEIGHT: f32 = 32.0;
 pub const FIELD_RADIUS: f32 = 9.0;

@@ -93,6 +93,7 @@ pub struct Hoverable<'a, Message> {
     radius: f32,
     key: Option<u64>,
     pressed: Option<Color>,
+    rest: Option<Color>,
     open: Option<(bool, Color)>,
     mark: Option<Color>,
     press_scale: f32,
@@ -110,6 +111,7 @@ pub fn hoverable<'a, Message>(
         radius,
         key: None,
         pressed: None,
+        rest: None,
         open: None,
         mark: None,
         press_scale: 1.0,
@@ -128,6 +130,13 @@ impl<Message> Hoverable<'_, Message> {
     /// The veil while a mouse button is held on it, reached over `motion::PRESS_FADE`.
     pub fn pressed(mut self, fill: Color) -> Self {
         self.pressed = Some(fill);
+        self
+    }
+
+    /// The color at rest of a filled control (a primary button, a chip): the hover and press
+    /// colors fade from it instead of from nothing.
+    pub fn rest(mut self, fill: Color) -> Self {
+        self.rest = Some(fill);
         self
     }
 
@@ -212,7 +221,7 @@ fn faded(fill: Color, share: f32) -> Color {
     }
 }
 
-fn veil(renderer: &mut Renderer, bounds: Rectangle, radius: f32, fill: Color) {
+pub(crate) fn veil(renderer: &mut Renderer, bounds: Rectangle, radius: f32, fill: Color) {
     if fill.a <= 0.0 {
         return;
     }
@@ -362,9 +371,13 @@ impl<Message> Widget<Message, Theme, Renderer> for Hoverable<'_, Message> {
         }
         let hover = state.value(now);
         let press = state.press.value(now);
-        let fill = match self.pressed {
-            Some(pressed) => faded(self.fill, hover).lerp(pressed, press),
+        let base = match self.rest {
+            Some(rest) => rest.lerp(self.fill, hover),
             None => faded(self.fill, hover),
+        };
+        let fill = match self.pressed {
+            Some(pressed) => base.lerp(pressed, press),
+            None => base,
         };
         veil(renderer, bounds, self.radius, fill);
         if let (Some(tint), true) = (self.mark, open > 0.0) {

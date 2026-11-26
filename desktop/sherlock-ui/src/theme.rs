@@ -212,6 +212,77 @@ pub fn toggle_press(theme: &Theme, _status: button::Status) -> button::Style {
     )
 }
 
+/// The row of a check box or a radio button: veiled on hover, like a ghost button.
+pub fn choice(theme: &Theme, status: button::Status) -> button::Style {
+    let p = palette(theme);
+    ghost(p, status, p.text_primary, metrics::CHOICE_RADIUS, p.hover)
+}
+
+/// The slider of the Panels board: a green rail up to the value, a veiled one after it.
+pub fn slider(theme: &Theme, status: iced::widget::slider::Status) -> iced::widget::slider::Style {
+    use iced::widget::slider::{Handle, HandleShape, Rail, Status};
+    let p = palette(theme);
+    let handle = match status {
+        Status::Active => p.accent,
+        Status::Hovered => p.accent_hover,
+        Status::Dragged => p.accent_pressed,
+    };
+    let rail = crate::panels::RAIL;
+    iced::widget::slider::Style {
+        rail: Rail {
+            backgrounds: (
+                Background::Color(p.accent.into()),
+                Background::Color(p.toggle_off.into()),
+            ),
+            width: rail,
+            border: border::rounded(rail / 2.0),
+        },
+        handle: Handle {
+            shape: HandleShape::Circle {
+                radius: crate::panels::HANDLE,
+            },
+            background: Background::Color(handle.into()),
+            border_width: 0.0,
+            border_color: iced::Color::TRANSPARENT,
+        },
+    }
+}
+
+/// The rail of a slider that can do nothing.
+pub fn rail_off(theme: &Theme) -> container::Style {
+    container::Style {
+        background: background(palette(theme).disabled),
+        border: border::rounded(crate::panels::RAIL / 2.0),
+        ..container::Style::default()
+    }
+}
+
+/// A segment of a segmented control: the chosen one in its text on cream (its thumb is
+/// `controls::thumb`), the others veiled on hover.
+pub fn segment(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let p = palette(theme);
+        let (back, ink) = match (active, status) {
+            (_, button::Status::Disabled) => (None, p.text_tertiary),
+            (true, _) => (None, p.text_on_cream),
+            (false, button::Status::Hovered) => (Some(p.hover), p.text_primary),
+            (false, button::Status::Pressed) => (Some(p.pressed), p.text_primary),
+            (false, button::Status::Active) => (None, p.text_secondary),
+        };
+        button_style(back, ink, border::rounded(crate::panels::SEGMENT_RADIUS))
+    }
+}
+
+/// The track of a segmented control.
+pub fn segmented_track(theme: &Theme) -> container::Style {
+    let p = palette(theme);
+    container::Style {
+        background: background(crate::panels::Colors::of(p).control),
+        border: border::rounded(crate::panels::SEGMENTED_RADIUS),
+        ..container::Style::default()
+    }
+}
+
 /// Text field: veiled background, focus ring when it has the keyboard.
 pub fn text_field(theme: &Theme, status: text_input::Status) -> text_input::Style {
     let p = palette(theme);

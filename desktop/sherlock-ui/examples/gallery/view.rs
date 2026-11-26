@@ -26,6 +26,8 @@ pub mod layout {
     pub const COLUMN_GAP: f32 = 28.0;
     /// Display sizes of the logo.
     pub const LOGO_SIZES: [f32; 4] = [96.0, 64.0, 32.0, 16.0];
+    /// Width of a column of the live components of UI-01.
+    pub const LIVE_COLUMN: f32 = 320.0;
 }
 
 use layout::{CELL, NAME};
@@ -38,6 +40,10 @@ pub struct Gallery {
     search: String,
     submenu: bool,
     last: &'static str,
+    checked: bool,
+    choice: usize,
+    volume: u8,
+    segment: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +55,10 @@ pub enum Message {
     Submenu,
     Focus(Direction),
     Theme(color::Theme),
+    Check(bool),
+    Choose(usize),
+    Volume(u8),
+    Segment(usize),
 }
 
 /// The five states shown for each component.
@@ -73,6 +83,8 @@ impl Gallery {
             variable_rate: true,
             quiet: true,
             last: "aucune",
+            checked: true,
+            volume: 62,
             ..Self::default()
         }
     }
@@ -86,6 +98,10 @@ impl Gallery {
             Message::Submenu => self.submenu = !self.submenu,
             Message::Focus(direction) => return focus::advance(direction),
             Message::Theme(theme) => color::set_active(theme),
+            Message::Check(on) => self.checked = on,
+            Message::Choose(index) => self.choice = index,
+            Message::Volume(value) => self.volume = value,
+            Message::Segment(index) => self.segment = index,
         }
         Task::none()
     }
@@ -119,6 +135,8 @@ impl Gallery {
             ui::glass_panel(states()),
             ui::section_label("Planches Menus et Réglages, composants vivants"),
             row![self.menus(), self.settings()].spacing(layout::COLUMN_GAP),
+            ui::section_label("Composants ajoutés par UI-01, vivants"),
+            self.more(),
             ui::section_label("Logo"),
             logos(),
         ]
@@ -184,6 +202,59 @@ impl Gallery {
             space().into()
         };
         row![window, sub].spacing(metrics::SUBMENU_GAP).into()
+    }
+
+    /// The components UI-01 adds, live: check boxes, radio buttons, a slider driving a
+    /// progress bar, a segmented control, a loading indicator, list entries, badges.
+    fn more(&self) -> Element<'_, Message> {
+        let radios = ["Automatique", "Toujours", "Jamais"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, label)| ui::radio(label, self.choice == i, Some(Message::Choose(i))).into());
+        let choices = column![
+            ui::checkbox("Montrer le pourcentage", self.checked, Some(Message::Check)),
+            ui::checkbox("Indisponible", false, None),
+            column(radios),
+        ]
+        .spacing(metrics::GAP_TIGHT);
+        let segments = ["Économie", "Équilibré", "Performance"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, label)| (label, self.segment == i, Some(Message::Segment(i))))
+            .collect();
+        let values = column![
+            ui::slider(self.volume, Some(Message::Volume)),
+            ui::progress_bar(f32::from(self.volume) / 100.0),
+            ui::segmented(segments),
+            row![
+                ui::spinner(metrics::SPINNER),
+                ui::description("Recherche des réseaux…"),
+            ]
+            .spacing(metrics::GAP_ICON)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(metrics::GAP_SECTION)
+        .width(layout::LIVE_COLUMN);
+        let entries = column![
+            ui::list_item(
+                Icon::Folder,
+                "Projets",
+                Some("12 éléments"),
+                Some(ui::badge("M", theme::Tone::Warning, false)),
+                Some(Message::Action("projets")),
+            ),
+            ui::list_item(
+                Icon::Document,
+                "Rapport annuel de la résidence des Lilas, version finale corrigée.pdf",
+                Some("Un nom trop long finit par « … »"),
+                None,
+                Some(Message::Action("rapport")),
+            ),
+        ]
+        .width(layout::LIVE_COLUMN);
+        row![choices, values, entries]
+            .spacing(layout::COLUMN_GAP)
+            .into()
     }
 
     /// Two cards of the « Réglages » design board.
@@ -270,7 +341,7 @@ fn states<'a>() -> Element<'a, Message> {
         .fold(row![space().width(NAME)], |r, (name, _)| {
             r.push(container(ui::section_label(name)).width(CELL))
         });
-    let lines: [(&str, Cell<'a>); 13] = [
+    let lines: [(&str, Cell<'a>); 16] = [
         ("Bouton principal", |look| {
             control(ui::primary_button("Relancer", enabled(look)), look)
         }),
@@ -323,6 +394,15 @@ fn states<'a>() -> Element<'a, Message> {
                 ui::nav_item(Icon::Home, "Accueil", None, true, enabled(look)),
                 look,
             )
+        }),
+        ("Case cochée", |look| {
+            control(ui::checkbox("Activée", true, toggled(look)), look)
+        }),
+        ("Bouton radio", |look| {
+            control(ui::radio("Choisi", true, enabled(look)), look)
+        }),
+        ("Puce de bureau", |look| {
+            control(ui::chip("2 · Web", false, enabled(look)), look)
         }),
         ("Champ vide", |look| field(look, "")),
         ("Champ rempli", |look| field(look, "Wi-Fi")),

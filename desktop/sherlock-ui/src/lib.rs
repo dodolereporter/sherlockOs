@@ -35,6 +35,8 @@ pub mod animated;
 #[cfg(feature = "iced")]
 pub mod component;
 #[cfg(feature = "iced")]
+pub mod controls;
+#[cfg(feature = "iced")]
 pub mod ellipsis;
 #[cfg(feature = "iced")]
 pub mod focus;

@@ -98,12 +98,14 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
         // A component without a background at rest (menu entry, icon button, secondary
         // button…) fades its hover and press veils in: the button no longer draws them,
         // `Hoverable` lays them underneath. A forced state (gallery) is still drawn as is.
+        // A filled one (primary, chip) fades from its color to its hover and press colors
+        // the same way (UI-01): `Hoverable` draws all three.
         let hover = hover_fill(&style, forced.is_some(), on_press.is_some());
         let pressed = hover.and_then(|_| fill_of(&style, button::Status::Pressed));
+        let rest = hover.and_then(|_| fill_of(&style, button::Status::Active));
         let styled = button.style(move |theme, status| {
             let mut s = style(theme, forced.unwrap_or(status));
-            let veiled = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            if hover.is_some() && veiled {
+            if hover.is_some() && status != button::Status::Disabled {
                 s.background = None;
             }
             s
@@ -115,6 +117,9 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
                 let fill = hover.map_or(color::TRANSPARENT, Color::from);
                 let mut veiled = crate::animated::hoverable(styled, fill, radius)
                     .press_scale(if forced.is_some() { 1.0 } else { press_scale });
+                if let Some(rest) = rest {
+                    veiled = veiled.rest(rest.into());
+                }
                 if let Some(pressed) = pressed {
                     veiled = veiled.pressed(pressed.into());
                 }
@@ -149,17 +154,13 @@ fn fill_of(style: &StyleFn<'_>, status: button::Status) -> Option<iced::Color> {
     }
 }
 
-/// The veil a control fades in on hover: only for an enabled control without a background
-/// at rest, and not when the gallery forces its state.
+/// The color a control fades to on hover: only for an enabled control, and not when the
+/// gallery forces its state.
 fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::Color> {
     if forced || !enabled {
         return None;
     }
-    let theme = theme::theme();
-    match style(&theme, button::Status::Active).background {
-        None => fill_of(style, button::Status::Hovered),
-        Some(_) => None,
-    }
+    fill_of(style, button::Status::Hovered)
 }
 
 /// Body text of the interface.
@@ -982,12 +983,165 @@ pub fn menu_header<'a, Message: 'a>(
     .into()
 }
 
+/// A check box and its label, the whole row clickable (UI-01). Checked, its box fills green
+/// and its check appears over a fade. `on_toggle` receives the new value.
+pub fn checkbox<'a, Message: Clone + 'a>(
+    label: &'a str,
+    checked: bool,
+    on_toggle: Option<fn(bool) -> Message>,
+) -> Control<'a, Message> {
+    let enabled = on_toggle.is_some();
+    choice(
+        crate::controls::check(checked, enabled).into(),
+        label,
+        on_toggle.map(|f| f(!checked)),
+    )
+}
+
+/// A radio button and its label (UI-01): chosen, its ring fills green and its dot grows.
+pub fn radio<'a, Message: Clone + 'a>(
+    label: &'a str,
+    selected: bool,
+    on_select: Option<Message>,
+) -> Control<'a, Message> {
+    let enabled = on_select.is_some();
+    choice(
+        crate::controls::radio(selected, enabled).into(),
+        label,
+        on_select,
+    )
+}
+
+fn choice<'a, Message: Clone + 'a>(
+    mark: Element<'a, Message>,
+    label: &'a str,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let line = row![mark, body(label)]
+        .spacing(metrics::CHOICE_GAP)
+        .align_y(Alignment::Center)
+        .height(Length::Fill);
+    let mut control = Control::new(line, theme::choice, on_press, metrics::CHOICE_RADIUS);
+    control.button = control
+        .button
+        .height(metrics::CHOICE_HEIGHT)
+        .padding([0.0, metrics::CHOICE_PADDING]);
+    control
+}
+
+/// A slider from 0 to 100, green up to its value (the Panels board's). Without `on_change`, a
+/// faded rail that does nothing, the forbidden sign over it.
+pub fn slider<'a, Message: Clone + 'a>(
+    value: u8,
+    on_change: Option<fn(u8) -> Message>,
+) -> Element<'a, Message> {
+    match on_change {
+        Some(on_change) => iced::widget::slider(0..=100u8, value, on_change)
+            .style(theme::slider)
+            .width(Length::Fill)
+            .into(),
+        None => {
+            let rail = container(space())
+                .width(Length::Fill)
+                .height(crate::panels::RAIL)
+                .style(theme::rail_off);
+            // The forbidden sign over the height of a control, not the 4 of the rail.
+            crate::pointer::disabled(container(rail).center_y(crate::panels::ROW_BUTTON)).into()
+        }
+    }
+}
+
+/// A segmented control: each choice with its label, whether it is the one chosen, and what
+/// choosing it does (nothing when it cannot be chosen). The cream thumb slides from one choice
+/// to the other on a spring (UI-01).
+pub fn segmented<'a, Message: Clone + 'a>(
+    choices: Vec<(&'a str, bool, Option<Message>)>,
+) -> Element<'a, Message> {
+    use crate::panels::{SEGMENT_GAP, SEGMENT_HEIGHT, SEGMENT_RADIUS, SEGMENTED_PADDING};
+    let count = choices.len();
+    let chosen = choices.iter().position(|(_, active, _)| *active);
+    let segments = choices.into_iter().map(|(label, active, on_press)| {
+        let font = if active {
+            typography::UI_SEMIBOLD
+        } else {
+            typography::UI
+        };
+        let label = ellipsis(label).font(font);
+        let content = container(label).center(Length::Fill);
+        let mut control = Control::new(content, theme::segment(active), on_press, SEGMENT_RADIUS);
+        control.button = control
+            .button
+            .width(Length::Fill)
+            .height(SEGMENT_HEIGHT)
+            .padding(0);
+        control.into()
+    });
+    let row = iced::widget::Row::with_children(segments).spacing(SEGMENT_GAP);
+    let layers = iced::widget::stack![crate::controls::thumb(chosen, count), row];
+    container(layers)
+        .padding(SEGMENTED_PADDING)
+        .width(Length::Fill)
+        .style(theme::segmented_track)
+        .into()
+}
+
+/// A progress bar, `value` from 0 to 1: its green fill follows the value on a spring.
+pub fn progress_bar<'a, Message: 'a>(value: f32) -> Element<'a, Message> {
+    crate::controls::progress(value).into()
+}
+
+/// A loading indicator: a green arc that turns, once every `motion::SPIN`.
+pub fn spinner<'a, Message: 'a>(size: f32) -> Element<'a, Message> {
+    crate::controls::spinner(size).into()
+}
+
+/// An entry of a list (UI-01): its icon, its title (cut with « … »), a second line, and what
+/// follows on the right. Clickable, it is veiled on hover like a menu entry.
+pub fn list_item<'a, Message: Clone + 'a>(
+    glyph: Icon,
+    title: &'a str,
+    detail: Option<&'a str>,
+    trailing: Option<Element<'a, Message>>,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let mut texts = column![
+        ellipsis(title)
+            .font(typography::UI_MEDIUM)
+            .width(Length::Fill)
+    ];
+    if let Some(detail) = detail {
+        texts = texts.push(
+            ellipsis(detail)
+                .size(typography::SMALL_SIZE)
+                .color(color::palette().text_secondary)
+                .width(Length::Fill),
+        );
+    }
+    let mut line = row![
+        icon(glyph, metrics::LIST_ICON, color::palette().text_secondary),
+        texts
+    ]
+    .spacing(metrics::GAP_ICON)
+    .align_y(Alignment::Center)
+    .height(Length::Fill);
+    if let Some(trailing) = trailing {
+        line = line.push(trailing);
+    }
+    let mut control = Control::new(line, theme::menu_item, on_press, metrics::LIST_ROW_RADIUS);
+    control.button = control
+        .button
+        .width(Length::Fill)
+        .height(metrics::LIST_ITEM_HEIGHT)
+        .padding([0.0, metrics::LIST_ROW_PADDING]);
+    control
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn only_enabled_ghost_controls_fade_their_hover() {
+    fn only_enabled_controls_fade_their_hover() {
         let ghost: StyleFn<'_> = Box::new(theme::menu_item);
         let filled: StyleFn<'_> = Box::new(theme::primary);
         assert!(hover_fill(&ghost, false, true).is_some());
@@ -996,9 +1150,8 @@ mod tests {
             hover_fill(&ghost, true, true).is_none(),
             "forced by the gallery"
         );
-        assert!(
-            hover_fill(&filled, false, true).is_none(),
-            "background at rest"
-        );
+        // A filled one fades too, from its own color (UI-01).
+        assert!(hover_fill(&filled, false, true).is_some());
+        assert!(fill_of(&filled, button::Status::Active).is_some());
     }
 }

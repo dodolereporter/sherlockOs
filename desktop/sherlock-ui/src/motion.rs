@@ -215,6 +215,11 @@ pub const GLYPH_FADE: Duration = FADE;
 /// One step of an icon that cycles while it waits: the arcs of a Wi-Fi connecting (UI-01).
 pub const PULSE: Duration = Duration::from_millis(400);
 
+/// One turn of a loading indicator (UI-01).
+pub const SPIN: Duration = Duration::from_millis(900);
+/// The positions of a turn of the loading indicator: one every 10°.
+pub const SPIN_STEPS: u32 = 36;
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
