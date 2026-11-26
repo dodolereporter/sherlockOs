@@ -109,6 +109,12 @@ Snapping:
   its first content, the client chooses its size. Resizing it removes the maximized or snapped
   state, and it starts from its current size.
 - A window snapped by a drop returns, when leaving its zone, to its place from before the drag.
+- Some clients leave the maximized state themselves (`xdg_toplevel.unset_maximized`, or
+  `_NET_WM_STATE` for X11) when their title bar is pulled, before or after asking for the move.
+  While the window is held, by a move or by a button pressed on it, it then comes off under the
+  pointer at its previous size, as a move takes it out (`State::unmaximize_held`, lot D-18d).
+  Before, it went back to its place from before it was maximized, the pointer far from it, and
+  the move went on from there. Not held, an unmaximize still gives the window back its place.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -123,8 +129,10 @@ Snapping:
 - Maximized is the xdg-shell `maximized` state, which the client knows about. A half or a
   quarter is only an imposed size: the `tiled` states are not sent.
 - Zones are taken from the work area of a screen: what the exclusive zones of anchored surfaces
-  leave (see below). A maximized or snapped window never covers the bar or the dock; a
-  fullscreen one covers the whole screen. Dropped by a drag, a window snaps on the screen under
+  leave (see below). A maximized or snapped window never covers the bar, nor the dock while it
+  keeps its zone; a fullscreen one covers the whole screen. Since lot D-18d the dock hides for
+  a snapped window as for a maximized one (`docs/dock.md`, Hiding): it gives up its zone, and
+  the snapped window takes the whole height below the bar, still 8 from the edges. Dropped by a drag, a window snaps on the screen under
   the pointer, against that screen's edges. A shortcut or a client request acts on the window's
   screen, the one under its center. Along the edge that two screens share, both edges snap:
   dragging a window from one screen to the other shows the preview of each side in turn.
@@ -294,9 +302,14 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
-- **Screens.** `output` gives, for each screen by its `wl_output` name, `maximized` and
-  `fullscreen` when such a window, not minimized and on the active workspace, is on it: what
-  the bar of lot D-18b reacts to.
+- **Screens.** `output` gives, for each screen by its `wl_output` name, `maximized`,
+  `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
+  on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
+  (all three, lot D-18d).
+- **Versions.** The global is offered at version 2 (lot D-18d), which adds `snapped` to the
+  states of a screen. A client that binds version 1 (the bar) never receives it: a screen with
+  only a snapped window is an empty state for it, as before. A toplevel has the version of its
+  manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -485,6 +498,10 @@ ordinary socket, and a shell program.
   gives its zone back (0): the window grows from 524 to 600 the same way. Snapped left above the
   dock, a window is 388 × 508 in (8, 8), keeps its corners, and takes 400 × 524 once the gap is
   set to 0.
+- **Snapped and the dock** (lot D-18d). A window snapped left above a dock covers its screen
+  with `snapped` for a manager of version 2, while a second shell client bound at version 1
+  sees an empty state; the dock gives up its zone and the half becomes 388 × 584 in (8, 8);
+  restored, the screen is uncovered.
 - **Frame callbacks.** A shown window gets one at every frame; minimized, none at 17 and 484 ms,
   one after a second.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
@@ -1320,6 +1337,47 @@ Why `desktop/compositor/session/` and not `distro/`: these files start the compo
 shell built from this workspace, and are tried on the author's Debian before the base exists.
 The package recipes of `distro/` will install them from here.
 
+### D-Bus session bus (lot D-18d)
+
+Started from a text console while Plasma stays open on another one, the session used to share
+Plasma's D-Bus session bus (`/run/user/1000/bus`: one bus per user, whatever the session).
+Konsole then took 25 to 50 seconds to show its window. The cause, found without a screen:
+
+- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `NOM_OS` it takes the generic
+  theme, which gives each window a D-Bus global menu (`QDBusMenuBar`) as soon as the name
+  `com.canonical.AppMenu.Registrar` has an owner on the bus. On the author's bus it does:
+  `kded6`, the appmenu module of the X11 Plasma session (checked by asking the bus daemon for
+  the owner of the name; nothing was sent to `kded6`).
+- The window registers with `RegisterWindow` and waits for the answer (`waitForFinished`): the
+  default timeout of D-Bus, 25 seconds, then `UnregisterWindow` when it closes. The log of the
+  author's session showed `Failed to register window menu, reason:
+  org.freedesktop.DBus.Error.NoReply`.
+- Reproduced on a private bus with a headless KWin (`kwin_wayland --virtual`), Konsole 25.04.2
+  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=NOM_OS`: with a registrar that never answers (a script that
+  owns the name), the window had no content after 40 s and Konsole logged the same `NoReply`;
+  without the registrar, its first content came 0.42 s after the start, and Konsole made no
+  other call that waits on Plasma.
+
+The shared bus breaks other things too: the notification daemon finds
+`org.freedesktop.Notifications` taken by Plasma and stops (`docs/notifications.md`), and an
+application that keeps a single instance through the bus may open its window in the Plasma
+session instead (not tried). So `sherlockos-session` starts the session on a bus of its own
+(`dbus-run-session`) when logind lists another graphical session (type `x11`, `wayland` or
+`mir`, not closing) of the same user; the session it runs in does not count. The traffic was
+read with `dbus-monitor` on the private bus only: the author's bus is never listened to. Once the
+compositor is ready, `dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY` gives the
+display to the services the bus starts (the portals): without it, on a private bus, the
+portal started by Konsole crashed again and again, and Konsole waited 9 seconds for it. With
+it, 0.42 s. Alone on the machine (the OS itself, or Plasma logged out), the session keeps the
+user's bus.
+
+`NOM_OS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
+`session: D-Bus session bus of its own` when the session has one. Not chosen: disabling the
+global menu alone (Qt's generic theme has no switch for it; `KDE_NO_GLOBAL_MENU` only exists
+for Plasma's theme, which the Qt theme batch may pick), since it would leave the notification
+daemon and the single-instance applications in the other session. Not checked yet: the
+session started from SDDM while Plasma runs on another console, which takes the same path.
+
 ### When something goes wrong
 
 - **Nothing answers.** Ctrl + Alt + Backspace stops the compositor, and the session with it: SDDM
@@ -1626,6 +1684,12 @@ The tests in `tests/headless.rs`:
   dragged afterwards is drawn under the pointer on every frame. Snapped left twice in a row,
   then resized by its band, it is drawn at its new size. Snapped then pulled out by dragging it
   fast, it stays under the pointer.
+- **Pulled out, it stays where it is dropped** (lot D-18d). Maximized, then snapped left, above
+  a dock of 76 that then hides (zone -1): pulled by its title bar, the window comes off at
+  100 × 80 under the pointer and stays where it is let go, also once the dock takes its zone
+  back; drawn at its place on every frame. A client that unmaximizes itself while its title
+  bar is held, before or after asking for the move, comes off in (350, 0) under the pointer,
+  not in (350, 260) where it was before being maximized (this test failed before the fix).
 
 The integration test runs the compositor and the client in the same thread, over a pair of Unix
 sockets: it depends neither on a screen nor on `XDG_RUNTIME_DIR`. It loads `libwayland-client`
