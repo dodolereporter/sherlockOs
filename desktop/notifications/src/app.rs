@@ -1,13 +1,13 @@
 //! The bubbles: state, messages, update and view. One layer-shell surface holds the stack; it
 //! exists only while a bubble shows.
 
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iced::font::{Style, Weight};
-use iced::futures::channel::mpsc::{self, UnboundedReceiver};
+use iced::futures::channel::mpsc::{self, Receiver};
 use iced::futures::{Stream, StreamExt, stream};
 use iced::widget::{
     Stack, button, column, container, float, image, mouse_area, pin, rich_text, row, sensor, span,
@@ -24,7 +24,10 @@ use sherlock_ui::{color, typography};
 use crate::core::{Core, Event, Sink};
 use crate::layout::{self, OUT, SURFACE_WIDTH};
 use crate::model::{Icon, Notification, Urgency};
+use crate::picture;
 
+/// The messages of a bubble name it by its serial, not by the id of its notification: an id
+/// replaced while its old bubble slides out names two bubbles.
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -32,29 +35,95 @@ pub enum Message {
     Theme(color::Theme),
     Frame(Instant),
     /// The height a bubble took once laid out.
-    Measured(u32, f32),
-    Hover(u32, bool),
-    Click(u32),
-    Action(u32, String),
+    Measured(u64, f32),
+    Hover(u64, bool),
+    Click(u64),
+    Action(u64, String),
 }
 
-/// The events of the core, handed once to the subscription.
+/// The events of the core waiting for the interface, merged so that they stay few however
+/// late the interface is: a newer `Show` of a bubble takes the place of the pending one, and a
+/// bubble the interface never got needs no `Close`.
+#[derive(Default)]
+struct Pending {
+    events: Vec<Event>,
+    /// The bubbles the interface got and still shows.
+    delivered: HashSet<u32>,
+}
+
+impl Pending {
+    fn add(&mut self, event: Event) {
+        match event {
+            Event::Show(note) => {
+                let same = |e: &&mut Event| matches!(e, Event::Show(n) if n.id == note.id);
+                match self.events.iter_mut().find(same) {
+                    Some(slot) => *slot = Event::Show(note),
+                    None => self.events.push(Event::Show(note)),
+                }
+            }
+            Event::Close(id) => {
+                self.events
+                    .retain(|e| !matches!(e, Event::Show(n) if n.id == id));
+                let pending = self
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, Event::Close(i) if *i == id));
+                if self.delivered.contains(&id) && !pending {
+                    self.events.push(Event::Close(id));
+                }
+            }
+        }
+    }
+
+    fn take(&mut self) -> Vec<Event> {
+        let events = std::mem::take(&mut self.events);
+        for event in &events {
+            match event {
+                Event::Show(note) => self.delivered.insert(note.id),
+                Event::Close(id) => self.delivered.remove(id),
+            };
+        }
+        events
+    }
+}
+
+/// The events of the core, handed once to the subscription. The core never waits on the
+/// interface: it adds to `pending` and wakes the stream through a channel of one.
 #[derive(Clone)]
-pub struct Inbox(Arc<Mutex<Option<UnboundedReceiver<Event>>>>);
+pub struct Inbox {
+    pending: Arc<Mutex<Pending>>,
+    wake: Arc<Mutex<Option<Receiver<()>>>>,
+}
 
 impl Inbox {
     /// The sink to give the core, and the inbox its events arrive in.
     pub fn new() -> (Sink, Self) {
-        let (sender, receiver) = mpsc::unbounded();
+        let (sender, receiver) = mpsc::channel(0);
+        let pending = Arc::new(Mutex::new(Pending::default()));
+        let shared = Arc::clone(&pending);
+        let sender = Mutex::new(sender);
         let sink: Sink = Box::new(move |event| {
-            let _ = sender.unbounded_send(event);
+            if let Ok(mut pending) = shared.lock() {
+                pending.add(event);
+            }
+            // Full: a wake is already on its way, and will take this event too.
+            if let Ok(mut sender) = sender.lock() {
+                let _ = sender.try_send(());
+            }
         });
-        (sink, Self(Arc::new(Mutex::new(Some(receiver)))))
+        let wake = Arc::new(Mutex::new(Some(receiver)));
+        (sink, Self { pending, wake })
     }
 
     fn stream(&self) -> impl Stream<Item = Event> + use<> {
-        match self.0.lock().ok().and_then(|mut r| r.take()) {
-            Some(receiver) => receiver.boxed(),
+        let pending = Arc::clone(&self.pending);
+        match self.wake.lock().ok().and_then(|mut r| r.take()) {
+            Some(wake) => wake
+                .flat_map(move |()| {
+                    let events = pending.lock().map(|mut p| p.take()).unwrap_or_default();
+                    stream::iter(events)
+                })
+                .boxed(),
             None => stream::empty().boxed(),
         }
     }
@@ -66,7 +135,7 @@ impl Hash for Inbox {
     }
 }
 
-/// The picture of a bubble, built once.
+/// The picture of a bubble, built once, from bytes only.
 #[derive(Debug, Clone)]
 enum Glyph {
     Svg(svg::Handle),
@@ -82,7 +151,8 @@ impl Glyph {
                 height,
                 rgba,
             } => Self::Image(image::Handle::from_rgba(*width, *height, rgba.to_vec())),
-            Icon::File(path) => Self::Svg(file_handle(path)),
+            Icon::Svg(bytes) => Self::Svg(svg::Handle::from_memory(bytes.to_vec())),
+            Icon::Png(bytes) => Self::Svg(svg::Handle::from_memory(picture::png_in_svg(bytes))),
             // Theme names wait for the shared icon lookup: the initial of the application.
             Icon::Name(_) | Icon::None => {
                 let letter = app_name(note).chars().next().unwrap_or('?');
@@ -90,23 +160,6 @@ impl Glyph {
             }
         }
     }
-}
-
-/// An SVG file as it is; any other picture inside an SVG, which resvg decodes (as the dock).
-fn file_handle(path: &Path) -> svg::Handle {
-    if path.extension().is_some_and(|e| e == "svg") {
-        return svg::Handle::from_path(path);
-    }
-    let href = path
-        .to_string_lossy()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
-    let document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    );
-    svg::Handle::from_memory(document.into_bytes())
 }
 
 fn app_name(note: &Notification) -> &str {
@@ -118,6 +171,7 @@ fn app_name(note: &Notification) -> &str {
 }
 
 struct Bubble {
+    serial: u64,
     note: Arc<Notification>,
     glyph: Glyph,
     /// Unknown until the bubble is laid out: it waits out of sight.
@@ -136,6 +190,7 @@ pub struct Notifications {
     height: u32,
     origin: Instant,
     now: Duration,
+    serials: u64,
 }
 
 impl Notifications {
@@ -148,6 +203,7 @@ impl Notifications {
             height: 0,
             origin: Instant::now(),
             now: Duration::ZERO,
+            serials: 0,
         }
     }
 
@@ -184,12 +240,9 @@ impl Notifications {
                 // A bubble still out of sight has nothing to slide: it goes at once.
                 return self.sweep().unwrap_or_else(|| self.relayout(false));
             }
-            Message::Measured(id, height) => {
-                let bubble = self
-                    .bubbles
-                    .iter_mut()
-                    .find(|b| b.note.id == id && !b.leaving);
-                if let Some(bubble) = bubble {
+            Message::Measured(serial, height) => {
+                let bubble = self.bubbles.iter_mut().find(|b| b.serial == serial);
+                if let Some(bubble) = bubble.filter(|b| !b.leaving) {
                     if bubble.height.is_none() {
                         bubble.slide.retarget(now, 0.0);
                     }
@@ -205,13 +258,32 @@ impl Notifications {
                     return self.relayout(true);
                 }
             }
-            Message::Hover(id, held) => self.core.hold(id, held),
-            Message::Click(id) => self.core.click(id),
-            Message::Action(id, key) => self.core.invoke(id, &key),
+            // A bubble on its way out takes nothing: its id may already name another one.
+            Message::Hover(serial, held) => {
+                if let Some(id) = self.live(serial) {
+                    self.core.hold(id, held);
+                }
+            }
+            Message::Click(serial) => {
+                if let Some(id) = self.live(serial) {
+                    self.core.click(id);
+                }
+            }
+            Message::Action(serial, key) => {
+                if let Some(id) = self.live(serial) {
+                    self.core.invoke(id, &key);
+                }
+            }
             Message::Theme(theme) => color::set_active(theme),
             _ => {}
         }
         Task::none()
+    }
+
+    /// The notification id of the bubble `serial`, unless it is leaving.
+    fn live(&self, serial: u64) -> Option<u32> {
+        let bubble = self.bubbles.iter().find(|b| b.serial == serial)?;
+        (!bubble.leaving).then_some(bubble.note.id)
     }
 
     /// Drops the bubbles that slid out, and the surface with the last one.
@@ -239,6 +311,10 @@ impl Notifications {
         {
             Some(bubble) => (bubble.note, bubble.glyph) = (note, glyph),
             None => self.bubbles.push(Bubble {
+                serial: {
+                    self.serials += 1;
+                    self.serials
+                },
                 note,
                 glyph,
                 height: None,
@@ -321,10 +397,10 @@ impl Notifications {
     pub fn view(&self, _surface: window::Id) -> Element<'_, Message> {
         let now = self.now;
         let layers = self.bubbles.iter().map(|b| {
-            let id = b.note.id;
+            let id = b.serial;
             let dx = at(&b.slide, now);
             let slid = float(bubble(b)).translate(move |_, _| Vector::new(dx, 0.0));
-            // Keyed by the id: a bubble that takes the place of another is measured anew.
+            // Keyed by the serial: a bubble that takes the place of another is measured anew.
             let measured = sensor(slid)
                 .key(id)
                 .anticipate(f32::MAX)
@@ -353,7 +429,7 @@ fn at(animation: &Animation, now: Duration) -> f32 {
 /// closes it or runs its default action; the pointer over it holds its timer.
 fn bubble(b: &Bubble) -> Element<'_, Message> {
     let note = &b.note;
-    let id = note.id;
+    let id = b.serial;
     let glyph: Element<'_, Message> = match &b.glyph {
         Glyph::Svg(handle) => svg(handle.clone()).width(ui::TILE).height(ui::TILE).into(),
         Glyph::Image(handle) => image(handle.clone())

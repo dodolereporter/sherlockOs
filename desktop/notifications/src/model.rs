@@ -1,7 +1,8 @@
-//! A notification as the daemon keeps it, read from the arguments of `Notify`.
+//! A notification as the daemon keeps it, read from the arguments of `Notify`. Everything a
+//! client sends is bounded here: texts, actions, icons. See `docs/notifications.md`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -9,11 +10,16 @@ use sherlock_ui::notifications as ui;
 use zbus::zvariant::OwnedValue;
 
 use crate::markup::{self, Span};
+use crate::picture;
 
 /// The key of the action a click on the bubble itself triggers.
 pub const DEFAULT_ACTION: &str = "default";
-/// Largest side of an `image-data` picture taken: more is refused, not scaled.
-const MAX_PIXELS_SIDE: i32 = 1024;
+/// Actions kept at most, and the longest key: a longer key is dropped with its action, since a
+/// cut key would no longer be the application's.
+pub const MAX_ACTIONS: usize = 32;
+pub const MAX_ACTION_KEY_BYTES: usize = 256;
+/// Longest icon name of a theme, in bytes: a file name.
+pub const MAX_ICON_NAME_BYTES: usize = 255;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Urgency {
@@ -28,6 +34,8 @@ pub enum Reason {
     Expired = 1,
     Dismissed = 2,
     Closed = 3,
+    /// Closed by the daemon itself: too many waiting, or hidden by Do not disturb.
+    Undefined = 4,
 }
 
 /// The picture of a notification, from the `image-data`, `image-path` hints or `app_icon`.
@@ -36,7 +44,9 @@ pub enum Icon {
     None,
     /// An icon name of the theme: not looked up yet (see `docs/notifications.md`).
     Name(String),
-    File(PathBuf),
+    /// A file read by the daemon and checked (`picture`): its bytes, never its path.
+    Png(Arc<Vec<u8>>),
+    Svg(Arc<Vec<u8>>),
     /// Raw pixels, made RGBA.
     Pixels {
         width: u32,
@@ -45,9 +55,10 @@ pub enum Icon {
     },
 }
 
-/// The arguments of `Notify`.
+/// The arguments of `Notify`, and the unique bus name of who sent it.
 #[derive(Debug, Default)]
 pub struct Request {
+    pub sender: String,
     pub app_name: String,
     pub replaces_id: u32,
     pub app_icon: String,
@@ -61,6 +72,8 @@ pub struct Request {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
     pub id: u32,
+    /// The unique bus name of the application: only it may replace or close the notification.
+    pub sender: String,
     pub app_name: String,
     pub summary: String,
     pub body: Vec<Span>,
@@ -76,6 +89,7 @@ pub struct Notification {
 }
 
 impl Notification {
+    /// Reads a request, bounding all it holds. Files are read here, off the interface thread.
     pub fn new(id: u32, request: Request) -> Self {
         let hints = &request.hints;
         let urgency = match hint::<u8>(hints, "urgency") {
@@ -94,12 +108,15 @@ impl Notification {
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|[key, label]| (key.clone(), label.clone()))
+            .filter(|[key, _]| !key.is_empty() && key.len() <= MAX_ACTION_KEY_BYTES)
+            .take(MAX_ACTIONS)
+            .map(|[key, label]| (key.clone(), markup::clean(label, ui::MAX_LABEL_CHARS)))
             .collect();
         Self {
             id,
-            app_name: request.app_name.trim().to_owned(),
-            summary: request.summary.chars().take(ui::MAX_BODY_CHARS).collect(),
+            sender: request.sender,
+            app_name: markup::clean(&request.app_name, ui::MAX_APP_NAME_CHARS),
+            summary: markup::clean(&request.summary, ui::MAX_SUMMARY_CHARS),
             body: markup::parse(&request.body, ui::MAX_BODY_CHARS),
             icon: icon(&request.app_icon, hints),
             actions,
@@ -115,9 +132,12 @@ impl Notification {
         self.actions.iter().any(|(key, _)| key == DEFAULT_ACTION)
     }
 
-    /// The actions shown as buttons: all but the default one.
+    /// The actions shown as buttons: the first ones but the default one.
     pub fn buttons(&self) -> impl Iterator<Item = &(String, String)> {
-        self.actions.iter().filter(|(key, _)| key != DEFAULT_ACTION)
+        self.actions
+            .iter()
+            .filter(|(key, _)| key != DEFAULT_ACTION)
+            .take(ui::MAX_BUTTONS)
     }
 }
 
@@ -143,13 +163,21 @@ fn icon(app_icon: &str, hints: &HashMap<String, OwnedValue>) -> Icon {
         .unwrap_or_else(|| named(app_icon))
 }
 
-/// An icon given as text: a `file://` URI, an absolute path or a theme name.
+/// An icon given as text: a `file://` URI or an absolute path, read now; or a theme name.
 fn named(text: &str) -> Icon {
     let text = text.trim();
     match text.strip_prefix("file://").unwrap_or(text) {
         "" => Icon::None,
-        path if path.starts_with('/') => Icon::File(PathBuf::from(path)),
-        _ => Icon::Name(text.to_owned()),
+        path if path.starts_with('/') => match picture::read(Path::new(path)) {
+            Ok((picture::Kind::Png, bytes)) => Icon::Png(Arc::new(bytes)),
+            Ok((picture::Kind::Svg, bytes)) => Icon::Svg(Arc::new(bytes)),
+            Err(error) => {
+                tracing::debug!(%error, "icon file refused");
+                Icon::None
+            }
+        },
+        name if name.len() <= MAX_ICON_NAME_BYTES => Icon::Name(name.to_owned()),
+        _ => Icon::None,
     }
 }
 
@@ -159,7 +187,8 @@ fn pixels(value: &OwnedValue) -> Option<Icon> {
     type Raw = (i32, i32, i32, bool, i32, i32, Vec<u8>);
     let (width, height, stride, alpha, bits, channels, data) =
         Raw::try_from(value.try_clone().ok()?).ok()?;
-    let size = 1..=MAX_PIXELS_SIDE;
+    let size = 1..=ui::MAX_PIXELS_SIDE;
+    let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
     let fits = size.contains(&width) && size.contains(&height) && bits == 8;
     if !fits || channels != if alpha { 4 } else { 3 } {
         return None;
@@ -179,8 +208,8 @@ fn pixels(value: &OwnedValue) -> Option<Icon> {
         }
     }
     Some(Icon::Pixels {
-        width: width.unsigned_abs(),
-        height: height.unsigned_abs(),
+        width,
+        height,
         rgba: Arc::new(rgba),
     })
 }
@@ -238,6 +267,18 @@ mod tests {
     fn icons_from_pixels_paths_and_names() {
         let mut data: Vec<u8> = vec![10, 20, 30, 40, 50, 60, 0, 0];
         data.extend([0; 8]);
+        let too_big = StructureBuilder::new()
+            .add_field(257_i32)
+            .add_field(1_i32)
+            .add_field(771_i32)
+            .add_field(false)
+            .add_field(8_i32)
+            .add_field(3_i32)
+            .add_field(vec![0_u8; 771])
+            .build()
+            .unwrap();
+        let note = Notification::new(1, request(-1, vec![("image-data", Value::from(too_big))]));
+        assert_eq!(note.icon, Icon::None);
         let image = StructureBuilder::new()
             .add_field(2_i32)
             .add_field(2_i32)
@@ -259,10 +300,50 @@ mod tests {
         };
         assert_eq!((width, height, rgba.len()), (2, 2, 16));
         assert_eq!(rgba[..8], [10, 20, 30, 255, 40, 50, 60, 255]);
-        let path = Value::from("file:///tmp/a.png");
+        let path = Value::from("file:///dev/zero");
         let note = Notification::new(1, request(-1, vec![("image-path", path)]));
-        assert_eq!(note.icon, Icon::File(PathBuf::from("/tmp/a.png")));
+        assert_eq!(note.icon, Icon::None);
         assert_eq!(named("firefox"), Icon::Name(String::from("firefox")));
         assert_eq!(named(" "), Icon::None);
+        assert_eq!(named(&"a".repeat(MAX_ICON_NAME_BYTES + 1)), Icon::None);
+        let svg =
+            std::env::temp_dir().join(format!("notifications-model-{}.svg", std::process::id()));
+        std::fs::write(&svg, "<svg/>").unwrap();
+        let read = named(&format!("file://{}", svg.display()));
+        std::fs::remove_file(&svg).unwrap();
+        assert_eq!(read, Icon::Svg(Arc::new(b"<svg/>".to_vec())));
+    }
+
+    #[test]
+    fn a_huge_request_is_bounded() {
+        let mut actions = Vec::new();
+        for i in 0..10_000 {
+            actions.push(format!("key{i}"));
+            actions.push("l".repeat(1000));
+        }
+        actions.push("k".repeat(MAX_ACTION_KEY_BYTES + 1));
+        actions.push(String::from("Clé trop longue"));
+        let note = Notification::new(
+            1,
+            Request {
+                app_name: "A".repeat(8 << 20),
+                summary: "T".repeat(8 << 20),
+                body: "<b>".repeat(4 << 20),
+                app_icon: "n".repeat(1 << 20),
+                actions,
+                ..Request::default()
+            },
+        );
+        assert_eq!(note.app_name.chars().count(), ui::MAX_APP_NAME_CHARS + 1);
+        assert_eq!(note.summary.chars().count(), ui::MAX_SUMMARY_CHARS + 1);
+        assert!(note.body.iter().map(|s| s.text.len()).sum::<usize>() < 4 * ui::MAX_BODY_CHARS);
+        assert_eq!(note.actions.len(), MAX_ACTIONS);
+        assert!(
+            note.actions
+                .iter()
+                .all(|(_, l)| l.chars().count() <= ui::MAX_LABEL_CHARS + 1)
+        );
+        assert_eq!(note.buttons().count(), ui::MAX_BUTTONS);
+        assert_eq!(note.icon, Icon::None);
     }
 }

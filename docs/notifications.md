@@ -22,7 +22,8 @@ will show (see History).
 | `lib.rs` | The surface (`surface`), iced settings, startup (`run`) |
 | `server.rs` | The D-Bus interface, taking the name (`start`) |
 | `core.rs` | The state, without D-Bus nor screen: open notifications, which show, timers, Do not disturb, history |
-| `model.rs` | A notification read from the arguments of `Notify`: urgency, timeout, icon, actions |
+| `model.rs` | A notification read from the arguments of `Notify`, every field bounded: urgency, timeout, icon, actions |
+| `picture.rs` | Icon files read by the daemon: regular files only, size and format checked |
 | `markup.rs` | The body markup, reduced to bold and italic |
 | `layout.rs` | Pure geometry of the stack: places, surface height, input region |
 | `app.rs` | The bubbles: iced state, update, view, animations |
@@ -40,11 +41,11 @@ and write the same file without pulling iced or zbus.
 
 | Method or signal | Behavior |
 | --- | --- |
-| `Notify` | Returns the id. `replaces_id` that this daemon gave (even closed since) keeps its id and updates the bubble in place, timer restarted; any other value gets a new id |
-| `CloseNotification` | Closes it and sends `NotificationClosed` with reason 3. An unknown or closed id is not an error |
+| `Notify` | Returns the id. `replaces_id` naming a notification of the same sender (its unique bus name), open or in the history, keeps its id and updates the bubble in place, timer restarted unless the pointer holds it; any other value, another application's id included, gets a new id |
+| `CloseNotification` | Closes it and sends `NotificationClosed` with reason 3. An unknown or closed id, or one of another sender, gets the empty error the specification asks for (`org.freedesktop.DBus.Error.Failed`) |
 | `GetCapabilities` | `actions`, `body`, `body-markup`, `icon-static` |
 | `GetServerInformation` | `notifications`, `NOM_OS` (the OS has no name yet), the crate version, `1.2` |
-| `NotificationClosed` | Reason 1 when it expires, 2 when the user closes it (click, action), 3 on `CloseNotification` |
+| `NotificationClosed` | Reason 1 when it expires, 2 when the user closes it (click, action), 3 on `CloseNotification`, 4 when the daemon closes it itself (too many waiting, hidden by Do not disturb) |
 | `ActionInvoked` | A button, or `default` for a click on the bubble |
 
 **Timeout.** The application's (`expire_timeout` > 0, in ms); 0 means never; -1 takes
@@ -66,17 +67,38 @@ then `image-path` (also `image_path`), then `app_icon`.
 
 | Given as | Shown |
 | --- | --- |
-| Raw pixels `(iiibiiay)` | Yes: 8 bits per sample, RGB or RGBA, 1024 per side at most (more is refused) |
-| An absolute path or a `file://` URI | Yes: SVG as it is, PNG and other pictures through resvg, as the dock does. A URI with `%` escapes is not decoded |
+| Raw pixels `(iiibiiay)` | Yes: 8 bits per sample, RGB or RGBA, 256 per side at most (`notifications::MAX_PIXELS_SIDE`; more is refused) |
+| An absolute path or a `file://` URI | PNG and SVG, read by the daemon when the notification comes (below). A URI with `%` escapes is not decoded |
 | An icon name of the theme (`firefox`) | Not yet: the initial of the application on a blue tile. The lookup will come from the shared icon theme crate of batch D-22b |
 
 The picture shows in the 20 px tile of the header, as on the board.
+
+**Files.** A path comes from any program of the session: the daemon reads it itself, off the
+interface thread, and iced only ever gets bytes (`picture.rs`). The file is opened with
+`O_NONBLOCK` (a FIFO opens at once instead of blocking), then checked on the open descriptor:
+only a regular file, so no device (`/dev/zero`), no FIFO, and a link to one is refused the same
+way. A PNG is at most 512 KiB, starts with its signature and declares at most 512 pixels per
+side in its header, so that its decoding stays small; it is drawn through an SVG that embeds it
+as a `data:` URI. An SVG is at most 256 KiB, in UTF-8, with no document type (no entity) and
+every `href` pointing inside itself (`#…`): it cannot make resvg read a file or a picture of its
+own. Anything else, JPEG included, shows the initial. The longest path taken is 4,096 bytes.
+
+**Limits.** Every field is bounded when the notification is read, so that neither a bubble nor
+the history holds much, whatever a client sends: the application name to 48 characters, the
+title to 120, the body to 300 after markup (only its first 16 KiB are read), an action label to
+24; 32 actions at most, a key longer than 256 bytes dropping its action (a cut key would no
+longer be the application's), three buttons shown; an icon name to 255 bytes. The limits of
+what shows are in `sherlock_ui::notifications`, the others are named constants of `model.rs`
+and `picture.rs`. Control characters and the invisible bidirectional formatting characters
+(U+200E, U+200F, U+061C, U+202A to U+202E, U+2066 to U+2069) are dropped from every text: they
+could make a text read differently from what it holds.
 
 **Markup.** `<b>` and `<i>` become bold (weight 600) and italic spans, nested as written. Every
 other tag is dropped and its text kept (`<a href>`, `<u>`, `<img>`, `<script>`); `<br>` breaks
 the line; the five XML entities and numeric ones are decoded into text. What comes out is a list
 of styled spans, never markup: nothing a client sends is interpreted as HTML. A `<` not followed
-by a letter or `/` is text (« a < b »). The body is cut at 300 characters
+by a letter or `/` is text (« a < b »), and so is a tag longer than 256 bytes. The reading is
+linear: a tag or an entity is looked for within a few bytes. The body is cut at 300 characters
 (`notifications::MAX_BODY_CHARS`). sherlock-ui embeds no italic face of Inter: italic spans are
 asked for, and come out upright until one is added (see Differences).
 
@@ -109,7 +131,13 @@ squeezed. It shrinks back once everything settled.
 
 **Stack.** The newest on top, 8 apart (the board's gap), four at most
 (`notifications::MAX_VISIBLE`); the others wait, in the order they came, and show as room
-frees up. Their timer starts when they show.
+frees up. Their timer starts when they show. At most 50 wait (`notifications::MAX_WAITING`):
+beyond, the oldest waiting one closes (reason 4, critical ones last) and stays in the history.
+Open notifications are thus never more than 54, and every walk over them stays short.
+
+**Between the core and the bubbles** the events are merged, never queued without end: a newer
+`Show` of a bubble takes the place of the one still pending, and a bubble the interface never
+got needs no `Close`. The core never waits on the interface.
 
 **Animations.** A bubble is laid out out of sight, measured (`sensor`), then slides in from the
 right edge; it slides out the same way, and the bubbles below close up. Both follow
@@ -117,7 +145,9 @@ right edge; it slides out the same way, and the bubbles below close up. Both fol
 34, 2 % overshoot, settled in under 300 ms). Frames are asked for only while something moves.
 
 **Pointer.** A click closes the bubble or runs its default action; a button runs its action. The
-pointer over a bubble holds its timer, which goes on with the time it had left once it leaves.
+pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
+a replacement meanwhile does not restart it. A bubble on its way out takes no click: its
+messages name the bubble, not the id, which a replacement may already have reused.
 
 ## Do not disturb
 
@@ -128,8 +158,9 @@ pointer over a bubble holds its timer, which goes on with the time it had left o
 DoNotDisturb=true
 ```
 
-While it is `true`, only critical notifications show; the others are kept, expire out of
-sight, and go to the history like every notification. A value that cannot be read gives `false`
+While it is `true`, only critical notifications show. The others go to the history like every
+notification, and are closed at once (reason 4), whatever their timeout: nothing stays open out
+of sight. A notification already on screen is still updated in place. A value that cannot be read gives `false`
 and a warning in the log. The daemon reads the file again whenever its modification time, size
 or inode changed, when a notification comes in: there is no watch, since the value is only used
 then. Bubbles already on screen when it is switched on stay until they close.
@@ -206,12 +237,22 @@ with the bar and the dock.
   by `replaces_id`, an unknown id not taken over; expiry (reason 1), the default timeout,
   critical never expiring; actions (`ActionInvoked` then reason 2), the default action on a
   click, a click without one, `resident`; Do not disturb (only critical shows, all in the
-  history, switched off at once); the name already taken.
-- **Core**: four bubbles at most, the next one shows when one closes; the pointer holds the
-  timer and gives back the time left; the history keeps 100, a replacement takes its entry.
-- **Model**: timeouts, urgency, actions in pairs, icons from pixels, path and name.
+  history, the hidden ones closed with reason 4, switched off at once); `CloseNotification` of
+  an unknown id is an error; two clients: the second cannot replace nor close the first one's
+  notification; the name already taken.
+- **Core**: four bubbles at most, the next one shows when one closes; at most 50 waiting, the
+  oldest non-critical closing first; the pointer holds the timer and gives back the time left,
+  a replacement keeps it held; only the sender replaces or closes; the history keeps 100, a
+  replacement takes its entry.
+- **Model**: timeouts, urgency, actions in pairs, icons from pixels (more than 256 refused), a
+  path to `/dev/zero` and a name too long refused; a request with an application name, a title
+  and a body of megabytes, 10,000 actions with long labels and a key too long, all bounded.
+- **Pictures** (`picture.rs`): `/dev/zero`, a FIFO without a writer and a link to `/dev/zero`
+  refused at once; a PNG too large in bytes or in pixels, a file that is no PNG; an SVG pointing
+  to `/dev/zero` or a `file://` URI, with a `data:` picture, an entity, invalid UTF-8.
 - **Markup**: bold and italic nested, injected HTML neutralized (script, event attributes,
-  links, pictures, escaped tags that stay text), entities, stray characters, cut bodies.
+  links, pictures, escaped tags that stay text), entities, stray characters, cut bodies, bidi
+  overrides dropped, megabytes of unclosed tags and entities read in a few milliseconds.
 - **Layout**: the stack and its gap, the surface height, the input region through the gaps; the
   surface below the bar against the right edge, the first bubble at y = 54 on the reference
   screen (`lib.rs`).

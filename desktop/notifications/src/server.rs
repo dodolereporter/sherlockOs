@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use zbus::blocking::{Connection, connection};
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
+use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::OwnedValue;
 
@@ -38,8 +39,10 @@ impl Server {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        #[zbus(header)] header: Header<'_>,
     ) -> u32 {
         self.core.notify(Request {
+            sender: sender(&header),
             app_name,
             replaces_id,
             app_icon,
@@ -54,11 +57,15 @@ impl Server {
     async fn close_notification(
         &self,
         id: u32,
+        #[zbus(header)] header: Header<'_>,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        if self.core.close(id) {
-            Self::notification_closed(&emitter, id, Reason::Closed as u32).await?;
+        // The specification asks for an empty error when the notification does not exist; one
+        // of another application does not exist for this one.
+        if !self.core.close_from(id, &sender(&header)) {
+            return Err(zbus::fdo::Error::Failed(String::new()));
         }
+        Self::notification_closed(&emitter, id, Reason::Closed as u32).await?;
         Ok(())
     }
 
@@ -90,6 +97,11 @@ impl Server {
         id: u32,
         action_key: &str,
     ) -> zbus::Result<()>;
+}
+
+/// The unique bus name of the caller, empty on a direct connection.
+fn sender(header: &Header<'_>) -> String {
+    header.sender().map(|s| s.to_string()).unwrap_or_default()
 }
 
 /// Serves `core` on the bus `builder` connects to. `Ok(None)` when another daemon already owns

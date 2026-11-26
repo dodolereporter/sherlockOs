@@ -49,8 +49,18 @@ pub const MEASURE_ROOM: f32 = 480.0;
 pub const MAX_VISIBLE: usize = 4;
 /// Time a bubble stays when its application gives none. A choice of D-23.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
-/// Body characters kept: a bubble stays a bubble.
+/// Characters kept of the body, the title, the application name and an action label: a bubble
+/// stays a bubble, and a client cannot make the daemon hold or lay out more.
 pub const MAX_BODY_CHARS: usize = 300;
+pub const MAX_SUMMARY_CHARS: usize = 120;
+pub const MAX_APP_NAME_CHARS: usize = 48;
+pub const MAX_LABEL_CHARS: usize = 24;
+/// Action buttons shown on a bubble: three compact buttons fit its width.
+pub const MAX_BUTTONS: usize = 3;
+/// Largest side of the raw pixels of a notification: the tile is 20 px.
+pub const MAX_PIXELS_SIDE: u32 = 256;
+/// Notifications waiting for room at most; beyond, the oldest ones close, kept in the history.
+pub const MAX_WAITING: usize = 50;
 /// Notifications the history keeps, the newest ones.
 pub const HISTORY: usize = 100;
 /// The spring of a bubble sliding in and out, and of the stack closing up: the spring of an

@@ -192,17 +192,16 @@ mod tests {
         );
         assert!(matches!(events.try_recv(), Ok(Event::Close(1))));
         assert!(core.open(id).is_none());
-        // Closing it again, or an id never given, is not an error.
+        // Closing it again, or an id never given: the empty error of the specification.
         for id in [id, 99] {
-            client
-                .call_method(
-                    Some(NAME),
-                    PATH,
-                    Some(INTERFACE),
-                    "CloseNotification",
-                    &(id,),
-                )
-                .unwrap();
+            let closed = client.call_method(
+                Some(NAME),
+                PATH,
+                Some(INTERFACE),
+                "CloseNotification",
+                &(id,),
+            );
+            assert!(closed.is_err());
         }
 
         let reply = client
@@ -337,6 +336,7 @@ mod tests {
         let bus = Bus::start("dnd");
         let (core, events, settings) = bus.serve();
         let client = bus.connect();
+        let signals = signals(&client);
         NotificationsConfig {
             do_not_disturb: true,
         }
@@ -349,6 +349,12 @@ mod tests {
         assert_eq!(core.shown(), [critical]);
         let history: Vec<u32> = core.history().iter().map(|n| n.id).collect();
         assert_eq!(history, [critical, low, quiet]);
+        // Hidden ones are not kept open: closed by the daemon (reason 4), even without a timeout.
+        let mut closed = vec![next(&signals), next(&signals)];
+        closed.sort();
+        let reason = |id| (String::from("NotificationClosed"), id, String::from("4"));
+        assert_eq!(closed, [reason(quiet), reason(low)]);
+        assert!(core.open(quiet).is_none() && core.open(low).is_none());
         // Read again at once: the next notification shows.
         NotificationsConfig {
             do_not_disturb: false,
@@ -357,6 +363,50 @@ mod tests {
         .unwrap();
         let after = notify(&client, 0, "Après", &[], urgency(1), 0);
         assert_eq!(shown(&events), [(after, String::from("Après"))]);
+    }
+
+    #[test]
+    fn an_application_cannot_take_over_the_notification_of_another() {
+        let bus = Bus::start("owner");
+        let (core, _events, _) = bus.serve();
+        let first = bus.connect();
+        let second = bus.connect();
+        let id = notify(
+            &first,
+            0,
+            "À supprimer ?",
+            &["delete", "Supprimer"],
+            HashMap::new(),
+            0,
+        );
+        // The second one names it: a new notification, the first one untouched.
+        let other = notify(
+            &second,
+            id,
+            "Leurre",
+            &["delete", "Ouvrir"],
+            HashMap::new(),
+            0,
+        );
+        assert_ne!(other, id);
+        let kept = core.open(id).unwrap();
+        assert_eq!(kept.summary, "À supprimer ?");
+        assert_eq!(kept.actions[0].1, "Supprimer");
+        // Nor can it close it.
+        let closed = second.call_method(
+            Some(NAME),
+            PATH,
+            Some(INTERFACE),
+            "CloseNotification",
+            &(id,),
+        );
+        assert!(closed.is_err());
+        assert!(core.open(id).is_some());
+        // Its owner still can replace it.
+        assert_eq!(
+            notify(&first, id, "Mise à jour", &[], HashMap::new(), 0),
+            id
+        );
     }
 
     #[test]

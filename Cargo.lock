@@ -2327,6 +2327,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "libc",
  "notifications-config",
  "sherlock-ui",
  "thiserror 2.0.21",

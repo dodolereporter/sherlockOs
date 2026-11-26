@@ -7,6 +7,7 @@ pub mod core;
 pub mod layout;
 pub mod markup;
 pub mod model;
+pub mod picture;
 pub mod server;
 
 use std::sync::Mutex;

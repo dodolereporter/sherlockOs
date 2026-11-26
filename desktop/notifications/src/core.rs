@@ -1,6 +1,9 @@
 //! The state of the daemon, without D-Bus nor screen: the open notifications, which of them
 //! show, their timers, Do not disturb and the history. The server feeds it, the bubbles show
 //! what it sends (`Event`) and report the clicks back.
+//!
+//! Everything is bounded: at most `MAX_VISIBLE` shown and `MAX_WAITING` waiting notifications
+//! are open, and the history holds `HISTORY`. Every walk over them is therefore short.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -36,14 +39,16 @@ enum Timer {
 struct Open {
     note: Arc<Notification>,
     shown: bool,
-    /// Do not disturb was on when it came: it never shows.
-    hidden: bool,
+    /// The pointer is over its bubble: its timer stays held.
+    held: bool,
     timer: Timer,
 }
 
 impl Open {
     fn start(&mut self, now: Instant) {
-        if let Timer::Waiting(left) = self.timer {
+        if let Timer::Waiting(left) = self.timer
+            && !self.held
+        {
             self.timer = Timer::Running(now + left);
         }
     }
@@ -57,6 +62,28 @@ struct State {
     /// The newest first.
     history: VecDeque<Arc<Notification>>,
     dnd: Option<Follower>,
+    /// Closed by the daemon itself, their signal not sent yet: the expiry thread sends it, out
+    /// of the method call that closed them.
+    dropped: Vec<u32>,
+}
+
+impl State {
+    /// Who sent the notification `id`, while it is open or in the history.
+    fn owner(&self, id: u32) -> Option<&str> {
+        let open = self.open.iter().map(|o| &o.note);
+        let mut all = open.chain(self.history.iter());
+        all.find(|n| n.id == id).map(|n| n.sender.as_str())
+    }
+
+    fn do_not_disturb(&mut self) -> bool {
+        let Some((config, problem)) = self.dnd.as_mut().map(Follower::current) else {
+            return false;
+        };
+        if let Some(problem) = problem {
+            tracing::warn!(%problem, "Do not disturb setting ignored");
+        }
+        config.do_not_disturb
+    }
 }
 
 pub struct Core {
@@ -94,56 +121,50 @@ impl Core {
             .map(|_| ())
     }
 
-    /// `Notify`: the id of the notification, `replaces_id` when it names one this daemon gave.
+    /// `Notify`: the id of the notification. `replaces_id` is kept when it names a notification
+    /// of the same sender, open or in the history; any other gets a new id, so that no
+    /// application can take over the bubble, and the action keys, of another.
     pub fn notify(&self, request: Request) -> u32 {
+        let replaces = request.replaces_id;
+        // Read and bounded before taking the lock: files are read there.
+        let mut note = Notification::new(0, request);
         let mut events = Vec::new();
         let mut state = self.lock();
-        let replaces = request.replaces_id;
-        let id = if replaces != 0 && replaces <= state.last_id {
-            replaces
-        } else {
-            state.last_id = state.last_id.checked_add(1).unwrap_or(1);
-            state.last_id
-        };
-        let note = Arc::new(Notification::new(id, request));
-        let dnd = match state.dnd.as_mut().map(Follower::current) {
-            Some((config, problem)) => {
-                if let Some(problem) = problem {
-                    tracing::warn!(%problem, "Do not disturb setting ignored");
-                }
-                config.do_not_disturb
+        note.id = match state.owner(replaces) {
+            Some(owner) if replaces != 0 && owner == note.sender => replaces,
+            _ => {
+                state.last_id = state.last_id.checked_add(1).unwrap_or(1);
+                state.last_id
             }
-            None => false,
         };
+        let id = note.id;
+        let note = Arc::new(note);
+        let hidden = note.urgency != Urgency::Critical && state.do_not_disturb();
         state.history.retain(|old| old.id != id);
         state.history.push_front(Arc::clone(&note));
         state.history.truncate(ui::HISTORY);
         let timer = note.timeout.map_or(Timer::Never, Timer::Waiting);
         let now = Instant::now();
         match state.open.iter_mut().find(|o| o.note.id == id) {
+            // Already on screen: updated in place, even in Do not disturb.
             Some(open) => {
                 open.note = Arc::clone(&note);
                 open.timer = timer;
-                if open.shown || open.hidden {
-                    open.start(now);
-                }
                 if open.shown {
+                    open.start(now);
                     events.push(Event::Show(note));
                 }
             }
+            // Do not disturb: the history only, and closed at once.
+            None if hidden => state.dropped.push(id),
             None => {
-                let hidden = dnd && note.urgency != Urgency::Critical;
-                let mut open = Open {
+                state.open.push(Open {
                     note,
                     shown: false,
-                    hidden,
+                    held: false,
                     timer,
-                };
-                // A hidden notification still expires, out of sight.
-                if hidden {
-                    open.start(now);
-                }
-                state.open.push(open);
+                });
+                overflow(&mut state);
             }
         }
         promote(&mut state, now, &mut events);
@@ -155,9 +176,19 @@ impl Core {
 
     /// Closes a notification. Returns whether it was open; the caller sends the signal.
     pub fn close(&self, id: u32) -> bool {
+        self.close_if(id, |_| true)
+    }
+
+    /// `CloseNotification` from `sender`: only its own notifications.
+    pub fn close_from(&self, id: u32, sender: &str) -> bool {
+        self.close_if(id, |note| note.sender == sender)
+    }
+
+    fn close_if(&self, id: u32, allowed: impl Fn(&Notification) -> bool) -> bool {
         let mut events = Vec::new();
         let mut state = self.lock();
-        let Some(index) = state.open.iter().position(|o| o.note.id == id) else {
+        let found = state.open.iter().position(|o| o.note.id == id);
+        let Some(index) = found.filter(|&i| allowed(&state.open[i].note)) else {
             return false;
         };
         if state.open.remove(index).shown {
@@ -169,7 +200,6 @@ impl Core {
         self.send(events);
         true
     }
-
     /// A click on the bubble: its default action, if it has one, then it closes.
     pub fn click(&self, id: u32) {
         let default = self.open(id).is_some_and(|note| note.has_default());
@@ -200,11 +230,12 @@ impl Core {
         let mut state = self.lock();
         let now = Instant::now();
         if let Some(open) = state.open.iter_mut().find(|o| o.note.id == id && o.shown) {
+            open.held = held;
             match open.timer {
                 Timer::Running(at) if held => {
                     open.timer = Timer::Waiting(at.saturating_duration_since(now));
                 }
-                Timer::Waiting(_) if !held => open.start(now),
+                Timer::Waiting(_) => open.start(now),
                 _ => {}
             }
         }
@@ -241,12 +272,17 @@ impl Core {
     }
 
     /// Closes the notifications whose time is up, and returns how long until the next one.
+    /// Also sends the signals of the notifications the daemon closed itself.
     pub fn expire(&self, now: Instant) -> Option<Duration> {
-        let expired: Vec<u32> = {
-            let state = self.lock();
+        let (expired, dropped): (Vec<u32>, Vec<u32>) = {
+            let mut state = self.lock();
             let due = |o: &&Open| matches!(o.timer, Timer::Running(at) if at <= now);
-            state.open.iter().filter(due).map(|o| o.note.id).collect()
+            let expired = state.open.iter().filter(due).map(|o| o.note.id).collect();
+            (expired, std::mem::take(&mut state.dropped))
         };
+        for id in dropped {
+            self.signal_closed(id, Reason::Undefined);
+        }
         for id in expired {
             if self.close(id) {
                 self.signal_closed(id, Reason::Expired);
@@ -311,10 +347,29 @@ fn next_wait(state: &State, now: Instant) -> Option<Duration> {
         .min()
 }
 
+/// Beyond `MAX_WAITING` notifications waiting for room, the oldest one closes (critical ones
+/// last); it stays in the history.
+fn overflow(state: &mut State) {
+    let waiting = state.open.iter().filter(|o| !o.shown).count();
+    if waiting <= ui::MAX_WAITING {
+        return;
+    }
+    let waiting = |o: &&Open| !o.shown;
+    let oldest = state
+        .open
+        .iter()
+        .position(|o| waiting(&o) && o.note.urgency != Urgency::Critical)
+        .or_else(|| state.open.iter().position(|o| waiting(&o)));
+    if let Some(index) = oldest {
+        let id = state.open.remove(index).note.id;
+        state.dropped.push(id);
+    }
+}
+
 /// Shows the next waiting notifications, in the order they came, while there is room.
 fn promote(state: &mut State, now: Instant, events: &mut Vec<Event>) {
     let mut room = ui::MAX_VISIBLE.saturating_sub(state.open.iter().filter(|o| o.shown).count());
-    for open in state.open.iter_mut().filter(|o| !o.shown && !o.hidden) {
+    for open in state.open.iter_mut().filter(|o| !o.shown) {
         if room == 0 {
             break;
         }
@@ -337,6 +392,10 @@ mod tests {
             let _ = sender.lock().map(|s| s.send(event));
         });
         (Core::new(sink, None), receiver)
+    }
+
+    fn urgent() -> zbus::zvariant::OwnedValue {
+        zbus::zvariant::OwnedValue::try_from(zbus::zvariant::Value::U8(2)).unwrap()
     }
 
     fn request(summary: &str, timeout: i32) -> Request {
@@ -376,6 +435,58 @@ mod tests {
         assert!(left > Duration::from_millis(900) && left <= Duration::from_millis(1000));
         assert_eq!(core.expire(Instant::now() + Duration::from_secs(2)), None);
         assert!(core.open(id).is_none());
+    }
+
+    #[test]
+    fn waiting_notifications_are_bounded() {
+        let (core, _events) = core();
+        let critical = core.notify(Request {
+            hints: [(String::from("urgency"), urgent())].into(),
+            ..request("critique", 0)
+        });
+        for i in 0..(ui::MAX_VISIBLE + ui::MAX_WAITING + 20) {
+            core.notify(request(&i.to_string(), 0));
+        }
+        let state = core.lock();
+        assert_eq!(state.open.len(), ui::MAX_VISIBLE + ui::MAX_WAITING);
+        // The oldest waiting ones closed, the critical one shows; all stay in the history.
+        assert!(state.open.iter().any(|o| o.note.id == critical && o.shown));
+        assert_eq!(state.dropped.len(), 21);
+        assert_eq!(state.dropped[0], ui::MAX_VISIBLE as u32 + 1);
+        drop(state);
+        assert_eq!(core.expire(Instant::now()), None);
+        assert!(core.lock().dropped.is_empty());
+    }
+
+    #[test]
+    fn a_replacement_under_the_pointer_keeps_its_timer_held() {
+        let (core, _events) = core();
+        let id = core.notify(request("a", 1000));
+        core.hold(id, true);
+        core.notify(Request {
+            replaces_id: id,
+            ..request("b", 1000)
+        });
+        assert_eq!(core.expire(Instant::now() + Duration::from_secs(5)), None);
+        assert!(core.open(id).is_some());
+    }
+
+    #[test]
+    fn only_the_sender_replaces_or_closes() {
+        let (core, _events) = core();
+        let from = |sender: &str, replaces_id| Request {
+            sender: sender.to_owned(),
+            replaces_id,
+            ..request("x", 0)
+        };
+        let id = core.notify(from(":1.1", 0));
+        assert_eq!(core.notify(from(":1.1", id)), id);
+        let other = core.notify(from(":1.2", id));
+        assert_ne!(other, id);
+        assert!(!core.close_from(id, ":1.2"));
+        assert!(core.close_from(id, ":1.1"));
+        // Closed, it stays in the history: its sender may still reuse its id.
+        assert_eq!(core.notify(from(":1.1", id)), id);
     }
 
     #[test]
