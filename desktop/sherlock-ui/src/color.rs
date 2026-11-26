@@ -368,6 +368,8 @@ pub const TILE_LAB: Color = Color::rgb(0x2F, 0x7A, 0x52);
 pub const TILE_GAMES: Color = ACCENT;
 /// Installer: deep blue.
 pub const TILE_INSTALLER: Color = Color::rgb(0x21, 0x47, 0x62);
+/// The dock's « Applications » button (D-41): slate blue.
+pub const TILE_APPLICATIONS: Color = Color::rgb(0x33, 0x49, 0x6A);
 /// Light blue of two knobs of the settings icon.
 pub const TILE_KNOB: Color = Color::rgb(0xA6, 0xC4, 0xDD);
 

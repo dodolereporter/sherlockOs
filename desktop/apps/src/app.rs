@@ -1,19 +1,22 @@
 //! State of the applications view, its messages, update and view.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, key::Named};
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::{
-    Space, button, column, container, mouse_area, operation, row, stack, svg, text,
+    Space, button, column, container, mouse_area, operation, pin, row, stack, svg, text,
 };
 use iced::window::{self, Id};
-use iced::{Alignment, Element, Event, Length, Padding, Size, Subscription, Task, event};
+use iced::{Alignment, Element, Event, Length, Padding, Point, Size, Subscription, Task, event};
 use iced_exwlshell::to_layer_message;
 use launcher::app::{Spawn, icon_handle};
+use launcher::source::Command;
 use sherlock_ui::animated::reveal;
 use sherlock_ui::apps::{self as look, text as texts};
-use sherlock_ui::component as ui;
+use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::dock::text as dock_texts;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::motion::Animation;
 use sherlock_ui::{color, metrics, typography};
@@ -48,8 +51,50 @@ pub enum Message {
     Page(usize),
     /// A click beside the tiles and the field: the view closes, as Launchpad does.
     Dismiss,
+    /// The pointer moved: where a menu opens.
+    Pointer(Point),
+    /// A right click on a tile, by its place among those shown: its menu.
+    Menu(usize),
+    MenuPick(Entry),
+    /// A click beside the menu: it closes.
+    CloseMenu,
     Scroll(ScrollDelta),
     Frame(Instant),
+}
+
+/// Desktop file id of Evidence, which « Afficher dans Evidence » starts.
+const EVIDENCE: &str = "evidence";
+
+/// An entry of a tile's menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    /// « Garder dans le Dock ».
+    Keep,
+    /// « Retirer du Dock ».
+    Unpin,
+    /// « Afficher dans Evidence »: the folder of its desktop file.
+    Show,
+}
+
+impl Entry {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Keep => dock_texts::KEEP,
+            Self::Unpin => dock_texts::UNPIN,
+            Self::Show => texts::SHOW,
+        }
+    }
+}
+
+/// The menu of a tile.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Menu {
+    /// The tile, by its place among those shown.
+    pub place: usize,
+    /// Where it opened.
+    pub at: Point,
+    /// Its entries, each with whether it acts.
+    pub entries: Vec<(Entry, bool)>,
 }
 
 pub struct View {
@@ -71,6 +116,11 @@ pub struct View {
     /// Time of the last event, from `origin`: the moment the view draws.
     now: Duration,
     surface: Option<Id>,
+    /// The dock's configuration file, where pinning writes.
+    dock_file: Option<PathBuf>,
+    pointer: Point,
+    /// The menu of a tile, while it is open.
+    pub menu: Option<Menu>,
     /// Asked to close: it fades out, then the program ends.
     pub closing: bool,
 }
@@ -95,11 +145,25 @@ impl View {
             origin: Instant::now(),
             now: Duration::ZERO,
             surface: None,
+            dock_file: dock_config::path(),
+            pointer: Point::ORIGIN,
+            menu: None,
             closing: false,
         }
     }
 
     /// The view already open, for the captures: no opening to wait for.
+    /// Pins to the dock in the file at `path` instead of the user's (the tests).
+    pub fn with_dock_file(mut self, path: PathBuf) -> Self {
+        self.dock_file = Some(path);
+        self
+    }
+
+    /// The dock's file the menu writes.
+    pub fn dock_file(&self) -> Option<&std::path::Path> {
+        self.dock_file.as_deref()
+    }
+
     pub fn opened(mut self) -> Self {
         self.presence = Animation::new(look::OPEN_SPRING, 1.0, 1.0, Duration::ZERO);
         self
@@ -157,13 +221,21 @@ impl View {
                 self.paginate();
             }
             Message::Query(query) => {
+                self.menu = None;
                 self.query = query;
                 self.paginate();
                 let typed = !self.query.trim().is_empty() && !self.shown.is_empty();
                 self.selected = typed.then_some(0);
             }
             Message::Key(key) => return self.key(key),
+            // With a menu open, a click elsewhere only closes it.
+            Message::Launch(_) | Message::Dismiss | Message::CloseMenu if self.menu.is_some() => {
+                self.menu = None;
+            }
             Message::Launch(place) => return self.launch(place),
+            Message::Pointer(point) => self.pointer = point,
+            Message::Menu(place) => self.open_menu(place),
+            Message::MenuPick(entry) => return self.pick(entry),
             Message::Page(page) => {
                 let now = self.clock();
                 self.pager.go(page, now);
@@ -214,7 +286,11 @@ impl View {
                     None => Task::none(),
                 }
             }
-            // Escape empties the search first, then closes.
+            // Escape closes the menu, empties the search, then closes the view.
+            Key::Escape if self.menu.is_some() => {
+                self.menu = None;
+                Task::none()
+            }
             Key::Escape if !self.query.is_empty() => {
                 self.query.clear();
                 self.paginate();
@@ -277,6 +353,88 @@ impl View {
         }
     }
 
+    /// Opens the menu of tile `place` where the pointer is.
+    fn open_menu(&mut self, place: usize) {
+        let Some(tile) = self.tile_at(place) else {
+            return;
+        };
+        let pinned = self
+            .dock_file
+            .as_deref()
+            .is_some_and(|path| dock::pins::is_pinned(path, tile.id()));
+        let pin = if pinned { Entry::Unpin } else { Entry::Keep };
+        let show = self.evidence().is_some();
+        self.menu = Some(Menu {
+            place,
+            at: self.pointer,
+            entries: vec![(pin, self.dock_file.is_some()), (Entry::Show, show)],
+        });
+    }
+
+    /// The tile at `place` among those shown.
+    fn tile_at(&self, place: usize) -> Option<&Tile> {
+        self.shown
+            .get(place)
+            .and_then(|index| self.catalog.tiles().get(*index))
+    }
+
+    /// Evidence, when it is installed.
+    fn evidence(&self) -> Option<&Tile> {
+        self.catalog.tiles().iter().find(|t| t.id() == EVIDENCE)
+    }
+
+    fn pick(&mut self, entry: Entry) -> Task<Message> {
+        let Some(menu) = self.menu.take() else {
+            return Task::none();
+        };
+        let Some(tile) = self.tile_at(menu.place) else {
+            return Task::none();
+        };
+        let id = tile.id().to_owned();
+        match entry {
+            Entry::Keep | Entry::Unpin => {
+                let Some(path) = self.dock_file.clone() else {
+                    return Task::none();
+                };
+                match dock::pins::set(&path, &id, entry == Entry::Keep) {
+                    Ok(_) => tracing::info!(id, pinned = entry == Entry::Keep, "dock"),
+                    Err(error) => tracing::error!(%error, "cannot write the dock's file"),
+                }
+                Task::none()
+            }
+            Entry::Show => self.show(menu.place),
+        }
+    }
+
+    /// Opens Evidence on the folder of the desktop file of tile `place`, then fades out.
+    fn show(&mut self, place: usize) -> Task<Message> {
+        let folder = self
+            .tile_at(place)
+            .and_then(|t| t.entry.path.parent())
+            .map(PathBuf::from);
+        let command = self.evidence().zip(folder).and_then(|(evidence, folder)| {
+            let (program, args) = evidence.entry.command(&[folder])?;
+            Some(Command {
+                program,
+                args,
+                dir: None,
+            })
+        });
+        let Some(command) = command else {
+            return Task::none();
+        };
+        match (self.spawn)(&command) {
+            Ok(pid) => {
+                tracing::info!(pid, "shown in Evidence");
+                self.close()
+            }
+            Err(error) => {
+                tracing::error!(%error, "cannot start Evidence");
+                Task::none()
+            }
+        }
+    }
+
     /// Fades the view out; the program ends at the last frame.
     fn close(&mut self) -> Task<Message> {
         if !self.closing {
@@ -316,9 +474,14 @@ impl View {
             .width(Length::Fill)
             .height(Length::Fill)
             .style(look::veil);
-        reveal(stack![veil, mouse_area(content).on_press(Message::Dismiss)])
-            .opacity(opacity)
-            .into()
+        let mut layers = vec![
+            veil.into(),
+            mouse_area(content).on_press(Message::Dismiss).into(),
+        ];
+        if let Some(menu) = &self.menu {
+            layers.push(self.view_menu(menu));
+        }
+        reveal(stack(layers)).opacity(opacity).into()
     }
 
     /// The search field, the magnifier inside it, as `component::search_field` lays them out.
@@ -435,18 +598,47 @@ impl View {
         let body = column![icon, name]
             .spacing(look::LABEL_GAP)
             .align_x(Alignment::Center);
+        let chosen =
+            self.selected == Some(place) || self.menu.as_ref().is_some_and(|m| m.place == place);
         let cell = button(container(body).center(Length::Fill))
             .on_press(Message::Launch(place))
             .width(layout.cell.0)
             .height(layout.cell.1)
             .padding(look::CELL_PADDING)
-            .style(look::cell(self.selected == Some(place)));
+            .style(look::cell(chosen));
+        let cell = mouse_area(cell).on_right_press(Message::Menu(place));
         if self.launched == Some(place) {
             let grow = 1.0 + (look::LAUNCH_SCALE - 1.0) * (1.0 - self.presence() as f32);
             reveal(cell).scale(grow, (0.5, 0.5)).into()
         } else {
             cell.into()
         }
+    }
+
+    /// The menu of a tile at the pointer, kept on the screen; a click beside closes it.
+    fn view_menu(&self, menu: &Menu) -> Element<'_, Message> {
+        let items = menu.entries.iter().map(|(entry, enabled)| {
+            let pick = enabled.then_some(Message::MenuPick(*entry));
+            ui::menu_item(entry.label(), Trailing::None, pick).into()
+        });
+        let width = look::MENU_WIDTH;
+        let height =
+            2.0 * metrics::MENU_PADDING + menu.entries.len() as f32 * metrics::MENU_ITEM_HEIGHT;
+        let x = menu
+            .at
+            .x
+            .min(self.size.width - width - look::MENU_MARGIN)
+            .max(0.0);
+        let y = menu
+            .at
+            .y
+            .min(self.size.height - height - look::MENU_MARGIN)
+            .max(0.0);
+        let placed = pin(ui::floating_menu(items, width)).x(x).y(y);
+        mouse_area(placed)
+            .on_press(Message::CloseMenu)
+            .on_right_press(Message::CloseMenu)
+            .into()
     }
 
     /// A dot for each page, when there are several; a click goes to that page.
@@ -490,6 +682,7 @@ pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
             Some(Message::Key(key))
         }
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Message::Scroll(delta)),
+        Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Pointer(position)),
         Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
         _ => None,
     }

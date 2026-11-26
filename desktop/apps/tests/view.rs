@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use apps::app::{Key, Message, View};
+use apps::app::{Entry, Key, Message, View};
 use apps::catalog::Catalog;
 use iced::mouse::ScrollDelta;
 use iced::widget::container;
@@ -99,7 +99,25 @@ fn recorded(catalog: Catalog) -> (View, Started) {
         }
         Ok(1)
     });
-    (View::new(catalog, spawn), started)
+    (
+        View::new(catalog, spawn).with_dock_file(dock_file()),
+        started,
+    )
+}
+
+/// A dock file of its own for each view, never the user's, pinning Evidence only.
+fn dock_file() -> PathBuf {
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("apps-dock-{}-{n}", std::process::id()));
+    let path = dir.join("dock/dock.conf");
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(error) = std::fs::create_dir_all(dir.join("dock"))
+        .and_then(|()| std::fs::write(&path, "[Dock]\nPinned=evidence;\n"))
+    {
+        panic!("cannot write the dock file: {error}");
+    }
+    path
 }
 
 fn names(view: &View) -> Vec<&str> {
@@ -378,6 +396,101 @@ fn the_view_renders_on_every_screen_in_both_themes() {
         assert!(capture(&view, &name).expect("screenshot written") > 10_000);
         let _ = view.update(Message::Query("zzz".into()));
         assert!(shows(&view, texts::NOTHING));
+    }
+    color::set_active(Theme::Dark);
+}
+
+/// The place of the tile named `name` among those shown.
+fn place(view: &View, name: &str) -> usize {
+    view.tiles()
+        .position(|t| t.name() == name)
+        .unwrap_or(usize::MAX)
+}
+
+#[test]
+fn the_menu_pins_to_the_dock_and_shows_in_evidence() {
+    let (mut view, started) = recorded(catalog());
+    let file = view.dock_file().expect("dock file").to_path_buf();
+    let kitty = place(&view, "Kitty");
+    let _ = view.update(Message::Pointer(Point::new(300.0, 200.0)));
+    let _ = view.update(Message::Menu(kitty));
+    let menu = view.menu.clone().expect("menu");
+    assert_eq!(menu.entries, [(Entry::Keep, true), (Entry::Show, true)]);
+    assert_eq!(menu.at, Point::new(300.0, 200.0));
+    // « Garder dans le Dock » writes the dock's file, after what was pinned.
+    let _ = view.update(Message::MenuPick(Entry::Keep));
+    assert!(view.menu.is_none());
+    let text = std::fs::read_to_string(&file).expect("dock file");
+    assert_eq!(text, "[Dock]\nPinned=evidence;kitty;\n");
+    assert!(!view.closing, "the view stays");
+    // Pinned now: « Retirer du Dock ».
+    let _ = view.update(Message::Menu(kitty));
+    assert_eq!(
+        view.menu.as_ref().map(|m| m.entries[0].0),
+        Some(Entry::Unpin)
+    );
+    let _ = view.update(Message::MenuPick(Entry::Unpin));
+    let text = std::fs::read_to_string(&file).expect("dock file");
+    assert_eq!(text, "[Dock]\nPinned=evidence;\n");
+    // A click beside or Escape closes the menu, not the view.
+    let _ = view.update(Message::Menu(kitty));
+    let _ = view.update(Message::Dismiss);
+    assert!(view.menu.is_none() && !view.closing);
+    let _ = view.update(Message::Menu(kitty));
+    let _ = view.update(Message::Key(Key::Escape));
+    assert!(view.menu.is_none() && !view.closing);
+    // « Afficher dans Evidence »: Evidence on the folder of the desktop file.
+    let _ = view.update(Message::Menu(kitty));
+    let _ = view.update(Message::MenuPick(Entry::Show));
+    let started = started.lock().expect("record").clone();
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].program, std::ffi::OsString::from("evidence"));
+    let folder = fixtures().join("system/applications");
+    assert_eq!(started[0].args, [folder.into_os_string()]);
+    assert!(view.closing);
+}
+
+#[test]
+fn without_evidence_the_menu_cannot_show() {
+    let (mut view, _) = recorded(many(3));
+    let _ = view.update(Message::Menu(0));
+    let menu = view.menu.clone().expect("menu");
+    assert_eq!(menu.entries, [(Entry::Keep, true), (Entry::Show, false)]);
+}
+
+#[test]
+fn a_right_click_opens_the_menu() {
+    let (mut view, _) = recorded(catalog());
+    let _ = view.update(Message::Resized(Size::new(1920.0, 1080.0)));
+    let view = view.opened();
+    let layout = view.layout();
+    let left = (1920.0 - layout.columns as f32 * layout.cell.0) / 2.0;
+    let mut ui = Simulator::with_size(launcher::settings(), (1920.0, 1080.0), view.view_screen());
+    ui.point_at(Point::new(
+        left + layout.cell.0 * 2.5,
+        layout.grid_top + layout.cell.1 / 2.0,
+    ));
+    let _ = ui.simulate([iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Right,
+    ))]);
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        messages.iter().any(|m| matches!(m, Message::Menu(2))),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn the_menu_renders_in_both_themes() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        let _theme = in_theme(which);
+        let mut view = opened(1920.0, 1080.0);
+        let _ = view.update(Message::Pointer(Point::new(1180.0, 220.0)));
+        let firefox = place(&view, "Firefox");
+        let _ = view.update(Message::Menu(firefox));
+        assert!(shows(&view, sherlock_ui::dock::text::KEEP));
+        let name = format!("apps-menu{suffix}");
+        assert!(capture(&view, &name).expect("screenshot written") > 10_000);
     }
     color::set_active(Theme::Dark);
 }

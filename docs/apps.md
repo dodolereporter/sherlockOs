@@ -6,7 +6,8 @@ started on demand, shown over the whole screen with layer-shell (ADR 0005), writ
 0.14 and `iced_exwlshell` 0.21.4 like the launcher (`docs/launcher.md`), whose reading of the
 applications, search, start and single instance it reuses. The crate is `apps`, the binary and
 the layer-shell namespace `sherlockos-apps`. Batch D-41a builds the view, the search and the
-start; D-41b adds the right-click menu, pinning to the dock, the dock's button and the shortcut.
+start; D-41b adds the right-click menu, pinning to the dock, the dock's button, F4 and the
+launcher's « Garder dans le Dock ».
 Its texts stay in French, from `sherlock-ui`.
 
 ![The view on a 1920 × 1080 screen](../desktop/apps/screenshots/apps-1920x1080.png)
@@ -134,6 +135,43 @@ As in the launcher: its `Exec` expanded by `mime-apps`, no shell, the environmen
 renderer choice (ADR 0018), its own process group, no standard streams, its `Path`. Then the
 view fades out and the program ends. A failed start leaves the view open and is logged.
 
+### Menu of an application
+
+A right click on an application opens its menu at the pointer, kept 8 away from the screen
+edges, in the menu glass of the theme (`component::floating_menu`, 240 wide). The cell stays
+lit under it.
+
+| Entry | Effect |
+| --- | --- |
+| « Garder dans le Dock » | Pins the application at the end of the dock's list; the view stays open |
+| « Retirer du Dock » | Instead of the first one when it is pinned |
+| « Afficher dans Evidence » | Opens Evidence on the folder of its desktop file, then the view fades out; disabled when Evidence is not installed |
+
+Pinning goes through `dock::pins`: the dock's file (`$XDG_CONFIG_HOME/dock/dock.conf`) gets the
+list the dock shows, its defaults included when the file has none, plus or minus the
+application; the dock reads it again at once. A click beside the menu, or Escape, closes it and
+nothing else.
+
+![The menu of an application](../desktop/apps/screenshots/apps-menu.png)
+![The same in the light theme](../desktop/apps/screenshots/apps-menu-light.png)
+
+**Dragging an icon to the dock: not done.** The view and the dock are two surfaces of two
+programs, and the view covers the dock (layer `Overlay`). An icon drawn by the view cannot leave
+its surface, and handing it to the dock would take a Wayland drag and drop
+(`wl_data_device.start_drag`), which neither iced 0.14 nor `iced_exwlshell` 0.21 can start. The
+pointer could be followed past the view's edge (the surface keeps it while the button is held),
+but the dock is under the view: there is nothing to drop on. « Garder dans le Dock » does it.
+
+### Opening it
+
+| From | How |
+| --- | --- |
+| The dock | The « Applications » button, first on the left (`docs/dock.md`) |
+| The keyboard | F4 alone, caught by the compositor (`docs/compositor.md`) |
+| A terminal | `sherlockos-apps` |
+
+The four finger pinch is another batch.
+
 ### One view at a time
 
 `$XDG_RUNTIME_DIR/sherlockos-apps.lock`, the launcher's mechanism (`docs/launcher.md`, One
@@ -168,6 +206,10 @@ Tested (`nothing_is_drawn_at_rest`).
 | `a_click_starts_a_tile_and_a_click_beside_closes` | The pointer on three screens |
 | `nothing_is_drawn_at_rest` | No frame at rest, frames while moving, the end after closing |
 | `the_view_renders_on_every_screen_in_both_themes` | The captures above |
+| `the_menu_pins_to_the_dock_and_shows_in_evidence` | The menu's entries, the file written, Escape, Evidence on the folder |
+| `without_evidence_the_menu_cannot_show`, `a_right_click_opens_the_menu` | The disabled entry, the right click |
+| `the_menu_renders_in_both_themes` | The menu's captures |
+| `dock::pins::tests` | The list written, defaults included, other keys kept |
 | `pager::tests` | Page count, notches, bounce, swipe, rubber band |
 | `sherlock_ui::apps::tests` | Contrasts, the grid on eight screens |
 
@@ -185,3 +227,4 @@ close it.
 - The blurred wallpaper: D-37.
 - Folders of applications, a later batch.
 - The four finger pinch: another batch.
+- Dragging an icon to the dock (see Menu of an application).

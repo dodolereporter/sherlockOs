@@ -385,6 +385,25 @@ used: our OS will not ship GTK for it.
 Sherlock has no window to open yet: a click on it is logged, like the entries of the bar's
 Sherlock menu.
 
+**The « Applications » button** (D-41) comes first, on the left as on macOS: nine squares on a
+slate tile, drawn by `sherlock_ui::dock::applications_icon` in the style of the application
+icons. A click starts the applications view (`docs/apps.md`), `$SHERLOCKOS_BIN/sherlockos-apps`
+or `sherlockos-apps` in the `PATH`; started again while open, the view closes, so the button
+toggles it. It is not in `Pinned`, cannot be dragged, and the dragged applications never take
+its place (`drag::orders` keeps it first). Its menu, like Sherlock's, has every entry disabled.
+Sherlock stays in the middle of the pinned applications.
+
+![The « Applications » button, the pointer over it](../desktop/dock/screenshots/dock-applications.png)
+
+The tests of the other icons build the dock without it (`Sources::applications`), so that
+their places stay those of the design board; `the_applications_button_comes_first` checks it.
+
+**Pinned from elsewhere.** `dock::pins` gives the other programs of the shell the list as the
+dock shows it, the defaults included when the file has none, and pins or unpins an application
+there: « Garder dans le Dock » of the applications view and of the launcher. The dock reads its
+file again at once. « Garder dans le Dock » and « Retirer du Dock » now take a capital D, as on
+macOS, in the dock's own menu too.
+
 ## Animations
 
 Batch D-21b, after macOS. The board shows none of them. Each icon keeps its animations by
