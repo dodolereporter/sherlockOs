@@ -33,6 +33,8 @@ xcursor = "=0.3.11"
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 # Wallpaper setting, shared with Control Room (workspace crate).
 desktop-config = { path = "../desktop-config" }
+# Names of the house cursor themes and of their shapes, without the generator (lot D-07).
+cursor-theme = { path = "../cursor-theme" }
 # Wallpaper decoders, PNG (the variants) and JPEG (an image chosen by the user) only. Same
 # version as evidence.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
@@ -44,7 +46,8 @@ shell-protocol = { path = "../shell-protocol", features = ["server"] }
 # built.
 ab_glyph = "=0.2.32"
 tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
-# The theme of the appearance file, followed live by the decorations (workspace crate).
+# The theme of the appearance file, followed live by the decorations, and read at startup for
+# the cursors (workspace crate).
 appearance-config = { path = "../appearance-config" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"

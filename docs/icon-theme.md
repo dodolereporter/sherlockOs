@@ -2,10 +2,9 @@
 
 `desktop/icon-theme` finds the file of an icon from its name (the `Icon` key of a desktop
 entry), as the freedesktop Icon Theme specification describes it. It is meant for every
-program of the desktop that shows application icons: the launcher uses it since D-22b; the
-dock (`desktop/dock/src/icons.rs`) and Evidence (`desktop/evidence/src/icons.rs`) still carry
-their own lookup and are meant to move onto it in a later batch. It depends on the standard
-library only.
+program of the desktop that shows application icons: the launcher uses it since D-22b, the
+dock since D-03; Evidence (`desktop/evidence/src/icons.rs`) still carries its own lookup and is
+meant to move onto it in a later batch. It depends on the standard library only.
 
 ## API
 
@@ -61,4 +60,4 @@ missing theme, and the user's theme from GTK then from Plasma.
 
 - No `icon-theme.cache`: the files are looked for directly.
 - No XPM.
-- The dock and Evidence still have their own copy (see above).
+- Evidence still has its own copy (see above).
