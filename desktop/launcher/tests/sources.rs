@@ -548,6 +548,35 @@ mod tests {
     }
 
     #[test]
+    fn evidence_shows_its_icon_from_our_theme() {
+        // Evidence's own desktop entry, and the theme of sherlock-ui beside the fixtures,
+        // whose hicolor index describes the folders as the system's does.
+        let tmp = TempDir::new("evidence");
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        std::fs::create_dir_all(tmp.0.join("applications")).expect("folder");
+        let entry = tmp.0.join("applications/evidence.desktop");
+        std::fs::copy(manifest.join("../evidence/evidence.desktop"), entry).expect("copied");
+        let dirs = Dirs {
+            config_home: fixtures().join("config"),
+            config_dirs: Vec::new(),
+            data_home: tmp.0.clone(),
+            data_dirs: Vec::new(),
+        };
+        let ours = manifest.join("../sherlock-ui");
+        let icons =
+            icon_theme::Lookup::new(&[ours, fixtures()], None, None).context("Applications");
+        let apps = Apps::load(&dirs, &["fr".into()], None).with_icons(icons);
+        let hits = apps.search(&Query::new("evidence"), 1);
+        let Tile::App(Some(icon)) = &hits[0].tile else {
+            panic!("Evidence has an icon: {:?}", hits[0].tile);
+        };
+        assert!(
+            icon.ends_with("sherlock-ui/icons/hicolor/scalable/apps/evidence.svg"),
+            "{icon:?}"
+        );
+    }
+
+    #[test]
     fn the_panel_renders_every_kind_of_result() {
         let home = home();
         let (mut launcher, _) = launcher_on(&home.0, Clipboard::Toolkit);

@@ -7,10 +7,11 @@
 # /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
 # session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
 # NOM_OS_XWAYLAND=1 starts XWayland too (off by default: see "Real session" in
-# docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus (see below). The log
-# of the session goes to $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log):
-# beyond 5 MiB it moves to session.log.old and starts again. Ctrl + Alt + Backspace stops the
-# compositor, and the session with it.
+# docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus, NOM_OS_DATA the
+# folder of the application icons (see below). The log of the session goes to
+# $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
+# to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
+# session with it.
 set -eu
 
 bin="${NOM_OS_BIN:-$(dirname "$(readlink -f "$0")")}"
@@ -51,6 +52,12 @@ if [ "${NOM_OS_OWN_BUS:-0}" != 1 ]; then
 fi
 
 export PATH="$PATH:$bin"
+# The data of the session, the application icons as a hicolor theme: in share/nom-os beside the
+# libexec folder (/usr/local/share/nom-os, where `just install-session` puts them), or in
+# NOM_OS_DATA. First in XDG_DATA_DIRS, for the programs of the session only. After the re-exec
+# above, so that it is added once.
+data="${NOM_OS_DATA:-$(dirname "$(dirname "$bin")")/share/nom-os}"
+export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/nom-os"
 log="$state/session.log"
 mkdir -p "$state"
