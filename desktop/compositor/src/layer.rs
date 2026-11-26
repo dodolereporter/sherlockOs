@@ -220,6 +220,25 @@ impl State {
         for window in windows {
             self.rearrange_on(&window, Some(output.clone()), |_, _| {});
         }
+        // A floating window that a new exclusive zone covers comes down under it: its title
+        // bar stays reachable (lot C-01).
+        let floating: Vec<_> = self
+            .space
+            .elements()
+            .filter(|w| window_data(w).restore.get().is_none())
+            .filter(|w| self.window_output(w).as_ref() == Some(output))
+            .cloned()
+            .collect();
+        for window in floating {
+            let Some(rect) = self.space.element_geometry(&window) else {
+                continue;
+            };
+            let center = rect.loc.to_f64() + rect.size.to_f64().downscale(2.0).to_point();
+            let loc = self.below_top_bar(&window, rect.loc, center);
+            if loc != rect.loc {
+                self.move_window(&window, loc, false);
+            }
+        }
     }
 
     /// The anchored surface that keeps the keyboard: exclusive keyboard, on the overlay or top
@@ -328,7 +347,7 @@ fn check_reserves(
 }
 
 /// The surface has a buffer: it shows something.
-fn has_content(surface: &WlSurface) -> bool {
+pub(crate) fn has_content(surface: &WlSurface) -> bool {
     with_renderer_surface_state(surface, |state| state.buffer().is_some()).unwrap_or(false)
 }
 

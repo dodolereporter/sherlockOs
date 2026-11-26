@@ -64,7 +64,7 @@ pub fn init(
     state.wallpaper = Wallpaper::start(
         &event_loop.handle(),
         desktop_config::wallpaper::config_file(var),
-        desktop_config::data_dirs(var),
+        desktop_config::wallpaper::dirs(var),
     )?;
     let mut textures = Textures::default();
     // The host frame is drawn in full every time: the identities only matter to the real

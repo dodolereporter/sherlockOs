@@ -1810,6 +1810,173 @@ mod tests {
         drop(shown);
     }
 
+    /// Lot C-01: dragged up, a window stops with its title bar under the top bar, where it
+    /// can still be grabbed; dropped there, it stays.
+    #[test]
+    fn a_window_dragged_up_keeps_its_title_bar_under_the_top_bar() {
+        let mut h = Harness::start();
+        let (_shown, _decoration) = h.show_decorated();
+        let _bar = show_bar(&mut h);
+        // The whole window, 342 high, at (200, 129): its bar from 129 to 171, below the top bar.
+        assert_eq!(location(&h.state), Some((200, 171).into()));
+        h.state.pointer_motion((300.0, 150.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        assert!(h.state.gesture_active());
+        // Up to the middle of the top bar, short of the edge that maximizes.
+        h.state.pointer_motion((300.0, 20.0).into(), 3);
+        assert_eq!(location(&h.state), Some((200, 46 + 42).into()), "stopped");
+        h.state.pointer_motion((350.0, 12.0).into(), 4);
+        assert_eq!(
+            location(&h.state),
+            Some((250, 88).into()),
+            "it still slides"
+        );
+        h.release();
+        assert_eq!(location(&h.state), Some((250, 88).into()), "dropped there");
+        // Its title bar is in reach: a press on it moves it again.
+        h.state.pointer_motion((350.0, 67.0).into(), 5);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+        assert!(h.state.gesture_active(), "the title bar is grabbed");
+        h.state.pointer_motion((350.0, 167.0).into(), 7);
+        h.release();
+        assert_eq!(location(&h.state), Some((250, 188).into()));
+    }
+
+    /// A client that draws its own title bar stops at the top of the work area, its top edge
+    /// under the top bar.
+    #[test]
+    fn a_window_without_our_bar_stops_under_the_top_bar() {
+        let mut h = Harness::start();
+        let Shown { seat, toplevel, .. } = h.show_window();
+        let _bar = show_bar(&mut h);
+        let start = location(&h.state).unwrap();
+        let (x, y) = (f64::from(start.x) + 10.0, f64::from(start.y) + 10.0);
+        let serial = h.press(x, y);
+        toplevel._move(&seat, serial);
+        h.run_until("the gesture start", |_, s| s.gesture_active());
+        h.state.pointer_motion((x, 15.0).into(), 3);
+        assert_eq!(location(&h.state), Some((start.x, 46).into()));
+        h.release();
+        assert_eq!(location(&h.state), Some((start.x, 46).into()));
+    }
+
+    /// A window already under an anchored surface that leaves it no room (no exclusive zone)
+    /// is taken back with the gesture key, through that surface.
+    #[test]
+    fn the_gesture_key_takes_back_a_window_under_a_bar() {
+        let mut h = Harness::start();
+        let _overlay = anchor(&mut h, Spec { zone: 0, ..BAR });
+        assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+        let _shown = h.show_window();
+        // Moved to the top of the screen: the bar covers its top 36 pixels.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 1);
+        h.state.pointer_motion((400.0, 300.0).into(), 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+        h.state.pointer_motion((400.0, 50.0).into(), 4);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 5);
+        assert_eq!(location(&h.state), Some((350, 10).into()));
+        // On the bar, with the gesture key: the window below moves.
+        h.state.pointer_motion((400.0, 20.0).into(), 6);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 7);
+        assert!(
+            h.state.gesture_active(),
+            "the window under the bar is grabbed"
+        );
+        h.state.pointer_motion((400.0, 220.0).into(), 8);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 9);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 10);
+        assert_eq!(location(&h.state), Some((350, 210).into()));
+        // Without it, the click goes to the bar.
+        h.state.pointer_motion((400.0, 20.0).into(), 11);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 12);
+        assert!(!h.state.gesture_active());
+        h.release();
+    }
+
+    /// A window whose first content is larger than the work area (a size its application kept
+    /// from a larger screen) is asked to fit, and shows once it has: its corners in reach.
+    #[test]
+    fn a_window_larger_than_the_screen_fits_before_it_shows() {
+        let mut h = Harness::start();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals.iter().any(|g| g.1 == "wl_shm")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let surface = compositor.create_surface(&qh, ());
+        let _toplevel = wm_base
+            .get_xdg_surface(&surface, &qh, ())
+            .get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("the first configure", |c, _| !c.configures.is_empty());
+        let file = shm_file(1000 * 700 * 4);
+        let pool = shm.create_pool(file.as_fd(), 1000 * 700 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 1000, 700, 4000, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        h.wait_size("the size of the screen", 800, 600);
+        let window = h.state.space.elements().next().unwrap().clone();
+        assert!(h.state.window_visual(&window, h.state.now()).is_none());
+        let shown = Shown {
+            seat: h.bind(&registry),
+            toplevel: _toplevel,
+            surface,
+            shm,
+            _file: file,
+        };
+        let _file = h.redraw(&shown, 800, 600);
+        h.run_until("the placement", |_, s| location(s) == Some((0, 0).into()));
+        assert!(h.state.window_visual(&window, h.state.now()).is_some());
+    }
+
+    /// A terminal: a minimum size, and a content that takes whole cells (8 × 16) of the size
+    /// it is given. Its corners resize it; the opposite corner stays in place.
+    #[test]
+    fn a_terminal_resizes_by_its_corners() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        shown.toplevel.set_min_size(96, 64);
+        shown.surface.commit();
+        settle(&mut h);
+        // Bottom right, just outside the corner of the window (350, 260, 100 × 80).
+        h.state.pointer_motion((452.0, 342.0).into(), 1);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::SeResize));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_motion((552.0, 402.0).into(), 3);
+        h.wait_size("larger", 200, 140);
+        h.release();
+        let cells = |w: i32, ht: i32| (w / 8 * 8, ht / 16 * 16);
+        let (w, ht) = cells(200, 140);
+        let _file = h.redraw(&shown, w, ht);
+        assert_eq!(location(&h.state), Some((350, 260).into()));
+        // Top left: the bottom right corner stays where it is.
+        h.state.pointer_motion((348.0, 258.0).into(), 4);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::NwResize));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 5);
+        h.state.pointer_motion((298.0, 198.0).into(), 6);
+        h.wait_size("larger again", 250, 188);
+        h.release();
+        let (w2, ht2) = cells(250, 188);
+        let _file = h.redraw(&shown, w2, ht2);
+        h.run_until("the realigned window", |_, s| {
+            location(s) == Some((350 + w - w2, 260 + ht - ht2).into())
+        });
+        // Never below its minimum.
+        let at = location(&h.state).unwrap();
+        let corner = (f64::from(at.x + w2) + 2.0, f64::from(at.y + ht2) + 2.0);
+        h.state.pointer_motion(corner.into(), 7);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 8);
+        h.state
+            .pointer_motion((corner.0 - 400.0, corner.1 - 400.0).into(), 9);
+        h.wait_size("the minimum", 96, 64);
+        h.release();
+    }
+
     #[test]
     fn the_title_bar_moves_and_maximizes_the_window_and_its_buttons_act() {
         let mut h = Harness::start();
@@ -1930,8 +2097,8 @@ mod tests {
         h.press(400.0, 300.0);
         h.release();
         // Over: no frame any more, and nothing is kept.
-        assert!(!animating(&h, now + Duration::from_millis(160)));
-        std::thread::sleep(Duration::from_millis(160));
+        assert!(!animating(&h, now + Duration::from_millis(190)));
+        std::thread::sleep(Duration::from_millis(190));
         h.state.refresh();
         assert_eq!(h.state.closing_windows(), (0, 0));
     }
@@ -2070,52 +2237,102 @@ mod tests {
             let mut renderer = gpu_.try_borrow_mut().ok()?;
             compositor::window_anim::snapshot(&scene_, &mut renderer, state, window)
         }));
+        // Six steps side by side, cut around the window and its shadow: the boards of the
+        // opening and of the closing (lot C-01).
+        let (cx, cy, cw, ch, gap) = (160usize, 99usize, 480usize, 400usize, 8usize);
+        let sheet = |name: &str, frames: &[Vec<u8>]| {
+            let width = frames.len() * cw + (frames.len() - 1) * gap;
+            let mut out = vec![0u8; width * ch * 4];
+            for (i, frame) in frames.iter().enumerate() {
+                for y in 0..ch {
+                    let src = ((cy + y) * w as usize + cx) * 4;
+                    let dst = (y * width + i * (cw + gap)) * 4;
+                    out[dst..dst + cw * 4].copy_from_slice(&frame[src..src + cw * 4]);
+                }
+            }
+            let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+            image::save_buffer(
+                &path,
+                &out,
+                width as u32,
+                ch as u32,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+            eprintln!("{name}: {}", path.display());
+        };
+        // The first row of the bar's color in column `x`, from the top: where the window
+        // starts.
+        let top = |pixels: &[u8], x: usize| {
+            let bar = color::palette().title_bar;
+            (0..ht as usize).find(|y| at(pixels, x, *y) == [bar.r, bar.g, bar.b])
+        };
         let fill = color::palette().window;
+        let window = [fill.r, fill.g, fill.b].to_vec();
         let (shown, _decoration) = h.show_decorated_in(fill);
         // The whole window is at (200, 129), 400 × 342 with its bar.
         let start = h.state.now();
-        shoot(&mut h.state, start);
-        let opening = shoot(&mut h.state, start + Duration::from_millis(60));
-        save("window-opening.png", &opening);
+        let opening: Vec<Vec<u8>> = [0, 50, 100, 150, 200, 250]
+            .map(|t| shoot(&mut h.state, start + Duration::from_millis(t)))
+            .to_vec();
+        sheet("window-opening-steps.png", &opening);
+        save("window-opening.png", &opening[1]);
         let open = shoot(&mut h.state, start + Duration::from_secs(1));
-        let window = [fill.r, fill.g, fill.b].to_vec();
         assert_eq!(at(&open, 400, 400), window);
+        // The bar comes down to its place with the window, and the window grows: never past
+        // its place, without a bounce.
+        let tops: Vec<usize> = opening[1..]
+            .iter()
+            .map(|f| top(f, 400).unwrap_or(ht as usize))
+            .collect();
+        assert!(tops.windows(2).all(|t| t[1] <= t[0]), "{tops:?}");
+        // Under its border of 1 at 130 once open; 8 lower at 50 ms (scale 0.95).
+        assert!(tops[0] > 130 + 5, "it starts smaller: {tops:?}");
+        assert_eq!(tops[4], 130, "{tops:?}");
         // Halfway: smaller, its edge inside its place, and still translucent.
-        assert_ne!(at(&opening, 203, 400), at(&open, 203, 400));
-        assert_ne!(at(&opening, 400, 400), window);
+        assert_ne!(at(&opening[1], 203, 400), at(&open, 203, 400));
+        assert_ne!(at(&opening[1], 400, 400), window);
+        assert_eq!(at(&opening[5], 400, 400), window, "opaque at 250 ms");
 
         shown.toplevel.destroy();
         h.run_until("the window gone", |_, s| s.space.elements().count() == 0);
         assert_eq!(h.state.closing_windows(), (1, 1), "its last image is kept");
         let closed = h.state.now();
-        let closing = shoot(&mut h.state, closed + Duration::from_millis(50));
-        save("window-closing.png", &closing);
-        let gone = shoot(&mut h.state, closed + Duration::from_millis(200));
-        assert_ne!(at(&closing, 400, 400), at(&gone, 400, 400));
-        assert_ne!(at(&closing, 203, 400), at(&open, 203, 400));
-        std::thread::sleep(Duration::from_millis(160));
+        let closing: Vec<Vec<u8>> = [0, 36, 72, 108, 144, 180]
+            .map(|t| shoot(&mut h.state, closed + Duration::from_millis(t)))
+            .to_vec();
+        sheet("window-closing-steps.png", &closing);
+        save("window-closing.png", &closing[2]);
+        let gone = &closing[5];
+        assert_eq!(at(&closing[0], 400, 400), window, "it starts as it was");
+        assert_ne!(at(&closing[2], 400, 400), at(gone, 400, 400));
+        assert_ne!(at(&closing[2], 203, 400), at(&open, 203, 400));
+        // Shrunk, not cut: at 108 ms (scale 0.971) its bottom right corner is still rounded,
+        // 3 pixels inside it is not the window.
+        assert_ne!(at(&closing[3], 591, 463), at(&closing[3], 400, 400));
+        // Gone at 180 ms; and the first frame of the opening showed nothing yet, as without
+        // the window: no flash of the whole window.
+        for (x, y) in [(400, 400), (203, 150), (400, 135)] {
+            assert_eq!(at(gone, x, y), at(&opening[0], x, y), "({x}, {y})");
+        }
+        std::thread::sleep(Duration::from_millis(200));
         h.state.refresh();
         assert_eq!(h.state.closing_windows(), (0, 0), "its texture is freed");
     }
 
-    /// Captures of a decorated window, dark then light with the pointer on the maximize
-    /// button: the scene of a screen, as the real session draws it, but into a texture with
-    /// Mesa's software renderer. They go to `screenshots/`, to compare with the Main board.
+    /// Captures of a decorated window, dark then light: at rest, then with the pointer on each
+    /// button, once its hover has settled. The scene of a screen, as the real session draws
+    /// it, but into a texture with Mesa's software renderer. They go to `screenshots/`
+    /// (`decorations-<theme>.png`, `decorations-<theme>-<button>.png`), cut around the window.
     #[test]
     #[ignore = "needs Mesa's EGL; writes the captures: run it with --ignored"]
     fn captures_of_a_decorated_window() {
         use compositor::{damage::Ids, render::Scene, wallpaper};
         use sherlock_ui::color::{self, Theme};
         use smithay::backend::{
-            allocator::Fourcc,
             egl::{EGLContext, EGLDevice, EGLDisplay},
-            renderer::{
-                Bind as _, ExportMem as _, Offscreen as _, TextureMapping as _,
-                damage::OutputDamageTracker,
-                gles::{GlesRenderer, GlesTexture},
-            },
+            renderer::gles::GlesRenderer,
         };
-        use smithay::utils::Transform;
 
         let mut device = EGLDevice::enumerate().unwrap();
         let device = device
@@ -2127,65 +2344,60 @@ mod tests {
         // SAFETY: the context was just made and is used by this renderer alone.
         let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
         let scene = Scene::new(&mut renderer).unwrap();
-        for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
-            color::set_active(theme);
-            let mut h = Harness::start();
-            let (_shown, _decoration) = h.show_decorated_in(theme.palette().window);
-            if theme == Theme::Light {
-                h.state.pointer_motion((545.0, 150.0).into(), 1);
-            }
-            let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
-            let views = h.state.views();
-            let now = h.state.now();
-            // The second frame, once the opening is over.
-            let mut elements = Vec::new();
-            for at in [now, now + Duration::from_secs(2)] {
-                let state = &mut h.state;
-                let drawn = scene.screens(
-                    &mut renderer,
-                    &mut ids,
-                    state,
-                    &mut textures,
-                    &views,
-                    None,
-                    at,
-                );
-                elements = drawn.0.into_iter().next().unwrap();
-            }
-            let (w, h) = (800, 600);
-            let mut texture: GlesTexture = renderer
-                .create_buffer(Fourcc::Abgr8888, (w, h).into())
-                .unwrap();
-            let mut target = renderer.bind(&mut texture).unwrap();
-            let mut tracker = OutputDamageTracker::new((w, h), 1.0, Transform::Normal);
-            let background = color::palette().desktop.premultiplied();
-            tracker
-                .render_output(&mut renderer, &mut target, 0, &elements, background)
-                .unwrap();
-            let region = smithay::utils::Rectangle::from_size((w, h).into());
-            let mapping = renderer
-                .copy_framebuffer(&target, region, Fourcc::Abgr8888)
-                .unwrap();
-            let mut pixels = renderer.map_texture(&mapping).unwrap().to_vec();
-            // GL reads the rows from the bottom up.
-            if !mapping.flipped() {
-                pixels = pixels
-                    .chunks(w as usize * 4)
-                    .rev()
-                    .flatten()
-                    .copied()
-                    .collect();
+        let (w, ht) = (800, 600);
+        // The window, 400 × 342 at (200, 129), and its shadow: 480 × 400 from (160, 99).
+        let (cx, cy, cw, ch) = (160usize, 99usize, 480usize, 400usize);
+        let save = |name: &str, pixels: &[u8]| {
+            let mut cut = Vec::with_capacity(cw * ch * 4);
+            for row in pixels.chunks(w as usize * 4).skip(cy).take(ch) {
+                cut.extend_from_slice(&row[cx * 4..(cx + cw) * 4]);
             }
             let path = format!(
                 "{}/screenshots/decorations-{name}.png",
                 env!("CARGO_MANIFEST_DIR")
             );
-            image::save_buffer(&path, &pixels, w as u32, h as u32, image::ColorType::Rgba8)
-                .unwrap();
-            // The bar has the color of its theme, under the title and beside the buttons.
-            let at = |x: usize, y: usize| &pixels[(y * w as usize + x) * 4..][..3];
-            let bar = color::palette().title_bar;
-            assert_eq!(at(400, 140), [bar.r, bar.g, bar.b], "{name}");
+            image::save_buffer(&path, &cut, cw as u32, ch as u32, image::ColorType::Rgba8).unwrap();
+        };
+        for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+            color::set_active(theme);
+            let mut h = Harness::start();
+            let (_shown, _decoration) = h.show_decorated_in(theme.palette().window);
+            let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+            // Once the opening is over, then each hover once settled: a second later.
+            let mut later = 2;
+            for (button, x) in [
+                ("", 0.0),
+                ("minimize", 505.0),
+                ("maximize", 539.0),
+                ("close", 573.0),
+            ] {
+                if x > 0.0 {
+                    h.state.pointer_motion((x, 150.0).into(), later);
+                }
+                later += 1;
+                // The first frame starts the opening, the second is a second later.
+                let mut pixels = Vec::new();
+                for step in [0, 1] {
+                    let at = h.state.now() + Duration::from_secs(u64::from(later) + step);
+                    let with = (&scene, &mut ids, &mut textures);
+                    pixels = software_frame_at(&mut renderer, with, &mut h, (w, ht), at);
+                }
+                let at = |x: usize, y: usize| &pixels[(y * w as usize + x) * 4..][..3];
+                let bar = color::palette().title_bar;
+                // The bar has the color of its theme, under the title.
+                assert_eq!(at(300, 140), [bar.r, bar.g, bar.b], "{name}");
+                let suffix = if button.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{name}-{button}")
+                };
+                if button == "close" {
+                    // Red under the pointer, around its icon.
+                    let salmon = color::palette().salmon;
+                    assert_eq!(at(562, 141), [salmon.r, salmon.g, salmon.b], "{name}");
+                }
+                save(&suffix, &pixels);
+            }
         }
         color::set_active(Theme::Dark);
     }
@@ -2194,6 +2406,21 @@ mod tests {
     /// compositor's time; its RGBA pixels, top row first.
     fn software_frame(
         renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+        with: (
+            &compositor::render::Scene,
+            &mut compositor::damage::Ids,
+            &mut compositor::wallpaper::Textures,
+        ),
+        h: &mut Harness,
+        size: (i32, i32),
+    ) -> Vec<u8> {
+        let now = h.state.now();
+        software_frame_at(renderer, with, h, size, now)
+    }
+
+    /// `software_frame` at `now`.
+    fn software_frame_at(
+        renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
         (scene, ids, textures): (
             &compositor::render::Scene,
             &mut compositor::damage::Ids,
@@ -2201,6 +2428,7 @@ mod tests {
         ),
         h: &mut Harness,
         (w, ht): (i32, i32),
+        now: Duration,
     ) -> Vec<u8> {
         use smithay::backend::{
             allocator::Fourcc,
@@ -2211,7 +2439,6 @@ mod tests {
         };
         use smithay::utils::Transform;
         let views = h.state.views();
-        let now = h.state.now();
         let drawn = scene.screens(renderer, ids, &mut h.state, textures, &views, None, now);
         let elements = drawn.0.into_iter().next().unwrap();
         let mut texture: GlesTexture = renderer
@@ -2296,7 +2523,8 @@ mod tests {
         let mut h = Harness::start();
         let handle = h.event_loop.handle();
         theme::follow_at(&handle, &mut h.state, file.clone());
-        h.state.wallpaper = wallpaper::Wallpaper::start(&handle, None, vec![data]).unwrap();
+        h.state.wallpaper =
+            wallpaper::Wallpaper::start(&handle, None, vec![data.join("wallpapers")]).unwrap();
         let socket = dir.join("wayland-capture");
         h.state.listen_at(socket.clone(), &h.event_loop).unwrap();
         let fill = |theme: Theme| theme.palette().window;

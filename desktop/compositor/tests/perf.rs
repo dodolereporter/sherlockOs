@@ -804,16 +804,23 @@ mod tests {
         let mut bench = Bench::start(false);
         bench.settle();
         // The pointer comes on the close button of the window on top: its bar alone is drawn
-        // again, with the button lit.
+        // again, while the button lights up and grows (lot C-01), then nothing.
         let window = bench.state.space.elements().last().unwrap().clone();
         let r = bench.state.space.element_geometry(&window).unwrap();
-        let close = (r.loc.x + r.size.w - 9 - 14, r.loc.y - 42 + 21);
+        let close = (r.loc.x + r.size.w - 9 - 18, r.loc.y - 42 + 21);
         let close = (f64::from(close.0), f64::from(close.1));
         bench.state.pointer_motion(close.into(), 0);
-        let frames: Vec<Frame> = (0..5).filter_map(|_| bench.tick()).collect();
-        assert_eq!(frames.len(), 1, "one frame, then rest again");
+        let frames: Vec<Frame> = (0..60).filter_map(|_| bench.tick()).collect();
+        assert!(frames.len() > 1, "the hover is animated");
         let bar = Rectangle::new((r.loc.x, r.loc.y - 42).into(), (r.size.w, 42).into());
-        assert_eq!(bounds(&frames[0].damage), Some(bar));
+        // A frame where the rounded look did not change draws nothing.
+        for frame in &frames {
+            assert!(frame.damage.is_empty() || bounds(&frame.damage) == Some(bar));
+        }
+        let drawn = frames.iter().filter(|f| !f.damage.is_empty()).count();
+        assert!(drawn > 1, "the bar is drawn while the button moves");
+        let rest: Vec<Frame> = (0..5).filter_map(|_| bench.tick()).collect();
+        assert!(rest.is_empty(), "then rest again");
         // Still on the button: a frame for the motion, nothing to draw.
         bench
             .state
