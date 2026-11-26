@@ -282,12 +282,12 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_the_default() {
-        let path = Path::new("/nonexistent/nom-os/touchpad.conf");
+        let path = Path::new("/nonexistent/sherlockos/touchpad.conf");
         assert_eq!(Config::read(path).unwrap(), Config::default());
         let env = |key: &str| (key == "HOME").then(|| OsString::from("/home/u"));
         assert_eq!(
             config_file(env),
-            Some("/home/u/.config/nom-os/touchpad.conf".into())
+            Some("/home/u/.config/sherlockos/touchpad.conf".into())
         );
     }
 }

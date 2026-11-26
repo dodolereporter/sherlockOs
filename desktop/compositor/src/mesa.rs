@@ -97,9 +97,9 @@ fn link_backends(dirs: &[PathBuf], into: &Path) -> std::io::Result<()> {
 }
 
 /// The folder of GBM backends without NVIDIA's, made in the user's runtime folder (private to
-/// them): `$XDG_RUNTIME_DIR/nom-os/gbm-backends`. `None` without a runtime folder.
+/// them): `$XDG_RUNTIME_DIR/sherlockos/gbm-backends`. `None` without a runtime folder.
 pub fn backends_without_nvidia(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let into = PathBuf::from(var("XDG_RUNTIME_DIR")?).join("nom-os/gbm-backends");
+    let into = PathBuf::from(var("XDG_RUNTIME_DIR")?).join("sherlockos/gbm-backends");
     let dirs: Vec<PathBuf> = match var(GBM_BACKENDS) {
         Some(path) => std::env::split_paths(&path).collect(),
         None => GBM_DIRS.map(PathBuf::from).to_vec(),
@@ -169,7 +169,7 @@ mod tests {
             _ => None,
         };
         // An older run had linked NVIDIA's: it goes away.
-        let backends = runtime.join("nom-os/gbm-backends");
+        let backends = runtime.join("sherlockos/gbm-backends");
         std::fs::create_dir_all(&backends).unwrap();
         std::os::unix::fs::symlink(
             system.join("nvidia-drm_gbm.so"),

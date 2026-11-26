@@ -1,6 +1,6 @@
 First of all, read `docs/contexte.md` in full. Then read this file, then the brief of your lot.
 
-# NOM_OS
+# SherlockOS
 
 A Linux OS built from source, with a desktop in Rust and an AI agent named Sherlock.
 The plan, milestones and lots are in `docs/plan.md`. Architecture decisions are in `docs/adr/`.
@@ -101,7 +101,8 @@ itself on the first `cargo`. Do not change it: it is also copied into `rust-vers
 - Typed errors in libraries, errors with context in binaries. Logging with `tracing`.
 - Identifiers, comments and documentation in English. No accents in file and folder names.
 - No color, size or interface text hard-coded outside `desktop/sherlock-ui`.
-- No name for the OS: write `NOM_OS` wherever one is needed.
+- The OS is called SherlockOS. How to write it in a shown text, a path, a variable or a D-Bus
+  name: ADR 0022.
 
 ## Decisions
 

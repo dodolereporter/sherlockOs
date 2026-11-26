@@ -89,7 +89,7 @@ impl Layout {
 
     /// Our own folder: palettes, the dconf profile of the session, the manifest, the program.
     pub fn themes(&self) -> PathBuf {
-        self.data.join("nom-os/themes")
+        self.data.join("sherlockos/themes")
     }
 
     pub fn manifest(&self) -> PathBuf {
@@ -209,7 +209,7 @@ pub fn files(layout: &Layout) -> Vec<File> {
     }
     // The session's own database first, written to; the user's after it, read only: the
     // theme set in the session never reaches the user's database, so neither Plasma.
-    let profile = "user-db:nom_os\nuser-db:user\n".to_owned();
+    let profile = "user-db:sherlockos\nuser-db:user\n".to_owned();
     files.push(File::text(layout.dconf_profile(), profile));
     files
 }

@@ -77,7 +77,7 @@ already pulls).
 
 | Command | What it does |
 | --- | --- |
-| `just cursors` | Writes `target/cursors/nom-os/` (dark desktop) and `target/cursors/nom-os-light/` |
+| `just cursors` | Writes `target/cursors/sherlockos/` (dark desktop) and `target/cursors/sherlockos-light/` |
 | `just cursor-board` | Draws `docs/cursor/board.png` |
 | `just install-session` | Also runs `just cursors`, then prints the commands that copy both themes into `/usr/local/share/icons` |
 
@@ -97,14 +97,14 @@ To try the themes without installing them: `XCURSOR_PATH=$PWD/target/cursors`.
 `desktop/compositor/src/cursor.rs`, real session only: in nested mode the host window keeps
 its own cursor.
 
-- **Theme.** The compositor shows `nom-os` while the desktop is dark and `nom-os-light` while
+- **Theme.** The compositor shows `sherlockos` while the desktop is dark and `sherlockos-light` while
   it is light, and follows a change of the appearance file (`docs/appearance.md`) live,
   automatic mode included (lot D-05c): at the next frame, `Cursors::follow` reads the other
   house theme, and the shape shown fades in as after any change of shape. The session
-  (`sherlockos-session`) exports `XCURSOR_THEME`: `nom-os`, or `nom-os-light` when the
+  (`sherlockos-session`) exports `XCURSOR_THEME`: `sherlockos`, or `sherlockos-light` when the
   appearance file gives the light theme at startup. It exports `XCURSOR_SIZE` (24 unless already set) and
   `XCURSOR_PATH`, with `cursors` beside the programs' folder first (`target/cursors` when the
-  session runs from the repository with `NOM_OS_BIN=target/release`), then the usual folders
+  session runs from the repository with `SHERLOCKOS_BIN=target/release`), then the usual folders
   (`~/.local/share/icons`, `~/.icons`, `/usr/local/share/icons`, `/usr/share/icons`). The
   compositor takes the house theme that `XCURSOR_THEME` names, so XWayland and Qt, when they
   draw their cursor themselves, draw the same one at startup. GTK under Wayland reads
