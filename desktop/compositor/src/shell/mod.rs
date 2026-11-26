@@ -361,7 +361,7 @@ impl State {
     }
 
     /// Asks the application of `window` to close it.
-    fn close(window: &Window) {
+    pub(crate) fn close(window: &Window) {
         if let Some(toplevel) = window.toplevel() {
             toplevel.send_close();
         } else if let Some(Err(err)) = window.x11_surface().map(|s| s.close()) {

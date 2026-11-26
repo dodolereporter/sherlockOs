@@ -47,11 +47,11 @@ use smithay::{
 };
 
 use crate::{
-    ClientState, State,
+    ClientState, State, decorations,
     focus::KeyboardFocus,
     input::GestureSource,
     layer::PopupGrab,
-    layout::{self, Edges, Zone},
+    layout::{Edges, Zone},
     window_data,
 };
 
@@ -120,7 +120,7 @@ impl State {
             data.shown.set(true);
             self.join_active_workspace(&window);
             if let (false, Some(area)) = (filled, self.output_area()) {
-                let loc = layout::centered(area, size);
+                let loc = decorations::centered(&window, area, size);
                 self.move_window(&window, loc, false);
             }
             self.focus(Some(window));
@@ -293,6 +293,9 @@ impl State {
             (false, true, _) => Some(work),
             (false, false, zone) => zone.map(|zone| zone.geometry(work, self.snap_gap)),
         };
+        // The zone takes the whole window: the content goes under its title bar, if the
+        // compositor draws one.
+        let target = target.map(|rect| decorations::content(window, rect));
         // Snap, maximize, fullscreen or restore: the window slides to its place, at once, even
         // when only its size changes (an exclusive zone that goes away under a maximized
         // window). Restored to a size its client chooses, it slides once that size is known.
