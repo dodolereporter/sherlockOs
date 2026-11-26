@@ -32,6 +32,8 @@ pub enum Part {
     Genie,
     /// One of the background discs, by its index.
     Disc(usize),
+    /// The title bar the compositor draws above a window (lot D-08).
+    TitleBar,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

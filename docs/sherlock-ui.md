@@ -9,7 +9,7 @@ toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 00
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `logo`, `window`, `gpu` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -90,6 +90,10 @@ All tokens are named by their role, in English like the rest of the code.
   (150 ms) and `EVENT_COALESCE_MAX_MS` (500 ms) for merging bursts of system events.
 - **`window`**: grab band and snapping of windows, set by D-17 for the compositor, and
   `SNAP_GAP`, the 8 px margin around snapped windows (D-18c1).
+- **`decorations`** (D-08): the title bar the compositor draws for the applications that leave
+  it their decoration: `INSET` (42: border, bar of 40, divider), title, pill and buttons taken
+  from `metrics` and `typography`, `RESTORE_ICON`, `DOUBLE_CLICK` (400 ms), and `Colors::of`, the
+  colors of a palette, those of the title bar of Evidence.
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
@@ -243,6 +247,119 @@ is, then the three optical versions.
 
 The source board is not in the repository: it is AI-generated, irregular, weighs 760 KiB and
 has no use left once the symbol is redrawn. Its measurements are in the table above.
+
+## Application icons (D-03)
+
+The author drew the icons of our applications: a glyph on a colored tile, on a 24 grid. They
+are in `desktop/sherlock-ui/icons/apps/`, under the id of each application, copied as they are
+from the author's set (v3):
+
+| Id | Application | Tile | Token |
+| --- | --- | --- | --- |
+| `evidence` | Evidence, files | `#2B5F86` | `color::TILE_FILES` (`BLUE_DARK`) |
+| `inquiry` | Inquiry, terminal | `#0B1220` | `color::TILE_TERMINAL` (`DEEPEST`) |
+| `control-room` | Control Room, settings | `#3A4A63` | `color::TILE_SETTINGS` |
+| `sherlock` | Sherlock | `#F4EBE3` | `color::TILE_SHERLOCK` (`CREAM`) |
+| `lab` | Development environment | `#2F7A52` | `color::TILE_LAB` |
+| `games` | Games | `#85C595` | `color::TILE_GAMES` (`ACCENT`) |
+| `installer` | Installer | `#214762` | `color::TILE_INSTALLER` |
+
+The names of the last three are not chosen yet: their icons are in the theme, and nothing shows
+a name for them. Their ids follow the author's file names and will follow the names chosen.
+
+**Tokens.** The three tiles that were outside the palette, and the light blue `#A6C4DD` of two
+knobs of the settings icon (`color::TILE_KNOB`), are tokens; the four others were already. An
+installed SVG is read by any program and cannot refer to a token: the files keep their values,
+and the tests of `app_icon` fail when a tile differs from its token or when a line icon uses a
+color that is not one. Sherlock is an illustration of the mascot: only its tile is checked.
+Like the dock tiles, the tiles keep their colors in both themes.
+
+**In the code.** `app_icon::AppIcon` gives each icon's `id` (the `Icon` key and desktop file
+id), its `tile`, its SVG (`svg`), its optical version when it has one (`optical`), and
+`at(size, scale)`, which picks the optical version at 16 device pixels and below.
+
+### Optical versions for 16 px
+
+Drawn as they are at 16 px, Evidence and Control Room turn grey: their lines of 0.95 to 1.1
+units are two thirds of a pixel, and smoothing spreads them over two. Their optical versions,
+`evidence-16.svg` and `control-room-16.svg`, are drawn by hand on a 16 grid, every line one
+whole pixel on whole pixels, so that nothing is smoothed (a test checks it):
+
+- **Evidence**: the folder closed, without the slanted front of the open one, its tab a step of
+  one pixel; the magnifier a ring of 5 by 5 pixels with a hole of 3 by 3, its handle a
+  diagonal two pixels wide.
+- **Control Room**: three slider lines running the whole width, one pixel thick and three
+  apart, knobs of 2 by 3 pixels laid on them in the author's places and colors.
+
+Both keep the author's tile, its radius and the hairline border, scaled to 16. The other five
+read at 16 px as drawn: Inquiry, Lab, Games and Sherlock are bold enough; Installer is the
+busiest of them (see open questions in the pull request).
+
+The icon at 16 px as drawn, then its optical version, enlarged eight times without smoothing:
+
+![Legibility at 16 px](../desktop/sherlock-ui/icons/legibility-16.png)
+
+### The installable theme
+
+`desktop/sherlock-ui/icons/hicolor/` is a hicolor theme, as the Icon Theme specification wants
+an application to install its icons:
+
+| Folder | Content |
+| --- | --- |
+| `scalable/apps/<id>.svg` | The author's SVGs |
+| `32x32/apps/<id>.png` | The author's 32 px PNGs, as they are |
+| `16x16/apps/<id>.png` | The author's 16 px PNGs, and the optical versions of Evidence and Control Room |
+
+`python3 export.py`, from `icons/`, copies the SVGs into `scalable` and renders the optical
+versions to their PNGs and the board above, with librsvg like the logo. The other PNGs are the
+author's.
+
+The theme has no `index.theme`: the system's hicolor one (package `hicolor-icon-theme` on
+Debian, to be packaged on our base) describes its folders. Ours would hide it: a lookup reads
+the index of the first data folder that has one, and the other applications' icons in hicolor
+would no longer be found.
+
+**Installed.** `just install-session` prints a copy of the theme to
+`/usr/local/share/nom-os/icons/hicolor/`, and `sherlockos-session` puts
+`/usr/local/share/nom-os` first in `XDG_DATA_DIRS` (another folder with `NOM_OS_DATA`, for
+instance `NOM_OS_DATA=$PWD/desktop/sherlock-ui` from the repository). Only the session sees it:
+Plasma's own hicolor is not touched. `just install-evidence` also installs Evidence's icon in
+`~/.local/share/icons/hicolor/`, beside its desktop entry, where the dock and the launcher of a
+nested session find it.
+
+**Found.** The dock and the launcher look icons up through `icon-theme`: the user's theme first,
+then hicolor, so a theme of the user that had an `evidence` icon would win, as for any
+application. Both look up for a screen at scale 2; the scalable SVG wins at every size they
+draw, and the renderer rasterizes it at the size and scale of the screen: sharp at any size and
+scale. The 16 and 32 px PNGs serve the programs that ask for those sizes (file dialogs, task
+bars of other desktops).
+
+**Sherlock in the dock.** The dock's Sherlock button takes the author's Sherlock tile, from
+`AppIcon::Sherlock` rather than from the theme: Sherlock has no desktop entry, and no theme of
+the user can replace it. The Dock board draws Sherlock exactly so: the mascot on a cream tile,
+cut by the bottom of the tile, with the other applications as glyphs on colored tiles. Until
+D-03 the dock showed the logo on a night blue tile, which the board does not have.
+
+![The dock with the application icons](../desktop/dock/screenshots/dock-app-icons.png)
+
+These come from the headless test `desktop/dock/tests/app_icons.rs`, at scale 2: at rest, then
+magnified over Sherlock, then at the smallest size the dock allows (32), then in the light
+theme. Stand-in desktop entries name the icons; the applications without a chosen name get a
+neutral one, never shown in a capture.
+
+![Magnified over Sherlock](../desktop/dock/screenshots/dock-app-icons-hover.png)
+
+![The smallest dock](../desktop/dock/screenshots/dock-app-icons-small.png)
+
+![In the light theme](../desktop/dock/screenshots/dock-app-icons-light.png)
+
+In the light theme, the cream Sherlock tile has no edge on the light dock glass: the tiles keep
+their colors (`THEME-CLAIR.md`), and the author's hairline border is white. A border for the
+light theme is for the author to choose.
+
+Gaps with the boards: the author's tiles have a radius of 22 % (5.28 on 24), the Dock board 27 %;
+the board's tiles have an inner light line at the top (`inset 0 1px 0`), the author's a hairline
+border all around. The icons are kept as the author drew them.
 
 ## Gallery
 
@@ -476,7 +593,8 @@ surface changes at once.
   light boards want a dark dot. The menu avatar and the dock tile keep the logo in its night
   blue square, the same in both themes.
 - The dock styles (`dock::bar`, `label`, `separator`, `dot`, `ring`) read the palette of their
-  iced theme. The tiles (`SHERLOCK_TILE`, `FALLBACK_TILE`, `FALLBACK_LETTER`) keep their colors:
+  iced theme. The tiles (`FALLBACK_TILE`, `FALLBACK_LETTER`, and since D-03 the application
+  icons and Sherlock's) keep their colors:
   « les fonds colorés des icônes du dock » do not change (`THEME-CLAIR.md`).
 
 Captures, rendered without a screen by the tests of each program, next to the light boards:

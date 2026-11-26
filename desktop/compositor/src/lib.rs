@@ -7,6 +7,7 @@ pub mod anim;
 pub mod card;
 mod cursor;
 pub mod damage;
+pub mod decorations;
 pub mod dmabuf;
 pub mod focus;
 pub mod genie;
@@ -190,6 +191,8 @@ pub struct State {
     shell_epoch: Option<u64>,
     /// Where the time of the event loop goes (lot P-01).
     pub perf: perf::LoopStats,
+    /// Server-side decorations: their protocols, the pointer on them (lot D-08).
+    decorations: decorations::Decorations,
 }
 
 /// Data attached to each window.
@@ -301,6 +304,7 @@ impl State {
             redraw_ping: None,
             shell_epoch: None,
             perf: perf::LoopStats::default(),
+            decorations: decorations::Decorations::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),

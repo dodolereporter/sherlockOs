@@ -124,7 +124,7 @@ mod tests {
             icon: Rectangle::new((360.0, 256.0).into(), (32.0, 32.0).into()),
             progress: 0.5,
         };
-        let bytes = draw(&mut renderer, window, &genie);
+        let bytes = draw(&mut renderer, window.clone(), &genie);
         let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("genie-half.png");
         let size = (SCREEN.0 as u32, SCREEN.1 as u32);
         image::save_buffer(&path, &bytes, size.0, size.1, image::ColorType::Rgba8).unwrap();
@@ -147,5 +147,24 @@ mod tests {
         // Above the window, which has slid down, and in the icon, not reached yet.
         assert!(near(pixel(&bytes, 160.0, 22.0), desktop));
         assert!(near(pixel(&bytes, 376.0, 280.0), desktop));
+
+        // The whole way, side by side, for the eye: `genie-steps.png`.
+        let steps = [0.0, 0.2, 0.4, 0.6, 0.8, 0.95];
+        let frames: Vec<Vec<u8>> = steps
+            .iter()
+            .map(|&progress| draw(&mut renderer, window.clone(), &Genie { progress, ..genie }))
+            .collect();
+        let row = 4 * SCREEN.0 as usize;
+        let strip: Vec<u8> = (0..SCREEN.1 as usize)
+            .flat_map(|y| {
+                frames
+                    .iter()
+                    .flat_map(move |f| f[y * row..(y + 1) * row].to_vec())
+            })
+            .collect();
+        let path = path.with_file_name("genie-steps.png");
+        let width = size.0 * steps.len() as u32;
+        image::save_buffer(&path, &strip, width, size.1, image::ColorType::Rgba8).unwrap();
+        eprintln!("genie, step by step: {}", path.display());
     }
 }

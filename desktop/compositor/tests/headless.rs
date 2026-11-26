@@ -12,7 +12,10 @@ mod tests {
         time::Duration,
     };
 
+    use std::io::Write as _;
+
     use compositor::State;
+    use sherlock_ui::color::{Color, Palette};
     use smithay::reexports::wayland_server::Resource as _;
     use smithay::{
         backend::input::{ButtonState, KeyState},
@@ -39,10 +42,20 @@ mod tests {
         wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
         wp_fractional_scale_v1::{self, WpFractionalScaleV1},
     };
+    use wayland_protocols::xdg::decoration::zv1::client::{
+        zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+        zxdg_toplevel_decoration_v1::{self, Mode as DecorationMode, ZxdgToplevelDecorationV1},
+    };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
+    };
+    use wayland_protocols_misc::server_decoration::client::{
+        org_kde_kwin_server_decoration::{self as kde, OrgKdeKwinServerDecoration},
+        org_kde_kwin_server_decoration_manager::{
+            self as kde_manager, OrgKdeKwinServerDecorationManager,
+        },
     };
     use wayland_protocols_wlr::layer_shell::v1::client::{
         zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
@@ -67,6 +80,61 @@ mod tests {
         preferred_scale: Option<u32>,
         /// Anchored surfaces closed by the compositor.
         layer_closed: usize,
+        /// Each decoration mode xdg-decoration gave.
+        decorations: Vec<DecorationMode>,
+        /// Default mode of KDE's protocol, then each mode it gave, as numbers.
+        kde_default: Option<u32>,
+        kde_modes: Vec<u32>,
+        /// The compositor asked the window to close.
+        closed: bool,
+    }
+
+    impl Dispatch<ZxdgToplevelDecorationV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &ZxdgToplevelDecorationV1,
+            event: zxdg_toplevel_decoration_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let zxdg_toplevel_decoration_v1::Event::Configure {
+                mode: WEnum::Value(mode),
+            } = event
+            {
+                client.decorations.push(mode);
+            }
+        }
+    }
+
+    impl Dispatch<OrgKdeKwinServerDecorationManager, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &OrgKdeKwinServerDecorationManager,
+            event: kde_manager::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let kde_manager::Event::DefaultMode { mode } = event {
+                client.kde_default = Some(mode.into());
+            }
+        }
+    }
+
+    impl Dispatch<OrgKdeKwinServerDecoration, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &OrgKdeKwinServerDecoration,
+            event: kde::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let kde::Event::Mode { mode } = event {
+                client.kde_modes.push(mode.into());
+            }
+        }
     }
 
     impl Dispatch<ZwlrLayerSurfaceV1, ()> for Client {
@@ -213,7 +281,9 @@ mod tests {
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            if let xdg_toplevel::Event::Configure {
+            if let xdg_toplevel::Event::Close = event {
+                client.closed = true;
+            } else if let xdg_toplevel::Event::Configure {
                 width,
                 height,
                 states,
@@ -229,6 +299,8 @@ mod tests {
             }
         }
     }
+
+    delegate_noop!(Client: ZxdgDecorationManagerV1);
 
     delegate_noop!(Client: WlCompositor);
     delegate_noop!(Client: ignore WlSurface);
@@ -388,6 +460,66 @@ mod tests {
                 shm,
                 _file: file,
             }
+        }
+
+        /// A client creates a window of 400 × 300 and asks the compositor for its decoration
+        /// through xdg-decoration before showing it. The whole window, its bar of 42 included,
+        /// is centered: at (200, 129), the content at (200, 171).
+        fn show_decorated(&mut self) -> (Shown, ZxdgToplevelDecorationV1) {
+            self.show_decorated_in(Palette::DARK.window)
+        }
+
+        /// `show_decorated`, the content filled with `fill`.
+        fn show_decorated_in(&mut self, fill: Color) -> (Shown, ZxdgToplevelDecorationV1) {
+            let qh = self.queue.handle();
+            let registry = self.conn.display().get_registry(&qh, ());
+            self.run_until("the globals", |c, _| {
+                c.globals
+                    .iter()
+                    .any(|g| g.1 == "zxdg_decoration_manager_v1")
+            });
+            let compositor: WlCompositor = self.bind(&registry);
+            let wm_base: XdgWmBase = self.bind(&registry);
+            let manager: ZxdgDecorationManagerV1 = self.bind(&registry);
+            let shm: WlShm = self.bind(&registry);
+            let seat: WlSeat = self.bind(&registry);
+            let _pointer = seat.get_pointer(&qh, ());
+            let surface = compositor.create_surface(&qh, ());
+            let toplevel = wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_toplevel(&qh, ());
+            toplevel.set_title("Konsole".into());
+            let decoration = manager.get_toplevel_decoration(&toplevel, &qh, ());
+            surface.commit();
+            self.run_until("the first configure", |c, _| !c.configures.is_empty());
+            let mut file = shm_file(400 * 300 * 4);
+            // Argb8888 is little-endian: blue, green, red, alpha.
+            let pixel = [fill.b, fill.g, fill.r, 255];
+            file.write_all(&pixel.repeat(400 * 300)).unwrap();
+            let pool = shm.create_pool(file.as_fd(), 400 * 300 * 4, &qh, ());
+            let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
+            surface.attach(Some(&buffer), 0, 0);
+            surface.commit();
+            self.run_until("the placement", |_, s| {
+                location(s) == Some((200, 171).into())
+            });
+            let shown = Shown {
+                seat,
+                toplevel,
+                surface,
+                shm,
+                _file: file,
+            };
+            (shown, decoration)
+        }
+
+        /// A click of the left button at (`x`, `y`), at `time` ms.
+        fn click(&mut self, x: f64, y: f64, time: u32) {
+            self.state.pointer_motion((x, y).into(), time);
+            self.state
+                .pointer_button(BTN_LEFT, ButtonState::Pressed, time);
+            self.state
+                .pointer_button(BTN_LEFT, ButtonState::Released, time + 1);
         }
 
         /// The client redraws its window at `w` × `h` and commits it. The buffer file must live
@@ -1411,5 +1543,336 @@ mod tests {
         // The first screen has no bar: its work area is whole.
         h.state.pointer_motion((400.0, 300.0).into(), 2);
         assert_eq!(h.state.output_area(), Some(rect(0, 0, 800, 600)));
+    }
+
+    /// The dock at the bottom: 76 high, with an exclusive zone of 76, the keyboard on demand.
+    const DOCK: Spec = Spec {
+        layer: Layer::Top,
+        anchor: Anchor::Bottom.union(Anchor::Left).union(Anchor::Right),
+        size: (0, 76),
+        zone: 76,
+        margin: (0, 0, 0, 0),
+        keyboard: KeyboardInteractivity::OnDemand,
+    };
+
+    /// Lot D-18d: a maximized or snapped window pulled by its title bar comes off under the
+    /// pointer at its previous size and stays where it is dropped, also when the dock comes
+    /// back and the work area shrinks.
+    #[test]
+    fn a_window_pulled_out_of_its_zone_stays_where_it_is_dropped() {
+        // Shortcut, size in the work area above the dock, size once the dock hid, a point on
+        // the title bar.
+        let cases = [
+            (KEY_UP, (800, 524), (800, 600), (400.0, 10.0)),
+            (KEY_LEFT, (388, 508), (388, 584), (100.0, 20.0)),
+        ];
+        for (key, above_dock, whole, title) in cases {
+            let mut h = Harness::start();
+            let shown = h.show_window();
+            // Frames are drawn all along, as on a screen: the motion of the window follows.
+            h.drawn(0);
+            let dock = anchor(&mut h, DOCK);
+            h.shortcut(key);
+            h.drawn(1_000);
+            h.wait_size("in its zone, above the dock", above_dock.0, above_dock.1);
+            let _a = h.redraw(&shown, above_dock.0, above_dock.1);
+            // The dock hides: it gives up its zone, the window takes the whole height.
+            dock.layer.set_exclusive_zone(-1);
+            dock.surface.commit();
+            h.wait_size("the whole height", whole.0, whole.1);
+            h.drawn(2_000);
+            let _b = h.redraw(&shown, whole.0, whole.1);
+            h.drawn(3_000);
+
+            // Pulled by its title bar: it comes off at its previous size, under the pointer.
+            let serial = h.press(title.0, title.1);
+            shown.toplevel._move(&shown.seat, serial);
+            h.run_until("the gesture start", |_, s| s.gesture_active());
+            h.state.pointer_motion((300.0, 300.0).into(), 3);
+            let states = h.wait_size("the previous size", 100, 80);
+            assert!(!states.contains(&XdgState::Maximized));
+            h.drawn(3_010);
+            let _c = h.redraw(&shown, 100, 80);
+            h.drawn(3_020);
+            h.state.pointer_motion((320.0, 310.0).into(), 4);
+            h.drawn(3_030);
+            let dropped = location(&h.state).unwrap();
+            h.release();
+            settle(&mut h);
+            assert_eq!(location(&h.state), Some(dropped), "moved by the release");
+            h.drawn(3_040);
+
+            // The dock comes back with its zone: the floating window stays.
+            dock.layer.set_exclusive_zone(76);
+            dock.surface.commit();
+            settle(&mut h);
+            assert_eq!(location(&h.state), Some(dropped), "moved by the dock");
+            assert_eq!(h.last_configure().0, 100, "resized by the dock");
+            // Drawn where it is, at its size, all along.
+            for t in [3_050, 3_100, 3_300, 5_000] {
+                let (drawn, real) = h.drawn(t);
+                assert_eq!(drawn, real, "drawn away from its place at {t} ms");
+            }
+            let (drawn, real) = h.drawn(60_000);
+            assert_eq!(drawn, real);
+            assert_eq!(real, rect(dropped.x, dropped.y, 100, 80).to_f64());
+        }
+    }
+    /// Lot D-18d: some clients leave the maximized state themselves when their title bar is
+    /// dragged, before or after asking for the move. The window still comes off under the
+    /// pointer, never back at its place from before it was maximized.
+    #[test]
+    fn a_client_that_unmaximizes_itself_while_dragged_comes_off_under_the_pointer() {
+        for unmaximize_first in [true, false] {
+            let mut h = Harness::start();
+            let shown = h.show_window();
+            h.drawn(0);
+            h.shortcut(KEY_UP);
+            h.wait_size("maximized", 800, 600);
+            let _a = h.redraw(&shown, 800, 600);
+            h.drawn(1_000);
+
+            // Pressed on the title bar, then dragged 14 px: past the threshold of 4.
+            let serial = h.press(400.0, 10.0);
+            if unmaximize_first {
+                h.state.pointer_motion((410.0, 20.0).into(), 3);
+                shown.toplevel.unset_maximized();
+                shown.toplevel._move(&shown.seat, serial);
+            } else {
+                shown.toplevel._move(&shown.seat, serial);
+                h.run_until("the gesture start", |_, s| s.gesture_active());
+                h.state.pointer_motion((410.0, 20.0).into(), 3);
+                shown.toplevel.unset_maximized();
+            }
+            h.run_until("the gesture start", |_, s| s.gesture_active());
+            let states = h.wait_size("the previous size", 100, 80);
+            assert!(!states.contains(&XdgState::Maximized));
+            // Grabbed in the middle of its width, as it was pressed: 400 of 800, 50 of 100;
+            // never at (350, 260), its place before.
+            let _b = h.redraw(&shown, 100, 80);
+            h.state.pointer_motion((420.0, 200.0).into(), 4);
+            let place = Some((370, 190).into());
+            assert_eq!(location(&h.state), place, "{unmaximize_first}");
+            h.release();
+            settle(&mut h);
+            assert_eq!(location(&h.state), place, "{unmaximize_first}");
+            for t in [1_010, 1_100, 1_500, 5_000] {
+                let (drawn, real) = h.drawn(t);
+                assert_eq!(drawn, real, "{unmaximize_first}: drawn away at {t} ms");
+            }
+        }
+    }
+
+    /// Lot D-18d: a double click on a title bar that the client draws. GTK 4 unmaximizes at
+    /// the second press, the button held and the pointer still: the window goes back to its
+    /// place, it does not come off under the pointer.
+    #[test]
+    fn a_double_click_on_a_client_title_bar_restores_the_window_to_its_place() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        h.shortcut(KEY_UP);
+        h.wait_size("maximized", 800, 600);
+        let _a = h.redraw(&shown, 800, 600);
+        h.press(400.0, 10.0);
+        h.release();
+        h.press(400.0, 10.0);
+        shown.toplevel.unset_maximized();
+        let states = h.wait_size("the previous size", 100, 80);
+        assert!(!states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((350, 260).into()));
+        assert!(!h.state.gesture_active());
+        h.release();
+        settle(&mut h);
+        assert_eq!(location(&h.state), Some((350, 260).into()));
+    }
+
+    #[test]
+    fn a_client_that_asks_gets_its_decoration_from_the_compositor() {
+        let mut h = Harness::start();
+        let qh = h.queue.handle();
+        let (shown, decoration) = h.show_decorated();
+        assert_eq!(h.client.decorations, [DecorationMode::ServerSide]);
+        let window = h.state.space.elements().next().unwrap().clone();
+        assert!(compositor::decorations::server_side(&window));
+
+        // A client that wants to draw its own keeps it, and the bar goes away.
+        decoration.set_mode(DecorationMode::ClientSide);
+        h.run_until("client side", |c, _| c.decorations.len() == 2);
+        assert_eq!(h.client.decorations[1], DecorationMode::ClientSide);
+        assert!(!compositor::decorations::server_side(&window));
+        // Without a preference, the compositor draws it again.
+        decoration.unset_mode();
+        h.run_until("server side again", |c, _| c.decorations.len() == 3);
+        assert_eq!(h.client.decorations[2], DecorationMode::ServerSide);
+
+        // KDE's older protocol, which GTK 3 and the Qt 5 of KDE use: server by default.
+        let registry = h.conn.display().get_registry(&qh, ());
+        let manager: OrgKdeKwinServerDecorationManager = h.bind(&registry);
+        h.run_until("the default mode", |c, _| c.kde_default.is_some());
+        let server = u32::from(kde_manager::Mode::Server);
+        assert_eq!(h.client.kde_default, Some(server));
+        let compositor: WlCompositor = h.bind(&registry);
+        let other = compositor.create_surface(&qh, ());
+        let kde = manager.create(&other, &qh, ());
+        h.run_until("its mode", |c, _| !c.kde_modes.is_empty());
+        assert_eq!(h.client.kde_modes, [server]);
+        kde.request_mode(kde::Mode::Client);
+        h.run_until("the client mode", |c, _| c.kde_modes.len() == 2);
+        assert_eq!(h.client.kde_modes[1], u32::from(kde::Mode::Client));
+        drop(shown);
+    }
+
+    #[test]
+    fn the_title_bar_moves_and_maximizes_the_window_and_its_buttons_act() {
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let window = h.state.space.elements().next().unwrap().clone();
+
+        // A drag of the bar moves the window; the client does not see the press.
+        h.state.pointer_motion((300.0, 150.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        assert!(h.state.gesture_active());
+        h.state.pointer_motion((320.0, 170.0).into(), 3);
+        h.release();
+        assert_eq!(location(&h.state), Some((220, 191).into()));
+        assert_eq!(h.client.button_serial, None);
+
+        // A double click maximizes it under its bar: the content takes the screen but 42.
+        h.click(300.0, 170.0, 1000);
+        h.click(301.0, 170.0, 1200);
+        let states = h.wait_size("maximized", 800, 558);
+        assert!(states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((0, 42).into()));
+        let _file = h.redraw(&shown, 800, 558);
+
+        // Its maximize button, now the restore one, gives it back its size and place.
+        h.click(745.0, 21.0, 2000);
+        let states = h.wait_size("restored", 400, 300);
+        assert!(!states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((220, 191).into()));
+        let _file = h.redraw(&shown, 400, 300);
+
+        // Dropped at the top of the screen, it is maximized, like any moved window.
+        h.state.pointer_motion((300.0, 170.0).into(), 3000);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3000);
+        h.state.pointer_motion((300.0, 2.0).into(), 3001);
+        h.release();
+        h.wait_size("maximized by the drop", 800, 558);
+        let _file = h.redraw(&shown, 800, 558);
+        h.click(745.0, 21.0, 4000);
+        h.wait_size("restored again", 400, 300);
+        let _file = h.redraw(&shown, 400, 300);
+
+        // A press that leaves its button does nothing.
+        let (x, y) = (220.0 + 400.0 - 101.0 + 16.0, 191.0 - 42.0 + 21.0);
+        h.state.pointer_motion((x, y).into(), 5000);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 5000);
+        h.state.pointer_motion((x - 100.0, y).into(), 5001);
+        h.state
+            .pointer_button(BTN_LEFT, ButtonState::Released, 5002);
+        assert!(!h.state.is_minimized(&window));
+        // Minimize, then close.
+        h.click(x, y, 6000);
+        assert!(h.state.is_minimized(&window));
+        h.state.activate(&window);
+        // The pointer reaches it again once it is back from its icon (lot D-19).
+        h.run_until("the window back", |_, s| {
+            s.minimize_progress(&window, s.now()).is_none()
+        });
+        h.click(x + 60.0, y, 7000);
+        h.run_until("the close request", |c, _| c.closed);
+        drop(shown);
+    }
+
+    /// Captures of a decorated window, dark then light with the pointer on the maximize
+    /// button: the scene of a screen, as the real session draws it, but into a texture with
+    /// Mesa's software renderer. They go to `screenshots/`, to compare with the Main board.
+    #[test]
+    #[ignore = "needs Mesa's EGL; writes the captures: run it with --ignored"]
+    fn captures_of_a_decorated_window() {
+        use compositor::{damage::Ids, render::Scene, wallpaper};
+        use sherlock_ui::color::{self, Theme};
+        use smithay::backend::{
+            allocator::Fourcc,
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::{
+                Bind as _, ExportMem as _, Offscreen as _, TextureMapping as _,
+                damage::OutputDamageTracker,
+                gles::{GlesRenderer, GlesTexture},
+            },
+        };
+        use smithay::utils::Transform;
+
+        let mut device = EGLDevice::enumerate().unwrap();
+        let device = device
+            .find(EGLDevice::is_software)
+            .expect("no software EGL device");
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let scene = Scene::new(&mut renderer).unwrap();
+        for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+            color::set_active(theme);
+            let mut h = Harness::start();
+            let (_shown, _decoration) = h.show_decorated_in(theme.palette().window);
+            if theme == Theme::Light {
+                h.state.pointer_motion((545.0, 150.0).into(), 1);
+            }
+            let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+            let views = h.state.views();
+            let now = h.state.now();
+            // The second frame, once the opening is over.
+            let mut elements = Vec::new();
+            for at in [now, now + Duration::from_secs(2)] {
+                let state = &mut h.state;
+                let drawn = scene.screens(
+                    &mut renderer,
+                    &mut ids,
+                    state,
+                    &mut textures,
+                    &views,
+                    None,
+                    at,
+                );
+                elements = drawn.0.into_iter().next().unwrap();
+            }
+            let (w, h) = (800, 600);
+            let mut texture: GlesTexture = renderer
+                .create_buffer(Fourcc::Abgr8888, (w, h).into())
+                .unwrap();
+            let mut target = renderer.bind(&mut texture).unwrap();
+            let mut tracker = OutputDamageTracker::new((w, h), 1.0, Transform::Normal);
+            let background = color::palette().desktop.premultiplied();
+            tracker
+                .render_output(&mut renderer, &mut target, 0, &elements, background)
+                .unwrap();
+            let region = smithay::utils::Rectangle::from_size((w, h).into());
+            let mapping = renderer
+                .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+                .unwrap();
+            let mut pixels = renderer.map_texture(&mapping).unwrap().to_vec();
+            // GL reads the rows from the bottom up.
+            if !mapping.flipped() {
+                pixels = pixels
+                    .chunks(w as usize * 4)
+                    .rev()
+                    .flatten()
+                    .copied()
+                    .collect();
+            }
+            let path = format!(
+                "{}/screenshots/decorations-{name}.png",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            image::save_buffer(&path, &pixels, w as u32, h as u32, image::ColorType::Rgba8)
+                .unwrap();
+            // The bar has the color of its theme, under the title and beside the buttons.
+            let at = |x: usize, y: usize| &pixels[(y * w as usize + x) * 4..][..3];
+            let bar = color::palette().title_bar;
+            assert_eq!(at(400, 140), [bar.r, bar.g, bar.b], "{name}");
+        }
+        color::set_active(Theme::Dark);
     }
 }

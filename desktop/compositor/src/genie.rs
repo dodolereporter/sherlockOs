@@ -16,7 +16,7 @@
 
 use std::{cell::RefCell, str::FromStr, time::Duration};
 
-use sherlock_ui::motion;
+use sherlock_ui::{decorations as ui_decorations, motion};
 use smithay::{
     backend::allocator::Fourcc,
     backend::renderer::{
@@ -39,6 +39,7 @@ use crate::{
     State,
     anim::{RectF, Visual},
     damage::{Ids, Key, Part, Stamped, params_hash},
+    decorations::Bar,
     handlers::Arrangement,
     output::View,
     render::{self, Item, SceneElement, Shadow},
@@ -341,8 +342,10 @@ pub(crate) fn push_effects(
         let icon = state.icon_in_space(window).or(track.icon.get());
         track.icon.set(icon);
         let screen = state.window_output(window);
+        let bar = state.decoration_bar(window);
         match (shape, icon) {
             (Shape::Genie, Some(icon)) => {
+                let window = (window, bar);
                 push_genie(items, window, (geometry, icon), value, decoration, view);
             }
             _ => {
@@ -350,7 +353,7 @@ pub(crate) fn push_effects(
                 let area = area.unwrap_or(geometry).to_f64();
                 let visual = scale_visual(geometry.to_f64(), area, value, decoration);
                 let own = screen.as_ref() == Some(output);
-                render::push_window(items, window, visual, view, own);
+                render::push_window(items, (window, bar), visual, view, own);
             }
         }
     }
@@ -358,11 +361,12 @@ pub(crate) fn push_effects(
 }
 
 /// The genie of `window`, between its geometry and its icon in the space, and its shadow, which
-/// fades out while the sides bend.
+/// fades out while the sides bend. The title bar the compositor draws above it (lot D-08) goes
+/// into the icon with it.
 fn push_genie(
     items: &mut Vec<Item>,
-    window: &Window,
-    (geometry, icon): (Rectangle<i32, Logical>, Rectangle<i32, Logical>),
+    (window, bar): (&Window, Option<Bar>),
+    (content_geometry, icon): (Rectangle<i32, Logical>, Rectangle<i32, Logical>),
     progress: f64,
     decoration: f32,
     view: &View,
@@ -370,6 +374,12 @@ fn push_genie(
     let Some(surface) = window.wl_surface() else {
         return;
     };
+    let inset = bar
+        .as_ref()
+        .map_or(0, |_| ui_decorations::INSET.round() as i32);
+    let mut geometry = content_geometry;
+    geometry.loc.y -= inset;
+    geometry.size.h += inset;
     let rect = view.rect(geometry.to_f64());
     let genie = Genie {
         window: rect.to_f64(),
@@ -388,14 +398,14 @@ fn push_genie(
         .to_i32_round();
     let mut content = Vec::new();
     let rest = Visual {
-        rect: geometry.to_f64(),
+        rect: content_geometry.to_f64(),
         opacity: 1.0,
         moving: false,
         decoration,
     };
     render::push_window(
         &mut content,
-        window,
+        (window, bar),
         rest,
         &offscreen(geometry, size, view.scale),
         false,

@@ -378,7 +378,7 @@ impl State {
     }
 
     /// Asks the application of `window` to close it.
-    fn close(window: &Window) {
+    pub(crate) fn close(window: &Window) {
         if let Some(toplevel) = window.toplevel() {
             toplevel.send_close();
         } else if let Some(Err(err)) = window.x11_surface().map(|s| s.close()) {
@@ -485,6 +485,7 @@ impl State {
                 for (flag, value) in [
                     (OutputState::Maximized, ToplevelState::Maximized),
                     (OutputState::Fullscreen, ToplevelState::Fullscreen),
+                    (OutputState::Snapped, ToplevelState::Snapped),
                 ] {
                     let active = self.shell.workspace_model.active();
                     let on = windows.iter().any(|(_, w)| {
