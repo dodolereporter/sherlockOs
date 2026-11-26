@@ -36,6 +36,7 @@ use crate::{
     handlers::{Arrangement, is_fullscreen, is_maximized},
     is_override_redirect,
     layout::{self, Edges, Resize, Zone},
+    media_keys::MediaKey,
     window_data,
 };
 
@@ -130,6 +131,8 @@ enum Shortcut {
     /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
     /// nothing else answers.
     Quit,
+    /// A media key, in a real session, with its xkb code (lot D-35).
+    Media(MediaKey, Keycode),
 }
 
 impl Shortcut {
@@ -483,6 +486,7 @@ impl State {
     /// keyboard, and these releases will not come.
     pub fn forget_intercepted_keys(&mut self) {
         self.intercepted_keys.clear();
+        self.stop_media_repeat(None);
     }
 
     /// A move or resize gesture is in progress.
@@ -571,6 +575,8 @@ impl State {
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
+        // A media key held repeats until its release, or until another key (lot D-35).
+        self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
@@ -598,8 +604,10 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
+            let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
-                .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym));
+                .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
+                .or(media.map(|media| Shortcut::Media(media, key)));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
@@ -650,6 +658,10 @@ impl State {
             }
             Shortcut::CloseOverview => {
                 self.close_overview();
+                return;
+            }
+            Shortcut::Media(media, code) => {
+                self.press_media_key(code, media);
                 return;
             }
             Shortcut::SendToWorkspace(index) => {

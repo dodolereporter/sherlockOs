@@ -49,6 +49,14 @@ tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", 
 # The theme of the appearance file, followed live by the decorations, and read at startup for
 # the cursors (workspace crate).
 appearance-config = { path = "../appearance-config" }
+# The media keys (lot D-35): sound, brightness and players, shared with the quick settings of
+# the bar (workspace crate), and zbus for their buses, with the version and features it pins.
+system-services = { path = "../system-services" }
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# The icons of the on-screen display: SVG paths with arcs, which the decorations' own path
+# reader does not take. The version iced already pulls for its SVG widget, on the tiny-skia the
+# compositor uses, without its text and image features: nothing new is built.
+resvg = { version = "=0.45.1", default-features = false }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.

@@ -45,6 +45,8 @@ pub enum Part {
     Thumbnail(usize),
     ThumbnailBorder(usize),
     ThumbnailLabel(usize),
+    /// The on-screen display of the media keys (lot D-35).
+    Osd,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

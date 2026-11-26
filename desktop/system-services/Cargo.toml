@@ -1,0 +1,18 @@
+[package]
+name = "system-services"
+description = "Sound, brightness and media players, shared by the quick settings and the media keys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# logind's SetBrightness on the system bus, the MPRIS players on the session bus: the version
+# and features the bar, the notification daemon and Evidence pin (blocking API, its own small
+# executor, no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+
+[lints]
+workspace = true

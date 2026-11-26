@@ -235,6 +235,8 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
+    // The media keys, through the machine's sound, logind and players (lot D-35).
+    state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();
     state.switch_vt = Some(Box::new(move |vt| {
         if let Err(err) = switcher.change_vt(vt) {
