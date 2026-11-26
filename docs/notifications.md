@@ -172,6 +172,27 @@ notify-send -u critical -A restart=Relancer -A logs="Voir les logs" "front-next 
    the next normal notification does not show, a critical one does.
 5. A second `target/debug/notifications` on the same bus stops with the message above.
 
+Checked during this batch without a screen: a private bus, a headless KWin
+(`kwin_wayland --virtual`, 1440 × 900) and `gdbus` for the notifications. Protocol log
+(`WAYLAND_DEBUG=client`), a normal notification of 1.5 s then a critical one with an action,
+then `CloseNotification` on the critical one:
+
+```text
+zwlr_layer_shell_v1#19.get_layer_surface(new id zwlr_layer_surface_v1#25, wl_surface#24, nil, 2, "notifications")
+zwlr_layer_surface_v1#25.set_anchor(9)                 # top and right
+zwlr_layer_surface_v1#25.set_exclusive_zone(0)
+zwlr_layer_surface_v1#25.set_margin(8, 0, 0, 0)
+zwlr_layer_surface_v1#25.set_size(332, 480)            # room to lay out the first bubble
+wl_region#68.add(0, 0, 320, 90)                        # the first bubble, 90 high
+zwlr_layer_surface_v1#25.set_size(332, 570)            # the second one is being laid out
+wl_region#55.add(0, 0, 320, 126)                       # the critical one on top
+wl_region#55.add(0, 133, 320, 91)                      # the first one pushed down
+zwlr_layer_surface_v1#25.set_size(332, 142)            # the first one expired
+zwlr_layer_surface_v1#25.destroy()                     # the last one closed
+```
+
+A second daemon on the same bus logged its message and exited with status 0.
+
 In the real session (batch D-14), Plasma is not running: the session starts `notifications`
 with the bar and the dock.
 
