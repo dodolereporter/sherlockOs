@@ -10,7 +10,7 @@ applications=/usr/local/share/applications
 # The application icons, a hicolor theme that only the session sees (sherlockos-session puts
 # this folder first in XDG_DATA_DIRS).
 data=/usr/local/share/sherlockos
-programs="compositor bar dock launcher notifications evidence sherlockos-lock"
+programs="compositor bar dock launcher sherlockos-apps notifications evidence sherlockos-lock"
 
 icons=/usr/local/share/icons
 themes="sherlockos sherlockos-light"
@@ -23,7 +23,7 @@ done
 
 for program in $programs; do
 	if [ ! -x "$repo/target/release/$program" ]; then
-		echo "missing $repo/target/release/$program: just install-session builds it" >&2
+		echo "missing $repo/target/release/$program: cargo build --release --bin $program" >&2
 		exit 1
 	fi
 done

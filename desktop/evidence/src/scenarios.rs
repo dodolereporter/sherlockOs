@@ -1278,13 +1278,18 @@ fn the_menu_unfolds_and_folds_back() {
 /// Renders the window, writes `target/tmp/<name>-<renderer>.png`, returns the picture and its
 /// scale.
 fn capture(app: &App, name: &str) -> (::image::RgbImage, f32) {
+    capture_at(app, name, metrics::REFERENCE_WINDOW)
+}
+
+/// `capture` in a window of `size`.
+fn capture_at(app: &App, name: &str, size: (f32, f32)) -> (::image::RgbImage, f32) {
     let settings = Settings {
         fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
         default_font: typography::UI,
         default_text_size: Pixels(typography::UI_SIZE),
         ..Settings::default()
     };
-    let (width, height) = metrics::REFERENCE_WINDOW;
+    let (width, height) = size;
     let mut ui = simulator::Simulator::with_size(settings, (width, height), app.view());
     let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
@@ -1416,4 +1421,176 @@ fn a_sort_during_a_rename_renames_the_same_item() {
     for kept in ["a.txt", "f01.txt", "f02.txt"] {
         assert!(bench.path(&format!("projet/{kept}")).exists(), "{kept}");
     }
+}
+
+/// A bus that never answers (a socket that takes connections and says nothing, not even the
+/// greeting) delays neither the application nor its first view; its devices are left out
+/// after the delay (lot E-01: Evidence once took more than 10 s to open).
+#[test]
+fn a_silent_bus_never_delays_the_first_view() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::Arc;
+    use std::time::Instant;
+    let tmp = TempDir::new("silent-bus");
+    let socket = tmp.path().join("bus");
+    let _silent = UnixListener::bind(&socket).expect("socket");
+    let project = tmp.path().join("projet");
+    fs::create_dir_all(&project).expect("folder");
+    fs::write(project.join("a.txt"), "a").expect("write");
+    let delay = Duration::from_millis(300);
+    let udisks = crate::udisks::UDisks::at(&format!("unix:path={}", socket.display()), delay);
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: project,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: Some(Arc::new(udisks)),
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    };
+    let start = Instant::now();
+    let (mut app, task) = App::new(config);
+    drop(app.view());
+    let ready = start.elapsed();
+    assert!(
+        ready < Duration::from_millis(500),
+        "first view after {ready:?}"
+    );
+    // The devices read gives up after its delay, and the folder is listed meanwhile.
+    drain(&mut app, task);
+    let done = start.elapsed();
+    assert!(
+        done < delay + Duration::from_secs(2),
+        "tasks done after {done:?}"
+    );
+    assert!(app.volumes.is_empty());
+    assert_eq!(app.entries.len(), 1);
+}
+
+/// A bench whose catalog has `names.len()` applications for text files, some with an icon of
+/// 16 px, some of 128, some with none, and a `notes.txt` selected.
+fn bench_with_apps(name: &str, names: &[String]) -> Bench {
+    let tmp = TempDir::new(name);
+    let share = tmp.path().join("xdg/share");
+    fs::create_dir_all(share.join("mime")).expect("folder");
+    fs::create_dir_all(share.join("applications")).expect("folder");
+    fs::write(share.join("mime/globs2"), "50:text/plain:*.txt\n").expect("write");
+    for (side, file) in [(16, "small.png"), (128, "large.png")] {
+        ::image::RgbaImage::from_pixel(side, side, ::image::Rgba([91, 163, 208, 255]))
+            .save(tmp.path().join(file))
+            .expect("icon");
+    }
+    for (i, app) in names.iter().enumerate() {
+        let icon = match i % 3 {
+            0 => format!("Icon={}\n", tmp.path().join("small.png").display()),
+            1 => format!("Icon={}\n", tmp.path().join("large.png").display()),
+            _ => String::new(),
+        };
+        let entry = format!(
+            "[Desktop Entry]\nType=Application\nName={app}\n{icon}Exec=true %F\nMimeType=text/plain;\n"
+        );
+        fs::write(share.join(format!("applications/app{i:02}.desktop")), entry).expect("write");
+    }
+    let project = tmp.path().join("projet");
+    fs::create_dir_all(&project).expect("folder");
+    fs::write(project.join("notes.txt"), "notes").expect("write");
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: project,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: Some(mime_apps::Dirs {
+            config_home: tmp.path().join("xdg/config"),
+            config_dirs: Vec::new(),
+            data_home: tmp.path().join("xdg/data"),
+            data_dirs: vec![share],
+        }),
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    };
+    let (app, task) = App::new(config);
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.select("notes.txt");
+    bench
+}
+
+/// The other applications of « Ouvrir avec »: 30 of them, very long names, a small window
+/// (review of the author: « toute écrasée dans certains cas »). Rows keep their height and one
+/// line each; the list scrolls; the chooser and the submenu stay inside the window.
+#[test]
+fn many_applications_and_long_names_stay_readable() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let long = "Un éditeur de texte au nom vraiment très long, qui ne tient pas sur une ligne";
+    let mut names: Vec<String> = (1..=27).map(|i| format!("Application {i:02}")).collect();
+    names.insert(1, long.to_owned());
+    names.insert(5, format!("{long}, deuxième"));
+    names.push("Éditeur".to_owned());
+    let mut bench = bench_with_apps("many-apps", &names);
+    assert_eq!(bench.app.icons.len(), 20, "two in three have an icon");
+
+    // The chooser, in the reference window: the list is as on the design and scrolls.
+    bench.send(Message::Run(crate::app::Command::ChooseApp));
+    assert_eq!(
+        bench.app.chooser_list_height(),
+        metrics::CHOOSER_LIST_HEIGHT
+    );
+    capture(&bench.app, "evidence-chooser-many");
+
+    // The same in the smallest window: a shorter list, still several whole rows.
+    let (width, height) = sherlock_ui::evidence::MIN_WINDOW;
+    bench.send(Message::Resized(iced::Size::new(width, height)));
+    let list = bench.app.chooser_list_height();
+    assert!(list < metrics::CHOOSER_LIST_HEIGHT);
+    assert!(list >= sherlock_ui::evidence::CHOOSER_MIN_ROWS * metrics::MENU_ITEM_HEIGHT);
+    let (picture, scale) = capture_at(&bench.app, "evidence-chooser-small", (width, height));
+    // The panel fits: above and below it, its middle column shows the scrimmed window, as
+    // its side does.
+    let pixel = |x: f32, y: f32| *picture.get_pixel((x * scale) as u32, (y * scale) as u32);
+    for y in [4.0, height - 4.0] {
+        let (middle, side) = (pixel(width / 2.0, y), pixel(8.0, y));
+        let near = middle.0.iter().zip(side.0).all(|(a, b)| a.abs_diff(b) <= 3);
+        assert!(near, "the panel stays inside, at {y}: {middle:?}, {side:?}");
+    }
+    bench.press(Named::Escape);
+
+    // « Ouvrir avec » opened near the bottom right corner of the small window: it lists the
+    // applications it holds, on the left of the menu, inside the window.
+    bench.send(Message::Cursor(iced::Point::new(
+        width - 40.0,
+        height - 40.0,
+    )));
+    let index = bench.names().iter().position(|n| *n == "notes.txt");
+    bench.send(Message::RightClick(index));
+    bench.send(Message::Submenu(Some(crate::app::Sub::OpenWith)));
+    bench.app.settle();
+    let menu = bench.app.menu.clone().expect("menu open");
+    let items = bench.app.menu_items(true);
+    let sub = bench.app.submenu_items(crate::app::Sub::OpenWith);
+    let at = crate::menu::submenu_at(&menu, &items, &sub, bench.app.size);
+    assert!(at.x + metrics::OPEN_WITH_WIDTH <= width && at.x < menu.at.x);
+    assert!(at.y >= 0.0 && at.y + App::menu_height(&sub) <= height);
+    assert!(menu.at.y + App::menu_height(&items) <= height);
+    capture_at(&bench.app, "evidence-open-with-small", (width, height));
+
+    // Light theme, long names.
+    color::set_active(Theme::Light);
+    bench.press(Named::Escape);
+    bench.send(Message::Resized(iced::Size::new(
+        metrics::REFERENCE_WINDOW.0,
+        metrics::REFERENCE_WINDOW.1,
+    )));
+    bench.send(Message::Run(crate::app::Command::ChooseApp));
+    bench.send(Message::ChooserSearch("éditeur".into()));
+    bench.app.settle();
+    capture(&bench.app, "evidence-chooser-long-light");
+    color::set_active(Theme::Dark);
 }

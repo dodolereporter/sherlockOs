@@ -42,16 +42,16 @@ impl Entry {
 pub struct Abilities {
     pub launch: bool,
     pub new_window: bool,
-    /// Open but not pinned, with a desktop entry: « Garder dans le dock ».
+    /// Open but not pinned, with a desktop entry: « Garder dans le Dock ».
     pub keep: bool,
-    /// Pinned, and not Sherlock: « Retirer du dock ».
+    /// Pinned, and not Sherlock: « Retirer du Dock ».
     pub unpin: bool,
     pub quit: bool,
 }
 
 /// The entries of an icon's menu, each with whether it is enabled. An action that does not
 /// exist is disabled, never pretended. An open application that is not pinned gets « Garder
-/// dans le dock » where a pinned one gets « Retirer du dock ».
+/// dans le dock » where a pinned one gets « Retirer du Dock ».
 pub fn entries(can: Abilities) -> Vec<(Entry, bool)> {
     let mut entries = vec![(Entry::Open, can.launch)];
     if can.new_window {
@@ -155,7 +155,7 @@ mod tests {
             [
                 ("Ouvrir", true),
                 ("Nouvelle fenêtre", true),
-                ("Retirer du dock", true),
+                ("Retirer du Dock", true),
                 ("Quitter", false),
             ]
         );
@@ -171,7 +171,7 @@ mod tests {
             labels(sherlock),
             [
                 ("Ouvrir", false),
-                ("Retirer du dock", false),
+                ("Retirer du Dock", false),
                 ("Quitter", false)
             ]
         );

@@ -245,6 +245,7 @@ impl Source for Files {
                         .unwrap_or_default(),
                     subtitle: Some(self.place(entry)),
                     tile: Tile::Glyph(glyph),
+                    app: None,
                     action,
                 }
             })

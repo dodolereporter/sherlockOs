@@ -53,14 +53,15 @@ jobs:
       # libegl1 the libEGL.so.1 without which it stops at startup: libepoxy loads it at run
       # time, and the xwayland package does not pull it in. libegl-mesa0 gives Mesa's software
       # EGL device, on which the compositor's genie test draws (lot D-19). dbus-daemon runs the
-      # private session buses of the notification daemon's tests.
+      # private session buses of the notification daemon's tests. mesa-vulkan-drivers gives
+      # lavapipe, Mesa's software Vulkan driver, on which sherlock-3d renders the mascot.
       # Keep this list in line with the prerequisites of CLAUDE.md and docs/ci.md.
       - name: Install the system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev \
             libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1 libegl-mesa0 \
-            dbus-daemon
+            dbus-daemon mesa-vulkan-drivers
 
       # `just verify` runs check-language, a Python script that only uses the standard library.
       - name: Show the Python of check-language
@@ -78,5 +79,12 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # The mascot's model is not in the repository (ADR 0024): downloaded at a pinned revision,
+      # its SHA-256 checked. With SHERLOCK_3D_REQUIRE=1 its tests fail instead of skipping.
+      - name: just mascot
+        run: just mascot
+
       - name: just verify
+        env:
+          SHERLOCK_3D_REQUIRE: "1"
         run: just verify

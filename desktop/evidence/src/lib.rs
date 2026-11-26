@@ -16,6 +16,7 @@ pub mod places;
 pub mod preview;
 pub mod probe;
 pub mod selection;
+pub mod startup;
 pub mod trash;
 pub mod udisks;
 mod view;
