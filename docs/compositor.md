@@ -174,8 +174,10 @@ Snapping:
 
 Cursors:
 
-- Over the band, the cursor takes the shape of the edge or corner. During a move, it takes the
-  "move" shape, and during a resize that of the pulled edge.
+- Over the band, the cursor takes the shape of the edge or corner. During a move by the title
+  bar or the client, it is the closed hand (`grabbing`, lot C-01); with the gesture key, the
+  "move" shape; during a resize, that of the pulled edge. The real session shows the Sherlock
+  cursor while the gesture key and the button are held without moving (see `docs/cursor.md`).
 - Over a client, the cursor is the one it names through the cursor shape protocol
   (`wp_cursor_shape_v1`, which Qt 6 uses). A client that draws its cursor image itself
   (`wl_pointer.set_cursor` with a surface) gets the arrow: the image is not shown. Elsewhere,
@@ -1059,9 +1061,14 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
   withdrawn while shown too (`tests/xwayland.rs`).
 - **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
   pointer goes through it to what is below. A window that opens takes input at once, as before.
-- **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
-  override-redirect windows, anchored surfaces (bar, dock), fullscreen windows, a window closing
-  on another workspace, minimized, or while Mission Control is open.
+- **Menus and popups (lot C-01).** The menus and popups of a window (`xdg_popup`) appear with
+  a fade of `MENU_FADE` (110 ms), without moving: from their first drawing with content, a
+  frame at each blank meanwhile. They go at once: when a menu is closed, its client has
+  already taken its content away, and keeping its last image (as for a window) would leave a
+  ghost over what the click reaches; the menus of the bar and the dock (their own surfaces)
+  have their own animations. X11 menus (override-redirect windows) appear at once.
+- **Not animated:** X11 override-redirect windows, anchored surfaces (bar, dock), fullscreen
+  windows, a window closing on another workspace, minimized, or while Mission Control is open.
 - **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
   animation for `pacing::Pacing`), nothing at rest. The ghost is one element under a stable
   identity (`damage::Part::Closing`): the damage is its old and new area, inside the window's.

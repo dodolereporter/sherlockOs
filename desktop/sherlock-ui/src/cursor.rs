@@ -56,6 +56,27 @@ pub const SHAKE_SCALE: f32 = 2.6;
 pub const SHAKE_HOLD: Duration = Duration::from_secs(1);
 pub const SHAKE_TRANSITION: Duration = Duration::from_millis(240);
 
+/// Show the clicks, the accessibility option of the boards (« Montrer les clics »): at each
+/// press, a ring leaves the pressed point and the pointer sinks. The ring is a circle of
+/// `CLICK_RING_DIAMETER` with a stroke of `CLICK_RING_WIDTH` in the accent green, from
+/// `CLICK_RING_SCALE.0` to `.1` of its size while its opacity goes from `CLICK_RING_OPACITY`
+/// to 0, over `CLICK_RING` eased out (the boards' `onde 460ms ease-out`).
+pub const CLICK_RING: Duration = Duration::from_millis(460);
+pub const CLICK_RING_DIAMETER: f32 = 40.0;
+pub const CLICK_RING_WIDTH: f32 = 2.0;
+pub const CLICK_RING_SCALE: (f32, f32) = (0.2, 1.7);
+pub const CLICK_RING_OPACITY: f32 = 0.9;
+/// The pointer sinks to this scale around its tip, in `CLICK_SINK`, then comes back in
+/// `CLICK_RISE` (the boards' `appui`: 3 % then 7 % of 1.8 s).
+pub const CLICK_PRESS_SCALE: f32 = 0.86;
+pub const CLICK_SINK: Duration = Duration::from_millis(54);
+pub const CLICK_RISE: Duration = Duration::from_millis(126);
+
+/// The color of the ring of a click: the accent green of the palette shown.
+pub fn click_ring_color() -> Color {
+    color::palette().accent
+}
+
 /// The curve of the cursor's transitions, `cubic-bezier(0.2, 0.9, 0.3, 1.35)` in the boards:
 /// fast, past the end, then back. `t` from 0 to 1.
 pub fn bounce(t: f32) -> f32 {

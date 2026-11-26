@@ -6,7 +6,8 @@
 pub mod anim;
 pub mod capture;
 pub mod card;
-mod cursor;
+pub mod clicks;
+pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
@@ -169,6 +170,8 @@ pub struct State {
     gestures: gestures::Gestures,
     /// Touchpad setting and the touchpads it applies to (lot D-31).
     touchpad: touchpad::Touchpad,
+    /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
+    clicks: clicks::Clicks,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -325,6 +328,7 @@ impl State {
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
+            clicks: clicks::Clicks::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -629,6 +633,7 @@ impl State {
         self.popups.cleanup();
         self.end_minimize_effects();
         self.end_closings();
+        self.end_clicks();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;

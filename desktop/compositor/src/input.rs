@@ -459,14 +459,23 @@ impl State {
         let Gesture {
             window,
             source,
+            button: gesture_button,
             initial,
             edges,
             last_size,
+            moved,
             floating,
             zone,
             ..
         } = gesture;
         tracing::debug!(?source, ?edges, size = ?last_size, ?zone, "gesture end");
+        if let (GestureSource::Modifier, None, BTN_LEFT, false) =
+            (source, edges, gesture_button, moved)
+        {
+            // Super + click: Sherlock will explain what is under the pointer. The action is
+            // reserved: the shape shows it, the agent is not plugged in yet.
+            tracing::info!("gesture key + click: for Sherlock, not plugged in yet");
+        }
         let Some(edges) = edges else {
             if let Some((zone, output)) = zone {
                 // Dropped against an edge: snapped. It will return to its place from before the
@@ -580,7 +589,13 @@ impl State {
             return Some(CursorIcon::Default);
         }
         if let Some(gesture) = &self.gesture {
-            return Some(gesture.edges.map_or(CursorIcon::Move, resize_cursor));
+            // A window taken by its title bar is held in the closed hand; moved with the
+            // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
+            let moving = match gesture.source {
+                GestureSource::Modifier => CursorIcon::Move,
+                _ => CursorIcon::Grabbing,
+            };
+            return Some(gesture.edges.map_or(moving, resize_cursor));
         }
         let location = self.seat.get_pointer()?.current_location();
         match (self.hit(location), &self.cursor_status) {
@@ -590,6 +605,23 @@ impl State {
             }
             (Some(Hit::Surface(..) | Hit::Layer(..)), CursorImageStatus::Hidden) => None,
             _ => Some(CursorIcon::Default),
+        }
+    }
+
+    /// The shape the real session draws: `cursor_icon`, or the Sherlock cursor while the
+    /// gesture key and the left button are held on a window that has not moved yet. Released
+    /// there, it is a Super + click, which asks Sherlock about what is under the pointer
+    /// (cursor boards); dragged, it becomes the move of the window.
+    pub fn cursor_shape(&self) -> Option<crate::cursor::Shape> {
+        let sherlock = self.gesture.as_ref().is_some_and(|g| {
+            matches!(g.source, GestureSource::Modifier)
+                && g.edges.is_none()
+                && g.button == BTN_LEFT
+                && !g.moved
+        });
+        match sherlock {
+            true => Some(crate::cursor::Shape::Sherlock),
+            false => self.cursor_icon().map(crate::cursor::Shape::Icon),
         }
     }
 
@@ -869,6 +901,10 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        if state == ButtonState::Pressed {
+            // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
+            self.click_at(location);
+        }
         if self.picking_area() {
             // The area of a screenshot: the click goes to no client (lot D-35c).
             pointer.button(self, &event);

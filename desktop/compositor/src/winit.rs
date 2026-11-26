@@ -66,6 +66,11 @@ pub fn init(
         desktop_config::wallpaper::config_file(var),
         desktop_config::wallpaper::dirs(var),
     )?;
+    // The rings of the clicks shown; the host draws the pointer (lot C-01).
+    state.watch_pointer(
+        &event_loop.handle(),
+        desktop_config::pointer::config_file(var),
+    )?;
     let mut textures = Textures::default();
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.

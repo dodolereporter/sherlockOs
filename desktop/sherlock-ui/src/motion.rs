@@ -259,6 +259,10 @@ pub const WINDOW_CLOSE_SCALE: f64 = 0.92;
 /// faster: it never lingers once nearly transparent.
 pub const WINDOW_CLOSE_EASE: Ease = Ease::InQuad;
 
+/// Menus and popups of the windows appear with this fade, without moving: short, so that a
+/// menu is readable at once (lot C-01). The lower end of a hover.
+pub const MENU_FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.0);
+
 /// Minimize and restore of a window (lot D-19): the genie effect into its dock icon, or the
 /// scale fallback. About half a second in lot D-19, found slow on the machine: 300 ms since
 /// lot Q-14, the phases keeping their shares.
