@@ -9,7 +9,8 @@ use sherlock_ui::window as ui;
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
+        SwitchToggleEvent,
     },
     desktop::{Window, WindowSurfaceType},
     input::{
@@ -141,6 +142,10 @@ enum Shortcut {
     Screenshot(capture::Kind),
     /// Escape while the area of a screenshot is chosen.
     CancelArea,
+    /// L: locks the session (lot D-25a).
+    Lock,
+    /// Enter on the rescue screen of the lock: the lock programs are tried again.
+    RetryLock,
 }
 
 impl Shortcut {
@@ -191,8 +196,21 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::l => Some(Self::Lock),
             _ => None,
         }
+    }
+
+    /// The only keys the compositor takes while the session is locked: the console switch,
+    /// Ctrl + Alt + Backspace, the volume and brightness keys, and Enter on the rescue screen.
+    /// Every other key goes to the lock surface, or nowhere.
+    fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
+        let media =
+            MediaKey::of(sym).filter(|media| media.acts_while_locked() && state.takes_media_keys());
+        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
+        Self::for_session(state.nested, m, sym)
+            .or(media.map(|media| Self::Media(media, key)))
+            .or(retry.then_some(Self::RetryLock))
     }
 }
 
@@ -609,6 +627,15 @@ impl State {
             return Some(gesture.edges.map_or(moving, resize_cursor));
         }
         let location = self.seat.get_pointer()?.current_location();
+        // Locked: the shape the lock surface under the pointer names, else the arrow. Never
+        // the edges of the windows hidden behind it (lot D-25a).
+        if self.is_locked() {
+            return match (self.lock_hit(location), &self.cursor_status) {
+                (Some(_), CursorImageStatus::Named(icon)) => Some(*icon),
+                (Some(_), CursorImageStatus::Hidden) => None,
+                _ => Some(CursorIcon::Default),
+            };
+        }
         match (self.hit(location), &self.cursor_status) {
             (Some(Hit::Border(_, edges)), _) => Some(resize_cursor(edges)),
             (Some(Hit::Surface(..) | Hit::Layer(..)), CursorImageStatus::Named(icon)) => {
@@ -707,6 +734,7 @@ impl State {
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
+        self.note_input();
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -720,7 +748,9 @@ impl State {
             let alone = !mods.ctrl && !mods.shift && !other;
             let gesture_key = crate::mission_control::is_gesture_key(state.nested, sym);
             let pressed = key_state == KeyState::Pressed;
-            state.overview.key(gesture_key, pressed, alone);
+            if !state.is_locked() {
+                state.overview.key(gesture_key, pressed, alone);
+            }
             if key_state == KeyState::Released {
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
@@ -732,6 +762,13 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            if state.is_locked() {
+                let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
+                    return FilterResult::Forward;
+                };
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             if state.picking_area() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CancelArea));
@@ -762,7 +799,7 @@ impl State {
         if let Some(Some(shortcut)) = shortcut {
             self.run_shortcut(shortcut);
         }
-        if self.overview.take_toggle() {
+        if self.overview.take_toggle() && !self.is_locked() {
             self.toggle_overview();
         }
     }
@@ -819,6 +856,15 @@ impl State {
                 self.cancel_area();
                 return;
             }
+            Shortcut::Lock => {
+                tracing::info!("Super + L: the session locks");
+                self.lock_session();
+                return;
+            }
+            Shortcut::RetryLock => {
+                self.retry_lock_program();
+                return;
+            }
             Shortcut::SendToWorkspace(index) => {
                 let id = self.workspaces().id_at(index).map(str::to_owned);
                 if let (Some(window), Some(id)) = (self.focused_window(), id) {
@@ -861,6 +907,7 @@ impl State {
                 self.pointer_button(event.button_code(), event.state(), event.time_msec());
             }
             InputEvent::PointerAxis { event } => {
+                self.note_input();
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
@@ -878,18 +925,33 @@ impl State {
                 pointer.axis(self, frame);
                 pointer.frame(self);
             }
-            event => self.gesture_event(event),
+            // The lid closed: the session locks, whether logind puts the machine to sleep for
+            // it or not (lot D-25a3).
+            InputEvent::SwitchToggle { event } => {
+                if event.switch() == Some(Switch::Lid) && event.state() == SwitchState::On {
+                    tracing::info!("lid closed: the session locks");
+                    self.lock_session();
+                }
+            }
+            event => {
+                self.note_input();
+                self.gesture_event(event);
+            }
         }
     }
 
     /// The pointer is at `location`. Entry point of every backend, and of the tests.
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         self.queue_redraw();
+        self.note_input();
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        // During a gesture, no client has the pointer.
-        let under = if self.gesture_active() {
+        // Locked: only a lock surface may have the pointer (lot D-25a). During a gesture, no
+        // client has it.
+        let under = if self.is_locked() {
+            self.lock_hit(location)
+        } else if self.gesture_active() {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
@@ -930,6 +992,7 @@ impl State {
     /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         self.queue_redraw();
+        self.note_input();
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;
@@ -943,6 +1006,16 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        if self.is_locked() {
+            // Locked: the button goes to the lock surface under the pointer, which takes the
+            // keyboard on a press (lot D-25a).
+            if state == ButtonState::Pressed {
+                self.set_keyboard_focus(None);
+            }
+            pointer.button(self, &event);
+            pointer.frame(self);
+            return;
+        }
         if state == ButtonState::Pressed {
             // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
             self.click_at(location);

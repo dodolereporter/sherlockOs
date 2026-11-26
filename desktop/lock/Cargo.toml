@@ -1,0 +1,59 @@
+[package]
+name = "lock"
+description = "Lock screen of the session, on ext-session-lock-v1, checked by PAM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlockos-lock"
+path = "src/main.rs"
+
+[dependencies]
+# Toolkit of the shell (ADR 0014), with the features of the other shell programs; the image
+# widget without its codecs for the picture of Sherlock, whose PNG decoder comes from `image`
+# below.
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "wgpu-bare",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+    "image-without-codecs",
+] }
+# The lock surfaces (ext-session-lock-v1) through the daemon of the crate the shell already
+# uses for layer-shell (ADR 0014 answer, docs/compositor.md).
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# The PNG decoder of the picture of Sherlock: the version and feature the compositor already
+# builds.
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+# PAM, opened at run time (`libpam.so.0`): no development package to build, and the tests never
+# load it. The version wgpu already pulls.
+libloading = "=0.8.9"
+# malloc, strdup and getpwuid_r for the PAM conversation and the user name: the version of the
+# other shell programs.
+libc = "=0.2.191"
+# The copies of the password made for PAM are overwritten with volatile writes: the version
+# system-services pins for `Secret`.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+# The local time, as the bar reads it (workspace crate).
+appearance-config = { path = "../appearance-config" }
+sherlock-ui = { path = "../sherlock-ui" }
+# The `Secret` type of the password, shared with the bar (workspace crate).
+system-services = { path = "../system-services" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
+
+[lints]
+workspace = true

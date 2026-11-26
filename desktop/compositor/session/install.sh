@@ -10,7 +10,7 @@ applications=/usr/local/share/applications
 # The application icons, a hicolor theme that only the session sees (sherlockos-session puts
 # this folder first in XDG_DATA_DIRS).
 data=/usr/local/share/sherlockos
-programs="compositor bar dock launcher sherlockos-apps notifications evidence"
+programs="compositor bar dock launcher sherlockos-apps notifications evidence sherlockos-lock"
 
 icons=/usr/local/share/icons
 themes="sherlockos sherlockos-light"
@@ -39,6 +39,8 @@ sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
+# The PAM service of the lock screen (lot D-25a):
+sudo install -m 644 $q/desktop/lock/pam/sherlockos-lock /etc/pam.d/sherlockos-lock
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
 sudo install -D -m 644 $q/desktop/compositor/session/sherlockos-portals.conf $data/xdg-desktop-portal/sherlockos-portals.conf
 # The cursor themes, their aliases kept as links:
@@ -47,7 +49,7 @@ sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done)$icons/
 
 # To remove it:
-#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop
+#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop /etc/pam.d/sherlockos-lock
 #   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 

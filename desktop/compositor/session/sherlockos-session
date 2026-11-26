@@ -128,6 +128,13 @@ else
 fi
 export SHERLOCKOS_POLKIT_AGENT="$agent"
 
+# The PAM service of the lock screen (lot D-25a): without it, PAM falls back to its `other`
+# service, which refuses every password on Debian, and the session cannot be unlocked.
+pam_lock="${SHERLOCKOS_PAM_DIR:-/etc/pam.d}/sherlockos-lock"
+if [ ! -f "$pam_lock" ]; then
+	note "warning: $pam_lock is missing: the lock screen cannot check the password (just install-session prints the command that installs it)"
+fi
+
 # Once `just install-themes` ran, third-party applications take the colors of the desktop
 # (docs/third-party-theming.md): the GTK settings live in a dconf database of the session's own,
 # libadwaita reads them without the portal, Qt goes through qt6ct. Plasma sees none of it.

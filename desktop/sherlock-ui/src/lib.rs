@@ -2,10 +2,11 @@
 //!
 //! The only place where colors, sizes and interface texts are written. The tokens (`color`,
 //! `cursor`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `app_icon`, `logo`,
-//! `window`, `decorations`, `mission_control`, `click`, `osd`, `evidence`) depend on nothing,
-//! and neither does `gpu`, the choice of the renderer. The theme and the iced components sit
-//! behind the `iced` feature, on by default; `panels`, `launcher` and `apps` hold both, their
-//! components behind that feature. The gallery lives in `examples/gallery`. See `docs/sherlock-ui.md`.
+//! `window`, `decorations`, `mission_control`, `click`, `osd`, `evidence`, `lock`) depend on
+//! nothing, and neither does `gpu`, the choice of the renderer. The theme and the iced
+//! components sit behind the `iced` feature, on by default; `panels`, `launcher` and `apps` hold
+//! both, their components behind that feature. The gallery lives in `examples/gallery`. See
+//! `docs/sherlock-ui.md`.
 
 pub mod app_icon;
 pub mod apps;
@@ -18,6 +19,7 @@ pub mod evidence;
 pub mod gpu;
 pub mod icon;
 pub mod launcher;
+pub mod lock;
 pub mod logo;
 pub mod metrics;
 pub mod mission_control;

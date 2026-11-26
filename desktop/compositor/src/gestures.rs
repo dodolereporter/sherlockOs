@@ -216,6 +216,10 @@ fn route(fingers: u32) -> Route {
 impl State {
     /// Hands a gesture event of the backend to the methods below.
     pub(crate) fn gesture_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // Locked: no gesture acts, nor reaches a client (lot D-25a).
+        if self.is_locked() {
+            return;
+        }
         match event {
             InputEvent::GestureSwipeBegin { event } => {
                 self.gesture_swipe_begin(event.fingers(), event.time_msec());

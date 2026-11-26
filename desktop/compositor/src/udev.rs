@@ -126,6 +126,9 @@ struct Head {
     ids: Ids,
     /// Time between two vertical blanks.
     period: Duration,
+    /// The frame waiting for the vertical blank was built while the session was locked: once
+    /// shown, the lock can be confirmed (lot D-25a).
+    lock_queued: bool,
 }
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
@@ -239,6 +242,9 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
+    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
+    state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
+    state.watch_logind(&event_loop.handle(), None)?;
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();
@@ -537,6 +543,7 @@ impl Backend {
             pacing: Pacing::default(),
             ids: Ids::default(),
             period,
+            lock_queued: false,
         };
         self.heads.insert(crtc, head);
         Ok(())
@@ -583,6 +590,9 @@ impl Backend {
                 tracing::warn!("DRM: {err}");
             }
             head.pacing.presented();
+            if std::mem::take(&mut head.lock_queued) {
+                state.lock_frame_shown(&head.output);
+            }
         }
         self.render(state, crtc);
     }
@@ -652,6 +662,7 @@ impl Backend {
         let started = Instant::now();
         let since = state.perf.start();
         let now = state.start_time.elapsed();
+        let locked = state.is_locked();
         let preview = self.preview.frame(now, state.snap_preview());
         let screen = [(output.clone(), view)];
         let (mut screens, mut animating) = self.scene.screens(
@@ -705,6 +716,7 @@ impl Backend {
             Ok(frame) if !frame.is_empty => match head.compositor.queue_frame(()) {
                 Ok(()) => {
                     head.pacing.drawn(epoch, true, animating);
+                    head.lock_queued = locked;
                     None
                 }
                 Err(err) => Some(format!("DRM: {err}")),
@@ -762,7 +774,8 @@ fn send_hidden_frames(state: &State) {
     }
 }
 
-/// Frame callbacks of the surfaces shown on `output`: windows and anchored surfaces.
+/// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the lock
+/// surface.
 fn send_frames(state: &State, output: &Output) {
     let time = state.start_time.elapsed();
     let throttle = Some(Duration::ZERO);
@@ -774,6 +787,7 @@ fn send_frames(state: &State, output: &Output) {
     for layer in layer_map_for_output(output).layers() {
         layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
     }
+    state.send_lock_frames(output, time);
 }
 
 #[cfg(test)]
