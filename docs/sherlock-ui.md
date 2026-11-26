@@ -109,7 +109,7 @@ instant, with no state that advances frame by frame.
 | Type | Role |
 | --- | --- |
 | `Spring` | Damped spring of mass 1: stiffness (`stiffness`) and damping (`damping`). `damping_ratio` gives the damping ratio. `solve(offset, velocity, t)` returns the offset and the velocity after `t` seconds, by the exact solution (underdamped, critical or overdamped) |
-| `Animation` | A value driven by a `Spring` from `from` to `to`. `value(now)`, `target()`, `is_done(now, precision)`. `retarget(now, to)` changes target while keeping value and velocity: nothing jumps |
+| `Animation` | A value driven by a `Spring` from `from` to `to`. `value(now)`, `target()`, `is_done(now, precision)`. `retarget(now, to)` changes target while keeping value and velocity: nothing jumps. `with_velocity` starts it moving, as a gesture lets it go (lot D-31) |
 | `Fade` | Fade over a fixed duration, brisk start and gentle arrival (cubic). `value(now)`, `is_done(now)`. `retarget(now, to, duration)` restarts from the current value, for the share of the run that is left |
 
 | Token | Value | Use |

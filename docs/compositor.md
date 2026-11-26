@@ -9,7 +9,8 @@ runs X11 applications in it, through XWayland, with the clipboard both ways. Lot
 anchored surfaces (layer-shell) for the bar, the dock and the panels, several screens, and
 fractional scaling. Lot D-04 draws the wallpaper. Lot D-06 accepts the buffers of clients that
 draw on the GPU (linux-dmabuf). Lot D-14 runs it as a real session, on the screens of the
-machine, from a text console or the login screen (see "Real session").
+machine, from a text console or the login screen (see "Real session"). Lot D-31 gives the
+touchpad its setting and its gestures (see "Touchpad").
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -38,12 +39,14 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
+| `src/gestures.rs` | Touchpad gestures (lot D-31): three finger swipes for the compositor, the others to the clients (`zwp_pointer_gestures_v1`) |
+| `src/touchpad.rs` | Touchpad setting applied to libinput, read again when it changes (lot D-31) |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
 | `src/decorations/` | Server-side decorations (lot D-08): who gets one (`protocol.rs`), the frame and its bar, the pointer on the bar and its buttons, the bar drawn into a texture (`raster.rs`) |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
-| `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants` |
+| `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
 | `src/shaders/` | The three GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag` |
 | `src/anim.rs` | Motion of windows, of the preview and of the workspaces: springs applied to rectangles and to the row of workspaces. Pure computation |
 | `src/stats.rs` | Frame statistics for `--measure` |
@@ -395,7 +398,8 @@ D-18w gives them their behavior.
 - **Moving a window** (`State::move_to_workspace`): out of the active workspace, it hides
   without being followed, and if it was the active window, the keyboard goes back as above.
   Refused during a gesture, which would go on with a hidden window.
-- **Who changes workspace.** Only the user, by the keys, and the shell, by `activate` (of a
+- **Who changes workspace.** Only the user, by the keys and the three finger swipe (see
+  "Touchpad"), and the shell, by `activate` (of a
   workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
   no `xdg-activation`, and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. An
   application may minimize its own window (lot D-18c1), never bring it back. A new window opens on the active workspace and
@@ -407,6 +411,7 @@ D-18w gives them their behavior.
 | Super + 1 to 9 | Goes to that workspace |
 | Super + Shift + 1 to 9 | Sends the window that has the keyboard to that workspace |
 | Super + Ctrl + Left or Right | Goes to the workspace on that side, without wrapping around |
+| Three fingers left or right on the touchpad | The row follows the fingers, then lands on the neighbour or comes back (see "Touchpad") |
 
 The digits are the keys of the top row, whatever the layout: on AZERTY, Super + `&` goes to
 workspace 1. These keys, press and release, do not go to the client. Only the modifiers of the
@@ -1374,7 +1379,7 @@ How it works (`src/udev.rs`):
   fails is logged at its 1st, 2nd, 4th, 8th… failure in a row, not on every frame.
 - **Input.** libinput, on the session's seat: keyboard (see "Behavior" for the layout; a layout
   xkb refuses falls back to AZERTY with a warning), mouse,
-  touchpad with tap to click. The pointer moves by steps and stays on the screens. The gesture
+  touchpad with its setting and its gestures (see "Touchpad"). The pointer moves by steps and stays on the screens. The gesture
   key is Super.
 - **Console switch.** Ctrl + Alt + F1 to F12 switch console. When the session is left, input
   and drawing stop, and the keys still held are released for the clients; when it comes back,
@@ -1552,6 +1557,125 @@ times a second on the reference laptop's screen. Now:
 - **Frame callbacks.** Clients get theirs when their frame goes to the screen, or at the
   estimated blank when nothing was shown; hidden windows once a second, by a timer of their own.
 
+## Touchpad
+
+Lot D-31 makes the touchpad behave like a Mac's: its setting in a file that Control Room's
+Touchpad page will write, and gestures that follow the fingers.
+
+### Setting
+
+`$XDG_CONFIG_HOME/nom-os/touchpad.conf` (`~/.config/nom-os/touchpad.conf`), read by
+`desktop_config::touchpad`, in the same `key = value` form as `wallpaper.conf`. Every key is
+optional; without the file, the defaults below apply.
+
+| Key | Default | Values | Effect (libinput) |
+| --- | --- | --- | --- |
+| `tap-to-click` | `true` | `true`, `false` | A tap clicks: one finger left, two right, three middle |
+| `tap-and-drag` | `true` | `true`, `false` | Tap, then slide with the finger down: drags |
+| `drag-lock` | `false` | `true`, `false` | The drag goes on a moment after the finger lifts |
+| `natural-scroll` | `true` | `true`, `false` | Two finger scrolling moves the content with the fingers |
+| `disable-while-typing` | `true` | `true`, `false` | The touchpad is off while the keyboard is typed on |
+| `speed` | `0` | `-1` to `1` | Pointer speed |
+| `acceleration` | `adaptive` | `adaptive`, `flat` | Faster movements go further, or not |
+| `click` | `fingers` | `fingers`, `areas` | A press clicks by the number of fingers (clickfinger), or by where it presses (bottom right corner: right button) |
+| `swipe-down` | `minimize` | `minimize`, `nothing` | What three fingers down do |
+
+Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
+when they are plugged in, and again within 2 seconds of a change of the file (modification time
+and length looked at every 2 seconds, as `wallpaper.conf`). A wrong line, an unknown key or a
+speed out of range gives the defaults, with a warning naming the line in the log. What a
+touchpad does not support is skipped (`debug` level): a touchpad without a physical button has
+no button areas. `State::set_touchpad` applies a setting directly, for the tests and for
+Control Room later.
+
+### Gestures
+
+libinput recognizes swipes, pinches and holds, with their number of fingers. **Gestures of three
+fingers or more belong to the compositor**; the others go to the client under the pointer,
+through `zwp_pointer_gestures_v1` (version 3): a two finger pinch zooms in Firefox, Evince or
+Eye of GNOME, a hold stops a kinetic scroll. Two fingers that move scroll (libinput): a touchpad
+gives no two finger swipe, but a device that would is passed on.
+
+| Fingers | Gesture | Effect |
+| --- | --- | --- |
+| 3 | Left or right | The row of workspaces follows the fingers, then lands on the neighbour or comes back |
+| 3 | Up | The overview: reserved for Mission Control, a lot of its own. A line in the log, nothing on screen |
+| 3 | Down | Minimizes the window that has the keyboard (`swipe-down = minimize`), or nothing |
+| 3 | Pinch, hold | Reserved |
+| 4 and more | Any | Reserved |
+| 1 and 2 | Pinch, hold, swipe | To the client under the pointer |
+
+"Reserved" means taken without effect: no client receives it, so that giving it a role later
+changes nothing for applications.
+
+**Following the fingers** (`gestures::Swipe`, pure computation). A three finger swipe picks its
+direction once the fingers travelled 16 units (`LOCK_DISTANCE`, libinput's units: a pixel of a
+1000 dpi pointer, accelerated): the larger axis wins, and stays. Left or right, the row of
+workspaces is held where the fingers put it (`WorkspaceSlide::hold`), without a spring: 400 units
+of travel (`WORKSPACE_DISTANCE`, GNOME's value) move it by a whole workspace, in the natural
+direction (fingers to the left, the workspace on the right comes in). The view starts where it
+is, even in the middle of a slide. It reaches the neighbours of the active workspace freely;
+beyond them, and past the ends of the row, it resists like iOS's rubber band (`1 − 1/(0.55 x +
+1)` of a workspace for `x` workspaces of travel): the elastic rebound at the end of the list.
+While held, a frame is drawn at each movement of the fingers, none when they rest.
+
+**Letting go.** When the fingers lift, the velocity is that of the last 100 ms of movement
+(`VELOCITY_WINDOW`): fingers that stopped before lifting throw nothing. The view lands on the
+workspace nearest to where that velocity carries it in 0.2 s (`PROJECTION`), among the
+neighbours: a quick flick of a quarter of the way goes on to the next one, a slow drag of a
+quarter comes back, past the middle it goes on. That workspace becomes active (keyboard,
+pointer, menus, as with the keys), and the row leaves from where the fingers left it, at their
+velocity (at most 6 workspaces a second, `MAX_VELOCITY`; none past the bounds), on
+`SNAP_SPRING` (`WorkspaceSlide::release`, `motion::Animation::with_velocity`): the slide of lot
+D-18w, driven by position during the gesture, then let go with the velocity. A swipe that
+libinput cancels comes back to the active workspace. A key that changes workspace during the
+swipe lets the row go from where it is.
+
+**Up and down** act when the fingers lift, after 100 units of vertical travel
+(`VERTICAL_DISTANCE`), unless libinput cancelled the swipe.
+
+Nested mode (`--nested`) receives no gesture: winit does not report them.
+
+### Tests
+
+`desktop-config` (settings read, written back, refused with their line), `src/touchpad.rs` (the
+setting turned into libinput settings, the file read again when it changes, defaults for a
+wrong file), `src/gestures.rs` (direction locked past 16 units, rubber band, velocity and
+landing: slow, thrown, stopped before lifting, never past the neighbour), `src/anim.rs` (a held
+row shows both workspaces where the fingers put it, without animation; let go, it leaves at the
+velocity of the fingers; a key during the swipe), `sherlock-ui/src/motion.rs` (a value thrown
+leaves at its velocity), and `tests/gestures.rs`, where a fake input backend hands simulated
+libinput events to `State::process_input_event`:
+
+- **Three fingers.** The row follows the fingers, at a fifth of a workspace after 80 units, does
+  not move while they rest, and lands on the next workspace when thrown, leaving at their
+  speed; slow, it comes back; past the middle it goes on; cancelled, it comes back; below the
+  lock distance nothing moves.
+- **The ends of the row.** Fingers to the right on the first workspace: the row resists, then
+  springs back; at the other end, one workspace at a time up to the third.
+- **Reserved.** Four fingers, three up, three down without a window: no workspace change.
+- **To the client.** A client binds `zwp_pointer_gestures_v1` and its swipe, pinch and hold
+  objects, with a window under the pointer: it receives a two finger pinch (begin, scale, end),
+  a hold (cancelled) and a two finger swipe; it receives nothing of three or four finger swipes,
+  pinches or holds.
+- **Three fingers down.** Not far enough, or `swipe-down = nothing`: the window stays; by
+  default, it is minimized.
+
+### Manual test on the reference laptop
+
+1. Start the session from a console (see "From a text console"), with
+   `RUST_LOG=info,compositor=debug`: the log names the touchpad (`input device`) and the setting
+   (`touchpad config=…`).
+2. Tap to click, tap and slide to drag a window, scroll a page in Firefox with two fingers (the
+   content follows the fingers), pinch to zoom in it.
+3. Type in Konsole while resting a palm on the touchpad: the pointer does not move.
+4. With three windows on three workspaces: three fingers left, slowly, and stop halfway: both
+   workspaces show, side by side, where the fingers are. Lift: it comes back. Flick: it goes to
+   the next one. On the first workspace, three fingers right: it resists and springs back.
+5. Three fingers down on a window: it is minimized. Write `swipe-down = nothing` in
+   `~/.config/nom-os/touchpad.conf`: within 2 seconds the log shows the new setting, and the
+   gesture does nothing. `natural-scroll = false`: the scrolling turns around.
+
 ## Measuring
 
 ### The event loop (lot P-01)
@@ -1716,6 +1840,7 @@ just verify
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
+| `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 
 The tests in `tests/headless.rs`:
 

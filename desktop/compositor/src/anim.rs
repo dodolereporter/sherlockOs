@@ -288,11 +288,16 @@ impl PreviewMotion {
 /// to the active one. Each screen shows its own part of the row: a workspace is shifted by its
 /// distance to the view times the width of the screen. Only the workspaces the slide goes
 /// through are drawn: the spring's overshoot does not show the next one.
+///
+/// A touchpad swipe (lot D-31) holds the view where the fingers put it (`hold`), then lets it
+/// go on the same spring with the velocity of the fingers (`release`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkspaceSlide {
     view: Option<Animation>,
     /// First and last index of the workspaces the slide goes through.
     span: (usize, usize),
+    /// Position held by a swipe, in workspaces.
+    held: Option<f64>,
 }
 
 impl WorkspaceSlide {
@@ -302,6 +307,7 @@ impl WorkspaceSlide {
     /// Slides from the workspace at `from` (the one shown at rest) to the one at `to`. During a
     /// slide, the view leaves from where it is: nothing jumps.
     pub fn go(&mut self, now: Duration, from: usize, to: usize) {
+        self.release(now, from, 0.0);
         let span = match &mut self.view {
             Some(view) if !view.is_done(now, Self::PRECISION) => {
                 let at = view.value(now).max(0.0);
@@ -320,6 +326,43 @@ impl WorkspaceSlide {
     /// Stops the slide: the active workspace is shown at once.
     pub fn stop(&mut self) {
         self.view = None;
+        self.held = None;
+    }
+
+    /// Where the view is at `now`, in workspaces, when the one at `active` is the active one.
+    pub fn position(&self, now: Duration, active: usize) -> f64 {
+        match (self.held, self.view) {
+            (Some(held), _) => held,
+            (None, Some(view)) if self.is_animating(now) => view.value(now),
+            _ => active as f64,
+        }
+    }
+
+    /// Holds the view at `view`, in workspaces: it follows the fingers, without a spring.
+    pub fn hold(&mut self, view: f64) {
+        self.held = Some(view);
+    }
+
+    /// Lets go of the view held by `hold`: it leaves with `velocity` (workspaces per second)
+    /// towards the workspace at `active`. `go` then turns it towards another one without a
+    /// jolt.
+    pub fn release(&mut self, now: Duration, active: usize, velocity: f64) {
+        let Some(at) = self.held.take() else {
+            return;
+        };
+        let to = active as f64;
+        self.view = Some(Animation::with_velocity(
+            motion::SNAP_SPRING,
+            at,
+            to,
+            velocity,
+            now,
+        ));
+        let at = at.max(0.0);
+        self.span = (
+            (at.floor() as usize).min(active),
+            (at.ceil() as usize).max(active),
+        );
     }
 
     pub fn is_animating(&self, now: Duration) -> bool {
@@ -329,8 +372,9 @@ impl WorkspaceSlide {
     /// Horizontal shift at `now` of the workspace at `index`, on a screen `width` wide, when
     /// the one at `active` is the active one. `None` when it is out of the screen.
     pub fn shift(&self, now: Duration, index: usize, active: usize, width: f64) -> Option<f64> {
-        let view = match self.view {
-            Some(view) if self.is_animating(now) => {
+        let view = match (self.held, self.view) {
+            (Some(held), _) => held,
+            (None, Some(view)) if self.is_animating(now) => {
                 if index < self.span.0 || index > self.span.1 {
                     return None;
                 }
@@ -550,6 +594,40 @@ mod tests {
         assert_eq!(shift(&slide, 3050, 1), before);
         slide.stop();
         assert_eq!(shift(&slide, 3060, 1), Some(0.0));
+    }
+
+    #[test]
+    fn a_held_view_follows_then_leaves_with_its_velocity() {
+        let mut slide = WorkspaceSlide::default();
+        let shift = |s: &WorkspaceSlide, now, index| s.shift(ms(now), index, 0, 1000.0);
+        // Held between the first and the second: both show, where the fingers put them.
+        slide.hold(0.25);
+        assert_eq!(shift(&slide, 0, 0), Some(-250.0));
+        assert_eq!(shift(&slide, 0, 1), Some(750.0));
+        assert_eq!(shift(&slide, 0, 2), None);
+        assert!(
+            !slide.is_animating(ms(0)),
+            "no frame while the fingers rest"
+        );
+        assert_eq!(slide.position(ms(5000), 0), 0.25);
+        // Past the first one: it shows beyond its edge, nothing on the other side.
+        slide.hold(-0.1);
+        assert_eq!(shift(&slide, 0, 0), Some(100.0));
+        // Let go towards the second at 3 workspaces a second: it goes on at that speed.
+        slide.hold(0.25);
+        slide.release(ms(1000), 0, 3.0);
+        slide.go(ms(1000), 0, 1);
+        let early = slide.position(ms(1010), 1);
+        // 0.25 + 3 × 0.01, and a little more from the spring pulling towards the second.
+        assert!(early > 0.28 && early < 0.31, "{early}");
+        assert!(slide.is_animating(ms(1010)));
+        assert_eq!(slide.shift(ms(2000), 1, 1, 1000.0), Some(0.0));
+        assert!(!slide.is_animating(ms(2000)));
+        // A key during the swipe lets the view go from where it is.
+        slide.hold(1.4);
+        slide.go(ms(3000), 1, 0);
+        assert!((slide.position(ms(3000), 0) - 1.4).abs() < 1e-9);
+        assert_eq!(slide.position(ms(4000), 0), 0.0);
     }
 
     #[test]

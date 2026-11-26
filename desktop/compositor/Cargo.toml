@@ -62,7 +62,7 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # bench build the scene's elements without a GPU (lot P-01).
 smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test"] }
 # Wayland client of the integration test: the same crates that smithay already pulls for
-# its winit backend.
+# its winit backend. `unstable` for the client side of `zwp_pointer_gestures_v1` (lot D-31).
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging", "unstable"] }
 # Client side of KDE's server decoration protocol, for the decoration test: the version that
