@@ -1359,3 +1359,61 @@ fn menu_captures() {
     }
     assert_eq!(dark, 0, "no black block in the unfolding menu");
 }
+
+/// The item a rename or an open acts on is always selected: Ctrl+click can leave the cursor
+/// on the item it just removed (review of E-01a).
+#[test]
+fn rename_and_open_act_on_a_selected_item_only() {
+    let mut bench = bench_with_files("focus", 2);
+    let index = |bench: &Bench, name: &str| bench.names().iter().position(|n| *n == name);
+    click_with(&mut bench, "a.txt", Modifiers::empty());
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    click_with(&mut bench, "f00.txt", Modifiers::CTRL);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    // A right click on the selected item, then « Renommer »: that item, not f00.txt.
+    bench.send(Message::RightClick(index(&bench, "a.txt")));
+    bench.send(Message::Run(crate::app::Command::Rename));
+    let renaming = bench.app.renaming.clone().expect("rename open");
+    assert_eq!(renaming.0, bench.path("projet/a.txt"));
+    bench.press(Named::Escape);
+    // F2 the same.
+    bench.press(Named::F2);
+    let renaming = bench.app.renaming.clone().expect("rename open");
+    assert_eq!(renaming.0, bench.path("projet/a.txt"));
+    bench.press(Named::Escape);
+    // Several selected: a right click on one of them puts the rename on it.
+    click_with(&mut bench, "f01.txt", Modifiers::CTRL);
+    bench.send(Message::RightClick(index(&bench, "a.txt")));
+    bench.send(Message::Run(crate::app::Command::Rename));
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.press(Named::Escape);
+    // Enter opens the selected folder, never the item the cursor was left on.
+    click_with(&mut bench, "src", Modifiers::empty());
+    click_with(&mut bench, "a.txt", Modifiers::CTRL);
+    click_with(&mut bench, "a.txt", Modifiers::CTRL);
+    bench.press(Named::Enter);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}
+
+/// A sort during a rename moves the rows, not the target: the item is kept by its path.
+#[test]
+fn a_sort_during_a_rename_renames_the_same_item() {
+    let mut bench = bench_with_files("rename-sort", 3);
+    bench.select("f00.txt");
+    bench.press(Named::F2);
+    bench.send(Message::Sort(crate::listing::Column::Name));
+    assert_eq!(
+        bench.names(),
+        ["src", "f02.txt", "f01.txt", "f00.txt", "a.txt"]
+    );
+    bench.send(Message::RenameInput("nouveau.txt".into()));
+    bench.send(Message::RenameSubmit);
+    assert!(bench.path("projet/nouveau.txt").exists());
+    assert!(!bench.path("projet/f00.txt").exists());
+    for kept in ["a.txt", "f01.txt", "f02.txt"] {
+        assert!(bench.path(&format!("projet/{kept}")).exists(), "{kept}");
+    }
+}
