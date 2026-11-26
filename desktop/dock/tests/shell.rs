@@ -1,15 +1,16 @@
 //! The `sherlock_shell_v1` source against a fake compositor: the windows already open, a new
-//! window, a closed one, and a compositor without the protocol.
+//! window, a closed one, a covered screen, the requests and rectangles it sends, and a
+//! compositor without the protocol.
 
 use std::os::unix::net::UnixStream;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use dock::shell::Shell;
-use dock::windows::{Source, SourceError};
+use dock::windows::{Control, Place, Request, Source, SourceError};
 use shell_protocol::server::sherlock_shell_manager_v1::{self as manager, SherlockShellManagerV1};
 use shell_protocol::server::sherlock_shell_toplevel_v1::{
     self as toplevel, SherlockShellToplevelV1,
@@ -26,13 +27,19 @@ enum Change {
     /// `closed` alone: the batch is not over.
     Closing(&'static str),
     Done,
+    /// A screen, and whether a maximized window covers it, then `done`.
+    Cover(&'static str, bool),
 }
+
+/// What the client asked: the `app_id` of the window, and the request.
+type Asked = Arc<Mutex<Vec<(&'static str, String)>>>;
 
 struct Compositor {
     /// Windows already open when a client binds: `app_id`, active.
     open: Vec<(&'static str, bool)>,
     managers: Vec<(Client, SherlockShellManagerV1)>,
     toplevels: Vec<(&'static str, SherlockShellToplevelV1)>,
+    asked: Asked,
 }
 
 impl Compositor {
@@ -75,6 +82,19 @@ impl Compositor {
                     manager.done();
                 }
             }
+            Change::Cover(name, covered) => {
+                let state = if covered {
+                    (manager::OutputState::Maximized as u32)
+                        .to_ne_bytes()
+                        .to_vec()
+                } else {
+                    Vec::new()
+                };
+                for (_, manager) in &self.managers {
+                    manager.output(String::from(name), state.clone());
+                }
+                self.apply(display, Change::Done);
+            }
         }
     }
 }
@@ -111,14 +131,35 @@ impl Dispatch<SherlockShellManagerV1, ()> for Compositor {
 
 impl Dispatch<SherlockShellToplevelV1, ()> for Compositor {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
-        _: &SherlockShellToplevelV1,
-        _: toplevel::Request,
+        resource: &SherlockShellToplevelV1,
+        request: toplevel::Request,
         _: &(),
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        let Some((app_id, _)) = state.toplevels.iter().find(|(_, t)| t == resource) else {
+            return;
+        };
+        let asked = match request {
+            toplevel::Request::Activate => String::from("activate"),
+            toplevel::Request::Minimize => String::from("minimize"),
+            toplevel::Request::Close => String::from("close"),
+            toplevel::Request::SetRectangle {
+                output,
+                x,
+                y,
+                width,
+                height,
+            } => format!("rectangle {output} {x} {y} {width} {height}"),
+            _ => return,
+        };
+        state
+            .asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((app_id, asked));
     }
 }
 
@@ -133,6 +174,7 @@ impl ClientData for NoData {
 struct Fake {
     connection: Option<Connection>,
     changes: Sender<Change>,
+    asked: Asked,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -151,10 +193,12 @@ impl Fake {
         handle.insert_client(theirs, Arc::new(NoData))?;
         let connection = Connection::from_socket(ours)?;
         let (changes, received): (Sender<Change>, Receiver<Change>) = channel();
+        let asked = Asked::default();
         let mut state = Compositor {
             open: open.to_vec(),
             managers: Vec::new(),
             toplevels: Vec::new(),
+            asked: Arc::clone(&asked),
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
@@ -172,9 +216,31 @@ impl Fake {
         Ok(Self {
             connection: Some(connection),
             changes,
+            asked,
             stop,
             thread: Some(thread),
         })
+    }
+}
+
+impl Fake {
+    /// What the client asked, once `count` requests came (5 s at most).
+    fn asked(&self, count: usize) -> Vec<(&'static str, String)> {
+        for _ in 0..500 {
+            let asked = self
+                .asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if asked.len() >= count {
+                return asked;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -255,4 +321,93 @@ fn a_closed_window_is_published_with_its_batch_only() {
     let windows = shell.read().expect("read");
     assert_eq!(windows.list.len(), 1);
     assert_eq!(windows.of(|id| id == "org.example.terminal"), (0, false));
+}
+
+fn place(app_id: &'static str, rectangle: (i32, i32, i32, i32)) -> Place {
+    Place {
+        owns: Box::new(move |a| a == app_id),
+        output: String::from("eDP-1"),
+        rectangle,
+    }
+}
+
+#[test]
+fn the_windows_are_acted_on_and_placed_on_the_watching_connection() {
+    let mut fake = Fake::start(
+        &[("org.example.terminal", true), ("QuickExample", false)],
+        true,
+    )
+    .expect("fake compositor");
+    let connection = fake.connection.take().expect("connection");
+    let mut shell = Shell::with_connection(connection).expect("manager bound");
+    let control = shell.control();
+
+    // The terminal is in front: a click minimizes it. « Quitter » on the other one closes it.
+    control.send(Request::Minimize, Box::new(|a| a == "org.example.terminal"));
+    control.send(Request::Close, Box::new(|a| a == "QuickExample"));
+    control.send(Request::Activate, Box::new(|a| a == "org.example.terminal"));
+    // Its icon: sent once, not again while it stays.
+    control.place(vec![place("org.example.terminal", (10, 820, 52, 52))]);
+    control.place(vec![place("org.example.terminal", (10, 820, 52, 52))]);
+    let asked = fake.asked(4);
+    assert_eq!(
+        asked,
+        [
+            ("org.example.terminal", String::from("minimize")),
+            ("QuickExample", String::from("close")),
+            ("org.example.terminal", String::from("activate")),
+            (
+                "org.example.terminal",
+                String::from("rectangle eDP-1 10 820 52 52")
+            ),
+        ]
+    );
+
+    // A second window of the terminal gets the rectangle of its icon as it comes.
+    fake.changes
+        .send(Change::Open("org.example.terminal"))
+        .expect("sent");
+    assert!(shell.wait());
+    let asked = fake.asked(5);
+    assert_eq!(
+        asked.get(4),
+        Some(&(
+            "org.example.terminal",
+            String::from("rectangle eDP-1 10 820 52 52")
+        ))
+    );
+
+    // The icon moves: both windows follow. It goes: their rectangles are removed.
+    control.place(vec![place("org.example.terminal", (70, 820, 52, 52))]);
+    control.place(Vec::new());
+    let asked = fake.asked(9);
+    let rest: Vec<&str> = asked[5..].iter().map(|(_, r)| r.as_str()).collect();
+    assert_eq!(
+        rest,
+        [
+            "rectangle eDP-1 70 820 52 52",
+            "rectangle eDP-1 70 820 52 52",
+            "rectangle eDP-1 0 0 0 0",
+            "rectangle eDP-1 0 0 0 0",
+        ]
+    );
+}
+
+#[test]
+fn the_covered_screens_are_read() {
+    let mut fake = Fake::start(&[("org.example.terminal", true)], true).expect("fake compositor");
+    let connection = fake.connection.take().expect("connection");
+    let mut shell = Shell::with_connection(connection).expect("manager bound");
+    assert!(shell.read().expect("read").covered.is_empty());
+    fake.changes
+        .send(Change::Cover("eDP-1", true))
+        .expect("sent");
+    assert!(shell.wait());
+    let covered = shell.read().expect("read").covered;
+    assert!(covered.contains("eDP-1") && covered.len() == 1);
+    fake.changes
+        .send(Change::Cover("eDP-1", false))
+        .expect("sent");
+    assert!(shell.wait());
+    assert!(shell.read().expect("read").covered.is_empty());
 }
