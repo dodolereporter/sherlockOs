@@ -874,7 +874,7 @@ mod tests {
             .unwrap();
         assert!((back - halfway).abs() < 0.01, "{halfway} then {back}");
         // While it comes back, the pointer does not reach it.
-        let center = rect.loc + (rect.size.w / 2, rect.size.h / 2).into();
+        let center = rect.loc + Point::from((rect.size.w / 2, rect.size.h / 2));
         bench
             .state
             .pointer_motion((f64::from(center.x), f64::from(center.y)).into(), 1);
@@ -889,6 +889,7 @@ mod tests {
         assert!(later.unwrap() < halfway, "it goes back");
         let frames = (0..60).filter_map(|_| bench.tick()).count();
         assert!(frames < 40, "then rest: {frames} frames");
+        assert_eq!((0..30).filter_map(|_| bench.tick()).count(), 0);
         // Back at its place, drawn as a window, and the pointer reaches it again.
         assert_eq!(
             bench.state.minimize_progress(&window, bench.state.now()),
@@ -906,7 +907,6 @@ mod tests {
             pointer.current_focus(),
             window.wl_surface().map(|s| s.into_owned())
         );
-        assert_eq!((0..30).filter_map(|_| bench.tick()).count(), 0);
     }
 
     /// Figures over a run, per second of the screen.
