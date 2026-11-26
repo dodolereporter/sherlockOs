@@ -239,8 +239,12 @@ logged as such, apart from a missing program.
 
 ### One launcher at a time
 
-The launcher is started on demand: by a keyboard shortcut of the compositor later, by hand for
-now. Started again while open, it closes the open one: pressing the shortcut twice toggles it.
+The launcher is started on demand: by the compositor's shortcut, **Super + Space** (Alt + Space
+in nested mode, where the host keeps Super), or by hand. Started again while open, it closes
+the open one: pressing the shortcut twice toggles it. The compositor starts
+`$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH` otherwise,
+with its Wayland socket and X11 display (`compositor/src/launcher.rs`, lot C-01). The shortcut
+does not open Mission Control: the gesture key is no longer alone when it is released.
 
 - The first launcher opens `$XDG_RUNTIME_DIR/launcher.lock` (without following a symbolic
   link), takes an exclusive `flock` on it without waiting, and writes its process id in it. It

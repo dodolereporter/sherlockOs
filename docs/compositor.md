@@ -120,7 +120,9 @@ Moving and resizing:
   zone covers (the bar starting after it) comes down under it.
 - **The way back for a lost window.** With the gesture key, a press goes to the window under
   an anchored surface of the top layer (bar, dock) instead of the surface: gesture key + drag
-  takes back a window under the bar. The overlay layer (lock screen) keeps its presses.
+  takes back a window under the bar. The overlay layer (lock screen) keeps its presses, and so
+  do the panels and menus of the top layer (the popups of the bar): a press on an open panel
+  never reaches the window below (`State::gesture_hit`, lot C-01b).
 - **Never larger than the screen.** The first configure gives the work area, less the title
   bar, as the bounds of the window (`xdg_toplevel.configure_bounds`). A first content larger
   than that (Konsole keeps a size per screen size, and opened 1450 × 888 on a screen of
@@ -150,6 +152,10 @@ Snapping:
   a double click on a title bar the client draws (GTK 4 unmaximizes at the second press, the
   pointer still) restores it, and a move that has not shifted the window yet goes on from that
   place.
+- Gesture key + Space starts the launcher, and closes it when pressed again (lot C-01, see
+  `docs/launcher.md`): `$SHERLOCKOS_BIN/launcher`, or `launcher` in the session's `PATH`.
+  Neither the Space nor its release go to the client, and the gesture key, no longer alone,
+  does not open Mission Control.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -1040,7 +1046,9 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
 - **An empty window could open.** The opening started at the first frame of a window shown,
   and an X11 window is shown when XWayland gives it its surface, before its first buffer: its
   title bar opened alone. Nothing is drawn of a window before its client has given a buffer;
-  the opening starts with that first content.
+  the opening starts with that first content. A window without content takes no click either,
+  on its bar or its edges, and an X11 window takes the keyboard at its first buffer, not
+  before (lot C-01b).
 - **Curves.** The opening was a critically damped spring (no bounce) for the scale with a
   200 ms fade, and the closing a 150 ms ease-out: it left fast and lingered nearly
   transparent. Now one timed curve each, an ease-out to open and an ease-in to close.

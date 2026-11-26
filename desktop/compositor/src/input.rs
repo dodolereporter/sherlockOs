@@ -124,6 +124,8 @@ enum Shortcut {
     Restore,
     /// Tab: opens or closes Mission Control (lot D-33).
     ToggleOverview,
+    /// Space: starts the launcher, or closes it (lot C-01).
+    Launcher,
     /// Escape while Mission Control is open: closes it.
     CloseOverview,
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
@@ -180,6 +182,7 @@ impl Shortcut {
             Keysym::Right => Some(Self::Snap(Zone::Right)),
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
+            Keysym::space => Some(Self::Launcher),
             _ => None,
         }
     }
@@ -634,11 +637,33 @@ impl State {
             .or_else(|| self.layer_hit(pos, &[Layer::Bottom, Layer::Background]))
     }
 
+    /// What a press with the gesture key reaches at `pos`: the window under the top bar or
+    /// the dock themselves, the way back for a window lost there. The overlay layer (lock
+    /// screen), and the panels and menus of the top layer (the popups of the bar), keep their
+    /// presses.
+    fn gesture_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
+        if let Some(hit) = self.layer_hit(pos, &[Layer::Overlay]) {
+            return Some(hit);
+        }
+        match self.layer_hit(pos, &[Layer::Top]) {
+            Some(Hit::Layer(main, surface, origin)) if main != surface => {
+                Some(Hit::Layer(main, surface, origin))
+            }
+            top => self.window_hit(pos).or(top).or_else(|| self.hit(pos)),
+        }
+    }
+
     fn window_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
         // Hidden windows (other workspaces, minimized) are skipped, which the space does not do,
         // and so are those of a minimize effect, whose drawing is not their place (lot D-19).
         let now = self.now();
-        let shown = |w: &&Window| self.is_visible(w) && self.minimize_progress(w, now).is_none();
+        // A window without content (an X11 window before its first buffer) is not drawn: it
+        // takes no click either.
+        let shown = |w: &&Window| {
+            self.is_visible(w)
+                && self.minimize_progress(w, now).is_none()
+                && (crate::has_buffer(w) || is_override_redirect(w))
+        };
         for window in self.space.elements().rev().filter(shown) {
             let loc = self
                 .space
@@ -763,6 +788,10 @@ impl State {
             }
             Shortcut::CloseOverview => {
                 self.close_overview();
+                return;
+            }
+            Shortcut::Launcher => {
+                self.start_launcher();
                 return;
             }
             Shortcut::Media(media, code) => {
@@ -945,10 +974,7 @@ impl State {
             // With the gesture key, a window under the top bar or the dock can still be moved:
             // the way back for a window lost there. The overlay (lock screen) keeps its clicks.
             let hit = match held {
-                true => self
-                    .layer_hit(location, &[Layer::Overlay])
-                    .or_else(|| self.window_hit(location))
-                    .or_else(|| self.hit(location)),
+                true => self.gesture_hit(location),
                 false => self.hit(location),
             };
             // An open menu closes on a click on another client; the click still goes through.

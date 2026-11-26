@@ -48,7 +48,7 @@ mod tests {
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_popup::{self, XdgPopup},
-        xdg_positioner::XdgPositioner,
+        xdg_positioner::{self, XdgPositioner},
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, ResizeEdge, State as XdgState, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
@@ -359,6 +359,7 @@ mod tests {
     const KEY_LEFT: u32 = 113;
     const KEY_DOWN: u32 = 116;
     const KEY_SHIFT: u32 = 50;
+    const KEY_SPACE: u32 = 65;
 
     /// Window shown by `Harness::show_window`: 100 × 80, centered at (350, 260) in the 800 × 600
     /// screen. The buffer file lives as long as it does.
@@ -2128,6 +2129,109 @@ mod tests {
         let (shown, animating) = alpha(&h);
         assert_eq!(shown, 1.0);
         assert!(!animating);
+    }
+
+    /// With the gesture key, a press on an open panel of the bar stays with the panel: only
+    /// the bar itself lets it through to the window below (review of C-01a).
+    #[test]
+    fn the_gesture_key_does_not_go_through_a_panel_of_the_bar() {
+        let mut h = Harness::start();
+        let (_shown, _decoration) = h.show_decorated();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        // A panel of 200 × 150 below the bar, from 473 to 673 and 46 to 196: over the window.
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(560, 0, 2, 36);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        settle(&mut h);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let before = h.state.space.element_geometry(&window);
+        // Gesture key + drag on the panel: the window under it does not move.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Pressed, 1);
+        h.state.pointer_motion((580.0, 150.0).into(), 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+        assert!(!h.state.gesture_active(), "the panel keeps the press");
+        h.state.pointer_motion((500.0, 300.0).into(), 4);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 5);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 6);
+        assert_eq!(h.state.space.element_geometry(&window), before);
+        drop(file);
+    }
+
+    /// A window whose client took its content away is not drawn: it takes no click either
+    /// (review of C-01a: an X11 window before its first buffer).
+    #[test]
+    fn a_window_without_content_takes_no_click() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        shown.surface.attach(None, 0, 0);
+        shown.surface.commit();
+        settle(&mut h);
+        h.client.button_serial = None;
+        h.state.pointer_motion((400.0, 300.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.release();
+        settle(&mut h);
+        assert_eq!(h.client.button_serial, None, "the click reaches nothing");
+        assert!(!h.state.gesture_active());
+    }
+
+    /// The gesture key and Space start the launcher, again to close it (a second launcher
+    /// closes the first), and do not open Mission Control when the gesture key is released
+    /// (lot C-01).
+    #[test]
+    fn the_gesture_key_and_space_start_the_launcher() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut h = Harness::start();
+        let dir = std::env::temp_dir().join(format!("launcher-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("started");
+        let program = dir.join("launcher");
+        let script = format!("#!/bin/sh\necho started >> '{}'\n", marker.display());
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        h.state.set_launcher_program(program);
+        let started = |n: usize| {
+            for _ in 0..500 {
+                let lines = std::fs::read_to_string(&marker).map_or(0, |t| t.lines().count());
+                if lines >= n {
+                    return lines;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            0
+        };
+        h.shortcut(KEY_SPACE);
+        assert_eq!(started(1), 1, "the launcher is started");
+        assert!(!h.state.overview_open(), "the gesture key was not alone");
+        h.shortcut(KEY_SPACE);
+        assert_eq!(started(2), 2, "started again, it closes the open one");
+        // Space alone goes to the client.
+        h.state
+            .keyboard_key(Keycode::new(KEY_SPACE), KeyState::Pressed, 9);
+        h.state
+            .keyboard_key(Keycode::new(KEY_SPACE), KeyState::Released, 10);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(started(2), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

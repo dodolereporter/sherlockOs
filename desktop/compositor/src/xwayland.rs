@@ -424,7 +424,12 @@ impl XWaylandShellHandler for State {
         if !surface.is_override_redirect() && !data.shown.get() {
             data.shown.set(true);
             self.join_active_workspace(&window);
-            self.focus(Some(window));
+            // Not drawn before its first buffer, it takes no key before it either (lot C-01).
+            if crate::has_buffer(&window) {
+                self.focus(Some(window));
+            } else {
+                data.focus_on_content.set(true);
+            }
         }
     }
 }
