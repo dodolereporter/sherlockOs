@@ -5,6 +5,7 @@
 //! and `metrics`. See `docs/evidence.md`.
 
 use crate::color::{self, Color};
+use crate::{metrics, typography};
 
 /// How far the pointer goes from the press, in logical pixels, before a press on the background
 /// becomes a lasso: a click with a slight slip stays a click.
@@ -33,6 +34,31 @@ pub fn lasso_fill() -> Color {
 pub fn lasso_border() -> Color {
     color::palette().blue
 }
+
+/// Smallest window: the right-click menu (about 380 high) and the application chooser keep
+/// their rows whole in it.
+pub const MIN_WINDOW: (f32, f32) = (720.0, 460.0);
+
+/// Longest wait for a read on D-Bus (UDisks2), as the bar's; then the devices are left out.
+pub const BUS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Longest wait for an action on D-Bus (mount, unmount, eject), which may wait for the
+/// password asked by polkit.
+pub const BUS_ACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The application chooser: what its panel holds besides the list (title, search field,
+/// the switch's two lines, button, the gaps between them, its padding) and a margin above and below it. The
+/// list takes the rest of the window's height, up to `metrics::CHOOSER_LIST_HEIGHT`, never
+/// less than `CHOOSER_MIN_ROWS` rows.
+pub const CHOOSER_CHROME: f32 = typography::CARD_TITLE_SIZE * 1.3
+    + metrics::FIELD_HEIGHT
+    // The switch's sentence takes two lines.
+    + 2.0 * typography::UI_SIZE * 1.3
+    + metrics::BUTTON_HEIGHT
+    + 4.0 * metrics::PREVIEW_GAP
+    + 2.0 * metrics::PANEL_PADDING
+    + 2.0 * CHOOSER_MARGIN;
+pub const CHOOSER_MARGIN: f32 = 24.0;
+pub const CHOOSER_MIN_ROWS: f32 = 4.0;
 
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";
@@ -68,6 +94,8 @@ mod style {
 // The lasso starts before a row is crossed, and scrolls from a band narrower than the
 // listing.
 const _: () = {
+    // The chooser keeps more than its fewest rows in the smallest window.
+    assert!(MIN_WINDOW.1 - CHOOSER_CHROME > CHOOSER_MIN_ROWS * metrics::MENU_ITEM_HEIGHT);
     assert!(LASSO_THRESHOLD < crate::metrics::LIST_ROW_HEIGHT / 2.0);
     assert!(LASSO_SCROLL / 60.0 < LASSO_EDGE);
 };

@@ -403,16 +403,13 @@ impl Launcher {
 
     fn view_hit<'a>(&self, hit: &'a Hit, index: usize) -> Element<'a, Message> {
         let selected = index == self.selected;
+        // « Demander à Sherlock » reads as any other result: Sherlock's tile tells it apart, the
+        // cream row of the board stood out too much on the glass (UI-03).
         let sherlock = hit.tile == Tile::Sherlock;
-        let colors = look::Colors::of(color::palette());
+        let p = color::palette();
         let (title_font, title_color, line_color) = if sherlock {
-            (
-                typography::UI_SEMIBOLD,
-                colors.sherlock_title,
-                colors.sherlock_line,
-            )
+            (typography::UI_SEMIBOLD, p.text_primary, p.text_secondary)
         } else {
-            let p = color::palette();
             (typography::UI_MEDIUM, p.text_primary, p.text_secondary)
         };
         let mut words = column![
@@ -451,11 +448,7 @@ impl Launcher {
             .width(Length::Fill)
             .height(look::ROW_HEIGHT)
             .padding([0.0, look::ROW_PADDING]);
-        let row: Element<'a, Message> = if sherlock {
-            row.style(look::sherlock_row(selected)).into()
-        } else {
-            row.style(look::row(selected)).into()
-        };
+        let row: Element<'a, Message> = row.style(look::row(selected)).into();
         if hit.app.is_some() {
             mouse_area(row).on_right_press(Message::Menu(index)).into()
         } else {
@@ -467,10 +460,14 @@ impl Launcher {
 /// The tile left of a result: an application's icon or initial, a glyph, or Sherlock.
 fn tile<'a>(tile: &Tile, title: &str) -> Element<'a, Message> {
     match tile {
-        Tile::App(Some(path)) => svg(icon_handle(path))
-            .width(look::APP_ICON)
-            .height(look::APP_ICON)
-            .into(),
+        // In a box of the tile's size, as every other tile: icons centred, titles aligned (UI-03).
+        Tile::App(Some(path)) => container(
+            svg(icon_handle(path))
+                .width(look::APP_ICON)
+                .height(look::APP_ICON),
+        )
+        .center(look::TILE)
+        .into(),
         Tile::App(None) => {
             let initial = title
                 .chars()
