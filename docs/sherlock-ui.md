@@ -9,7 +9,7 @@ toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 00
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `gpu` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `click`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -96,6 +96,9 @@ All tokens are named by their role, in English like the rest of the code.
   it their decoration: `INSET` (42: border, bar of 40, divider), title, pill and buttons taken
   from `metrics` and `typography`, `RESTORE_ICON`, `DOUBLE_CLICK` (400 ms), and `Colors::of`, the
   colors of a palette, those of the title bar of Evidence.
+- **`click`** (Q-13): `DoubleClick`, a double click recognised in the state of the
+  application, two presses on one target within `decorations::DOUBLE_CLICK` and
+  `DOUBLE_CLICK_DISTANCE` (6 px). A widget's own detection is lost when iced rebuilds its tree.
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
