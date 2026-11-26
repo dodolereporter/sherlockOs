@@ -27,7 +27,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/perf.rs` | Where the time of the event loop goes: totals every 5 s, stalls at once (lot P-01) |
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
-| `src/cursor.rs` | Cursor images of the real session, from the cursor theme |
+| `src/cursor.rs` | Cursor of the real session: the house theme or the user's, size and scale, the turn of the waiting cursors, the fade of a new shape, shake to find (lot D-07, see `docs/cursor.md`) |
 | `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
 | `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
 | `src/lib.rs` | `State`: Wayland display, protocols, seat, `Space` of the windows. Socket, screen, focus |
@@ -138,7 +138,8 @@ Cursors:
   (`wl_pointer.set_cursor` with a surface) gets the arrow: the image is not shown. Elsewhere,
   it is the arrow.
 - In nested mode, the cursor of the host window changes shape, with the host session's theme.
-  The real session draws the cursor itself, from the cursor theme (see "Real session").
+  The real session draws the cursor itself, from the house cursor theme, with its motion (see
+  "Real session" and `docs/cursor.md`).
 
 ## Anchored surfaces (layer-shell)
 
@@ -1250,9 +1251,13 @@ How it works (`src/udev.rs`):
   there, so that moving the pointer draws nothing. A screen draws only when something changed,
   at the pace of its vertical blank, and only what changed (see "Frames of the real session").
   The cursor is drawn in
-  front of the scene, from the cursor theme (`XCURSOR_THEME`, or the system's `default`;
-  `XCURSOR_SIZE`, 24 by default, times the screen's scale), in the shape `cursor_icon` asks for;
-  a client that draws its own cursor image gets the arrow, as in nested mode. linux-dmabuf
+  front of the scene, from the house cursor theme (`nom-os`, `nom-os-light` for the light
+  desktop; the user's `XCURSOR_THEME` or the system's `default` when it is not installed;
+  `XCURSOR_SIZE`, 24 by default, times the screen's scale, the nearest size above), in the
+  shape `cursor_icon` asks for; a client that draws its own cursor image gets the arrow, as in
+  nested mode. A transition of the cursor (a new shape, a shake) draws at each blank while it
+  runs; the waiting cursors draw only when their next image is due, woken by a timer. See
+  `docs/cursor.md`. linux-dmabuf
   (lot D-06) is offered on the render node of the driven card, with its renderer's formats, as
   in nested mode; the `DmabufBlocker` it lacks is still to come (see "GPU buffers"). A frame that
   fails is logged at its 1st, 2nd, 4th, 8th… failure in a row, not on every frame.

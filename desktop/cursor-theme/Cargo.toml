@@ -25,5 +25,9 @@ xcursor = "=0.3.11"
 name = "cursor-theme"
 required-features = ["render"]
 
+[[test]]
+name = "theme"
+required-features = ["render"]
+
 [lints]
 workspace = true

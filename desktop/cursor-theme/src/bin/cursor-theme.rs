@@ -4,7 +4,7 @@
 //! - `cursor-theme build <svg folder> <output folder>` writes `<output>/nom-os/` and
 //!   `<output>/nom-os-light/`: `index.theme`, one Xcursor file per shape in `cursors/`, with an
 //!   image per size of `SIZES` (a turn of images per size for the waiting cursors), and a link
-//!   per alias. Running it again gives the same files, byte for byte.
+//!   per alias.
 //! - `cursor-theme board <svg folder> <output.png> [names] [sizes]` draws the shapes `names`
 //!   (comma separated, every shape by default) at the `sizes` (24,48,72 by default), the dark
 //!   theme on the dark desktop and the light one on the light desktop, with each 24 px drawing
