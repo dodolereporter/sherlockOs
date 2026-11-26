@@ -17,9 +17,9 @@ use smithay::{
     },
     delegate_pointer_gestures,
     input::pointer::{
-        GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
-        GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent,
-        GestureSwipeEndEvent, GestureSwipeUpdateEvent, PointerHandle,
+        GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+        GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+        GestureSwipeUpdateEvent, PointerHandle,
     },
     reexports::wayland_server::DisplayHandle,
     utils::{Logical, Point, SERIAL_COUNTER},
@@ -317,7 +317,9 @@ impl State {
                 // Reserved for the overview (Mission Control), a lot of its own.
                 tracing::info!("three finger swipe up: the overview is not there yet");
             }
-            Some(Direction::Down) if done && self.touchpad.config().swipe_down == SwipeDown::Minimize => {
+            Some(Direction::Down)
+                if done && self.touchpad.config().swipe_down == SwipeDown::Minimize =>
+            {
                 if let Some(window) = self.focused_window() {
                     self.minimize(&window);
                 }

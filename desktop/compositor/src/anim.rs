@@ -359,7 +359,10 @@ impl WorkspaceSlide {
             now,
         ));
         let at = at.max(0.0);
-        self.span = ((at.floor() as usize).min(active), (at.ceil() as usize).max(active));
+        self.span = (
+            (at.floor() as usize).min(active),
+            (at.ceil() as usize).max(active),
+        );
     }
 
     pub fn is_animating(&self, now: Duration) -> bool {
@@ -602,7 +605,10 @@ mod tests {
         assert_eq!(shift(&slide, 0, 0), Some(-250.0));
         assert_eq!(shift(&slide, 0, 1), Some(750.0));
         assert_eq!(shift(&slide, 0, 2), None);
-        assert!(!slide.is_animating(ms(0)), "no frame while the fingers rest");
+        assert!(
+            !slide.is_animating(ms(0)),
+            "no frame while the fingers rest"
+        );
         assert_eq!(slide.position(ms(5000), 0), 0.25);
         // Past the first one: it shows beyond its edge, nothing on the other side.
         slide.hold(-0.1);

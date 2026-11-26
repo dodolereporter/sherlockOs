@@ -176,7 +176,9 @@ impl Config {
                         .parse::<f64>()
                         .ok()
                         .filter(|s| (low..=high).contains(s))
-                        .ok_or_else(|| error(format!("expected a number from -1 to 1, not {value:?}")))?;
+                        .ok_or_else(|| {
+                            error(format!("expected a number from -1 to 1, not {value:?}"))
+                        })?;
                 }
                 "acceleration" => config.acceleration = value.parse().map_err(error)?,
                 "click" => config.click = value.parse().map_err(error)?,

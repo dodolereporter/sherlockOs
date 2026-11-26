@@ -308,7 +308,9 @@ impl State {
         self.queue_redraw();
         let now = self.start_time.elapsed();
         let model = &self.shell.workspace_model;
-        self.shell.slide.release(now, model.active_index(), velocity);
+        self.shell
+            .slide
+            .release(now, model.active_index(), velocity);
         if let Some(id) = model.id_at(index).map(str::to_owned) {
             self.activate_workspace(&id);
         }

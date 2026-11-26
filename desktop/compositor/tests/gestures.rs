@@ -22,8 +22,8 @@ mod tests {
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop,
         protocol::{
-            wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_pointer::WlPointer,
-            wl_registry, wl_seat::WlSeat, wl_shm::Format, wl_shm::WlShm, wl_shm_pool::WlShmPool,
+            wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_pointer::WlPointer, wl_registry,
+            wl_seat::WlSeat, wl_shm::Format, wl_shm::WlShm, wl_shm_pool::WlShmPool,
             wl_surface::WlSurface,
         },
     };
@@ -502,8 +502,10 @@ mod tests {
         fn draw(&mut self, surface: &WlSurface, w: i32, h: i32) {
             static NEXT: AtomicUsize = AtomicUsize::new(0);
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir()
-                .join(format!("compositor-gestures-test-{}-{n}", std::process::id()));
+            let path = std::env::temp_dir().join(format!(
+                "compositor-gestures-test-{}-{n}",
+                std::process::id()
+            ));
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
