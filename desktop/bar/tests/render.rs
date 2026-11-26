@@ -9,6 +9,13 @@ use bar::calendar::Month;
 use bar::history::{Entry, Group};
 use bar::menu;
 use bar::panel::{self, History, Panel};
+use bar::quick::{self, Load};
+use bar::system::Problem;
+use bar::system::audio::Output;
+use bar::system::backlight::Backlight;
+use bar::system::bluetooth::Bluetooth;
+use bar::system::network::{Network, Security, Wifi};
+use bar::system::power::{Power, Profile};
 use bar::source::battery::{Battery, Charge};
 use bar::source::clock::LocalTime;
 use bar::source::network::{Link, Network};
@@ -275,8 +282,65 @@ fn panel_size(state: &Bar, which: Panel) -> (f32, f32) {
     (width as f32, height as f32)
 }
 
-/// The calendar and the notification centre in each theme, full and empty: `calendar`,
-/// `notification-centre`, `notification-centre-empty`, then their `-light` versions.
+/// The quick settings of the Panels board: Wi-Fi on « Maison », Bluetooth off, sound at 62 %,
+/// brightness at 80 %, the balanced profile; no service actually read.
+fn board_quick(state: &mut Bar) {
+    let maison = Network {
+        ssid: String::from("Maison"),
+        strength: 90,
+        security: Security::Psk,
+        active: true,
+        path: String::from("/ap/1"),
+    };
+    let cafe = Network {
+        ssid: String::from("Café du coin"),
+        strength: 60,
+        security: Security::Open,
+        active: false,
+        path: String::from("/ap/2"),
+    };
+    let messages = [
+        quick::Message::Wifi(Load::Ready(Wifi {
+            enabled: true,
+            hardware_off: false,
+            device: Some(String::from("/dev/1")),
+            networks: vec![maison, cafe],
+        })),
+        quick::Message::Bluetooth(Load::Ready(Bluetooth {
+            adapter: String::from("/org/bluez/hci0"),
+            powered: false,
+            connected: 0,
+        })),
+        quick::Message::Sound(Load::Ready(Output {
+            sound: Sound {
+                volume: 62,
+                muted: false,
+            },
+            name: String::from("Haut-parleurs intégrés"),
+        })),
+        quick::Message::Brightness(Load::Ready(Backlight {
+            name: String::from("amdgpu_bl1"),
+            brightness: 204,
+            max: 255,
+        })),
+        quick::Message::Energy(Load::Ready(Power::new(
+            Some(Profile::Balanced),
+            Profile::ALL.to_vec(),
+        ))),
+    ];
+    for message in messages {
+        let _ = state.quick.update(message);
+    }
+    state.quick.do_not_disturb = Some(false);
+    // Only for the tile to be clickable: the tests never run the messages.
+    state.quick.settings = Some(PathBuf::from("notifications.conf"));
+}
+
+/// The calendar and the control centre in each theme: `calendar`, `control-centre` (the
+/// board's notifications and quick settings), `control-centre-empty` (no notification, no
+/// service: what a machine without NetworkManager, BlueZ, backlight nor power-profiles-daemon
+/// shows), `wifi-networks` (the network page, a password asked), then their `-light`
+/// versions.
 #[test]
 fn the_panels_render_in_both_themes() {
     for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
@@ -291,14 +355,39 @@ fn the_panels_render_in_both_themes() {
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
             assert_written(capture(ui, &format!("calendar{suffix}")));
 
-            state.history = board_history();
             let size = panel_size(&state, Panel::Control);
-            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-            assert_written(capture(ui, &format!("notification-centre{suffix}")));
-
             state.history = History::Ready(Vec::new());
+            let absent = || Problem::Absent(String::from("test"));
+            for message in [
+                quick::Message::Wifi(Load::Failed(absent())),
+                quick::Message::Bluetooth(Load::Failed(absent())),
+                quick::Message::Sound(Load::Failed(absent())),
+                quick::Message::Brightness(Load::Failed(absent())),
+                quick::Message::Energy(Load::Failed(absent())),
+            ] {
+                let _ = state.quick.update(message);
+            }
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-            assert_written(capture(ui, &format!("notification-centre-empty{suffix}")));
+            assert_written(capture(ui, &format!("control-centre-empty{suffix}")));
+
+            state.history = board_history();
+            board_quick(&mut state);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("control-centre{suffix}")));
+
+            let _ = state.quick.update(quick::Message::ShowNetworks(true));
+            let maison = state.quick.wifi.ready().map(|w| w.networks[0].clone());
+            let mut other = maison.unwrap();
+            other.active = false;
+            other.path = String::from("/ap/3");
+            other.ssid = String::from("Voisin");
+            state.quick.joining = Some(other.clone());
+            if let Load::Ready(wifi) = &mut state.quick.wifi {
+                wifi.networks.push(other);
+            }
+            state.quick.password = String::from("secret");
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-networks{suffix}")));
         });
     }
 }
@@ -369,4 +458,34 @@ fn a_click_on_the_indicators_or_the_clock_opens_their_panel() {
             Message::TogglePanel(Panel::Control)
         ]
     ));
+}
+
+#[test]
+fn the_quick_settings_answer_their_clicks() {
+    let mut state = sample();
+    state.panel_margins = panel::margins(false);
+    state.history = History::Ready(Vec::new());
+    board_quick(&mut state);
+    let size = panel_size(&state, Panel::Control);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+    for text in ["Wi-Fi", "Maison", "Bluetooth", "Désactivé", "Mode jeu", "Bientôt", "Haut-parleurs intégrés", "Équilibré", "Dodo"] {
+        assert!(ui.find(text).is_ok(), "{text} missing from the quick settings");
+    }
+    ui.click("Bluetooth").expect("tile found");
+    ui.click("Économie").expect("profile found");
+    ui.click("Ne pas déranger").expect("tile found");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(matches!(
+        messages[..],
+        [
+            Message::Quick(quick::Message::ToggleBluetooth),
+            Message::Quick(quick::Message::Profile(Profile::Saver)),
+            Message::Quick(quick::Message::ToggleDoNotDisturb),
+        ]
+    ));
+    // The game mode and the graphics card do nothing yet.
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+    ui.click("Mode jeu").expect("tile found");
+    ui.click("NVIDIA").expect("segment found");
+    assert_eq!(ui.into_messages().count(), 0);
 }

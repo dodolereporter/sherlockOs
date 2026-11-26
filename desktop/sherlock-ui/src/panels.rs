@@ -78,6 +78,113 @@ pub const CALENDAR_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + metrics::BORDER_WIDTH
     + AGENDA_HEIGHT;
 
+/// Quick settings: a tile of the grid (height, radius, gap, side padding, glyph, gap between
+/// the glyph and its texts), the chevron of the Wi-Fi tile.
+pub const TILE_HEIGHT: f32 = 56.0;
+pub const TILE_RADIUS: f32 = 14.0;
+pub const TILE_GAP: f32 = 8.0;
+pub const TILE_PADDING: f32 = 12.0;
+pub const GLYPH: f32 = 18.0;
+pub const TILE_ICON_GAP: f32 = 10.0;
+pub const CHEVRON: f32 = 28.0;
+/// A slider row: the button or icon on its left, the gap, the rail and handle; the room under
+/// the volume for the name of the output.
+pub const ROW_BUTTON: f32 = 28.0;
+pub const SLIDER_GAP: f32 = 10.0;
+pub const SLIDER_INSET: f32 = ROW_BUTTON + SLIDER_GAP;
+pub const RAIL: f32 = 4.0;
+pub const HANDLE: f32 = 8.0;
+pub const CAPTION_GAP: f32 = 4.0;
+/// A labelled group: gap under its label; the segmented control (its padding, gap, segment
+/// height and radius, its own radius).
+pub const GROUP_GAP: f32 = 6.0;
+pub const SEGMENTED_PADDING: f32 = 3.0;
+pub const SEGMENT_GAP: f32 = 2.0;
+pub const SEGMENT_HEIGHT: f32 = 30.0;
+pub const SEGMENT_RADIUS: f32 = 8.0;
+pub const SEGMENTED_RADIUS: f32 = 11.0;
+/// The user row: the room under the line above it, the round buttons and their gap.
+pub const FOOTER_GAP: f32 = 12.0;
+pub const ROUND_BUTTON: f32 = 34.0;
+pub const ROUND_RADIUS: f32 = 10.0;
+pub const ROUND_GAP: f32 = 4.0;
+pub const ROUND_GLYPH: f32 = 16.0;
+
+/// The line icons of the quick settings, on the grid and stroke of `icon::Icon`. All from the
+/// Panels board but the padlock of a protected network and the three session commands, which
+/// are the launcher's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    Wifi,
+    Bluetooth,
+    Moon,
+    Gamepad,
+    Volume,
+    Muted,
+    Sun,
+    User,
+    Lock,
+    LogOut,
+    Reboot,
+    PowerOff,
+    Padlock,
+}
+
+impl Glyph {
+    pub const ALL: [Self; 13] = [
+        Self::Wifi,
+        Self::Bluetooth,
+        Self::Moon,
+        Self::Gamepad,
+        Self::Volume,
+        Self::Muted,
+        Self::Sun,
+        Self::User,
+        Self::Lock,
+        Self::LogOut,
+        Self::Reboot,
+        Self::PowerOff,
+        Self::Padlock,
+    ];
+
+    /// Path on the 24 grid.
+    pub const fn path(self) -> &'static str {
+        use crate::icon::Icon;
+        use crate::launcher::Glyph as Launcher;
+        match self {
+            Self::Wifi => Icon::Network.path(),
+            Self::Bluetooth => "M7 7l10 10-5 4V3l5 4L7 17",
+            Self::Moon => "M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z",
+            Self::Gamepad => {
+                "M7.5 8h9a4.5 4.5 0 0 1 4.4 5.4l-.6 3a2.2 2.2 0 0 1-3.9.9L15 15.5H9l-1.4 1.8a2.2 2.2 0 0 1-3.9-.9l-.6-3A4.5 4.5 0 0 1 7.5 8zM8 10.5v3M6.5 12h3M15.5 11h.01M17.5 13h.01"
+            }
+            Self::Volume => Icon::Sound.path(),
+            Self::Muted => Icon::SoundMuted.path(),
+            Self::Sun => {
+                "M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"
+            }
+            Self::User => "M12 4a4 4 0 1 0 0 8a4 4 0 0 0 0-8zM4 20a8 8 0 0 1 16 0",
+            Self::Lock => "M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z",
+            Self::LogOut => Launcher::LogOut.path(),
+            Self::Reboot => Launcher::Reboot.path(),
+            Self::PowerOff => Launcher::PowerOff.path(),
+            Self::Padlock => Icon::Lock.path(),
+        }
+    }
+
+    /// Full SVG document, stroked in black: the display recolors it.
+    pub fn svg(self) -> String {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {grid} {grid}\" fill=\"none\" \
+             stroke=\"#000\" stroke-width=\"{stroke}\" stroke-linecap=\"round\" \
+             stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>",
+            grid = metrics::ICON_GRID,
+            stroke = metrics::ICON_STROKE,
+            path = self.path(),
+        )
+    }
+}
+
 /// Ghost button around the clock and around the indicators of the bar: its side padding. The
 /// bar takes it back from its gaps, so that nothing moves.
 pub const BAR_BUTTON_PADDING: f32 = 6.0;
@@ -92,18 +199,22 @@ pub struct Colors {
     pub card: Color,
     /// « Tout effacer » and the tiles that are off: `0.08`.
     pub control: Color,
+    /// The line under the title of a tile that is on: the board's `#1E3A2A`.
+    pub tile_on_line: Color,
 }
 
 impl Colors {
     pub const DARK: Self = Self {
         card: Color::rgba(255, 255, 255, 0.07),
         control: Color::rgba(255, 255, 255, 0.08),
+        tile_on_line: Color::rgb(0x1E, 0x3A, 0x2A),
     };
 
     /// The light board: the same veils, in night blue.
     pub const LIGHT: Self = Self {
         card: Color::rgba(20, 35, 59, 0.07),
         control: Color::rgba(20, 35, 59, 0.08),
+        tile_on_line: Color::rgb(0x1E, 0x3A, 0x2A),
     };
 
     /// The colors that go with `palette`.
@@ -153,6 +264,52 @@ pub mod text {
     pub const NEXT_MONTH: &str = "Mois suivant";
     pub const AGENDA: &str = "Agenda";
     pub const AGENDA_SOON: &str = "Bientôt : tes rendez-vous du jour ici.";
+
+    /// Quick settings.
+    pub const WIFI: &str = "Wi-Fi";
+    pub const BLUETOOTH: &str = "Bluetooth";
+    pub const DO_NOT_DISTURB: &str = "Ne pas déranger";
+    pub const GAME_MODE: &str = "Mode jeu";
+    pub const ON: &str = "Activé";
+    pub const OFF: &str = "Désactivé";
+    pub const LOADING: &str = "…";
+    pub const SOON: &str = "Bientôt";
+    pub const UNAVAILABLE: &str = "Indisponible";
+    pub const REFUSED: &str = "Refusé";
+    pub const FAILED: &str = "Échec";
+    pub const NOT_CONNECTED: &str = "Non connecté";
+    pub const CONNECTING: &str = "Connexion…";
+    pub const NO_WIFI_DEVICE: &str = "Aucune carte";
+    pub const BLOCKED: &str = "Bloqué";
+    pub const NETWORKS: &str = "Réseaux Wi-Fi";
+    pub const BACK: &str = "Retour";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const JOIN: &str = "Rejoindre";
+    pub const WIFI_OFF_LINE: &str = "Le Wi-Fi est coupé.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const ENTERPRISE: &str = "Ce réseau se rejoint depuis les Réglages.";
+    pub const MUTE: &str = "Couper le son";
+    pub const UNMUTE: &str = "Rétablir le son";
+    pub const NO_OUTPUT: &str = "Aucune sortie son";
+    pub const GPU: &str = "Carte graphique";
+    pub const GPU_CHOICES: [&str; 3] = ["Auto", "AMD", "NVIDIA"];
+    pub const ENERGY: &str = "Énergie";
+    pub const PROFILES: [&str; 3] = ["Économie", "Équilibré", "Performance"];
+    pub const ENERGY_ABSENT: &str = "Service absent";
+    pub const LOCK: &str = "Verrouiller";
+    pub const LOG_OUT: &str = "Se déconnecter";
+    pub const REBOOT: &str = "Redémarrer";
+    pub const POWER_OFF: &str = "Éteindre";
+    pub const CONFIRM: &str = "Reclique pour confirmer";
+
+    /// Bluetooth devices connected.
+    pub fn devices(count: usize) -> String {
+        if count == 1 {
+            String::from("1 appareil")
+        } else {
+            format!("{count} appareils")
+        }
+    }
 
     /// Title of the month shown, such as « novembre 2026 ». `month` goes from 1 to 12.
     pub fn month_title(month: u8, year: i32) -> String {
@@ -328,6 +485,318 @@ mod styles {
         }
     }
 
+    /// The SVG of a glyph, built once.
+    fn handle(glyph: Glyph) -> iced::widget::svg::Handle {
+        static HANDLES: std::sync::OnceLock<Vec<iced::widget::svg::Handle>> =
+            std::sync::OnceLock::new();
+        let all = HANDLES.get_or_init(|| {
+            Glyph::ALL
+                .iter()
+                .map(|g| iced::widget::svg::Handle::from_memory(g.svg().into_bytes()))
+                .collect()
+        });
+        Glyph::ALL
+            .iter()
+            .position(|g| *g == glyph)
+            .and_then(|i| all.get(i))
+            .cloned()
+            .unwrap_or_else(|| iced::widget::svg::Handle::from_memory(glyph.svg().into_bytes()))
+    }
+
+    /// A glyph of the quick settings, in `tint`, at `size`.
+    fn glyph_sized<'a>(glyph: Glyph, tint: Color, size: f32) -> iced::widget::Svg<'a> {
+        iced::widget::svg(handle(glyph))
+            .width(size)
+            .height(size)
+            .style(move |_, _| iced::widget::svg::Style {
+                color: Some(tint.into()),
+            })
+    }
+
+    /// A glyph of the quick settings, 18 px, in `tint`.
+    pub fn glyph<'a>(glyph: Glyph, tint: Color) -> iced::widget::Svg<'a> {
+        glyph_sized(glyph, tint, GLYPH)
+    }
+
+    /// Background of a tile: green when on, veiled when off, fainter when it can do nothing.
+    fn tile_back(on: bool, enabled: bool) -> impl Fn(&Theme) -> container::Style {
+        move |theme| {
+            let p = theme::palette(theme);
+            let back = match (enabled, on) {
+                (false, _) => p.disabled,
+                (true, true) => p.accent,
+                (true, false) => Colors::of(p).control,
+            };
+            container::Style {
+                background: fill(back),
+                border: border::rounded(TILE_RADIUS),
+                ..container::Style::default()
+            }
+        }
+    }
+
+    /// The press area of a tile, over its background: a veil on hover and press.
+    fn tile_press(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+        move |theme, status| {
+            let p = theme::palette(theme);
+            let veil = match (on, status) {
+                (true, button::Status::Hovered) => Some(p.accent_hover),
+                (true, button::Status::Pressed) => Some(p.accent_pressed),
+                (false, button::Status::Hovered) => Some(p.hover),
+                (false, button::Status::Pressed) => Some(p.pressed),
+                _ => None,
+            };
+            button::Style {
+                background: veil.and_then(fill),
+                border: border::rounded(TILE_RADIUS),
+                ..button::Style::default()
+            }
+        }
+    }
+
+    /// A tile of the grid: its glyph, its title and the line under it. `on_press` switches it;
+    /// without it the tile is faded and does nothing. `more`: a chevron on its right, with its
+    /// label, which opens a page of its own.
+    pub fn tile<'a, Message: Clone + 'a>(
+        glyph_of: Glyph,
+        title: &'a str,
+        line: String,
+        on: bool,
+        on_press: Option<Message>,
+        more: Option<(&'a str, Message)>,
+    ) -> Element<'a, Message> {
+        let p = crate::color::palette();
+        let enabled = on_press.is_some();
+        let (ink, under) = match (enabled, on) {
+            (false, _) => (p.text_tertiary, p.text_tertiary),
+            (true, true) => (p.text_on_accent, Colors::of(p).tile_on_line),
+            (true, false) => (p.text_primary, p.text_secondary),
+        };
+        let texts = iced::widget::column![
+            text(title)
+                .font(typography::UI_SEMIBOLD)
+                .color(ink)
+                .wrapping(text::Wrapping::None),
+            text(line)
+                .font(typography::UI)
+                .size(typography::SMALL_SIZE)
+                .color(under)
+                .wrapping(text::Wrapping::None),
+        ];
+        let content = iced::widget::row![glyph(glyph_of, ink), container(texts).clip(true)]
+            .spacing(TILE_ICON_GAP)
+            .align_y(iced::Alignment::Center)
+            .height(Length::Fill);
+        let mut main = Control::new(content, tile_press(on), on_press, TILE_RADIUS);
+        main.button = main
+            .button
+            .width(Length::Fill)
+            .height(TILE_HEIGHT)
+            .padding([0.0, TILE_PADDING]);
+        let mut line = iced::widget::Row::new().push(main);
+        if let Some((label, message)) = more {
+            let chevron = crate::component::icon(
+                crate::icon::Icon::Chevron,
+                metrics::ICON_SIZE,
+                ink,
+            );
+            let chevron = container(chevron).center(Length::Fill);
+            let mut open = Control::new(chevron, tile_press(on), Some(message), TILE_RADIUS);
+            open.button = open.button.width(CHEVRON).height(TILE_HEIGHT).padding(0);
+            open.label = Some(label);
+            line = line.push(open);
+        }
+        container(line)
+            .width(Length::Fill)
+            .height(TILE_HEIGHT)
+            .style(tile_back(on, enabled))
+            .into()
+    }
+
+    /// A segment of a segmented control: cream when chosen, as the board's « Auto ».
+    fn segment_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+        move |theme, status| {
+            let p = theme::palette(theme);
+            let (back, ink) = match (active, status) {
+                (_, button::Status::Disabled) => (None, p.text_tertiary),
+                (true, _) => (Some(p.cream), p.text_on_cream),
+                (false, button::Status::Hovered) => (Some(p.hover), p.text_primary),
+                (false, button::Status::Pressed) => (Some(p.pressed), p.text_primary),
+                (false, button::Status::Active) => (None, p.text_secondary),
+            };
+            button::Style {
+                background: back.and_then(fill),
+                text_color: ink.into(),
+                border: border::rounded(SEGMENT_RADIUS),
+                ..button::Style::default()
+            }
+        }
+    }
+
+    fn segmented_track(theme: &Theme) -> container::Style {
+        let p = theme::palette(theme);
+        container::Style {
+            background: fill(Colors::of(p).control),
+            border: border::rounded(SEGMENTED_RADIUS),
+            ..container::Style::default()
+        }
+    }
+
+    /// A segmented control of the board: each choice with its label, whether it is the active
+    /// one, and what choosing it does (nothing when it cannot be chosen).
+    pub fn segmented<'a, Message: Clone + 'a>(
+        choices: Vec<(&'a str, bool, Option<Message>)>,
+    ) -> Element<'a, Message> {
+        let segments = choices.into_iter().map(|(label, active, on_press)| {
+            let font = if active {
+                typography::UI_SEMIBOLD
+            } else {
+                typography::UI
+            };
+            let label = crate::component::body(label).font(font);
+            let content = container(label).center(Length::Fill);
+            let style = segment_style(active);
+            let mut control = Control::new(content, style, on_press, SEGMENT_RADIUS);
+            control.button = control
+                .button
+                .width(Length::Fill)
+                .height(SEGMENT_HEIGHT)
+                .padding(0);
+            control.into()
+        });
+        container(iced::widget::Row::with_children(segments).spacing(SEGMENT_GAP))
+            .padding(SEGMENTED_PADDING)
+            .width(Length::Fill)
+            .style(segmented_track)
+            .into()
+    }
+
+    /// The slider of the board: a green rail up to the value, a veiled one after it.
+    fn slider_style(
+        theme: &Theme,
+        status: iced::widget::slider::Status,
+    ) -> iced::widget::slider::Style {
+        use iced::widget::slider::{Handle, HandleShape, Rail, Status};
+        let p = theme::palette(theme);
+        let handle = match status {
+            Status::Active => p.accent,
+            Status::Hovered => p.accent_hover,
+            Status::Dragged => p.accent_pressed,
+        };
+        iced::widget::slider::Style {
+            rail: Rail {
+                backgrounds: (
+                    Background::Color(p.accent.into()),
+                    Background::Color(p.toggle_off.into()),
+                ),
+                width: RAIL,
+                border: border::rounded(RAIL / 2.0),
+            },
+            handle: Handle {
+                shape: HandleShape::Circle { radius: HANDLE },
+                background: Background::Color(handle.into()),
+                border_width: 0.0,
+                border_color: iced::Color::TRANSPARENT,
+            },
+        }
+    }
+
+    fn rail_off(theme: &Theme) -> container::Style {
+        container::Style {
+            background: fill(theme::palette(theme).disabled),
+            border: border::rounded(RAIL / 2.0),
+            ..container::Style::default()
+        }
+    }
+
+    /// A row of the board: its button or icon, then a slider from 0 to 100. Without
+    /// `on_change`, a faded rail that does nothing.
+    pub fn slider_row<'a, Message: Clone + 'a>(
+        leading: impl Into<Element<'a, Message>>,
+        value: u8,
+        on_change: Option<fn(u8) -> Message>,
+    ) -> Element<'a, Message> {
+        let control: Element<'a, Message> = match on_change {
+            Some(on_change) => iced::widget::slider(0..=100u8, value, on_change)
+                .style(slider_style)
+                .width(Length::Fill)
+                .into(),
+            None => container(iced::widget::space())
+                .width(Length::Fill)
+                .height(RAIL)
+                .style(rail_off)
+                .into(),
+        };
+        iced::widget::row![leading.into(), control]
+            .spacing(SLIDER_GAP)
+            .align_y(iced::Alignment::Center)
+            .height(ROW_BUTTON)
+            .into()
+    }
+
+    /// A ghost button of 28 holding a glyph: the mute switch. `label` names it.
+    pub fn glyph_button<'a, Message: Clone + 'a>(
+        glyph_of: Glyph,
+        label: &'a str,
+        on_press: Option<Message>,
+    ) -> Control<'a, Message> {
+        let p = crate::color::palette();
+        let tint = if on_press.is_some() {
+            p.text_secondary
+        } else {
+            p.text_tertiary
+        };
+        let content = container(glyph(glyph_of, tint)).center(Length::Fill);
+        let radius = metrics::ICON_BUTTON_RADIUS;
+        let mut control = Control::new(content, theme::icon_button, on_press, radius);
+        control.button = control
+            .button
+            .width(ROW_BUTTON)
+            .height(ROW_BUTTON)
+            .padding(0);
+        control.label = Some(label);
+        control
+    }
+
+    /// A round button of the user row: veiled; amber while its session command waits for a
+    /// second click.
+    fn round_style(armed: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+        move |theme, status| {
+            let p = theme::palette(theme);
+            let back = match (armed, status) {
+                (true, _) => p.amber_soft,
+                (false, button::Status::Hovered) => p.chip_hover,
+                (false, button::Status::Pressed) => p.pressed,
+                (false, _) => Colors::of(p).control,
+            };
+            button::Style {
+                background: fill(back),
+                border: border::rounded(ROUND_RADIUS),
+                ..button::Style::default()
+            }
+        }
+    }
+
+    /// A button of the user row (Verrouiller, Éteindre…). `label` names it.
+    pub fn round_button<'a, Message: Clone + 'a>(
+        glyph_of: Glyph,
+        label: &'a str,
+        armed: bool,
+        on_press: Option<Message>,
+    ) -> Control<'a, Message> {
+        let p = crate::color::palette();
+        let tint = if armed { p.amber_text } else { p.text_primary };
+        let content = container(glyph_sized(glyph_of, tint, ROUND_GLYPH)).center(Length::Fill);
+        let mut control = Control::new(content, round_style(armed), on_press, ROUND_RADIUS);
+        control.button = control
+            .button
+            .width(ROUND_BUTTON)
+            .height(ROUND_BUTTON)
+            .padding(0);
+        control.label = Some(label);
+        control
+    }
+
     /// Error line of a panel: the salmon as text.
     pub fn error_text(theme: &Theme) -> text::Style {
         text::Style {
@@ -372,11 +841,35 @@ mod tests {
     }
 
     #[test]
+    fn the_line_of_a_tile_that_is_on_reads_on_the_green() {
+        for palette in [&Palette::DARK, &Palette::LIGHT] {
+            let line = Colors::of(palette).tile_on_line;
+            assert!(line.contrast(palette.accent) >= 4.5, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn every_glyph_stays_in_the_grid() {
+        for glyph in Glyph::ALL {
+            let numbers = glyph
+                .path()
+                .split(|c: char| c.is_ascii_alphabetic() || c == ' ' || c == ',')
+                .flat_map(|chunk| chunk.split_inclusive('-'))
+                .filter_map(|n| n.trim_end_matches('-').parse::<f32>().ok());
+            for n in numbers {
+                assert!(n.abs() <= metrics::ICON_GRID, "{glyph:?}: {n}");
+            }
+        }
+    }
+
+    #[test]
     fn the_month_title_is_in_french() {
         assert_eq!(text::month_title(11, 2026), "novembre 2026");
         assert_eq!(text::month_title(2, 2028), "février 2028");
         assert_eq!(text::month_title(13, 2028), " 2028");
         assert_eq!(text::more(1), "1 autre notification");
         assert_eq!(text::more(4), "4 autres notifications");
+        assert_eq!(text::devices(1), "1 appareil");
+        assert_eq!(text::devices(2), "2 appareils");
     }
 }

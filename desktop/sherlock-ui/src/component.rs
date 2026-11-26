@@ -25,7 +25,7 @@ pub struct Control<'a, Message> {
     radius: f32,
     forced: Option<button::Status>,
     ring: bool,
-    label: Option<&'a str>,
+    pub(crate) label: Option<&'a str>,
 }
 
 impl<'a, Message: Clone + 'a> Control<'a, Message> {

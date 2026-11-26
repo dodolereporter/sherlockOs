@@ -27,7 +27,10 @@ impl Panel {
     /// Size of the panel itself, without the room for its shadow.
     pub fn size(self) -> (f32, f32) {
         match self {
-            Self::Control => (panels::CENTER_WIDTH, panels::CONTROL_HEIGHT),
+            Self::Control => (
+                panels::CENTER_WIDTH + panels::PANEL_GAP + panels::QUICK_WIDTH,
+                panels::CONTROL_HEIGHT,
+            ),
             Self::Calendar => (panels::CALENDAR_WIDTH, panels::CALENDAR_HEIGHT),
         }
     }
@@ -91,21 +94,27 @@ pub fn input_rect(panel: Panel, margins: Padding) -> (i32, i32, i32, i32) {
     )
 }
 
-/// A panel in its surface: the glass, its shadow on the GPU, and a click on the room around
-/// it closing it, for a compositor that would ignore the input region.
-pub fn frame<'a>(
+/// One panel: `content` on the glass, `width` wide and as high as `panel`, over its shadow
+/// (on the GPU).
+pub fn glass<'a>(
     content: impl Into<Element<'a, Message>>,
     panel: Panel,
-    margins: Padding,
+    width: f32,
 ) -> Element<'a, Message> {
-    let (width, height) = panel.size();
+    let (_, height) = panel.size();
     let glass = container(content)
         .width(width)
         .height(height)
         .padding(panels::PADDING + metrics::BORDER_WIDTH)
         .style(panels::panel);
-    let shadowed = surface::shadowed(glass, panels::RADIUS, Elevation::Panel);
-    let room = container(opaque(shadowed)).padding(margins);
+    opaque(surface::shadowed(glass, panels::RADIUS, Elevation::Panel))
+}
+
+/// The panels of a surface, side by side, and a click on the room around them closing them,
+/// for a compositor that would ignore the input region.
+pub fn frame<'a>(glasses: Vec<Element<'a, Message>>, margins: Padding) -> Element<'a, Message> {
+    let line = iced::widget::Row::with_children(glasses).spacing(panels::PANEL_GAP);
+    let room = container(line).padding(margins);
     mouse_area(room).on_press(Message::ClosePanel).into()
 }
 
@@ -400,8 +409,8 @@ mod tests {
                 );
             }
         }
-        // The board's notification centre ends at the quick settings; alone, at the bar end.
-        assert_eq!(on_screen(Panel::Control, margins(false)).0, right - 320.0);
+        // The board's notification centre at 756, the quick settings at 1092.
+        assert_eq!(on_screen(Panel::Control, margins(false)).0, 756.0);
     }
 
     #[test]

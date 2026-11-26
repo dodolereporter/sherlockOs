@@ -23,6 +23,7 @@ use crate::calendar::Month;
 use crate::history::{self, Entry};
 use crate::menu::{self, Action};
 use crate::panel::{self, History, Panel};
+use crate::quick::{self, Quick};
 use crate::shape::{Geometry, Shape};
 use crate::source::battery::{Battery, Charge, UPower};
 use crate::source::clock::{LocalTime, SystemClock};
@@ -75,6 +76,8 @@ pub struct Bar {
     pub month: Option<Month>,
     /// What the notification centre shows.
     pub history: History,
+    /// The quick settings of the control centre.
+    pub quick: Quick,
 }
 
 /// A bar button that Tab can reach.
@@ -127,6 +130,8 @@ pub enum Message {
     InvokeAction(u32, String),
     /// A call to the daemon ended.
     HistoryDone(Result<(), String>),
+    /// The quick settings.
+    Quick(quick::Message),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
     Frame(Instant),
@@ -135,9 +140,11 @@ pub enum Message {
 impl Bar {
     /// The bar, told of the screens of its surfaces by `shell_events`.
     pub fn new(shell_events: ShellReceiver) -> (Self, Task<Message>) {
+        let session = launcher::system::Systemd::from_env();
         let bar = Self {
             user: user::current(),
             shell_events: Some(shell_events),
+            quick: Quick::new(std::sync::Arc::new(session)),
             ..Self::default()
         };
         (bar, Task::none())
@@ -163,7 +170,11 @@ impl Bar {
             Subscription::none()
         };
         let history = if self.panel_open() == Some(Panel::Control) {
-            Subscription::run(history::watch).map(|()| Message::HistoryChanged)
+            Subscription::batch([
+                Subscription::run(history::watch).map(|()| Message::HistoryChanged),
+                Subscription::run(quick::watch)
+                    .map(|service| Message::Quick(quick::Message::Changed(service))),
+            ])
         } else {
             Subscription::none()
         };
@@ -251,6 +262,9 @@ impl Bar {
                     async move { history::invoke(&bus::session().await?, id, &key).await },
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
+            }
+            Message::Quick(message) => {
+                return self.quick.update(message).map(Message::Quick);
             }
             Message::HistoryDone(done) => {
                 if let Err(error) = done {
@@ -468,7 +482,8 @@ impl Bar {
         match which {
             Panel::Control => {
                 self.history = History::Loading;
-                opened.chain(load_history())
+                let quick = self.quick.open().map(Message::Quick);
+                opened.chain(Task::batch([load_history(), quick]))
             }
             Panel::Calendar => {
                 self.month = panel::today(self.clock.as_ref()).map(Month::of);
@@ -546,18 +561,26 @@ impl Bar {
 
     /// A panel in its surface.
     pub fn view_panel(&self, which: Panel) -> Element<'_, Message> {
-        let content = match which {
-            Panel::Control => panel::center(&self.history),
+        let glasses = match which {
+            Panel::Control => vec![
+                panel::glass(panel::center(&self.history), which, panels::CENTER_WIDTH),
+                panel::glass(
+                    self.quick.view(&self.user).map(Message::Quick),
+                    which,
+                    panels::QUICK_WIDTH,
+                ),
+            ],
             Panel::Calendar => {
                 let today = panel::today(self.clock.as_ref());
                 let month = self.month.or_else(|| today.map(Month::of));
-                match month {
+                let content = match month {
                     Some(month) => panel::calendar(month, today),
                     None => iced::widget::space().into(),
-                }
+                };
+                vec![panel::glass(content, which, panels::CALENDAR_WIDTH)]
             }
         };
-        panel::frame(content, which, self.panel_margins)
+        panel::frame(glasses, self.panel_margins)
     }
 
     pub fn view_bar(&self) -> Element<'_, Message> {
