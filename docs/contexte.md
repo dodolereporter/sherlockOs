@@ -296,6 +296,17 @@ Chaque outil déclare son niveau dans le code de son serveur. Un outil sans nive
 2. L'utilisateur demande « prépare tout pour lancer Steam ». Sherlock lit l'état des paquets, présente un plan en étapes, demande l'accord pour l'installation, puis prévient quand c'est prêt.
 3. Une commande échoue dans le terminal. Sherlock explique l'erreur sous le bloc et propose un correctif, qui passe par un accord.
 
+### Ambition : une IA locale, sur NPU
+
+L'ambition de SherlockOS, c'est un Sherlock qui tourne **sur la machine** : un modèle local, sur le NPU du processeur (Ryzen AI, Intel Core Ultra, puis leurs successeurs) ou sur la carte graphique. Il marcherait hors ligne, sans envoyer de données, et son coût serait nul à l'usage.
+
+Les NPU des PC actuels ne sont pas encore assez aboutis pour ça : puissance, mémoire, pilotes sous Linux et outils encore jeunes. **Sherlock passe donc par le cloud pour l'instant** : le vrai Claude Code, avec l'abonnement de l'utilisateur (voir « Fournisseur de modèle » plus haut).
+
+Conséquences pour le code, dès maintenant :
+- le fournisseur de modèle reste une interface (`sherlockd`), pour qu'un fournisseur local puisse s'ajouter sans toucher au reste ;
+- rien dans les accords, le journal ou les serveurs MCP ne suppose que le modèle est distant ;
+- un module « IA locale » viendra quand le matériel suivra : détection du NPU, choix du modèle selon la mémoire, bascule automatique entre local et cloud, et réglage dans Control Room.
+
 ## Conventions du dépôt et du code
 
 ### Arborescence

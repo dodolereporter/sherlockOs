@@ -1,10 +1,11 @@
-//! The media keys of the real session (lot D-35): sound and microphone, screen brightness and
-//! media players. The compositor takes them whatever has the keyboard, and a worker thread does
-//! what they ask, so that a slow `pactl` or bus never holds the event loop: the sound through
-//! `pactl` or `wpctl`, the brightness through logind's `SetBrightness`, the players through
-//! MPRIS (`system-services`, shared with the quick settings of the bar). What changed comes back
-//! to the loop and shows in the on-screen display (`osd`). The volume and brightness keys
-//! repeat while held, at the pace of the keyboard. See `docs/media-keys.md`.
+//! The media keys of the real session (lots D-35, D-35d): sound and microphone, screen and
+//! keyboard brightness, media players. The compositor takes them whatever has the keyboard, and
+//! a worker thread does what they ask, so that a slow `pactl` or bus never holds the event loop:
+//! the sound through `pactl` or `wpctl`, the screen brightness through logind's `SetBrightness`,
+//! the keyboard backlight through UPower (or logind), the players through MPRIS
+//! (`system-services`, shared with the quick settings of the bar). What changed comes back to
+//! the loop and shows in the on-screen display (`osd`). The volume and brightness keys repeat
+//! while held, at the pace of the keyboard. See `docs/media-keys.md`.
 
 use std::{
     path::PathBuf,
@@ -28,15 +29,18 @@ use smithay::{
 use system_services::{
     Problem,
     audio::{Device, Mixer},
-    backlight, mpris,
+    backlight, keyboard, mpris,
 };
 
-use crate::{State, osd::Level};
+use crate::{
+    State,
+    osd::{Edge, Level},
+};
 
 /// Delay before a held key repeats, and its pace: those of the keyboard (`State::new`).
 pub const REPEAT_DELAY: Duration = Duration::from_millis(crate::KEY_REPEAT_DELAY as u64);
 pub const REPEAT_INTERVAL: Duration = Duration::from_millis(1000 / crate::KEY_REPEAT_RATE as u64);
-/// Longest wait for logind or a media player.
+/// Longest wait for logind, UPower or a media player.
 const BUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A key the compositor takes for the system.
@@ -48,6 +52,10 @@ pub enum MediaKey {
     MicMute,
     BrightnessUp,
     BrightnessDown,
+    KeyboardUp,
+    KeyboardDown,
+    /// Turns the keyboard backlight off, or back on.
+    KeyboardToggle,
     Player(mpris::Command),
 }
 
@@ -60,6 +68,9 @@ impl MediaKey {
             Keysym::XF86_AudioMicMute => Self::MicMute,
             Keysym::XF86_MonBrightnessUp => Self::BrightnessUp,
             Keysym::XF86_MonBrightnessDown => Self::BrightnessDown,
+            Keysym::XF86_KbdBrightnessUp => Self::KeyboardUp,
+            Keysym::XF86_KbdBrightnessDown => Self::KeyboardDown,
+            Keysym::XF86_KbdLightOnOff => Self::KeyboardToggle,
             Keysym::XF86_AudioPlay => Self::Player(mpris::Command::PlayPause),
             Keysym::XF86_AudioPause => Self::Player(mpris::Command::Pause),
             Keysym::XF86_AudioNext => Self::Player(mpris::Command::Next),
@@ -68,11 +79,16 @@ impl MediaKey {
         })
     }
 
-    /// Held, the key does it again: the steps of the volume and of the brightness.
+    /// Held, the key does it again: the steps of the volume and of the brightnesses.
     pub fn repeats(self) -> bool {
         matches!(
             self,
-            Self::VolumeUp | Self::VolumeDown | Self::BrightnessUp | Self::BrightnessDown
+            Self::VolumeUp
+                | Self::VolumeDown
+                | Self::BrightnessUp
+                | Self::BrightnessDown
+                | Self::KeyboardUp
+                | Self::KeyboardDown
         )
     }
 }
@@ -81,8 +97,10 @@ impl MediaKey {
 #[derive(Debug, Clone)]
 pub struct Controls {
     pub mixer: Mixer,
-    /// Where the kernel lists the backlights; only read.
+    /// Where the kernel lists the backlights and the LEDs (the keyboard's, when UPower is not
+    /// there); only read.
     pub backlights: PathBuf,
+    pub leds: PathBuf,
     /// Address of the system bus (logind), or `None` for the machine's.
     pub system_bus: Option<String>,
     /// Address of the session bus (media players), or `None` for the session's.
@@ -90,11 +108,13 @@ pub struct Controls {
 }
 
 impl Controls {
-    /// The machine's: `pactl` or `wpctl`, `/sys/class/backlight`, its buses.
+    /// The machine's: `pactl` or `wpctl`, `/sys/class/backlight` and `/sys/class/leds`, its
+    /// buses.
     pub fn system() -> Self {
         Self {
             mixer: Mixer::find(),
             backlights: PathBuf::from(backlight::SYSFS),
+            leds: PathBuf::from(keyboard::LEDS),
             system_bus: None,
             session_bus: None,
         }
@@ -118,6 +138,8 @@ pub fn merge(keys: &[MediaKey]) -> Vec<(MediaKey, i32)> {
         MediaKey::VolumeDown => Some((MediaKey::VolumeUp, -1)),
         MediaKey::BrightnessUp => Some((MediaKey::BrightnessUp, 1)),
         MediaKey::BrightnessDown => Some((MediaKey::BrightnessUp, -1)),
+        MediaKey::KeyboardUp => Some((MediaKey::KeyboardUp, 1)),
+        MediaKey::KeyboardDown => Some((MediaKey::KeyboardUp, -1)),
         _ => None,
     };
     let mut merged: Vec<(MediaKey, i32)> = Vec::new();
@@ -155,13 +177,43 @@ impl Bus {
     }
 }
 
+/// What the worker keeps from one key to the next: its buses, opened on first use, and the
+/// keyboard brightness its on and off key turned off.
+struct Worker {
+    system: Bus,
+    session: Bus,
+    keyboard_off: Option<u32>,
+}
+
+/// What a key changed: the level to show, and the end it pushed against.
+pub type Shown = (Level, Option<Edge>);
+
+/// The end of `steps` that pushed against it, if one did.
+fn edge(steps: i32, pushed: bool) -> Option<Edge> {
+    match (pushed, steps > 0) {
+        (false, _) => None,
+        (true, true) => Some(Edge::High),
+        (true, false) => Some(Edge::Low),
+    }
+}
+
+/// The level of the keyboard backlight.
+fn keyboard_level(light: &keyboard::KeyboardLight) -> Level {
+    Level {
+        kind: Kind::Keyboard,
+        percent: u16::from(light.percent()),
+        muted: false,
+    }
+}
+
 /// Does what `key` asks, on the worker thread, `steps` times for the volume and the
-/// brightness (`VolumeUp` and `BrightnessUp`, negative steps going down). Returns what to show.
+/// brightnesses (`VolumeUp`, `BrightnessUp` and `KeyboardUp`, negative steps going down).
+/// Returns what to show.
 fn act(
     controls: &Controls,
-    buses: &mut (Bus, Bus),
+    worker: &mut Worker,
     (key, steps): (MediaKey, i32),
-) -> Result<Option<Level>, Problem> {
+) -> Result<Option<Shown>, Problem> {
     let sound = |kind, sound: system_services::audio::Sound| Level {
         kind,
         percent: sound.volume,
@@ -169,25 +221,47 @@ fn act(
     };
     Ok(Some(match key {
         MediaKey::VolumeUp | MediaKey::VolumeDown => {
-            sound(Kind::Volume, controls.mixer.step_volume(steps)?)
+            let (level, pushed) = controls.mixer.step_volume(steps)?;
+            (sound(Kind::Volume, level), edge(steps, pushed))
         }
-        MediaKey::Mute => sound(Kind::Volume, controls.mixer.toggle_mute(Device::Output)?),
-        MediaKey::MicMute => sound(
-            Kind::Microphone,
-            controls.mixer.toggle_mute(Device::Microphone)?,
+        MediaKey::Mute => (
+            sound(Kind::Volume, controls.mixer.toggle_mute(Device::Output)?),
+            None,
+        ),
+        MediaKey::MicMute => (
+            sound(
+                Kind::Microphone,
+                controls.mixer.toggle_mute(Device::Microphone)?,
+            ),
+            None,
         ),
         MediaKey::BrightnessUp | MediaKey::BrightnessDown => {
-            let bus = buses.0.get()?;
+            let bus = worker.system.get()?;
             let root = &controls.backlights;
-            let percent = zbus::block_on(backlight::step_from(&bus, root, steps))?;
-            Level {
+            let (percent, pushed) = zbus::block_on(backlight::step_from(&bus, root, steps))?;
+            let level = Level {
                 kind: Kind::Brightness,
                 percent: u16::from(percent),
                 muted: false,
-            }
+            };
+            (level, edge(steps, pushed))
+        }
+        MediaKey::KeyboardUp | MediaKey::KeyboardDown => {
+            let bus = worker.system.get()?;
+            let leds = &controls.leds;
+            let (light, pushed) = zbus::block_on(keyboard::step_from(&bus, leds, steps))?;
+            (keyboard_level(&light), edge(steps, pushed))
+        }
+        MediaKey::KeyboardToggle => {
+            let bus = worker.system.get()?;
+            let restore = worker.keyboard_off;
+            let leds = &controls.leds;
+            let (light, off) = zbus::block_on(keyboard::toggle(&bus, leds, restore))?;
+            worker.keyboard_off = off.or(worker.keyboard_off);
+            (keyboard_level(&light), None)
         }
         MediaKey::Player(command) => {
-            let bus = buses.1.get()?;
+            let bus = worker.session.get()?;
             let player = zbus::block_on(mpris::send(&bus, command))?;
             tracing::debug!(player, ?command, "media key sent");
             return Ok(None);
@@ -200,24 +274,25 @@ fn work(
     controls: Controls,
     keys: mpsc::Receiver<MediaKey>,
     busy: Arc<AtomicBool>,
-    shown: channel::Sender<Level>,
+    shown: channel::Sender<Shown>,
 ) {
     let bus = |address: &Option<String>, system| Bus {
         address: address.clone(),
         system,
         connection: None,
     };
-    let mut buses = (
-        bus(&controls.system_bus, true),
-        bus(&controls.session_bus, false),
-    );
+    let mut worker = Worker {
+        system: bus(&controls.system_bus, true),
+        session: bus(&controls.session_bus, false),
+        keyboard_off: None,
+    };
     while let Ok(first) = keys.recv() {
         busy.store(true, Ordering::SeqCst);
         let waiting: Vec<MediaKey> = std::iter::once(first).chain(keys.try_iter()).collect();
         for key in merge(&waiting) {
-            match act(&controls, &mut buses, key) {
-                Ok(Some(level)) => {
-                    if shown.send(level).is_err() {
+            match act(&controls, &mut worker, key) {
+                Ok(Some(change)) => {
+                    if shown.send(change).is_err() {
                         return;
                     }
                 }
@@ -238,8 +313,8 @@ impl State {
         let worker_busy = busy.clone();
         let (shown, levels) = channel::channel();
         let inserted = self.loop_handle.insert_source(levels, |event, _, state| {
-            if let Event::Msg(level) = event {
-                state.show_osd(level);
+            if let Event::Msg((level, against)) = event {
+                state.show_osd(level, against);
             }
         });
         if let Err(err) = inserted {
@@ -331,6 +406,12 @@ mod tests {
         assert_eq!(MediaKey::of(Keysym::a), None);
         assert!(MediaKey::BrightnessDown.repeats());
         assert!(!MediaKey::Mute.repeats());
+        assert_eq!(
+            MediaKey::of(Keysym::XF86_KbdLightOnOff),
+            Some(MediaKey::KeyboardToggle)
+        );
+        assert!(MediaKey::KeyboardUp.repeats());
+        assert!(!MediaKey::KeyboardToggle.repeats());
         assert!(REPEAT_INTERVAL < REPEAT_DELAY);
     }
 
@@ -346,9 +427,18 @@ mod tests {
             Mute,
             BrightnessDown,
             BrightnessDown,
+            KeyboardUp,
+            KeyboardDown,
+            KeyboardDown,
         ];
         let merged = merge(&keys);
-        assert_eq!(merged, [(VolumeUp, 2), (Mute, 0), (BrightnessUp, -2)]);
+        let want = [
+            (VolumeUp, 2),
+            (Mute, 0),
+            (BrightnessUp, -2),
+            (KeyboardUp, -1),
+        ];
+        assert_eq!(merged, want);
         // Steps that cancel out do nothing; other keys stay in their place.
         assert_eq!(merge(&[VolumeUp, VolumeDown, play]), [(play, 0)]);
         assert!(merge(&[]).is_empty());

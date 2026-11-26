@@ -1035,11 +1035,26 @@ pub fn slider<'a, Message: Clone + 'a>(
     value: u8,
     on_change: Option<fn(u8) -> Message>,
 ) -> Element<'a, Message> {
+    held_slider(value, on_change, None)
+}
+
+/// The same slider, telling `on_release` when the pointer lets it go: what an owner needs to
+/// keep it from jumping under a change made elsewhere while it is held (lot D-35d).
+pub fn held_slider<'a, Message: Clone + 'a>(
+    value: u8,
+    on_change: Option<fn(u8) -> Message>,
+    on_release: Option<Message>,
+) -> Element<'a, Message> {
     match on_change {
-        Some(on_change) => iced::widget::slider(0..=100u8, value, on_change)
-            .style(theme::slider)
-            .width(Length::Fill)
-            .into(),
+        Some(on_change) => {
+            let slider = iced::widget::slider(0..=100u8, value, on_change)
+                .style(theme::slider)
+                .width(Length::Fill);
+            match on_release {
+                Some(message) => slider.on_release(message).into(),
+                None => slider.into(),
+            }
+        }
         None => {
             let rail = container(space())
                 .width(Length::Fill)

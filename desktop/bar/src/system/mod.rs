@@ -11,8 +11,8 @@ pub mod bluetooth;
 pub mod network;
 pub mod power;
 
-// Sound and brightness are shared with the media keys of the compositor (lot D-35).
-pub use system_services::{Problem, Result, audio, backlight};
+// Sound and brightnesses are shared with the media keys of the compositor (lots D-35, D-35d).
+pub use system_services::{Problem, Result, audio, backlight, keyboard, watch};
 
 use std::sync::OnceLock;
 use std::time::Duration;
