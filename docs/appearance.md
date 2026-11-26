@@ -48,7 +48,8 @@ the table value of each row and these replacements (`OVERRIDES` in `color.rs`).
 
 The wallpaper follows the theme (author's decision): in the light theme, the default becomes
 the light version of « Premier indice ». D-04 holds the pictures and pairs each dark wallpaper
-with its light one; D-05c links the active theme to the wallpaper.
+with its light one; the compositor changes to the pendant when the theme changes, with a
+crossfade (lot D-05c, "Theme" in `docs/compositor.md`).
 
 ## API
 
@@ -82,7 +83,8 @@ with its light one; D-05c links the active theme to the wallpaper.
 No polling. The thread stops the next time it reports something after `on_event` returned
 `false`.
 
-A program wires it like the top bar, Evidence and the dock do: `color::set_active(theme_now(..))`
+A program wires it like the top bar, Evidence, the dock and the compositor (`theme.rs`, through
+a calloop channel) do: `color::set_active(theme_now(..))`
 before its first frame, so that a light session never starts on a dark frame, then a
 subscription whose stream receives the themes of `follow_themes`, given to a `color::ThemeFade` in `update`, which fades
 the palette shown over `motion::THEME_FADE` (see "Following the theme" in

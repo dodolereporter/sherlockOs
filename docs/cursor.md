@@ -97,20 +97,27 @@ To try the themes without installing them: `XCURSOR_PATH=$PWD/target/cursors`.
 `desktop/compositor/src/cursor.rs`, real session only: in nested mode the host window keeps
 its own cursor.
 
-- **Theme.** The session (`sherlockos-session`) exports `XCURSOR_THEME`: `nom-os`, or
-  `nom-os-light` when the appearance file (`docs/appearance.md`) gives the light theme at
-  startup, automatic mode included. It exports `XCURSOR_SIZE` (24 unless already set) and
+- **Theme.** The compositor shows `nom-os` while the desktop is dark and `nom-os-light` while
+  it is light, and follows a change of the appearance file (`docs/appearance.md`) live,
+  automatic mode included (lot D-05c): at the next frame, `Cursors::follow` reads the other
+  house theme, and the shape shown fades in as after any change of shape. The session
+  (`sherlockos-session`) exports `XCURSOR_THEME`: `nom-os`, or `nom-os-light` when the
+  appearance file gives the light theme at startup. It exports `XCURSOR_SIZE` (24 unless already set) and
   `XCURSOR_PATH`, with `cursors` beside the programs' folder first (`target/cursors` when the
   session runs from the repository with `NOM_OS_BIN=target/release`), then the usual folders
   (`~/.local/share/icons`, `~/.icons`, `/usr/local/share/icons`, `/usr/share/icons`). The
   compositor takes the house theme that `XCURSOR_THEME` names, so XWayland and Qt, when they
-  draw their cursor themselves, draw the same one: two themes never mix. GTK under Wayland
-  reads `cursor-theme` and `cursor-size` in dconf instead, which `toolkit-theme` sets in the
-  session's database (`docs/third-party-theming.md`). Started
-  otherwise, the compositor picks the house theme from the appearance file itself. Without the
-  house theme installed, `XCURSOR_THEME`, else the system's `default`. A shape missing from the theme shows the
-  arrow. Following a theme change live comes with the theme setting of the compositor (lot
-  D-05c), as for the wallpaper.
+  draw their cursor themselves, draw the same one at startup. GTK under Wayland reads
+  `cursor-theme` and `cursor-size` in dconf instead, which `toolkit-theme` sets in the
+  session's database and changes with the theme (`docs/third-party-theming.md`): GTK follows
+  live too. Without the house theme installed, `XCURSOR_THEME`, else the system's `default`. A
+  shape missing from the theme shows the arrow.
+- **Limit: XWayland and Qt.** An environment variable cannot change in a running process:
+  XWayland and the X11 applications, and Qt applications under Wayland when they draw their
+  cursor themselves, keep the `XCURSOR_THEME` of the session's start until they restart. After
+  a change of theme, an X11 window may show the cursor of the other theme over its own
+  surface, while the compositor shows the new one everywhere else. Most Wayland clients name
+  their cursor (`wp_cursor_shape_v1`) and get the compositor's.
 - **Size.** `XCURSOR_SIZE` (24 by default) times the screen's scale. The image of the nearest
   size above is shown pixel for pixel: at 1.25, 30 px are asked for and the image of 32 is
   shown, never a stretched 24.
@@ -138,7 +145,7 @@ next; Super + click for Sherlock is only a shape for now.
 | --- | --- |
 | `cursor-theme`, unit | Every name given once; every CSS name of the protocol has a shape; every drawing has its marks and its hotspot inside its image; the dark style block of the files; the light theme changes only the style block; the spinning group turns around its center; the Xcursor writer, read back by the parser the compositor uses |
 | `cursor-theme`, `tests/theme.rs` | Runs the generator: in both themes, every shape at every size, its hotspot, something drawn under it, 30 images for the waiting cursors, every alias a link to its drawing |
-| `compositor`, `cursor.rs` | The theme the session names wins; every shape a client names finds the file of its drawing; the nearest size above; fallback on the user's theme and on the arrow; the turn of the waiting cursor and the time of its next image; the fade of a new shape; shake to find, held then back to rest; nothing asked at rest |
+| `compositor`, `cursor.rs` | The house theme follows the desktop's theme, read again on a change; every shape a client names finds the file of its drawing; the nearest size above; fallback on the user's theme and on the arrow; the turn of the waiting cursor and the time of its next image; the fade of a new shape; shake to find, held then back to rest; nothing asked at rest |
 | `sherlock-ui`, `cursor.rs` | The bounce curve; the contrast of body and outline |
 
 On the machine, in the real session, after `just install-session` and the printed commands:

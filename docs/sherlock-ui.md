@@ -518,8 +518,8 @@ A program sets its theme with `color::set_active` (at once) or a `color::ThemeFa
 fade, see below) and returns `theme::theme()` from its iced `theme` function. The styles read
 the palette of the iced theme they are given (`theme::palette`), the constructors of
 `component` read `color::palette()`: no component tests the theme. The module constants of
-`color` stay, with the dark values, for the compositor, which follows the theme in D-05c; the
-shell programs no longer use them. The file and the automatic mode are in
+`color` keep the dark values for the tests and the few tokens built on them; neither the shell
+programs nor the compositor draw with them any more (lot D-05c). The file and the automatic mode are in
 `docs/appearance.md`.
 
 The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch

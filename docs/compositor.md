@@ -807,15 +807,17 @@ drawn at scale 1: the elements' "logical" coordinates are frame pixels.
 | `shadow.frag` | Pixels | Drop shadow of a rounded rectangle blurred by a Gaussian, cleared under the window |
 | `clip.frag` | Texture | Client content multiplied by the coverage of its window's rounded rectangle |
 
-The values, all taken from `sherlock-ui`:
+The values, all taken from `sherlock-ui`. The colors are those of the palette shown,
+`color::palette()`, which follows the theme (see "Theme"); the dark values are given here:
 
-| Element | Value | Token |
+| Element | Value (dark) | Token |
 | --- | --- | --- |
-| Background | `#0E1A2E` | `color::DESKTOP` |
-| Discs | `#132A49`, `#16314F`, `#1B3F63`, places and diameters from the Main board | `color::DESKTOP_DISCS`, `metrics::DESKTOP_DISC_GEOMETRY` |
+| Background | `#0E1A2E` | `desktop` |
+| Discs | `#132A49`, `#16314F`, `#1B3F63`, places and diameters from the Main board | `desktop_discs`, `metrics::DESKTOP_DISC_GEOMETRY` |
 | Corners | Radius 16, reduced for a window smaller than two corners | `metrics::WINDOW_RADIUS` |
-| Border | 1 px `rgba(255,255,255,0.10)`, inside the window as in CSS | `metrics::BORDER_WIDTH`, `color::BORDER` |
-| Shadow | `0 28px 70px rgba(3,8,18,0.55)` | `metrics::SHADOW_OFFSET`, `metrics::SHADOW_BLUR`, `color::SHADOW` |
+| Border | 1 px `rgba(255,255,255,0.10)`, inside the window as in CSS | `metrics::BORDER_WIDTH`, `border` |
+| Shadow | `0 28px 70px rgba(3,8,18,0.55)` | `metrics::SHADOW_OFFSET`, `metrics::SHADOW_BLUR`, `shadow` |
+| Snap preview | `rgba(133,197,149,0.16)`, border 2 px `#85C595` | `window::snap_preview_fill()`, `snap_preview_border()` |
 
 **Background.** On a 1440 by 900 screen, the discs are exactly at their place on the board:
 (-260, 340) diameter 1100, (860, -420) diameter 900, (980, 520) diameter 520, the last one in
@@ -960,9 +962,8 @@ corners, `divider` line under it; the title on the left from 15 (border and padd
 radius 9, padding 2) of three buttons of 28 by 24 (radius 7, 2 apart), 9 from the right edge,
 with the icons of `sherlock_ui::icon` (14 px, stroke 1.7, `text_secondary`). A button under the
 pointer takes `hover`, held down `pressed`. Maximized, the maximize button shows the restore icon
-(`decorations::RESTORE_ICON`). The colors are those of the active palette: the compositor makes
-the theme of the appearance file active at start and follows it (`decorations::follow_theme`),
-without the fade of the shell programs.
+(`decorations::RESTORE_ICON`). The colors are those of the palette shown, which follows the
+theme with a fade (see "Theme").
 
 **Behavior.**
 
@@ -1118,8 +1119,8 @@ mode = cover
   in each `$XDG_DATA_DIRS`.
 - `Config::choice(variant)` (crate `desktop-config`) gives what to show in a theme: the user's
   path, or the installed wallpaper to look for. The compositor keeps the theme in
-  `Wallpaper::set_theme`; it stays dark for now. Lot D-05 brings the theme setting
-  (`appearance-config`) and lot D-05c will call `set_theme` when it changes.
+  `Wallpaper::set_theme`, called at each change of the appearance file (see "Theme"): with
+  `follow-theme = true`, the default first-clue becomes first-clue-light, and back.
 - `cover` fills the screen, centered, and cuts what overflows. `contain` shows the whole image,
   centered, with the desktop color in the bands. `center` puts one image pixel on one screen
   pixel, centered.
@@ -1140,12 +1141,19 @@ mode = cover
   already in it: a screen at 1 and a screen at 2 of the same size in pixels show exactly the
   same part of the image.
 - **Loading.** The image is decoded on a thread of its own (a 4K PNG takes a while): the
-  frames go on, with the board's background until it is ready. The decoder refuses an image
+  frames go on, with the image shown before, or the board's background at start, until it is
+  ready. The decoder refuses an image
   larger than 8192 pixels on a side or needing more than 256 MiB (a PNG "decompression bomb"),
   and a thread that the system refuses is logged: both give the board's background. It is then uploaded once as a
   texture, shared by the screens that use the same variant, and drawn every frame as one
-  textured rectangle. A texture that no screen uses any more is freed; a new setting drops
-  them all.
+  textured rectangle. A texture that no screen uses any more is freed.
+- **Change of image (lot D-05c).** A new source (another wallpaper, the pendant of the other
+  theme) keeps, for each screen, the texture it shows (`Textures::layers`). Once the new image
+  is uploaded, it fades in over the old one over `motion::THEME_FADE` (250 ms, the cubic of
+  `Fade`), then the old texture is freed: two textured rectangles during the fade, one after,
+  and no frame asked for once it is over. A setting whose source does not change (the file
+  written again, `mode` alone, a theme without a pendant) keeps its images: no reload, no
+  flash. A source that gives the board's background (not installed, broken) shows it at once.
 - **Cost at rest.** One textured rectangle per screen in place of the three discs, and one
   `stat` every 2 seconds.
 - **Blur (lot D-11b).** The wallpaper is an element of the same list as the rest of the scene,
@@ -1178,17 +1186,13 @@ Notes:
 - The settings file is read as it is found: a program that writes it (Control Room) must write
   a temporary file and `rename` it, or a half-written file may be refused for 2 seconds.
 - Variants installed after the start are seen at the next change of the settings file.
-- Both backends redraw continuously (the real session at the pace of each screen). When they
-  draw on damage, a new setting (`reload`) and a decoded image (`receive`) will have to request
-  a frame.
+- A new setting, a new theme and a decoded image ask for a frame (`State::queue_redraw`): the
+  real session draws on damage (see "Frames of the real session").
 
 Left for lot D-04b, from the review of D-04:
 
-1. **No flash when the source changes.** Every reload (file rewritten identically, `mode`
-   alone changed, `set_theme` on a wallpaper without a pendant) and every scale change of a
-   screen drop the textures: the board's background shows while decoding. Change the
-   generation only when the source changes, and keep the last ready texture until the new one
-   is uploaded. To do before or with D-05c.
+1. **No flash when the source changes.** Done by lot D-05c, but for a scale change of a screen,
+   which still drops its texture: the board's background shows while the new variant decodes.
 2. **Development fallback on the original.** In a debug build, when the wallpaper is not
    installed, show `assets/wallpapers/<id>.jpg`; and reduce on the decoding thread an image
    more than twice the screen (`thumbnail`), against the aliasing of the GPU's bilinear
@@ -1211,6 +1215,60 @@ XDG_DATA_HOME=/tmp/wallpaper-test/share cargo run -p compositor -- --nested
 
 Then write `wallpaper = ring` and `mode = contain` in `~/.config/nom-os/wallpaper.conf`: the
 wallpaper changes within 2 seconds.
+
+## Theme (lot D-05c)
+
+The compositor follows the theme of the appearance file (`docs/appearance.md`) live, like the
+shell programs. `theme::follow` makes the theme of the file active before the first frame, then
+receives each change from `appearance_config::follow_themes` (inotify and the timer of the
+automatic mode, no polling) through a calloop channel, and calls `State::set_theme`:
+
+| What | How it follows |
+| --- | --- |
+| Colors | A `color::ThemeFade` fades `color::palette()` over `motion::THEME_FADE` (250 ms), in 32 steps. Background, discs, window borders, shadows, snap preview and title bars read the palette shown when the frame is built: nothing else holds a color |
+| Wallpaper | `Wallpaper::set_theme`: a wallpaper that follows the theme takes its pendant, decoded then crossfaded (see "Wallpapers") |
+| Cursor | Real session: `Cursors::follow` reads the house theme of the new theme, `nom-os` or `nom-os-light`, at the next frame (see `docs/cursor.md`) |
+
+The fade is ticked at the start of each frame (`State::tick_theme`, in `Scene::screens`): while
+it runs, each screen draws at each blank; the frame where it ends draws the final palette, and
+nothing is asked for afterwards. A change of theme damages the whole screen during the fade
+(background, discs, every border, shadow and title bar change color); the real session's
+`DrmCompositor` also redraws in full when its clear color changes. A title bar is drawn again on
+the processor at each step of the fade (its colors are in its `Look`): at most 32 times per
+window, then never.
+
+The palette is global to the process (`color::set_active`, `ThemeFade`): the bench that changes
+the theme (`tests/perf.rs`) runs alone, the others wait for it.
+
+Clients draw their own colors: GTK follows the session's dconf database (`toolkit-theme
+follow`, `docs/third-party-theming.md`), the shell programs follow the appearance file. The
+dock is checked by `the_dock_follows_a_new_theme_in_the_file` (`desktop/dock/tests/render.rs`):
+glass, separator, dots, label and focus ring read the palette shown, Sherlock's tile keeps its
+cream in both themes, as on the boards.
+
+**Tests.**
+
+- `tests/theme.rs`: `Theme=` rewritten in an appearance file of the test: the light palette
+  after the fade, the redraw asked for, the wallpaper changed to first-clue-light, then back.
+- `tests/perf.rs`, `a_theme_change_fades_everything_then_rests`: the whole screen is damaged
+  during the fade, frames at each blank, then no frame is even built at rest.
+- `wallpaper.rs` (unit): the new image fades in over the old one and the old one goes away;
+  the same source keeps its images. `cursor.rs` (unit): the house theme follows the desktop.
+- `captures_of_the_desktop_in_both_themes` (ignored, needs Mesa's EGL and the dock built):
+  the scene with the default wallpaper pair, a decorated window and the real dock hovered over
+  Sherlock, rendered with the software renderer, dark, then light after rewriting `Theme=`.
+  The dock draws in software there too: its buffers have no alpha (see "Layer-shell toolkit of
+  the shell"), so the room around its glass is black; in the real session it draws with
+  Vulkan and stays transparent.
+
+```sh
+cargo build -p dock
+cargo test -p compositor --test headless -- --ignored captures_of_the_desktop
+```
+
+| Dark | Light, after the change |
+| --- | --- |
+| ![Dark](../desktop/compositor/screenshots/desktop-dark.png) | ![Light](../desktop/compositor/screenshots/desktop-light.png) |
 
 ## Running
 
