@@ -50,8 +50,9 @@ Surface):
 | `icons.rs` | Icon lookup in the themes, `hicolor`, then `pixmaps` |
 | `config.rs` | Default pinned applications |
 | `launch.rs` | Starting an application without a shell |
-| `windows.rs` | Open windows behind the `Source` trait: placeholder and `zwlr_foreign_toplevel_manager_v1` |
-| `shell.rs` | The windows of our compositor through `sherlock_shell_v1`, read only, for the bounce (D-21b) |
+| `windows.rs` | Open windows behind the `Source` trait, acting on them behind `Control`: placeholder, `zwlr_foreign_toplevel_manager_v1`, and the choice between the sources |
+| `shell.rs` | The windows of our compositor through `sherlock_shell_v1`: read, acted on, icon rectangles, covered screens (D-18c2) |
+| `hide.rs` | When the dock hides (`AutoHide`) and the spring that slides it (D-18c2) |
 | `anim.rs` | The animations of each icon, kept by identity: size, arrival and departure, offset, bounce (D-21b) |
 | `drag.rs` | A press on an icon: click, or drag to reorder or unpin (D-21b) |
 
@@ -61,7 +62,8 @@ module `sherlock_ui::dock`: padding, edge margin, dot, label, separator, menu wi
 bounds of the settings, the magnification spring `dock::SPRING`, the label fade, the tile
 colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and `ring`, and the texts
 `dock::text`. The animations of D-21b take their springs and fade from `sherlock_ui::motion`,
-named for the dock in `sherlock_ui::dock` (see Animations).
+named for the dock in `sherlock_ui::dock` (see Animations), and so does the hiding of D-18c2:
+`dock::HIDE_STRIP`, `HIDE_DELAY`, `HIDE_SPRING` (see Hiding).
 
 **Theme.** The dock reads the theme of the appearance file before its first frame, then follows
 the file live and fades from one theme to the other
@@ -125,6 +127,41 @@ wl_surface#28.set_input_region(wl_region#40)
 wl_region#41.add(105, 56, 319, 76)                 # it leaves: the bar again
 wl_surface#28.set_input_region(wl_region#41)
 ```
+
+### Hiding
+
+`AutoHide` (`hide.rs`) decides when the dock leaves the screen:
+
+| Mode | The dock |
+| --- | --- |
+| `smart` (default) | Shown with its exclusive zone, except while a maximized or fullscreen window is on its screen |
+| `always` | Hidden, without exclusive zone |
+| `never` | Always shown, with its exclusive zone |
+
+Whether a maximized or fullscreen window is on the dock's screen comes from the `output` event
+of `sherlock_shell_v1` (only the windows of the active workspace count), matched by name with
+the screen iced_exwlshell reports for the dock's surface. A window on another screen changes
+nothing; a screen not known yet counts as uncovered.
+
+- **A window is maximized.** The dock gives up its exclusive zone at once (0): the compositor
+  gives the maximized window the whole screen below the bar, the dock's room included
+  (recomputing that geometry is batch D-18c1). Then the dock slides off the screen with the
+  spring of the top bar (`dock::HIDE_SPRING`): only its margin moves, from 8 to
+  `HIDE_STRIP − depth`, one commit per whole pixel. Hidden, `HIDE_STRIP` (2) pixels of the
+  surface stay on the screen, its side away from the edge; its input region shrinks to that
+  band, over the whole length of the surface. A dock under the pointer when the window is
+  maximized stays until the pointer leaves it.
+- **The pointer touches the edge.** The band takes the pointer: the dock slides back over the
+  window, on the `Top` layer, still without exclusive zone, and takes the pointer as usual.
+- **The pointer leaves it.** It hides again `dock::HIDE_DELAY` (300 ms) later, unless the
+  pointer came back, a menu is open or an icon is held. The pointer must come back on the
+  surface: the gap of 8 between the bar and the screen edge is not part of it.
+- **No maximized window any more.** The dock slides back, and takes its exclusive zone again
+  once in place: the compositor reserves the zone plus the margin, negative while the dock is
+  still sliding in, so the zone waits for the margin to be 8 again.
+
+Frames are asked for while the dock slides and while it waits to hide. On the left and right
+edges the same happens sideways. A new mode in the configuration file applies at once.
 
 ### Magnification
 
@@ -219,7 +256,7 @@ IconTheme=breeze
 IconSize=52
 Magnification=true
 MagnificationFactor=1.7
-AutoHide=never
+AutoHide=smart
 Position=bottom
 ```
 
@@ -230,15 +267,14 @@ Position=bottom
 | `IconSize` | Side of an icon at rest, from 32 to 96 (`dock::ICON_SIZE_MIN`, `MAX`) | 52 (`metrics::DOCK_ICON`) |
 | `Magnification` | `true`, `false` | `true` |
 | `MagnificationFactor` | From 1.0 to 2.0 (`dock::MAGNIFICATION_MIN`, `MAX`) | 1.7 (`metrics::DOCK_MAGNIFICATION`) |
-| `AutoHide` | `never`, `always`, `smart` | `never` |
+| `AutoHide` | `never`, `always`, `smart` (see Hiding) | `smart` |
 | `Position` | `bottom`, `top`, `left`, `right` | `bottom` |
 
 Words are read without regard to case. A value that cannot be read or is out of its bounds is
 ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
 and the default is used: a bad file never stops the dock. Unknown keys, comments and blank lines are
 kept when the dock writes the file, and values are escaped (`\n`, `\\`, a leading space as
-`\s`): a value can never add a line of its own. `AutoHide` is read and kept, but the dock does not hide yet
-(batch D-18c: it needs the geometry of the windows).
+`\s`): a value can never add a line of its own.
 
 **Live reload.** The dock watches the file's folder with inotify (one blocking thread, no
 polling). It reads the whole inotify buffer at each wake: a folder deleted with its file sends
@@ -407,10 +443,8 @@ asks for a token and gives it to the application, which uses it to take the focu
 protocol has no event for the launcher when the token is used, so the dock would never learn
 that the window came. Our compositor's shell protocol says it directly.
 
-The shell source is read only: the dock opens one connection to the shell socket on its own
-thread, and takes nothing else from it. The dots, a click that brings forward or minimizes,
-« Quitter » and auto-hide over this protocol are batch D-18c, which will give `Shell` a
-`windows::Control` and make it the dock's window source.
+Since D-18c2, the shell source is the dock's window source (see Open windows): the bounce
+ends with the first window it lists.
 
 **No frame at rest.** Frames are asked for while a size, a room, a scale, an opacity or an
 offset moves, while an icon is leaving and while an icon bounces. A bounce that landed and an
@@ -435,34 +469,44 @@ own thread, connection included:
 | Source | When | Closes windows |
 | --- | --- | --- |
 | `Placeholder` | `DOCK_OPEN` is set: comma separated `app_id`s, `DOCK_ACTIVE` the active one | No: a click starts the application, « Quitter » stays disabled |
+| `shell::Shell` | Our compositor: its shell socket offers `sherlock_shell_v1` (ADR 0021) | Yes: `activate`, `minimize`, `close`, `set_rectangle`, through `shell::ShellControl` |
 | `Wlr` | The compositor offers `zwlr_foreign_toplevel_manager_v1` (wlroots compositors) | Yes: `activate`, `set_minimized`, `close`, through `WlrControl` |
-| None | Neither | Windows unknown: no dot, « Quitter » disabled |
+| None | None of them | Windows unknown: no dot, « Quitter » disabled |
+
+They are tried in this order. `windows::Auto`, the control of the running dock, acts through
+the shell protocol while its source runs, through the wlroots one otherwise.
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id, its last part (`konsole` for `org.kde.konsole`), or its `StartupWMClass`, ignoring case.
 
-Neither our compositor nor KWin offers a window list to an ordinary client (KWin keeps
-`org_kde_plasma_window_management` for Plasma). `tests/windows.rs` runs the `Wlr` source
-against a fake compositor written with `wayland-server`: two windows, one active, then
-the clicks of the dock on them (the one behind brought forward, the active one minimized), then
-« Quitter », which the compositor receives and the watching connection sees go.
+**On our compositor** (D-18c2). The dock opens one connection to the shell socket, on the
+thread of its source, and sends its requests on that same connection from the interface thread
+(`shell::ShellControl`): nothing waits for the compositor. The state is read at each `done` of
+the manager only, so a window closing and another opening in one batch never reads as one less.
 
-**What our compositor will have to provide**, to replace the placeholder:
+- **Dots**: one under each application with a window, green for the application whose window
+  has the `activated` state. The compositor keeps that state while an anchored surface (the
+  dock itself, after a click) has the keyboard: the active application stays active, and the
+  click below is reliable.
+- **Click** on an open application not in front: `activate` on each of its windows, the last
+  one gets the keyboard. On the one in front: `minimize` on each. Without a window: started.
+- **« Quitter »**: `close` on each window of the application, which may ask first.
+- **`set_rectangle`**: for each window, the rectangle of its application's icon at rest, shown,
+  on the dock's screen (`layout::on_screen`: the surface centered along its edge, 8 from it, as
+  the compositor places it), for the minimize animation (D-19). Sent again only when an icon
+  moves (icons added or removed, another size or edge, another screen), never while the icons
+  magnify or the dock slides; a window that comes gets it at its first `done`; a window whose
+  icon left gets a size of 0, which removes it. On the left and right edges the compositor
+  centers the dock in the area the bar leaves, a few pixels off this rectangle.
 
-1. **The windows**: `zwlr_foreign_toplevel_manager_v1` (version 3), the protocol the dock
-   already speaks: for each window its `app_id` (the X11 class for XWayland windows), its
-   states (`activated` for the active one, and `fullscreen`), `done` after each change,
-   `closed` when it goes; and the `activate`, `set_minimized` and `close` requests for the
-   clicks and « Quitter ». Batch D-18 plans a protocol of ours instead: it only needs another
-   implementation of `windows::Source` and `windows::Control`. `ext-foreign-toplevel-list-v1` alone is not
-   enough: it carries neither the active state nor `close`.
-2. **Restricted to the shell**: like layer-shell (see the security notes of
-   `docs/compositor.md`), the global must not be open to every client, Flatpak ones
-   included: it lists and closes every window.
-3. **Game mode**: a way for the dock to know it, so that it hides (see below).
-4. **Windows over the dock**, for `AutoHide=smart` (D-21b): no standard protocol gives clients
-   the geometry of windows. Either an extension of ours that says whether a window overlaps
-   the dock's area, or the rectangles of the windows on each output.
+The list is restricted to the shell (ADR 0021): only the shell socket offers it. KWin offers no
+window list to an ordinary client (it keeps `org_kde_plasma_window_management` for Plasma):
+under KWin the dock has no dot. `tests/windows.rs` runs the `Wlr` source against a fake
+compositor written with `wayland-server`: two windows, one active, then the clicks of the dock
+on them (the one behind brought forward, the active one minimized), then « Quitter », which the
+compositor receives and the watching connection sees go.
+
+Still missing: **game mode**, a way for the dock to know it, so that it hides (see below).
 
 ## Menu of an icon
 
@@ -637,8 +681,18 @@ X focus): the keyboard steps were checked in the nested KWin.
   (fake source) or at its timeout, and no frame is asked for once everything is still.
   Captures of a bounce and of a drag (`dock-bounce-tiny-skia.png`, `dock-drag-tiny-skia.png`).
 - **Shell windows** (`tests/shell.rs`): the `sherlock_shell_v1` source against a fake
-  compositor: windows already open, one that comes, one that closes, and a compositor without
-  the protocol.
+  compositor: windows already open, one that comes, one that closes, a window closed in a batch
+  that is not over yet published only at `done`, a covered screen and back, the requests
+  (minimize, close, activate) on the right windows, a rectangle sent once while it stays, given
+  to a window that comes, moved, then removed; and a compositor without the protocol.
+- **Hiding** (`hide.rs`, `tests/hide.rs`): on the four edges, a maximized window takes the zone
+  at once (84 reserved, then 0), the dock slides until only the band of 2 is on the screen, the
+  input region is that band on the side away from the edge, and the window restored gives the
+  zone back once the dock is in place; a window on another screen changes nothing; the edge
+  brings the dock back over the window without zone, it hides again after the delay and not
+  before, a menu holds it; `always` hidden from the start, `never` never; the icon rectangles
+  on the screen, Sherlock owning no window, unchanged while the pointer magnifies or the dock
+  hides, sent again when an icon comes.
 - **Pinned order** (`dock-config`): `move_pinned` before another id, at the end, unchanged.
 - **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, on
   the left edge, with an open application after the separator, and of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning
@@ -669,10 +723,8 @@ X focus): the keyboard steps were checked in the nested KWin.
 ## What this batch does not do
 
 Batch D-21b added the bounce, smooth adding and removing of icons, reordering by drag and drop
-and dragging an icon out to unpin it (see Animations). Auto-hide (`AutoHide=always`: sliding
-out with no exclusive zone and an input strip of a few pixels at the edge; `AutoHide=smart`:
-hiding when a window overlaps) and sliding in and out belong to batch D-18c, with the rest of
-the windows over `sherlock_shell_v1`.
+and dragging an icon out to unpin it (see Animations). Batch D-18c2 put the dock on
+`sherlock_shell_v1` and added hiding (see Hiding).
 
 - **Hiding in game mode**: there is no game mode yet, and no way for the dock to know it (see
   what the compositor will have to provide).
