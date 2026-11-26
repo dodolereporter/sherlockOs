@@ -56,11 +56,27 @@ color, size, duration and text is in `sherlock_ui::lock::screen`.
 - `libpam.so.0` is opened at run time (`libloading`): nothing to build against, no development
   package.
 - The password is a `Secret` (`system_services::secret`, shared with the Wi-Fi password of the
-  bar): `Debug` prints `***`, and it is overwritten with zeros when dropped. The conversation
-  function gives PAM a `malloc` copy, which PAM frees; our copy is overwritten as soon as it is
-  handed over. It is never logged.
-- pam_faillock, when the system's `login` uses it, limits the tries; its delay is respected
-  (the check runs on its own thread, the screen keeps drawing).
+  bar): `Debug` prints `***`, and it is overwritten with zeros (`zeroize`, volatile writes)
+  when dropped. The conversation function gives PAM a `malloc` copy, which PAM frees; our copy
+  is overwritten as soon as it is handed over. It is never logged.
+- **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
+  text in its own state, and `on_input` hands a new `String` at each key before it becomes a
+  `Secret`; iced frees them without overwriting them. They live in the memory of this process
+  only, for the time the field shows them; a process able to read it (ptrace) could read the
+  password anyway.
+- **Tries.** The lock screen runs as the user, so it cannot write the counters of
+  pam_faillock: failures are not counted, as with swaylock. Each wrong password waits for the
+  delay of pam_faildelay from `login` (3 s on Debian) before PAM answers, and only one check
+  runs at a time: that is what slows the tries. The check runs on its own thread, the screen
+  keeps drawing.
+- **Only one clean exit.** The toolkit (`exwlshellev`) sends `unlock_and_destroy` on every
+  clean exit while the lock is held: the program reaches `iced::exit()` only after PAM accepted
+  the password. A panic aborts the process (no unwinding through the toolkit), and an error
+  ends it without a clean exit: the compositor keeps the session locked. A test checks that
+  the source has a single exit, in the branch of the acceptance.
+- **Its connection.** The compositor starts the program with a connection it opened itself
+  (`WAYLAND_SOCKET`), the only one allowed to lock (ADR 0023). The program opens no other: the
+  clipboard is off.
 
 ## Tests
 
@@ -69,7 +85,7 @@ color, size, duration and text is in `sherlock_ui::lock::screen`.
   system's PAM, never a real password.
 - `src/machine.rs`: the second click and its delay.
 - `tests/render.rs`, with a fake PAM and a fake `systemctl`: the right password unlocks, a wrong
-  one empties the field, an empty one sends nothing; the typed password never shows in a
+  one empties the field, an empty one sends nothing; only PAM's acceptance leads to the exit; the typed password never shows in a
   message (`Typed(***)`); the pill follows the screen of the pointer; a machine button needs a
   second click. Screenshots in `target/tmp/lock/`: rest, typing, spinner and error in both
   themes, the second screen, and the rest on the four sizes above.

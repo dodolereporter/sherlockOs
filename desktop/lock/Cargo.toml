@@ -37,6 +37,9 @@ libloading = "=0.8.9"
 # malloc, strdup and getpwuid_r for the PAM conversation and the user name: the version of the
 # other shell programs.
 libc = "=0.2.191"
+# The copies of the password made for PAM are overwritten with volatile writes: the version
+# system-services pins for `Secret`.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 # The local time, as the bar reads it (workspace crate).
 appearance-config = { path = "../appearance-config" }
 sherlock-ui = { path = "../sherlock-ui" }

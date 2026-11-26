@@ -12,6 +12,9 @@ publish.workspace = true
 # executor, no tokio).
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 thiserror = "=2.0.21"
+# Overwrites the password of a `Secret` with volatile writes, which the compiler cannot remove
+# (a plain fill before a drop may be optimized away). Small, no dependency of its own.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 tracing = "=0.1.44"
 
 [lints]
