@@ -342,7 +342,7 @@ choices, then the user and the session buttons (`quick.rs`, services in `system/
 | Control | Service | Read | Written |
 | --- | --- | --- | --- |
 | Wi-Fi | NetworkManager, system bus | `WirelessEnabled`, `WirelessHardwareEnabled`, the first device of type 2, its `ActiveAccessPoint` and `AccessPoints` | `WirelessEnabled`; `ActivateConnection` of a saved connection, else `AddAndActivateConnection` |
-| Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its connected `Device1` | `Powered` |
+| Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its `Device1` and their `Battery1` | `Powered`; `Connect`, `Disconnect`, `Pair`, `Trusted`, `RemoveDevice`, `StartDiscovery`, `StopDiscovery` |
 | « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
 | Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
@@ -392,6 +392,47 @@ protected one asks for its password below its line (a hidden field, Enter or « 
 NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
 (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
 depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+
+**Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
+the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
+
+- **« Mes appareils »**: the paired devices, the connected ones first, each with the glyph of
+  its kind (headphones, mouse, keyboard, phone, computer, gamepad, else Bluetooth), from
+  BlueZ's `Icon`, and on its right « Connecté » and its battery when it gives it
+  (`org.bluez.Battery1`). A click connects or disconnects it.
+- **« Autres appareils »**: the named devices a scan finds, twelve at most; a device without a
+  name would only show its address and is left out. A scan (`StartDiscovery`) runs while the
+  list is open, « Recherche… » on the right of the section, and stops (`StopDiscovery`) when
+  the list closes, by « Retour » or with the panel. A click pairs the device: `Pair`, then
+  `Trusted=true` and `Connect`. One device at a time; its line reads « Connexion… » or
+  « Appairage… ».
+- **The agent.** For each pairing only, the bar serves `org.bluez.Agent1` at
+  `/org/sherlockos/bar/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
+  end, whatever the end. It answers BlueZ alone: the unique name that owns `org.bluez`, read
+  with `GetNameOwner` when the agent is registered, compared with the sender of every call; and
+  about the device being paired alone. Anything else gets `org.bluez.Error.Rejected`. Its
+  questions come into the panel, in a card under the list: a code to check on the device
+  (`RequestConfirmation`), a code to type on it (`RequestPinCode`, `RequestPasskey`: drawn from
+  `/dev/urandom`), or a code it shows (`DisplayPinCode`, `DisplayPasskey`), with « Confirmer »
+  and « Annuler ». Nothing is answered by itself: the agent waits for the click.
+  `RequestAuthorization` and `AuthorizeService` are refused, always; a « Just Works » pairing
+  started by `Pair` does not ask.
+- **Closing the panel during a pairing** stops it at once: the iced task of the pairing is
+  aborted, its stream dropped, and a guard cancels the pairing (`CancelPairing`, while `Pair`
+  has not answered) and unregisters the agent, on the connection's own executor. Only the end
+  of the pairing, connection or disconnection under way frees the list for another device.
+- **« Oublier »**: the bin button of a paired device asks « Oublier Casque ? Il faudra
+  l'appairer de nouveau. » under its line, then `RemoveDevice`.
+- **Time limits**: 5 s for the reads and the scan, 60 s for connecting, pairing and forgetting
+  (the action connection): a device that does not answer ends in « Échec », never in a wait.
+  Without BlueZ, « Indisponible ».
+- **Live**: `InterfacesAdded` and `InterfacesRemoved` of BlueZ's object manager, besides its
+  `PropertiesChanged`, coalesced like the others: no polling.
+
+![The Bluetooth devices, all fictitious](../desktop/bar/screenshots/bluetooth-devices.png)
+![The same in the light theme](../desktop/bar/screenshots/bluetooth-devices-light.png)
+![A device pairing, its code to confirm](../desktop/bar/screenshots/bluetooth-pairing.png)
+![The same in the light theme](../desktop/bar/screenshots/bluetooth-pairing-light.png)
 
 **Live.** While the control centre is open, the bar follows `PropertiesChanged` of
 NetworkManager's main object, `StateChanged` of its devices, `PropertiesChanged` of BlueZ and of
@@ -609,6 +650,16 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   cancelled, confirmed), Do not disturb written to a temporary file, a refusal under its tile.
   In `tests/render.rs`: the clicks on the tiles, a profile, and nothing from the game mode or
   the graphics card.
+- **Bluetooth** (`tests/bluetooth.rs`): a fake BlueZ on a private bus (its own `dbus-daemon`,
+  never the system bus) with fictitious devices: the list, paired first, kinds, battery, an
+  unnamed device left out; connecting and disconnecting; a scan started and stopped; a pairing
+  confirmed (paired, trusted, connected) and one cancelled, the agent registered for each
+  pairing only; another client of the bus calling the agent, BlueZ asking about another device,
+  `AuthorizeService` and `RequestAuthorization`, all rejected; the panel closing during a
+  pairing, which cancels it and unregisters the agent; a device that never answers `Pair`, failing within the time limit; a device
+  forgotten; BlueZ absent. In `quick.rs`, the scan while the list is open and stopped when it
+  or the panel closes, one device at a time, the agent's question answered by the click, a
+  refusal shown, « Oublier » asking first.
 - **Notification centre** (`tests/history.rs`): the real daemon on a private bus: the history
   listed and grouped, `Changed` after each notification, an action run from the centre, « Tout
   effacer », and a bus without the daemon.
@@ -682,7 +733,7 @@ shows against one.
 - The application name from its `.desktop` file: the bar shows the window title.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
 - The game mode and the choice of the graphics card: their tiles wait for their batches.
-  Bluetooth devices are not listed nor paired: the tile only switches the adapter.
+- Bluetooth: the first adapter only; no file transfer, no audio profile choice.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
   already follows that screen alone; a bar on every screen needs the menu to open on the
   surface that was clicked.
