@@ -682,7 +682,7 @@ impl State {
                 pointer.axis(self, frame);
                 pointer.frame(self);
             }
-            _ => {}
+            event => self.gesture_event(event),
         }
     }
 

@@ -572,6 +572,7 @@ version = "0.0.0"
 dependencies = [
  "ab_glyph",
  "appearance-config",
+ "cursor-theme",
  "desktop-config",
  "image",
  "shell-protocol",
@@ -744,6 +745,15 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "cursor-theme"
+version = "0.0.0"
+dependencies = [
+ "resvg",
+ "sherlock-ui",
+ "xcursor",
+]
 
 [[package]]
 name = "darling"
@@ -3853,6 +3863,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6769c452d71ba30696c6b37770c439a9cc9110f47f7d5cdbeda79840ef5ea31"
 dependencies = [
  "winnow",
+]
+
+[[package]]
+name = "toolkit-theme"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

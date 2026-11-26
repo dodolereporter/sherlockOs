@@ -11,6 +11,7 @@ pub mod decorations;
 pub mod dmabuf;
 pub mod focus;
 pub mod genie;
+pub mod gestures;
 mod handlers;
 mod input;
 pub mod keyboard;
@@ -24,6 +25,7 @@ pub mod perf;
 pub mod render;
 mod shell;
 pub mod stats;
+pub mod touchpad;
 pub mod udev;
 pub mod wallpaper;
 pub mod winit;
@@ -157,6 +159,10 @@ pub struct State {
     /// Screens and where they draw in the host frame.
     screens: Vec<output::Screen>,
     gesture: Option<input::Gesture>,
+    /// Touchpad gestures in progress, and the protocol that hands them to clients (lot D-31).
+    gestures: gestures::Gestures,
+    /// Touchpad setting and the touchpads it applies to (lot D-31).
+    touchpad: touchpad::Touchpad,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -287,6 +293,8 @@ impl State {
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
+            gestures: gestures::Gestures::new(&dh),
+            touchpad: touchpad::Touchpad::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,

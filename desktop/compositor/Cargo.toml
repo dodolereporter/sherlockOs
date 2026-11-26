@@ -33,6 +33,8 @@ xcursor = "=0.3.11"
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 # Wallpaper setting, shared with Control Room (workspace crate).
 desktop-config = { path = "../desktop-config" }
+# Names of the house cursor themes and of their shapes, without the generator (lot D-07).
+cursor-theme = { path = "../cursor-theme" }
 # Wallpaper decoders, PNG (the variants) and JPEG (an image chosen by the user) only. Same
 # version as evidence.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
@@ -44,7 +46,8 @@ shell-protocol = { path = "../shell-protocol", features = ["server"] }
 # built.
 ab_glyph = "=0.2.32"
 tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
-# The theme of the appearance file, followed live by the decorations (workspace crate).
+# The theme of the appearance file, followed live by the decorations, and read at startup for
+# the cursors (workspace crate).
 appearance-config = { path = "../appearance-config" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
@@ -59,7 +62,7 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # bench build the scene's elements without a GPU (lot P-01).
 smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test"] }
 # Wayland client of the integration test: the same crates that smithay already pulls for
-# its winit backend.
+# its winit backend. `unstable` for the client side of `zwp_pointer_gestures_v1` (lot D-31).
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging", "unstable"] }
 # Client side of KDE's server decoration protocol, for the decoration test: the version that

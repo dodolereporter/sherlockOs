@@ -4,6 +4,7 @@ members = [
     "desktop/appearance-config",
     "desktop/bar",
     "desktop/compositor",
+    "desktop/cursor-theme",
     "desktop/desktop-config",
     "desktop/dock",
     "desktop/dock-config",
@@ -15,6 +16,7 @@ members = [
     "desktop/notifications-config",
     "desktop/sherlock-ui",
     "desktop/shell-protocol",
+    "desktop/toolkit-theme",
     "sherlock/sherlockd",
 ]
 

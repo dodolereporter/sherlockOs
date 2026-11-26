@@ -1,6 +1,6 @@
 [package]
 name = "desktop-config"
-description = "Settings of the desktop shared by the compositor and Control Room: the wallpaper"
+description = "Settings of the desktop shared by the compositor and Control Room: the wallpaper, the touchpad"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

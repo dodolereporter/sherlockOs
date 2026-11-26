@@ -31,8 +31,16 @@ build:
 wallpapers output="target/wallpapers":
     cargo run --release -p desktop-config --features variants --bin wallpaper-variants -- assets/wallpapers {{ quote(output) }}
 
-# Builds the session (compositor, bar, dock), then prints the sudo commands that install it for the login screen, without running them
-install-session:
+# Generates the cursor themes nom-os and nom-os-light from the SVGs of assets/cursors
+cursors output="target/cursors":
+    cargo run --release -p cursor-theme --features render -- build assets/cursors {{ quote(output) }}
+
+# Draws the board of every cursor, dark and light, for docs/cursor.md
+cursor-board output="docs/cursor/board.png":
+    cargo run --release -p cursor-theme --features render -- board assets/cursors {{ quote(output) }}
+
+# Builds the session (compositor, bar, dock) and the cursor themes, then prints the sudo commands that install them for the login screen, without running them
+install-session: cursors
     cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence
     desktop/compositor/session/install.sh "$PWD"
 
@@ -58,6 +66,20 @@ install-evidence:
     for file in "$theme"/*/apps/evidence.*; do
         install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
     done
+
+# Writes the GTK, Qt and KDE themes under a folder laid out like a home folder, to look at them; overwrites nothing unless `force` is `--force`
+themes output="target/themes" force="":
+    cargo run -p toolkit-theme -- generate {{ force }} {{ quote(output) }}
+
+# Installs the colors of the desktop for GTK, Qt and KDE applications, without root: every file it replaces is kept as <name>.bak-<date>
+install-themes:
+    cargo build --release -p toolkit-theme
+    "${CARGO_TARGET_DIR:-target}/release/toolkit-theme" install
+
+# Takes away what install-themes installed and puts the backups back
+uninstall-themes:
+    cargo build --release -p toolkit-theme
+    "${CARGO_TARGET_DIR:-target}/release/toolkit-theme" uninstall
 
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:
