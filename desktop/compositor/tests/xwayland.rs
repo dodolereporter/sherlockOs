@@ -16,7 +16,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use compositor::State;
+    use compositor::{State, decorations};
     use smithay::{
         backend::input::{ButtonState, KeyState},
         desktop::Window,
@@ -116,6 +116,8 @@ mod tests {
         Map,
         /// Iconify the managed window, as `XIconifyWindow` does (`WM_CHANGE_STATE`).
         Iconify,
+        /// Ask for no decoration on the managed window (`_MOTIF_WM_HINTS`).
+        Undecorate,
         Quit,
     }
 
@@ -177,6 +179,7 @@ mod tests {
         let utf8 = atom(&conn, "UTF8_STRING");
         let moveresize = atom(&conn, "_NET_WM_MOVERESIZE");
         let change_state = atom(&conn, "WM_CHANGE_STATE");
+        let motif = atom(&conn, "_MOTIF_WM_HINTS");
         loop {
             while let Some(event) = conn.poll_for_event().unwrap() {
                 if let Event::SelectionRequest(req) = event {
@@ -235,6 +238,13 @@ mod tests {
                     let event = ClientMessageEvent::new(32, window, change_state, [3, 0, 0, 0, 0]);
                     let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
                     conn.send_event(false, root, mask, event).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Undecorate) => {
+                    // Flags: decorations given (2); decorations: none.
+                    let hints = [2, 0, 0, 0, 0];
+                    conn.change_property32(PropMode::REPLACE, window, motif, motif, &hints)
+                        .unwrap();
                     conn.flush().unwrap();
                 }
                 Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
@@ -360,13 +370,14 @@ mod tests {
         let (commands, receiver) = mpsc::channel();
         let client = thread::spawn(move || x11_client(display, receiver));
 
-        // Mapping and title: the window is centered, and the X server knows its place.
+        // Mapping and title: the window is centered with the title bar of the compositor above
+        // it (lot D-08): 42 more, and the X server knows the place of its content.
         h.run_until("the X11 window", |s| x11_window(s, false).is_some());
         let window = x11_window(&h.state, false).unwrap();
         assert_eq!(State::title(&window).as_deref(), Some("test x11"));
         assert_eq!(
             places(&h.state, &window),
-            (rect(300, 250, 200, 100), rect(300, 250, 200, 100))
+            (rect(300, 271, 200, 100), rect(300, 271, 200, 100))
         );
 
         // Focus: it has the keyboard as soon as XWayland has given it its surface.
@@ -374,6 +385,7 @@ mod tests {
             s.focused_window().as_ref() == Some(&window)
         });
         assert!(h.state.window_visual(&window, Duration::ZERO).is_some());
+        assert!(decorations::server_side(&window));
         // XWayland is an ordinary client: the shell's globals are not offered to it (ADR 0021).
         let xwayland = window.wl_surface().unwrap().client().unwrap();
         assert!(!State::is_shell_client(&xwayland));
@@ -387,6 +399,7 @@ mod tests {
             h.state.space.element_geometry(&menu),
             Some(rect(50, 60, 80, 40))
         );
+        assert!(!decorations::server_side(&menu), "a menu has no title bar");
         let visual = h.state.window_visual(&menu, Duration::ZERO).unwrap();
         assert_eq!(visual.rect, rect(50, 60, 80, 40).to_f64());
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));
@@ -423,7 +436,8 @@ mod tests {
         assert!(current_data_device_selection_userdata(&h.state.seat).is_some());
         assert!(current_primary_selection_userdata(&h.state.seat).is_some());
 
-        // Super + drag up to the top edge: maximized, for the X server too.
+        // Super + drag up to the top edge: maximized, for the X server too, its content under
+        // its title bar.
         h.motion(400.0, 300.0);
         h.key(KEY_SUPER, KeyState::Pressed);
         h.button(ButtonState::Pressed);
@@ -435,7 +449,7 @@ mod tests {
         assert!(surface.is_maximized());
         assert_eq!(
             places(&h.state, &window),
-            (rect(0, 0, 800, 600), rect(0, 0, 800, 600))
+            (rect(0, 42, 800, 558), rect(0, 42, 800, 558))
         );
 
         // Super + down: it returns to its place from before the drag.
@@ -446,20 +460,20 @@ mod tests {
         assert!(!surface.is_maximized());
         assert_eq!(
             places(&h.state, &window),
-            (rect(300, 250, 200, 100), rect(300, 250, 200, 100))
+            (rect(300, 271, 200, 100), rect(300, 271, 200, 100))
         );
 
         // Grab band: the bottom right corner follows the pointer, the top left corner stays.
         h.run_until("the window content", |s| {
             s.window_visual(&window, Duration::ZERO).is_some()
         });
-        h.motion(503.0, 353.0);
+        h.motion(503.0, 374.0);
         h.button(ButtonState::Pressed);
-        h.motion(553.0, 383.0);
+        h.motion(553.0, 404.0);
         h.button(ButtonState::Released);
         assert_eq!(
             places(&h.state, &window),
-            (rect(300, 250, 250, 130), rect(300, 250, 250, 130))
+            (rect(300, 271, 250, 130), rect(300, 271, 250, 130))
         );
 
         // Minimized by the shell, then withdrawn by its application and mapped again: it is no
@@ -494,6 +508,10 @@ mod tests {
         h.state.activate(&window);
         assert!(!h.state.is_minimized(&window) && !surface.is_minimized());
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));
+
+        // A window that asks for no decoration (`_MOTIF_WM_HINTS`) loses its title bar.
+        commands.send(Command::Undecorate).unwrap();
+        h.run_until("the title bar gone", |_| !decorations::server_side(&window));
 
         // Closing: the client leaves, its windows go away and nobody has the keyboard.
         commands.send(Command::Quit).unwrap();
