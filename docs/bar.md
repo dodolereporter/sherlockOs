@@ -11,7 +11,7 @@ namespace are all `bar`. The texts it shows stay in French, from `sherlock-ui`.
 ![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
 
 Both screenshots come from a nested KWin running inside a Xephyr display started for the test,
-with `USER=Dodo` so that no login name of the machine shows (see « Running and checking by
+with `USER=Camille` so that no login name of the machine shows (see « Running and checking by
 hand »).
 
 ### Logo
@@ -270,6 +270,166 @@ ring stayed one Tab behind the real focus and Enter activated the next button.
 The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
 them yet, so the menu does not show them.
 
+## Panels (D-20b)
+
+A click on the indicators opens the control centre; a click on the date and time opens the
+calendar. Each is an `xdg_popup` of the bar surface, with a grab: a click elsewhere closes it,
+and so does Escape or a second click on its button. Opening one closes the other and the
+Sherlock menu. Both indicators and clock are ghost buttons (`panels::bar_button`), veiled while
+their panel is open, and Tab reaches them after the workspaces; their padding is taken back
+from the gaps, so the bar looks the same as before.
+
+| Module | Role |
+| --- | --- |
+| `panel.rs` | Which panel, its size, its place under the bar, its input region; the views of the centre and of the calendar |
+| `calendar.rs` | Months, leap years, the weekday of a date, the six weeks of a month from Monday |
+| `history.rs` | Client of `org.nomos.Notifications.History`: list, group by application, clear, run an action, `Changed` |
+| `bus.rs` | The session bus, opened on first use and shared |
+
+Tokens, styles and French texts are in `sherlock_ui::panels`.
+
+**Place.** The board puts the panels 54 from the top, and their right edge at 1428, where the
+bar ends: `panels::BELOW_BAR` (8) under the 46 the bar takes. The popup is placed from the bar
+width (each `Resized` of the bar surface) and its side margin, so that it keeps 12 from the
+right edge when the bar is attached. On the GPU, the surface holds the panel shadow of the
+board (`0 28px 70px`), cut on the right where the screen ends; the input region is the panel
+alone. In software it holds the 8 under the bar, like the menu its 6. The anchor rectangle is
+the centre of the top edge of the surface, as for the menu (`panel::anchor_rect`).
+
+### Notification centre
+
+The history of the notification daemon, newest first, a card per application (tile with its
+initial, name, time), its three newest notifications in it and « N autres notifications » under
+them. A card of one notification looks like the board's; a card of several puts each time on
+the right of its title. The time is the hour on the day it came, the short date before. A
+notification still open keeps its buttons (three at most, the first one primary, `default`
+left out): a click runs the action through the daemon, which sends `ActionInvoked` to the
+application and closes it. « Tout effacer » empties the history; open notifications stay on
+screen. Without a notification, « Aucune notification »; without the daemon, « Le service des
+notifications ne répond pas. » and a warning in the log.
+
+The list is read when the centre opens, and again on each `Changed` of the daemon while it is
+open (an iced subscription on the session bus, `history::watch`), from the daemon that owns
+the name only: nothing polls, and no other client makes the centre read again. The calls run
+in iced tasks, never on the interface thread. The interface is described in
+`docs/notifications.md` (History over D-Bus).
+
+The board shows the centre next to the quick settings, both 54 from the top: the control
+centre is both, in one popup, and its height is the quick settings' (`panels::CONTROL_HEIGHT`,
+462); the notification list scrolls inside it.
+
+### Quick settings
+
+The right column of the control centre, after the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
+« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the graphics card and energy
+choices, then the user and the session buttons (`quick.rs`, services in `system/`).
+
+| Control | Service | Read | Written |
+| --- | --- | --- | --- |
+| Wi-Fi | NetworkManager, system bus | `WirelessEnabled`, `WirelessHardwareEnabled`, the first device of type 2, its `ActiveAccessPoint` and `AccessPoints` | `WirelessEnabled`; `ActivateConnection` of a saved connection, else `AddAndActivateConnection` |
+| Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its connected `Device1` | `Powered` |
+| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
+| Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
+| Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
+| « Énergie » | power-profiles-daemon, system bus | `ActiveProfile`, `Profiles`, under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles` | `ActiveProfile` |
+| « Mode jeu », « Carte graphique » | none yet | | Faded, « Bientôt » |
+| Session | the launcher's `Systemd` (`launcher::system`) | | `loginctl lock-session`, `terminate-session`, `systemctl reboot`, `poweroff` |
+
+**Every system write goes through D-Bus** to the service that owns the setting, which asks
+polkit when its policy wants it (NetworkManager: `enable-disable-wifi`, `network-control`,
+`settings.modify.system`; power-profiles-daemon: `switch-profile`); logind lets the user of the
+active session set the brightness. Nothing runs as root, nothing uses `sudo`. Sound is the
+exception: PipeWire has no D-Bus interface, and `pactl` talks to the user's own sound server.
+The calls run in iced tasks, never on the interface thread; `pactl` and the sysfs reads on a
+thread of their own each, never on iced's pool.
+
+**Time limits.** Every D-Bus connection of the bar has a `method_timeout`: 5 s on the session
+bus and for the reads on the system bus, 60 s for the actions on the system bus, long enough
+for polkit to ask for a password. `pactl` is killed after 3 s (`system::audio::TIMEOUT`). A
+service that does not answer in time ends unavailable, never « … » for ever. The sound server
+gets one `pactl` at a time: a volume or a mute asked meanwhile waits, the latest of each
+replacing the previous one (`SoundQueue`).
+
+**Password.** The Wi-Fi password lives in a `Secret`: its `Debug` shows `***`, it is
+overwritten with zeros when dropped, and the panel wipes it whenever it closes (Escape, its
+button, a click elsewhere, the compositor) and once it is sent to NetworkManager. The text
+field of iced keeps its own copy while the field is on screen. A slider sends one call at a time,
+the latest value winning (`Throttle`): a drag does not queue dozens of calls. The brightness
+never goes below 1 %.
+
+**States.** A tile shows « … » while it is read. A service that is not there fades its control:
+« Indisponible » (no NetworkManager, no Bluetooth adapter), « Aucune carte » without a Wi-Fi
+device, « Bloqué » when the radio switch keeps the Wi-Fi off, « Service absent » next to
+« Énergie », « Aucune sortie son » under the volume, a faded rail without a backlight. A service
+that refuses shows « Refusé » under its tile (« Échec » for another error), the details in the
+log; the next read shows the real state again. The D-Bus error name sorts them:
+`ServiceUnknown`, `NameHasNoOwner` and an unknown object, interface or method are absent;
+`AccessDenied`, `NotAuthorized`, `PermissionDenied`, `InteractiveAuthorizationRequired` are
+refused.
+
+**Wi-Fi.** A click on the tile switches the Wi-Fi; its line is the network it is on. The
+chevron on its right (« Réseaux Wi-Fi ») opens the list of networks after asking for a scan: one
+line per name (the access point in use, else the strongest), twelve at most, read again when
+the scan's results come (`PropertiesChanged` of the device's Wi-Fi interface, `AccessPointAdded`,
+`AccessPointRemoved`), a padlock on a
+protected one, a check on the one in use. An open or saved network is joined at once. A new
+protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
+NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
+(`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
+depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+
+**Live.** While the control centre is open, the bar follows `PropertiesChanged` of
+NetworkManager's main object, `StateChanged` of its devices, `PropertiesChanged` of BlueZ and of
+power-profiles-daemon, on the system bus (`quick::watch`), and reads that service again. Sound
+and brightness are read when the panel opens and after each change.
+
+**Session.** The user row of the board, with the launcher's commands and rules
+(`docs/launcher.md`): « Verrouiller » at once (`loginctl lock-session`: until the lock screen of
+D-25 exists, logind has no locker to tell, and the button does nothing visible); « Se déconnecter », « Redémarrer » and
+« Éteindre » want a second click at least 400 ms after the first (`launcher::CONFIRM_DELAY`),
+so that a double click only arms them. The armed button turns amber and « Reclique pour
+confirmer » replaces the user's name; any other click cancels it.
+
+![The control centre](../desktop/bar/screenshots/control-centre.png)
+![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
+![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
+![The control centre without notification nor service](../desktop/bar/screenshots/control-centre-empty.png)
+![The same in the light theme](../desktop/bar/screenshots/control-centre-empty-light.png)
+
+The tiles keep 10 on their sides and 8 between their 16 px glyph and their texts, 2 under the
+board each: « Ne pas déranger » fits in the 149 a tile gets, as iced lays out Inter.
+
+### Calendar
+
+No board draws it: the panel glass of the board, 282 wide (seven columns of 36). The month and
+its year in Space Grotesk 17, the arrows « Mois précédent » and « Mois suivant », the weekday
+heads « lu » to « di », Monday first, then always six weeks, so that the panel keeps its height:
+the days of the months around are faded (tertiary text), today is a green disc. Under a line,
+the slot of the agenda, « Bientôt : tes rendez-vous du jour ici. »: there is no agenda in 0.1.
+No week numbers: no board shows them.
+
+It opens on the month of the bar's clock, whose year now comes with the date (`LocalTime::year`).
+Page Down and Page Up show the next and previous months, Home comes back to today's.
+
+The dates are computed by `calendar.rs` (Gregorian, Sakamoto's weekday), not by the C library:
+only today comes from `localtime_r`.
+
+### Keyboard
+
+| Where | Key | Effect |
+| --- | --- | --- |
+| Bar | Tab | Also reaches the indicators and the clock; Enter or Space opens their panel |
+| Panel | Escape | Closes it |
+| Panel | Tab, Shift+Tab | Moves between its controls (iced focus), Enter or Space activates |
+| Calendar | Page Down, Page Up, Home | Next month, previous month, today's month |
+
+![The calendar](../desktop/bar/screenshots/calendar.png)
+![The calendar in the light theme](../desktop/bar/screenshots/calendar-light.png)
+
+From `cargo test -p bar --test render`, at scale 2, in software: the board's three
+applications (with a second Sherlock notification) next to the board's quick settings, and
+November 2026 on the board's date.
+
 ## Running and checking by hand
 
 On the author's machine (Plasma X11), in a nested KWin Wayland:
@@ -337,7 +497,7 @@ inside a Xephyr display started for the test, and work on that display only:
 ```sh
 Xephyr :5 -screen 1440x900 -br -nolisten tcp &
 DISPLAY=:5 kwin_wayland --x11-display :5 --width 1440 --height 900 --socket wayland-bar &
-WAYLAND_DISPLAY=wayland-bar USER=Dodo BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar &
+WAYLAND_DISPLAY=wayland-bar USER=Camille BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar &
 DISPLAY=:5 import -window root screenshot.png
 ```
 
@@ -375,7 +535,27 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Bursts**: a burst of monitor lines gives a single refresh.
 - **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, and of the
   attached bar (`bar-attached`, `bar-attached-light`), expected texts, a click on a workspace
-  and on a menu entry yields the right message.
+  and on a menu entry yields the right message. The calendar and the notification centre in
+  both themes, full and empty; a click on the indicators or the clock, on a month arrow, on an
+  action and on « Tout effacer ».
+- **Calendar** (`calendar.rs`): leap years (2000, 1900, 2028), weekdays of known dates, months
+  across years, the grid of November and December 2026 and of February 2027 and 2028.
+- **Panels** (`panel.rs`): both panels land at 54, their right edge at 1428, with and without
+  their shadow, and 12 from the edge under an attached bar; the time of a notification.
+- **Quick settings** (`tests/quick.rs`): fake NetworkManager, BlueZ, logind and
+  power-profiles-daemon on a private bus started by the test, never the system bus: the Wi-Fi
+  read (devices, networks merged by name, security), switched, a saved network joined, a new
+  one only with its password; Bluetooth read and switched, an adapter missing; the backlight
+  chosen by kind, set through logind, never below 1 %; the profiles under the older name of
+  the daemon, without performance; each service refusing (polkit's `AccessDenied`) and absent;
+  a `StateChanged` of NetworkManager reaching the bar. A fake `pactl` for the sound. In
+  `quick.rs`: the slider throttle, the session rules (lock at once, a second click too soon,
+  cancelled, confirmed), Do not disturb written to a temporary file, a refusal under its tile.
+  In `tests/render.rs`: the clicks on the tiles, a profile, and nothing from the game mode or
+  the graphics card.
+- **Notification centre** (`tests/history.rs`): the real daemon on a private bus: the history
+  listed and grouped, `Changed` after each notification, an action run from the centre, « Tout
+  effacer », and a bus without the daemon.
 - **Contrast** (`sherlock-ui`): bar texts and workspace chips (active, occupied, empty), on
   the bar over the desktop and its three discs, and on the opaque attached bar.
 
@@ -392,7 +572,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   batches.
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
-- **User name**: the board says « Dodo ». The bar reads the user's GECOS, otherwise the login.
+- **User name**: the board shows a sample name. The bar reads the user's GECOS, otherwise the login.
 - **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
   yet, so they are not shown.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
@@ -407,6 +587,12 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.
+- **Panels** (D-20b): the notification centre is as high as the quick settings and its list
+  scrolls; the board's centre is only as high as its cards. A card per application, not per
+  notification. The board's « Réglages » button of the user row is not there (Control Room
+  does not exist yet); « Se déconnecter » and « Redémarrer » are added. The Wi-Fi tile has a
+  chevron for the network list, which no board draws, nor the calendar. « Carte graphique »
+  shows no active choice, since none exists yet. Panels open at once, without animation.
 
 ## GPU rendering (D-02)
 
@@ -438,8 +624,8 @@ shows against one.
 
 - The application name from its `.desktop` file: the bar shows the window title.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
-- Quick settings on a click on an indicator (Panels batch), the dock (D-21), the launcher
-  (D-22).
+- The game mode and the choice of the graphics card: their tiles wait for their batches.
+  Bluetooth devices are not listed nor paired: the tile only switches the adapter.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
   already follows that screen alone; a bar on every screen needs the menu to open on the
   surface that was clicked.
