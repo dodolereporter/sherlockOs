@@ -41,6 +41,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/decorations/` | Server-side decorations (lot D-08): who gets one (`protocol.rs`), the frame and its bar, the pointer on the bar and its buttons, the bar drawn into a texture (`raster.rs`) |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants` |
 | `src/shaders/` | The three GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag` |
@@ -71,7 +72,8 @@ Behavior:
 - The gesture key is Super in a real session (lot D-14), and Alt in nested mode (`--nested`): the
   host session keeps Super for itself (under Plasma, the KWin window actions and the launcher).
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
-- Windows draw their title bar themselves: xdg-decoration is out of the lot.
+- Windows that ask for it get their title bar from the compositor (lot D-08, see
+  "Server-side decorations"); the others draw their own.
 - The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
   `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
   `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
@@ -752,7 +754,8 @@ front to back, as Smithay expects them:
 1. anchored surfaces of the overlay and top layers, each with its menus in front;
 2. the snap preview: translucent green rounded rectangle, 2 px green border;
 3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
-   scaled), its border, its clipped content, its shadow;
+   scaled), its border, its title bar if the compositor draws it, its clipped content, its
+   shadow;
 4. anchored surfaces of the bottom and background layers;
 5. the wallpaper, or without one the three background discs (see "Wallpapers");
 6. the desktop color, which fills the rest.
@@ -889,6 +892,93 @@ drawn in the previous frame.
   Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
+
+## Server-side decorations (lot D-08)
+
+The compositor draws the title bar and the three buttons of the windows whose application
+leaves its decoration to it, in the style of the boards: Konsole and the other Qt and KDE
+applications no longer show Qt's fallback decoration, and X11 windows get a frame. The code is
+in `src/decorations/`; colors, measures and the double click delay in `sherlock_ui::decorations`.
+
+**Who gets one.**
+
+| Client | Protocol | Result |
+| --- | --- | --- |
+| Qt 6 (Konsole, KWrite) | `zxdg_decoration_manager_v1`, asks for `server_side` | Our bar |
+| GTK 3 without a header bar, Qt 5 of KDE | `org_kde_kwin_server_decoration_manager` | `Server`, the default mode: our bar |
+| Chromium, Evidence (winit, `decorations: false`) | xdg-decoration, `set_mode(client_side)` | Their own: no second bar |
+| Firefox (GTK 3, tabs in its title bar) | KDE's protocol, asks for `Client` | Its own |
+| GTK 4, libadwaita (Zenity) | Neither | Its own |
+| X11 window (xterm, xeyes, Konsole on X11) | `_MOTIF_WM_HINTS`, window type | A bar, unless it asks for none (Firefox on X11), places itself (override-redirect), or is a menu, tooltip, notification or splash screen |
+
+Tried on the author's machine (Debian 13, Qt 6.8.2, GTK 4.18.6, GTK 3.24.49), with the compositor
+running without a screen: each application above asked what the table says. Electron was not
+tried: none is installed.
+
+A new xdg decoration, or one whose client drops its preference (`unset_mode`), gets
+`server_side`; a client that asks for `client_side` keeps it: the compositor only forces its bar
+on clients that let it. The mode goes with the next configure. A window that gains or loses its
+bar while maximized or snapped is placed again.
+
+**Geometry.** The space keeps the geometry of the content, the one the client knows. The bar
+sits above it: 42 pixels, the window border (1), the bar (40) and its divider (1), as on the Main
+board. The whole window, the frame, is the content and its bar: it is what gets centered,
+maximized and snapped (the content takes the zone but the top 42), what the grab band surrounds,
+and what the corners, the border, the shadow and the clip of the content go around. A fullscreen
+window has no bar. Maximized, its corners are square (D-18c1), the bar included.
+
+**Look.** Like the title bar of Evidence and the boards: `title_bar` background, rounded top
+corners, `divider` line under it; the title on the left from 15 (border and padding of 14), Inter
+13 semibold in `text_primary`, cut with an ellipsis before the buttons; the pill (`controls`,
+radius 9, padding 2) of three buttons of 28 by 24 (radius 7, 2 apart), 9 from the right edge,
+with the icons of `sherlock_ui::icon` (14 px, stroke 1.7, `text_secondary`). A button under the
+pointer takes `hover`, held down `pressed`. Maximized, the maximize button shows the restore icon
+(`decorations::RESTORE_ICON`). The colors are those of the active palette: the compositor makes
+the theme of the appearance file active at start and follows it (`decorations::follow_theme`),
+without the fade of the shell programs.
+
+**Behavior.**
+
+- A click on a button minimizes, maximizes or restores, or asks the application to close
+  (`xdg_toplevel.close`, `WM_DELETE_WINDOW`). It acts on release, if the pointer is still on it.
+- A double click on the bar (two presses within 400 ms, `decorations::DOUBLE_CLICK`, less than
+  4 pixels apart) maximizes, or gives back the previous place.
+- Dragging the bar moves the window, with the snapping of every move: dropped at the top, it is
+  maximized; pulled out of a zone, it gets its size back with the pointer on its bar.
+- The client sees none of these presses. The cursor over the bar is the arrow.
+- A right click does nothing yet: the menu (minimize, maximize, always on top, move to a
+  workspace, close) is a follow-up.
+
+**Drawing and damage.** The bar is drawn on the processor into one texture (`raster.rs`):
+tiny-skia fills the shapes and strokes the icons, ab_glyph lays out and rasterizes the title.
+Both crates were already built into the compositor (smithay's winit backend pulls them, through
+sctk-adwaita): nothing new is compiled. cosmic-text, which iced uses, would shape and fall back
+on other fonts, but it is not in the compositor and its font system is much heavier for one line
+of text. ab_glyph kerns without shaping: enough for the scripts Inter covers. A glyph Inter lacks
+(CJK, emoji) shows as a box.
+
+The texture depends on its `Look`: size in pixels, scale, radius, title, buttons lit, colors.
+Each frame builds the look; the texture is made again only when it changes (a title, a hover,
+a resize, the corners while maximizing), one per window and scale. Its element keeps its
+identity under `Part::TitleBar` (see "Damage"), so a bar that did not change is not drawn
+again, and nothing is drawn at rest. Its opaque region is the bar but its top corners.
+
+**Tests.** `decorations` (unit): the buttons sit at their place of the Main board, the pointer
+finds them. `raster` (unit): the window icons are read, a long title ends with an ellipsis.
+`tests/headless.rs`: a client asking through xdg-decoration gets `server_side`, then
+`client_side` when it asks, KDE's protocol answers `Server`; a drag of the bar moves the window,
+a double click maximizes it under its bar (800 by 558), the restore button gives back its place,
+a drop at the top maximizes, a press that leaves its button does nothing, minimize then close.
+`tests/xwayland.rs`: the X11 window has its bar (content 42 lower, maximized at 42), the menu
+has none, `_MOTIF_WM_HINTS` without decorations removes it. `tests/perf.rs`: the ten windows of
+the bench have the bar; hovering a button redraws that bar only, and nothing at rest.
+`captures_of_a_decorated_window` (ignored, needs Mesa's EGL) renders the scene into a texture
+with the software renderer and writes `screenshots/decorations-dark.png` and
+`decorations-light.png`:
+
+```sh
+cargo test -p compositor --test headless -- --ignored captures_of_a_decorated_window
+```
 
 ## Wallpapers
 

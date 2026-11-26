@@ -9,7 +9,7 @@ toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 00
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `gpu` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -90,6 +90,10 @@ All tokens are named by their role, in English like the rest of the code.
   (150 ms) and `EVENT_COALESCE_MAX_MS` (500 ms) for merging bursts of system events.
 - **`window`**: grab band and snapping of windows, set by D-17 for the compositor, and
   `SNAP_GAP`, the 8 px margin around snapped windows (D-18c1).
+- **`decorations`** (D-08): the title bar the compositor draws for the applications that leave
+  it their decoration: `INSET` (42: border, bar of 40, divider), title, pill and buttons taken
+  from `metrics` and `typography`, `RESTORE_ICON`, `DOUBLE_CLICK` (400 ms), and `Colors::of`, the
+  colors of a palette, those of the title bar of Evidence.
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
