@@ -2226,7 +2226,10 @@ neither drawn nor given input; a refused lock cannot unlock, the lock that holds
 can, and the window gets the keyboard back; an unlock before `locked` is refused; a killed
 lock client leaves the session locked, the lock programs fail three times, the rescue program
 too, and the rescue screen shows, Enter trying again; an ordinary client cannot take a lock
-over, a lock program can; Super + L locks at once.
+over, a lock program can; Super + L locks at once; on four screens side by side (1366 × 768,
+1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
+size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
+scale.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 

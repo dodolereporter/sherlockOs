@@ -68,6 +68,8 @@ mod tests {
         window_configured: bool,
         layer_configured: bool,
         lock_size: Option<(u32, u32)>,
+        /// Every configure of the lock surfaces.
+        lock_sizes: Vec<(u32, u32)>,
         locked: bool,
         finished: bool,
     }
@@ -203,6 +205,7 @@ mod tests {
             {
                 surface.ack_configure(serial);
                 seen.lock_size = Some((width, height));
+                seen.lock_sizes.push((width, height));
             }
         }
     }
@@ -699,5 +702,121 @@ mod tests {
         h.key(KEY_A);
         h.settle();
         assert_eq!(h.peers[app].seen.keys, []);
+    }
+
+    /// The screens of the brief: a small laptop, the author's screen, a 2560 × 1600 at 1.5 and a
+    /// 4K at 2. Each gets a lock surface of its logical size, drawn on it alone.
+    const SCREENS: [((i32, i32), f64); 4] = [
+        ((1366, 768), 1.0),
+        ((1920, 1080), 1.0),
+        ((2560, 1600), 1.5),
+        ((3840, 2160), 2.0),
+    ];
+
+    /// A harness whose screens are `SCREENS`, side by side.
+    fn start_on_every_screen(client: &[&str], rescue: &[&str]) -> Harness {
+        let mut h = Harness::start(client, rescue);
+        let first = h.state.outputs()[0].clone();
+        h.state.remove_screen(&first);
+        for (size, scale) in SCREENS {
+            h.state.add_output(size.into(), scale);
+        }
+        h
+    }
+
+    #[test]
+    fn every_screen_gets_a_lock_surface_of_its_own_size() {
+        let mut h = start_on_every_screen(&["sleep", "5"], &["false"]);
+        let locker = h.connect();
+        let peer = &h.peers[locker];
+        let qh = peer.qh();
+        let manager: ExtSessionLockManagerV1 = peer.bind();
+        let lock = manager.lock(&qh, ());
+        let outputs: Vec<(u32, u32)> = peer
+            .seen
+            .globals
+            .iter()
+            .filter(|g| g.1 == "wl_output")
+            .map(|g| (g.0, g.2))
+            .collect();
+        assert_eq!(outputs.len(), SCREENS.len());
+        let mut surfaces = Vec::new();
+        for (name, version) in outputs {
+            let output: WlOutput = peer.registry.bind(name, version.min(4), &qh, ());
+            let surface = peer.bind::<WlCompositor>().create_surface(&qh, ());
+            let _lock_surface = lock.get_lock_surface(&surface, &output, &qh, ());
+            surfaces.push(surface);
+        }
+        h.run_until("a configure per screen", |h| {
+            h.peers[locker].seen.lock_sizes.len() == SCREENS.len()
+        });
+        // The logical size of each screen, in the order the screens were added.
+        let mut expected: Vec<(u32, u32)> = h
+            .state
+            .views()
+            .iter()
+            .map(|(_, view)| (view.area.size.w as u32, view.area.size.h as u32))
+            .collect();
+        let mut sizes = h.peers[locker].seen.lock_sizes.clone();
+        assert_eq!(
+            expected,
+            [(1366, 768), (1920, 1080), (1707, 1067), (1920, 1080)]
+        );
+        expected.sort();
+        sizes.sort();
+        assert_eq!(sizes, expected);
+        for (surface, (w, h_)) in surfaces.iter().zip(h.peers[locker].seen.lock_sizes.clone()) {
+            h.peers[locker].show(surface, w as i32, h_ as i32);
+        }
+        h.settle();
+        // Each screen draws one surface, its own, over the whole screen.
+        for (output, view) in h.state.views() {
+            let items =
+                compositor::render::items(&h.state, (&output, &view), None, false, h.state.now()).0;
+            let drawn: Vec<_> = items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Surface { origin, scale, .. } => Some((*origin, *scale)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(drawn, [(view.frame.loc, view.scale)], "{output:?}");
+            let background = items
+                .iter()
+                .any(|i| matches!(i, Item::Shape { rect, .. } if *rect == view.frame));
+            assert!(background, "the background covers the screen");
+        }
+    }
+
+    #[test]
+    fn the_rescue_screen_is_centered_on_every_screen() {
+        let mut h = start_on_every_screen(&["true"], &["/nonexistent/swaylock"]);
+        h.chord(KEY_SUPER, KEY_L);
+        h.run_until("the rescue screen", |h| h.state.lock_rescue_shown());
+        for (output, view) in h.state.views() {
+            let items =
+                compositor::render::items(&h.state, (&output, &view), None, false, h.state.now()).0;
+            let labels: Vec<_> = items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Label { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(labels.len(), 2, "{output:?}");
+            let frame = view.frame;
+            let center = frame.loc.x + frame.size.w / 2;
+            for rect in &labels {
+                assert!(
+                    frame.contains_rect(*rect),
+                    "{output:?}: {rect:?} out of {frame:?}"
+                );
+                let middle = rect.loc.x + rect.size.w / 2;
+                assert!((middle - center).abs() <= 1, "{output:?}: not centered");
+            }
+            // Their height follows the scale of the screen.
+            let height = labels[0].size.h as f64 / view.scale;
+            assert!((height - 24.0).abs() <= 1.0, "{output:?}: {height}");
+        }
     }
 }
