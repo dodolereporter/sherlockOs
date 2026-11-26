@@ -84,15 +84,18 @@ desktop entries and icon themes. The menu reuses `menu`,
 ### Surface
 
 The layer-shell surface is anchored to the bottom only, so the compositor centers it, on the
-`Top` layer, with a bottom margin of 8. It declares an exclusive zone of 76, the bar's height:
-maximized windows stop just above the bar. The keyboard comes on demand (`OnDemand`), on a click
+`Top` layer. Since D-18c2 the surface reaches the screen edge (margin 0) and the gap of 8 below
+the bar is inside it (`Geometry::gap`): a dock brought back over a maximized window keeps the
+pointer up to the edge (see Hiding). It declares an exclusive zone of 84, the gap and the bar's
+height, the 76 of the bar and the margin of 8 it reserved before: maximized windows stop just
+above the bar. The keyboard comes on demand (`OnDemand`), on a click
 into the dock, for its keyboard navigation.
 
 The surface is taller and wider than the bar: the magnified icons grow above the bar (88 at
 most, 101 above the bottom), the label sits 108 above it, and the widest magnified bar needs
 room on the sides. `layout::surface_size` computes it from the number of icons: the widest bar
 over every pointer position, plus `dock::SURFACE_SLACK` (52) on each side for the label, by
-the label's top in height (132). With five icons: 529 by 132.
+the label's top in height (132), plus the gap of 8 (140). With five icons: 529 by 140.
 
 **Input region.** The surface only takes the pointer where the dock is
 (`Geometry::input_region`, sent with `wl_surface.set_input_region`, rounded out to whole
@@ -111,7 +114,8 @@ the transparent pixels of the surface come out black (see `docs/compositor.md`).
 glass shows on black, and so does the room above the bar, a band 56 high over the bottom of
 maximized windows. This goes with the GPU batch (D-02); the dock does not work around it.
 
-Protocol log in the nested KWin (`WAYLAND_DEBUG=client`), five icons:
+Protocol log in the nested KWin (`WAYLAND_DEBUG=client`), five icons, before D-18c2 (the
+surface has been 8 deeper since, with a margin of 0, a zone of 84 and the regions 8 higher):
 
 ```text
 zwlr_layer_surface_v1#29.set_anchor(2)
@@ -143,19 +147,24 @@ of `sherlock_shell_v1` (only the windows of the active workspace count), matched
 the screen iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
-- **A window is maximized.** The dock gives up its exclusive zone at once (0): the compositor
-  gives the maximized window the whole screen below the bar, the dock's room included
-  (recomputing that geometry is batch D-18c1). Then the dock slides off the screen with the
-  spring of the top bar (`dock::HIDE_SPRING`): only its margin moves, from 8 to
-  `HIDE_STRIP − depth`, one commit per whole pixel. Hidden, `HIDE_STRIP` (2) pixels of the
+- **A window is maximized.** The dock gives up its exclusive zone at once: -1, so that the
+  compositor places it against the screen edge itself, never against what another surface
+  reserves (a dock at the top would otherwise hide under the top bar's zone, its band below
+  the bar). The compositor gives the maximized window the whole screen below the bar, the
+  dock's room included (recomputing that geometry is batch D-18c1). Then the dock slides off
+  the screen with the spring of the top bar (`dock::HIDE_SPRING`): only its margin moves, from
+  0 to `HIDE_STRIP − depth`, one commit per whole pixel. Hidden, `HIDE_STRIP` (2) pixels of the
   surface stay on the screen, its side away from the edge; its input region shrinks to that
   band, over the whole length of the surface. A dock under the pointer when the window is
   maximized stays until the pointer leaves it.
 - **The pointer touches the edge.** The band takes the pointer: the dock slides back over the
-  window, on the `Top` layer, still without exclusive zone, and takes the pointer as usual.
+  window, on the `Top` layer, still without exclusive zone. Its input region reaches the screen
+  edge, the gap of 8 included: the pointer that brought it back, resting against the edge,
+  keeps it.
 - **The pointer leaves it.** It hides again `dock::HIDE_DELAY` (300 ms) later, unless the
-  pointer came back, a menu is open or an icon is held. The pointer must come back on the
-  surface: the gap of 8 between the bar and the screen edge is not part of it.
+  pointer came back, a menu is open or an icon is held. While a menu is open or an icon held,
+  nothing counts and no frame is asked for; the delay starts when the menu closes or the icon
+  is let go.
 - **No maximized window any more.** The dock slides back, and takes its exclusive zone again
   once in place: the compositor reserves the zone plus the margin, negative while the dock is
   still sliding in, so the zone waits for the margin to be 8 again.

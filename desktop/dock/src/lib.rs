@@ -25,7 +25,7 @@ use iced::{Settings, Size};
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, Margin};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
-use sherlock_ui::{color, dock, theme, typography};
+use sherlock_ui::{color, theme, typography};
 
 use app::{Dock, Message, Sources};
 use entry::Catalog;
@@ -36,9 +36,10 @@ use layout::Geometry;
 const NAMESPACE: &str = "dock";
 
 /// Surface settings for a dock on `geometry.position`, shown: anchored to that edge only, so
-/// centered along it, 8 away from it. The surface is deeper than the bar, for the magnified
-/// icons and the label; the exclusive zone is the bar's thickness, so maximized windows stop
-/// just past it. The keyboard comes on a click. A hiding dock changes the margin and the zone
+/// centered along it, against it; the bar is drawn 8 away from the edge, inside the surface
+/// (`Geometry::gap`). The surface is deeper than the bar, for the magnified icons and the
+/// label; the exclusive zone is the gap and the bar's thickness, so maximized windows stop just
+/// past it. The keyboard comes on a click. A hiding dock changes the margin and the zone
 /// (`hide`).
 pub fn surface(geometry: Geometry, size: Size) -> LayerShellSettings {
     let anchor = match geometry.position {
@@ -51,8 +52,8 @@ pub fn surface(geometry: Geometry, size: Size) -> LayerShellSettings {
         anchor,
         layer: Layer::Top,
         size: LayerSize::px(size.width as u32, size.height as u32),
-        exclusive_zone: geometry.bar_thickness().round() as i32,
-        margin: margin(geometry.position, dock::MARGIN_BOTTOM as i32),
+        exclusive_zone: (geometry.bar_thickness() + geometry.gap).round() as i32,
+        margin: margin(geometry.position, 0),
         keyboard_interactivity: KeyboardInteractivity::OnDemand,
         start_mode: StartMode::Active,
         ..LayerShellSettings::default()

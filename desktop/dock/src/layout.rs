@@ -18,6 +18,9 @@ pub struct Geometry {
     /// Magnification factor, 1 without magnification.
     pub factor: f32,
     pub position: Position,
+    /// Distance from the screen edge to the bar, inside the surface: the surface reaches the
+    /// edge, so that a dock brought back over a window keeps the pointer up to the edge.
+    pub gap: f32,
 }
 
 impl Default for Geometry {
@@ -27,6 +30,7 @@ impl Default for Geometry {
             icon: metrics::DOCK_ICON,
             factor: metrics::DOCK_MAGNIFICATION,
             position: Position::Bottom,
+            gap: 0.0,
         }
     }
 }
@@ -41,6 +45,7 @@ impl Geometry {
                 1.0
             },
             position: config.position,
+            gap: dock::MARGIN_BOTTOM,
         }
     }
 
@@ -102,7 +107,7 @@ impl Geometry {
     /// room for the label at its ends, as deep as the label (beside the icons on the sides).
     pub fn surface_size(&self, count: usize, separator: bool) -> Size {
         let along = (self.longest(count, separator) + 2.0 * dock::SURFACE_SLACK).ceil();
-        let depth = self.reach().ceil();
+        let depth = (self.reach() + self.gap).ceil();
         if self.position.is_vertical() {
             Size::new(depth, along)
         } else {
@@ -156,19 +161,34 @@ impl Geometry {
             surface.width
         };
         let length = self.longest(count, separator.is_some());
-        let depth = self.reach().min(if self.position.is_vertical() {
+        let deep = if self.position.is_vertical() {
             surface.width
         } else {
             surface.height
-        });
-        to_surface(
-            self.position,
-            surface,
-            (span - length) / 2.0,
-            0.0,
-            length,
-            depth,
-        )
+        };
+        let depth = self.reach().min(deep - self.gap);
+        to_surface(self, surface, (span - length) / 2.0, 0.0, length, depth)
+    }
+
+    /// `rectangle` stretched to the screen edge of the surface, over the gap: the input region
+    /// of a dock brought back over a window, which keeps the pointer up to the edge.
+    pub fn to_edge(&self, rectangle: Rectangle, surface: Size) -> Rectangle {
+        let Rectangle {
+            x,
+            y,
+            width,
+            height,
+        } = rectangle;
+        match self.position {
+            Position::Bottom => {
+                Rectangle::new(Point::new(x, y), Size::new(width, surface.height - y))
+            }
+            Position::Top => Rectangle::new(Point::new(x, 0.0), Size::new(width, y + height)),
+            Position::Left => Rectangle::new(Point::new(0.0, y), Size::new(x + width, height)),
+            Position::Right => {
+                Rectangle::new(Point::new(x, y), Size::new(surface.width - x, height))
+            }
+        }
     }
 
     /// Where a hidden dock takes the pointer: the band of `HIDE_STRIP` the screen still shows
@@ -180,7 +200,7 @@ impl Geometry {
             (surface.width, surface.height)
         };
         let strip = dock::HIDE_STRIP.min(deep);
-        to_surface(self.position, surface, 0.0, deep - strip, span, strip)
+        to_surface(self, surface, 0.0, deep - strip - self.gap, span, strip)
     }
 }
 
@@ -302,9 +322,9 @@ impl Layout {
     pub fn flow(geometry: Geometry, surface: Size, flow: &Flow) -> Self {
         let vertical = geometry.position.is_vertical();
         let (span, deep) = if vertical {
-            (surface.height, surface.width)
+            (surface.height, surface.width - geometry.gap)
         } else {
-            (surface.width, surface.height)
+            (surface.width, surface.height - geometry.gap)
         };
         let gap = metrics::DOCK_ICON_GAP;
         let weight = |slot: &Slot| (slot.side + gap) * slot.room;
@@ -319,7 +339,7 @@ impl Layout {
         let length = ends + (icons_length - gap).max(0.0) + room * (separator_length() + gap);
         let start = (span - length) / 2.0;
         let place = |along: f32, depth: f32, length: f32, thickness: f32| {
-            to_surface(geometry.position, surface, along, depth, length, thickness)
+            to_surface(&geometry, surface, along, depth, length, thickness)
         };
         let bar = place(start, 0.0, length, geometry.bar_thickness());
         let inset = geometry.inset();
@@ -365,7 +385,7 @@ impl Layout {
         if let Some((held, point)) = flow.held
             && let Some(icon) = icons.get_mut(held)
         {
-            let (along, depth) = along_depth(geometry.position, surface, point);
+            let (along, depth) = along_depth(&geometry, surface, point);
             let side = if vertical { icon.height } else { icon.width };
             let along = (along - side / 2.0).clamp(0.0, (span - side).max(0.0));
             let depth = (depth - side / 2.0).clamp(inset, (deep - side).max(inset));
@@ -390,14 +410,7 @@ impl Layout {
             self.surface.width
         };
         let (along, depth) = (offset.0 + span / 2.0, offset.1);
-        to_surface(
-            self.geometry.position,
-            self.surface,
-            along,
-            depth,
-            side,
-            side,
-        )
+        to_surface(&self.geometry, self.surface, along, depth, side, side)
     }
 
     /// The middle of icon `index` along the dock.
@@ -408,19 +421,19 @@ impl Layout {
 
     /// `point` along the dock.
     pub fn along(&self, point: Point) -> f32 {
-        along_depth(self.geometry.position, self.surface, point).0
+        along_depth(&self.geometry, self.surface, point).0
     }
 
     /// Distance of `point` from the screen edge.
     pub fn depth(&self, point: Point) -> f32 {
-        along_depth(self.geometry.position, self.surface, point).1
+        along_depth(&self.geometry, self.surface, point).1
     }
 
     /// Place of `rectangle` relative to the middle of the dock, which stays put on the screen
     /// when the surface changes size: along the dock, and away from the edge.
     pub fn offset(&self, rectangle: Rectangle) -> (f32, f32) {
         let corner = Point::new(rectangle.x, rectangle.y);
-        let (along, depth) = along_depth(self.geometry.position, self.surface, corner);
+        let (along, depth) = along_depth(&self.geometry, self.surface, corner);
         let (span, side) = if self.geometry.position.is_vertical() {
             (self.surface.height, rectangle.width)
         } else {
@@ -463,14 +476,7 @@ impl Layout {
             .geometry
             .bar_thickness()
             .max(self.geometry.inset() + tallest);
-        to_surface(
-            self.geometry.position,
-            self.surface,
-            start,
-            0.0,
-            length,
-            depth,
-        )
+        to_surface(&self.geometry, self.surface, start, 0.0, length, depth)
     }
 
     /// Whether `point` is over the dock: the bar, or an icon that grew past it.
@@ -490,7 +496,7 @@ impl Layout {
         let (along, side) = self.along_of(*icon);
         let start = along + (side - dock::DOT) / 2.0;
         Some(to_surface(
-            self.geometry.position,
+            &self.geometry,
             self.surface,
             start,
             depth,
@@ -505,7 +511,7 @@ impl Layout {
         let icon = self.icons.get(index)?;
         let (along, side) = self.along_of(*icon);
         let middle = along + side / 2.0;
-        let depth = self.geometry.label_depth();
+        let depth = self.geometry.label_depth() + self.geometry.gap;
         let Size { width, height } = self.surface;
         Some(match self.geometry.position {
             Position::Bottom => Point::new(middle, height - depth),
@@ -525,26 +531,30 @@ impl Layout {
     }
 }
 
-/// `point` along the dock, and its distance from the screen edge.
-fn along_depth(position: Position, surface: Size, point: Point) -> (f32, f32) {
-    match position {
+/// `point` along the dock, and its distance from the bar's side of the surface (its edge less
+/// the gap).
+fn along_depth(geometry: &Geometry, surface: Size, point: Point) -> (f32, f32) {
+    let (along, depth) = match geometry.position {
         Position::Bottom => (point.x, surface.height - point.y),
         Position::Top => (point.x, point.y),
         Position::Left => (point.y, point.x),
         Position::Right => (point.y, surface.width - point.x),
-    }
+    };
+    (along, depth - geometry.gap)
 }
 
-/// A rectangle given along the dock and away from its screen edge, in surface coordinates.
+/// A rectangle given along the dock and away from the bar's side of the surface (its edge
+/// less the gap), in surface coordinates.
 fn to_surface(
-    position: Position,
+    geometry: &Geometry,
     surface: Size,
     along: f32,
     depth: f32,
     length: f32,
     thickness: f32,
 ) -> Rectangle {
-    let (x, y, width, height) = match position {
+    let depth = depth + geometry.gap;
+    let (x, y, width, height) = match geometry.position {
         Position::Bottom => (along, surface.height - depth - thickness, length, thickness),
         Position::Top => (along, depth, length, thickness),
         Position::Left => (depth, along, thickness, length),

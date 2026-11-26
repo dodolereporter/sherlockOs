@@ -112,14 +112,17 @@ const EDGES: [Position; 4] = [
 fn a_maximized_window_takes_the_room_of_the_dock_on_every_edge() {
     for position in EDGES {
         let mut dock = dock(position, AutoHide::Smart, &Recorder::default());
-        // Shown: the bar of 76 and its gap of 8 are kept clear.
+        // Shown: the bar of 76 and its gap of 8 are kept clear; the surface is against the
+        // edge, the gap inside it.
         assert_eq!(reserved(&dock, position), 84, "{position:?}");
-        assert_eq!(margin(&dock, position), 8);
+        assert_eq!(margin(&dock, position), 0);
         let rest = dock.input_area();
 
         // A window is maximized on the dock's screen: no zone at once, then the dock slides out.
         let _ = dock.update(windows(&[SCREEN]));
         assert_eq!(reserved(&dock, position), 0, "{position:?}");
+        // -1: placed against the screen edge itself, not below the top bar's zone.
+        assert_eq!(dock.layer_settings().exclusive_zone, -1);
         assert!(dock.animating(), "it slides");
         settle(&mut dock);
         let hidden = tokens::HIDE_STRIP as i32 - depth(&dock, position).round() as i32;
@@ -148,7 +151,7 @@ fn a_maximized_window_takes_the_room_of_the_dock_on_every_edge() {
         assert_eq!(reserved(&dock, position), 0);
         settle(&mut dock);
         assert_eq!(reserved(&dock, position), 84);
-        assert_eq!(margin(&dock, position), 8);
+        assert_eq!(margin(&dock, position), 0);
         assert_eq!(dock.input_area(), rest);
     }
 }
@@ -169,7 +172,7 @@ fn the_edge_brings_the_dock_back_over_the_window() {
     // The pointer touches the band.
     let _ = dock.update(Message::Pointer(Pointer::Moved(Point::new(300.0, 1.0))));
     settle(&mut dock);
-    assert_eq!(margin(&dock, Position::Bottom), 8, "back");
+    assert_eq!(margin(&dock, Position::Bottom), 0, "back");
     assert_eq!(reserved(&dock, Position::Bottom), 0, "over the window");
     assert_ne!(
         dock.input_area().height,
@@ -181,7 +184,7 @@ fn the_edge_brings_the_dock_back_over_the_window() {
     let _ = dock.update(Message::Pointer(Pointer::Left));
     let left = dock.now();
     let _ = dock.tick(left + tokens::HIDE_DELAY - Duration::from_millis(20));
-    assert_eq!(margin(&dock, Position::Bottom), 8);
+    assert_eq!(margin(&dock, Position::Bottom), 0);
     let _ = dock.tick(left + tokens::HIDE_DELAY);
     assert!(dock.animating());
     settle(&mut dock);
@@ -214,7 +217,7 @@ fn each_window_gets_the_rectangle_of_its_icon_on_the_screen() {
     assert_eq!(last.len(), 3);
     let size = dock.surface_size;
     let left = SIZE.0 / 2 - size.width.round() as i32 / 2;
-    let top = SIZE.1 - 8 - size.height.round() as i32;
+    let top = SIZE.1 - size.height.round() as i32;
     let icon = dock.layout(dock.now()).icons[2];
     assert_eq!(
         last[2],
@@ -244,4 +247,55 @@ fn each_window_gets_the_rectangle_of_its_icon_on_the_screen() {
     let places = recorder.places();
     assert_eq!(places.len(), count + 1);
     assert_eq!(places[count].len(), 4);
+}
+
+#[test]
+fn a_dock_brought_back_keeps_the_pointer_up_to_the_edge() {
+    for position in EDGES {
+        let mut dock = dock(position, AutoHide::Smart, &Recorder::default());
+        let _ = dock.update(windows(&[SCREEN]));
+        settle(&mut dock);
+        let size = dock.surface_size;
+        // A point in the gap of 8 between the bar and the screen edge, in the middle.
+        let gap = match position {
+            Position::Bottom => Point::new(size.width / 2.0, size.height - 3.0),
+            Position::Top => Point::new(size.width / 2.0, 3.0),
+            Position::Left => Point::new(3.0, size.height / 2.0),
+            Position::Right => Point::new(size.width - 3.0, size.height / 2.0),
+        };
+        // The pointer touches the band, the dock comes back.
+        let band = dock.input_area().center();
+        let _ = dock.update(Message::Pointer(Pointer::Moved(band)));
+        settle(&mut dock);
+        // Shown, the gap is part of the surface and of its input region.
+        assert!(dock.input_area().contains(gap), "{position:?}");
+        // The pointer rests in the gap: the dock stays, long after the delay.
+        let _ = dock.update(Message::Pointer(Pointer::Moved(gap)));
+        let now = dock.now();
+        let _ = dock.tick(now + Duration::from_secs(2));
+        assert_eq!(margin(&dock, position), 0, "{position:?} still shown");
+        // A dock that does not hide keeps the gap out of its input region.
+        let shown = self::dock(position, AutoHide::Never, &Recorder::default());
+        assert!(!shown.input_area().contains(gap), "{position:?}");
+    }
+}
+
+#[test]
+fn an_open_menu_holds_the_dock_without_frames() {
+    let mut dock = dock(Position::Bottom, AutoHide::Smart, &Recorder::default());
+    let _ = dock.update(windows(&[SCREEN]));
+    settle(&mut dock);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(Point::new(300.0, 1.0))));
+    settle(&mut dock);
+    // A right click on the terminal opens its menu; the pointer goes there.
+    let icon = dock.layout(dock.now()).icons[2].center();
+    let _ = dock.update(Message::Pointer(Pointer::Moved(icon)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(
+        iced::mouse::Button::Right,
+    )));
+    assert!(dock.menu_open());
+    let _ = dock.update(Message::Pointer(Pointer::Left));
+    settle(&mut dock);
+    assert!(!dock.animating(), "no frame while the menu is open");
+    assert_eq!(margin(&dock, Position::Bottom), 0, "the dock stays");
 }

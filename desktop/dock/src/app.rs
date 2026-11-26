@@ -226,12 +226,14 @@ impl Dock {
         hide::margin(self.hide.progress(), depth)
     }
 
-    /// The exclusive zone: the bar's thickness, none while the dock hides.
+    /// The exclusive zone: the gap and the bar's thickness; while the dock hides, -1, so that
+    /// the compositor places it against the screen edge itself, not against what other
+    /// surfaces reserve (the top bar, for a dock at the top).
     fn zone(&self) -> i32 {
         if self.hide.exclusive() {
-            self.geometry.bar_thickness().round() as i32
+            (self.geometry.bar_thickness() + self.geometry.gap).round() as i32
         } else {
-            0
+            -1
         }
     }
 
@@ -297,7 +299,7 @@ impl Dock {
         };
         let sizes = self.geometry.targets(None, self.items.len());
         let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
-        let distance = dock::MARGIN_BOTTOM as i32;
+        let distance = 0;
         let placed: Vec<_> = self
             .items
             .iter()
@@ -458,7 +460,7 @@ impl Dock {
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
-            || self.hide.running()
+            || self.hide.running(self.busy())
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -616,6 +618,9 @@ impl Dock {
             Message::MenuPick(entry) => return self.pick(entry),
             Message::Closed(id) if self.menu.as_ref().is_some_and(|m| m.id == id) => {
                 self.menu = None;
+                // A dock brought back hides the delay after its menu closes.
+                let now = self.clock();
+                self.hide.restart(now);
             }
             Message::Closed(id) => {
                 self.outputs.remove(&id);
@@ -659,8 +664,9 @@ impl Dock {
 
     /// `refresh`, the icons animated or put in place at once. The input region follows the
     /// icons at once, when one leaves as when one arrives.
+    /// Uses the time of the event being handled (`clock`, read once when it came in), so that
+    /// what an event starts all starts at one instant.
     fn refresh_as(&mut self, previous: Geometry, animate: bool) -> Task<Message> {
-        self.clock();
         let (size, count) = (self.surface_size, self.items.len());
         self.rebuild(animate);
         let resized = self.resize(size, previous);
@@ -765,10 +771,15 @@ impl Dock {
     /// that left are gone.
     pub fn tick(&mut self, now: Duration) -> Task<Message> {
         self.frame(now);
-        let busy = self.menu_open() || self.press.is_some();
+        let busy = self.busy();
         self.hide.tick(self.now, busy);
         let settled = self.settle();
         Task::batch([settled, self.apply_hide()])
+    }
+
+    /// A menu is open or an icon is held: a dock brought back stays.
+    fn busy(&self) -> bool {
+        self.menu_open() || self.press.is_some()
     }
 
     /// The time the dock draws at.
@@ -914,6 +925,7 @@ impl Dock {
         let Some(press) = self.press.take() else {
             return Task::none();
         };
+        self.hide.restart(now);
         let Some(index) = self.index_of(&press.target) else {
             return Task::none();
         };
@@ -1027,14 +1039,20 @@ impl Dock {
     /// `Geometry::input_region`.
     pub fn input_area(&self) -> iced::Rectangle {
         if self.hide.hidden() {
-            self.geometry.strip(self.surface_size)
+            return self.geometry.strip(self.surface_size);
+        }
+        let region = self.geometry.input_region(
+            self.surface_size,
+            self.items.len(),
+            self.separator,
+            self.hovering,
+        );
+        if self.hide.hides() {
+            // Brought back over a window: up to the screen edge, gap included, so that the
+            // pointer between the bar and the edge keeps it.
+            self.geometry.to_edge(region, self.surface_size)
         } else {
-            self.geometry.input_region(
-                self.surface_size,
-                self.items.len(),
-                self.separator,
-                self.hovering,
-            )
+            region
         }
     }
 
@@ -1243,6 +1261,7 @@ impl Dock {
     }
 
     fn pick(&mut self, entry: Entry) -> Task<Message> {
+        self.clock();
         let Some(target) = self.menu.as_ref().map(|m| m.target.clone()) else {
             return Task::none();
         };

@@ -130,9 +130,19 @@ impl Hide {
         }
     }
 
-    /// Frames are needed: the dock slides, or waits to hide.
-    pub fn running(&self) -> bool {
-        self.left_at.is_some() || self.sliding()
+    /// Frames are needed: the dock slides, or waits to hide. `busy` (a menu open, an icon
+    /// held): it does not wait, it stays.
+    pub fn running(&self, busy: bool) -> bool {
+        (self.left_at.is_some() && !busy) || self.sliding()
+    }
+
+    /// The menu closed, or the icon was let go, at `now`: a dock the pointer left hides
+    /// `HIDE_DELAY` from now.
+    pub fn restart(&mut self, now: Duration) {
+        self.now = self.now.max(now);
+        if self.left_at.is_some() {
+            self.left_at = Some(self.now);
+        }
     }
 
     fn target(&self) -> f64 {
@@ -152,10 +162,11 @@ impl Hide {
     }
 }
 
-/// Distance from the screen edge to the dock surface at `progress` from shown (0, the gap of
-/// the board) to hidden (1, only `HIDE_STRIP` of a surface `depth` deep left on the screen).
+/// Distance from the screen edge to the dock surface at `progress` from shown (0: against the
+/// edge, the gap of the board being inside the surface) to hidden (1, only `HIDE_STRIP` of a
+/// surface `depth` deep left on the screen).
 pub fn margin(progress: f32, depth: f32) -> i32 {
-    let shown = dock::MARGIN_BOTTOM;
+    let shown = 0.0;
     let hidden = dock::HIDE_STRIP - depth;
     (shown + (hidden - shown) * progress).round() as i32
 }
@@ -172,18 +183,18 @@ mod tests {
     fn settle(hide: &mut Hide, from: Duration) -> Duration {
         let end = from + Duration::from_secs(2);
         hide.tick(end, false);
-        assert!(!hide.running());
+        assert!(!hide.running(false));
         end
     }
 
     #[test]
     fn smart_hides_while_a_window_covers_the_screen() {
         let mut hide = Hide::new(AutoHide::Smart);
-        assert!(!hide.hidden() && hide.exclusive() && !hide.running());
+        assert!(!hide.hidden() && hide.exclusive() && !hide.running(false));
         assert_eq!(hide.progress(), 0.0);
         // A window is maximized: no exclusive zone at once, and the dock slides out.
         hide.set_covered(true, false, ms(0));
-        assert!(hide.hidden() && !hide.exclusive() && hide.running());
+        assert!(hide.hidden() && !hide.exclusive() && hide.running(false));
         let t = settle(&mut hide, ms(0));
         assert_eq!(hide.progress(), 1.0);
         // The window is restored: the dock comes back, and takes its room again once there.
@@ -220,6 +231,28 @@ mod tests {
     }
 
     #[test]
+    fn a_menu_holds_the_dock_without_frames() {
+        let mut hide = Hide::new(AutoHide::Smart);
+        hide.set_covered(true, false, ms(0));
+        let t = settle(&mut hide, ms(0));
+        hide.pointer_in(t);
+        let t = settle(&mut hide, t);
+        // The pointer goes to the menu: the dock waits for nothing while it is open.
+        hide.pointer_out(t);
+        assert!(!hide.running(true), "no frame while the menu is open");
+        hide.tick(t + Duration::from_secs(5), true);
+        assert!(!hide.hidden());
+        // It closes: the delay starts from there.
+        let closed = t + Duration::from_secs(5);
+        hide.restart(closed);
+        assert!(hide.running(false));
+        hide.tick(closed + dock::HIDE_DELAY - ms(1), false);
+        assert!(!hide.hidden());
+        hide.tick(closed + dock::HIDE_DELAY, false);
+        assert!(hide.hidden());
+    }
+
+    #[test]
     fn a_dock_under_the_pointer_stays_until_the_pointer_leaves() {
         let mut hide = Hide::new(AutoHide::Smart);
         hide.set_covered(true, true, ms(0));
@@ -234,7 +267,7 @@ mod tests {
         let mut never = Hide::new(AutoHide::Never);
         never.set_covered(true, false, ms(0));
         never.pointer_out(ms(0));
-        assert!(!never.hidden() && never.exclusive() && !never.running());
+        assert!(!never.hidden() && never.exclusive() && !never.running(false));
         let always = Hide::new(AutoHide::Always);
         assert!(always.hidden() && !always.exclusive());
         assert_eq!(
@@ -242,17 +275,17 @@ mod tests {
             1.0,
             "hidden from the start, without sliding"
         );
-        assert!(!always.running());
+        assert!(!always.running(false));
         // The pointer is not on the dock: no delay waits.
         let mut always = always;
         always.pointer_out(ms(0));
-        assert!(!always.running());
+        assert!(!always.running(false));
     }
 
     #[test]
     fn the_margin_leaves_the_strip_on_the_screen() {
-        assert_eq!(margin(0.0, 160.0), 8);
+        assert_eq!(margin(0.0, 160.0), 0);
         assert_eq!(margin(1.0, 160.0), -158);
-        assert_eq!(margin(0.5, 160.0), -75);
+        assert_eq!(margin(0.5, 160.0), -79);
     }
 }
