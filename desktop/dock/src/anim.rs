@@ -1,0 +1,351 @@
+//! The animations of each icon, kept with it by identity when the icons are built again: its
+//! size under the pointer, its arrival and departure (room in the bar, scale, opacity), and
+//! its offset from its place when the icons move (reordering, an icon dropped).
+//!
+//! An icon that moves is drawn where it was, then led back to its new place by a spring: the
+//! offset is the old place minus the new one, and heads for 0.
+
+use std::time::Duration;
+
+use sherlock_ui::dock;
+use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION, SCALE_PRECISION};
+
+use crate::items::{Item, Target};
+use crate::layout::Slot;
+
+/// The animations of one icon.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Track {
+    /// Side, led towards the size the pointer gives it.
+    pub size: Animation,
+    /// Share of its room in the bar: 0 absent, 1 in place. Its neighbours move aside as it
+    /// opens.
+    pub room: Animation,
+    /// Scale it is drawn at: 0 absent, 1 in place.
+    pub scale: Animation,
+    pub opacity: Fade,
+    /// Offset from its place, along the dock and away from its edge.
+    pub along: Animation,
+    pub depth: Animation,
+}
+
+impl Track {
+    /// An icon of `side` in its place, at rest.
+    pub fn settled(side: f32) -> Self {
+        let still = |value| Animation::new(dock::SHIFT_SPRING, value, value, Duration::ZERO);
+        let present = || Animation::new(dock::ARRIVAL_SPRING, 1.0, 1.0, Duration::ZERO);
+        Self {
+            size: Animation::new(dock::SPRING, side.into(), side.into(), Duration::ZERO),
+            room: present(),
+            scale: present(),
+            opacity: Fade::new(1.0, 1.0, Duration::ZERO, Duration::ZERO),
+            along: still(0.0),
+            depth: still(0.0),
+        }
+    }
+
+    /// An icon of `side` arriving at `now`: its room opens, it grows and fades in.
+    pub fn arriving(side: f32, now: Duration) -> Self {
+        let mut track = Self::settled(side);
+        track.room = Animation::new(dock::ARRIVAL_SPRING, 0.0, 1.0, now);
+        track.scale = track.room;
+        track.opacity = Fade::new(0.0, 1.0, now, dock::ICON_FADE);
+        track
+    }
+
+    /// Leads the icon in (`true`) or out of the dock from `now`, from where it is: its room,
+    /// its scale and its opacity.
+    pub fn show(&mut self, now: Duration, shown: bool) {
+        let target = if shown { 1.0 } else { 0.0 };
+        self.open(now, shown);
+        if self.scale.target() != target {
+            self.scale.retarget(now, target);
+        }
+        if self.opacity.target() != target as f32 {
+            self.opacity.retarget(now, target as f32, dock::ICON_FADE);
+        }
+    }
+
+    /// Opens or closes its room in the bar from `now`, without changing how it is drawn: an
+    /// icon dragged out of the dock and back.
+    pub fn open(&mut self, now: Duration, open: bool) {
+        let target = if open { 1.0 } else { 0.0 };
+        if self.room.target() != target {
+            self.room.retarget(now, target);
+        }
+    }
+
+    /// Vanishes where it is from `now`, from the opacity `from`: an icon dragged out and let go.
+    pub fn vanish(&mut self, now: Duration, from: f32) {
+        self.scale = Animation::new(dock::ARRIVAL_SPRING, self.scale.value(now), 0.0, now);
+        self.opacity = Fade::new(from, 0.0, now, dock::ICON_FADE);
+    }
+
+    /// The icon is drawn `from` its place at `now` and heads for `to`: 0 to go back to its
+    /// place, `from` to stay where it is.
+    pub fn moved(&mut self, now: Duration, from: (f32, f32), to: (f32, f32)) {
+        let lead =
+            |from: f32, to: f32| Animation::new(dock::SHIFT_SPRING, from.into(), to.into(), now);
+        self.along = lead(from.0, to.0);
+        self.depth = lead(from.1, to.1);
+    }
+
+    /// Scale it is drawn at, never below 0 (the spring passes it a little).
+    pub fn drawn_scale(&self, now: Duration) -> f32 {
+        (self.scale.value(now) as f32).max(0.0)
+    }
+
+    /// The icon in the flow of the dock at `now`.
+    pub fn slot(&self, now: Duration) -> Slot {
+        Slot {
+            side: self.size.value(now) as f32,
+            room: (self.room.value(now) as f32).max(0.0),
+            shift: (self.along.value(now) as f32, self.depth.value(now) as f32),
+        }
+    }
+
+    /// Whether nothing of the icon moves any more at `now`.
+    pub fn is_done(&self, now: Duration) -> bool {
+        self.size.is_done(now, GEOMETRY_PRECISION)
+            && self.room.is_done(now, SCALE_PRECISION)
+            && self.scale.is_done(now, SCALE_PRECISION)
+            && self.opacity.is_done(now)
+            && self.along.is_done(now, GEOMETRY_PRECISION)
+            && self.depth.is_done(now, GEOMETRY_PRECISION)
+    }
+
+    /// Whether an icon led out of the dock is gone.
+    pub fn is_gone(&self, now: Duration) -> bool {
+        self.scale.target() == 0.0 && self.is_done(now)
+    }
+}
+
+/// An icon that left the dock and is still drawn while it goes.
+#[derive(Debug, Clone)]
+pub struct Leaving {
+    pub item: Item,
+    pub track: Track,
+    /// The icon it comes before, closing its room there; `None` at the end.
+    pub next: Option<Target>,
+    /// It was after the separator.
+    pub unpinned: bool,
+    /// Dragged out of the dock and let go: where it vanishes, relative to the middle of the
+    /// dock (`Layout::offset`), without room in the bar.
+    pub dropped: Option<(f32, f32)>,
+}
+
+/// Height of the bounce of an icon of `side` at `elapsed` into it: hops of `BOUNCE_PERIOD`,
+/// each a parabola, as a thrown object falls, `BOUNCE_HEIGHT` of the side high.
+pub fn hop(elapsed: Duration, side: f32) -> f32 {
+    let period = dock::BOUNCE_PERIOD.as_secs_f32();
+    let phase = (elapsed.as_secs_f32() / period).fract();
+    4.0 * dock::BOUNCE_HEIGHT * side * phase * (1.0 - phase)
+}
+
+/// The bounce of an icon while its application starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounce {
+    start: Duration,
+    /// When it lands for good: the end of the hop in progress when it was told to stop.
+    end: Option<Duration>,
+}
+
+impl Bounce {
+    pub fn new(start: Duration) -> Self {
+        Self { start, end: None }
+    }
+
+    /// Height above its place at `now`, for an icon of `side`.
+    pub fn lift(&self, now: Duration, side: f32) -> f32 {
+        if self.end.is_some_and(|end| now >= end) {
+            return 0.0;
+        }
+        hop(now.saturating_sub(self.start), side)
+    }
+
+    /// Stops at the end of the hop in progress at `now`: the icon lands, nothing jumps.
+    pub fn stop(&mut self, now: Duration) {
+        if self.end.is_some() {
+            return;
+        }
+        let period = dock::BOUNCE_PERIOD.as_secs_f64();
+        let hops = (now.saturating_sub(self.start).as_secs_f64() / period).ceil();
+        self.end = Some(self.start + dock::BOUNCE_PERIOD.mul_f64(hops));
+    }
+
+    /// Told to stop, or still bouncing.
+    pub fn stopping(&self) -> bool {
+        self.end.is_some()
+    }
+
+    /// Landed for good at `now`.
+    pub fn is_done(&self, now: Duration) -> bool {
+        self.end.is_some_and(|end| now >= end)
+    }
+
+    /// Stops it once `BOUNCE_TIMEOUT` passed without a window.
+    pub fn time_out(&mut self, now: Duration) {
+        if now.saturating_sub(self.start) >= dock::BOUNCE_TIMEOUT {
+            self.stop(now);
+        }
+    }
+}
+
+/// An application started from the dock, bouncing until its first window comes.
+#[derive(Debug, Clone)]
+pub struct Launch {
+    pub target: Target,
+    pub bounce: Bounce,
+    /// For each source of windows, the number of windows of the application when it started:
+    /// one more is its window. `None` while the source said nothing yet.
+    pub before: [Option<usize>; 2],
+}
+
+impl Launch {
+    /// Started at `now`, while the sources count `before` windows of the application.
+    pub fn new(target: Target, now: Duration, before: [Option<usize>; 2]) -> Self {
+        Self {
+            target,
+            bounce: Bounce::new(now),
+            before,
+        }
+    }
+
+    /// Source `source` now counts `count` windows of the application. Stops the bounce at
+    /// `now` when one more than at the start came; returns whether it did.
+    pub fn windows(&mut self, source: usize, count: usize, now: Duration) -> bool {
+        let Some(slot) = self.before.get_mut(source) else {
+            return false;
+        };
+        match *slot {
+            Some(before) if count > before => {
+                self.bounce.stop(now);
+                return true;
+            }
+            // A window closed meanwhile: the next one to come is still new.
+            Some(before) => *slot = Some(before.min(count)),
+            None => *slot = Some(count),
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn an_arriving_icon_opens_its_room_and_fades_in() {
+        let track = Track::arriving(52.0, ms(100));
+        let slot = track.slot(ms(100));
+        assert_eq!((slot.room, track.opacity.value(ms(100))), (0.0, 0.0));
+        assert_eq!(track.drawn_scale(ms(100)), 0.0);
+        // Half way in less than the fade; past 1 a little (the spring of a window opening),
+        // then in place.
+        let rooms: Vec<f32> = (100..700).map(|t| track.slot(ms(t)).room).collect();
+        let half = rooms.iter().position(|r| *r >= 0.5).unwrap_or(usize::MAX);
+        assert!(half < 100, "half open after {half} ms");
+        let peak = rooms.iter().copied().fold(0.0, f32::max);
+        assert!(peak > 1.0 && peak < 1.04, "peak {peak}");
+        assert_eq!(track.opacity.value(ms(100) + dock::ICON_FADE), 1.0);
+        assert!(!track.is_done(ms(150)));
+        assert!(track.is_done(ms(700)));
+        assert_eq!(track.slot(ms(700)).side, 52.0);
+    }
+
+    #[test]
+    fn a_leaving_icon_closes_its_room_and_is_gone() {
+        let mut track = Track::settled(52.0);
+        track.show(ms(0), false);
+        assert_eq!(track.drawn_scale(ms(0)), 1.0);
+        assert!(!track.is_gone(ms(50)));
+        assert!(track.drawn_scale(ms(80)) < 0.5 && track.slot(ms(80)).room < 0.5);
+        assert_eq!(track.opacity.value(ms(0) + dock::ICON_FADE), 0.0);
+        // The spring passes 0 a little: neither the scale nor the room go below.
+        assert!((0..600).all(|t| track.drawn_scale(ms(t)) >= 0.0 && track.slot(ms(t)).room >= 0.0));
+        assert!(track.is_gone(ms(600)));
+        // Shown again on the way: it comes back from where it is.
+        let mut back = Track::settled(52.0);
+        back.show(ms(0), false);
+        let midway = back.drawn_scale(ms(40));
+        back.show(ms(40), true);
+        assert_eq!(back.drawn_scale(ms(40)), midway);
+        assert!(back.is_done(ms(800)) && !back.is_gone(ms(800)));
+    }
+
+    #[test]
+    fn a_dragged_out_icon_closes_its_room_and_keeps_its_size() {
+        let mut track = Track::settled(52.0);
+        track.open(ms(0), false);
+        assert!(track.slot(ms(600)).room < 0.01);
+        assert_eq!(track.drawn_scale(ms(600)), 1.0);
+        assert!(!track.is_gone(ms(600)), "still dragged");
+        // Let go out of the dock: it shrinks and fades where it is.
+        track.vanish(ms(600), dock::DRAG_OUT_OPACITY);
+        assert_eq!(track.opacity.value(ms(600)), dock::DRAG_OUT_OPACITY);
+        assert!(track.drawn_scale(ms(680)) < 0.5);
+        assert!(track.is_gone(ms(1200)));
+    }
+
+    #[test]
+    fn a_moved_icon_starts_where_it_was_and_springs_to_its_place() {
+        let mut track = Track::settled(52.0);
+        track.moved(ms(10), (-60.0, 30.0), (0.0, 0.0));
+        assert_eq!(track.slot(ms(10)).shift, (-60.0, 30.0));
+        // 90 % of the way within 150 ms, past it a little, settled to half a pixel soon after.
+        let shift = |t| track.slot(ms(t)).shift.0;
+        assert!(shift(160).abs() < 6.0, "{}", shift(160));
+        let overshoot = (10..600).map(shift).fold(0.0, f32::max);
+        assert!(overshoot > 0.0 && overshoot < 2.5, "overshoot {overshoot}");
+        assert!(!track.is_done(ms(200)) && track.is_done(ms(500)));
+    }
+
+    #[test]
+    fn the_bounce_hops_and_lands_at_the_end_of_a_hop() {
+        let mut bounce = Bounce::new(ms(1000));
+        let period = dock::BOUNCE_PERIOD;
+        // On its place at the start of each hop, highest in its middle.
+        assert_eq!(bounce.lift(ms(1000), 52.0), 0.0);
+        let top = bounce.lift(ms(1000) + period / 2, 52.0);
+        assert!((top - 26.0).abs() < 1e-3, "{top}");
+        assert!(bounce.lift(ms(1000) + period / 4, 52.0) < top);
+        assert!((bounce.lift(ms(1000) + period + period / 2, 52.0) - top).abs() < 1e-3);
+        // Told to stop in the middle of its third hop: it finishes it, then stays down.
+        let stop = ms(1000) + period * 2 + period / 2;
+        bounce.stop(stop);
+        assert!(bounce.stopping() && !bounce.is_done(stop));
+        assert!(bounce.lift(stop + period / 4, 52.0) > 0.0);
+        let end = ms(1000) + period * 3;
+        assert!(bounce.is_done(end));
+        assert_eq!(bounce.lift(end, 52.0), 0.0);
+        assert_eq!(bounce.lift(end + period / 2, 52.0), 0.0);
+    }
+
+    #[test]
+    fn the_bounce_gives_up_after_its_timeout() {
+        let mut bounce = Bounce::new(ms(0));
+        bounce.time_out(dock::BOUNCE_TIMEOUT - ms(1));
+        assert!(!bounce.stopping());
+        bounce.time_out(dock::BOUNCE_TIMEOUT);
+        assert!(bounce.stopping());
+        assert!(bounce.is_done(dock::BOUNCE_TIMEOUT + dock::BOUNCE_PERIOD));
+    }
+
+    #[test]
+    fn a_launch_ends_with_one_more_window() {
+        // Source 0 knew one window of the application, source 1 nothing yet.
+        let mut launch = Launch::new(Target::App(String::from("a")), ms(0), [Some(1), None]);
+        assert!(
+            !launch.windows(1, 1, ms(10)),
+            "the first count is the start"
+        );
+        assert!(!launch.windows(0, 1, ms(20)));
+        assert!(!launch.windows(0, 0, ms(30)), "one closed");
+        assert!(launch.windows(0, 1, ms(40)), "the new one");
+        assert!(launch.bounce.stopping());
+    }
+}

@@ -74,6 +74,12 @@ pub enum SourceError {
     Unsupported(#[from] BindError),
     #[error("lost the compositor: {0}")]
     Dispatch(#[from] DispatchError),
+    #[error("the environment names no shell socket (WAYLAND_DISPLAY, XDG_RUNTIME_DIR)")]
+    NoShellSocket,
+    #[error("cannot connect to the shell socket: {0}")]
+    ShellSocket(std::io::Error),
+    #[error("the shell socket does not offer sherlock_shell_v1: {0}")]
+    NoShellProtocol(BindError),
 }
 
 /// A source of open windows.

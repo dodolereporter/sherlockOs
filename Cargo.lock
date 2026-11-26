@@ -835,6 +835,7 @@ dependencies = [
  "iced_exwlshell",
  "iced_test",
  "libc",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",

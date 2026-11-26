@@ -16,13 +16,15 @@ use iced_exwlshell::to_layer_message;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
-use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION};
+use sherlock_ui::motion::Fade;
 
+use crate::anim::{Launch, Leaving, Track};
+use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::icons::IconLookup;
-use crate::items::{Builder, Glyph, Item, Target};
+use crate::items::{Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
-use crate::layout::{self, Geometry, Layout};
+use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key};
 use crate::windows::{self, Click, Control, Request, Windows};
 
@@ -42,6 +44,9 @@ pub enum Pointer {
     Moved(Point),
     Left,
     Pressed(mouse::Button),
+    /// The left button came up over the dock. Also seen by the gesture subscription, which
+    /// starts after the press and might miss a quick click.
+    Released,
 }
 
 #[to_layer_message(multi)]
@@ -51,6 +56,10 @@ pub enum Message {
     Pointer(Pointer),
     Frame(Instant),
     Windows(Windows),
+    /// The windows of the compositor's shell socket, for the bounce of a starting application.
+    Shell(Windows),
+    /// The pointer while the button is held on an icon.
+    Gesture(Gesture),
     /// The configuration file changed.
     Config(Box<DockConfig>),
     Key(Key),
@@ -90,8 +99,16 @@ pub struct Dock {
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
-    /// Side of each icon, led by a spring towards the size the pointer gives it.
-    sizes: Vec<Animation>,
+    /// The animations of each icon: size under the pointer, arrival, offset from its place.
+    pub(crate) tracks: Vec<Track>,
+    /// Icons that left the dock, drawn until they are gone.
+    pub leaving: Vec<Leaving>,
+    /// Applications started from the dock, bouncing until their first window.
+    pub launches: Vec<Launch>,
+    /// The icon let go out of the dock, which vanishes where it is.
+    dropping: Option<Target>,
+    /// The left button held on an icon: a click, or a drag.
+    pub(crate) press: Option<Press>,
     /// Opacity of the label, and the icon it names.
     pub(crate) label: Fade,
     pub(crate) label_item: Option<usize>,
@@ -102,6 +119,9 @@ pub struct Dock {
     /// Time of the last event, from `origin`: the moment the view draws.
     pub(crate) now: Duration,
     pub windows: Option<Windows>,
+    /// The windows of the shell socket, read for the bounce only (batch D-18c uses them for the
+    /// rest).
+    shell: Option<Windows>,
     /// Icon with the keyboard focus, kept in our state like the bar does.
     pub(crate) focus: Option<usize>,
     pub(crate) menu: Option<OpenMenu>,
@@ -115,7 +135,6 @@ pub struct Dock {
 impl Dock {
     pub fn new(sources: Sources) -> Self {
         let geometry = Geometry::from_config(&sources.config);
-        let fade = Duration::from_millis(dock::LABEL_FADE_MS);
         let mut dock = Self {
             items: Vec::new(),
             separator: None,
@@ -125,27 +144,36 @@ impl Dock {
             geometry,
             surface_size: Size::ZERO,
             surface: None,
-            sizes: Vec::new(),
-            label: Fade::new(0.0, 0.0, Duration::ZERO, fade),
+            tracks: Vec::new(),
+            leaving: Vec::new(),
+            launches: Vec::new(),
+            dropping: None,
+            press: None,
+            // Hidden, and already still: no frame for it at startup.
+            label: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
             label_item: None,
             hovering: false,
             pointer: None,
             origin: Instant::now(),
             now: Duration::ZERO,
             windows: None,
+            shell: None,
             focus: None,
             menu: None,
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
         };
-        dock.rebuild();
+        dock.rebuild(false);
         dock
     }
 
-    /// Builds the icons again from the pinned list and the open windows. Springs are kept when
-    /// the number of icons stays, reset to rest otherwise.
-    fn rebuild(&mut self) {
+    /// Builds the icons again from the pinned list and the open windows. Each icon keeps its
+    /// animations by identity. With `animate`, a new icon arrives, a gone one leaves, and the
+    /// icons that moved start where they were drawn; otherwise everything is in place.
+    fn rebuild(&mut self, animate: bool) {
+        let now = self.now;
+        let before = animate.then(|| self.layout(now));
         let icon_size = (self.geometry.icon * self.geometry.factor).round() as u32;
         let mut builder = Builder {
             catalog: &self.sources.catalog,
@@ -154,16 +182,104 @@ impl Dock {
             glyphs: &mut self.glyphs,
         };
         let (items, separator) = builder.build(&self.pinned, self.windows.as_ref());
-        if items.len() != self.sizes.len() {
-            self.sizes = rest(items.len(), self.geometry.icon);
+        let old = std::mem::take(&mut self.items);
+        let old_separator = self.separator;
+        let mut old_tracks: Vec<Option<Track>> = std::mem::take(&mut self.tracks)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let side = self.geometry.icon;
+        let mut moved = Vec::new();
+        for item in &items {
+            let place = old.iter().position(|o| o.target() == item.target());
+            let track = match place.and_then(|j| old_tracks.get_mut(j)?.take()) {
+                Some(track) if animate => track,
+                _ if animate => Track::arriving(side, now),
+                _ => Track::settled(side),
+            };
+            moved.push(place);
+            self.tracks.push(track);
+        }
+        let dropping = self.dropping.take();
+        match &before {
+            Some(before) => {
+                for (j, (item, track)) in old.iter().zip(old_tracks).enumerate() {
+                    let Some(mut track) = track else { continue };
+                    let target = item.target();
+                    let next = old[j + 1..]
+                        .iter()
+                        .map(Item::target)
+                        .find(|t| items.iter().any(|i| i.target() == *t));
+                    let dropped = (dropping.as_ref() == Some(&target))
+                        .then(|| before.icons.get(j).map(|r| before.offset(*r)))
+                        .flatten();
+                    match dropped {
+                        Some(_) => track.vanish(now, dock::DRAG_OUT_OPACITY),
+                        None => track.show(now, false),
+                    }
+                    self.leaving.push(Leaving {
+                        item: item.clone(),
+                        track,
+                        next,
+                        unpinned: old_separator.is_some_and(|s| j >= s),
+                        dropped,
+                    });
+                }
+            }
+            None => self.leaving.clear(),
+        }
+        if items.len() != old.len() {
             self.label_item = None;
             self.focus = None;
         }
         self.items = items;
         self.separator = separator;
-        self.surface_size = self
-            .geometry
-            .surface_size(self.items.len(), self.separator.is_some());
+        self.surface_size = self.wanted_surface();
+        // Each icon that moved starts where it was drawn, relative to the middle of the dock.
+        if let Some(before) = before {
+            let after = self.layout(now);
+            for (i, place) in moved.into_iter().enumerate() {
+                let (Some(j), Some(new)) = (place, after.icons.get(i)) else {
+                    continue;
+                };
+                let Some(old) = before.icons.get(j) else {
+                    continue;
+                };
+                let (from, to) = (before.offset(*old), after.offset(*new));
+                self.shift(i, (from.0 - to.0, from.1 - to.1), now);
+            }
+        }
+    }
+
+    /// Icon `index` is drawn `by` away from where it was: it starts back there at `now` and
+    /// springs to its place.
+    fn shift(&mut self, index: usize, by: (f32, f32), now: Duration) {
+        let Some(track) = self.tracks.get_mut(index) else {
+            return;
+        };
+        if by.0.abs() < 0.5 && by.1.abs() < 0.5 {
+            return;
+        }
+        let current = track.slot(now).shift;
+        track.moved(now, (current.0 + by.0, current.1 + by.1), (0.0, 0.0));
+    }
+
+    /// The icons leaving the dock that still take room in the bar.
+    pub(crate) fn flowing(&self) -> impl Iterator<Item = &Leaving> {
+        self.leaving.iter().filter(|l| l.dropped.is_none())
+    }
+
+    /// Size of the surface for the icons and those still closing their room.
+    fn wanted_surface(&self) -> Size {
+        let separator = self.separator.is_some() || self.flowing().any(|l| l.unpinned);
+        self.geometry
+            .surface_size(self.items.len() + self.flowing().count(), separator)
+    }
+
+    /// The time of the clock, never before the last event's.
+    fn clock(&mut self) -> Duration {
+        self.now = self.now.max(self.origin.elapsed());
+        self.now
     }
 
     pub fn menu_open(&self) -> bool {
@@ -174,10 +290,9 @@ impl Dock {
     pub fn animating(&self) -> bool {
         self.theme.running()
             || !self.label.is_done(self.now)
-            || self
-                .sizes
-                .iter()
-                .any(|s| !s.is_done(self.now, GEOMETRY_PRECISION))
+            || !self.leaving.is_empty()
+            || !self.launches.is_empty()
+            || self.tracks.iter().any(|t| !t.is_done(self.now))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -197,9 +312,16 @@ impl Dock {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
+        let gesture = if self.press.is_some() {
+            iced::event::listen_with(drag::gesture).map(Message::Gesture)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             appearance,
             Subscription::run(|| windows::watch(windows::source)).map(Message::Windows),
+            Subscription::run(|| windows::watch(crate::shell::source)).map(Message::Shell),
+            gesture,
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
             config,
@@ -209,8 +331,61 @@ impl Dock {
 
     /// Layout of the dock at `now`.
     pub fn layout(&self, now: Duration) -> Layout {
-        let sizes: Vec<f32> = self.sizes.iter().map(|s| s.value(now) as f32).collect();
-        Layout::new(self.geometry, self.surface_size, &sizes, self.separator)
+        let slots: Vec<_> = self.tracks.iter().map(|t| t.slot(now)).collect();
+        let place = |next: &Option<Target>| {
+            next.as_ref()
+                .and_then(|t| self.index_of(t))
+                .unwrap_or(self.items.len())
+        };
+        let leaving = self
+            .flowing()
+            .map(|l| (place(&l.next), l.unpinned, l.track.slot(now)))
+            .collect();
+        // The separator opens and closes with the open applications after it.
+        let after = |from: usize| {
+            slots[from.min(slots.len())..]
+                .iter()
+                .map(|s| s.room)
+                .chain(
+                    self.flowing()
+                        .filter(|l| l.unpinned)
+                        .map(|l| l.track.slot(now).room),
+                )
+                .fold(0.0, f32::max)
+        };
+        let separator = match self.separator {
+            Some(index) => Some((index, after(index).min(1.0))),
+            None if self.flowing().any(|l| l.unpinned) => {
+                Some((self.items.len(), after(self.items.len()).min(1.0)))
+            }
+            None => None,
+        };
+        let held = self.held().map(|(index, _)| index);
+        let flow = Flow {
+            slots,
+            leaving,
+            separator,
+            held: held.zip(self.press.as_ref().map(|p| p.pointer)),
+        };
+        Layout::flow(self.geometry, self.surface_size, &flow)
+    }
+
+    /// The icon the pointer drags, and whether it is out of the dock.
+    pub fn held(&self) -> Option<(usize, bool)> {
+        let press = self.press.as_ref().filter(|p| p.dragging)?;
+        Some((self.index_of(&press.target)?, press.out))
+    }
+
+    /// The height icon `index` bounces at, at `now`.
+    pub fn lift(&self, index: usize, now: Duration) -> f32 {
+        let (Some(item), Some(track)) = (self.items.get(index), self.tracks.get(index)) else {
+            return 0.0;
+        };
+        let target = item.target();
+        self.launches
+            .iter()
+            .find(|l| l.target == target)
+            .map_or(0.0, |l| l.bounce.lift(now, track.size.value(now) as f32))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -220,18 +395,28 @@ impl Dock {
                 return self.input_region();
             }
             Message::Pointer(event) => {
-                let now = self.origin.elapsed();
+                let now = self.clock();
                 return self.pointer(event, now);
             }
             Message::Frame(instant) => {
                 self.theme.tick(instant);
-                self.frame(instant.saturating_duration_since(self.origin));
+                return self.tick(instant.saturating_duration_since(self.origin));
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Windows(windows) => {
+                self.clock();
+                // The first list is the dock at startup: in place at once.
+                let first = self.windows.is_none();
                 self.windows = Some(windows);
-                return self.refresh(self.geometry);
+                self.windows_came(0);
+                return self.refresh_as(self.geometry, !first);
             }
+            Message::Shell(windows) => {
+                self.clock();
+                self.shell = Some(windows);
+                self.windows_came(1);
+            }
+            Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
             Message::Key(key) => return self.key(key),
             Message::Focus(direction) if self.menu_open() => {
@@ -277,18 +462,32 @@ impl Dock {
             self.pinned.clone_from(pinned);
         }
         self.geometry = Geometry::from_config(&config);
-        if self.geometry.icon != previous.icon {
-            self.sizes = rest(self.sizes.len(), self.geometry.icon);
-        }
         self.sources.config = config;
+        self.clock();
         self.refresh(previous)
     }
 
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
     /// its anchor, margin and exclusive zone when the edge changed.
     fn refresh(&mut self, previous: Geometry) -> Task<Message> {
-        let size = self.surface_size;
-        self.rebuild();
+        self.refresh_as(previous, self.geometry == previous)
+    }
+
+    /// `refresh`, the icons animated or put in place at once. The input region follows the
+    /// icons at once, when one leaves as when one arrives.
+    fn refresh_as(&mut self, previous: Geometry, animate: bool) -> Task<Message> {
+        self.clock();
+        let (size, count) = (self.surface_size, self.items.len());
+        self.rebuild(animate);
+        let resized = self.resize(size, previous);
+        if self.items.len() == count {
+            return resized;
+        }
+        Task::batch([resized, self.input_region()])
+    }
+
+    /// Tells the compositor what changed of the surface since it had `size` with `previous`.
+    fn resize(&mut self, size: Size, previous: Geometry) -> Task<Message> {
         let Some(id) = self.surface else {
             return Task::none();
         };
@@ -331,8 +530,9 @@ impl Dock {
         let count = self.items.len();
         let ratio = inside.map(|p| layout.ratio(p));
         for (size, target) in self
-            .sizes
+            .tracks
             .iter_mut()
+            .map(|t| &mut t.size)
             .zip(self.geometry.targets(ratio, count))
         {
             if (size.target() - f64::from(target)).abs() > f64::EPSILON {
@@ -373,6 +573,210 @@ impl Dock {
         }
     }
 
+    /// A frame was drawn at `now`: the bounces past their timeout stop, the icons that are
+    /// gone and the bounces that landed are dropped, and the surface shrinks once the icons
+    /// that left are gone.
+    pub fn tick(&mut self, now: Duration) -> Task<Message> {
+        self.frame(now);
+        self.settle()
+    }
+
+    /// The time the dock draws at.
+    pub fn now(&self) -> Duration {
+        self.now
+    }
+
+    fn settle(&mut self) -> Task<Message> {
+        let now = self.now;
+        for launch in &mut self.launches {
+            launch.bounce.time_out(now);
+        }
+        self.launches.retain(|l| !l.bounce.is_done(now));
+        let count = self.leaving.len();
+        self.leaving.retain(|l| !l.track.is_gone(now));
+        if self.leaving.len() == count {
+            return Task::none();
+        }
+        let size = self.surface_size;
+        self.surface_size = self.wanted_surface();
+        self.resize(size, self.geometry)
+    }
+
+    /// A source of windows (0 the dock's, 1 the shell socket) has a new list: an application
+    /// that starts and has one more window than when it started stops bouncing.
+    fn windows_came(&mut self, source: usize) {
+        let now = self.now;
+        let windows = if source == 0 {
+            self.windows.as_ref()
+        } else {
+            self.shell.as_ref()
+        };
+        let Some(windows) = windows else {
+            return;
+        };
+        for launch in &mut self.launches {
+            let Some(item) = self.items.iter().find(|i| i.target() == launch.target) else {
+                continue;
+            };
+            let (count, _) = windows.of(|app_id| item.owns(app_id));
+            if launch.windows(source, count, now) {
+                tracing::info!(app = item.name, "window came: the bounce stops");
+            }
+        }
+    }
+
+    /// The pointer moved or the button came up while it is held on an icon.
+    fn gesture(&mut self, gesture: Gesture) -> Task<Message> {
+        let now = self.clock();
+        let Some(press) = self.press.as_mut() else {
+            return Task::none();
+        };
+        match gesture {
+            Gesture::Moved(point) => {
+                press.pointer = point;
+                if !press.dragging && press.past_threshold() {
+                    let target = press.target.clone();
+                    let draggable = self
+                        .index_of(&target)
+                        .and_then(|i| self.items.get(i))
+                        .is_some_and(|i| i.pinned && i.entry().is_some());
+                    if let Some(press) = self.press.as_mut() {
+                        press.dragging = draggable;
+                    }
+                }
+                self.drag(now)
+            }
+            Gesture::Released => self.release(now),
+        }
+    }
+
+    /// The held icon follows the pointer: out of the dock its room closes, along the dock it
+    /// takes the place nearest the pointer.
+    fn drag(&mut self, now: Duration) -> Task<Message> {
+        let Some(press) = self.press.clone().filter(|p| p.dragging) else {
+            return Task::none();
+        };
+        let Some(index) = self.index_of(&press.target) else {
+            self.press = None;
+            return Task::none();
+        };
+        let layout = self.layout(now);
+        let side = self.tracks[index].size.value(now) as f32;
+        let out = layout.depth(press.pointer) > self.geometry.bar_thickness() + side / 2.0;
+        if out != press.out {
+            self.tracks[index].open(now, !out);
+            if let Some(press) = self.press.as_mut() {
+                press.out = out;
+            }
+        }
+        if out {
+            return Task::none();
+        }
+        // Among the orders the pinned icons can take, the one that puts the icon nearest the
+        // pointer.
+        let pinned = self.separator.unwrap_or(self.items.len());
+        let Some(sherlock) = self.items.iter().position(|i| i.kind == Kind::Sherlock) else {
+            return Task::none();
+        };
+        let sides: Vec<f32> = self
+            .tracks
+            .iter()
+            .map(|t| t.size.value(now) as f32)
+            .collect();
+        let along = layout.along(press.pointer);
+        let distance = |order: &Vec<usize>| {
+            let mut ordered: Vec<f32> = order.iter().map(|&i| sides[i]).collect();
+            ordered.extend_from_slice(&sides[pinned..]);
+            let candidate = Layout::new(self.geometry, self.surface_size, &ordered, self.separator);
+            order
+                .iter()
+                .position(|&i| i == index)
+                .and_then(|place| candidate.middle(place))
+                .map_or(f32::INFINITY, |middle| (middle - along).abs())
+        };
+        let Some(best) = drag::orders(pinned, sherlock, index)
+            .into_iter()
+            .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+        else {
+            return Task::none();
+        };
+        let ids: Vec<&str> = best
+            .iter()
+            .filter_map(|&i| self.items[i].entry().map(|e| e.id.as_str()))
+            .collect();
+        let Some(id) = self.items[index].entry().map(|e| e.id.clone()) else {
+            return Task::none();
+        };
+        if ids == self.shown_pins() {
+            // Same order on screen: nothing moves, even among pins that are not shown.
+            return Task::none();
+        }
+        let before = ids
+            .iter()
+            .position(|i| *i == id)
+            .and_then(|place| ids.get(place + 1))
+            .map(|next| (*next).to_owned());
+        if dock_config::move_pinned(&mut self.pinned, &id, before.as_deref()) {
+            return self.refresh(self.geometry);
+        }
+        Task::none()
+    }
+
+    /// The button came up: a click when the icon was not dragged; otherwise the icon flies to
+    /// its place and the new order is written, or, out of the dock, it is unpinned.
+    fn release(&mut self, now: Duration) -> Task<Message> {
+        let held = self.layout(now);
+        let Some(press) = self.press.take() else {
+            return Task::none();
+        };
+        let Some(index) = self.index_of(&press.target) else {
+            return Task::none();
+        };
+        if !press.dragging {
+            if held.icon_at(press.pointer) == Some(index) {
+                self.click(index);
+            }
+            return Task::none();
+        }
+        let free = self.layout(now);
+        let (Some(drawn), Some(place)) = (held.icons.get(index), free.icons.get(index)) else {
+            return Task::none();
+        };
+        let (from, to) = (held.offset(*drawn), free.offset(*place));
+        let by = (from.0 - to.0, from.1 - to.1);
+        let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        if press.out && !open {
+            // It stays where it was let go, and vanishes there.
+            let current = self.tracks[index].slot(now).shift;
+            let at = (current.0 + by.0, current.1 + by.1);
+            self.tracks[index].moved(now, at, at);
+            self.dropping = Some(press.target);
+            return self.unpin(index);
+        }
+        self.shift(index, by, now);
+        self.tracks[index].open(now, true);
+        if press.out {
+            // Still open: it moves after the separator.
+            return self.unpin(index);
+        }
+        if self.shown_pins() != press.shown {
+            tracing::info!(pinned = ?self.pinned, "reordered");
+            return self.save_pinned();
+        }
+        // Back where it was: the list too, and the file is not written.
+        self.pinned = press.pinned;
+        Task::none()
+    }
+
+    /// The pinned applications shown, in order.
+    fn shown_pins(&self) -> Vec<&str> {
+        let end = self.separator.unwrap_or(self.items.len());
+        self.items[..end.min(self.items.len())]
+            .iter()
+            .filter_map(|i| i.entry().map(|e| e.id.as_str()))
+            .collect()
+    }
+
     fn pointer(&mut self, event: Pointer, now: Duration) -> Task<Message> {
         match event {
             Pointer::Moved(_) | Pointer::Left => {
@@ -393,11 +797,19 @@ impl Dock {
                 // Like `:focus-visible`: the mouse removes the keyboard ring.
                 self.focus = None;
                 let target = self.pointer.and_then(|p| self.layout(now).icon_at(p));
-                match (button, target) {
-                    (mouse::Button::Left, Some(index)) => self.click(index),
-                    (mouse::Button::Right, Some(index)) => return self.open_menu(index),
+                match (button, target, self.pointer) {
+                    (mouse::Button::Left, Some(index), Some(point)) => {
+                        let target = self.items[index].target();
+                        let shown = self.shown_pins().into_iter().map(String::from).collect();
+                        self.press = Some(Press::new(target, point, self.pinned.clone(), shown));
+                    }
+                    (mouse::Button::Right, Some(index), _) => return self.open_menu(index),
                     _ => {}
                 }
+            }
+            Pointer::Released => {
+                let now = self.clock();
+                return self.release(now);
             }
         }
         Task::none()
@@ -496,7 +908,7 @@ impl Dock {
 
     /// A click on icon `index`: brings its windows forward, minimizes them when they already
     /// are, or starts the application.
-    pub fn click(&self, index: usize) {
+    pub fn click(&mut self, index: usize) {
         match windows::click(self.open_windows(index), self.controllable()) {
             Click::Launch => self.activate(index, What::App),
             Click::Activate => self.request(index, Request::Activate),
@@ -514,8 +926,10 @@ impl Dock {
             .send(request, Box::new(move |app_id| item.owns(app_id)));
     }
 
-    /// Starts `what` for icon `index`.
-    pub fn activate(&self, index: usize, what: What) {
+    /// Starts `what` for icon `index`, which bounces until a window of the application comes.
+    /// While it bounces, it is not started again.
+    pub fn activate(&mut self, index: usize, what: What) {
+        let now = self.clock();
         let Some(item) = self.items.get(index) else {
             return;
         };
@@ -523,10 +937,30 @@ impl Dock {
             tracing::info!(name = item.name, "nothing to start for this icon yet");
             return;
         };
+        let target = item.target();
+        if self
+            .launches
+            .iter()
+            .any(|l| l.target == target && !l.bounce.stopping())
+        {
+            tracing::info!(app = entry.id, "already starting");
+            return;
+        }
         match launch::launch(entry, what) {
             Ok(pid) => tracing::info!(app = entry.id, pid, ?what, "started"),
-            Err(error) => tracing::warn!(app = entry.id, %error, "cannot start"),
+            Err(error) => {
+                tracing::warn!(app = entry.id, %error, "cannot start");
+                return;
+            }
         }
+        let count = |windows: Option<&Windows>| windows.map(|w| w.of(|a| item.owns(a)).0);
+        let before = [count(self.windows.as_ref()), count(self.shell.as_ref())];
+        self.launches.retain(|l| l.target != target);
+        if !self.animating() {
+            self.frames = 0;
+            self.frames_since = now;
+        }
+        self.launches.push(Launch::new(target, now, before));
     }
 
     fn open_menu(&mut self, index: usize) -> Task<Message> {
@@ -682,14 +1116,6 @@ impl Dock {
         }
         self.refresh(self.geometry)
     }
-}
-
-/// Every icon at rest.
-fn rest(count: usize, side: f32) -> Vec<Animation> {
-    let side = f64::from(side);
-    (0..count)
-        .map(|_| Animation::new(dock::SPRING, side, side, Duration::ZERO))
-        .collect()
 }
 
 /// Tab moves the focus; the other keys go to the menu when it is open, to the dock otherwise.

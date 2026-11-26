@@ -51,13 +51,17 @@ Surface):
 | `config.rs` | Default pinned applications |
 | `launch.rs` | Starting an application without a shell |
 | `windows.rs` | Open windows behind the `Source` trait: placeholder and `zwlr_foreign_toplevel_manager_v1` |
+| `shell.rs` | The windows of our compositor through `sherlock_shell_v1`, read only, for the bounce (D-21b) |
+| `anim.rs` | The animations of each icon, kept by identity: size, arrival and departure, offset, bounce (D-21b) |
+| `drag.rs` | A press on an icon: click, or drag to reorder or unpin (D-21b) |
 
 Every color, size and text comes from `sherlock-ui`: `metrics::DOCK_*` (already there since
 D-01), the palette (`dock_glass`, `dock_border`, `dock_separator`, `logo_dot`, `cream`), and the
 module `sherlock_ui::dock`: padding, edge margin, dot, label, separator, menu width and gap, the
 bounds of the settings, the magnification spring `dock::SPRING`, the label fade, the tile
 colors, the styles `bar`, `tile`, `label`, `dot`, `separator` and `ring`, and the texts
-`dock::text`.
+`dock::text`. The animations of D-21b take their springs and fade from `sherlock_ui::motion`,
+named for the dock in `sherlock_ui::dock` (see Animations).
 
 **Theme.** The dock reads the theme of the appearance file before its first frame, then follows
 the file live and fades from one theme to the other
@@ -234,7 +238,7 @@ ignored with a warning in the log (`IconSize=9999 ignored, expected a number fro
 and the default is used: a bad file never stops the dock. Unknown keys, comments and blank lines are
 kept when the dock writes the file, and values are escaped (`\n`, `\\`, a leading space as
 `\s`): a value can never add a line of its own. `AutoHide` is read and kept, but the dock does not hide yet
-(batch D-21b).
+(batch D-18c: it needs the geometry of the windows).
 
 **Live reload.** The dock watches the file's folder with inotify (one blocking thread, no
 polling). It reads the whole inotify buffer at each wake: a folder deleted with its file sends
@@ -276,7 +280,8 @@ and installs it for the user, without root: the binary in `~/.local/bin`, and
 `desktop/evidence/evidence.desktop` in `~/.local/share/applications` with that absolute path in
 `Exec`. A dock that already wrote its `Pinned` list keeps it: « Garder dans le dock » on an open
 Evidence window adds it there. The OS packages will install both in `/usr`. Nothing is
-written until the list changes. « Retirer du dock » and « Garder dans le dock » write the file.
+written until the list changes. « Retirer du dock », « Garder dans le dock », a drag and drop
+and an icon dragged out of the dock write the file.
 
 ### Edges
 
@@ -322,6 +327,94 @@ used: our OS will not ship GTK for it.
 
 Sherlock has no window to open yet: a click on it is logged, like the entries of the bar's
 Sherlock menu.
+
+## Animations
+
+Batch D-21b, after macOS. The board shows none of them. Each icon keeps its animations by
+identity (desktop file id, or `app_id`) when the icons are built again (`anim::Track`): its
+size under the pointer, its room in the bar, its scale and opacity, and its offset from its
+place. Everything is computed from the time, like the magnification: no state that advances
+frame by frame.
+
+| Token (`sherlock_ui::dock`) | Value | Use |
+| --- | --- | --- |
+| `ARRIVAL_SPRING` | `motion::OPEN_SPRING` (ratio 0.80, overshoot of 2 %) | Room and scale of an icon arriving or leaving |
+| `ICON_FADE` | `motion::FADE`, 150 ms | Opacity of an icon arriving or leaving |
+| `SHIFT_SPRING` | `motion::SNAP_SPRING` (ratio 0.75, overshoot of 3 %) | Icons moving aside, a dropped icon flying to its place |
+| `BOUNCE_HEIGHT`, `BOUNCE_PERIOD` | Half the icon, 600 ms | A hop of the bounce |
+| `BOUNCE_TIMEOUT` | 10 s | Longest bounce without a window |
+| `DRAG_THRESHOLD` | 4 px | Under it a press is a click, past it a drag |
+| `DRAG_OUT_OPACITY` | 0.5 | An icon dragged out of the dock |
+
+The bounce height, its period, the threshold and the opacity are choices of D-21b, to review
+with the design.
+
+**Arriving and leaving.** A pinned application, an application unpinned, a window of an
+application not pinned that opens or the last one that closes: the icon's room in the bar opens
+or closes with `ARRIVAL_SPRING`, so its neighbours move aside or close up and the bar follows;
+the icon grows from its base, or shrinks to it, and fades with `ICON_FADE`. An icon that left
+is still drawn, in its room, until it is gone (`Dock::leaving`); the surface keeps its size
+until then, then shrinks; the input region takes the new bar at once, for a leaving icon as for
+an arriving one. The separator opens and closes with the open applications after it.
+At startup (the first list of windows included), and when the edge, the icon size or the
+magnification changes, everything is in place at once.
+
+**Moving.** When the order changes (a drag, the settings, an application moving across the
+separator), each icon starts where it was drawn and springs to its new place
+(`SHIFT_SPRING`): its offset is the old place minus the new one, measured from the middle of
+the dock, which stays put on the screen when the surface changes size.
+
+![An icon dragged between two others](../desktop/dock/screenshots/dock-drag.png)
+
+**Drag and drop.** The left button now acts when it comes up: pressed and released on the same
+icon without moving 4 px, it is a click. Past 4 px, a pinned application follows the pointer
+(Sherlock and the open applications that are not pinned do not move). Along the dock it takes
+the place nearest the pointer among the pinned applications, Sherlock staying in their middle:
+the dock tries each place with the current sizes and keeps the one that puts the icon closest
+to the pointer; the others make room with `SHIFT_SPRING`. Let go, it flies to its place and the
+new order is written to `dock.conf` by `dock-config` (`move_pinned`, then the atomic
+`DockConfig::save`), only if the order shown changed: a pinned application that is not
+installed, between two shown ones, never moves on its own, and a drag back to its place writes
+nothing. While the button is held the dock follows the pointer
+through iced's events (`drag::gesture`), past the edges of its surface as well: the surface
+keeps the pointer until the button comes up.
+
+**Dragged out.** When the pointer is more than half the icon past the bar, away from the edge,
+the icon is out: its room closes, it is drawn at half opacity. Back over the dock, its room
+opens again. Let go out of the dock, a pinned application is unpinned and the file written; it
+shrinks and fades where it was let go. A pinned application that is open moves after the
+separator instead, as with « Retirer du dock ». The icon is drawn inside the dock surface:
+higher than it, it stays at its top edge (a drag icon of its own, `wl_data_device`, is not
+offered by `iced_exwlshell`).
+
+![An icon at the top of its bounce](../desktop/dock/screenshots/dock-bounce.png)
+
+**Bounce.** An application started from the dock (a click, Enter, « Ouvrir », « Nouvelle
+fenêtre ») bounces: hops of 600 ms, each a parabola half the icon high, as on macOS. It is not
+started again while it bounces. It stops at the end of the hop in progress, so that it lands,
+when one of these says its first window came:
+
+1. our compositor, through `sherlock_shell_v1` on its shell socket (`shell.rs`,
+   `shell_protocol::socket_from_env`, ADR 0021): a window that the application owns (same
+   rule as the dots) more than when it started. The source publishes the windows at each
+   `done` only: a window closing and another opening in one batch never reads as one less;
+2. the dock's window source (`zwlr_foreign_toplevel_manager_v1` on wlroots compositors),
+   with the same rule;
+3. otherwise, `BOUNCE_TIMEOUT`, 10 s after the start.
+
+`xdg-activation` was considered between 2 and 3: it cannot tell the dock anything. A launcher
+asks for a token and gives it to the application, which uses it to take the focus; the
+protocol has no event for the launcher when the token is used, so the dock would never learn
+that the window came. Our compositor's shell protocol says it directly.
+
+The shell source is read only: the dock opens one connection to the shell socket on its own
+thread, and takes nothing else from it. The dots, a click that brings forward or minimizes,
+« Quitter » and auto-hide over this protocol are batch D-18c, which will give `Shell` a
+`windows::Control` and make it the dock's window source.
+
+**No frame at rest.** Frames are asked for while a size, a room, a scale, an opacity or an
+offset moves, while an icon is leaving and while an icon bounces. A bounce that landed and an
+icon that is gone are dropped at the next frame, and the frames stop.
 
 ## Open windows
 
@@ -532,6 +625,21 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.
+- **Animations** (`anim.rs`, `tests/animations.rs`): an arriving icon opens its room, overshoots
+  a little and settles; a leaving one closes it and is gone, never below 0; a moved icon starts
+  where it was and springs to its place; the bounce hops, lands at the end of its hop, gives up
+  at its timeout; a launch ends with one more window. In the dock: a pinned application
+  arrives and its neighbours move aside without a jump, one unpinned leaves and the surface
+  shrinks once it is gone, a drag reorders and writes the file once let go (comment kept, no
+  temporary file left), a small move is still a click, a drag out unpins and the icon
+  vanishes, Sherlock and the open applications that are not pinned do not move, an open pinned
+  application dragged out moves after the separator, the bounce stops when the window comes
+  (fake source) or at its timeout, and no frame is asked for once everything is still.
+  Captures of a bounce and of a drag (`dock-bounce-tiny-skia.png`, `dock-drag-tiny-skia.png`).
+- **Shell windows** (`tests/shell.rs`): the `sherlock_shell_v1` source against a fake
+  compositor: windows already open, one that comes, one that closes, and a compositor without
+  the protocol.
+- **Pinned order** (`dock-config`): `move_pinned` before another id, at the end, unchanged.
 - **Rendering** (`tests/render.rs`): headless screenshots at rest, magnified with the label, on
   the left edge, with an open application after the separator, and of the menu; the pointer tracked over the surface; a disabled entry picks nothing; unpinning
   keeps Sherlock in the middle.
@@ -560,12 +668,11 @@ X focus): the keyboard steps were checked in the nested KWin.
 
 ## What this batch does not do
 
-Batch D-21b, split off at the coordinator's request, will add: auto-hide (`AutoHide=always`:
-sliding out with no exclusive zone and an input strip of a few pixels at the edge;
-`AutoHide=smart`: hiding when a window overlaps, behind a trait, since no protocol gives
-clients the geometry of windows), the bounce of an icon while its application starts, sliding
-in and out, smooth adding and removing of icons, reordering by drag and drop, and dragging an
-icon out of the dock to unpin it.
+Batch D-21b added the bounce, smooth adding and removing of icons, reordering by drag and drop
+and dragging an icon out to unpin it (see Animations). Auto-hide (`AutoHide=always`: sliding
+out with no exclusive zone and an input strip of a few pixels at the edge; `AutoHide=smart`:
+hiding when a window overlaps) and sliding in and out belong to batch D-18c, with the rest of
+the windows over `sherlock_shell_v1`.
 
 - **Hiding in game mode**: there is no game mode yet, and no way for the dock to know it (see
   what the compositor will have to provide).

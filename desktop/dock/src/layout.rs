@@ -196,6 +196,44 @@ pub fn nearest(p: f32, count: usize) -> usize {
     index.min(count.saturating_sub(1))
 }
 
+/// An icon in the flow of the dock, as its animations have it at one instant.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slot {
+    /// Side of the icon.
+    pub side: f32,
+    /// Share of its room it takes along the dock: 0 while it arrives or once it left, 1 in
+    /// place. Its neighbours move aside as it grows.
+    pub room: f32,
+    /// Offset of the icon from its place: along the dock, and away from the screen edge.
+    pub shift: (f32, f32),
+}
+
+impl Slot {
+    /// An icon of `side` in its place.
+    pub fn at_rest(side: f32) -> Self {
+        Self {
+            side,
+            room: 1.0,
+            shift: (0.0, 0.0),
+        }
+    }
+}
+
+/// What the dock holds at one instant.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Flow {
+    /// The icons, in order.
+    pub slots: Vec<Slot>,
+    /// Icons leaving the dock, still closing their room: the icon each comes before
+    /// (`slots.len()` at the end), whether it was after the separator, and its slot.
+    pub leaving: Vec<(usize, bool, Slot)>,
+    /// The separator before icon `.0`, taking `.1` of its room.
+    pub separator: Option<(usize, f32)>,
+    /// The icon the pointer drags, and the pointer: the icon is drawn under it, its room stays
+    /// in the bar.
+    pub held: Option<(usize, Point)>,
+}
+
 /// Where everything is, for icons of the given sizes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
@@ -205,6 +243,8 @@ pub struct Layout {
     pub bar: Rectangle,
     /// Each icon, on the padding nearest the screen edge. A magnified icon goes past the bar.
     pub icons: Vec<Rectangle>,
+    /// The icons leaving the dock, in the order of `Flow::leaving`.
+    pub leaving: Vec<Rectangle>,
     /// The separator before the open applications that are not pinned.
     pub separator: Option<Rectangle>,
     /// Start and length of the bar along the dock.
@@ -216,45 +256,149 @@ impl Layout {
     /// `separator`. The bar is as long as its icons: when one grows, the bar grows at both
     /// ends and pushes the neighbours away.
     pub fn new(geometry: Geometry, surface: Size, sizes: &[f32], separator: Option<usize>) -> Self {
-        let vertical = geometry.position.is_vertical();
-        let span = if vertical {
-            surface.height
-        } else {
-            surface.width
+        let flow = Flow {
+            slots: sizes.iter().map(|&side| Slot::at_rest(side)).collect(),
+            separator: separator.map(|index| (index, 1.0)),
+            ..Flow::default()
         };
-        let length = geometry.bar_length(sizes, separator.is_some());
+        Self::flow(geometry, surface, &flow)
+    }
+
+    /// Lays out `flow`: each icon takes its share of its room, leaving icons included, and is
+    /// drawn at its offset; the held icon is drawn under the pointer, inside the surface.
+    pub fn flow(geometry: Geometry, surface: Size, flow: &Flow) -> Self {
+        let vertical = geometry.position.is_vertical();
+        let (span, deep) = if vertical {
+            (surface.height, surface.width)
+        } else {
+            (surface.width, surface.height)
+        };
+        let gap = metrics::DOCK_ICON_GAP;
+        let weight = |slot: &Slot| (slot.side + gap) * slot.room;
+        let (index, room) = flow.separator.unwrap_or((usize::MAX, 0.0));
+        let icons_length: f32 = flow
+            .slots
+            .iter()
+            .chain(flow.leaving.iter().map(|(_, _, slot)| slot))
+            .map(weight)
+            .sum();
+        let ends = 2.0 * (metrics::BORDER_WIDTH + dock::PADDING.0);
+        let length = ends + (icons_length - gap).max(0.0) + room * (separator_length() + gap);
         let start = (span - length) / 2.0;
         let place = |along: f32, depth: f32, length: f32, thickness: f32| {
             to_surface(geometry.position, surface, along, depth, length, thickness)
         };
         let bar = place(start, 0.0, length, geometry.bar_thickness());
-        let depth = geometry.inset();
+        let inset = geometry.inset();
         let mut cursor = start + metrics::BORDER_WIDTH + dock::PADDING.0;
-        let mut icons = Vec::with_capacity(sizes.len());
+        let put = |cursor: &mut f32, slot: &Slot| {
+            let middle = *cursor + slot.side * slot.room / 2.0;
+            *cursor += weight(slot);
+            let depth = (inset + slot.shift.1).clamp(0.0, (deep - slot.side).max(0.0));
+            place(
+                middle - slot.side / 2.0 + slot.shift.0,
+                depth,
+                slot.side,
+                slot.side,
+            )
+        };
+        let mut icons = Vec::with_capacity(flow.slots.len());
+        let mut leaving = vec![Rectangle::default(); flow.leaving.len()];
         let mut divider = None;
-        for (index, &side) in sizes.iter().enumerate() {
-            if separator == Some(index) {
-                let (thickness, across) = dock::SEPARATOR;
-                let middle = (geometry.bar_thickness() - across) / 2.0;
-                divider = Some(place(
-                    cursor + dock::SEPARATOR_MARGIN,
-                    middle,
-                    thickness,
-                    across,
-                ));
-                cursor += separator_length() + metrics::DOCK_ICON_GAP;
+        for at in 0..=flow.slots.len() {
+            // The icons that leave before this one: those of the pinned part before the
+            // separator, the open ones after it.
+            for after in [false, true] {
+                if after && index == at {
+                    let (thickness, across) = dock::SEPARATOR;
+                    let middle = (geometry.bar_thickness() - across) / 2.0;
+                    let margin = dock::SEPARATOR_MARGIN * room;
+                    divider = Some(place(cursor + margin, middle, thickness, across));
+                    cursor += room * (separator_length() + gap);
+                }
+                for (rank, (_, _, slot)) in flow
+                    .leaving
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| l.0 == at && l.1 == after)
+                {
+                    leaving[rank] = put(&mut cursor, slot);
+                }
             }
-            icons.push(place(cursor, depth, side, side));
-            cursor += side + metrics::DOCK_ICON_GAP;
+            if let Some(slot) = flow.slots.get(at) {
+                icons.push(put(&mut cursor, slot));
+            }
+        }
+        if let Some((held, point)) = flow.held
+            && let Some(icon) = icons.get_mut(held)
+        {
+            let (along, depth) = along_depth(geometry.position, surface, point);
+            let side = if vertical { icon.height } else { icon.width };
+            let along = (along - side / 2.0).clamp(0.0, (span - side).max(0.0));
+            let depth = (depth - side / 2.0).clamp(inset, (deep - side).max(inset));
+            *icon = place(along, depth, side, side);
         }
         Self {
             geometry,
             surface,
             bar,
             icons,
+            leaving,
             separator: divider,
             along: (start, length),
         }
+    }
+
+    /// Where `offset` (`Layout::offset`) is in this surface, for an icon of `side`.
+    pub fn at_offset(&self, offset: (f32, f32), side: f32) -> Rectangle {
+        let span = if self.geometry.position.is_vertical() {
+            self.surface.height
+        } else {
+            self.surface.width
+        };
+        let (along, depth) = (offset.0 + span / 2.0, offset.1);
+        to_surface(
+            self.geometry.position,
+            self.surface,
+            along,
+            depth,
+            side,
+            side,
+        )
+    }
+
+    /// The middle of icon `index` along the dock.
+    pub fn middle(&self, index: usize) -> Option<f32> {
+        let (along, side) = self.along_of(*self.icons.get(index)?);
+        Some(along + side / 2.0)
+    }
+
+    /// `point` along the dock.
+    pub fn along(&self, point: Point) -> f32 {
+        along_depth(self.geometry.position, self.surface, point).0
+    }
+
+    /// Distance of `point` from the screen edge.
+    pub fn depth(&self, point: Point) -> f32 {
+        along_depth(self.geometry.position, self.surface, point).1
+    }
+
+    /// Place of `rectangle` relative to the middle of the dock, which stays put on the screen
+    /// when the surface changes size: along the dock, and away from the edge.
+    pub fn offset(&self, rectangle: Rectangle) -> (f32, f32) {
+        let corner = Point::new(rectangle.x, rectangle.y);
+        let (along, depth) = along_depth(self.geometry.position, self.surface, corner);
+        let (span, side) = if self.geometry.position.is_vertical() {
+            (self.surface.height, rectangle.width)
+        } else {
+            (self.surface.width, rectangle.height)
+        };
+        // The corner of a rectangle at the bottom or right is its far side from the edge.
+        let depth = match self.geometry.position {
+            Position::Bottom | Position::Right => depth - side,
+            Position::Top | Position::Left => depth,
+        };
+        (along - span / 2.0, depth)
     }
 
     /// Position of the pointer along the bar, from 0 to 1, as the board measures it on the bar
@@ -345,6 +489,16 @@ impl Layout {
         } else {
             (rectangle.x, rectangle.width)
         }
+    }
+}
+
+/// `point` along the dock, and its distance from the screen edge.
+fn along_depth(position: Position, surface: Size, point: Point) -> (f32, f32) {
+    match position {
+        Position::Bottom => (point.x, surface.height - point.y),
+        Position::Top => (point.x, point.y),
+        Position::Left => (point.y, point.x),
+        Position::Right => (point.y, surface.width - point.x),
     }
 }
 
