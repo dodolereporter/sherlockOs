@@ -127,6 +127,8 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
+    Applications,
     /// Escape while Mission Control is open: closes it.
     CloseOverview,
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
@@ -178,6 +180,12 @@ impl Shortcut {
             (true, false, None, Keysym::Right) => Some(Self::NeighborWorkspace(1)),
             _ => None,
         }
+    }
+
+    /// F4 without any modifier: the applications view (lot D-41).
+    fn for_applications(m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let alone = !m.ctrl && !m.alt && !m.shift && !m.logo;
+        (sym == Keysym::F4 && alone).then_some(Self::Applications)
     }
 
     fn for_key(sym: Keysym) -> Option<Self> {
@@ -774,7 +782,8 @@ impl State {
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
                 .or(media.map(|media| Shortcut::Media(media, key)))
-                .or(screenshot.map(Shortcut::Screenshot));
+                .or(screenshot.map(Shortcut::Screenshot))
+                .or_else(|| Shortcut::for_applications(mods, sym));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
@@ -829,6 +838,10 @@ impl State {
             }
             Shortcut::Launcher => {
                 self.start_launcher();
+                return;
+            }
+            Shortcut::Applications => {
+                self.start_applications();
                 return;
             }
             Shortcut::Media(media, code) => {
@@ -1191,5 +1204,18 @@ mod tests {
         // In nested mode, the host session keeps its consoles, and closing the window stops.
         assert!(Shortcut::for_session(true, &ctrl_alt, Keysym::BackSpace).is_none());
         assert!(Shortcut::for_session(true, &ctrl_alt, Keysym::XF86_Switch_VT_2).is_none());
+    }
+
+    #[test]
+    fn f4_alone_opens_the_applications_view() {
+        let none = mods(false, false);
+        assert!(matches!(
+            Shortcut::for_applications(&none, Keysym::F4),
+            Some(Shortcut::Applications)
+        ));
+        // With a modifier (Alt + F4 closes a window elsewhere), it goes to the client.
+        assert!(Shortcut::for_applications(&mods(false, true), Keysym::F4).is_none());
+        assert!(Shortcut::for_applications(&mods(true, false), Keysym::F4).is_none());
+        assert!(Shortcut::for_applications(&none, Keysym::F3).is_none());
     }
 }

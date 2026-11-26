@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Evidence
+GenericName[fr]=Gestionnaire de fichiers
+Exec=evidence %U
+Icon=evidence

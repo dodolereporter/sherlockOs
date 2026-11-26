@@ -45,8 +45,15 @@ A pull request is green only if `verify` and `test-boot` both are.
   `xwayland` package does not pull it in. `libegl-mesa0` is Mesa's EGL, whose software device
   (llvmpipe) draws the genie of the compositor without a GPU (`tests/genie.rs`, lot D-19): the
   test fails on the CI without it. `dbus-daemon` runs the private session buses of the
-  notification daemon's tests (`desktop/notifications/tests/dbus.rs`). Any system library added
-  here is also added to the prerequisites of the local machine.
+  notification daemon's tests (`desktop/notifications/tests/dbus.rs`). `mesa-vulkan-drivers`
+  gives Mesa's software Vulkan driver (lavapipe), on which `sherlock-3d` renders the mascot off
+  screen (lot D-30). Any system library added here is also added to the prerequisites of the
+  local machine.
+- **Mascot.** `just mascot` downloads the 3D model of Sherlock (`sherlock.glb`, 1.4 MiB) from
+  the public repository `dodolereporter/sherlock`, at the revision and SHA-256 pinned in the
+  `justfile`: it is not in this repository (ADR 0024). `just verify` then runs with
+  `SHERLOCK_3D_REQUIRE=1`, so the tests of `sherlock-3d` fail instead of skipping when the
+  model or the Vulkan driver is missing.
 - **Python.** `check-language` runs with the `python3` of the image (3.12 on `ubuntu-24.04`) and
   only uses its standard library. The workflow prints its version before `just verify`.
 - **just.** Installed by `taiki-e/install-action`, version 1.59.0, pinned in the workflow.
@@ -77,7 +84,10 @@ Prerequisites of the local machine: `rustup`, `just`, `python3`, a C compiler (`
 Debian), the compositor libraries (`libxkbcommon-dev`, `libwayland-dev`, `libudev-dev`,
 `libinput-dev`, `libseat-dev`, `libgbm-dev` and `libdrm-dev` on Debian), the `Xwayland` server
 (`xwayland` package on Debian), Mesa's EGL (`libegl-mesa0`, without which the genie test only
-says it has nothing to draw with) and `dbus-daemon` (package of the same name).
+says it has nothing to draw with), `dbus-daemon` (package of the same name) and, for the
+mascot's off-screen render on a machine without an AMD chip, Mesa's Vulkan drivers
+(`mesa-vulkan-drivers`). The tests of `sherlock-3d` need `just mascot` first; without the model
+they say so and pass.
 
 To run a single step:
 

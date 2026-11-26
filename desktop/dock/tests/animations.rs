@@ -56,6 +56,7 @@ fn dock(extra: &[PathBuf], pinned: &[&str], config: DockConfig, path: Option<Pat
         home: None,
         gtk_theme: None,
         control: Arc::new(Recorder::default()),
+        applications: false,
     };
     let mut dock = Dock::new(sources);
     let _ = dock.update(Message::Surface(Id::unique()));

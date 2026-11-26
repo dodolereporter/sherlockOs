@@ -84,6 +84,7 @@ fn git_badge(status: GitStatus) -> (&'static str, Tone) {
 
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
+        crate::startup::first(&crate::app::FIRST_VIEW, "first view");
         let now = self.now();
         let mut body = Row::new()
             .push(self.sidebar())
@@ -794,15 +795,17 @@ impl App {
 }
 
 impl App {
-    /// An application's icon at the size of a menu icon, if it has one.
+    /// An application's icon at the size of a menu icon, whatever its own size; an empty
+    /// square of that size when it has none, so that every name starts at the same place.
     fn app_icon(&self, id: &str) -> Option<Element<'_, Message>> {
         let size = metrics::ICON_SIZE;
-        Some(match self.icons.get(id)? {
-            AppIcon::Raster(handle) => image(handle.clone()).width(size).height(size).into(),
-            AppIcon::Vector(handle) => iced::widget::svg(handle.clone())
+        Some(match self.icons.get(id) {
+            Some(AppIcon::Raster(handle)) => image(handle.clone()).width(size).height(size).into(),
+            Some(AppIcon::Vector(handle)) => iced::widget::svg(handle.clone())
                 .width(size)
                 .height(size)
                 .into(),
+            None => space().width(size).height(size).into(),
         })
     }
 
@@ -820,7 +823,7 @@ impl App {
         let list: Element<'_, Message> = if apps.is_empty() {
             container(ui::description(t::CHOOSER_EMPTY))
                 .center_x(Length::Fill)
-                .height(metrics::CHOOSER_LIST_HEIGHT)
+                .height(self.chooser_list_height())
                 .into()
         } else {
             let rows = apps.into_iter().map(|app| {
@@ -832,8 +835,10 @@ impl App {
                 )
                 .into()
             });
+            // Rows keep their height (and long names their single line, with « … »): a list
+            // longer than its room scrolls.
             scrollable(Column::with_children(rows))
-                .height(metrics::CHOOSER_LIST_HEIGHT)
+                .height(self.chooser_list_height())
                 .into()
         };
         let always = row![

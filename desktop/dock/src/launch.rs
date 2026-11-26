@@ -3,8 +3,10 @@
 //! Unlike the bar's monitoring commands, an application must outlive the dock: it gets its own
 //! process group, no death signal, and a thread reaps it when it exits.
 
+use std::ffi::OsString;
 use std::io;
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::entry::{self, DesktopEntry};
@@ -41,6 +43,29 @@ pub fn launch(app: &DesktopEntry, what: What) -> Result<u32, LaunchError> {
     let (program, args) = line
         .split_first()
         .ok_or_else(|| LaunchError::NoCommand(app.id.clone()))?;
+    spawn(Path::new(program), args, app.path.as_deref().map(Path::new))
+}
+
+/// Program of the applications view (D-41, `docs/apps.md`).
+pub const APPLICATIONS: &str = "sherlockos-apps";
+
+/// The applications view to start: in the folder `var` gives for `SHERLOCKOS_BIN` when it is
+/// there, as the compositor finds the launcher, else in the `PATH`.
+pub fn applications_program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    var("SHERLOCKOS_BIN")
+        .map(|dir| Path::new(&dir).join(APPLICATIONS))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| APPLICATIONS.into())
+}
+
+/// Opens the applications view, or closes it when it is open: a second one closes the first.
+pub fn toggle_applications() -> Result<u32, LaunchError> {
+    let program = applications_program(|key| std::env::var_os(key));
+    spawn(&program, &[], None)
+}
+
+/// Starts `program` with `args`, in `dir`, and returns at once.
+fn spawn(program: &Path, args: &[String], dir: Option<&Path>) -> Result<u32, LaunchError> {
     let mut command = Command::new(program);
     // The application gets the environment the dock started with, not its renderer choice:
     // a game launched from the dock must still see the NVIDIA card (ADR 0018).
@@ -52,11 +77,11 @@ pub fn launch(app: &DesktopEntry, what: What) -> Result<u32, LaunchError> {
         .stderr(Stdio::null())
         // Its own group: a Ctrl+C or a signal sent to the dock's group spares it.
         .process_group(0);
-    if let Some(dir) = app.path.as_deref() {
+    if let Some(dir) = dir {
         command.current_dir(dir);
     }
     let mut child = command.spawn().map_err(|source| LaunchError::Spawn {
-        program: program.clone(),
+        program: program.display().to_string(),
         source,
     })?;
     let pid = child.id();
@@ -120,5 +145,17 @@ mod tests {
             launch(&missing, What::App),
             Err(LaunchError::Spawn { .. })
         ));
+    }
+
+    #[test]
+    fn the_applications_view_is_found_beside_the_programs_then_in_the_path() {
+        let dir = std::env::temp_dir().join(format!("dock-apps-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("directory");
+        let var = |key: &str| (key == "SHERLOCKOS_BIN").then(|| dir.clone().into_os_string());
+        assert_eq!(applications_program(var), PathBuf::from(APPLICATIONS));
+        std::fs::write(dir.join(APPLICATIONS), b"").expect("program");
+        assert_eq!(applications_program(var), dir.join(APPLICATIONS));
+        assert_eq!(applications_program(|_| None), PathBuf::from(APPLICATIONS));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

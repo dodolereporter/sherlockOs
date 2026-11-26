@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "desktop/appearance-config",
+    "desktop/apps",
     "desktop/bar",
     "desktop/compositor",
     "desktop/cursor-theme",
@@ -15,6 +16,7 @@ members = [
     "desktop/mime-apps",
     "desktop/notifications",
     "desktop/notifications-config",
+    "desktop/sherlock-3d",
     "desktop/sherlock-ui",
     "desktop/shell-protocol",
     "desktop/system-services",

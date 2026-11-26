@@ -1,0 +1,4 @@
+[Desktop Entry]
+Type=Application
+Name=Gestionnaire de paquets et de mises à jour
+Exec=example-packages
