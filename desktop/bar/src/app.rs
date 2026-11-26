@@ -95,15 +95,13 @@ pub struct Bar {
     pub history: History,
     /// The quick settings of the control centre.
     pub quick: Quick,
-    /// The indicator the control centre was opened from: it carries the open mark.
-    pub opener: Option<Indicator>,
     /// The Wi-Fi signal, a connection under way, the Internet, from NetworkManager.
     pub link: Option<Link>,
     /// The Bluetooth radio; `None` without an adapter: no indicator.
     pub radio: Option<Radio>,
 }
 
-/// An indicator of the bar: each one is a button that opens the control centre.
+/// An indicator of the bar. Together they make one button, which opens the control centre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Indicator {
     Bluetooth,
@@ -117,8 +115,8 @@ pub enum Indicator {
 pub enum Target {
     Sherlock,
     Workspace(usize),
-    /// An indicator: the control centre.
-    Status(Indicator),
+    /// The indicators, one button: the control centre.
+    Status,
     /// The date and time: the calendar.
     Clock,
 }
@@ -151,9 +149,6 @@ pub enum Message {
     Resized(Id, f32),
     /// Opens a panel, or closes it when it is open.
     TogglePanel(Panel),
-    /// An indicator was clicked: the control centre opens, or closes when it was opened from
-    /// that indicator; opened from another one, it stays and that one takes the mark.
-    Indicator(Indicator),
     ClosePanel,
     /// The calendar shows this month.
     ShowMonth(Month),
@@ -283,14 +278,6 @@ impl Bar {
             }
             Message::ToggleMenu => return self.toggle_menu(),
             Message::TogglePanel(panel) => return self.toggle_panel(panel),
-            Message::Indicator(indicator) => {
-                let switch = self.panel_open() == Some(Panel::Control)
-                    && self.opener.is_some_and(|o| o != indicator);
-                self.opener = Some(indicator);
-                if !switch {
-                    return self.toggle_panel(Panel::Control);
-                }
-            }
             Message::ClosePanel => return self.close_panel(),
             Message::Resized(id, width) => {
                 self.widths.insert(id, width);
@@ -508,15 +495,13 @@ impl Bar {
     /// The bar buttons, in Tab order: Sherlock, the workspaces, the indicators, the clock.
     pub fn targets(&self) -> Vec<Target> {
         let workspaces = self.group().map_or(0, |g| g.workspaces.len());
-        let indicators = [
-            self.radio.is_some().then_some(Indicator::Bluetooth),
-            self.network.is_some().then_some(Indicator::Network),
-            self.sound.is_some().then_some(Indicator::Sound),
-            matches!(self.battery, Some(Some(_))).then_some(Indicator::Battery),
-        ];
+        let status = self.radio.is_some()
+            || self.network.is_some()
+            || self.sound.is_some()
+            || matches!(self.battery, Some(Some(_)));
         std::iter::once(Target::Sherlock)
             .chain((0..workspaces).map(Target::Workspace))
-            .chain(indicators.into_iter().flatten().map(Target::Status))
+            .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
     }
@@ -531,7 +516,7 @@ impl Bar {
         self.focused().map(|target| match target {
             Target::Sherlock => Message::ToggleMenu,
             Target::Workspace(i) => Message::SelectWorkspace(i),
-            Target::Status(indicator) => Message::Indicator(indicator),
+            Target::Status => Message::TogglePanel(Panel::Control),
             Target::Clock => Message::TogglePanel(Panel::Calendar),
         })
     }
@@ -909,20 +894,28 @@ impl Bar {
         surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }
 
-    /// The indicators, each a button that opens the control centre, then the date and time,
-    /// which open the calendar: ghost buttons, whose padding the gaps give back.
+    /// The indicators, one button with one pill around them all, which opens the control centre
+    /// (UI-02: one by one they opened the same panel), then the date and time, which open the
+    /// calendar: ghost buttons, whose padding the gaps give back.
     fn view_indicators(
         &self,
         ring: &impl Fn(ui::Control<'static, Message>, Target) -> ui::Control<'static, Message>,
     ) -> Element<'static, Message> {
         let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
         let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
-        let control = self.panel_open() == Some(Panel::Control);
-        for (indicator, content) in self.indicators() {
-            let open = control && self.opener.unwrap_or(indicator) == indicator;
-            let press = Some(Message::Indicator(indicator));
-            let button = panels::bar_button(content, open, press);
-            buttons = buttons.push(ring(button, Target::Status(indicator)));
+        let status: Vec<_> = self
+            .indicators()
+            .into_iter()
+            .map(|(_, content)| content)
+            .collect();
+        if !status.is_empty() {
+            let line = row(status)
+                .spacing(metrics::STATUS_GAP)
+                .align_y(Alignment::Center);
+            let open = self.panel_open() == Some(Panel::Control);
+            let toggle = Some(Message::TogglePanel(Panel::Control));
+            let button = panels::bar_button(line, open, toggle);
+            buttons = buttons.push(ring(button, Target::Status));
         }
         if let Some(clock) = self.clock.as_ref() {
             let p = color::palette();
@@ -1218,7 +1211,7 @@ mod tests {
                 Target::Workspace(i) => {
                     assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
                 }
-                Target::Status(_) | Target::Clock => panic!("no indicator in this bar"),
+                Target::Status | Target::Clock => panic!("no indicator in this bar"),
             }
         }
         let _ = bar.update(Message::Focus(Direction::Previous));
@@ -1247,10 +1240,10 @@ mod tests {
             Some(Message::TogglePanel(Panel::Calendar))
         ));
         let _ = bar.update(Message::Focus(Direction::Previous));
-        assert_eq!(bar.focused(), Some(Target::Status(Indicator::Sound)));
+        assert_eq!(bar.focused(), Some(Target::Status));
         assert!(matches!(
             bar.activation(),
-            Some(Message::Indicator(Indicator::Sound))
+            Some(Message::TogglePanel(Panel::Control))
         ));
         // Opened, then the other one: one panel at a time, and Escape closes it.
         let _ = bar.update(Message::Surface(Id::unique()));
@@ -1538,18 +1531,29 @@ mod tests {
 
     #[test]
     fn the_bluetooth_indicator_shows_only_with_an_adapter() {
+        let shown = |bar: &Bar| {
+            bar.indicators()
+                .iter()
+                .any(|(indicator, _)| *indicator == Indicator::Bluetooth)
+        };
         let mut bar = with_workspaces();
-        assert!(
-            !bar.targets()
-                .contains(&Target::Status(Indicator::Bluetooth))
-        );
+        assert!(!shown(&bar) && !bar.targets().contains(&Target::Status));
         let _ = bar.update(Message::Radio(Some(Radio::Connected)));
-        assert_eq!(bar.targets()[4], Target::Status(Indicator::Bluetooth));
+        assert!(shown(&bar));
+        // The indicators are one button, one stop of Tab.
+        assert_eq!(bar.targets()[4], Target::Status);
+        let _ = bar.update(Message::Sound(crate::source::sound::Sound {
+            volume: 40,
+            muted: false,
+        }));
+        let count = bar
+            .targets()
+            .iter()
+            .filter(|t| **t == Target::Status)
+            .count();
+        assert_eq!(count, 1);
         let _ = bar.update(Message::Radio(None));
-        assert!(
-            !bar.targets()
-                .contains(&Target::Status(Indicator::Bluetooth))
-        );
+        assert!(!shown(&bar));
     }
 
     /// The only test of this binary that changes the theme: the others draw nothing.
