@@ -260,6 +260,10 @@ Ces lots ajoutent environ un mois, surtout sur J6 et J7. Je ne décale pas les d
 | Steam change ses fichiers | Bibliothèque vide dans l'app Jeux | Lecture isolée dans un module, repli sur l'ouverture du client Steam |
 | Droits sur la mascotte | Le dépôt la présente comme la mascotte de l'assistant d'ITHome | À vérifier avant toute publication de l'OS |
 
+## Ambitions au-delà de la 0.1
+
+- **IA locale sur NPU.** C'est l'objectif de Sherlock à terme : un modèle qui tourne sur le NPU ou la carte graphique, hors ligne et privé. Les NPU des PC actuels ne suffisent pas encore, donc Sherlock passe par le cloud en attendant. Le fournisseur de modèle de `sherlockd` reste une interface pour qu'un fournisseur local s'ajoute sans refonte. Ce module sera planifié quand le matériel suivra (voir `docs/contexte.md`, « Ambition : une IA locale, sur NPU »).
+
 ## Questions ouvertes
 
 Aucune ne bloque le jalon J0. Tu as répondu pour la machine : un portable, Ryzen 7 et RTX 3060.
