@@ -11,7 +11,7 @@ use crate::{Problem, Result};
 pub const SERVICE: &str = "org.freedesktop.login1";
 /// The caller's own session.
 pub const SESSION: &str = "/org/freedesktop/login1/session/auto";
-const INTERFACE: &str = "org.freedesktop.login1.Session";
+pub const INTERFACE: &str = "org.freedesktop.login1.Session";
 /// Where the kernel lists the backlights.
 pub const SYSFS: &str = "/sys/class/backlight";
 /// Lowest brightness the slider and the keys give, in percent: a black screen is not a
@@ -52,6 +52,23 @@ impl Backlight {
 /// The backlight of the screen under `root`: the firmware one first, then the platform one,
 /// then a raw one, as the kernel documentation advises; by name within a kind.
 pub fn find(root: &Path) -> Result<Backlight> {
+    let (name, path) = locate(root)?;
+    let number = |file: &str| -> Result<u32> {
+        let text = std::fs::read_to_string(path.join(file))
+            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))?;
+        text.trim()
+            .parse()
+            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))
+    };
+    Ok(Backlight {
+        brightness: number("brightness")?,
+        max: number("max_brightness")?,
+        name,
+    })
+}
+
+/// The name and the folder of the backlight `find` reads.
+pub fn locate(root: &Path) -> Result<(String, PathBuf)> {
     let entries =
         std::fs::read_dir(root).map_err(|e| Problem::Absent(format!("{}: {e}", root.display())))?;
     let mut found: Vec<(u8, String, PathBuf)> = entries
@@ -71,18 +88,7 @@ pub fn find(root: &Path) -> Result<Backlight> {
     let Some((_, name, path)) = found.into_iter().next() else {
         return Err(Problem::Absent(String::from("no backlight")));
     };
-    let number = |file: &str| -> Result<u32> {
-        let text = std::fs::read_to_string(path.join(file))
-            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))?;
-        text.trim()
-            .parse()
-            .map_err(|e| Problem::Failed(format!("{name}/{file}: {e}")))
-    };
-    Ok(Backlight {
-        brightness: number("brightness")?,
-        max: number("max_brightness")?,
-        name,
-    })
+    Ok((name, path))
 }
 
 /// Sets the brightness of `backlight` to `percent`, through logind.
@@ -110,12 +116,13 @@ pub fn step(percent: u8, up: bool) -> u8 {
 }
 
 /// `steps` steps of the backlight found under `root`, up when positive, down when negative,
-/// set at once through logind. Returns the new brightness, in percent.
-pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<u8> {
+/// set at once through logind. Returns the new brightness, in percent, and whether a step pushed
+/// against the end (`crate::press`).
+pub async fn step_from(bus: &Connection, root: &Path, steps: i32) -> Result<(u8, bool)> {
     let backlight = find(root)?;
-    let percent = (0..steps.unsigned_abs()).fold(backlight.percent(), |p, _| step(p, steps > 0));
+    let (percent, pushed) = crate::press(backlight.percent(), steps, step);
     set(bus, &backlight, percent).await?;
-    Ok(percent)
+    Ok((percent, pushed))
 }
 
 #[cfg(test)]

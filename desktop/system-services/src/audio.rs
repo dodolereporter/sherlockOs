@@ -288,15 +288,17 @@ impl Mixer {
     }
 
     /// `steps` steps of the output volume, up when positive, down when negative, set at once;
-    /// it also unmutes it. Returns the new sound.
-    pub fn step_volume(&self, steps: i32) -> Result<Sound> {
+    /// it also unmutes it. Returns the new sound, and whether a step pushed against the end
+    /// (`crate::press`).
+    pub fn step_volume(&self, steps: i32) -> Result<(Sound, bool)> {
         let now = self.sound(Device::Output)?;
-        let volume = (0..steps.unsigned_abs()).fold(now.volume, |v, _| step(v, steps > 0));
+        let (volume, pushed) = crate::press(now.volume, steps, step);
         self.set_volume(volume)?;
-        Ok(Sound {
+        let sound = Sound {
             volume,
             muted: false,
-        })
+        };
+        Ok((sound, pushed))
     }
 
     /// Mutes `device` if it plays, unmutes it otherwise. Returns the new sound.

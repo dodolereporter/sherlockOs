@@ -62,6 +62,8 @@ pub enum Icon {
     MicrophoneMuted,
     /// Screen brightness: a sun.
     Brightness,
+    /// Keyboard backlight: a keyboard under three rays (lot D-35d).
+    KeyboardBrightness,
     /// The password field of the lock screen (lot D-25a): show the password, hide it, send it.
     Eye,
     EyeOff,
@@ -76,7 +78,7 @@ pub enum Icon {
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -111,6 +113,7 @@ impl Icon {
         Self::Microphone,
         Self::MicrophoneMuted,
         Self::Brightness,
+        Self::KeyboardBrightness,
         Self::Eye,
         Self::EyeOff,
         Self::ArrowRight,
@@ -123,8 +126,8 @@ impl Icon {
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
     /// arrows. The device icons are drawn for Evidence, on the same grid and stroke, except
     /// the system disk, which is the mock-up's. The boards draw neither the battery, nor the
-    /// network off, nor the muted sound, nor the microphone and the sun of the media keys:
-    /// those follow the stroke of the others.
+    /// network off, nor the muted sound, nor the microphone, the sun and the lit keyboard of
+    /// the media keys: those follow the stroke of the others.
     pub const fn path(self) -> &'static str {
         match self {
             Self::Chevron => "M9 6l6 6-6 6",
@@ -192,6 +195,9 @@ impl Icon {
             }
             Self::Brightness => {
                 "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"
+            }
+            Self::KeyboardBrightness => {
+                "M4.5 11h15a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5v-6A1.5 1.5 0 0 1 4.5 11zM7 14h.01M10 14h.01M14 14h.01M17 14h.01M8.5 17h7M12 3.5v3M6.8 5.2l1.4 1.8M17.2 5.2l-1.4 1.8"
             }
             Self::Eye => {
                 "M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z"
