@@ -527,6 +527,16 @@ fn the_button_of_the_open_panel_is_marked() {
             assert_eq!(state.panel_open(), Some(Panel::Control));
             let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
             assert_written(capture(ui, &format!("bar-open{suffix}")));
+            // The whole bar of the author's 1920 × 1080, the group marked under the open
+            // control centre.
+            if which == Theme::Dark {
+                let size = (
+                    1920.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE,
+                    metrics::TOP_BAR_HEIGHT,
+                );
+                let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+                assert_written(capture(ui, "bar-open-1920"));
+            }
             let _ = state.update(Message::TogglePanel(Panel::Control));
             assert_eq!(state.panel_open(), None);
         });

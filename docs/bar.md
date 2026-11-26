@@ -56,6 +56,7 @@ name ends with « … » where the left half of the bar ends.
 
 ![The control centre open, the group of indicators marked](../desktop/bar/screenshots/bar-open.png)
 ![The same in the light theme](../desktop/bar/screenshots/bar-open-light.png)
+![The whole bar of a 1920 × 1080 screen, the control centre open](../desktop/bar/screenshots/bar-open-1920.png)
 
 **Live icons** (UI-01). Each icon shows the real state, drawn from its level rather than
 chosen among pictures (`sherlock_ui::icon::wifi_svg`, `sound_svg`, `bluetooth_svg`, beside
