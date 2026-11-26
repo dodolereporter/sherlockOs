@@ -75,6 +75,11 @@ stops). It sets the theme of the appearance file at start, then at every change:
 - `gtk-theme` becomes `NOM_OS-dark` or `NOM_OS-light`, and `color-scheme` becomes `prefer-dark`
   or `default`, with `gsettings`. The program refuses to call `gsettings` when `DCONF_PROFILE`
   is not the installed profile: run by hand under Plasma, it never writes the user's database.
+- `cursor-theme` becomes `nom-os` or `nom-os-light`, the house cursors of `docs/cursor.md`, and
+  `cursor-size` becomes `XCURSOR_SIZE`, 24 when it is not a whole number above 0. Under
+  Wayland, GTK takes its cursor from these keys and not from `XCURSOR_THEME`: without them, it
+  read Plasma's (Breeze) from the user's database. Same database, same refusal outside the
+  session.
 - the `color_scheme_path` line of `qt5ct.conf` and `qt6ct.conf` names the palette of the theme.
   The file is replaced through a rename, and every other line is kept. A settings file that
   `install` did not write is left alone.
@@ -91,6 +96,7 @@ stops). It sets the theme of the appearance file at start, then at every change:
 | Qt through qt6ct | qt6ct watches its settings folder and reads the palette again a few seconds later |
 | KDE applications | Their palette follows qt6ct; the colors they read through `KColorScheme` come from `kdeglobals` (see "Limits") |
 | Firefox, Zen | GTK widgets follow the GTK theme; the dark mode of web pages is to be checked |
+| Cursor | GTK follows `cursor-theme` live; the compositor and Qt keep the cursor of `XCURSOR_THEME`, set at startup, until lot D-05c |
 
 Checked without a screen: the GTK 3 and GTK 4 themes as rendered, and the live switch of
 libadwaita through the session's database. Not checked: the reload of GTK under Wayland when
@@ -122,7 +128,9 @@ That choice is the author's.
 - **Kvantum**: a Kvantum theme is SVG artwork plus a configuration file, more than a palette.
   It is a follow-up.
 - The terminal colors of Konsole: a Konsole `.colorscheme` is a follow-up.
-- Icons, cursors and fonts stay those of the user's database.
+- Icons and fonts stay those of the user's database.
+- Qt has no cursor setting in qt6ct: under Wayland, Qt 6 reads `XCURSOR_THEME` and
+  `XCURSOR_SIZE`, which the session exports.
 - Qt 5 applications: the session points `QT_QPA_PLATFORMTHEME` at qt6ct, and Qt 5 looks for a
   plugin of that name. They take the qt5ct settings only when started with
   `QT_QPA_PLATFORMTHEME=qt5ct`.
@@ -190,6 +198,8 @@ its default look, and GTK 3 is painted over its built-in Adwaita. Kvantum is not
   gets a number; a symbolic link that leads nowhere is kept and comes back; a removal stopped
   halfway and run again puts every file back in place; the folders created go, those that
   were there stay; the GTK settings are left alone outside the session;
+- the keys set are the GTK theme, the color scheme, the cursor theme of each variant and the
+  cursor size, taken from `XCURSOR_SIZE` or 24;
 - `generate` refuses a folder where a file is already there, unless `force` is given.
 
 The captures in `desktop/toolkit-theme/screenshots/` were taken without a screen, in a
