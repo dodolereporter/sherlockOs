@@ -28,12 +28,12 @@ mod tests {
     use super::*;
 
     const PASSWD: &str = "root:x:0:0:root:/root:/bin/bash\n\
-        dodo:x:1000:1000:Dodo,,,:/home/dodo:/bin/zsh\n\
+        camille:x:1000:1000:Camille,,,:/home/camille:/bin/zsh\n\
         noname:x:1001:1001:,,,:/home/noname:/bin/sh\n";
 
     #[test]
     fn the_name_comes_from_gecos() {
-        assert_eq!(display_name(PASSWD, "dodo").as_deref(), Some("Dodo"));
+        assert_eq!(display_name(PASSWD, "camille").as_deref(), Some("Camille"));
         assert_eq!(display_name(PASSWD, "noname"), None);
         assert_eq!(display_name(PASSWD, "unknown"), None);
     }

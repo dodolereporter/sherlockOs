@@ -113,7 +113,13 @@ pub fn start(
     let server = Server {
         core: Arc::clone(core),
     };
-    let bus = builder.serve_at(PATH, server)?.build()?;
+    let history = crate::history::History {
+        core: Arc::clone(core),
+    };
+    let bus = builder
+        .serve_at(PATH, server)?
+        .serve_at(crate::history::PATH, history)?
+        .build()?;
     match bus.request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into()) {
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {}
         Ok(_) | Err(zbus::Error::NameTaken) => return Ok(None),

@@ -20,6 +20,10 @@ iced = { version = "=0.14.0", default-features = false, features = [
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 # The theme of the appearance file, followed live (workspace crate).
 appearance-config = { path = "../appearance-config" }
+# The session commands of the quick settings, with the launcher's rules (workspace crate).
+launcher = { path = "../launcher" }
+# Do not disturb, the notification daemon's file (workspace crate).
+notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
 sherlock-ui = { path = "../sherlock-ui" }
@@ -29,6 +33,11 @@ sherlock-ui = { path = "../sherlock-ui" }
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+# The notification history (org.nomos.Notifications.History) on the session bus, and the
+# system services of the quick settings on the system bus: the version
+# and features the notification daemon and Evidence pin (blocking API, its own small executor,
+# no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
@@ -38,6 +47,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# The real notification daemon on a private bus, for the notification centre test (workspace
+# crate).
+notifications = { path = "../notifications" }
 # A fake compositor for the shell protocols test: the server side that smithay already pulls.
 shell-protocol = { path = "../shell-protocol", features = ["client", "server"] }
 wayland-server = "=0.31.14"

@@ -14,6 +14,7 @@ mod tests {
     use std::time::Duration;
 
     use notifications::core::{Core, Event, Sink};
+    use notifications::history;
     use notifications::server::{self, INTERFACE, NAME, PATH};
     use notifications_config::{Follower, NotificationsConfig};
     use sherlock_ui::notifications as ui;
@@ -418,5 +419,114 @@ mod tests {
         let core = Core::new(sink, None);
         let builder = connection::Builder::address(bus.address.as_str()).unwrap();
         assert!(server::start(builder, &core).unwrap().is_none());
+    }
+
+    /// `List` of the history interface.
+    fn history(client: &Connection) -> Vec<history::Entry> {
+        let reply = client
+            .call_method(
+                Some(NAME),
+                history::PATH,
+                Some(history::INTERFACE),
+                "List",
+                &(),
+            )
+            .unwrap();
+        reply.body().deserialize().unwrap()
+    }
+
+    /// `Changed` of the history interface, one `()` per signal.
+    fn changes(client: &Connection) -> Receiver<()> {
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .interface(history::INTERFACE)
+            .unwrap()
+            .member("Changed")
+            .unwrap()
+            .build();
+        let iterator = MessageIterator::for_match_rule(rule, client, None).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in iterator.flatten() {
+                if sender.send(()).is_err() {
+                    return;
+                }
+            }
+        });
+        receiver
+    }
+
+    #[test]
+    fn the_history_interface_lists_clears_and_runs_actions() {
+        let bus = Bus::start("history");
+        let (core, _events, _) = bus.serve();
+        let client = bus.connect();
+        let signals = signals(&client);
+        let changed = changes(&client);
+        let first = notify(&client, 0, "Build terminé", &[], HashMap::new(), 0);
+        changed.recv_timeout(Duration::from_secs(5)).unwrap();
+        let actions = ["restart", "Relancer", "logs", "Voir les logs"];
+        let second = notify(&client, 0, "front-next", &actions, urgency(2), 0);
+        changed.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        // Newest first, the body as plain text, the actions of the open one.
+        let list = history(&client);
+        assert_eq!(list.len(), 2);
+        let (id, app, summary, body, actions, open, received, critical) = &list[0];
+        assert_eq!(
+            (*id, app.as_str(), summary.as_str()),
+            (second, "test", "front-next")
+        );
+        assert_eq!(body, "Corps");
+        assert_eq!(
+            actions[0],
+            (String::from("restart"), String::from("Relancer"))
+        );
+        assert!(*open && *critical && *received > 1_700_000_000);
+        assert_eq!(list[1].0, first);
+        assert!(!list[1].7);
+
+        // An action from the centre: `ActionInvoked`, then it closes and stays in the history.
+        let invoke = |id: u32, key: &str| {
+            client.call_method(
+                Some(NAME),
+                history::PATH,
+                Some(history::INTERFACE),
+                "InvokeAction",
+                &(id, key),
+            )
+        };
+        invoke(second, "logs").unwrap();
+        assert_eq!(
+            next(&signals),
+            (String::from("ActionInvoked"), second, String::from("logs"))
+        );
+        assert_eq!(
+            next(&signals),
+            (
+                String::from("NotificationClosed"),
+                second,
+                String::from("2")
+            )
+        );
+        changed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!history(&client)[0].5, "closed: no more actions");
+        // Closed, or a key it does not have: refused.
+        assert!(invoke(second, "logs").is_err());
+        assert!(invoke(first, "nothing").is_err());
+
+        // « Tout effacer »: the history goes, the open notification stays on screen.
+        client
+            .call_method(
+                Some(NAME),
+                history::PATH,
+                Some(history::INTERFACE),
+                "Clear",
+                &(),
+            )
+            .unwrap();
+        changed.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(history(&client).is_empty());
+        assert!(core.open(first).is_some());
     }
 }

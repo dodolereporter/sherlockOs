@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod core;
+pub mod history;
 pub mod layout;
 pub mod markup;
 pub mod model;

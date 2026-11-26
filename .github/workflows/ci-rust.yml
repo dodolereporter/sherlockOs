@@ -51,14 +51,16 @@ jobs:
       # (libdrm for its headers). The ubuntu-24.04 image lacks their development packages.
       # xwayland provides the Xwayland binary that the XWayland integration test starts, and
       # libegl1 the libEGL.so.1 without which it stops at startup: libepoxy loads it at run
-      # time, and the xwayland package does not pull it in. dbus-daemon runs the private session
-      # buses of the notification daemon's tests.
+      # time, and the xwayland package does not pull it in. libegl-mesa0 gives Mesa's software
+      # EGL device, on which the compositor's genie test draws (lot D-19). dbus-daemon runs the
+      # private session buses of the notification daemon's tests.
       # Keep this list in line with the prerequisites of CLAUDE.md and docs/ci.md.
       - name: Install the system libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev \
-            libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1 dbus-daemon
+            libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1 libegl-mesa0 \
+            dbus-daemon
 
       # `just verify` runs check-language, a Python script that only uses the standard library.
       - name: Show the Python of check-language

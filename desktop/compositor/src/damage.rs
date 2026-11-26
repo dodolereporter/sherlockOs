@@ -28,6 +28,8 @@ pub enum Part {
     Border,
     Shadow,
     Preview,
+    /// A window during its minimize effect (lot D-19).
+    Genie,
     /// One of the background discs, by its index.
     Disc(usize),
     /// The title bar the compositor draws above a window (lot D-08).

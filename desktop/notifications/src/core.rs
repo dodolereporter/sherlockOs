@@ -13,6 +13,7 @@ use notifications_config::Follower;
 use sherlock_ui::notifications as ui;
 use zbus::blocking::Connection;
 
+use crate::history::{self, Entry};
 use crate::model::{DEFAULT_ACTION, Notification, Reason, Request, Urgency};
 use crate::server::{INTERFACE, PATH};
 
@@ -65,6 +66,9 @@ struct State {
     /// Closed by the daemon itself, their signal not sent yet: the expiry thread sends it, out
     /// of the method call that closed them.
     dropped: Vec<u32>,
+    /// The history changed since `Changed` was last sent: the expiry thread sends it, out of
+    /// the method call that changed it.
+    changed: bool,
 }
 
 impl State {
@@ -168,6 +172,7 @@ impl Core {
             }
         }
         promote(&mut state, now, &mut events);
+        state.changed = true;
         drop(state);
         self.tick.notify_all();
         self.send(events);
@@ -195,6 +200,8 @@ impl Core {
             events.push(Event::Close(id));
         }
         promote(&mut state, Instant::now(), &mut events);
+        // Its actions are gone from the notification centre.
+        state.changed = true;
         drop(state);
         self.tick.notify_all();
         self.send(events);
@@ -210,18 +217,20 @@ impl Core {
         }
     }
 
-    /// A button of the bubble: `ActionInvoked`, then it closes unless it is resident.
-    pub fn invoke(&self, id: u32, key: &str) {
+    /// A button of the bubble, or of the notification centre: `ActionInvoked`, then it closes
+    /// unless it is resident. Returns whether the notification was open with that action.
+    pub fn invoke(&self, id: u32, key: &str) -> bool {
         let Some(note) = self.open(id) else {
-            return;
+            return false;
         };
         if !note.actions.iter().any(|(k, _)| k == key) {
-            return;
+            return false;
         }
         self.signal_action(id, key);
         if !note.resident && self.close(id) {
             self.signal_closed(id, Reason::Dismissed);
         }
+        true
     }
 
     /// The pointer is over the bubble (`held`) or left it: its timer stops, then goes on with
@@ -266,20 +275,41 @@ impl Core {
         self.lock().history.iter().cloned().collect()
     }
 
+    /// The history as `org.nomos.Notifications.History` lists it, newest first, each entry
+    /// telling whether its notification is still open.
+    pub fn history_entries(&self) -> Vec<Entry> {
+        let state = self.lock();
+        let open = |id: u32| state.open.iter().any(|o| o.note.id == id);
+        state
+            .history
+            .iter()
+            .map(|note| history::entry(note, open(note.id)))
+            .collect()
+    }
+
     /// Empties the history (« Tout effacer » of the centre).
     pub fn clear_history(&self) {
-        self.lock().history.clear();
+        let mut state = self.lock();
+        state.history.clear();
+        state.changed = true;
+        drop(state);
+        self.tick.notify_all();
     }
 
     /// Closes the notifications whose time is up, and returns how long until the next one.
-    /// Also sends the signals of the notifications the daemon closed itself.
+    /// Also sends the signals of the notifications the daemon closed itself, and `Changed`
+    /// of the history.
     pub fn expire(&self, now: Instant) -> Option<Duration> {
-        let (expired, dropped): (Vec<u32>, Vec<u32>) = {
+        let (expired, dropped, changed): (Vec<u32>, Vec<u32>, bool) = {
             let mut state = self.lock();
             let due = |o: &&Open| matches!(o.timer, Timer::Running(at) if at <= now);
             let expired = state.open.iter().filter(due).map(|o| o.note.id).collect();
-            (expired, std::mem::take(&mut state.dropped))
+            let changed = std::mem::take(&mut state.changed);
+            (expired, std::mem::take(&mut state.dropped), changed)
         };
+        if changed {
+            self.signal_changed();
+        }
         for id in dropped {
             self.signal_closed(id, Reason::Undefined);
         }
@@ -297,6 +327,10 @@ impl Core {
             // The wait is computed under the lock it then waits on: a change of the timers in
             // between wakes the thread up, and it computes the wait again.
             let state = self.lock();
+            // A signal still to send, set after `expire` looked: no waiting.
+            if state.changed || !state.dropped.is_empty() {
+                continue;
+            }
             match next_wait(&state, Instant::now()) {
                 Some(wait) => drop(self.tick.wait_timeout(state, wait)),
                 None => drop(self.tick.wait(state)),
@@ -315,6 +349,22 @@ impl Core {
             );
             if let Err(error) = sent {
                 tracing::warn!(%error, "cannot send NotificationClosed");
+            }
+        }
+    }
+
+    /// `Changed` of the history interface: the notification centre reads the list again.
+    fn signal_changed(&self) {
+        if let Some(bus) = self.bus.get() {
+            let sent = bus.emit_signal(
+                None::<&str>,
+                history::PATH,
+                history::INTERFACE,
+                "Changed",
+                &(),
+            );
+            if let Err(error) = sent {
+                tracing::warn!(%error, "cannot send Changed");
             }
         }
     }

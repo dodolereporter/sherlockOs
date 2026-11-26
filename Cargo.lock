@@ -295,7 +295,10 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "launcher",
  "libc",
+ "notifications",
+ "notifications-config",
  "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
@@ -304,6 +307,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-server",
+ "zbus",
 ]
 
 [[package]]

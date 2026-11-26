@@ -1,0 +1,15 @@
+Sink #49
+	State: RUNNING
+	Name: alsa_output.pci-0000_05_00.6.analog-stereo
+	Description: Haut-parleurs intégrés
+	Driver: PipeWire
+	Sample Specification: s32le 2ch 48000Hz
+	Mute: no
+	Volume: front-left: 40632 /  62% / -12.46 dB,   front-right: 40632 /  62% / -12.46 dB
+
+Sink #50
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_05_00.1.hdmi-stereo
+	Description: Sortie HDMI
+	Driver: PipeWire
+	Mute: no

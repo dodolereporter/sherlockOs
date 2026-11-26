@@ -11,7 +11,8 @@
 //! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
 //! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
 //! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default). `--snap-gap PX`
-//! sets the margin around snapped windows, from 0 to 64 (8 by default).
+//! sets the margin around snapped windows, from 0 to 64 (8 by default). `--minimize-effect`
+//! chooses what minimizing a window shows: `genie` (by default), `scale` or `none`.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -51,6 +52,9 @@ fn main() -> Result<(), Error> {
     }
     if let Some(gap) = options.snap_gap {
         state.set_snap_gap(gap);
+    }
+    if let Some(effect) = options.minimize_effect {
+        state.set_minimize_effect(effect);
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.
