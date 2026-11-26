@@ -19,14 +19,12 @@ mod raster;
 pub use raster::{Bar, Look, Textures, draw};
 
 use sherlock_ui::{
-    color,
     decorations::{self as ui, Button},
     metrics, window as ui_window,
 };
 use smithay::{
     desktop::Window,
     reexports::{
-        calloop::{EventLoop, channel},
         wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
         wayland_server::DisplayHandle,
     },
@@ -170,32 +168,6 @@ pub fn control_at(width: f64, at: Point<f64, Logical>) -> Option<Control> {
     }
     let button = buttons(width).into_iter().find(|(_, r)| r.contains(at));
     Some(button.map_or(Control::Bar, |(button, _)| Control::Button(button)))
-}
-
-/// Makes the theme of the appearance file active, then follows it: the decorations take the
-/// colors of the active palette (`color::palette`). Without the file, the dark theme.
-pub fn follow_theme(event_loop: &EventLoop<'static, State>) {
-    let Some(path) = appearance_config::path() else {
-        return;
-    };
-    color::set_active(appearance_config::theme_now(&path));
-    let (sender, themes) = channel::channel();
-    let source = event_loop
-        .handle()
-        .insert_source(themes, |event, _, state| {
-            if let channel::Event::Msg(theme) = event {
-                color::set_active(theme);
-                state.queue_redraw();
-            }
-        });
-    if let Err(err) = source {
-        tracing::warn!("following the theme: {}", err.error);
-        return;
-    }
-    let follow = appearance_config::follow_themes(path, move |theme| sender.send(theme).is_ok());
-    if let Err(err) = follow {
-        tracing::warn!("following the theme: {err}");
-    }
 }
 
 impl State {

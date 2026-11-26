@@ -246,7 +246,7 @@ pub fn init(
         heads: HashMap::new(),
         scene,
         textures: Textures::default(),
-        cursors: Cursors::load(),
+        cursors: Cursors::load(state.theme()),
         renderer,
         device,
         gbm,
@@ -634,6 +634,7 @@ impl Backend {
         );
         let mut elements: Vec<SessionElement> = Vec::new();
         let pointer = state.seat.get_pointer().map(|p| p.current_location());
+        self.cursors.follow(state.theme());
         if let (Some(icon), Some(at)) = (state.cursor_icon(), pointer)
             && state.space.output_under(at).any(|o| *o == output)
             && let Some((cursor, next)) =
@@ -658,7 +659,7 @@ impl Backend {
         );
         state.perf.stop(perf::Phase::Scene, since);
         let since = state.perf.start();
-        let clear = color::DESKTOP.premultiplied();
+        let clear = color::palette().desktop.premultiplied();
         let frame = head
             .compositor
             .render_frame(&mut self.renderer, &elements, clear, FRAME_FLAGS);

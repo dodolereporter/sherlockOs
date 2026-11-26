@@ -1,8 +1,9 @@
 //! Wallpaper: the setting of `wallpaper.conf` (crate `desktop-config`), read again when the
 //! file changes, the images decoded on a thread of their own, and their textures, uploaded once
 //! per variant and drawn behind everything. Without an image, or if it cannot be read, the
-//! background of the Main board (color and discs) shows. See "Wallpapers" in
-//! `docs/compositor.md`.
+//! background of the Main board (color and discs) shows. When the image changes (a new setting,
+//! the pendant of the other theme), each screen keeps the image it shows until the new one is
+//! uploaded, then crossfades to it (lot D-05c). See "Wallpapers" in `docs/compositor.md`.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -12,7 +13,11 @@ use std::{
 };
 
 use desktop_config::wallpaper::{self as config, Choice, Config, Mode, Variant};
-use sherlock_ui::wallpapers::ThemeVariant;
+use sherlock_ui::{
+    color,
+    motion::{Fade, THEME_FADE},
+    wallpapers::ThemeVariant,
+};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -33,7 +38,7 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, Size, Transform},
 };
 
-use crate::{State, output::View};
+use crate::{State, output::View, theme};
 
 /// How often the settings file is checked for changes: one `stat` every two seconds.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
@@ -73,12 +78,12 @@ pub struct Wallpaper {
     file: Option<PathBuf>,
     stamp: Option<(SystemTime, u64)>,
     data_dirs: Vec<PathBuf>,
-    /// Theme the wallpaper follows. Dark until the theme setting (lot D-05) is plugged in
-    /// (lot D-05c), through `set_theme`.
+    /// Theme the wallpaper follows (`State::set_theme`).
     theme: ThemeVariant,
     pub mode: Mode,
     source: Source,
-    /// Changes with every new setting: textures and images of the previous one are dropped.
+    /// Changes with every new source: textures and images of the previous one are dropped,
+    /// once the screens have faded to the new ones.
     generation: u64,
     decoded: Vec<(PathBuf, image::RgbaImage)>,
     loading: HashSet<PathBuf>,
@@ -88,7 +93,8 @@ pub struct Wallpaper {
 
 impl Wallpaper {
     /// Reads the setting of `file`, falls back on the default wallpaper installed in
-    /// `data_dirs`, and plugs the loading and the periodic check into the loop.
+    /// `data_dirs`, and plugs the loading and the periodic check into the loop. The theme is
+    /// the one already active (`theme::follow` runs first).
     pub fn start(
         handle: &LoopHandle<'static, State>,
         file: Option<PathBuf>,
@@ -105,9 +111,9 @@ impl Wallpaper {
             .map_err(|err| err.error)?;
         handle
             .insert_source(Timer::from_duration(RELOAD_EVERY), |_, _, state| {
-                let generation = state.wallpaper.generation;
+                let before = (state.wallpaper.generation, state.wallpaper.mode);
                 state.wallpaper.check();
-                if state.wallpaper.generation != generation {
+                if (state.wallpaper.generation, state.wallpaper.mode) != before {
                     state.queue_redraw();
                 }
                 TimeoutAction::ToDuration(RELOAD_EVERY)
@@ -116,6 +122,7 @@ impl Wallpaper {
         let mut wallpaper = Self {
             file,
             data_dirs,
+            theme: theme::variant(color::active()),
             sender: Some(sender),
             ..Self::default()
         };
@@ -140,7 +147,9 @@ impl Wallpaper {
     }
 
     /// Reads the setting and finds its images. Errors are logged, never fatal: what cannot be
-    /// read gives the board's background, or the default wallpaper for a wrong file.
+    /// read gives the board's background, or the default wallpaper for a wrong file. The same
+    /// source (a file written again, the mode alone changed, a theme without a pendant) keeps
+    /// its images.
     fn reload(&mut self) {
         self.stamp = self.file.as_deref().and_then(stamp);
         let setting = match &self.file {
@@ -151,7 +160,11 @@ impl Wallpaper {
             None => Config::default(),
         };
         self.mode = setting.mode;
-        self.source = resolve(setting.choice(self.theme), &self.data_dirs);
+        let source = resolve(setting.choice(self.theme), &self.data_dirs);
+        if source == self.source && self.generation > 0 {
+            return;
+        }
+        self.source = source;
         self.generation += 1;
         self.decoded.clear();
         self.loading.clear();
@@ -278,6 +291,7 @@ fn decode(path: &Path) -> Result<image::RgbaImage, String> {
 }
 
 /// A wallpaper uploaded to the GPU, and its size in pixels.
+#[derive(Clone)]
 pub struct Texture {
     buffer: TextureBuffer<GlesTexture>,
     size: (u32, u32),
@@ -288,13 +302,24 @@ pub struct Texture {
 pub struct Textures {
     generation: u64,
     textures: HashMap<PathBuf, Texture>,
+    /// The variant each screen shows, by the screen's name.
+    shown: HashMap<String, PathBuf>,
+    /// The image of an older source each screen still shows, until it has faded to the new one.
+    outgoing: HashMap<String, Outgoing<Texture>>,
 }
 
 impl Textures {
-    /// Follows the setting: drops the textures of an older one, uploads the decoded images.
+    /// Follows the setting: keeps what each screen shows to fade from it when the source
+    /// changes, uploads the decoded images.
     pub fn update(&mut self, renderer: &mut GlesRenderer, wallpaper: &mut Wallpaper) {
         if self.generation != wallpaper.generation {
             self.generation = wallpaper.generation;
+            // A screen whose new image never came (a change while decoding) keeps the older one.
+            for (screen, path) in self.shown.drain() {
+                if let Some(texture) = self.textures.get(&path) {
+                    self.outgoing.insert(screen, Outgoing::new(texture.clone()));
+                }
+            }
             self.textures.clear();
         }
         for (path, image) in wallpaper.decoded.drain(..) {
@@ -319,8 +344,33 @@ impl Textures {
         }
     }
 
-    pub fn get(&self, path: &Path) -> Option<&Texture> {
-        self.textures.get(path)
+    /// The images to draw on the screen `screen`, front to back with their opacity, at `now`,
+    /// `path` being the variant it should show (`Wallpaper::image_for`); and whether a fade
+    /// runs. Empty: the board's background.
+    pub fn layers(
+        &mut self,
+        screen: &str,
+        path: Option<&Path>,
+        now: Duration,
+    ) -> (Vec<(Texture, f32)>, bool) {
+        let new = path.and_then(|path| self.textures.get(path)).cloned();
+        match path {
+            Some(path) if new.is_some() => {
+                self.shown.insert(screen.to_owned(), path.to_path_buf());
+            }
+            // Still decoding: the older image stays meanwhile.
+            Some(_) => {}
+            // The board's background: no image to fade to.
+            None => {
+                self.outgoing.remove(screen);
+            }
+        }
+        let mut outgoing = self.outgoing.remove(screen);
+        let layers = blend(&mut outgoing, new, now);
+        if let Some(outgoing) = outgoing {
+            self.outgoing.insert(screen.to_owned(), outgoing);
+        }
+        layers
     }
 
     /// Keeps only the textures drawn in this frame: a variant no screen shows any more goes
@@ -355,14 +405,58 @@ pub fn placement(
     (dst, src)
 }
 
-/// The wallpaper element of a screen. The frame is drawn at scale 1: its logical coordinates
-/// are its pixels.
-pub fn element(texture: &Texture, mode: Mode, view: &View) -> TextureRenderElement<GlesTexture> {
+/// An image of an older source, still shown on a screen, and when the new one started to fade
+/// in over it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outgoing<T> {
+    image: T,
+    since: Option<Duration>,
+}
+
+impl<T> Outgoing<T> {
+    fn new(image: T) -> Self {
+        Self { image, since: None }
+    }
+}
+
+/// What a screen shows at `now`, front to back with the opacity of each image, and whether a
+/// fade runs: the new image once it is there, faded in over the `outgoing` one for
+/// `motion::THEME_FADE`. Until it is there, the outgoing one. The outgoing image goes away once
+/// the fade is over.
+fn blend<T: Clone>(
+    outgoing: &mut Option<Outgoing<T>>,
+    new: Option<T>,
+    now: Duration,
+) -> (Vec<(T, f32)>, bool) {
+    match (new, outgoing.as_mut()) {
+        (Some(new), Some(old)) => {
+            let since = *old.since.get_or_insert(now);
+            let fade = Fade::new(0.0, 1.0, since, THEME_FADE);
+            if fade.is_done(now) {
+                *outgoing = None;
+                return (vec![(new, 1.0)], false);
+            }
+            (vec![(new, fade.value(now)), (old.image.clone(), 1.0)], true)
+        }
+        (Some(new), None) => (vec![(new, 1.0)], false),
+        (None, Some(old)) => (vec![(old.image.clone(), 1.0)], false),
+        (None, None) => (Vec::new(), false),
+    }
+}
+
+/// The wallpaper element of a screen, at `alpha`. The frame is drawn at scale 1: its logical
+/// coordinates are its pixels.
+pub fn element(
+    texture: &Texture,
+    alpha: f32,
+    mode: Mode,
+    view: &View,
+) -> TextureRenderElement<GlesTexture> {
     let (dst, src) = placement(mode, texture.size, view);
     TextureRenderElement::from_texture_buffer(
         dst.loc.to_f64(),
         &texture.buffer,
-        None,
+        (alpha < 1.0).then_some(alpha),
         Some(src),
         Some((dst.size.w, dst.size.h).into()),
         Kind::Unspecified,
@@ -486,6 +580,52 @@ mod tests {
         assert!(decode(&save("tall.png", 1, MAX_SIDE + 1)).is_err());
         // The memory limit is that of the largest image allowed, in RGBA.
         assert_eq!(MAX_ALLOC, u64::from(MAX_SIDE) * u64::from(MAX_SIDE) * 4);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_image_fades_in_over_the_one_shown() {
+        let ms = Duration::from_millis;
+        // Nothing shown before: the new image at once.
+        let mut none: Option<Outgoing<u8>> = None;
+        assert_eq!(blend(&mut none, Some(2), ms(0)), (vec![(2, 1.0)], false));
+        // Decoding: the image shown stays, without asking for frames.
+        let mut old = Some(Outgoing::new(1));
+        assert_eq!(blend(&mut old, None, ms(0)), (vec![(1, 1.0)], false));
+        // Uploaded at 100 ms: it fades in over the older one from there.
+        let start = ms(100);
+        let first = blend(&mut old, Some(2), start);
+        assert_eq!(first, (vec![(2, 0.0), (1, 1.0)], true));
+        let (layers, fading) = blend(&mut old, Some(2), start + THEME_FADE / 2);
+        assert!(fading && layers.len() == 2);
+        assert!((layers[0].1 - 0.875).abs() < 1e-3, "{layers:?}");
+        // Over: the older image goes away, and no frame is asked for any more.
+        let end = blend(&mut old, Some(2), start + THEME_FADE);
+        assert_eq!(end, (vec![(2, 1.0)], false));
+        assert_eq!(old, None);
+    }
+
+    #[test]
+    fn the_same_source_keeps_its_images() {
+        let dir = temp_dir("same");
+        let file = dir.join("wallpaper.conf");
+        let image = dir.join("wall.jpg");
+        fs::write(&image, b"").unwrap();
+        fs::write(&file, format!("path = {}\n", image.display())).unwrap();
+        let mut w = Wallpaper {
+            file: Some(file.clone()),
+            ..Wallpaper::default()
+        };
+        w.reload();
+        let first = w.generation;
+        // The mode alone: the same image, placed otherwise.
+        let text = format!("path = {}\nmode = contain\n", image.display());
+        fs::write(&file, text).unwrap();
+        w.reload();
+        assert_eq!((w.generation, w.mode), (first, Mode::Contain));
+        // An image of the user's has no pendant: the other theme keeps it.
+        w.set_theme(ThemeVariant::Light);
+        assert_eq!(w.generation, first);
         fs::remove_dir_all(&dir).unwrap();
     }
 
