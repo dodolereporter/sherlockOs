@@ -6,6 +6,10 @@ use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
+    // Before anything else: the renderer is chosen through the environment (ADR 0018).
+    let renderer = sherlock_ui::gpu::Choice::detect();
+    // SAFETY: first statement of `main`, no other thread exists yet.
+    unsafe { renderer.apply() };
     // A panic aborts, without unwinding through the toolkit: a clean exit of the toolkit would
     // end the lock (see `app.rs`). The compositor keeps the session locked and starts the
     // program again.
@@ -13,10 +17,6 @@ fn main() -> ExitCode {
         tracing::error!("panic: {info}");
         std::process::abort();
     }));
-    // Before anything else: the renderer is chosen through the environment (ADR 0018).
-    let renderer = sherlock_ui::gpu::Choice::detect();
-    // SAFETY: first statement of `main`, no other thread exists yet.
-    unsafe { renderer.apply() };
     // Log level from RUST_LOG, info otherwise. The password is never logged.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
