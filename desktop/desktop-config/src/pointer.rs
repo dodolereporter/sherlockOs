@@ -1,6 +1,5 @@
 //! The pointer setting, `<config dir>/pointer.conf`: what the compositor adds to the pointer.
-//! The compositor reads it again when it changes; Control Room's accessibility page will
-//! write it.
+//! The compositor reads it again when it changes; Control Room's touchpad page writes it.
 //!
 //! ```text
 //! # true: a green ring leaves each click, and the pointer sinks (false by default).
@@ -9,7 +8,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    fmt, fs, io,
     path::{Path, PathBuf},
 };
 
@@ -75,6 +74,13 @@ impl Config {
     }
 }
 
+impl fmt::Display for Config {
+    /// The file as Control Room writes it: `parse` reads it back.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "show-clicks = {}", self.show_clicks)
+    }
+}
+
 /// `<config dir>/pointer.conf`.
 pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     crate::config_dir(var).map(|dir| dir.join(FILE))
@@ -101,6 +107,14 @@ mod tests {
         assert!(matches!(err, Error::Line { line: 2, .. }), "{err}");
         let err = Config::parse("clicks = true").unwrap_err();
         assert!(matches!(err, Error::Line { line: 1, .. }), "{err}");
+    }
+
+    #[test]
+    fn what_control_room_writes_reads_back() {
+        for show_clicks in [false, true] {
+            let config = Config { show_clicks };
+            assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
+        }
     }
 
     #[test]

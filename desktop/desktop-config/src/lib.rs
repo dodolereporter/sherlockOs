@@ -1,5 +1,5 @@
 //! Settings of the desktop that several programs share: the compositor applies them, Control
-//! Room (lot D-26) will write them: the wallpaper (see "Wallpapers" in `docs/compositor.md`),
+//! Room (lot D-26a) writes them: the wallpaper (see "Wallpapers" in `docs/compositor.md`),
 //! the touchpad (see "Touchpad" there) and the pointer (see "Show the clicks" in
 //! `docs/cursor.md`).
 

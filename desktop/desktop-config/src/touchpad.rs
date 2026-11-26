@@ -1,6 +1,6 @@
 //! The touchpad setting, `<config dir>/touchpad.conf`: what libinput does with the touchpad
 //! (tap, scrolling, clicks, speed) and what the three finger swipe down does. The compositor
-//! reads it again when it changes; Control Room's Touchpad page will write it.
+//! reads it again when it changes; Control Room's touchpad page writes it.
 //!
 //! ```text
 //! # Every key is optional; these are the defaults.

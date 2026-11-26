@@ -1085,6 +1085,43 @@ pub fn segmented<'a, Message: Clone + 'a>(
         .into()
 }
 
+/// A picture among others to choose from (D-26a: a wallpaper): `content` veiled on hover like
+/// a menu entry, with the focus ring and the pointing hand.
+pub fn picture_choice<'a, Message: Clone + 'a>(
+    content: impl Into<Element<'a, Message>>,
+    radius: f32,
+    on_press: Option<Message>,
+) -> Control<'a, Message> {
+    let mut control = Control::new(content, theme::menu_item, on_press, radius);
+    control.button = control.button.padding(metrics::GAP_TIGHT);
+    control
+}
+
+/// A dropdown menu (D-26a): the choice made and an arrow, drawn as a secondary button; the
+/// choices open below it in a menu's glass. `width` includes the arrow.
+pub fn dropdown<'a, T, Message>(
+    choices: Vec<T>,
+    chosen: Option<T>,
+    on_choose: impl Fn(T) -> Message + 'a,
+    width: f32,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    Message: Clone + 'a,
+{
+    let line = typography::UI_SIZE * typography::LINE_HEIGHT;
+    let vertical = (metrics::BUTTON_HEIGHT - line) / 2.0;
+    iced::widget::pick_list(choices, chosen, on_choose)
+        .font(typography::UI)
+        .text_size(typography::UI_SIZE)
+        .text_line_height(text::LineHeight::Relative(typography::LINE_HEIGHT))
+        .padding([vertical, metrics::BUTTON_PADDING])
+        .width(width)
+        .style(theme::dropdown)
+        .menu_style(theme::dropdown_menu)
+        .into()
+}
+
 /// A progress bar, `value` from 0 to 1: its green fill follows the value on a spring.
 pub fn progress_bar<'a, Message: 'a>(value: f32) -> Element<'a, Message> {
     crate::controls::progress(value).into()

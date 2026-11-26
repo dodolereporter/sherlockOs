@@ -62,11 +62,15 @@ pub enum Icon {
     MicrophoneMuted,
     /// Screen brightness: a sun.
     Brightness,
+    Bluetooth,
+    Touchpad,
+    Grid,
+    Sidebar,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 38] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -101,6 +105,10 @@ impl Icon {
         Self::Microphone,
         Self::MicrophoneMuted,
         Self::Brightness,
+        Self::Bluetooth,
+        Self::Touchpad,
+        Self::Grid,
+        Self::Sidebar,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -176,6 +184,16 @@ impl Icon {
             Self::Brightness => {
                 "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"
             }
+            // The Reglages board's.
+            Self::Bluetooth => "M7 7l10 10-5 4V3l5 4L7 17",
+            // A touchpad with its button line, drawn for Control Room.
+            Self::Touchpad => {
+                "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM4 15h16M12 15v5"
+            }
+            // « Dock et barre » in the Reglages board.
+            Self::Grid => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+            // A window with its sidebar: shows or hides a folded sidebar.
+            Self::Sidebar => "M4 5h16v14H4zM10 5v14",
         }
     }
 

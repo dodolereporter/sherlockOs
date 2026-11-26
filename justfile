@@ -67,6 +67,22 @@ install-evidence:
         install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
     done
 
+# Installs Control Room for the user, without root: its binary in ~/.local/bin, its desktop entry and its icon
+install-control-room:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p control-room
+    exe="$HOME/.local/bin/control-room"
+    install -D -m 755 "${CARGO_TARGET_DIR:-target}/release/control-room" "$exe"
+    # Exec quoted as the desktop entry specification wants, as for Evidence.
+    quoted=$(printf '%s' "$exe" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')
+    sed "s|^Exec=control-room$|Exec=\"$quoted\"|" desktop/control-room/control-room.desktop \
+        | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/control-room.desktop"
+    theme=desktop/sherlock-ui/icons/hicolor
+    for file in "$theme"/*/apps/control-room.*; do
+        install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
+    done
+
 # Writes the GTK, Qt and KDE themes under a folder laid out like a home folder, to look at them; overwrites nothing unless `force` is `--force`
 themes output="target/themes" force="":
     cargo run -p toolkit-theme -- generate {{ force }} {{ quote(output) }}
