@@ -488,8 +488,11 @@ impl State {
 
     /// Forgets the shortcut keys waiting for their release: the host window has lost the
     /// keyboard, and these releases will not come.
+    /// The area of a screenshot being chosen goes too (lot D-35c): the real session calls it
+    /// when the console is left.
     pub fn forget_intercepted_keys(&mut self) {
         self.intercepted_keys.clear();
+        self.cancel_area();
         self.stop_media_repeat(None);
     }
 

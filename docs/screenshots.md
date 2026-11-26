@@ -36,9 +36,15 @@ Nested mode (`--nested`) leaves the key to the host session.
   read back (`copy_framebuffer`), rows put from the top, alpha made straight. An area is the
   screen of its start, cut to the rectangle. This happens between two frames: the loop runs one
   source at a time.
+- **Leaving the console gives up the area.** The real session forgets the keys and the area
+  being chosen when the console is left (`forget_intercepted_keys`, which `pause` calls): back
+  on it, the screen is not dimmed any more.
 - **Never in the loop.** Encoding the PNG, writing it and sending the notification run on a
   thread of their own (`screenshots`). The PNG comes back to the loop, which makes it the
-  selection of the seat. A client that pastes it gets it written on a thread of its own too.
+  selection of the seat. A client that pastes it gets it written by the loop, into its pipe made
+  non-blocking, as the pipe takes it: no thread per paste, and at most 8 pastes under way
+  (`MAX_PASTES`); past them a paste is refused, so that a client that asks without reading
+  holds nothing more.
 - **Clipboard.** The selection the compositor sets carries its bytes (`SelectionUserData`);
   the one it sets for XWayland carries none, and only that one is cleared when the X11 client
   lets it go. X11 applications do not see the screenshot in the clipboard yet.
@@ -46,7 +52,8 @@ Nested mode (`--nested`) leaves the key to the host session.
 ## Tests
 
 - `cargo test -p compositor capture`: the keys, the pictures folder read from `user-dirs.dirs`,
-  the crop, a PNG written under a new name and read back.
+  the crop, a PNG written under a new name and read back, a paste larger than a pipe written as
+  it is read and the bound on pastes, the area given up when the console is left.
 - `cargo test -p compositor --test screenshots`: on Mesa's software renderer, Print Screen
   writes an 800 × 600 PNG of the desktop into a folder of the test's own, notifies a fake
   notification server on a private bus and puts the same bytes in the clipboard; Shift + Print

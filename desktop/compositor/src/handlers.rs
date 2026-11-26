@@ -622,14 +622,7 @@ impl SelectionHandler for State {
         user_data: &Self::SelectionUserData,
     ) {
         if let Some(bytes) = user_data {
-            // Written on a thread of its own: a reader that does not read never holds the loop.
-            let bytes = bytes.clone();
-            std::thread::spawn(move || {
-                use std::io::Write as _;
-                if let Err(err) = std::fs::File::from(fd).write_all(&bytes) {
-                    tracing::debug!(mime_type, "screenshot not pasted: {err}");
-                }
-            });
+            self.paste_png(fd, bytes.clone());
             return;
         }
         if let Some(xwm) = self.xwm.as_mut()

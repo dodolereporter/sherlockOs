@@ -7,10 +7,13 @@
 //! nested mode leaves the key to the host session. See `docs/screenshots.md`.
 
 use std::{
+    cell::Cell,
     ffi::OsString,
     fs::File,
     io::Write as _,
+    os::fd::OwnedFd,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::{Arc, mpsc},
 };
 
@@ -26,7 +29,14 @@ use smithay::{
     desktop::Window,
     input::keyboard::{Keysym, ModifiersState},
     output::Output,
-    reexports::calloop::channel::{self, Event},
+    reexports::{
+        calloop::{
+            Interest, Mode, PostAction,
+            channel::{self, Event},
+            generic::Generic,
+        },
+        rustix,
+    },
     utils::{Logical, Physical, Point, Rectangle, Size},
     wayland::selection::data_device::set_data_device_selection,
 };
@@ -120,7 +130,13 @@ pub struct Capture {
     jobs: Option<mpsc::Sender<Image>>,
     capturer: Option<Capturer>,
     area: Option<Area>,
+    /// Pastes of a screenshot being written.
+    pastes: Rc<Cell<usize>>,
 }
+
+/// Most pastes of a screenshot written at the same time: past it, a paste is refused (its
+/// pipe closed), so that a client that asks without reading holds no more.
+pub const MAX_PASTES: usize = 8;
 
 /// The pictures folder: `XDG_PICTURES_DIR` of `user-dirs.dirs`, or `Images` in the home folder.
 pub fn pictures(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
@@ -360,6 +376,54 @@ impl State {
         Some(Rectangle::bounding_box([area.start?, area.current]))
     }
 
+    /// A client pastes the screenshot: `png` is written into `fd` by the loop, as the pipe takes
+    /// it, never waiting for the reader; no thread per paste.
+    pub(crate) fn paste_png(&mut self, fd: OwnedFd, png: Arc<[u8]>) {
+        let pastes = self.capture.pastes.clone();
+        if pastes.get() >= MAX_PASTES {
+            tracing::debug!("screenshot not pasted: {MAX_PASTES} pastes under way");
+            return;
+        }
+        let flags = rustix::fs::OFlags::NONBLOCK;
+        if let Err(err) = rustix::fs::fcntl_setfl(&fd, flags) {
+            tracing::debug!("screenshot not pasted: {err}");
+            return;
+        }
+        let mut written = 0;
+        let ended = pastes.clone();
+        let source = Generic::new(File::from(fd), Interest::WRITE, Mode::Level);
+        let inserted = self.loop_handle.insert_source(source, move |_, file, _| {
+            loop {
+                match rustix::io::write(&**file, &png[written..]) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        written += n;
+                        if written == png.len() {
+                            break;
+                        }
+                    }
+                    Err(rustix::io::Errno::AGAIN) => return Ok(PostAction::Continue),
+                    Err(rustix::io::Errno::INTR) => {}
+                    Err(err) => {
+                        tracing::debug!("screenshot not pasted: {err}");
+                        break;
+                    }
+                }
+            }
+            ended.set(ended.get().saturating_sub(1));
+            Ok(PostAction::Remove)
+        });
+        match inserted {
+            Ok(_) => pastes.set(pastes.get() + 1),
+            Err(err) => tracing::debug!("screenshot not pasted: {err}"),
+        }
+    }
+
+    /// Pastes of a screenshot under way.
+    pub fn pastes(&self) -> usize {
+        self.capture.pastes.get()
+    }
+
     /// The image goes to the clipboard, as `image/png`.
     fn copy_png(&mut self, png: Arc<[u8]>) {
         let mime = vec![String::from("image/png")];
@@ -503,6 +567,70 @@ mod tests {
         std::fs::write(dir.join("user-dirs.dirs"), "XDG_PICTURES_DIR=\"$HOME/\"\n").unwrap();
         assert_eq!(pictures(var(&dir)), Some(home.join("Images")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pastes_are_written_by_the_loop_and_bounded() {
+        use smithay::reexports::calloop::EventLoop;
+        use std::io::Read as _;
+        let event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        let mut event_loop = event_loop;
+        // More than a pipe holds: written as the reader reads, the loop never waiting.
+        let png: Arc<[u8]> = (0..1_000_000u32).map(|i| i as u8).collect();
+        let (read, write) = rustix::pipe::pipe().unwrap();
+        state.paste_png(write, png.clone());
+        assert_eq!(state.pastes(), 1);
+        let reader = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            File::from(read).read_to_end(&mut got).unwrap();
+            got
+        });
+        while state.pastes() > 0 {
+            event_loop
+                .dispatch(Some(std::time::Duration::from_millis(5)), &mut state)
+                .unwrap();
+        }
+        assert_eq!(reader.join().unwrap(), &*png);
+        // Clients that never read: at most `MAX_PASTES` at once, the next one refused.
+        let mut readers = Vec::new();
+        for _ in 0..=MAX_PASTES {
+            let (read, write) = rustix::pipe::pipe().unwrap();
+            state.paste_png(write, png.clone());
+            readers.push(read);
+        }
+        event_loop
+            .dispatch(Some(std::time::Duration::from_millis(5)), &mut state)
+            .unwrap();
+        assert_eq!(state.pastes(), MAX_PASTES);
+        // Readers gone: the writes end.
+        drop(readers);
+        while state.pastes() > 0 {
+            event_loop
+                .dispatch(Some(std::time::Duration::from_millis(5)), &mut state)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn leaving_the_console_gives_up_the_area() {
+        let event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((800, 600).into(), 1.0);
+        let dir = std::env::temp_dir().join(format!("capture-console-{}", std::process::id()));
+        state.enable_screenshots(Settings {
+            pictures: Some(dir),
+            session_bus: None,
+        });
+        state.screenshot(Kind::Area);
+        assert!(state.picking_area());
+        state.area_button(true, true, (10.0, 10.0).into());
+        state.area_motion((50.0, 40.0).into());
+        assert!(state.picked_area().is_some());
+        // What `udev` does when the session is paused (Ctrl + Alt + Fn).
+        state.forget_intercepted_keys();
+        assert!(!state.picking_area());
+        assert!(state.picked_area().is_none());
     }
 
     #[test]
