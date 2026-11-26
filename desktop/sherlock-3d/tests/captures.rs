@@ -1,5 +1,6 @@
 //! Captures of the moods the lock screen uses, in the round bubble, dark and light, at two
-//! sizes. They go to `target/tmp/sherlock-3d/captures/`, never into the repository.
+//! sizes, and two sequences of 8 frames, eyes closing and peeking at the field below. They go
+//! to `target/tmp/sherlock-3d/captures/`, never into the repository.
 //!
 //! Picking the Vulkan driver changes the environment, which needs a single thread: this test
 //! runs without libtest's harness (`harness = false`).
@@ -24,6 +25,10 @@ const STATES: [(Mood, f32, &str); 5] = [
 ];
 /// Bubble sides in pixels: about the lock screen's at scale 1, and at scale 2.
 const SIDES: [u32; 2] = [170, 340];
+/// Frames of the sequences, at 30 per second from the change of mood.
+const SEQUENCE: [usize; 8] = [0, 2, 3, 4, 5, 8, 15, 30];
+/// Where the password field lies, below the bubble, in normalized device coordinates.
+const FIELD: glam::Vec2 = glam::Vec2::new(0.0, -2.6);
 
 fn srgb(color: Color) -> [f32; 4] {
     let c = |v: u8| f32::from(v) / 255.0;
@@ -102,6 +107,54 @@ fn main() -> Result {
     assert_ne!(rest, closed);
     assert_ne!(rest, peek);
     assert_ne!(closed, peek);
+
+    // The sequences, dark, at the larger size.
+    let palette = Palette::DARK;
+    let side = SIDES[1];
+    for (mood, name) in [
+        (Mood::EyesClosed, "seq-yeux-fermes"),
+        (Mood::Peek, "seq-peek"),
+    ] {
+        let mut animator = Animator::new(model.clone());
+        for _ in 0..15 {
+            animator.advance(1.0 / 30.0);
+        }
+        if mood == Mood::Peek {
+            let field = Camera::UPPER_BODY.unproject(FIELD, 1.0, 4.0);
+            animator.look_at(Some(field));
+        }
+        animator.set_mood(mood);
+        let mut played = 0;
+        for (index, frame) in SEQUENCE.into_iter().enumerate() {
+            while played < frame {
+                animator.advance(1.0 / 30.0);
+                played += 1;
+            }
+            let joints = animator.joints();
+            let frame = Frame {
+                size: [side, side],
+                joints: &joints,
+                camera: Camera::UPPER_BODY,
+                cut: Cut::Circle { radius: 1.0 },
+                background: srgb(palette.system_discs[1]),
+            };
+            let image = renderer.capture(&device, &queue, &frame, srgb(palette.system_screen))?;
+            image.save(dir.join(format!("{name}-{index}.png")))?;
+            // Once the eyes are shut, no reflection (pure white) is left in their band.
+            if mood == Mood::EyesClosed && played >= 6 {
+                let (w, h) = image.dimensions();
+                for y in h * 25 / 100..h * 55 / 100 {
+                    for x in w * 15 / 100..w * 85 / 100 {
+                        let p = image.get_pixel(x, y).0;
+                        assert!(
+                            p[..3].iter().any(|&c| c < 250),
+                            "{name}-{index}: a reflection shows at {x}, {y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
     support::say(&format!("captures in {}", dir.display()));
     Ok(())
 }
