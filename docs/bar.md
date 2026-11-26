@@ -43,6 +43,19 @@ is at 8.8 or more.
 An indicator that has not been read yet is not shown. Without a battery, the battery
 indicator disappears. A battery discharging below 15 % turns amber.
 
+**Battery** (D-20c). The gauge is drawn, not chosen among a few glyphs: the outline of the
+`Battery` icon, filled from the left to the real percentage (`icon::battery_svg`, 12 units of
+the 24 grid for 100 %). A bolt while it charges, a plug when it is plugged in and full or not
+charging; the mark is cut out of the level and filled outside it (even-odd rule), so it shows at
+every level in the single color of the icon. Amber only while discharging under 15 %. The
+percentage and the time left (« 3 h 12 restantes », « pleine dans 45 min », « branchée »), when
+UPower gives it (`time to empty`, `time to full`), are written next to « Énergie » in the control
+centre: a tooltip would not fit in the 36 high bar surface. `upower --monitor` prints a line
+on each `PropertiesChanged` of a device, and the battery is read again then: no polling.
+
+![The battery at 5, 50 and 100 %, charging, plugged in and low](../desktop/bar/screenshots/battery.png)
+![The same in the light theme](../desktop/bar/screenshots/battery-light.png)
+
 ## Architecture
 
 | Module | Role |
@@ -56,8 +69,8 @@ indicator disappears. A battery discharging below 15 % turns amber.
 
 Every color, size and text comes from `sherlock-ui`: tokens `TOP_BAR_*`, `CHIP*`,
 `SHERLOCK_*`, `STATUS_*`, `MENU_AVATAR`, `MENU_HEADER_PADDING`; components `chip`,
-`sherlock_button`, `status`, `menu_header`, `logo`, `logo_square`; the `strings` text module; icons
-`NetworkOff`, `SoundMuted`, `Battery` and `BatteryCharging`. The only threshold written in the
+`sherlock_button`, `status`, `battery`, `menu_header`, `logo`, `logo_square`; the `strings` text
+module; icons `NetworkOff`, `SoundMuted`, and the battery gauge `icon::battery_svg`. The only threshold written in the
 bar is the low battery one (`battery::LOW_PERCENT`), which is behavior.
 
 ### Surface
@@ -268,11 +281,12 @@ ring stayed one Tab behind the real focus and Enter activated the next button.
 The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
 them yet, so the menu does not show them.
 
-## Panels (D-20b)
+## Panels (D-20b, D-20c)
 
-A click on the indicators opens the control centre; a click on the date and time opens the
-calendar. Each is an `xdg_popup` of the bar surface, with a grab: a click elsewhere closes it,
-and so does Escape or a second click on its button. Opening one closes the other and the
+As on a Mac, a click on the indicators opens the control centre, the quick settings alone; a
+click on the date and time opens the calendar with the notification centre under it. Each is an
+`xdg_popup` of the bar surface, with a grab: a click elsewhere closes it, and so does Escape or
+a second click on its button. Opening one closes the other and the
 Sherlock menu. Both indicators and clock are ghost buttons (`panels::bar_button`), veiled while
 their panel is open, and Tab reaches them after the workspaces; their padding is taken back
 from the gaps, so the bar looks the same as before.
@@ -282,7 +296,8 @@ from the gaps, so the bar looks the same as before.
 | `panel.rs` | Which panel, its size, its place under the bar, its input region; the views of the centre and of the calendar |
 | `calendar.rs` | Months, leap years, the weekday of a date, the six weeks of a month from Monday |
 | `history.rs` | Client of `org.nomos.Notifications.History`: list, group by application, clear, run an action, `Changed` |
-| `bus.rs` | The session bus, opened on first use and shared |
+| `bus.rs` | The session bus, opened on first use and shared; `coalesce`, which calms the signals |
+| `unfold.rs` | The spring and the fade of a panel that unfolds or folds back, and of a page that comes in |
 
 Tokens, styles and French texts are in `sherlock_ui::panels`.
 
@@ -312,13 +327,15 @@ the name only: nothing polls, and no other client makes the centre read again. T
 in iced tasks, never on the interface thread. The interface is described in
 `docs/notifications.md` (History over D-Bus).
 
-The board shows the centre next to the quick settings, both 54 from the top: the control
-centre is both, in one popup, and its height is the quick settings' (`panels::CONTROL_HEIGHT`,
-462); the notification list scrolls inside it.
+The board shows the centre next to the quick settings, both 54 from the top. Since D-20c it is
+under the calendar instead, in the panel of the clock, 320 wide like on the board and 280 high
+(`panels::CENTER_HEIGHT`): the panel ends at 729 on the 1440 × 900 reference screen, above the
+150 kept for the dock. Its list scrolls inside it. The calendar takes the same width, its
+grid centred.
 
 ### Quick settings
 
-The right column of the control centre, after the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
+The control centre, after the right column of the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
 « Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the graphics card and energy
 choices, then the user and the session buttons (`quick.rs`, services in `system/`).
 
@@ -379,7 +396,11 @@ depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager
 **Live.** While the control centre is open, the bar follows `PropertiesChanged` of
 NetworkManager's main object, `StateChanged` of its devices, `PropertiesChanged` of BlueZ and of
 power-profiles-daemon, on the system bus (`quick::watch`), and reads that service again. Sound
-and brightness are read when the panel opens and after each change.
+and brightness are read when the panel opens and after each change. The signals come in
+bursts (BlueZ sends one for each device seen again during a scan, whoever started it):
+`bus::coalesce` lets one batch through every 150 ms at most, each service once in it, and a
+service has one read at a time, one more asked meanwhile running after it (`Reads`). The
+notification centre follows `Changed` the same way.
 
 **Session.** The user row of the board, with the launcher's commands and rules
 (`docs/launcher.md`): « Verrouiller » at once (`loginctl lock-session`: until the lock screen of
@@ -391,7 +412,7 @@ confirmer » replaces the user's name; any other click cancels it.
 ![The control centre](../desktop/bar/screenshots/control-centre.png)
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
 ![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
-![The control centre without notification nor service](../desktop/bar/screenshots/control-centre-empty.png)
+![The control centre without any service](../desktop/bar/screenshots/control-centre-empty.png)
 ![The same in the light theme](../desktop/bar/screenshots/control-centre-empty-light.png)
 
 The tiles keep 10 on their sides and 8 between their 16 px glyph and their texts, 2 under the
@@ -399,7 +420,8 @@ board each: « Ne pas déranger » fits in the 149 a tile gets, as iced lays out
 
 ### Calendar
 
-No board draws it: the panel glass of the board, 282 wide (seven columns of 36). The month and
+No board draws it: the panel glass of the board, seven columns of 36, centred in the 320 of
+the notification centre under it. The month and
 its year in Space Grotesk 17, the arrows « Mois précédent » and « Mois suivant », the weekday
 heads « lu » to « di », Monday first, then always six weeks, so that the panel keeps its height:
 the days of the months around are faded (tertiary text), today is a green disc. Under a line,
@@ -421,12 +443,40 @@ only today comes from `localtime_r`.
 | Panel | Tab, Shift+Tab | Moves between its controls (iced focus), Enter or Space activates |
 | Calendar | Page Down, Page Up, Home | Next month, previous month, today's month |
 
-![The calendar](../desktop/bar/screenshots/calendar.png)
+![The calendar over the notification centre](../desktop/bar/screenshots/calendar.png)
 ![The calendar in the light theme](../desktop/bar/screenshots/calendar-light.png)
 
-From `cargo test -p bar --test render`, at scale 2, in software: the board's three
-applications (with a second Sherlock notification) next to the board's quick settings, and
-November 2026 on the board's date.
+From `cargo test -p bar --test render`, at scale 2, in software: November 2026 on the board's
+date over the board's three applications (with a second Sherlock notification), and the board's
+quick settings.
+
+### Animations (D-20c)
+
+The motion of the dock and of the attached bar, with the springs of `sherlock_ui::motion`; the
+values are in `sherlock_ui::panels`.
+
+- **Opening**: the panel unfolds from the end of the bar, from 96 % of its size around its top
+  right corner and 8 higher, on the spring of an opening window (`OPEN_SPRING`), and fades in
+  over a hover's 150 ms (`OPEN_FADE`).
+- **Closing**: the same backwards, from where it is; the popup closes once it has faded out.
+  Clicked again while it folds, the panel unfolds again in the same popup: a double click or a
+  quick series of clicks never opens nor closes popups one after the other. Another panel, the
+  Sherlock menu, or the compositor (a click on another client) close it at once.
+- **A page that comes in**: the Wi-Fi networks slide in from 24 on the right and fade in, the
+  main page comes back from the left the same way (`PAGE_SLIDE`).
+- **Tiles**: switched on or off, a tile mixes its colors from one state to the other over 150 ms
+  (`TILE_FADE`); the first state read shows at once.
+- **Sliders**: the volume and the brightness follow the pointer at once, without a spring; the
+  value goes to the service one call at a time.
+- **Rest**: the bar asks for frames (`window::frames`) only while something moves; at rest it
+  draws nothing.
+
+iced 0.14 has no opacity for a group of widgets: `sherlock_ui::color::with_opacity` multiplies
+the opacity of every color given to iced on the thread, the panel view is built inside it, and
+`animated::Reveal` draws its content inside it, with a transformation for the offset and the
+scale. Only on the GPU: in software the surface around the panel is black, and a panel fading in
+from black looks worse than one shown at once, so there it opens and closes at once. Pages and
+tiles move in both.
 
 ## Running and checking by hand
 
@@ -533,9 +583,17 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Bursts**: a burst of monitor lines gives a single refresh.
 - **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, and of the
   attached bar (`bar-attached`, `bar-attached-light`), expected texts, a click on a workspace
-  and on a menu entry yields the right message. The calendar and the notification centre in
-  both themes, full and empty; a click on the indicators or the clock, on a month arrow, on an
-  action and on « Tout effacer ».
+  and on a menu entry yields the right message. The calendar over the notification centre and
+  the control centre in both themes, full and empty; the battery at 5, 50 and 100 %, charging,
+  plugged in and low; a click on the indicators or the clock, on a month arrow, on an action
+  and on « Tout effacer ».
+- **Clicks and rest** (`app.rs`): twelve quick clicks on the indicators keep one popup, turned
+  back and forth, closed once after it has faded out, then no frame; a late close of an old
+  popup changes nothing; in software each click opens or closes at once. A notification
+  service that is not ours (Plasma's, `UnknownObject`) leaves the centre unavailable without
+  reading again. In `unfold.rs`, the progress of a panel unfolding, folding from where it is,
+  and resting; in `quick.rs`, a tile's colors mixing then resting, the page sliding in, and a
+  burst of fifty changes giving two reads; in `bus.rs`, a burst of signals coalesced.
 - **Calendar** (`calendar.rs`): leap years (2000, 1900, 2028), weekdays of known dates, months
   across years, the grid of November and December 2026 and of February 2027 and 2028.
 - **Panels** (`panel.rs`): both panels land at 54, their right edge at 1428, with and without
@@ -581,7 +639,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   the left where the screen ends; a click on the shadow closes the menu. In software the
   surface is opaque and the menu has no shadow.
 - **Animations**: the menu opens at once, hovers change at once (`sherlock-ui` does not wire
-  `motion` into its components yet).
+  `motion` into its components yet). The panels unfold since D-20c (see Animations).
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.
@@ -590,7 +648,9 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   notification. The board's « Réglages » button of the user row is not there (Control Room
   does not exist yet); « Se déconnecter » and « Redémarrer » are added. The Wi-Fi tile has a
   chevron for the network list, which no board draws, nor the calendar. « Carte graphique »
-  shows no active choice, since none exists yet. Panels open at once, without animation.
+  shows no active choice, since none exists yet.
+- **Panels** (D-20c): the notification centre moved from the side of the quick settings to
+  under the calendar, as the author asked, as on a Mac.
 
 ## GPU rendering (D-02)
 

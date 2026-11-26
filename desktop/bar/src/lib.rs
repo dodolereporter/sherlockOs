@@ -12,6 +12,7 @@ pub mod quick;
 pub mod shape;
 pub mod source;
 pub mod system;
+pub mod unfold;
 pub mod user;
 
 use iced::Settings;
