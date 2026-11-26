@@ -1422,10 +1422,16 @@ work:
 
 **Procedure on the reference laptop**, in the real session:
 
-1. Build in release, and start the session with the log level:
-   `RUST_LOG=info,compositor::perf=debug` (from a console, as in "From a text console"; from
-   SDDM, put it in the environment of `sherlockos-session`, whose log is
-   `~/.local/state/nom-os/session.log`).
+1. Build in release (`cargo build --release -p compositor -p bar -p dock -p notifications`),
+   and start the whole session from a free console with the log level (`compositor=debug`
+   includes it too):
+
+   ```sh
+   RUST_LOG=info,compositor::perf=debug NOM_OS_BIN=$PWD/target/release \
+     desktop/compositor/session/sherlockos-session
+   ```
+
+   The log is `~/.local/state/nom-os/session.log`.
 2. Use the desktop for a few minutes: rest without touching anything for 30 s, move the pointer,
    hover the dock, open Kate and Nautilus, snap and maximize them with Super + arrows, drag and
    resize a window, switch workspaces.
