@@ -167,7 +167,9 @@ impl Icon {
             Self::BatteryCharging => {
                 "M4.5 7h13A1.5 1.5 0 0 1 19 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 15.5v-7A1.5 1.5 0 0 1 4.5 7zM21.5 10.5v3M12 9l-2.5 3.5h3L10 16"
             }
-            Self::Microphone => "M9 7a3 3 0 0 1 6 0v4a3 3 0 0 1-6 0zM6 11a6 6 0 0 0 12 0M12 17v3M9 20h6",
+            Self::Microphone => {
+                "M9 7a3 3 0 0 1 6 0v4a3 3 0 0 1-6 0zM6 11a6 6 0 0 0 12 0M12 17v3M9 20h6"
+            }
             Self::MicrophoneMuted => {
                 "M9 7a3 3 0 0 1 6 0v4a3 3 0 0 1-6 0zM6 11a6 6 0 0 0 12 0M12 17v3M9 20h6M4 4l16 16"
             }

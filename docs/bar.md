@@ -140,7 +140,8 @@ dragged, a network reconnecting) gives a single refresh: the lines that follow w
 `metrics::EVENT_COALESCE_MAX_MS` (500 ms) at most, so that a long drag still refreshes. When the
 bar stops, the monitors stop quietly and are not restarted. A read
 error, such as an `upower` output without a battery section, is logged as a warning once, until
-the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs
+the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs (the last one in
+`desktop/system-services/fixtures`, with the sound shared with the media keys)
 were recorded on the reference laptop, with the Wi-Fi name and the Docker bridge ids replaced by
 neutral values; the others are rewritten from them by hand (battery at 12 % discharging, sound
 muted, Ethernet, network off).
@@ -320,7 +321,8 @@ centre is both, in one popup, and its height is the quick settings' (`panels::CO
 
 The right column of the control centre, after the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
 « Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the graphics card and energy
-choices, then the user and the session buttons (`quick.rs`, services in `system/`).
+choices, then the user and the session buttons (`quick.rs`, services in `system/`; sound and
+brightness in the `system-services` crate, shared with the media keys of the compositor).
 
 | Control | Service | Read | Written |
 | --- | --- | --- | --- |

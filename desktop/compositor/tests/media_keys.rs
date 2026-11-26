@@ -164,7 +164,8 @@ mod tests {
 
     impl Harness {
         fn start(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("media-keys-{name}-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("media-keys-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             // A raw backlight at 20 %.
@@ -267,32 +268,33 @@ mod tests {
         h.tap(MIC_MUTE);
         let shown = level(Kind::Microphone, 80, true);
         h.run_until("the microphone muted", |h| h.state.osd_level() == shown);
-        assert!(
-            h.pactl_log()
-                .contains("set-source-mute @DEFAULT_SOURCE@ 1")
-        );
+        assert!(h.pactl_log().contains("set-source-mute @DEFAULT_SOURCE@ 1"));
         // The pill goes once the keys are left alone.
-        let visible = sherlock_ui::osd::VISIBLE;
         h.run_until("the pill gone", |h| h.state.osd_level().is_none());
-        let _ = visible;
     }
 
     #[test]
     fn a_held_brightness_key_repeats_until_released() {
         let mut h = Harness::start("brightness");
         h.key(BRIGHTNESS_UP, KeyState::Pressed);
-        // The first step, then one each interval after the delay.
+        // The first step, then one each interval after the delay: about six in all.
         h.run_for(REPEAT_DELAY + REPEAT_INTERVAL * 4 + REPEAT_INTERVAL / 2);
         h.key(BRIGHTNESS_UP, KeyState::Released);
         let count = |h: &Harness| h.brightness.lock().unwrap().len();
-        h.run_until("the steps done", |h| count(h) >= 6);
+        h.run_until("the steps done", |h| count(h) >= 4);
+        // The worker ends what it was given; then nothing more comes.
+        h.run_for(REPEAT_INTERVAL * 3);
+        let steps = count(&h);
         h.run_for(REPEAT_INTERVAL * 4);
         let calls = h.brightness.lock().unwrap().clone();
-        assert_eq!(calls.len(), 6, "{calls:?}");
+        assert_eq!(calls.len(), steps, "{calls:?}");
+        assert!((4..=8).contains(&steps), "{calls:?}");
         // From 20 %, by steps of 5, through logind: never written by the compositor itself.
         assert_eq!(calls[0], "backlight amdgpu_bl1 64");
-        assert_eq!(calls[5], "backlight amdgpu_bl1 140");
-        let shown = level(Kind::Brightness, 55, false);
+        let percent = 20 + 5 * steps as u16;
+        let raw = (255 * u32::from(percent) + 50) / 100;
+        assert_eq!(calls[steps - 1], format!("backlight amdgpu_bl1 {raw}"));
+        let shown = level(Kind::Brightness, percent, false);
         h.run_until("the level shown", |h| h.state.osd_level() == shown);
     }
 

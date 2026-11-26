@@ -123,7 +123,11 @@ impl Bus {
 }
 
 /// Does what `key` asks, on the worker thread. Returns what to show.
-fn act(controls: &Controls, buses: &mut (Bus, Bus), key: MediaKey) -> Result<Option<Level>, Problem> {
+fn act(
+    controls: &Controls,
+    buses: &mut (Bus, Bus),
+    key: MediaKey,
+) -> Result<Option<Level>, Problem> {
     let sound = |kind, sound: system_services::audio::Sound| Level {
         kind,
         percent: sound.volume,
@@ -227,12 +231,12 @@ impl State {
         }
         let worker = keys.worker.clone();
         let timer = Timer::from_duration(REPEAT_DELAY);
-        let token = self.loop_handle.insert_source(timer, move |_, _, _| {
-            match worker.send(key) {
+        let token = self
+            .loop_handle
+            .insert_source(timer, move |_, _, _| match worker.send(key) {
                 Ok(()) => TimeoutAction::ToDuration(REPEAT_INTERVAL),
                 Err(_) => TimeoutAction::Drop,
-            }
-        });
+            });
         match token {
             Ok(token) => {
                 if let Some(keys) = &mut self.media_keys {

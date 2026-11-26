@@ -707,6 +707,9 @@ mod tests {
             }
             | Item::Label {
                 key, rect, alpha, ..
+            }
+            | Item::Osd {
+                key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
             Item::Thumbnail { .. } => Vec::new(),
         }

@@ -169,8 +169,8 @@ pub fn push_item(items: &mut Vec<Item>, state: &State, (output, view): (&Output,
     };
     let now = state.now();
     let presence = shown.presence.value(now).clamp(0.0, 1.0);
-    let animating = !shown.presence.is_done(now, SCALE_PRECISION)
-        || !shown.gauge.is_done(now, SCALE_PRECISION);
+    let animating =
+        !shown.presence.is_done(now, SCALE_PRECISION) || !shown.gauge.is_done(now, SCALE_PRECISION);
     if shown.output.as_ref().is_some_and(|o| o != output) || presence < 0.01 && !animating {
         return animating;
     }
@@ -276,7 +276,13 @@ pub fn draw(look: &Look) -> Option<Pixmap> {
     );
     let size = ui::ICON_SIZE * s;
     let at = (ui::PADDING * s, (hf - size) / 2.0);
-    icon(&mut pixmap, look.kind.icon(look.muted), at, size, colors.icon);
+    icon(
+        &mut pixmap,
+        look.kind.icon(look.muted),
+        at,
+        size,
+        colors.icon,
+    );
     let (left, middle, width) = gauge_track(wf, hf, s);
     let thickness = ui::GAUGE_HEIGHT * s;
     // The round ends stick out of the line by half its thickness.
