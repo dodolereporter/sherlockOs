@@ -489,7 +489,9 @@ pub fn items(
     let mut items = Vec::new();
     let mut animating = preview.is_some();
     let scale = view.scale as f32;
-    // The on-screen display of the media keys, in front of everything (lot D-35).
+    // The area of a screenshot being chosen, then the on-screen display of the media keys, in
+    // front of everything (lot D-35).
+    crate::capture::push_area(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
     push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).

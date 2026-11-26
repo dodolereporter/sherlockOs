@@ -4,6 +4,7 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod capture;
 pub mod card;
 mod cursor;
 pub mod damage;
@@ -214,6 +215,8 @@ pub struct State {
     media_keys: Option<media_keys::MediaKeys>,
     /// What the media keys changed, on screen (lot D-35).
     osd: osd::Osd,
+    /// Screenshots (lot D-35c).
+    capture: capture::Capture,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -342,6 +345,7 @@ impl State {
             window_anims: window_anim::WindowAnims::default(),
             media_keys: None,
             osd: osd::Osd::default(),
+            capture: capture::Capture::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),

@@ -10,6 +10,7 @@
 pub mod audio;
 pub mod backlight;
 pub mod mpris;
+pub mod notify;
 
 use zbus::DBusError;
 

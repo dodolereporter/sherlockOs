@@ -12,7 +12,7 @@ draw on the GPU (linux-dmabuf). Lot D-14 runs it as a real session, on the scree
 machine, from a text console or the login screen (see "Real session"). Lot D-31 gives the
 touchpad its setting and its gestures (see "Touchpad"). Lot D-33 adds Mission Control (see
 "Mission Control"). Lot D-35 takes the media keys and shows their on-screen display
-(`docs/media-keys.md`).
+(`docs/media-keys.md`), and takes screenshots (`docs/screenshots.md`).
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -44,6 +44,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/gestures.rs` | Touchpad gestures (lot D-31): three finger swipes for the compositor, the others to the clients (`zwp_pointer_gestures_v1`) |
 | `src/touchpad.rs` | Touchpad setting applied to libinput, read again when it changes (lot D-31) |
 | `src/media_keys.rs` | Media keys of the real session (lot D-35): sound, brightness, players, on a worker thread (see `docs/media-keys.md`) |
+| `src/capture.rs` | Screenshots (lot D-35c): Print Screen, the area, the drawing offscreen, the PNG, the clipboard (see `docs/screenshots.md`) |
 | `src/osd.rs` | On-screen display of the media keys: the pill, its springs, its texture (lot D-35) |
 | `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |

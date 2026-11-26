@@ -49,6 +49,9 @@ pub enum Part {
     ThumbnailLabel(usize),
     /// The on-screen display of the media keys (lot D-35).
     Osd,
+    /// The area of a screenshot being chosen, and the dim over its screen (lot D-35c).
+    CaptureArea,
+    CaptureDim,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

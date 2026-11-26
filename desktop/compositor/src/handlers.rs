@@ -590,8 +590,10 @@ impl OutputHandler for State {}
 /// The clipboard of a Wayland client is relayed to XWayland, and the other way round: when an
 /// X11 client sets it, the compositor sets it on the Wayland side on its behalf (see
 /// `xwayland.rs`).
+/// The compositor sets a selection of its own too: a screenshot, as `image/png` (lot D-35c).
+/// Its user data holds the bytes; `None` is a selection set for XWayland.
 impl SelectionHandler for State {
-    type SelectionUserData = ();
+    type SelectionUserData = Option<std::sync::Arc<[u8]>>;
 
     fn new_selection(
         &mut self,
@@ -612,8 +614,19 @@ impl SelectionHandler for State {
         mime_type: String,
         fd: OwnedFd,
         _seat: Seat<Self>,
-        _user_data: &(),
+        user_data: &Self::SelectionUserData,
     ) {
+        if let Some(bytes) = user_data {
+            // Written on a thread of its own: a reader that does not read never holds the loop.
+            let bytes = bytes.clone();
+            std::thread::spawn(move || {
+                use std::io::Write as _;
+                if let Err(err) = std::fs::File::from(fd).write_all(&bytes) {
+                    tracing::debug!(mime_type, "screenshot not pasted: {err}");
+                }
+            });
+            return;
+        }
         if let Some(xwm) = self.xwm.as_mut()
             && let Err(err) = xwm.send_selection(target, mime_type, fd, self.loop_handle.clone())
         {

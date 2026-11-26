@@ -375,8 +375,10 @@ impl XwmHandler for State {
         }
         let dh = &self.display_handle;
         match selection {
-            SelectionTarget::Clipboard => set_data_device_selection(dh, &self.seat, mime_types, ()),
-            SelectionTarget::Primary => set_primary_selection(dh, &self.seat, mime_types, ()),
+            SelectionTarget::Clipboard => {
+                set_data_device_selection(dh, &self.seat, mime_types, None)
+            }
+            SelectionTarget::Primary => set_primary_selection(dh, &self.seat, mime_types, None),
         }
     }
 
@@ -386,12 +388,16 @@ impl XwmHandler for State {
         let dh = &self.display_handle;
         match selection {
             SelectionTarget::Clipboard => {
-                if current_data_device_selection_userdata(&self.seat).is_some() {
+                // Set for XWayland, not a screenshot of the compositor's.
+                if current_data_device_selection_userdata(&self.seat)
+                    .is_some_and(|data| data.is_none())
+                {
                     clear_data_device_selection(dh, &self.seat);
                 }
             }
             SelectionTarget::Primary => {
-                if current_primary_selection_userdata(&self.seat).is_some() {
+                if current_primary_selection_userdata(&self.seat).is_some_and(|data| data.is_none())
+                {
                     clear_primary_selection(dh, &self.seat);
                 }
             }
