@@ -2195,6 +2195,21 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **Locking.** Super + L locks the session at once, then starts the lock program,
   `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). Any
   client may also lock an unlocked session through the protocol, as `swaylock` does.
+- **Triggers (lot D-25a3, `src/triggers.rs`).** The session also locks:
+  - after a delay without input (keyboard, pointer, touchpad), set in
+    `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
+    within a second when it changes; `desktop_config::lock`, which Control Room will write);
+    no application can hold it off yet (no `idle-inhibit` protocol);
+  - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
+    the launcher and the bar);
+  - before the sleep: the compositor holds a `delay` inhibitor of logind; on
+    `PrepareForSleep(true)` it locks, and releases the inhibitor once every screen shows the
+    lock, or after 1.5 s (a console away draws nothing); a new inhibitor is taken at wake-up;
+  - when the lid closes (libinput's switch), whether logind puts the machine to sleep for it
+    or not.
+  logind's `Unlock` signal is ignored: only the lock screen ends the lock. logind is read on
+  a thread of its own, in the real session only; without it, the log says so and the other
+  triggers remain.
 - **What is drawn.** Each screen shows its lock surface, in front of the background of the
   system screens (`#0A1424` in the dark theme), or that background alone. Nothing else, except
   the on-screen display of the volume and brightness keys: no window, bar, dock, menu, Mission
@@ -2226,7 +2241,10 @@ neither drawn nor given input; a refused lock cannot unlock, the lock that holds
 can, and the window gets the keyboard back; an unlock before `locked` is refused; a killed
 lock client leaves the session locked, the lock programs fail three times, the rescue program
 too, and the rescue screen shows, Enter trying again; an ordinary client cannot take a lock
-over, a lock program can; Super + L locks at once; on four screens side by side (1366 × 768,
+over, a lock program can; Super + L locks at once; the session locks after the delay without
+input, never with `0`; with a fake logind on a private bus, the `Lock` of this session locks and
+another session's does not, and `PrepareForSleep` locks, keeps the inhibitor until the locked
+frame is shown, then a new one is taken at wake-up; on four screens side by side (1366 × 768,
 1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
 scale.
