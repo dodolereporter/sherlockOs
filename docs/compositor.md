@@ -904,11 +904,16 @@ in `src/decorations/`; colors, measures and the double click delay in `sherlock_
 
 | Client | Protocol | Result |
 | --- | --- | --- |
-| Qt 6 (Konsole, Kate, Dolphin), winit | `zxdg_decoration_manager_v1` | `server_side` |
-| GTK 3 without a header bar, Qt 5 of KDE | `org_kde_kwin_server_decoration_manager` | `Server`, the default mode |
-| Chromium, Electron, Evidence (`decorations: false`) | xdg-decoration, `set_mode(client_side)` | Their own: no second bar |
-| GTK 4, libadwaita, GTK 3 with a header bar | Neither, or `Client` | Their own |
-| X11 window | `_MOTIF_WM_HINTS`, window type | A bar, unless it asks for none, places itself (override-redirect), or is a menu, tooltip, notification or splash screen |
+| Qt 6 (Konsole, KWrite) | `zxdg_decoration_manager_v1`, asks for `server_side` | Our bar |
+| GTK 3 without a header bar, Qt 5 of KDE | `org_kde_kwin_server_decoration_manager` | `Server`, the default mode: our bar |
+| Chromium, Evidence (winit, `decorations: false`) | xdg-decoration, `set_mode(client_side)` | Their own: no second bar |
+| Firefox (GTK 3, tabs in its title bar) | KDE's protocol, asks for `Client` | Its own |
+| GTK 4, libadwaita (Zenity) | Neither | Its own |
+| X11 window (xterm, xeyes, Konsole on X11) | `_MOTIF_WM_HINTS`, window type | A bar, unless it asks for none (Firefox on X11), places itself (override-redirect), or is a menu, tooltip, notification or splash screen |
+
+Tried on the author's machine (Debian 13, Qt 6.8.2, GTK 4.18.6, GTK 3.24.49), with the compositor
+running without a screen: each application above asked what the table says. Electron was not
+tried: none is installed.
 
 A new xdg decoration, or one whose client drops its preference (`unset_mode`), gets
 `server_side`; a client that asks for `client_side` keeps it: the compositor only forces its bar
