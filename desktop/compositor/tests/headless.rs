@@ -1775,6 +1775,10 @@ mod tests {
         h.click(x, y, 6000);
         assert!(h.state.is_minimized(&window));
         h.state.activate(&window);
+        // The pointer reaches it again once it is back from its icon (lot D-19).
+        h.run_until("the window back", |_, s| {
+            s.minimize_progress(&window, s.now()).is_none()
+        });
         h.click(x + 60.0, y, 7000);
         h.run_until("the close request", |c, _| c.closed);
         drop(shown);

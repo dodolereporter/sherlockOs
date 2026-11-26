@@ -42,7 +42,7 @@ use crate::{
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
-    is_override_redirect,
+    genie, is_override_redirect,
     output::View,
     wallpaper, window_data,
 };
@@ -57,6 +57,7 @@ render_elements! {
     Window=RoundedSurface,
     Surface=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     Wallpaper=TextureRenderElement<GlesTexture>,
+    Genie=Stamped<genie::GenieElement>,
     Decoration=Stamped<TextureRenderElement<GlesTexture>>,
 }
 
@@ -65,6 +66,7 @@ pub struct Scene {
     shape: GlesPixelProgram,
     shadow: GlesPixelProgram,
     clip: GlesTexProgram,
+    genie: genie::Painter,
     /// Textures of the title bars the compositor draws (lot D-08).
     bars: RefCell<decorations::Textures>,
 }
@@ -112,6 +114,8 @@ pub enum Item {
     },
     /// The wallpaper of the screen.
     Wallpaper,
+    /// A window minimized into its dock icon or coming back from it (lot D-19).
+    Genie(genie::Frame),
     /// The title bar the compositor draws above a window, in `rect` (lot D-08).
     Decoration {
         key: Key,
@@ -144,6 +148,7 @@ impl Item {
                 let scalars = [*radius, shadow.sigma, *alpha];
                 params_hash(&[&shadow.caster[..], &shadow.window, &scalars].concat())
             }
+            Item::Genie(frame) => frame.params(),
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
@@ -183,6 +188,7 @@ impl Scene {
             shape,
             shadow,
             clip,
+            genie: genie::Painter::new(renderer)?,
             bars: RefCell::default(),
         })
     }
@@ -219,6 +225,7 @@ impl Scene {
             screens.push(elements);
         }
         ids.sweep();
+        self.genie.sweep();
         self.bars.borrow_mut().sweep();
         let used: Vec<_> = state
             .views()
@@ -347,6 +354,16 @@ impl Scene {
                 .map(|texture| SceneElement::Wallpaper(wallpaper::element(texture, mode, view)))
                 .into_iter()
                 .collect(),
+            Item::Genie(mut frame) => {
+                // Its content goes into a texture: identities of its own, out of the screen's.
+                let (inside, mut own) = (frame.view(), Ids::default());
+                let content: Vec<_> = std::mem::take(&mut frame.content)
+                    .into_iter()
+                    .flat_map(|item| self.elements(renderer, &mut own, item, &inside, None, mode))
+                    .collect();
+                let element = self.genie.element(renderer, ids, &frame, &content);
+                element.map(SceneElement::Genie).into_iter().collect()
+            }
             Item::Decoration {
                 key,
                 rect,
@@ -377,7 +394,10 @@ pub fn items(
     let mut items = Vec::new();
     let mut animating = preview.is_some();
     let scale = view.scale as f32;
-    push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
+    push_layers(&mut items, output, view, &[Layer::Overlay]);
+    // A window minimized or restored goes in front of the dock, into its icon (lot D-19).
+    animating |= genie::push_effects(&mut items, state, (output, view), now);
+    push_layers(&mut items, output, view, &[Layer::Top]);
     if let Some(preview) = preview {
         items.push(Item::Shape {
             key: Key::of(None, Part::Preview),
@@ -395,6 +415,10 @@ pub fn items(
         let Some(shift) = state.workspace_shift(window, now) else {
             continue;
         };
+        // Restored, it is drawn by its effect, in front.
+        if state.minimize_progress(window, now).is_some() {
+            continue;
+        }
         // The shadow stays on the window's own screen: a maximized window does not cast it
         // on the next one. While sliding, the window itself does not reach the next screen.
         let own = state.window_output(window).as_ref() == Some(output);
@@ -484,7 +508,7 @@ fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, p
     });
 }
 
-fn push_window(
+pub(crate) fn push_window(
     items: &mut Vec<Item>,
     (window, bar): (&Window, Option<Bar>),
     visual: Visual,

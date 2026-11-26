@@ -524,8 +524,11 @@ impl State {
     }
 
     fn window_hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
-        // Hidden windows (other workspaces, minimized) are skipped, which the space does not do.
-        for window in self.space.elements().rev().filter(|w| self.is_visible(w)) {
+        // Hidden windows (other workspaces, minimized) are skipped, which the space does not do,
+        // and so are those of a minimize effect, whose drawing is not their place (lot D-19).
+        let now = self.now();
+        let shown = |w: &&Window| self.is_visible(w) && self.minimize_progress(w, now).is_none();
+        for window in self.space.elements().rev().filter(shown) {
             let loc = self
                 .space
                 .element_location(window)

@@ -154,6 +154,21 @@ impl State {
         Some((icon.1.clone(), icon.2))
     }
 
+    /// Keeps `rect`, on the screen named `output`, as the dock icon of `window`, or forgets it
+    /// (`None`): what `set_rectangle` does, for the tests that have no shell client.
+    pub fn set_icon_rectangle(
+        &mut self,
+        window: &Window,
+        output: &str,
+        rect: Option<Rectangle<i32, Logical>>,
+    ) {
+        let id = window_id(window);
+        self.shell.icons.retain(|i| i.0 != id);
+        if let Some(rect) = rect.filter(|r| !r.size.is_empty()) {
+            self.shell.icons.push((id, output.to_owned(), rect));
+        }
+    }
+
     /// The workspaces, in order, and the active one.
     pub fn workspaces(&self) -> &workspaces::Workspaces {
         &self.shell.workspace_model
@@ -350,6 +365,7 @@ impl State {
         }
         let active = is_activated(window) || self.focused_window().as_ref() == Some(window);
         self.shell.minimized.push(window.clone());
+        self.start_minimize_effect(window, true);
         window.set_activated(false);
         if let Some(toplevel) = window.toplevel() {
             toplevel.send_pending_configure();
@@ -374,6 +390,7 @@ impl State {
         }
         if self.is_minimized(window) {
             self.shell.minimized.retain(|w| w != window);
+            self.start_minimize_effect(window, false);
             if let Some(surface) = window.x11_surface()
                 && let Err(err) = surface.set_suspended(false)
             {

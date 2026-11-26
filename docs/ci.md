@@ -42,7 +42,9 @@ A pull request is green only if `verify` and `test-boot` both are.
   libwayland-client. `xwayland` provides the `Xwayland` binary,
   which the XWayland integration test (`tests/xwayland.rs`) starts, and `libegl1` the
   `libEGL.so.1` without which Xwayland stops at startup: libepoxy loads it at run time, and the
-  `xwayland` package does not pull it in. `dbus-daemon` runs the private session buses of the
+  `xwayland` package does not pull it in. `libegl-mesa0` is Mesa's EGL, whose software device
+  (llvmpipe) draws the genie of the compositor without a GPU (`tests/genie.rs`, lot D-19): the
+  test fails on the CI without it. `dbus-daemon` runs the private session buses of the
   notification daemon's tests (`desktop/notifications/tests/dbus.rs`). Any system library added
   here is also added to the prerequisites of the local machine.
 - **Python.** `check-language` runs with the `python3` of the image (3.12 on `ubuntu-24.04`) and
@@ -74,7 +76,8 @@ This is exactly what the CI runs, with the same Rust version, read from `rust-to
 Prerequisites of the local machine: `rustup`, `just`, `python3`, a C compiler (`gcc` and `libc6-dev` on
 Debian), the compositor libraries (`libxkbcommon-dev`, `libwayland-dev`, `libudev-dev`,
 `libinput-dev`, `libseat-dev`, `libgbm-dev` and `libdrm-dev` on Debian), the `Xwayland` server
-(`xwayland` package on Debian) and `dbus-daemon` (package of the same name).
+(`xwayland` package on Debian), Mesa's EGL (`libegl-mesa0`, without which the genie test only
+says it has nothing to draw with) and `dbus-daemon` (package of the same name).
 
 To run a single step:
 
