@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::{container, mouse_area, opaque, row};
@@ -78,6 +78,12 @@ pub struct Bar {
     pub panel_motion: Option<bool>,
     /// Room around the panel in its surface: the gap below the bar, and its shadow on the GPU.
     pub panel_margins: Padding,
+    /// Whether the popup holds both panels (on the GPU), so that one turns into the other.
+    pub panel_shared: bool,
+    /// The panel the one shown replaced in the same popup, and the motion between them.
+    pub swap: Option<(Panel, Unfold)>,
+    /// The Sherlock menu unfolding from its button, or folding back before it closes.
+    pub menu_unfold: Unfold,
     /// Width of the bar surface, which the panels are placed from.
     width: Option<f32>,
     /// The month the calendar shows.
@@ -198,9 +204,11 @@ impl Bar {
 
     /// Something moves: frames are needed. At rest, none.
     pub fn animating(&self) -> bool {
+        let swapping = self.swap.is_some_and(|(_, motion)| motion.running());
         self.theme.running()
             || self.shape.running()
-            || (self.panel.is_some() && (self.unfold.running() || self.quick.running()))
+            || (self.menu.is_some() && self.menu_unfold.running())
+            || (self.panel.is_some() && (self.unfold.running() || self.quick.running() || swapping))
     }
 
     fn animates(&self) -> bool {
@@ -399,12 +407,22 @@ impl Bar {
                 self.shape.tick(now);
                 let at = animated::at(now);
                 self.unfold.tick(at);
+                self.menu_unfold.tick(at);
                 self.quick.tick(at);
-                let shape = self.apply_shape();
-                if self.unfold.folded() {
-                    return shape.chain(self.drop_panel());
+                if let Some((_, motion)) = &mut self.swap {
+                    motion.tick(at);
+                    if !motion.running() {
+                        self.swap = None;
+                    }
                 }
-                return shape;
+                let mut tasks = self.apply_shape();
+                if self.unfold.folded() {
+                    tasks = tasks.chain(self.drop_panel());
+                }
+                if self.menu_unfold.folded() {
+                    tasks = tasks.chain(self.drop_menu());
+                }
+                return tasks;
             }
             Message::Closed(id) => {
                 // The compositor closes the menu and the panels on a click elsewhere
@@ -413,6 +431,7 @@ impl Bar {
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
+                    self.menu_unfold = Unfold::default();
                 }
                 if self.panel_surface() == Some(id) {
                     self.panel = None;
@@ -525,23 +544,32 @@ impl Bar {
             }
             Some((shown, _)) if shown == which => {
                 self.unfold.fold(now, true);
-                return self.close_menu().chain(self.opened(which));
+                return self.drop_menu().chain(self.opened(which));
+            }
+            // The other panel, open in a popup that holds both: it turns into this one.
+            Some((shown, id)) if self.panel_shared && !self.unfold.folding() => {
+                return self.swap_to(shown, which, id, now);
             }
             _ => {}
         }
-        let closed = self.drop_panel().chain(self.close_menu());
+        // The menu goes at once: a popup folding back would still hold the grab the panel's
+        // popup takes.
+        let closed = self.drop_panel().chain(self.drop_menu());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the panel cannot open");
             return closed;
         };
         self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
-        let (width, height) = panel::surface_size(which, self.panel_margins);
+        self.panel_shared = self.animates();
+        self.swap = None;
+        let shared = self.panel_shared;
+        let (width, height) = panel::surface_size(which, self.panel_margins, shared);
         let bar_width = self
             .width
             .unwrap_or(metrics::REFERENCE_SCREEN.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE);
         let side = self.applied.margin_side as f32;
         let (x, y, anchor_width, anchor_height) =
-            panel::anchor_rect(which, self.panel_margins, bar_width, side);
+            panel::anchor_rect(which, self.panel_margins, bar_width, side, shared);
         let settings = IcedNewPopupSettings::new(
             surface,
             PixelSize::px(width, height),
@@ -557,18 +585,40 @@ impl Bar {
         } else {
             Unfold::default()
         };
-        let (x, y, width, height) = panel::input_rect(which, self.panel_margins);
+        closed
+            .chain(Task::done(Message::NewPopUp { settings, id }))
+            .chain(self.input_region(which, id))
+            .chain(self.opened(which))
+    }
+
+    /// Limits the input of the popup `id` to `which`: the rest of its room lets the clicks
+    /// through to what is under it.
+    fn input_region(&self, which: Panel, id: Id) -> Task<Message> {
+        let (x, y, width, height) = panel::input_rect(which, self.panel_margins, self.panel_shared);
         let region = RegionActionCB::new(move |region| {
             if let Err(error) = region.add(x, y, width, height) {
                 tracing::warn!(%error, "cannot limit the panel's input region");
             }
         });
-        closed
-            .chain(Task::done(Message::NewPopUp { settings, id }))
-            .chain(Task::done(Message::SetInputRegion {
-                id,
-                callback: region,
-            }))
+        Task::done(Message::SetInputRegion {
+            id,
+            callback: region,
+        })
+    }
+
+    /// `shown` turns into `which` in the same popup `id`: `shown` slides out and fades while
+    /// `which` comes in from the other side, a mask going from the height of one to the
+    /// other's (UI-01). What `shown` read stops, what `which` reads starts.
+    fn swap_to(&mut self, shown: Panel, which: Panel, id: Id, now: Duration) -> Task<Message> {
+        let stopped = match shown {
+            Panel::Control => self.quick.close().map(Message::Quick),
+            Panel::Calendar => Task::none(),
+        };
+        self.swap = Some((shown, Unfold::opening(now)));
+        self.panel = Some((which, id));
+        stopped
+            .chain(self.drop_menu())
+            .chain(self.input_region(which, id))
             .chain(self.opened(which))
     }
 
@@ -609,8 +659,13 @@ impl Bar {
     }
 
     fn toggle_menu(&mut self) -> Task<Message> {
-        if self.menu_open() {
+        if self.menu_open() && !self.menu_unfold.folding() {
             return self.close_menu();
+        }
+        // Clicked again while it folds back: it unfolds again in the same popup.
+        if self.menu_open() {
+            self.menu_unfold.fold(animated::clock(), true);
+            return Task::none();
         }
         let closed = self.drop_panel();
         let Some(surface) = self.surface else {
@@ -632,6 +687,11 @@ impl Bar {
         let id = Id::unique();
         self.menu = Some(id);
         self.cursor = None;
+        self.menu_unfold = if self.animates() {
+            Unfold::opening(animated::clock())
+        } else {
+            Unfold::default()
+        };
         // Only the menu takes the pointer: the transparent room for the shadow lies over the
         // bar, whose buttons stay reachable through it.
         let (x, y, width, height) = menu::input_rect(self.menu_margins);
@@ -648,8 +708,21 @@ impl Bar {
             }))
     }
 
+    /// Closes the menu: it folds back first where it unfolds, and its popup closes once it has
+    /// faded out (`Message::Frame`).
     fn close_menu(&mut self) -> Task<Message> {
         self.cursor = None;
+        if self.menu.is_some() && self.animates() {
+            self.menu_unfold.fold(animated::clock(), false);
+            return Task::none();
+        }
+        self.drop_menu()
+    }
+
+    /// Closes the popup of the menu at once.
+    fn drop_menu(&mut self) -> Task<Message> {
+        self.cursor = None;
+        self.menu_unfold = Unfold::default();
         match self.menu.take() {
             Some(id) => window::close(id),
             None => Task::none(),
@@ -668,9 +741,51 @@ impl Bar {
         }
     }
 
-    /// A panel in its surface, as it unfolds or folds back.
+    /// A panel in its surface, as it unfolds or folds back, or turns into the other one.
     pub fn view_panel(&self, which: Panel) -> Element<'_, Message> {
-        let content = color::with_opacity(self.unfold.opacity(), || match which {
+        let room = panel::room(which, self.panel_shared);
+        let coming = self.swap.map_or(1.0, |(_, motion)| motion.opacity());
+        let content: Element<'_, Message> = color::with_opacity(self.unfold.opacity(), || {
+            let (leaving, coming) = match self.swap {
+                Some((leaving, motion)) => {
+                    // From the indicators to the clock the new panel comes from the right,
+                    // from the clock to the indicators from the left, as they sit in the bar.
+                    let side = if leaving == Panel::Control { 1.0 } else { -1.0 };
+                    let progress = motion.settled();
+                    // The mask goes from one panel's height to the other's, the room for the
+                    // shadow below it kept.
+                    let height = leaving.size().1
+                        + (which.size().1 - leaving.size().1) * progress
+                        + self.panel_margins.bottom;
+                    let slide = panels::SWITCH_SLIDE;
+                    let out = color::with_opacity(1.0 - coming, || self.panel_view(leaving));
+                    let out = animated::reveal(panel::place(out, room))
+                        .opacity(1.0 - coming)
+                        .offset(-side * progress * slide, 0.0)
+                        .clip_height(height)
+                        .inert();
+                    let shown = color::with_opacity(coming, || self.panel_view(which));
+                    let shown = animated::reveal(panel::place(shown, room))
+                        .opacity(coming)
+                        .offset(side * (1.0 - progress) * slide, 0.0)
+                        .clip_height(height);
+                    (out.into(), shown)
+                }
+                None => (
+                    // A stack takes the size of its first layer: the room.
+                    iced::widget::space().width(room.0).height(room.1).into(),
+                    animated::reveal(panel::place(self.panel_view(which), room)),
+                ),
+            };
+            let layers: [Element<'_, Message>; 2] = [leaving, coming.into()];
+            iced::widget::Stack::with_children(layers).into()
+        });
+        panel::frame(self.unfold.panel(content, (1.0, 0.0)), self.panel_margins)
+    }
+
+    /// The glass of `which`, without its motion.
+    fn panel_view(&self, which: Panel) -> Element<'_, Message> {
+        match which {
             Panel::Control => {
                 let battery = self.battery.flatten();
                 let quick = self.quick.view(&self.user, battery).map(Message::Quick);
@@ -692,8 +807,7 @@ impl Bar {
                 .spacing(panels::PANEL_GAP)
                 .into()
             }
-        });
-        panel::frame(self.unfold.panel(content), self.panel_margins)
+        }
     }
 
     pub fn view_bar(&self) -> Element<'_, Message> {
@@ -838,29 +952,38 @@ impl Bar {
     }
 
     pub fn view_menu(&self) -> Element<'_, Message> {
-        let mut entries = vec![
-            ui::menu_header(self.user.as_str(), strings::top_bar::SESSION_OPEN),
-            ui::menu_separator(),
-        ];
-        for (i, action) in Action::ALL.into_iter().enumerate() {
-            if action.starts_group() {
-                entries.push(ui::menu_separator());
+        // Built inside the fade, for the colors its texts take when they are built.
+        let panel = color::with_opacity(self.menu_unfold.opacity(), || {
+            let mut entries = vec![
+                ui::menu_header(self.user.as_str(), strings::top_bar::SESSION_OPEN),
+                ui::menu_separator(),
+            ];
+            for (i, action) in Action::ALL.into_iter().enumerate() {
+                if action.starts_group() {
+                    entries.push(ui::menu_separator());
+                }
+                let mut item = ui::menu_item(
+                    action.label(),
+                    action.trailing(),
+                    Some(Message::Activate(action)),
+                );
+                if self.cursor == Some(i) {
+                    item = ui::open(item);
+                }
+                entries.push(mouse_area(item).on_enter(Message::Hover(i)).into());
             }
-            let mut item = ui::menu_item(
-                action.label(),
-                action.trailing(),
-                Some(Message::Activate(action)),
-            );
-            if self.cursor == Some(i) {
-                item = ui::open(item);
-            }
-            entries.push(mouse_area(item).on_enter(Message::Hover(i)).into());
-        }
-        let panel = ui::menu(entries, metrics::MENU_WIDTH).height(Length::Fill);
-        let panel = surface::shadowed(panel, metrics::MENU_RADIUS, Elevation::Menu);
+            let panel = ui::menu(entries, metrics::MENU_WIDTH).height(Length::Fill);
+            opaque(surface::shadowed(
+                panel,
+                metrics::MENU_RADIUS,
+                Elevation::Menu,
+            ))
+        });
+        // It unfolds from its top left corner, under the Sherlock button.
+        let panel = self.menu_unfold.panel(panel, (0.0, 0.0));
         // A click on the shadow, outside the menu, closes it like a click elsewhere, for a
         // compositor that would ignore the input region.
-        let surface = container(opaque(panel)).padding(self.menu_margins);
+        let surface = container(panel).padding(self.menu_margins);
         mouse_area(surface)
             .on_press(Message::MenuKey(menu::Key::Close))
             .into()
@@ -1188,6 +1311,63 @@ mod tests {
         let _ = bar.update(Message::TogglePanel(Panel::Control));
         let _ = bar.update(Message::TogglePanel(Panel::Calendar));
         assert_eq!(bar.panel_open(), Some(Panel::Calendar));
+    }
+
+    /// On the GPU the control centre turns into the calendar and back in the same popup, a
+    /// motion that runs then rests; in software the other panel replaces it at once.
+    #[test]
+    fn the_control_centre_turns_into_the_calendar_in_the_same_popup() {
+        let second = std::time::Duration::from_secs(2);
+        let mut bar = with_surface(true);
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        let _ = frame_in(&mut bar, second);
+        let popup = bar.panel_surface();
+        assert!(popup.is_some() && !bar.animating());
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert_eq!(bar.panel_surface(), popup, "the same popup");
+        assert_eq!(bar.panel_open(), Some(Panel::Calendar));
+        assert!(matches!(bar.swap, Some((Panel::Control, _))));
+        assert!(bar.animating(), "frames while it turns");
+        // And back, from the calendar to the control centre.
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        assert_eq!(bar.panel_surface(), popup);
+        assert!(matches!(bar.swap, Some((Panel::Calendar, _))));
+        let _ = frame_in(&mut bar, second);
+        assert_eq!(bar.swap, None);
+        assert!(!bar.animating(), "no frame at rest");
+        assert_eq!(bar.panel_open(), Some(Panel::Control));
+
+        let mut bar = with_surface(false);
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        let popup = bar.panel_surface();
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert_ne!(bar.panel_surface(), popup, "a popup of its own size");
+        assert_eq!(bar.swap, None);
+    }
+
+    /// The Sherlock menu unfolds and folds back on the GPU before its popup closes.
+    #[test]
+    fn the_menu_folds_back_before_it_closes() {
+        let second = std::time::Duration::from_secs(2);
+        let mut bar = with_surface(true);
+        let _ = bar.update(Message::ToggleMenu);
+        assert!(bar.menu_open() && bar.animating());
+        let _ = frame_in(&mut bar, second);
+        assert!(!bar.animating());
+        let _ = bar.update(Message::ToggleMenu);
+        assert!(bar.menu_open(), "still there while it folds");
+        assert!(bar.menu_unfold.folding());
+        // Clicked again: it unfolds again in the same popup.
+        let _ = bar.update(Message::ToggleMenu);
+        assert!(!bar.menu_unfold.folding());
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        let closed = frame_in(&mut bar, second);
+        assert!(closed.units() > 0);
+        assert!(!bar.menu_open() && !bar.animating());
+        // A panel opening takes the menu away at once: one grab at a time.
+        let _ = bar.update(Message::ToggleMenu);
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert!(!bar.menu_open());
     }
 
     #[test]

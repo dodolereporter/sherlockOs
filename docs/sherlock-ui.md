@@ -657,10 +657,53 @@ middle of a letter, small icons, and pointers that did not change.
   cross-fades a new document over `motion::GLYPH_FADE` and cycles several every
   `motion::PULSE` (400 ms), asking for the next step at its time; the battery uses it too.
 
+### Audit of the design system (UI-01)
+
+The boards draw few controls (buttons, toggles, a slider, a segmented control, menus, a field,
+badges, progress bars); none draws a hover, a press or a motion. What the library had, what it
+lacked, and what UI-01 did:
+
+| Component | Before UI-01 | Missing | UI-01 |
+| --- | --- | --- | --- |
+| Toggle | `toggle`, state switched at once | Motion | Knob on a spring, track faded, hover, stretched knob on press (`animated::Switch`) |
+| Check box | None | All | `checkbox`: box filling green, check fading in (`controls::check`) |
+| Radio button | None | All | `radio`: ring filling green, dot growing (`controls::radio`) |
+| Slider | In `panels` only | A component of its own, pointer shapes | `component::slider`, styles in `theme::slider` and `rail_off`; open then closed hand, forbidden sign disabled |
+| Text field | `text_field`, `search_field` | Text cursor, forbidden sign disabled | Text cursor (iced); `pointer::disabled` for a disabled one |
+| Buttons | Hover veil faded on ghost buttons only | Press, filled buttons, focus kept | Press faded (90 ms) on every button, filled ones (primary, chips, segments) fade from their color; focus ring unchanged; disabled: forbidden sign |
+| Menu | `menu`, `menu_item`, submenu | Long labels, opening | Labels cut with « … »; the bar's menu unfolds and folds back (UI-01b) |
+| Tooltip | Label of `icon_button`, iced's tooltip | Motion | Unchanged: iced 0.14's tooltip shows at once; a fade would need a tooltip of our own |
+| Segmented control | In `panels`, chosen segment switched at once | Motion | `component::segmented`: the cream thumb slides on a spring (`controls::thumb`) |
+| List | Evidence's rows, `nav_item` | A general entry | `list_item`: icon, title cut with « … », second line, trailing element |
+| Badge | `badge`, three tones | Nothing | Unchanged |
+| Progress bar | None (boards Demarrage, InstalleurInstallation) | All | `progress_bar`: the Demarrage board's 5 px rail, fill following its value on a spring |
+| Loading indicator | None | All | `spinner`: a green arc turning once every 900 ms (`motion::SPIN`), the only control drawing while still |
+| Text | `body`, clipped by its container | « … » | `ellipsis` (UI-01a) |
+
+Each one in its states, dark then light (`tests/gallery.rs`, `each_component_renders_in_both_themes`):
+
+| Component | Dark | Light |
+| --- | --- | --- |
+| Buttons | ![](sherlock-ui/components/buttons.png) | ![](sherlock-ui/components/buttons-light.png) |
+| Toggles | ![](sherlock-ui/components/toggle.png) | ![](sherlock-ui/components/toggle-light.png) |
+| Check boxes | ![](sherlock-ui/components/checkbox.png) | ![](sherlock-ui/components/checkbox-light.png) |
+| Radio buttons | ![](sherlock-ui/components/radio.png) | ![](sherlock-ui/components/radio-light.png) |
+| Sliders | ![](sherlock-ui/components/slider.png) | ![](sherlock-ui/components/slider-light.png) |
+| Segmented control | ![](sherlock-ui/components/segmented.png) | ![](sherlock-ui/components/segmented-light.png) |
+| Progress bars | ![](sherlock-ui/components/progress.png) | ![](sherlock-ui/components/progress-light.png) |
+| Loading indicator | ![](sherlock-ui/components/spinner.png) | ![](sherlock-ui/components/spinner-light.png) |
+| Text fields | ![](sherlock-ui/components/text-field.png) | ![](sherlock-ui/components/text-field-light.png) |
+| Menu | ![](sherlock-ui/components/menu.png) | ![](sherlock-ui/components/menu-light.png) |
+| List | ![](sherlock-ui/components/list.png) | ![](sherlock-ui/components/list-light.png) |
+| Badges | ![](sherlock-ui/components/badges.png) | ![](sherlock-ui/components/badges-light.png) |
+| Tooltip | ![](sherlock-ui/components/tooltip.png) | ![](sherlock-ui/components/tooltip-light.png) |
+| Ellipsis | ![](sherlock-ui/components/ellipsis.png) | ![](sherlock-ui/components/ellipsis-light.png) |
+
+The gallery shows the new components live (« Composants ajoutés par UI-01 »), and its table of
+states gains the check box, the radio button and the workspace chip.
+
 ## What the lot does not do
 
-- Animated components: the springs and the fade are in `motion` since D-11, to be wired to the
-  hovers and the transitions of the components.
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like
   the board.
 - (D-20) layer-shell and the real placement of a menu live in the bar: see `docs/bar.md`,

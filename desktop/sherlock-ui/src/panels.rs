@@ -74,6 +74,10 @@ pub const OPEN_FADE: std::time::Duration = motion::FADE;
 /// A page that replaces another in a panel (the Wi-Fi networks): it slides in from 24 on its
 /// side, on the same spring and fade.
 pub const PAGE_SLIDE: f32 = 24.0;
+/// The control centre turning into the calendar or back (UI-01): each slides by this much, one
+/// out, the other in, while a mask goes from the height of one to the other's. 12, the room
+/// between the panels and the edge of the screen: nothing leaves the surface.
+pub const SWITCH_SLIDE: f32 = metrics::TOP_BAR_MARGIN_SIDE;
 /// A tile switched on or off: its colors mix over a hover's duration.
 pub const TILE_FADE: std::time::Duration = motion::FADE;
 
@@ -743,100 +747,11 @@ mod styles {
             .into()
     }
 
-    /// A segment of a segmented control: cream when chosen, as the board's « Auto ».
-    fn segment_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-        move |theme, status| {
-            let p = theme::palette(theme);
-            let (back, ink) = match (active, status) {
-                (_, button::Status::Disabled) => (None, p.text_tertiary),
-                (true, _) => (Some(p.cream), p.text_on_cream),
-                (false, button::Status::Hovered) => (Some(p.hover), p.text_primary),
-                (false, button::Status::Pressed) => (Some(p.pressed), p.text_primary),
-                (false, button::Status::Active) => (None, p.text_secondary),
-            };
-            button::Style {
-                background: back.and_then(fill),
-                text_color: ink.into(),
-                border: border::rounded(SEGMENT_RADIUS),
-                ..button::Style::default()
-            }
-        }
-    }
-
-    fn segmented_track(theme: &Theme) -> container::Style {
-        let p = theme::palette(theme);
-        container::Style {
-            background: fill(Colors::of(p).control),
-            border: border::rounded(SEGMENTED_RADIUS),
-            ..container::Style::default()
-        }
-    }
-
-    /// A segmented control of the board: each choice with its label, whether it is the active
-    /// one, and what choosing it does (nothing when it cannot be chosen).
+    /// A segmented control of the board: see `component::segmented`.
     pub fn segmented<'a, Message: Clone + 'a>(
         choices: Vec<(&'a str, bool, Option<Message>)>,
     ) -> Element<'a, Message> {
-        let segments = choices.into_iter().map(|(label, active, on_press)| {
-            let font = if active {
-                typography::UI_SEMIBOLD
-            } else {
-                typography::UI
-            };
-            let label = crate::component::body(label).font(font);
-            let content = container(label).center(Length::Fill);
-            let style = segment_style(active);
-            let mut control = Control::new(content, style, on_press, SEGMENT_RADIUS);
-            control.button = control
-                .button
-                .width(Length::Fill)
-                .height(SEGMENT_HEIGHT)
-                .padding(0);
-            control.into()
-        });
-        container(iced::widget::Row::with_children(segments).spacing(SEGMENT_GAP))
-            .padding(SEGMENTED_PADDING)
-            .width(Length::Fill)
-            .style(segmented_track)
-            .into()
-    }
-
-    /// The slider of the board: a green rail up to the value, a veiled one after it.
-    fn slider_style(
-        theme: &Theme,
-        status: iced::widget::slider::Status,
-    ) -> iced::widget::slider::Style {
-        use iced::widget::slider::{Handle, HandleShape, Rail, Status};
-        let p = theme::palette(theme);
-        let handle = match status {
-            Status::Active => p.accent,
-            Status::Hovered => p.accent_hover,
-            Status::Dragged => p.accent_pressed,
-        };
-        iced::widget::slider::Style {
-            rail: Rail {
-                backgrounds: (
-                    Background::Color(p.accent.into()),
-                    Background::Color(p.toggle_off.into()),
-                ),
-                width: RAIL,
-                border: border::rounded(RAIL / 2.0),
-            },
-            handle: Handle {
-                shape: HandleShape::Circle { radius: HANDLE },
-                background: Background::Color(handle.into()),
-                border_width: 0.0,
-                border_color: iced::Color::TRANSPARENT,
-            },
-        }
-    }
-
-    fn rail_off(theme: &Theme) -> container::Style {
-        container::Style {
-            background: fill(theme::palette(theme).disabled),
-            border: border::rounded(RAIL / 2.0),
-            ..container::Style::default()
-        }
+        crate::component::segmented(choices)
     }
 
     /// A row of the board: its button or icon, then a slider from 0 to 100. Without
@@ -846,20 +761,7 @@ mod styles {
         value: u8,
         on_change: Option<fn(u8) -> Message>,
     ) -> Element<'a, Message> {
-        let control: Element<'a, Message> = match on_change {
-            Some(on_change) => iced::widget::slider(0..=100u8, value, on_change)
-                .style(slider_style)
-                .width(Length::Fill)
-                .into(),
-            None => {
-                let rail = container(iced::widget::space())
-                    .width(Length::Fill)
-                    .height(RAIL)
-                    .style(rail_off);
-                // The forbidden sign over the whole row's height, not the 4 of the rail.
-                crate::pointer::disabled(container(rail).center_y(ROW_BUTTON)).into()
-            }
-        };
+        let control = crate::component::slider(value, on_change);
         iced::widget::row![leading.into(), control]
             .spacing(SLIDER_GAP)
             .align_y(iced::Alignment::Center)

@@ -93,6 +93,7 @@ pub struct Hoverable<'a, Message> {
     radius: f32,
     key: Option<u64>,
     pressed: Option<Color>,
+    rest: Option<Color>,
     open: Option<(bool, Color)>,
     mark: Option<Color>,
     press_scale: f32,
@@ -110,6 +111,7 @@ pub fn hoverable<'a, Message>(
         radius,
         key: None,
         pressed: None,
+        rest: None,
         open: None,
         mark: None,
         press_scale: 1.0,
@@ -128,6 +130,13 @@ impl<Message> Hoverable<'_, Message> {
     /// The veil while a mouse button is held on it, reached over `motion::PRESS_FADE`.
     pub fn pressed(mut self, fill: Color) -> Self {
         self.pressed = Some(fill);
+        self
+    }
+
+    /// The color at rest of a filled control (a primary button, a chip): the hover and press
+    /// colors fade from it instead of from nothing.
+    pub fn rest(mut self, fill: Color) -> Self {
+        self.rest = Some(fill);
         self
     }
 
@@ -212,7 +221,7 @@ fn faded(fill: Color, share: f32) -> Color {
     }
 }
 
-fn veil(renderer: &mut Renderer, bounds: Rectangle, radius: f32, fill: Color) {
+pub(crate) fn veil(renderer: &mut Renderer, bounds: Rectangle, radius: f32, fill: Color) {
     if fill.a <= 0.0 {
         return;
     }
@@ -362,9 +371,13 @@ impl<Message> Widget<Message, Theme, Renderer> for Hoverable<'_, Message> {
         }
         let hover = state.value(now);
         let press = state.press.value(now);
-        let fill = match self.pressed {
-            Some(pressed) => faded(self.fill, hover).lerp(pressed, press),
+        let base = match self.rest {
+            Some(rest) => rest.lerp(self.fill, hover),
             None => faded(self.fill, hover),
+        };
+        let fill = match self.pressed {
+            Some(pressed) => base.lerp(pressed, press),
+            None => base,
         };
         veil(renderer, bounds, self.radius, fill);
         if let (Some(tint), true) = (self.mark, open > 0.0) {
@@ -434,6 +447,22 @@ pub struct Reveal<'a, Message> {
     scale: f32,
     /// The point the scale keeps in place, as a share of the width and the height.
     origin: (f32, f32),
+    clip: Clip,
+    /// Drawn only: it takes no input and no focus (a page on its way out).
+    inert: bool,
+}
+
+/// How far a mask cut below only reaches above and on the sides: beyond any surface.
+const UNCUT: f32 = 1.0e4;
+
+/// Where a moving `Reveal` is cut, so that nothing it draws leaves its panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Clip {
+    None,
+    /// Its bounds grown by this much on every side, while it moves.
+    Margin(f32),
+    /// Down to this height from the top of its bounds, nothing cut above nor on the sides.
+    Height(f32),
 }
 
 /// `content` at rest; see the setters.
@@ -444,6 +473,8 @@ pub fn reveal<'a, Message>(content: impl Into<Element<'a, Message>>) -> Reveal<'
         offset: Vector::ZERO,
         scale: 1.0,
         origin: (0.5, 0.0),
+        clip: Clip::None,
+        inert: false,
     }
 }
 
@@ -463,6 +494,43 @@ impl<Message> Reveal<'_, Message> {
         self.scale = scale;
         self.origin = origin;
         self
+    }
+
+    /// While it moves, nothing is drawn further than `margin` from its bounds: a page that
+    /// slides stays inside the glass of its panel, its padding being `margin`.
+    pub fn clip_margin(mut self, margin: f32) -> Self {
+        self.clip = Clip::Margin(margin);
+        self
+    }
+
+    /// Nothing is drawn below `height` from its top, everything above and on its sides: a panel
+    /// unfolding by a mask, its shadow and its sides left whole.
+    pub fn clip_height(mut self, height: f32) -> Self {
+        self.clip = Clip::Height(height);
+        self
+    }
+
+    /// Drawn only, without input nor focus: a page or a panel on its way out.
+    pub fn inert(mut self) -> Self {
+        self.inert = true;
+        self
+    }
+
+    /// The area it is cut to, if any, for its bounds.
+    fn clip_area(&self, bounds: Rectangle) -> Option<Rectangle> {
+        let moving = self.offset != Vector::ZERO || self.scale != 1.0;
+        match self.clip {
+            Clip::Margin(margin) if moving => Some(bounds.expand(margin)),
+            // Cut below only: above and on the sides, everything it draws stays, a panel moving
+            // sideways and its shadow included.
+            Clip::Height(height) => Some(Rectangle {
+                x: bounds.x - UNCUT,
+                y: bounds.y - UNCUT,
+                width: bounds.width + 2.0 * UNCUT,
+                height: UNCUT + height.max(0.0),
+            }),
+            Clip::Margin(_) | Clip::None => None,
+        }
     }
 
     /// Where the content is drawn: from its bounds to the screen.
@@ -508,6 +576,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        if self.inert {
+            return;
+        }
         self.content
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
@@ -524,6 +595,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if self.inert {
+            return;
+        }
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -544,6 +618,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        if self.inert {
+            return mouse::Interaction::None;
+        }
         self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -579,11 +656,18 @@ impl<Message> Widget<Message, Theme, Renderer> for Reveal<'_, Message> {
                 );
             });
         };
-        if self.offset == Vector::ZERO && self.scale == 1.0 {
-            draw(renderer);
-        } else {
-            let moved = self.transformation(layout.bounds());
-            iced::advanced::Renderer::with_transformation(renderer, moved, draw);
+        let bounds = layout.bounds();
+        let placed = |renderer: &mut Renderer| {
+            if self.offset == Vector::ZERO && self.scale == 1.0 {
+                draw(renderer);
+            } else {
+                let moved = self.transformation(bounds);
+                iced::advanced::Renderer::with_transformation(renderer, moved, draw);
+            }
+        };
+        match self.clip_area(bounds) {
+            Some(area) => iced::advanced::Renderer::with_layer(renderer, area, placed),
+            None => placed(renderer),
         }
     }
 
@@ -1096,6 +1180,39 @@ mod tests {
         let half = state.open.map_or(0.0, |l| l.value(120 * MS));
         assert!(half > 0.0 && half < 1.0, "{half}");
         assert!(!state.tick(100 * MS + motion::FADE));
+    }
+
+    #[test]
+    fn a_moving_page_is_cut_to_its_panel_and_a_mask_to_its_height() {
+        let bounds = Rectangle::new(Point::new(15.0, 15.0), Size::new(306.0, 400.0));
+        let page = || reveal::<()>(iced::widget::space()).clip_margin(14.0);
+        // At rest nothing is cut: no layer to draw.
+        assert_eq!(page().clip_area(bounds), None);
+        let moving = page().offset(24.0, 0.0).clip_area(bounds);
+        assert_eq!(
+            moving,
+            Some(Rectangle::new(
+                Point::new(1.0, 1.0),
+                Size::new(334.0, 428.0)
+            ))
+        );
+        // A mask cuts below only: a panel that slides sideways keeps its edges, its corners and
+        // its shadow, wherever its surface holds them.
+        let mask = reveal::<()>(iced::widget::space())
+            .offset(12.0, 0.0)
+            .clip_height(120.0);
+        let Some(area) = mask.clip_area(bounds) else {
+            panic!("a mask cuts");
+        };
+        assert_eq!(area.y + area.height, bounds.y + 120.0);
+        let surface = Rectangle::new(Point::ORIGIN, Size::new(418.0, 773.0));
+        assert!(area.x <= surface.x && area.y <= surface.y);
+        assert!(area.x + area.width >= surface.x + surface.width);
+        let beyond = reveal::<()>(iced::widget::space()).clip_height(900.0);
+        assert_eq!(
+            beyond.clip_area(bounds).map(|a| a.y + a.height),
+            Some(915.0)
+        );
     }
 
     #[test]

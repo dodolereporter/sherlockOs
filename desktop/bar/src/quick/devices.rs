@@ -15,17 +15,12 @@ use super::{Message, Page, Quick, Service, act, notice, on_system};
 use crate::system::Problem;
 use crate::system::bluetooth::{self, Asked, Device, Kind, Pairing};
 use crate::system::{self};
-use crate::unfold::Unfold;
 
 impl Quick {
     /// Opens the list of devices and starts a scan, or goes back and stops it.
     pub(super) fn show_devices(&mut self, show: bool) -> Task<Message> {
         let page = if show { Page::Devices } else { Page::Main };
-        if page != self.page {
-            self.page_motion = Unfold::opening(self.now);
-            self.page_forward = show;
-        }
-        self.page = page;
+        self.turn_page(page, show);
         self.forgetting = None;
         if show {
             self.start_scan()

@@ -9,15 +9,17 @@ use std::path::PathBuf;
 use iced::advanced::clipboard;
 use iced::advanced::widget::{Operation, operation};
 use iced::keyboard::{self, Key, key::Named};
+use iced::widget::{button, column, row};
 use iced::{Element, Event, Pixels, Settings, Size, mouse};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use iced_test::simulator;
 use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::icon::Icon;
 use sherlock_ui::{color, metrics, theme, typography};
 use view::{Gallery, Message};
 
 /// Height that shows the whole gallery at once, logos included.
-const FULL_HEIGHT: f32 = 2400.0;
+const FULL_HEIGHT: f32 = 2900.0;
 
 fn settings() -> Settings {
     Settings {
@@ -60,6 +62,179 @@ fn the_gallery_renders_headless_in_both_themes() {
             "snapshot too small for a gallery: {size} bytes"
         );
         println!("snapshot: {}", written.display());
+    }
+    color::set_active(color::Theme::Dark);
+}
+
+/// Each component of the design system on its own, in its states, in each theme (UI-01): into
+/// `target/tmp/components/<name>-tiny-skia.png` and `<name>-light-tiny-skia.png`, at scale 2.
+/// The documentation keeps a copy in `docs/sherlock-ui/components/`.
+#[test]
+fn each_component_renders_in_both_themes() {
+    type Sample = fn() -> iced::Element<'static, Message>;
+    let samples: [(&str, Sample); 14] = [
+        ("buttons", || {
+            let act = Some(Message::Action("bouton"));
+            row![
+                ui::primary_button("Relancer", act.clone()),
+                ui::secondary_button("Voir les logs", act.clone()),
+                ui::danger_button("Vider", act),
+                ui::primary_button("Désactivé", None),
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("toggle", || {
+            row![
+                ui::toggle(false, Some(Message::Quiet)),
+                ui::toggle(true, Some(Message::Quiet)),
+                ui::toggle(true, None),
+                ui::toggle(true, Some(Message::Quiet)).status(button::Status::Pressed),
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("checkbox", || {
+            row![
+                ui::checkbox("Non cochée", false, Some(Message::Quiet)),
+                ui::checkbox("Cochée", true, Some(Message::Quiet)),
+                ui::checkbox("Désactivée", true, None),
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("radio", || {
+            let pick = Some(Message::Action("radio"));
+            row![
+                ui::radio("Automatique", true, pick.clone()),
+                ui::radio("Toujours", false, pick),
+                ui::radio("Jamais", false, None),
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("slider", || {
+            column![ui::slider(62, Some(Message::Volume)), ui::slider(30, None)]
+                .spacing(metrics::GAP_INLINE)
+                .into()
+        }),
+        ("segmented", || {
+            let pick = Some(Message::Segment(0));
+            ui::segmented(vec![
+                ("Économie", false, pick.clone()),
+                ("Équilibré", true, pick),
+                ("Performance", false, None),
+            ])
+        }),
+        ("progress", || {
+            column![
+                ui::progress_bar(0.0),
+                ui::progress_bar(0.38),
+                ui::progress_bar(1.0)
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("spinner", || {
+            row![
+                ui::spinner(metrics::SPINNER),
+                ui::description("Recherche des réseaux…")
+            ]
+            .spacing(metrics::GAP_ICON)
+            .align_y(iced::Alignment::Center)
+            .into()
+        }),
+        ("text-field", || {
+            column![
+                ui::text_field("Rechercher un réglage", "", Some(Message::Search)),
+                ui::text_field("Mot de passe", "Wi-Fi", Some(Message::Search)),
+                ui::text_field("Désactivé", "", None),
+            ]
+            .spacing(metrics::GAP_INLINE)
+            .into()
+        }),
+        ("menu", || {
+            let act = Some(Message::Action("menu"));
+            ui::menu(
+                [
+                    ui::menu_item("Réduire", Trailing::Shortcut("Super+M"), act.clone()).into(),
+                    ui::open(ui::menu_item(
+                        "Déplacer vers le bureau",
+                        Trailing::Submenu,
+                        act.clone(),
+                    ))
+                    .into(),
+                    ui::menu_separator(),
+                    ui::menu_item(
+                        "Un réseau au nom bien trop long pour ce menu",
+                        Trailing::Checked,
+                        act,
+                    )
+                    .into(),
+                ],
+                metrics::MENU_WIDTH,
+            )
+            .into()
+        }),
+        ("list", || {
+            column![
+                ui::list_item(
+                    Icon::Folder,
+                    "Projets",
+                    Some("12 éléments"),
+                    None,
+                    Some(Message::Action("liste"))
+                ),
+                ui::list_item(
+                    Icon::Document,
+                    "Rapport annuel de la résidence des Lilas, version finale.pdf",
+                    Some("Hier à 18:04"),
+                    None,
+                    Some(Message::Action("liste"))
+                ),
+            ]
+            .into()
+        }),
+        ("badges", || {
+            row![
+                ui::badge("Modifié", theme::Tone::Warning, false),
+                ui::badge("Nouveau", theme::Tone::Success, false),
+                ui::badge("Ignoré", theme::Tone::Neutral, false),
+            ]
+            .spacing(metrics::GAP_TIGHT * 3.0)
+            .into()
+        }),
+        ("tooltip", || {
+            iced::widget::container(ui::body("Fermer"))
+                .padding(metrics::MENU_PADDING)
+                .style(theme::tooltip)
+                .into()
+        }),
+        ("ellipsis", || {
+            column![
+                ui::ellipsis("Livebox-Résidence-des-Lilas-étage-3-5GHz").width(180.0),
+                ui::ellipsis("Maison").width(180.0),
+            ]
+            .into()
+        }),
+    ];
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("components");
+    std::fs::create_dir_all(&dir).expect("folder of the captures");
+    for (which, suffix) in [(color::Theme::Dark, ""), (color::Theme::Light, "-light")] {
+        color::set_active(which);
+        for (name, sample) in samples {
+            let page = iced::widget::container(sample())
+                .padding(metrics::GAP_SECTION)
+                .width(iced::Length::Fill)
+                .height(iced::Length::Fill)
+                .style(theme::desktop);
+            let mut ui = simulator::Simulator::with_size(settings(), (560.0, 150.0), page);
+            let snapshot = ui.snapshot(&theme::theme()).expect("snapshot");
+            let path = dir.join(format!("{name}{suffix}.png"));
+            // An image already there would be compared rather than written again.
+            let _ = std::fs::remove_file(dir.join(format!("{name}{suffix}-tiny-skia.png")));
+            assert!(snapshot.matches_image(&path).expect("writing the snapshot"));
+        }
     }
     color::set_active(color::Theme::Dark);
 }

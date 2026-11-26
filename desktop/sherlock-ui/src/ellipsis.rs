@@ -155,6 +155,8 @@ impl<Message> Widget<Message, Theme, Renderer> for Ellipsis<'_> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<State>();
+        // A fixed width is the room the text gets.
+        let limits = limits.width(self.width);
         let max = limits.max();
         let key = (
             self.content.to_string(),
