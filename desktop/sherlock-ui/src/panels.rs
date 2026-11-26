@@ -232,10 +232,13 @@ impl Glyph {
     }
 }
 
-/// Ghost button around the clock and around the indicators of the bar: its side padding. The
-/// bar takes it back from its gaps, so that nothing moves.
-pub const BAR_BUTTON_PADDING: f32 = 6.0;
-pub const BAR_BUTTON_HEIGHT: f32 = 28.0;
+/// Ghost button around the clock and around each indicator of the bar: its side padding and
+/// height. The bar takes the padding back from its gaps. UI-01 makes the hit area wider and
+/// taller than D-20's (6 and 28): the whole height of the bar but the border and 2 around.
+pub const BAR_BUTTON_PADDING: f32 = 7.0;
+pub const BAR_BUTTON_HEIGHT: f32 = 30.0;
+/// A bar button pressed shrinks a little, around its centre.
+pub const BAR_PRESS_SCALE: f32 = 0.94;
 
 // Colors.
 
@@ -448,6 +451,7 @@ mod styles {
 
     use super::*;
     use crate::component::Control;
+    use crate::ellipsis::ellipsis;
     use crate::theme;
 
     fn fill(c: Color) -> Option<Background> {
@@ -547,8 +551,9 @@ mod styles {
         control
     }
 
-    /// Ghost button of the top bar around the clock or the indicators: veiled on hover, and
-    /// while its panel is open, like the Sherlock button.
+    /// Ghost button of the top bar around the clock or an indicator: a pill fades in on
+    /// hover and deepens on press, the content shrinks a little while pressed, and while its
+    /// panel is open it keeps a veil and a green mark under it, which fade in and out.
     pub fn bar_button<'a, Message: Clone + 'a>(
         content: impl Into<Element<'a, Message>>,
         open: bool,
@@ -557,7 +562,7 @@ mod styles {
         let content = container(content).center_y(Length::Fill);
         let mut control = Control::new(
             content,
-            theme::sherlock_button(open),
+            theme::sherlock_button(false),
             on_press,
             metrics::SHERLOCK_BUTTON_RADIUS,
         );
@@ -565,6 +570,8 @@ mod styles {
             .button
             .height(BAR_BUTTON_HEIGHT)
             .padding([0.0, BAR_BUTTON_PADDING]);
+        control.open = Some(open);
+        control.press_scale = BAR_PRESS_SCALE;
         control
     }
 
@@ -697,19 +704,19 @@ mod styles {
         } else {
             (p.text_tertiary, p.text_tertiary)
         };
+        // A long network name ends with « … » rather than being cut.
         let texts = iced::widget::column![
-            text(title)
+            ellipsis(title)
                 .font(typography::UI_SEMIBOLD)
                 .color(ink)
-                .wrapping(text::Wrapping::None),
-            text(line)
-                .font(typography::UI)
+                .width(Length::Fill),
+            ellipsis(line)
                 .size(typography::SMALL_SIZE)
                 .color(under)
-                .wrapping(text::Wrapping::None),
+                .width(Length::Fill),
         ];
         let icon = glyph_sized(glyph_of, ink, TILE_GLYPH);
-        let content = iced::widget::row![icon, container(texts).clip(true)]
+        let content = iced::widget::row![icon, texts]
             .spacing(TILE_ICON_GAP)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);
@@ -844,11 +851,14 @@ mod styles {
                 .style(slider_style)
                 .width(Length::Fill)
                 .into(),
-            None => container(iced::widget::space())
-                .width(Length::Fill)
-                .height(RAIL)
-                .style(rail_off)
-                .into(),
+            None => {
+                let rail = container(iced::widget::space())
+                    .width(Length::Fill)
+                    .height(RAIL)
+                    .style(rail_off);
+                // The forbidden sign over the whole row's height, not the 4 of the rail.
+                crate::pointer::disabled(container(rail).center_y(ROW_BUTTON)).into()
+            }
         };
         iced::widget::row![leading.into(), control]
             .spacing(SLIDER_GAP)
@@ -913,16 +923,14 @@ mod styles {
         let p = crate::color::palette();
         let start = iced::widget::row![
             glyph(glyph_of, p.text_secondary),
-            crate::component::body(name).wrapping(text::Wrapping::None),
+            ellipsis(name).width(Length::Fill),
         ]
         .spacing(metrics::GAP_ICON)
         .align_y(iced::Alignment::Center);
-        let end = text(line)
-            .font(typography::UI)
+        let end = ellipsis(line)
             .size(typography::SMALL_SIZE)
-            .color(p.text_tertiary)
-            .wrapping(text::Wrapping::None);
-        let content = iced::widget::row![container(start).width(Length::Fill).clip(true), end]
+            .color(p.text_tertiary);
+        let content = iced::widget::row![container(start).width(Length::Fill), end]
             .spacing(metrics::GAP_INLINE)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);

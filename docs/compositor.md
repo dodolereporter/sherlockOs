@@ -109,6 +109,24 @@ Moving and resizing:
 - Only the release of the button that started the gesture ends it. Other buttons go to the
   seat, with no client to receive them.
 - A fullscreen window is neither moved nor resized by a gesture, and has no band.
+- **Never under the top bar (lot C-01).** As on macOS, a moved window stops with its top, its
+  title bar when the compositor draws one, at the top of the work area: under the bar, never
+  behind it, where it could no longer be grabbed. During the drag and at the drop
+  (`State::below_top_bar`), whatever moves it: its title bar, the gesture key, a client's
+  `xdg_toplevel.move`, an X11 `_NET_WM_MOVERESIZE`. Pulling its top edge stops there too. A
+  client that draws its own title bar stops with its top edge there. When another screen lies
+  just above, the window may go there. An X11 window does not place itself: the place of its
+  configure requests is not taken (see "XWayland"). A floating window that a new exclusive
+  zone covers (the bar starting after it) comes down under it.
+- **The way back for a lost window.** With the gesture key, a press goes to the window under
+  an anchored surface of the top layer (bar, dock) instead of the surface: gesture key + drag
+  takes back a window under the bar. The overlay layer (lock screen) keeps its presses.
+- **Never larger than the screen.** The first configure gives the work area, less the title
+  bar, as the bounds of the window (`xdg_toplevel.configure_bounds`). A first content larger
+  than that (Konsole keeps a size per screen size, and opened 1450 × 888 on a screen of
+  1280 × 800 in a test, its bottom corners off the screen) is asked to fit, once, and the window
+  shows at its next content, its corners in reach. An X11 window gets the fitted size on its
+  map request.
 
 Snapping:
 
@@ -984,18 +1002,50 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
 the three choices, by these names (`genie::Effect` reads them). `none` hides and shows the window
 at once, as before this lot. A change applies to the next minimize; an effect running goes on.
 
-### Opening and closing (lot D-34)
+### Opening and closing (lots D-34, C-01)
 
-As on macOS: a window that opens grows from `OPEN_SCALE` (0.92) to 1 around its center on
-`WINDOW_OPEN_SPRING`, critically damped (no bounce, 90 % of the way in 155 ms, settled in about
-250), and fades in over `WINDOW_OPEN_FADE` (200 ms). A window that closes shrinks back to 0.92
-and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
+As on macOS. A window that opens grows from `WINDOW_OPEN_SCALE` (0.90) to 1 around the center
+of the whole window and goes from transparent to opaque, both over `WINDOW_OPEN` (250 ms) on
+`WINDOW_OPEN_EASE`, a cubic ease-out without a bounce: half the way in 50 ms, 94 % in 150. A
+window that closes shrinks to `WINDOW_CLOSE_SCALE` (0.92) and fades out over `WINDOW_CLOSE`
+(180 ms) on `WINDOW_CLOSE_EASE`, a quadratic ease-in (close to CSS `ease-in`), then is freed.
+The durations, scales and curves are in `sherlock_ui::motion`; `src/window_anim.rs` and
+`src/anim.rs`.
 
-![A window halfway through its opening](../desktop/compositor/screenshots/window-opening.png)
+| Opening, at 0, 50, 100, 150, 200 and 250 ms |
+| --- |
+| ![Six steps of the opening](../desktop/compositor/screenshots/window-opening-steps.png) |
 
-- **Before this lot** the opening was already there, on `OPEN_SPRING` and the 150 ms fade of a
-  hover. That fade is cubic, brisk at the start: the window was 70 % opaque after 50 ms, and
-  the spring had made most of its way, so the opening went by in three frames and did not show.
+| Closing, at 0, 36, 72, 108, 144 and 180 ms |
+| --- |
+| ![Six steps of the closing](../desktop/compositor/screenshots/window-closing-steps.png) |
+
+What lot C-01 found, image by image, in D-34's animations, and changed:
+
+- **The title bar did not follow.** The content was scaled around its own center, and the
+  bar of 42 put above it at its full height: the bar shrank in width only and slid over the
+  content. Now the whole window, bar included, is scaled around its center
+  (`anim::scaled_whole`): the bar keeps its share of the height. Its texture is drawn at its
+  size at rest and stretched, so the opening does not draw it again at each frame.
+- **The closing window was cut, not shrunk.** Its last image was drawn into a smaller
+  rectangle without saying which part of the texture to take: smithay then takes the part of
+  the size of the rectangle, from the top left. The window lost its right and bottom edges,
+  its corners and its border, and only its top left corner seemed to move. The whole texture
+  is now stretched into the rectangle.
+- **The shadow did not follow.** Its offset (28) and blur (70) stayed those of the window at
+  rest around a smaller window. They are now multiplied by the scale of the window, opening
+  and closing, and so are its corners.
+- **An empty window could open.** The opening started at the first frame of a window shown,
+  and an X11 window is shown when XWayland gives it its surface, before its first buffer: its
+  title bar opened alone. Nothing is drawn of a window before its client has given a buffer;
+  the opening starts with that first content.
+- **Curves.** The opening was a critically damped spring (no bounce) for the scale with a
+  200 ms fade, and the closing a 150 ms ease-out: it left fast and lingered nearly
+  transparent. Now one timed curve each, an ease-out to open and an ease-in to close.
+- **Scales.** 0.92 to open, now 0.90; 0.92 to close, kept.
+- **No flash.** The first frame of an opening draws nothing (opacity 0), and the window is not
+  drawn before; the test below checks it on the pixels.
+
 - **Closing.** The client has already destroyed its window when the compositor learns it
   (`toplevel_destroyed`, or the unmap of an X11 window): its buffer goes away with its surface.
   Before the window leaves the space, the backend draws it as at rest into a texture of its size
@@ -1005,7 +1055,8 @@ and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
   never during a frame. That texture, the ghost, is drawn in front of the other windows,
   stretched (`render::Item::Snapshot`), with a shadow at its scale. A client that removed its
   content before destroying its window (a null buffer) leaves nothing to draw: the window goes
-  at once.
+  at once. Dialogs are toplevels like the others and close the same way; an X11 window
+  withdrawn while shown too (`tests/xwayland.rs`).
 - **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
   pointer goes through it to what is below. A window that opens takes input at once, as before.
 - **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
@@ -1021,15 +1072,19 @@ and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
 while the session runs, for Control Room. Off, windows appear and go at once. A window already
 closing finishes.
 
-**Tests.** `anim.rs`: the opening grows and fades in without a bounce, still moving at 150 ms,
-settled by 400; a skipped opening shows at once. `window_anim.rs`: the closing shrinks and fades
-in 150 ms. `tests/headless.rs`: a window closing over another one takes no click, the one below
+**Tests.** `motion.rs` (sherlock-ui): the durations, scales and curves. `anim.rs`: the opening
+grows and fades in together without a bounce, still moving at 200 ms, over at 250; the bar
+scales with the window around the center of both; a skipped opening shows at once.
+`window_anim.rs`: the closing shrinks and fades in 180 ms, each step longer than the one
+before. `tests/headless.rs`: a window closing over another one takes no click, the one below
 does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
 and closes at once; so does any window with the setting off.
-`the_opening_and_the_closing_are_drawn_halfway` draws a decorated window halfway through its
-opening and through its closing with Mesa's software renderer, like the genie test, checks the
-pixels and that the ghost's texture is held then freed, and saves `window-opening.png` and
-`window-closing.png` in `target/tmp`.
+`the_opening_and_the_closing_are_drawn_halfway` draws a decorated window through its opening
+and its closing with Mesa's software renderer, like the genie test: nothing at the first frame,
+the top of its bar coming down to its place without passing it, opaque at 250 ms, gone at
+180 ms, and the ghost's texture held then freed. It saves `window-opening.png`,
+`window-closing.png` and the two boards of six steps above (`window-opening-steps.png`,
+`window-closing-steps.png`) in `target/tmp`; the boards are copied into `screenshots/`.
 
 **Manual test.** Nested (`--nested`) or in the real session: open Konsole, a GTK application
 and `xterm`; each grows and fades in. Close them (Super + Q, or their close button): each
@@ -1082,11 +1137,28 @@ window has no bar. Maximized, its corners are square (D-18c1), the bar included.
 **Look.** Like the title bar of Evidence and the boards: `title_bar` background, rounded top
 corners, `divider` line under it; the title on the left from 15 (border and padding of 14), Inter
 13 semibold in `text_primary`, cut with an ellipsis before the buttons; the pill (`controls`,
-radius 9, padding 2) of three buttons of 28 by 24 (radius 7, 2 apart), 9 from the right edge,
-with the icons of `sherlock_ui::icon` (14 px, stroke 1.7, `text_secondary`). A button under the
-pointer takes `hover`, held down `pressed`. Maximized, the maximize button shows the restore icon
+radius 10, padding 2) of three buttons, 9 from the right edge, with the icons of
+`sherlock_ui::icon`. Maximized, the maximize button shows the restore icon
 (`decorations::RESTORE_ICON`). The colors are those of the palette shown, which follows the
 theme with a fade (see "Theme").
+
+**Buttons (lot C-01).** The author found them too small and too still. They are now 32 by 28
+(radius 8, 2 apart; the boards draw 28 by 24), the pill 104 by 32, and their icons 16 px with
+the stroke of 2 of the boards' window buttons (1.3 px), in `text_secondary`. The pointer on the
+pill shows the three icons in `text_primary`, with the fade of a hover (`HOVER_FADE`, 150 ms).
+A button under the pointer takes its color with that fade (`hover`; the close button the red
+of destructive actions, `salmon`, its icon in `text_on_cream`) and grows to `HOVER_SCALE`
+(1.06) on `BUTTON_SPRING`, with a slight bounce; held down, it sinks to `PRESS_SCALE` (0.92)
+and takes `pressed`. The boards show no hover: these are choices of the lot, in
+`sherlock_ui::decorations`. Each window's buttons have their motion (`decorations::Motion`),
+aimed when the pointer changes and read at each frame; the bar texture is made again only
+while it moves, and its look is rounded (thousandths of scale, 255ths of color) so that a
+settled button gives the same texture.
+
+| | At rest | Minimize | Maximize | Close |
+| --- | --- | --- | --- | --- |
+| Dark | ![](../desktop/compositor/screenshots/decorations-dark.png) | ![](../desktop/compositor/screenshots/decorations-dark-minimize.png) | ![](../desktop/compositor/screenshots/decorations-dark-maximize.png) | ![](../desktop/compositor/screenshots/decorations-dark-close.png) |
+| Light | ![](../desktop/compositor/screenshots/decorations-light.png) | ![](../desktop/compositor/screenshots/decorations-light-minimize.png) | ![](../desktop/compositor/screenshots/decorations-light-maximize.png) | ![](../desktop/compositor/screenshots/decorations-light-close.png) |
 
 **Behavior.**
 
@@ -1094,8 +1166,9 @@ theme with a fade (see "Theme").
   (`xdg_toplevel.close`, `WM_DELETE_WINDOW`). It acts on release, if the pointer is still on it.
 - A double click on the bar (two presses within 400 ms, `decorations::DOUBLE_CLICK`, less than
   4 pixels apart) maximizes, or gives back the previous place.
-- Dragging the bar moves the window, with the snapping of every move: dropped at the top, it is
-  maximized; pulled out of a zone, it gets its size back with the pointer on its bar.
+- Dragging the bar, or the pill between its buttons, moves the window, with the snapping of
+  every move: dropped at the top, it is maximized; pulled out of a zone, it gets its size back
+  with the pointer on its bar. It never goes under the top bar (see "Moving and resizing").
 - The client sees none of these presses. The cursor over the bar is the arrow.
 - A right click does nothing yet: the menu (minimize, maximize, always on top, move to a
   workspace, close) is a follow-up.
@@ -1114,8 +1187,9 @@ a resize, the corners while maximizing), one per window and scale. Its element k
 identity under `Part::TitleBar` (see "Damage"), so a bar that did not change is not drawn
 again, and nothing is drawn at rest. Its opaque region is the bar but its top corners.
 
-**Tests.** `decorations` (unit): the buttons sit at their place of the Main board, the pointer
-finds them. `raster` (unit): the window icons are read, a long title ends with an ellipsis.
+**Tests.** `decorations` (unit): the buttons sit at the right of the bar, 32 by 28, the pointer
+finds them and the pill; a hovered button lights up and grows with a slight bounce, sinks when
+pressed, and comes back to rest. `raster` (unit): the window icons are read, a long title ends with an ellipsis.
 `tests/headless.rs`: a client asking through xdg-decoration gets `server_side`, then
 `client_side` when it asks, KDE's protocol answers `Server`; a drag of the bar moves the window,
 a double click maximizes it under its bar (800 by 558), the restore button gives back its place,
@@ -1124,8 +1198,9 @@ a drop at the top maximizes, a press that leaves its button does nothing, minimi
 has none, `_MOTIF_WM_HINTS` without decorations removes it. `tests/perf.rs`: the ten windows of
 the bench have the bar; hovering a button redraws that bar only, and nothing at rest.
 `captures_of_a_decorated_window` (ignored, needs Mesa's EGL) renders the scene into a texture
-with the software renderer and writes `screenshots/decorations-dark.png` and
-`decorations-light.png`:
+with the software renderer and writes `screenshots/decorations-<theme>.png` and
+`decorations-<theme>-<button>.png`, at rest and with each button hovered, checking the red of
+the close button:
 
 ```sh
 cargo test -p compositor --test headless -- --ignored captures_of_a_decorated_window
@@ -1238,8 +1313,18 @@ mode = cover
 ```
 
 - Without a file, or without `path` and `wallpaper`: the default pair, which follows the theme.
-- A wallpaper of the collection is looked for in `$XDG_DATA_HOME/sherlockos/wallpapers/<id>`, then
-  in each `$XDG_DATA_DIRS`.
+- A wallpaper of the collection is looked for in `$SHERLOCKOS_WALLPAPERS/<id>` when that
+  variable is set (an absolute path), then in `$XDG_DATA_HOME/sherlockos/wallpapers/<id>`, then
+  in each `$XDG_DATA_DIRS` (`desktop_config::wallpaper::dirs`). `sherlockos-session` sets
+  `SHERLOCKOS_WALLPAPERS` to the `wallpapers` folder beside the programs' folder when there is
+  one: `target/wallpapers`, which `just wallpapers` writes, when the session runs from the
+  repository with `SHERLOCKOS_BIN=target/release`. A wallpaper not found is logged as a
+  warning, with the folders searched.
+- **Why the default was lost (lot C-01).** Lot Q-10 renamed the folder of the desktop from
+  `nom-os` to `sherlockos` (`desktop_config::DIR`). A trial of the session that still links
+  the variants as `<data>/nom-os/wallpapers` is no longer found, and the board's background
+  (color and discs) shows instead of « Le premier indice ». The variable above finds
+  `target/wallpapers` without any link.
 - `Config::choice(variant)` (crate `desktop-config`) gives what to show in a theme: the user's
   path, or the installed wallpaper to look for. The compositor keeps the theme in
   `Wallpaper::set_theme`, called at each change of the appearance file (see "Theme"): with

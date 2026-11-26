@@ -202,42 +202,14 @@ pub fn menu_item_open(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Track of the toggle, green when it is on.
-pub fn toggle_track(on: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme, status| {
-        let p = palette(theme);
-        let fill = match (on, status) {
-            (_, button::Status::Disabled) => p.disabled,
-            (true, button::Status::Hovered) => p.accent_hover,
-            (true, button::Status::Pressed) => p.accent_pressed,
-            (true, button::Status::Active) => p.accent,
-            (false, button::Status::Active) => p.toggle_off,
-            (false, _) => p.toggle_off_hover,
-        };
-        button_style(
-            Some(fill),
-            p.text_primary,
-            border::rounded(metrics::TOGGLE_HEIGHT / 2.0),
-        )
-    }
-}
-
-/// Round knob of the toggle: dark on the green in the dark theme, light in the light one,
-/// grey on the off track.
-pub fn toggle_knob(on: bool, enabled: bool) -> impl Fn(&Theme) -> container::Style {
-    move |theme| {
-        let p = palette(theme);
-        let fill = match (on, enabled) {
-            (_, false) => p.text_tertiary,
-            (true, true) => p.deepest,
-            (false, true) => p.text_secondary,
-        };
-        container::Style {
-            background: background(fill),
-            border: border::rounded(metrics::TOGGLE_HEIGHT / 2.0),
-            ..container::Style::default()
-        }
-    }
+/// The button around a toggle: transparent, the switch draws its track and knob
+/// (`animated::Switch`), from the palette of the theme.
+pub fn toggle_press(theme: &Theme, _status: button::Status) -> button::Style {
+    button_style(
+        None,
+        palette(theme).text_primary,
+        border::rounded(metrics::TOGGLE_HEIGHT / 2.0),
+    )
 }
 
 /// Text field: veiled background, focus ring when it has the keyboard.

@@ -230,6 +230,9 @@ struct WindowData {
     /// The window has received its first content and has been placed. An X11 window is placed
     /// on its map request, and shown when XWayland associates its Wayland surface with it.
     shown: Cell<bool>,
+    /// Its first content was larger than the work area: it was asked to fit, and shows at its
+    /// next content, whatever its size then (lot C-01).
+    fitting: Cell<bool>,
     /// Geometry to return to when leaving maximized, fullscreen or a zone.
     restore: Cell<Option<Rectangle<i32, Logical>>>,
     /// Half or quarter of the screen where the window is snapped. Maximized, on the other hand,
@@ -541,9 +544,13 @@ impl State {
                 opacity: 1.0,
                 moving: false,
                 decoration: 0.0,
+                scale: 1.0,
             });
         }
-        if !window_data(window).shown.get() {
+        // Nothing drawn before the first content of the client: neither an empty frame nor
+        // its title bar. Its opening starts with that content (lot C-01): an X11 window has
+        // its surface before its first buffer.
+        if !window_data(window).shown.get() || !has_buffer(window) {
             return None;
         }
         let arrangement = handlers::Arrangement::of(window);
@@ -552,7 +559,13 @@ impl State {
         if self.opens_at_once(window) {
             motion.skip_opening();
         }
-        Some(motion.frame(now, geometry))
+        let mut visual = motion.frame(now, geometry);
+        if visual.scale != 1.0 {
+            // The whole window opens around its center, its title bar with it.
+            let inset = f64::from(decorations::inset(window));
+            visual.rect = anim::scaled_whole(visual.rect, inset, visual.scale);
+        }
+        Some(visual)
     }
 
     /// Changes the margin around snapped windows; those already snapped take it at once.
@@ -638,6 +651,13 @@ impl State {
 
 /// Pace of the frame callbacks of a window out of view.
 pub const HIDDEN_FRAME_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The client has given `window` a buffer: it has something to show.
+fn has_buffer(window: &Window) -> bool {
+    window
+        .wl_surface()
+        .is_some_and(|surface| layer::has_content(&surface))
+}
 
 /// X11 window that bypasses the window manager: menu, tooltip, drop-down list.
 pub(crate) fn is_override_redirect(window: &Window) -> bool {

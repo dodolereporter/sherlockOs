@@ -191,12 +191,30 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     crate::config_dir(var).map(|dir| dir.join(FILE))
 }
 
-/// Folder of variants of the installed wallpaper `id`, in the first data folder that has it.
-pub fn find(id: &str, data_dirs: &[PathBuf]) -> Option<PathBuf> {
-    data_dirs
-        .iter()
-        .map(|dir| dir.join(DATA_SUBDIR).join(id))
-        .find(|dir| dir.is_dir())
+/// A folder of installed wallpapers looked in before the data folders: the session sets it to
+/// `target/wallpapers`, what `just wallpapers` writes, when it runs from the repository.
+pub const DIR_VAR: &str = "SHERLOCKOS_WALLPAPERS";
+
+/// The folders of installed wallpapers, most important first: `$SHERLOCKOS_WALLPAPERS` when it
+/// is an absolute path, then `wallpapers` in each data folder of the desktop
+/// (`crate::data_dirs`). `var` reads the environment.
+pub fn dirs(var: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
+    let own = var(DIR_VAR)
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute());
+    own.into_iter()
+        .chain(
+            crate::data_dirs(var)
+                .into_iter()
+                .map(|dir| dir.join(DATA_SUBDIR)),
+        )
+        .collect()
+}
+
+/// Folder of variants of the installed wallpaper `id`, in the first of `dirs` (see `dirs`)
+/// that has it.
+pub fn find(id: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().map(|dir| dir.join(id)).find(|dir| dir.is_dir())
 }
 
 /// A variant of a wallpaper: a PNG at one definition.
@@ -488,9 +506,33 @@ mod tests {
         let found = variants(&wallpaper).unwrap();
         let sizes: Vec<_> = found.iter().map(|v| v.size).collect();
         assert_eq!(sizes, [(1920, 1080), (3840, 2160)]);
-        let dirs = [dir.join("missing"), dir.clone()];
+        let dirs = [dir.join("missing"), dir.join(DATA_SUBDIR)];
         assert_eq!(find("first-clue", &dirs), Some(wallpaper));
         assert_eq!(find("ring", &dirs), None);
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_folder_of_the_session_comes_before_the_data_folders() {
+        let env = |pairs: &'static [(&str, &str)]| {
+            move |key: &str| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.into())
+        };
+        assert_eq!(
+            dirs(env(&[
+                ("HOME", "/home/u"),
+                ("XDG_DATA_DIRS", "/usr/share"),
+                (DIR_VAR, "/repo/target/wallpapers"),
+            ])),
+            [
+                PathBuf::from("/repo/target/wallpapers"),
+                "/home/u/.local/share/sherlockos/wallpapers".into(),
+                "/usr/share/sherlockos/wallpapers".into(),
+            ]
+        );
+        // A relative folder is ignored, like the XDG ones.
+        assert_eq!(
+            dirs(env(&[("HOME", "/home/u"), (DIR_VAR, "target/wallpapers")])).len(),
+            3
+        );
     }
 }

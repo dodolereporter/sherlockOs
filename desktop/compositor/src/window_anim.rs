@@ -1,7 +1,7 @@
-//! Opening and closing of the windows (lot D-34), as on macOS. Opening, a window grows from
-//! `motion::OPEN_SCALE` to 1 around its center and fades in (`anim::WindowMotion`). Closing,
-//! its last image shrinks back to that scale and fades out over `motion::WINDOW_CLOSE`, then
-//! is freed.
+//! Opening and closing of the windows (lots D-34, C-01), as on macOS. Opening, from its first
+//! content, a window grows from `motion::WINDOW_OPEN_SCALE` to 1 around its center and fades in
+//! (`anim::WindowMotion`). Closing, its last image shrinks to `motion::WINDOW_CLOSE_SCALE` and
+//! fades out over `motion::WINDOW_CLOSE` on an ease-in, its shadow with it, then is freed.
 //!
 //! The client has already destroyed its window when the closing starts: its buffer goes away
 //! with its surface. So, when its toplevel goes (`toplevel_destroyed`, or an X11 unmap), the
@@ -20,7 +20,7 @@ use sherlock_ui::{decorations as ui_decorations, motion};
 use smithay::{
     backend::allocator::Fourcc,
     backend::renderer::{
-        Bind as _, Frame as _, Offscreen as _, Renderer as _,
+        Bind as _, Frame as _, Offscreen as _, Renderer as _, Texture as _,
         element::texture::TextureRenderElement,
         element::{Element as _, Kind, RenderElement as _, texture::TextureBuffer},
         gles::{GlesError, GlesRenderer, GlesTexture},
@@ -69,8 +69,15 @@ pub struct WindowAnims {
 /// Scale and opacity of a closing window at `fade`, the opacity going from 1 to 0.
 fn closing(fade: &motion::Fade, now: Duration) -> (f64, f32) {
     let alpha = fade.value(now).clamp(0.0, 1.0);
-    let scale = motion::OPEN_SCALE + (1.0 - motion::OPEN_SCALE) * f64::from(alpha);
+    let end = motion::WINDOW_CLOSE_SCALE;
+    let scale = end + (1.0 - end) * f64::from(alpha);
     (scale, alpha)
+}
+
+/// The fade of a closing that starts at `now`.
+fn close_fade(now: Duration) -> motion::Fade {
+    let (duration, ease) = (motion::WINDOW_CLOSE, motion::WINDOW_CLOSE_EASE);
+    motion::Fade::eased(1.0, 0.0, now, duration, ease)
 }
 
 impl State {
@@ -133,7 +140,7 @@ impl State {
             owner: surface.id(),
             rect: geometry,
             texture,
-            fade: motion::Fade::new(1.0, 0.0, self.now(), motion::WINDOW_CLOSE),
+            fade: close_fade(self.now()),
             decoration: if arrangement.maximized { 0.0 } else { 1.0 },
             workspace: self.workspace_of(window),
         };
@@ -192,11 +199,13 @@ pub(crate) fn push_closing(
             alpha,
         });
         if ghost.decoration > 0.0 {
-            let size = ghost.rect.size.to_f64().upscale(scale).to_i32_round();
-            let radius = render::corner_radius(size) * view.scale as f32 * ghost.decoration;
+            // The shadow shrinks with the window: its offset and blur too.
+            let radius = render::corner_radius(ghost.rect.size)
+                * (view.scale * scale) as f32
+                * ghost.decoration;
             items.push(Item::Shadow {
                 key: Key::of(owner, Part::Shadow),
-                shadow: Shadow::of(rect, view.scale),
+                shadow: Shadow::of(rect, view.scale * scale),
                 color: sherlock_ui::color::palette().shadow.premultiplied(),
                 radius,
                 alpha: alpha * ghost.decoration,
@@ -213,13 +222,18 @@ pub(crate) fn element(
     rect: Rectangle<i32, Physical>,
     alpha: f32,
 ) -> TextureRenderElement<GlesTexture> {
+    let whole = texture.size();
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
     let size = Size::<i32, Logical>::from((rect.size.w, rect.size.h));
+    // The whole texture, stretched into `rect`: without `src`, smithay takes the part of the
+    // texture of the size of `rect`, and a ghost smaller than at rest was cut, not shrunk
+    // (its right and bottom edges, corners and border gone, seen in lot C-01).
+    let src = Rectangle::from_size((f64::from(whole.w), f64::from(whole.h)).into());
     TextureRenderElement::from_texture_buffer(
         rect.loc.to_f64(),
         &buffer,
         Some(alpha),
-        None,
+        Some(src),
         Some(size),
         Kind::Unspecified,
     )
@@ -248,6 +262,7 @@ pub fn snapshot(
         opacity: 1.0,
         moving: false,
         decoration: if bare { 0.0 } else { 1.0 },
+        scale: 1.0,
     };
     let mut items = Vec::new();
     let bar = state.decoration_bar(window);
@@ -296,18 +311,22 @@ mod tests {
     }
 
     #[test]
-    fn a_closing_window_shrinks_and_fades_out_in_150_ms() {
-        let fade = motion::Fade::new(1.0, 0.0, ms(1000), motion::WINDOW_CLOSE);
+    fn a_closing_window_shrinks_and_fades_out_in_180_ms_on_an_ease_in() {
+        let fade = close_fade(ms(1000));
         assert_eq!(closing(&fade, ms(1000)), (1.0, 1.0));
         let mut last = (1.0, 1.0);
-        for t in [1030, 1060, 1100, 1140] {
+        let mut steps = Vec::new();
+        for t in [1030, 1060, 1090, 1120, 1150] {
             let (scale, alpha) = closing(&fade, ms(t));
             assert!(scale < last.0 && alpha < last.1, "{t}");
-            assert!(scale > motion::OPEN_SCALE && alpha > 0.0, "{t}");
+            assert!(scale > motion::WINDOW_CLOSE_SCALE && alpha > 0.0, "{t}");
+            steps.push(last.1 - alpha);
             last = (scale, alpha);
         }
-        let (scale, alpha) = closing(&fade, ms(1150));
-        assert!((scale - motion::OPEN_SCALE).abs() < 1e-9 && alpha == 0.0);
-        assert!(fade.is_done(ms(1150)) && !fade.is_done(ms(1149)));
+        // Ease-in: each step takes more than the one before.
+        assert!(steps.windows(2).all(|w| w[1] > w[0]), "{steps:?}");
+        let (scale, alpha) = closing(&fade, ms(1180));
+        assert!((scale - motion::WINDOW_CLOSE_SCALE).abs() < 1e-9 && alpha == 0.0);
+        assert!(fade.is_done(ms(1180)) && !fade.is_done(ms(1179)));
     }
 }

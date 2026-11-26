@@ -156,7 +156,8 @@ impl State {
                 .element_geometry(&window)
                 .unwrap_or_default()
                 .size;
-            self.move_window(&window, layout::centered(area, size), false);
+            let loc = crate::decorations::centered(&window, area, size);
+            self.move_window(&window, loc, false);
         }
     }
 

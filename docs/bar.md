@@ -43,6 +43,46 @@ is at 8.8 or more.
 An indicator that has not been read yet is not shown. Without a battery, the battery
 indicator disappears. A battery discharging below 15 % turns amber.
 
+**Indicators** (UI-01). Bluetooth, network, sound and battery are each a button of their own, with an
+18 px icon (`metrics::STATUS_ICON`, the board's 16 was found too small), 30 high and 7 on each
+side (`panels::BAR_BUTTON_HEIGHT`, `BAR_BUTTON_PADDING`): a pill fades in on hover and deepens on
+press, and the content shrinks a little while pressed. Each opens the control centre; the one
+it was opened from carries the open mark, a short green line under it, and the veil. A click on
+another indicator while the centre is open moves the mark there and leaves the centre open; a
+click on the same one closes it. The clock and the Sherlock button have the same pill, veil and
+mark. Tab reaches each indicator. The application name ends with « … » where the left half of
+the bar ends.
+
+![The control centre opened from the sound, its button marked](../desktop/bar/screenshots/bar-open.png)
+![The same in the light theme](../desktop/bar/screenshots/bar-open-light.png)
+
+**Live icons** (UI-01). Each icon shows the real state, drawn from its level rather than
+chosen among pictures (`sherlock_ui::icon::wifi_svg`, `sound_svg`, `bluetooth_svg`, beside
+`battery_svg`), and a change of level or state cross-fades over `motion::GLYPH_FADE`
+(`animated::GlyphFade`) instead of jumping:
+
+| Indicator | States |
+| --- | --- |
+| Wi-Fi | The dot and 0 to 3 arcs lit by the strength of the access point in use (`Strength`, under 25, 50, 75, then 3), the others faded; every arc faded and a slash without a network; an exclamation mark when NetworkManager's `Connectivity` says none, portal or limited; the arcs lit in turn every 400 ms (`motion::PULSE`) while it connects (`State` 40), the next step asked for at its time, no frame in between. A wired network shows every arc |
+| Sound | The speaker and 0 to 3 waves by the volume (0, up to 33, up to 66, above), crossed out when muted |
+| Bluetooth | The rune faded when off, lit when on, a dot beside it when a device is connected. No indicator without an adapter |
+| Battery | As in D-20c, at the new size |
+
+The Wi-Fi and Bluetooth states come from the system bus (`live.rs`): read when the bar starts,
+then again on NetworkManager's `PropertiesChanged` (its state, its connectivity, the strength of
+an access point) and on BlueZ's `PropertiesChanged`, `InterfacesAdded` and `InterfacesRemoved`,
+coalesced like the panels' (`bus::coalesce`), each read sent only when it changed: nothing polls.
+Without NetworkManager on the bus, a Wi-Fi network shows every arc, as before. The microphone has
+no indicator in the bar, so its mute is not shown.
+
+![Every state of the live icons](../desktop/bar/screenshots/indicators.png)
+![The same in the light theme](../desktop/bar/screenshots/indicators-light.png)
+
+A network name too long for its tile or its line ends with « … » (`sherlock_ui::ellipsis`):
+
+![A long network name in its tile](../desktop/bar/screenshots/control-centre-long-name.png)
+![The same in the list of networks](../desktop/bar/screenshots/wifi-long-name.png)
+
 **Battery** (D-20c). The gauge is drawn, not chosen among a few glyphs: the outline of the
 `Battery` icon, filled from the left to the real percentage (`icon::battery_svg`, 12 units of
 the 24 grid for 100 %). A bolt while it charges, a plug when it is plugged in and full or not
@@ -691,8 +731,8 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   On the GPU, the menu surface is enlarged to hold the board's shadow (`0 22px 54px`), cut on
   the left where the screen ends; a click on the shadow closes the menu. In software the
   surface is opaque and the menu has no shadow.
-- **Animations**: the menu opens at once, hovers change at once (`sherlock-ui` does not wire
-  `motion` into its components yet). The panels unfold since D-20c (see Animations).
+- **Animations**: the menu opens at once. The hovers and presses of the bar buttons fade
+  (UI-01); the panels unfold since D-20c (see Animations).
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.

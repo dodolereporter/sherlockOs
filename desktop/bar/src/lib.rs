@@ -6,6 +6,7 @@ pub mod app;
 pub mod bus;
 pub mod calendar;
 pub mod history;
+pub mod live;
 pub mod menu;
 pub mod panel;
 pub mod quick;
