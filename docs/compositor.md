@@ -328,26 +328,44 @@ D-18w gives them their behavior.
   workspace go to the active one; if the active one goes, the first one becomes active, without
   sliding, and its window on top takes the keyboard.
 - **A window belongs to one workspace,** the active one when it shows up (first content, or
-  association of its surface for an X11 window): the workspace where the user is.
+  association of its surface for an X11 window): the workspace where the user is. An X11 menu
+  or tooltip takes, when it maps, the workspace of the window it names in `WM_TRANSIENT_FOR`
+  if that one is known, the active one otherwise: a menu of an application on a hidden
+  workspace that names no parent shows up on the active workspace.
 - **Hidden windows stay in the space.** The windows of the other workspaces and the minimized
   ones keep their place, their screen, their commits and their arrangement: a change of the work
   area or a screen unplugged rearranges them like the others. Rendering, hit testing and the
   choice of the window that takes the keyboard back skip them (`State::is_visible`). They keep
   receiving frame callbacks.
 - **Switching** (`State::activate_workspace`): the windows of the arriving workspace show up,
-  the others hide, open menus close, the keyboard goes to the window on top of the arriving
-  workspace (to none if it is empty), and the pointer to what is under it now. A window being
-  dragged comes along. `activate` on a window of another workspace goes there.
+  the others hide, open menus close, the keyboard goes to the window of the arriving workspace
+  that had it last (to none if it is empty), and the pointer to what is under it now. A window
+  being dragged comes along. `activate` on a window of another workspace goes there and gives
+  the keyboard straight to that window.
+- **Which window takes the keyboard back** (switch, close, minimize, move to another
+  workspace): the shown window that had it last, counted by `State::focus`, not the top of the
+  stack. Windows that never had it come after, topmost first. A window that closes gives the
+  keyboard back only if it had it: one closing on a hidden workspace, or while an anchored
+  surface has the keyboard, takes nothing.
+- **Placing does not raise.** The space raises every window it maps; `move_window` puts back
+  above it the windows that were above, unless it activates the window. A reflow (exclusive
+  zone, screen) or a request of a hidden application therefore leaves the stack as it was.
 - **Sliding.** The workspaces stand in a row, side by side; each screen shows its part of it.
   The view moves along the row on `SNAP_SPRING` (`anim::WorkspaceSlide`): the leaving workspace
   goes out on one side while the arriving one comes in from the other, by the width of each
   window's screen. A switch during a slide turns around from where the view is; a jump over
-  several workspaces passes through those between them. While sliding, a window is drawn on its
-  own screen only, so as not to slide onto the next one; input already goes to the arriving
-  workspace.
+  several workspaces passes through those between them. Only the workspaces between the start
+  and the arrival are drawn: the spring's overshoot (3 %) does not show the next one. While
+  sliding, a window is drawn on its own screen only, so as not to slide onto the next one;
+  input already goes to the arriving workspace.
 - **Moving a window** (`State::move_to_workspace`): out of the active workspace, it hides
-  without being followed, and if it was the active window, the window on top takes the
-  keyboard.
+  without being followed, and if it was the active window, the keyboard goes back as above.
+  Refused during a gesture, which would go on with a hidden window.
+- **Who changes workspace.** Only the user, by the keys, and the shell, by `activate` (of a
+  workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
+  no `xdg-activation`, does not honor `xdg_toplevel.set_minimized` nor `_NET_WM_STATE_HIDDEN`,
+  and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. A new window opens on the active workspace and
+  takes the keyboard.
 - **Anchored surfaces** (bar, dock) are not windows: they stay on every workspace.
 
 | Keys (Alt in place of Super with `--nested`) | Effect |
@@ -437,9 +455,15 @@ ordinary socket, and a shell program.
   to 2 while on the third: its window and the active state go to the first; then to 5.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
   a dock with an exclusive zone appears.
+- **Keyboard after a close.** A window closing on a hidden workspace while nothing has the
+  keyboard leaves it with nothing.
+- **Keyboard back on a workspace.** "Max" maximized then "Float" on workspace 1; on workspace
+  2, a dock with an exclusive zone places "Max" again: it stays below "Float", and Super + 1
+  gives the keyboard back to "Float".
 
 The unit tests check the keys of the top row with AZERTY symbols and in nested mode
-(`src/input.rs`), the slide side by side, its turn around and its stop (`src/anim.rs`), and the
+(`src/input.rs`), the slide side by side, its turn around, its stop, and an overshoot that
+does not show the next workspace (`src/anim.rs`), and the
 model from 1 to 9 workspaces (`src/shell/workspaces.rs`).
 
 `tests/xwayland.rs` also checks that the real XWayland is not a shell client, that the shell

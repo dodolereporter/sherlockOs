@@ -1184,4 +1184,62 @@ mod tests {
         });
         assert!(h.state.is_minimized(&window));
     }
+
+    #[test]
+    fn a_hidden_window_closing_takes_no_keyboard() {
+        let mut h = Harness::start();
+        let (one, _surface) = h.open_window("One");
+        h.keys(&[KEY_SUPER], KEY_2);
+        h.open_window("Two");
+        // A click on the desktop, away from "Two": nothing has the keyboard.
+        h.state.pointer_motion((10.0, 10.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 3);
+        h.turn();
+        assert_eq!(h.focused_title(), None);
+        // "One", on the hidden workspace 1, closes: the keyboard stays with nothing.
+        one.destroy();
+        h.run_until("the window gone", |h| h.state.space.elements().count() == 1);
+        assert_eq!(h.focused_title(), None, "the keyboard was taken");
+    }
+
+    #[test]
+    fn back_on_a_workspace_its_last_active_window_has_the_keyboard() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Max");
+        toplevel.set_maximized();
+        surface.commit();
+        h.run_until("maximized", |h| {
+            h.state
+                .space
+                .element_geometry(&h.titled("Max"))
+                .is_some_and(|g| g.loc == (0, 0).into())
+        });
+        h.open_window("Float");
+        h.keys(&[KEY_SUPER], KEY_2);
+        // A dock with an exclusive zone appears: the maximized window, hidden, is placed again.
+        let qh = h.shell.queue.handle();
+        let compositor: WlCompositor = h.shell.bind();
+        let layer_shell: ZwlrLayerShellV1 = h.shell.bind();
+        let dock_surface = compositor.create_surface(&qh, ());
+        let dock =
+            layer_shell.get_layer_surface(&dock_surface, None, Layer::Top, "dock".into(), &qh, ());
+        dock.set_anchor(Anchor::Bottom | Anchor::Left | Anchor::Right);
+        dock.set_size(0, 76);
+        dock.set_exclusive_zone(76);
+        dock_surface.commit();
+        h.run_until("the dock configure", |h| h.shell.client.layer_configured);
+        h.shell.draw(&dock_surface, 800, 76);
+        let max = h.titled("Max");
+        let pending =
+            |w: &smithay::desktop::Window| w.toplevel().unwrap().with_pending_state(|s| s.size);
+        h.run_until("the work area", |_| {
+            pending(&max) == Some((800, 524).into())
+        });
+        // Placed again without being raised, and the keyboard goes back to "Float".
+        let top = h.state.space.elements().last().cloned();
+        assert_eq!(top.and_then(|w| State::title(&w)).as_deref(), Some("Float"));
+        h.keys(&[KEY_SUPER], KEY_1);
+        assert_eq!(h.focused_title().as_deref(), Some("Float"));
+    }
 }

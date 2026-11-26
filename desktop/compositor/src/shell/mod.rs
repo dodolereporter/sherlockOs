@@ -160,12 +160,22 @@ impl State {
     }
 
     /// Makes the workspace `id` active: its windows show up and the others slide away. The
-    /// keyboard goes to its window on top, and a window being dragged comes along.
+    /// keyboard goes to the window of that workspace that had it last, and a window being
+    /// dragged comes along.
     pub fn activate_workspace(&mut self, id: &str) {
+        if self.switch_workspace(id) {
+            self.focus(self.top_window());
+            self.refresh_pointer_focus();
+        }
+    }
+
+    /// Makes the workspace `id` active, without touching the keyboard nor the pointer. `false`
+    /// if it already was, or does not exist.
+    fn switch_workspace(&mut self, id: &str) -> bool {
         let model = &mut self.shell.workspace_model;
         let from = model.active_index();
         if !model.activate(id) || model.active_index() == from {
-            return;
+            return false;
         }
         tracing::debug!(id, "workspace activated");
         let now = self.start_time.elapsed();
@@ -175,8 +185,7 @@ impl State {
             *self.window_workspace(&window).0.borrow_mut() = id.to_owned();
         }
         self.dismiss_popups();
-        self.focus(self.top_window());
-        self.refresh_pointer_focus();
+        true
     }
 
     /// Activates the workspace `steps` away from the active one, if there is one.
@@ -208,8 +217,9 @@ impl State {
         if active != before {
             self.shell.slide.stop();
             self.focus(self.top_window());
-            self.refresh_pointer_focus();
         }
+        // Windows of a removed workspace may now be under the pointer.
+        self.refresh_pointer_focus();
     }
 
     /// Id of the workspace `window` belongs to.
@@ -218,9 +228,13 @@ impl State {
     }
 
     /// Puts `window` on the workspace `id`, if it exists. Leaving the active workspace, it hides,
-    /// and if it was the active window, the keyboard goes to the window on top.
+    /// and if it was the active window, the keyboard goes to the window that had it before.
+    /// Nothing happens during a gesture, which would go on with a hidden window.
     pub fn move_to_workspace(&mut self, window: &Window, id: &str) {
-        if !self.shell.workspace_model.contains(id) || self.workspace_of(window) == id {
+        if !self.shell.workspace_model.contains(id)
+            || self.workspace_of(window) == id
+            || self.gesture_active()
+        {
             return;
         }
         let active = is_activated(window) || self.focused_window().as_ref() == Some(window);
@@ -231,10 +245,20 @@ impl State {
         self.refresh_pointer_focus();
     }
 
-    /// Puts a window that shows up on the active workspace.
+    /// Puts a window that shows up on the active workspace. An X11 menu or tooltip goes on
+    /// the workspace of the window it names as its parent (`WM_TRANSIENT_FOR`), if that one is
+    /// known.
     pub(crate) fn join_active_workspace(&self, window: &Window) {
-        let active = self.shell.workspace_model.active().to_owned();
-        *self.window_workspace(window).0.borrow_mut() = active;
+        let parent = window.x11_surface().and_then(|s| s.is_transient_for());
+        let parent = parent.and_then(|id| {
+            let mut windows = self.space.elements();
+            windows.find(|w| w.x11_surface().is_some_and(|s| s.window_id() == id))
+        });
+        let workspace = match parent {
+            Some(parent) if parent != window => self.workspace_of(parent),
+            _ => self.shell.workspace_model.active().to_owned(),
+        };
+        *self.window_workspace(window).0.borrow_mut() = workspace;
     }
 
     /// Whether `window` is shown: on the active workspace, and not minimized.
@@ -324,7 +348,9 @@ impl State {
                 tracing::warn!("showing the X11 window: {err}");
             }
         }
-        self.activate_workspace(&self.workspace_of(window));
+        // Straight to the window: no other one of its workspace gets the keyboard on the way.
+        let workspace = self.workspace_of(window);
+        self.switch_workspace(&workspace);
         self.focus(Some(window.clone()));
         self.refresh_pointer_focus();
     }

@@ -135,15 +135,30 @@ impl State {
         }
     }
 
-    /// Places the window at `loc` and raises it. An X11 window learns its place: XWayland needs
-    /// it to place its menus and translate the pointer.
+    /// Places the window at `loc`; with `activate`, raises it and makes it the active one. An
+    /// X11 window learns its place: XWayland needs it to place its menus and translate the
+    /// pointer.
     pub(crate) fn move_window(
         &mut self,
         window: &Window,
         loc: Point<i32, Logical>,
         activate: bool,
     ) {
+        // The space raises every window it maps: those that were above go back above it.
+        let above: Vec<Window> = match activate {
+            true => Vec::new(),
+            false => self
+                .space
+                .elements()
+                .skip_while(|w| *w != window)
+                .skip(1)
+                .cloned()
+                .collect(),
+        };
         self.space.map_element(window.clone(), loc, activate);
+        for other in &above {
+            self.space.raise_element(other, false);
+        }
         if let Some(surface) = window.x11_surface() {
             configure_x11(surface, Rectangle::new(loc, surface.geometry().size));
         }
@@ -412,9 +427,14 @@ impl XdgShellHandler for State {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        // The keyboard goes back to a window only if this one had it: a window closing on a
+        // hidden workspace, or while an anchored surface has the keyboard, takes nothing.
         if let Some(window) = self.window_for(surface.wl_surface()) {
+            let focused = self.focused_window().as_ref() == Some(&window);
             self.space.unmap_elem(&window);
-            self.focus(self.top_window());
+            if focused {
+                self.focus(self.top_window());
+            }
         }
     }
 
