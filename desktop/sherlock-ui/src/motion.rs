@@ -209,6 +209,12 @@ pub const KNOB_PRECISION: f32 = 0.01;
 /// answers the finger at once (a choice of UI-01, under the 110 ms of a hover).
 pub const PRESS_FADE: Duration = Duration::from_millis(90);
 
+/// An icon of the bar changing level or state (a Wi-Fi arc, a sound muted): a short
+/// cross-fade rather than a jump (UI-01), a hover's.
+pub const GLYPH_FADE: Duration = FADE;
+/// One step of an icon that cycles while it waits: the arcs of a Wi-Fi connecting (UI-01).
+pub const PULSE: Duration = Duration::from_millis(400);
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to

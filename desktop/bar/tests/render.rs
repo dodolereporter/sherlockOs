@@ -593,6 +593,48 @@ fn the_battery_fills_with_its_level_in_both_themes() {
     }
 }
 
+/// Every state of the live icons of the bar (UI-01), in each theme, `indicators` then
+/// `indicators-light`: the Wi-Fi at 0 to 3 arcs, without the Internet, without a network, and
+/// the four steps of a connection; the sound at 0 to 3 waves and muted; Bluetooth off, on and
+/// connected.
+#[test]
+fn every_state_of_the_indicators_renders_in_both_themes() {
+    use sherlock_ui::component as ui;
+    use sherlock_ui::icon::{self, Radio, WifiMark};
+    let wifi: Vec<String> = (0..=icon::LEVELS)
+        .map(|level| icon::wifi_svg(level, WifiMark::None))
+        .chain([
+            icon::wifi_svg(2, WifiMark::NoInternet),
+            icon::wifi_svg(0, WifiMark::Off),
+        ])
+        .collect();
+    let sound: Vec<String> = (0..=icon::LEVELS)
+        .map(|level| icon::sound_svg(level, false))
+        .chain([icon::sound_svg(2, true)])
+        .collect();
+    let radio = [Radio::Off, Radio::On, Radio::Connected].map(icon::bluetooth_svg);
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let tint = color::palette().text_secondary;
+            let line = |documents: &[String]| {
+                let icons = documents
+                    .iter()
+                    .map(|d| ui::live_icon::<Message>(vec![d.clone()], tint));
+                iced::widget::Row::with_children(icons).spacing(metrics::STATUS_GAP)
+            };
+            let all = iced::widget::column![line(&wifi), line(&sound), line(&radio)]
+                .spacing(metrics::STATUS_GAP)
+                .padding(10);
+            let back = iced::widget::container(all).style(sherlock_ui::theme::top_bar_shaped(
+                0.0,
+                metrics::TOP_BAR_RADIUS,
+            ));
+            let ui = Simulator::with_size(bar::settings(), (220.0, 110.0), back);
+            assert_written(capture(ui, &format!("indicators{suffix}")));
+        });
+    }
+}
+
 /// The Bluetooth devices of fictitious devices, in each theme: `bluetooth-devices` (« Casque »
 /// connected at 80 %, « Souris » paired, « Clavier » found while the scan runs), then
 /// `bluetooth-pairing` (« Clavier » pairing, the agent asking to confirm its code), and their

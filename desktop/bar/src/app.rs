@@ -16,12 +16,13 @@ use sherlock_ui::animated;
 use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
-use sherlock_ui::icon::{BatteryMark, Icon};
+use sherlock_ui::icon::{self, BatteryMark, Radio, WifiMark};
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
 use crate::calendar::Month;
 use crate::history::{self, Entry};
+use crate::live::{self, Link};
 use crate::menu::{self, Action};
 use crate::panel::{self, History, Panel};
 use crate::quick::{self, Quick};
@@ -87,11 +88,16 @@ pub struct Bar {
     pub quick: Quick,
     /// The indicator the control centre was opened from: it carries the open mark.
     pub opener: Option<Indicator>,
+    /// The Wi-Fi signal, a connection under way, the Internet, from NetworkManager.
+    pub link: Option<Link>,
+    /// The Bluetooth radio; `None` without an adapter: no indicator.
+    pub radio: Option<Radio>,
 }
 
 /// An indicator of the bar: each one is a button that opens the control centre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Indicator {
+    Bluetooth,
     Network,
     Sound,
     Battery,
@@ -119,6 +125,10 @@ pub enum Message {
     Desktop(Desktop),
     /// The screen a surface is on.
     Output(Id, Option<String>),
+    /// The network as NetworkManager reports it on the system bus.
+    Link(Option<Link>),
+    /// The Bluetooth radio as BlueZ reports it.
+    Radio(Option<Radio>),
     ToggleMenu,
     MenuKey(menu::Key),
     Hover(usize),
@@ -224,6 +234,8 @@ impl Bar {
             Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
             Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
             Subscription::run(|| watch(Pactl::default(), "sound")).map(Message::Sound),
+            Subscription::run(live::link).map(Message::Link),
+            Subscription::run(live::bluetooth).map(Message::Radio),
             Subscription::run(|| watch(Auto::default(), "workspaces")).map(Message::Desktop),
             self.shell_events
                 .as_ref()
@@ -244,6 +256,8 @@ impl Bar {
             Message::Battery(battery) => self.battery = Some(battery),
             Message::Network(network) => self.network = Some(network),
             Message::Sound(sound) => self.sound = Some(sound),
+            Message::Link(link) => self.link = link,
+            Message::Radio(radio) => self.radio = radio,
             Message::Desktop(desktop) => {
                 self.desktop = Some(desktop);
                 return self.reshape(Instant::now());
@@ -471,6 +485,7 @@ impl Bar {
     pub fn targets(&self) -> Vec<Target> {
         let workspaces = self.group().map_or(0, |g| g.workspaces.len());
         let indicators = [
+            self.radio.is_some().then_some(Indicator::Bluetooth),
             self.network.is_some().then_some(Indicator::Network),
             self.sound.is_some().then_some(Indicator::Sound),
             matches!(self.battery, Some(Some(_))).then_some(Indicator::Battery),
@@ -782,25 +797,31 @@ impl Bar {
         buttons.into()
     }
 
-    /// Network, sound and battery, each with its indicator. One not read yet is not shown.
+    /// Bluetooth, network, sound and battery, each with its indicator, drawn from their live
+    /// state and faded from one level to the next. One not read yet is not shown.
     fn indicators(&self) -> Vec<(Indicator, Element<'static, Message>)> {
         let p = color::palette();
         let tint = p.text_secondary;
+        let glyph = |frames| ui::live_icon(frames, tint);
         let mut items = Vec::new();
+        if let Some(radio) = self.radio {
+            items.push((
+                Indicator::Bluetooth,
+                glyph(vec![icon::bluetooth_svg(radio)]),
+            ));
+        }
         if let Some(network) = &self.network {
-            let glyph = match network {
-                Network::Connected { .. } => Icon::Network,
-                Network::Disconnected => Icon::NetworkOff,
-            };
-            items.push((Indicator::Network, ui::status(glyph, None, tint)));
+            items.push((
+                Indicator::Network,
+                glyph(network_frames(network, self.link)),
+            ));
         }
         if let Some(sound) = &self.sound {
-            let glyph = if sound.muted {
-                Icon::SoundMuted
-            } else {
-                Icon::Sound
-            };
-            items.push((Indicator::Sound, ui::status(glyph, None, tint)));
+            let level = icon::sound_level(u32::from(sound.volume));
+            items.push((
+                Indicator::Sound,
+                glyph(vec![icon::sound_svg(level, sound.muted)]),
+            ));
         }
         if let Some(Some(battery)) = &self.battery {
             let mark = match battery.charge {
@@ -844,6 +865,32 @@ impl Bar {
             .on_press(Message::MenuKey(menu::Key::Close))
             .into()
     }
+}
+
+/// The Wi-Fi icon of the bar: its arcs by the strength of the signal, a slash when there is no
+/// network, an exclamation mark without the Internet, and the arcs lit in turn while
+/// NetworkManager connects. A wired network shows every arc; without NetworkManager on the
+/// system bus, so does a Wi-Fi one.
+pub fn network_frames(network: &Network, link: Option<Link>) -> Vec<String> {
+    let link = link.unwrap_or_default();
+    if link.connecting {
+        return (0..=icon::LEVELS)
+            .map(|level| icon::wifi_svg(level, WifiMark::None))
+            .collect();
+    }
+    let mark = if link.no_internet {
+        WifiMark::NoInternet
+    } else {
+        WifiMark::None
+    };
+    let document = match network {
+        Network::Disconnected => icon::wifi_svg(0, WifiMark::Off),
+        Network::Connected { .. } => {
+            let level = link.strength.map_or(icon::LEVELS, icon::wifi_level);
+            icon::wifi_svg(level, mark)
+        }
+    };
+    vec![document]
 }
 
 /// The themes of the appearance file at `path`, live (`appearance_config::follow_themes`).
@@ -1183,6 +1230,66 @@ mod tests {
         assert_eq!(bar.focused(), Some(Target::Workspace(2)));
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert_eq!(bar.focused(), None);
+    }
+
+    #[test]
+    fn the_wifi_icon_follows_the_signal_the_connection_and_the_internet() {
+        use crate::source::network::Link as Carrier;
+        let wifi = Network::Connected {
+            link: Carrier::Wifi,
+            name: String::from("Maison"),
+        };
+        let at = |strength| Link {
+            strength: Some(strength),
+            ..Link::default()
+        };
+        for (strength, level) in [(10, 0), (30, 1), (60, 2), (90, 3)] {
+            assert_eq!(
+                network_frames(&wifi, Some(at(strength))),
+                [icon::wifi_svg(level, WifiMark::None)]
+            );
+        }
+        // Without NetworkManager on the bus, every arc, as before.
+        assert_eq!(
+            network_frames(&wifi, None),
+            [icon::wifi_svg(3, WifiMark::None)]
+        );
+        let limited = Link {
+            no_internet: true,
+            ..at(60)
+        };
+        assert_eq!(
+            network_frames(&wifi, Some(limited)),
+            [icon::wifi_svg(2, WifiMark::NoInternet)]
+        );
+        assert_eq!(
+            network_frames(&Network::Disconnected, None),
+            [icon::wifi_svg(0, WifiMark::Off)]
+        );
+        // Connecting: the arcs lit one after the other.
+        let connecting = Link {
+            connecting: true,
+            ..Link::default()
+        };
+        let frames = network_frames(&Network::Disconnected, Some(connecting));
+        assert_eq!(frames.len(), 4);
+        assert_eq!(frames[3], icon::wifi_svg(3, WifiMark::None));
+    }
+
+    #[test]
+    fn the_bluetooth_indicator_shows_only_with_an_adapter() {
+        let mut bar = with_workspaces();
+        assert!(
+            !bar.targets()
+                .contains(&Target::Status(Indicator::Bluetooth))
+        );
+        let _ = bar.update(Message::Radio(Some(Radio::Connected)));
+        assert_eq!(bar.targets()[4], Target::Status(Indicator::Bluetooth));
+        let _ = bar.update(Message::Radio(None));
+        assert!(
+            !bar.targets()
+                .contains(&Target::Status(Indicator::Bluetooth))
+        );
     }
 
     /// The only test of this binary that changes the theme: the others draw nothing.
