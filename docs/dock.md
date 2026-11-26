@@ -354,9 +354,10 @@ application not pinned that opens or the last one that closes: the icon's room i
 or closes with `ARRIVAL_SPRING`, so its neighbours move aside or close up and the bar follows;
 the icon grows from its base, or shrinks to it, and fades with `ICON_FADE`. An icon that left
 is still drawn, in its room, until it is gone (`Dock::leaving`); the surface keeps its size
-until then, then shrinks. The separator opens and closes with the open applications after it.
-At startup, and when the edge, the icon size or the magnification changes, everything is in
-place at once.
+until then, then shrinks; the input region takes the new bar at once, for a leaving icon as for
+an arriving one. The separator opens and closes with the open applications after it.
+At startup (the first list of windows included), and when the edge, the icon size or the
+magnification changes, everything is in place at once.
 
 **Moving.** When the order changes (a drag, the settings, an application moving across the
 separator), each icon starts where it was drawn and springs to its new place
@@ -372,7 +373,9 @@ the place nearest the pointer among the pinned applications, Sherlock staying in
 the dock tries each place with the current sizes and keeps the one that puts the icon closest
 to the pointer; the others make room with `SHIFT_SPRING`. Let go, it flies to its place and the
 new order is written to `dock.conf` by `dock-config` (`move_pinned`, then the atomic
-`DockConfig::save`), only if it changed. While the button is held the dock follows the pointer
+`DockConfig::save`), only if the order shown changed: a pinned application that is not
+installed, between two shown ones, never moves on its own, and a drag back to its place writes
+nothing. While the button is held the dock follows the pointer
 through iced's events (`drag::gesture`), past the edges of its surface as well: the surface
 keeps the pointer until the button comes up.
 
@@ -393,7 +396,8 @@ when one of these says its first window came:
 
 1. our compositor, through `sherlock_shell_v1` on its shell socket (`shell.rs`,
    `shell_protocol::socket_from_env`, ADR 0021): a window that the application owns (same
-   rule as the dots) more than when it started;
+   rule as the dots) more than when it started. The source publishes the windows at each
+   `done` only: a window closing and another opening in one batch never reads as one less;
 2. the dock's window source (`zwlr_foreign_toplevel_manager_v1` on wlroots compositors),
    with the same rule;
 3. otherwise, `BOUNCE_TIMEOUT`, 10 s after the start.

@@ -135,7 +135,6 @@ pub struct Dock {
 impl Dock {
     pub fn new(sources: Sources) -> Self {
         let geometry = Geometry::from_config(&sources.config);
-        let fade = Duration::from_millis(dock::LABEL_FADE_MS);
         let mut dock = Self {
             items: Vec::new(),
             separator: None,
@@ -150,7 +149,8 @@ impl Dock {
             launches: Vec::new(),
             dropping: None,
             press: None,
-            label: Fade::new(0.0, 0.0, Duration::ZERO, fade),
+            // Hidden, and already still: no frame for it at startup.
+            label: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
             label_item: None,
             hovering: false,
             pointer: None,
@@ -405,9 +405,11 @@ impl Dock {
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Windows(windows) => {
                 self.clock();
+                // The first list is the dock at startup: in place at once.
+                let first = self.windows.is_none();
                 self.windows = Some(windows);
                 self.windows_came(0);
-                return self.refresh(self.geometry);
+                return self.refresh_as(self.geometry, !first);
             }
             Message::Shell(windows) => {
                 self.clock();
@@ -468,10 +470,20 @@ impl Dock {
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
     /// its anchor, margin and exclusive zone when the edge changed.
     fn refresh(&mut self, previous: Geometry) -> Task<Message> {
+        self.refresh_as(previous, self.geometry == previous)
+    }
+
+    /// `refresh`, the icons animated or put in place at once. The input region follows the
+    /// icons at once, when one leaves as when one arrives.
+    fn refresh_as(&mut self, previous: Geometry, animate: bool) -> Task<Message> {
         self.clock();
-        let size = self.surface_size;
-        self.rebuild(self.geometry == previous);
-        self.resize(size, previous)
+        let (size, count) = (self.surface_size, self.items.len());
+        self.rebuild(animate);
+        let resized = self.resize(size, previous);
+        if self.items.len() == count {
+            return resized;
+        }
+        Task::batch([resized, self.input_region()])
     }
 
     /// Tells the compositor what changed of the surface since it had `size` with `previous`.
@@ -695,6 +707,10 @@ impl Dock {
         let Some(id) = self.items[index].entry().map(|e| e.id.clone()) else {
             return Task::none();
         };
+        if ids == self.shown_pins() {
+            // Same order on screen: nothing moves, even among pins that are not shown.
+            return Task::none();
+        }
         let before = ids
             .iter()
             .position(|i| *i == id)
@@ -743,11 +759,22 @@ impl Dock {
             // Still open: it moves after the separator.
             return self.unpin(index);
         }
-        if self.pinned != press.pinned {
+        if self.shown_pins() != press.shown {
             tracing::info!(pinned = ?self.pinned, "reordered");
             return self.save_pinned();
         }
+        // Back where it was: the list too, and the file is not written.
+        self.pinned = press.pinned;
         Task::none()
+    }
+
+    /// The pinned applications shown, in order.
+    fn shown_pins(&self) -> Vec<&str> {
+        let end = self.separator.unwrap_or(self.items.len());
+        self.items[..end.min(self.items.len())]
+            .iter()
+            .filter_map(|i| i.entry().map(|e| e.id.as_str()))
+            .collect()
     }
 
     fn pointer(&mut self, event: Pointer, now: Duration) -> Task<Message> {
@@ -773,7 +800,8 @@ impl Dock {
                 match (button, target, self.pointer) {
                     (mouse::Button::Left, Some(index), Some(point)) => {
                         let target = self.items[index].target();
-                        self.press = Some(Press::new(target, point, self.pinned.clone()));
+                        let shown = self.shown_pins().into_iter().map(String::from).collect();
+                        self.press = Some(Press::new(target, point, self.pinned.clone(), shown));
                     }
                     (mouse::Button::Right, Some(index), _) => return self.open_menu(index),
                     _ => {}

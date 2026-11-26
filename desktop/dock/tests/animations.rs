@@ -506,3 +506,42 @@ fn the_animations_render_without_a_screen() {
     assert!(capture(&dock, "dock-drag").expect("screenshot written") > 2_000);
     color::set_active(Theme::Dark);
 }
+
+#[test]
+fn the_first_list_of_windows_is_in_place_at_once() {
+    let mut dock = dock(&[], &FOUR, DockConfig::default(), None);
+    open(&mut dock, "mystery");
+    assert_eq!(dock.items.len(), 6);
+    assert!(!dock.animating(), "the dock at startup does not animate");
+    // The next lists do.
+    open(&mut dock, "mystery,other");
+    assert!(dock.animating());
+}
+
+#[test]
+fn a_drag_back_to_its_place_writes_nothing() {
+    let dir = scratch("unchanged");
+    let path = dir.join("dock.conf");
+    // A pinned application that is not installed sits between two shown ones.
+    let pinned = [
+        "org.example.Files",
+        "org.example.Missing",
+        "org.example.Terminal",
+        "example-editor",
+        "example-browser",
+    ];
+    let mut dock = dock(&[], &pinned, flat(), Some(path.clone()));
+    let t = settle(&mut dock);
+    let rest = dock.layout(t);
+    let files = middle(&rest, 0);
+    press(&mut dock, files);
+    // Past the terminal, then back to its place.
+    let past = Point::new(middle(&rest, 1).x + 10.0, files.y);
+    drag_to(&mut dock, files, past);
+    assert_eq!(dock.items[1].name, "Fichiers", "it moved on screen");
+    drag_to(&mut dock, past, files);
+    assert_eq!(dock.items[0].name, "Fichiers");
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert_eq!(dock.pinned, pinned, "the hidden pin did not move");
+    assert!(!path.exists(), "nothing written");
+}

@@ -20,12 +20,15 @@ pub struct Press {
     pub dragging: bool,
     /// The icon is out of the dock: letting it go unpins it.
     pub out: bool,
-    /// The pinned list when the button went down: the file is written only if it changed.
+    /// The pinned list when the button went down.
     pub pinned: Vec<String>,
+    /// The pinned applications shown, in order, when the button went down: the file is
+    /// written only if this order changed.
+    pub shown: Vec<String>,
 }
 
 impl Press {
-    pub fn new(target: Target, at: Point, pinned: Vec<String>) -> Self {
+    pub fn new(target: Target, at: Point, pinned: Vec<String>, shown: Vec<String>) -> Self {
         Self {
             target,
             from: at,
@@ -33,6 +36,7 @@ impl Press {
             dragging: false,
             out: false,
             pinned,
+            shown,
         }
     }
 
@@ -99,7 +103,12 @@ mod tests {
 
     #[test]
     fn a_small_move_is_still_a_click() {
-        let mut press = Press::new(Target::Sherlock, Point::new(10.0, 10.0), Vec::new());
+        let mut press = Press::new(
+            Target::Sherlock,
+            Point::new(10.0, 10.0),
+            Vec::new(),
+            Vec::new(),
+        );
         press.pointer = Point::new(12.0, 12.0);
         assert!(!press.past_threshold());
         press.pointer = Point::new(10.0, 10.0 + dock::DRAG_THRESHOLD);
