@@ -22,8 +22,8 @@ iced = { version = "=0.14.0", default-features = false, features = [
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 # `kill`, to close the launcher already open: the version the bar and the dock already pin.
 libc = "=0.2.191"
-# The pinned list as the dock shows it, and its file, for « Garder dans le Dock » (workspace
-# crates).
+# The pinned list as the dock shows it, and its file, for the menu that pins an application
+# (workspace crates).
 dock = { path = "../dock" }
 dock-config = { path = "../dock-config" }
 # Application icons (workspace crate).
