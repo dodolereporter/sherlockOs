@@ -29,6 +29,10 @@ sherlock-ui = { path = "../sherlock-ui" }
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+# The notification history (org.nomos.Notifications.History) on the session bus: the version
+# and features the notification daemon and Evidence pin (blocking API, its own small executor,
+# no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
@@ -38,6 +42,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# The real notification daemon on a private bus, for the notification centre test (workspace
+# crate).
+notifications = { path = "../notifications" }
 # A fake compositor for the shell protocols test: the server side that smithay already pulls.
 shell-protocol = { path = "../shell-protocol", features = ["client", "server"] }
 wayland-server = "=0.31.14"

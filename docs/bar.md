@@ -270,6 +270,85 @@ ring stayed one Tab behind the real focus and Enter activated the next button.
 The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
 them yet, so the menu does not show them.
 
+## Panels (D-20b)
+
+A click on the indicators opens the control centre; a click on the date and time opens the
+calendar. Each is an `xdg_popup` of the bar surface, with a grab: a click elsewhere closes it,
+and so does Escape or a second click on its button. Opening one closes the other and the
+Sherlock menu. Both indicators and clock are ghost buttons (`panels::bar_button`), veiled while
+their panel is open, and Tab reaches them after the workspaces; their padding is taken back
+from the gaps, so the bar looks the same as before.
+
+| Module | Role |
+| --- | --- |
+| `panel.rs` | Which panel, its size, its place under the bar, its input region; the views of the centre and of the calendar |
+| `calendar.rs` | Months, leap years, the weekday of a date, the six weeks of a month from Monday |
+| `history.rs` | Client of `org.nomos.Notifications.History`: list, group by application, clear, run an action, `Changed` |
+| `bus.rs` | The session bus, opened on first use and shared |
+
+Tokens, styles and French texts are in `sherlock_ui::panels`.
+
+**Place.** The board puts the panels 54 from the top, and their right edge at 1428, where the
+bar ends: `panels::BELOW_BAR` (8) under the 46 the bar takes. The popup is placed from the bar
+width (each `Resized` of the bar surface) and its side margin, so that it keeps 12 from the
+right edge when the bar is attached. On the GPU, the surface holds the panel shadow of the
+board (`0 28px 70px`), cut on the right where the screen ends; the input region is the panel
+alone. In software it holds the 8 under the bar, like the menu its 6. The anchor rectangle is
+the centre of the top edge of the surface, as for the menu (`panel::anchor_rect`).
+
+### Notification centre
+
+The history of the notification daemon, newest first, a card per application (tile with its
+initial, name, time), its three newest notifications in it and « N autres notifications » under
+them. A card of one notification looks like the board's; a card of several puts each time on
+the right of its title. The time is the hour on the day it came, the short date before. A
+notification still open keeps its buttons (three at most, the first one primary, `default`
+left out): a click runs the action through the daemon, which sends `ActionInvoked` to the
+application and closes it. « Tout effacer » empties the history; open notifications stay on
+screen. Without a notification, « Aucune notification »; without the daemon, « Le service des
+notifications ne répond pas. » and a warning in the log.
+
+The list is read when the centre opens, and again on each `Changed` of the daemon while it is
+open (an iced subscription on the session bus, `history::watch`): nothing polls. The calls run
+in iced tasks, never on the interface thread. The interface is described in
+`docs/notifications.md` (History over D-Bus).
+
+The board shows the centre next to the quick settings, both 54 from the top: the control
+centre is both, and its height is the quick settings' (`panels::CONTROL_HEIGHT`); the
+notification list scrolls inside it.
+
+### Calendar
+
+No board draws it: the panel glass of the board, 282 wide (seven columns of 36). The month and
+its year in Space Grotesk 17, the arrows « Mois précédent » and « Mois suivant », the weekday
+heads « lu » to « di », Monday first, then always six weeks, so that the panel keeps its height:
+the days of the months around are faded (tertiary text), today is a green disc. Under a line,
+the slot of the agenda, « Bientôt : tes rendez-vous du jour ici. »: there is no agenda in 0.1.
+No week numbers: no board shows them.
+
+It opens on the month of the bar's clock, whose year now comes with the date (`LocalTime::year`).
+Page Down and Page Up show the next and previous months, Home comes back to today's.
+
+The dates are computed by `calendar.rs` (Gregorian, Sakamoto's weekday), not by the C library:
+only today comes from `localtime_r`.
+
+### Keyboard
+
+| Where | Key | Effect |
+| --- | --- | --- |
+| Bar | Tab | Also reaches the indicators and the clock; Enter or Space opens their panel |
+| Panel | Escape | Closes it |
+| Panel | Tab, Shift+Tab | Moves between its controls (iced focus), Enter or Space activates |
+| Calendar | Page Down, Page Up, Home | Next month, previous month, today's month |
+
+![The notification centre](../desktop/bar/screenshots/notification-centre.png)
+![The notification centre in the light theme](../desktop/bar/screenshots/notification-centre-light.png)
+![The calendar](../desktop/bar/screenshots/calendar.png)
+![The calendar in the light theme](../desktop/bar/screenshots/calendar-light.png)
+
+From `cargo test -p bar --test render`, at scale 2, in software: the board's three
+applications (with a second Sherlock notification), and November 2026 on the board's date.
+
 ## Running and checking by hand
 
 On the author's machine (Plasma X11), in a nested KWin Wayland:
@@ -375,7 +454,16 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Bursts**: a burst of monitor lines gives a single refresh.
 - **Rendering** (`tests/render.rs`): headless screenshot of the bar and the menu, and of the
   attached bar (`bar-attached`, `bar-attached-light`), expected texts, a click on a workspace
-  and on a menu entry yields the right message.
+  and on a menu entry yields the right message. The calendar and the notification centre in
+  both themes, full and empty; a click on the indicators or the clock, on a month arrow, on an
+  action and on « Tout effacer ».
+- **Calendar** (`calendar.rs`): leap years (2000, 1900, 2028), weekdays of known dates, months
+  across years, the grid of November and December 2026 and of February 2027 and 2028.
+- **Panels** (`panel.rs`): both panels land at 54, their right edge at 1428, with and without
+  their shadow, and 12 from the edge under an attached bar; the time of a notification.
+- **Notification centre** (`tests/history.rs`): the real daemon on a private bus: the history
+  listed and grouped, `Changed` after each notification, an action run from the centre, « Tout
+  effacer », and a bus without the daemon.
 - **Contrast** (`sherlock-ui`): bar texts and workspace chips (active, occupied, empty), on
   the bar over the desktop and its three discs, and on the opaque attached bar.
 
@@ -438,7 +526,7 @@ shows against one.
 
 - The application name from its `.desktop` file: the bar shows the window title.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
-- Quick settings on a click on an indicator (Panels batch), the dock (D-21), the launcher
+- The quick settings of the control centre: batch D-20b2. The dock (D-21), the launcher
   (D-22).
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
   already follows that screen alone; a bar on every screen needs the menu to open on the

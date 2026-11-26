@@ -5,7 +5,10 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use bar::app::{Bar, Message};
+use bar::calendar::Month;
+use bar::history::{Entry, Group};
 use bar::menu;
+use bar::panel::{self, History, Panel};
 use bar::source::battery::{Battery, Charge};
 use bar::source::clock::LocalTime;
 use bar::source::network::{Link, Network};
@@ -33,6 +36,7 @@ fn sample() -> Bar {
     let mut state = Bar::default();
     let messages = [
         Message::Clock(LocalTime {
+            year: 2026,
             weekday: 2,
             day: 24,
             month: 11,
@@ -189,4 +193,180 @@ fn a_click_in_the_menu_picks_its_entry() {
         .into_messages()
         .any(|m| matches!(m, Message::Activate(menu::Action::Lock)));
     assert!(activated);
+}
+
+/// A notification of the Panels board.
+fn entry(
+    id: u32,
+    app: &str,
+    summary: &str,
+    body: &str,
+    when: &str,
+    actions: &[(&str, &str)],
+) -> Entry {
+    Entry {
+        id,
+        app: app.to_owned(),
+        summary: summary.to_owned(),
+        body: body.to_owned(),
+        actions: actions
+            .iter()
+            .map(|(k, l)| ((*k).to_owned(), (*l).to_owned()))
+            .collect(),
+        open: !actions.is_empty(),
+        received: 0,
+        critical: false,
+        when: when.to_owned(),
+    }
+}
+
+/// The notification centre of the Panels board: three applications, the second one with its
+/// two buttons, Sherlock with two notifications.
+fn board_history() -> History {
+    History::Ready(vec![
+        Group {
+            app: String::from("Sherlock"),
+            entries: vec![
+                entry(
+                    5,
+                    "Sherlock",
+                    "Build terminé",
+                    "compositeur a compilé sans erreur.",
+                    "21:44",
+                    &[],
+                ),
+                entry(
+                    2,
+                    "Sherlock",
+                    "Tests passés",
+                    "412 tests, aucun échec.",
+                    "20:02",
+                    &[],
+                ),
+            ],
+        },
+        Group {
+            app: String::from("Conteneurs"),
+            entries: vec![entry(
+                4,
+                "Conteneurs",
+                "front-next s'est arrêté",
+                "Le conteneur ne répond plus.",
+                "21:31",
+                &[("restart", "Relancer"), ("logs", "Voir les logs")],
+            )],
+        },
+        Group {
+            app: String::from("Mises à jour"),
+            entries: vec![entry(
+                3,
+                "Mises à jour",
+                "3 paquets à mettre à jour",
+                "mesa, pipewire et le noyau.",
+                "20:15",
+                &[],
+            )],
+        },
+    ])
+}
+
+fn panel_size(state: &Bar, which: Panel) -> (f32, f32) {
+    let (width, height) = panel::surface_size(which, state.panel_margins);
+    (width as f32, height as f32)
+}
+
+/// The calendar and the notification centre in each theme, full and empty: `calendar`,
+/// `notification-centre`, `notification-centre-empty`, then their `-light` versions.
+#[test]
+fn the_panels_render_in_both_themes() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            state.month = Some(Month {
+                year: 2026,
+                month: 11,
+            });
+            let size = panel_size(&state, Panel::Calendar);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+            assert_written(capture(ui, &format!("calendar{suffix}")));
+
+            state.history = board_history();
+            let size = panel_size(&state, Panel::Control);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("notification-centre{suffix}")));
+
+            state.history = History::Ready(Vec::new());
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("notification-centre-empty{suffix}")));
+        });
+    }
+}
+
+#[test]
+fn the_calendar_marks_today_and_walks_the_months() {
+    let mut state = sample();
+    state.panel_margins = panel::margins(false);
+    let size = panel_size(&state, Panel::Calendar);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    for text in ["novembre 2026", "lu", "di", "24", "30"] {
+        assert!(ui.find(text).is_ok(), "{text} missing from the calendar");
+    }
+    ui.click("Mois suivant").expect("arrow found");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(matches!(
+        messages[..],
+        [Message::ShowMonth(Month {
+            year: 2026,
+            month: 12
+        })]
+    ));
+    let _ = state.update(Message::ShowMonth(Month {
+        year: 2026,
+        month: 12,
+    }));
+    let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    let mut ui = ui;
+    assert!(ui.find("décembre 2026").is_ok());
+}
+
+#[test]
+fn the_centre_runs_an_action_and_clears() {
+    let mut state = sample();
+    state.panel_margins = panel::margins(false);
+    state.history = board_history();
+    let size = panel_size(&state, Panel::Control);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+    for text in [
+        "Notifications",
+        "Build terminé",
+        "Conteneurs",
+        "21:31",
+        "Mises à jour",
+    ] {
+        assert!(ui.find(text).is_ok(), "{text} missing from the centre");
+    }
+    ui.click("Relancer").expect("action found");
+    ui.click("Tout effacer").expect("button found");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(matches!(
+        &messages[..],
+        [Message::InvokeAction(4, key), Message::ClearHistory] if key == "restart"
+    ));
+}
+
+#[test]
+fn a_click_on_the_indicators_or_the_clock_opens_their_panel() {
+    let state = sample();
+    let mut ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+    ui.click("21:46").expect("clock found");
+    ui.click("82\u{202F}%").expect("battery found");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(matches!(
+        messages[..],
+        [
+            Message::TogglePanel(Panel::Calendar),
+            Message::TogglePanel(Panel::Control)
+        ]
+    ));
 }

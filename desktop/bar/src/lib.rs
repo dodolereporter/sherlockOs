@@ -3,7 +3,11 @@
 //! `docs/bar.md`.
 
 pub mod app;
+pub mod bus;
+pub mod calendar;
+pub mod history;
 pub mod menu;
+pub mod panel;
 pub mod shape;
 pub mod source;
 pub mod user;

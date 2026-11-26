@@ -12,8 +12,8 @@ texts stay in French, from `sherlock-ui` (`sherlock_ui::notifications`).
 From the headless rendering test (`tests/render.rs`), at scale 2, on the desktop background: a
 critical notification with two actions over a normal one whose body has a bold span.
 
-The notification centre of the panels is not in this batch: the daemon keeps the history it
-will show (see History).
+The notification centre of the top bar (batch D-20b) shows that history (see History over
+D-Bus).
 
 ## Architecture
 
@@ -171,8 +171,29 @@ settings panel and Control Room.
 
 The 100 newest notifications (`notifications::HISTORY`), in memory, newest first, whatever
 became of them: shown, hidden by Do not disturb, expired, closed. A replacement takes the place
-of the old entry. `Core::history()` and `Core::clear_history()` are the API for the centre. The
+of the old entry. `Core::history()` and `Core::clear_history()` are the API for the centre, which reaches them
+through D-Bus (below). The
 history is lost when the daemon stops.
+
+## History over D-Bus
+
+The notification centre of the top bar (`docs/bar.md`, Panels) reads the history through a
+small private interface of the daemon, `org.nomos.Notifications.History`, served under the
+same well-known name, `org.freedesktop.Notifications`, at `/org/nomos/Notifications`
+(`history.rs`).
+
+| Member | Behavior |
+| --- | --- |
+| `List() → a(usssa(ss)bxb)` | The history, newest first: id, application, title, body as plain text (markup spans joined), actions as key and label, whether it is still open, the time it came (seconds since 1970), whether it is critical |
+| `Clear()` | Empties the history (« Tout effacer »). Open notifications stay on screen |
+| `InvokeAction(u id, s key)` | Runs the action of a notification still open, as its button would: `ActionInvoked`, then it closes (reason 2) unless it is resident. An id no longer open, or a key it does not have, gets `org.freedesktop.DBus.Error.Failed` |
+| `Changed` (signal) | The history changed: a notification came or was replaced, closed, or the history was emptied. A listener reads `List` again |
+
+`Changed` is sent by the expiry thread, like the signals of the notifications the daemon closes
+itself: never from inside the method call that changed the history.
+
+Anyone on the session bus can call it, as anyone there can already watch the notifications go
+by: the session bus is the user's. The centre shows what applications sent, as plain text.
 
 ## Running and checking by hand
 
@@ -239,7 +260,8 @@ with the bar and the dock.
   `CloseNotification` and its signal, the capabilities and the server information; replacement
   by `replaces_id`, an unknown id not taken over; expiry (reason 1), the default timeout,
   critical never expiring; actions (`ActionInvoked` then reason 2), the default action on a
-  click, a click without one, `resident`; Do not disturb (only critical shows, all in the
+  click, a click without one, `resident`; the history interface (`List`, `Changed`,
+  `InvokeAction` on an open and a closed notification, `Clear`); Do not disturb (only critical shows, all in the
   history, the hidden ones closed with reason 4, switched off at once); `CloseNotification` of
   an unknown id is an error; two clients: the second cannot replace nor close the first one's
   notification; the name already taken.
@@ -279,8 +301,6 @@ with the bar and the dock.
 
 ## What this batch does not do
 
-- The notification centre and its grouping by application, « Tout effacer »: the panels batch,
-  on top of `Core::history()`.
 - Theme icon names: after the shared icon lookup of D-22b.
 - Muting in game mode: there is no game mode yet; it will set Do not disturb, or a state of its
   own in the same file.

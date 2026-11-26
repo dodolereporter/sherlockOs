@@ -19,7 +19,7 @@ type StyleFn<'a> = Box<dyn Fn(&Theme, button::Status) -> button::Style + 'a>;
 
 /// A clickable component, ready to become an `Element`.
 pub struct Control<'a, Message> {
-    button: Button<'a, Message>,
+    pub(crate) button: Button<'a, Message>,
     style: StyleFn<'a>,
     on_press: Option<Message>,
     radius: f32,
@@ -29,7 +29,7 @@ pub struct Control<'a, Message> {
 }
 
 impl<'a, Message: Clone + 'a> Control<'a, Message> {
-    fn new(
+    pub(crate) fn new(
         content: impl Into<Element<'a, Message>>,
         style: impl Fn(&Theme, button::Status) -> button::Style + 'a,
         on_press: Option<Message>,

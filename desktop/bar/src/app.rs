@@ -17,9 +17,12 @@ use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::surface::{self, Elevation};
-use sherlock_ui::{metrics, strings, typography};
+use sherlock_ui::{metrics, panels, strings, typography};
 
+use crate::calendar::Month;
+use crate::history::{self, Entry};
 use crate::menu::{self, Action};
+use crate::panel::{self, History, Panel};
 use crate::shape::{Geometry, Shape};
 use crate::source::battery::{Battery, Charge, UPower};
 use crate::source::clock::{LocalTime, SystemClock};
@@ -28,7 +31,7 @@ use crate::source::shell::{self, Auto};
 use crate::source::sound::{Pactl, Sound};
 use crate::source::watch;
 use crate::source::workspaces::{Desktop, Group};
-use crate::user;
+use crate::{bus, user};
 
 #[derive(Debug, Default)]
 pub struct Bar {
@@ -62,6 +65,16 @@ pub struct Bar {
     focus: Option<usize>,
     /// The theme of the appearance file, shown with a fade.
     pub theme: ThemeFade,
+    /// The panel open, and its surface.
+    panel: Option<(Panel, Id)>,
+    /// Room around the panel in its surface: the gap below the bar, and its shadow on the GPU.
+    pub panel_margins: Padding,
+    /// Width of the bar surface, which the panels are placed from.
+    width: Option<f32>,
+    /// The month the calendar shows.
+    pub month: Option<Month>,
+    /// What the notification centre shows.
+    pub history: History,
 }
 
 /// A bar button that Tab can reach.
@@ -69,6 +82,10 @@ pub struct Bar {
 pub enum Target {
     Sherlock,
     Workspace(usize),
+    /// The indicators: the control centre.
+    Status,
+    /// The date and time: the calendar.
+    Clock,
 }
 
 #[to_layer_message(multi)]
@@ -91,6 +108,25 @@ pub enum Message {
     /// A mouse button was pressed somewhere in the bar or its menu.
     Pointer,
     Closed(Id),
+    /// The width of a surface, when it is configured.
+    Resized(Id, f32),
+    /// Opens a panel, or closes it when it is open.
+    TogglePanel(Panel),
+    ClosePanel,
+    /// The calendar shows this month.
+    ShowMonth(Month),
+    /// Page Up or Page Down in the calendar: the month before or after.
+    Page(bool),
+    /// The history of the notification daemon, or why it could not be read.
+    History(Result<Vec<Entry>, String>),
+    /// The daemon says the history changed.
+    HistoryChanged,
+    /// « Tout effacer ».
+    ClearHistory,
+    /// An action of an open notification, from the centre.
+    InvokeAction(u32, String),
+    /// A call to the daemon ended.
+    HistoryDone(Result<(), String>),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
     Frame(Instant),
@@ -111,6 +147,11 @@ impl Bar {
         self.menu.is_some()
     }
 
+    /// The panel open, if any.
+    pub fn panel_open(&self) -> Option<Panel> {
+        self.panel.map(|(panel, _)| panel)
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
         let appearance = match appearance_config::path() {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
@@ -121,9 +162,15 @@ impl Bar {
         } else {
             Subscription::none()
         };
+        let history = if self.panel_open() == Some(Panel::Control) {
+            Subscription::run(history::watch).map(|()| Message::HistoryChanged)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
             appearance,
             frames,
+            history,
             Subscription::run(|| watch(SystemClock::default(), "clock")).map(Message::Clock),
             Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
             Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
@@ -137,6 +184,7 @@ impl Bar {
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
             iced::event::listen_with(on_pointer),
+            iced::event::listen_with(on_resize),
         ])
     }
 
@@ -156,6 +204,72 @@ impl Bar {
                 return self.reshape(Instant::now());
             }
             Message::ToggleMenu => return self.toggle_menu(),
+            Message::TogglePanel(panel) => return self.toggle_panel(panel),
+            Message::ClosePanel => return self.close_panel(),
+            Message::Resized(id, width) => {
+                if Some(id) == self.surface {
+                    self.width = Some(width);
+                }
+            }
+            Message::ShowMonth(month) => self.month = Some(month),
+            Message::Page(forward) => {
+                if let Some(month) = self.month {
+                    self.month = Some(if forward {
+                        month.next()
+                    } else {
+                        month.previous()
+                    });
+                }
+            }
+            Message::History(Ok(entries)) => {
+                let today = panel::today(self.clock.as_ref());
+                let entries = entries
+                    .into_iter()
+                    .map(|entry| Entry {
+                        when: panel::when(entry.received, today),
+                        ..entry
+                    })
+                    .collect();
+                self.history = History::Ready(history::group(entries));
+            }
+            Message::History(Err(error)) => {
+                tracing::warn!(%error, "cannot read the notification history");
+                self.history = History::Unavailable;
+            }
+            Message::HistoryChanged if self.panel_open() == Some(Panel::Control) => {
+                return load_history();
+            }
+            Message::HistoryChanged => {}
+            Message::ClearHistory => {
+                return Task::perform(
+                    async { history::clear(&bus::session().await?).await },
+                    |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
+                );
+            }
+            Message::InvokeAction(id, key) => {
+                return Task::perform(
+                    async move { history::invoke(&bus::session().await?, id, &key).await },
+                    |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
+                );
+            }
+            Message::HistoryDone(done) => {
+                if let Err(error) = done {
+                    tracing::warn!(%error, "the notification daemon refused");
+                }
+                return load_history();
+            }
+            // Escape closes the panel; Enter and Space belong to the control that has the
+            // focus in it.
+            Message::MenuKey(menu::Key::Close) if self.panel.is_some() => {
+                return self.close_panel();
+            }
+            Message::MenuKey(menu::Key::First) if self.panel_open() == Some(Panel::Calendar) => {
+                self.month = panel::today(self.clock.as_ref()).map(Month::of);
+            }
+            Message::MenuKey(_) if self.panel.is_some() => {}
+            Message::Focus(direction) if self.panel.is_some() => {
+                return focus::advance(direction);
+            }
             Message::MenuKey(key) if self.menu_open() => match key {
                 menu::Key::Close => return self.close_menu(),
                 menu::Key::Activate => {
@@ -211,11 +325,15 @@ impl Bar {
                 return self.apply_shape();
             }
             Message::Closed(id) => {
-                // The compositor closes the menu on a click elsewhere (popup_done).
+                // The compositor closes the menu and the panels on a click elsewhere
+                // (popup_done).
                 self.outputs.remove(&id);
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
+                }
+                if self.panel.is_some_and(|(_, panel)| panel == id) {
+                    self.panel = None;
                 }
             }
             _ => {}
@@ -279,11 +397,14 @@ impl Bar {
         Task::done(Message::MarginChange { id, margin })
     }
 
-    /// The bar buttons, in Tab order: Sherlock, then the workspaces.
+    /// The bar buttons, in Tab order: Sherlock, the workspaces, the indicators, the clock.
     pub fn targets(&self) -> Vec<Target> {
         let workspaces = self.group().map_or(0, |g| g.workspaces.len());
+        let status = self.network.is_some() || self.sound.is_some() || self.battery.is_some();
         std::iter::once(Target::Sherlock)
             .chain((0..workspaces).map(Target::Workspace))
+            .chain(status.then_some(Target::Status))
+            .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
     }
 
@@ -297,13 +418,77 @@ impl Bar {
         self.focused().map(|target| match target {
             Target::Sherlock => Message::ToggleMenu,
             Target::Workspace(i) => Message::SelectWorkspace(i),
+            Target::Status => Message::TogglePanel(Panel::Control),
+            Target::Clock => Message::TogglePanel(Panel::Calendar),
         })
+    }
+
+    /// Opens `panel` under the right end of the bar, or closes it when it is open. Another
+    /// panel or the menu closes first.
+    fn toggle_panel(&mut self, which: Panel) -> Task<Message> {
+        let open = self.panel_open();
+        let closed = self.close_panel().chain(self.close_menu());
+        if open == Some(which) {
+            return closed;
+        }
+        let Some(surface) = self.surface else {
+            tracing::warn!("bar surface unknown: the panel cannot open");
+            return closed;
+        };
+        self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
+        let (width, height) = panel::surface_size(which, self.panel_margins);
+        let bar_width = self
+            .width
+            .unwrap_or(metrics::REFERENCE_SCREEN.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE);
+        let side = self.applied.margin_side as f32;
+        let (x, y, anchor_width, anchor_height) =
+            panel::anchor_rect(which, self.panel_margins, bar_width, side);
+        let settings = IcedNewPopupSettings::new(
+            surface,
+            PixelSize::px(width, height),
+            Position::new(x, y),
+            PixelSize::px(anchor_width, anchor_height),
+        )
+        .anchor(PopupAnchor::Bottom)
+        .gravity(PopupGravity::Bottom);
+        let id = Id::unique();
+        self.panel = Some((which, id));
+        let (x, y, width, height) = panel::input_rect(which, self.panel_margins);
+        let region = RegionActionCB::new(move |region| {
+            if let Err(error) = region.add(x, y, width, height) {
+                tracing::warn!(%error, "cannot limit the panel's input region");
+            }
+        });
+        let opened = closed
+            .chain(Task::done(Message::NewPopUp { settings, id }))
+            .chain(Task::done(Message::SetInputRegion {
+                id,
+                callback: region,
+            }));
+        match which {
+            Panel::Control => {
+                self.history = History::Loading;
+                opened.chain(load_history())
+            }
+            Panel::Calendar => {
+                self.month = panel::today(self.clock.as_ref()).map(Month::of);
+                opened
+            }
+        }
+    }
+
+    fn close_panel(&mut self) -> Task<Message> {
+        match self.panel.take() {
+            Some((_, id)) => window::close(id),
+            None => Task::none(),
+        }
     }
 
     fn toggle_menu(&mut self) -> Task<Message> {
         if self.menu_open() {
             return self.close_menu();
         }
+        let closed = self.close_panel();
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
@@ -331,10 +516,12 @@ impl Bar {
                 tracing::warn!(%error, "cannot limit the menu's input region");
             }
         });
-        Task::done(Message::NewPopUp { settings, id }).chain(Task::done(Message::SetInputRegion {
-            id,
-            callback: region,
-        }))
+        closed
+            .chain(Task::done(Message::NewPopUp { settings, id }))
+            .chain(Task::done(Message::SetInputRegion {
+                id,
+                callback: region,
+            }))
     }
 
     fn close_menu(&mut self) -> Task<Message> {
@@ -346,11 +533,31 @@ impl Bar {
     }
 
     pub fn view(&self, id: Id) -> Element<'_, Message> {
+        match self.panel {
+            Some((which, panel)) if panel == id => return self.view_panel(which),
+            _ => {}
+        }
         if self.menu == Some(id) {
             self.view_menu()
         } else {
             self.view_bar()
         }
+    }
+
+    /// A panel in its surface.
+    pub fn view_panel(&self, which: Panel) -> Element<'_, Message> {
+        let content = match which {
+            Panel::Control => panel::center(&self.history),
+            Panel::Calendar => {
+                let today = panel::today(self.clock.as_ref());
+                let month = self.month.or_else(|| today.map(Month::of));
+                match month {
+                    Some(month) => panel::calendar(month, today),
+                    None => iced::widget::space().into(),
+                }
+            }
+        };
+        panel::frame(content, which, self.panel_margins)
     }
 
     pub fn view_bar(&self) -> Element<'_, Message> {
@@ -394,9 +601,7 @@ impl Bar {
             .spacing(metrics::CHIP_GAP)
             .align_y(Alignment::Center);
 
-        let right = row(self.indicators())
-            .spacing(metrics::STATUS_GAP)
-            .align_y(Alignment::Center);
+        let right = self.view_indicators(&ring);
 
         // Both sides share the remaining space: the workspaces land in the middle.
         let (pad_left, pad_right) = metrics::TOP_BAR_PADDING;
@@ -411,7 +616,7 @@ impl Bar {
         .height(Length::Fill)
         .padding(Padding {
             left: pad_left + metrics::BORDER_WIDTH,
-            right: pad_right + metrics::BORDER_WIDTH,
+            right: pad_right - panels::BAR_BUTTON_PADDING + metrics::BORDER_WIDTH,
             ..Padding::ZERO
         });
         let shape = self.shape.geometry();
@@ -426,8 +631,42 @@ impl Bar {
         surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }
 
-    /// Network, sound, battery, then date and time. An indicator not read yet is not shown.
-    fn indicators(&self) -> Vec<Element<'_, Message>> {
+    /// The indicators, which open the control centre, then the date and time, which open the
+    /// calendar: two ghost buttons, whose padding the gaps give back.
+    fn view_indicators(
+        &self,
+        ring: &impl Fn(ui::Control<'static, Message>, Target) -> ui::Control<'static, Message>,
+    ) -> Element<'static, Message> {
+        let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
+        let (status, clock) = self.indicators();
+        let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
+        if !status.is_empty() {
+            let open = self.panel_open() == Some(Panel::Control);
+            let line = row(status)
+                .spacing(metrics::STATUS_GAP)
+                .align_y(Alignment::Center);
+            let toggle = Some(Message::TogglePanel(Panel::Control));
+            buttons = buttons.push(ring(panels::bar_button(line, open, toggle), Target::Status));
+        }
+        if !clock.is_empty() {
+            let open = self.panel_open() == Some(Panel::Calendar);
+            let line = row(clock)
+                .spacing(metrics::STATUS_GAP)
+                .align_y(Alignment::Center);
+            let toggle = Some(Message::TogglePanel(Panel::Calendar));
+            buttons = buttons.push(ring(panels::bar_button(line, open, toggle), Target::Clock));
+        }
+        buttons.into()
+    }
+
+    /// Network, sound and battery; then date and time. An indicator not read yet is not shown.
+    #[allow(clippy::type_complexity)]
+    fn indicators(
+        &self,
+    ) -> (
+        Vec<Element<'static, Message>>,
+        Vec<Element<'static, Message>>,
+    ) {
         let p = color::palette();
         let tint = p.text_secondary;
         let mut items = Vec::new();
@@ -455,14 +694,15 @@ impl Bar {
             let value = strings::percent(battery.percent);
             items.push(ui::status(glyph, Some(value), tint));
         }
+        let mut clock_items = Vec::new();
         if let Some(clock) = &self.clock {
-            items.push(ui::body(clock.date()).color(tint).into());
+            clock_items.push(ui::body(clock.date()).color(tint).into());
             let time = ui::body(clock.time())
                 .font(typography::UI_SEMIBOLD)
                 .color(p.text_primary);
-            items.push(time.into());
+            clock_items.push(time.into());
         }
-        items
+        (items, clock_items)
     }
 
     pub fn view_menu(&self) -> Element<'_, Message> {
@@ -518,6 +758,22 @@ fn on_output(event: ShellEvent) -> Option<Message> {
     }
 }
 
+/// Reads the history of the notification daemon.
+fn load_history() -> Task<Message> {
+    Task::perform(
+        async { history::list(&bus::session().await?).await },
+        |listed| Message::History(listed.map_err(|e| e.to_string())),
+    )
+}
+
+/// The width of a surface, each time it is configured.
+fn on_resize(event: iced::Event, _: iced::event::Status, id: Id) -> Option<Message> {
+    match event {
+        iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(id, size.width)),
+        _ => None,
+    }
+}
+
 /// Any mouse button press, captured by a widget or not.
 fn on_pointer(event: iced::Event, _: iced::event::Status, _: Id) -> Option<Message> {
     matches!(
@@ -532,7 +788,23 @@ fn on_pointer(event: iced::Event, _: iced::event::Status, _: Id) -> Option<Messa
 fn on_key(event: keyboard::Event) -> Option<Message> {
     focus::tab(event.clone())
         .map(Message::Focus)
+        .or_else(|| page(&event).map(Message::Page))
         .or_else(|| menu::key(event).map(Message::MenuKey))
+}
+
+/// Page Up and Page Down: the calendar's month before and after.
+fn page(event: &keyboard::Event) -> Option<bool> {
+    match event {
+        keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::PageDown),
+            ..
+        } => Some(true),
+        keyboard::Event::KeyPressed {
+            key: keyboard::Key::Named(keyboard::key::Named::PageUp),
+            ..
+        } => Some(false),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
