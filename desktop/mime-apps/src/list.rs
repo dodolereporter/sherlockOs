@@ -242,14 +242,15 @@ fn resolve_links(path: &Path) -> PathBuf {
 
 /// Writes a file beside the target, flushes it to disk, then renames it over the target: a
 /// reader sees the old file or the new one, never half of one.
-fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
     // A list kept elsewhere and linked into the configuration (dotfiles in a repository)
     // is written where it lives: the link stays a link.
     let target = resolve_links(path);
     let path = target.as_path();
     let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".mimeapps.list.{}.tmp", std::process::id()));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temporary = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = (|| {
         let mut file = std::fs::File::create(&temporary)?;
         file.write_all(text.as_bytes())?;

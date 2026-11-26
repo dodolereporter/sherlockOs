@@ -7,35 +7,55 @@ use std::ops::Range;
 use sherlock_ui::control_room::texts as t;
 use sherlock_ui::icon::Icon;
 
+use crate::apps::Kind;
+
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
+    Sound,
     Appearance,
     Touchpad,
+    Lock,
+    DefaultApps,
 }
 
 impl Page {
-    pub const ALL: [Self; 2] = [Self::Appearance, Self::Touchpad];
+    pub const ALL: [Self; 5] = [
+        Self::Sound,
+        Self::Appearance,
+        Self::Touchpad,
+        Self::Lock,
+        Self::DefaultApps,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Sound => t::SOUND,
             Self::Appearance => t::APPEARANCE,
             Self::Touchpad => t::TOUCHPAD,
+            Self::Lock => t::LOCK,
+            Self::DefaultApps => t::DEFAULT_APPS,
         }
     }
 
     /// The sentence under its title.
     pub fn about(self) -> &'static str {
         match self {
+            Self::Sound => t::SOUND_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
+            Self::Lock => t::LOCK_ABOUT,
+            Self::DefaultApps => t::DEFAULT_APPS_ABOUT,
         }
     }
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Sound => Icon::Sound,
             Self::Appearance => Icon::Image,
             Self::Touchpad => Icon::Touchpad,
+            Self::Lock => Icon::Lock,
+            Self::DefaultApps => Icon::Grid,
         }
     }
 }
@@ -59,10 +79,16 @@ pub enum Setting {
     Speed,
     Typing,
     ShowClicks,
+    OutputDevice,
+    OutputVolume,
+    InputDevice,
+    InputVolume,
+    LockAfter,
+    App(Kind),
 }
 
 impl Setting {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 29] = [
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -79,6 +105,19 @@ impl Setting {
         Self::Speed,
         Self::Typing,
         Self::ShowClicks,
+        Self::OutputDevice,
+        Self::OutputVolume,
+        Self::InputDevice,
+        Self::InputVolume,
+        Self::LockAfter,
+        Self::App(Kind::Browser),
+        Self::App(Kind::Mail),
+        Self::App(Kind::Editor),
+        Self::App(Kind::Terminal),
+        Self::App(Kind::Files),
+        Self::App(Kind::Images),
+        Self::App(Kind::Video),
+        Self::App(Kind::Music),
     ];
 
     /// Its page, its name, and the other words it is found by.
@@ -101,6 +140,12 @@ impl Setting {
             Self::Speed => (Touchpad, t::SPEED, t::POINTER_WORDS),
             Self::Typing => (Touchpad, t::TYPING, t::TOUCHPAD_WORDS),
             Self::ShowClicks => (Touchpad, t::SHOW_CLICKS, t::POINTER_WORDS),
+            Self::OutputDevice => (Sound, t::OUTPUT_DEVICE, t::SOUND_WORDS),
+            Self::OutputVolume => (Sound, t::OUTPUT_VOLUME, t::SOUND_WORDS),
+            Self::InputDevice => (Sound, t::INPUT_DEVICE, t::MICROPHONE_WORDS),
+            Self::InputVolume => (Sound, t::INPUT_VOLUME, t::MICROPHONE_WORDS),
+            Self::LockAfter => (Lock, t::LOCK_AFTER, t::LOCK_WORDS),
+            Self::App(kind) => (DefaultApps, kind.texts().0, t::APPS_WORDS),
         }
     }
 

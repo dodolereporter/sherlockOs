@@ -211,8 +211,11 @@ impl App {
             ]
             .spacing(cr::TITLE_GAP);
             let cards = match self.page {
+                Page::Sound => self.sound(inner),
                 Page::Appearance => self.appearance(inner),
                 Page::Touchpad => self.touchpad(inner),
+                Page::Lock => self.lock(inner),
+                Page::DefaultApps => self.default_apps(inner),
             };
             Column::new()
                 .push(heading)

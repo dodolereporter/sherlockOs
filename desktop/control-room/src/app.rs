@@ -18,8 +18,14 @@ use sherlock_ui::focus;
 use sherlock_ui::motion::{Animation, Fade, SCALE_PRECISION};
 use sherlock_ui::{dock, wallpapers};
 
+use mime_apps::Catalog;
+use system_services::Problem;
+use system_services::audio::{Device, Pactl};
+
+use crate::apps::{self, Choice, Kind};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
+use crate::sound::{self, Audio};
 use crate::thumbnails::{self, Thumbnail};
 
 /// Identifier of the search field.
@@ -37,7 +43,7 @@ impl Config {
     pub fn from_env() -> Option<Self> {
         Some(Self {
             paths: Paths::from_env()?,
-            page: Page::ALL[0],
+            page: Page::Appearance,
         })
     }
 }
@@ -50,6 +56,39 @@ impl std::fmt::Display for Hour {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&texts::hour(self.0))
     }
+}
+
+/// A delay before the lock, in minutes (0: never), as a dropdown menu shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Delay(pub u32);
+
+impl std::fmt::Display for Delay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => f.write_str(texts::NEVER),
+            60 => f.write_str(texts::ONE_HOUR),
+            n => f.write_str(&texts::minutes(n)),
+        }
+    }
+}
+
+/// The delays the lock page offers, and `current` if it is another one.
+pub(crate) fn delays(current: u32) -> Vec<Delay> {
+    let mut delays: Vec<Delay> = cr::LOCK_DELAYS.iter().copied().map(Delay).collect();
+    if !delays.contains(&Delay(current)) {
+        delays.push(Delay(current));
+        // « Jamais » stays last.
+        delays.sort_by_key(|d| if d.0 == 0 { u32::MAX } else { d.0 });
+    }
+    delays
+}
+
+/// What the sound page knows of the devices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sound {
+    Loading,
+    Ready(Audio),
+    Unavailable,
 }
 
 /// A setting changed by the interface.
@@ -71,6 +110,7 @@ pub enum Change {
     Speed(u8),
     Typing(bool),
     ShowClicks(bool),
+    LockAfter(Delay),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +137,11 @@ pub enum Message {
     Window(WindowAction),
     Thumbnails(Arc<Vec<Thumbnail>>),
     Set(Change),
+    /// The devices read, or the reason they are not.
+    Audio(Result<Audio, Problem>),
+    SetSound(sound::Change),
+    Catalog(Arc<Catalog>),
+    SetApp(Kind, Choice),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -163,8 +208,12 @@ pub struct App {
     /// The folded sidebar, over the page in a narrow window.
     pub(crate) sidebar: Slide,
     pub(crate) thumbnails: HashMap<&'static str, image::Handle>,
-    /// Files changed and not written yet, and when to write them.
+    pub(crate) sound: Sound,
+    /// The installed applications and their associations, once read.
+    pub(crate) catalog: Option<Arc<Catalog>>,
+    /// Files changed and not written yet, volumes not set yet, and when to do it.
     pending: Vec<File>,
+    volumes: Vec<(Device, u8)>,
     save_at: Option<Instant>,
     pub(crate) theme: ThemeFade,
     origin: Instant,
@@ -184,7 +233,10 @@ impl App {
             spotlight: None,
             sidebar: Slide::at_rest(false),
             thumbnails: HashMap::new(),
+            sound: Sound::Loading,
+            catalog: None,
             pending: Vec::new(),
+            volumes: Vec::new(),
             save_at: None,
             theme: ThemeFade::default(),
             origin: Instant::now(),
@@ -192,7 +244,29 @@ impl App {
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
             Message::Thumbnails(Arc::new(found))
         });
-        (app, load)
+        let pactl = app.pactl();
+        let audio = Task::perform(async move { sound::read(&pactl) }, Message::Audio);
+        let catalog = app.load_catalog();
+        (app, Task::batch([load, audio, catalog]))
+    }
+
+    fn pactl(&self) -> Pactl {
+        Pactl {
+            program: self.paths.pactl.clone(),
+        }
+    }
+
+    /// Reads the applications and their associations off the interface thread.
+    fn load_catalog(&self) -> Task<Message> {
+        let (dirs, desktops, locales) = (
+            self.paths.apps.clone(),
+            self.paths.desktops.clone(),
+            self.paths.locales.clone(),
+        );
+        Task::perform(
+            async move { Arc::new(Catalog::load(dirs, &desktops, &locales)) },
+            Message::Catalog,
+        )
     }
 
     /// Time on the clock of the animations.
@@ -287,20 +361,23 @@ impl App {
                     self.spotlight = None;
                 }
                 if self.save_at.is_some_and(|at| instant >= at) {
-                    self.flush();
+                    return self.flush();
                 }
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Window(action) => {
-                if action == WindowAction::Close {
-                    self.flush();
-                }
-                return window::latest().and_then(move |id| match action {
+                // Closing sets the volumes still waiting first, then closes.
+                let waiting = match action {
+                    WindowAction::Close => self.flush(),
+                    _ => Task::none(),
+                };
+                let window = window::latest().and_then(move |id| match action {
                     WindowAction::Drag => window::drag(id),
                     WindowAction::Minimize => window::minimize(id, true),
                     WindowAction::Maximize => window::toggle_maximize(id),
                     WindowAction::Close => window::close(id),
                 });
+                return waiting.chain(window);
             }
             Message::Thumbnails(found) => {
                 self.thumbnails = found
@@ -319,11 +396,54 @@ impl App {
                 if is_continuous(change) {
                     self.save_at = Some(Instant::now() + cr::SAVE_DELAY);
                 } else {
-                    self.flush();
+                    return self.flush();
                 }
+            }
+            Message::Audio(read) => {
+                self.sound = match read {
+                    Ok(audio) => Sound::Ready(audio),
+                    Err(problem) => {
+                        tracing::warn!(%problem, "no sound devices");
+                        Sound::Unavailable
+                    }
+                };
+            }
+            Message::SetSound(change) => {
+                // Shown at once; the volume is set once the slider rests.
+                if let Sound::Ready(audio) = &mut self.sound {
+                    audio.show(&change);
+                }
+                match change {
+                    sound::Change::Volume(device, v) => {
+                        self.volumes.retain(|(d, _)| *d != device);
+                        self.volumes.push((device, v));
+                        self.save_at = Some(Instant::now() + cr::SAVE_DELAY);
+                    }
+                    change => return self.set_sound(change),
+                }
+            }
+            Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::SetApp(kind, choice) => {
+                let paths = self.paths.clone();
+                let reload = self.load_catalog();
+                let write = Task::perform(
+                    async move { apps::set(&paths.apps, &paths.desktops, kind, &choice.id) },
+                    move |written| {
+                        if let Err(error) = written {
+                            tracing::warn!(%error, ?kind, "default application not written");
+                        }
+                    },
+                );
+                return write.discard().chain(reload);
             }
         }
         Task::none()
+    }
+
+    /// Asks `pactl` for `change` off the interface thread, then shows the devices again.
+    fn set_sound(&self, change: sound::Change) -> Task<Message> {
+        let pactl = self.pactl();
+        Task::perform(async move { sound::apply(&pactl, &change) }, Message::Audio)
     }
 
     /// Opens `page`: it comes in, and the folded sidebar goes.
@@ -339,13 +459,20 @@ impl App {
 
     /// Writes the files changed. A file that cannot be written goes to the log; the setting
     /// stays as chosen in the window.
-    pub fn flush(&mut self) {
+    /// The volumes waiting are set off the interface thread: the task returned.
+    pub fn flush(&mut self) -> Task<Message> {
         self.save_at = None;
         for file in std::mem::take(&mut self.pending) {
             if let Err(error) = self.settings.save(file, &self.paths) {
                 tracing::warn!(%error, ?file, "setting not written");
             }
         }
+        let volumes = std::mem::take(&mut self.volumes);
+        Task::batch(
+            volumes
+                .into_iter()
+                .map(|(device, v)| self.set_sound(sound::Change::Volume(device, v))),
+        )
     }
 
     /// Puts the animations at their end, for a capture.
@@ -392,6 +519,7 @@ impl App {
             }
             Change::Typing(on) => s.touchpad.disable_while_typing = on,
             Change::ShowClicks(on) => s.pointer.show_clicks = on,
+            Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
         }
         match change {
             Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
@@ -402,6 +530,7 @@ impl App {
             | Change::AutoHide(_)
             | Change::Position(_) => File::Dock,
             Change::ShowClicks(_) => File::Pointer,
+            Change::LockAfter(_) => File::Lock,
             _ => File::Touchpad,
         }
     }

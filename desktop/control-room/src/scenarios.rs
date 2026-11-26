@@ -16,9 +16,11 @@ use sherlock_ui::color::{self, Theme};
 use sherlock_ui::control_room::{self as cr, texts as t};
 use sherlock_ui::{theme, typography};
 
-use crate::app::{App, Change, Config, Hour, Message};
+use crate::app::{App, Change, Config, Delay, Hour, Message, Sound};
+use crate::apps::{self, Kind};
 use crate::search::{Page, Setting};
 use crate::settings::{Paths, Settings};
+use crate::sound;
 use crate::thumbnails;
 
 /// A temporary folder, removed at the end.
@@ -45,7 +47,10 @@ impl Drop for TempDir {
 /// The application on a temporary `XDG_CONFIG_HOME`, with the wallpapers of `wallpapers`.
 fn bench(name: &str, wallpapers: Vec<PathBuf>) -> (TempDir, App) {
     let tmp = TempDir::new(name);
-    let paths = Paths::under(&tmp.0.join("config"), wallpapers);
+    let mut paths = Paths::under(&tmp.0.join("config"), wallpapers);
+    paths.apps = apps_dirs(&tmp.0);
+    // Never the real one: a fake `pactl` (`fake_pactl`), or none at all.
+    paths.pactl = tmp.0.join("no-pactl").into_os_string();
     let (app, _) = App::new(Config {
         paths,
         page: Page::Appearance,
@@ -92,7 +97,8 @@ fn every_setting_is_written_and_read_back() {
         let _ = app.update(Message::Set(change));
     }
     // A slider waits for its rest; closing the window writes what waits.
-    app.flush();
+    let _ = app.update(Message::Set(Change::LockAfter(Delay(15))));
+    let _ = app.flush();
     let read = Settings::load(&app.paths);
     let s = &read;
     let written = &app.settings;
@@ -120,6 +126,8 @@ fn every_setting_is_written_and_read_back() {
     assert!(text(&app.paths.dock).contains("Position=left"));
     assert!(text(&app.paths.pointer).contains("show-clicks = true"));
     assert!(text(&app.paths.wallpaper).contains("wallpaper = aurora"));
+    assert_eq!(text(&app.paths.lock), "idle-minutes = 15\n");
+    assert_eq!(read.lock.idle_minutes, 15);
 }
 
 #[test]
@@ -278,15 +286,27 @@ fn captures_of_the_pages_in_both_themes() {
     for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         let _theme = in_theme(which);
         for (page, page_name) in [
+            (Page::Sound, "sound"),
             (Page::Appearance, "appearance"),
             (Page::Touchpad, "touchpad"),
+            (Page::Lock, "lock"),
+            (Page::DefaultApps, "default-apps"),
         ] {
-            let (_tmp, mut app) = bench("capture", dirs.clone());
+            let (tmp, mut app) = bench("capture", dirs.clone());
             let _ = app.update(Message::Thumbnails(found.clone()));
+            let pactl = fake_pactl(&tmp.0);
+            let _ = app.update(Message::Audio(sound::read(&pactl)));
+            install_apps(&tmp.0);
+            let _ = app.update(Message::Catalog(catalog(&app)));
             let _ = app.update(Message::Go(page));
             let _ = app.update(Message::Set(Change::Mode(Mode::Auto)));
             app.settle();
-            for (size, size_name) in SIZES {
+            // Sound and lock, short pages, in the wide window only: the captures take time.
+            let sizes = match page {
+                Page::Sound | Page::Lock => &SIZES[..1],
+                _ => &SIZES[..],
+            };
+            for &(size, size_name) in sizes {
                 let path = capture(&app, &format!("{page_name}-{size_name}-{theme_name}"), size);
                 assert!(path.exists(), "{}", path.display());
             }
@@ -304,4 +324,188 @@ fn captures_of_the_search_and_the_folded_sidebar() {
     let _ = app.update(Message::ToggleSidebar);
     app.settle();
     capture(&app, "sidebar-narrow", SIZES[1].0);
+}
+
+/// Fake XDG folders of applications under `root`, `mimeapps.list` in its `config`.
+fn apps_dirs(root: &Path) -> mime_apps::Dirs {
+    mime_apps::Dirs {
+        config_home: root.join("config"),
+        config_dirs: Vec::new(),
+        data_home: root.join("data"),
+        data_dirs: Vec::new(),
+    }
+}
+
+/// A few applications, as a laptop has them.
+fn install_apps(root: &Path) {
+    let folder = root.join("data/applications");
+    fs::create_dir_all(&folder).expect("applications");
+    for (id, name, types, categories) in [
+        (
+            "firefox",
+            "Firefox",
+            "text/html;x-scheme-handler/http;x-scheme-handler/https;",
+            "Network;",
+        ),
+        (
+            "app.zen_browser.zen",
+            "Zen Browser",
+            "text/html;x-scheme-handler/http;x-scheme-handler/https;",
+            "Network;",
+        ),
+        (
+            "thunderbird",
+            "Thunderbird",
+            "x-scheme-handler/mailto;",
+            "Network;",
+        ),
+        ("org.kde.kate", "Kate", "text/plain;", "Utility;TextEditor;"),
+        (
+            "code",
+            "Visual Studio Code",
+            "text/plain;inode/directory;",
+            "Development;",
+        ),
+        ("org.kde.konsole", "Konsole", "", "System;TerminalEmulator;"),
+        ("foot", "Foot", "", "System;TerminalEmulator;"),
+        (
+            "evidence",
+            "Evidence",
+            "inode/directory;",
+            "System;FileManager;",
+        ),
+        (
+            "org.kde.gwenview",
+            "Gwenview",
+            "image/png;image/jpeg;",
+            "Graphics;",
+        ),
+        (
+            "mpv",
+            "mpv",
+            "video/mp4;video/webm;audio/mpeg;",
+            "AudioVideo;",
+        ),
+        (
+            "org.kde.elisa",
+            "Elisa",
+            "audio/mpeg;audio/flac;",
+            "AudioVideo;",
+        ),
+    ] {
+        let entry = format!(
+            "[Desktop Entry]\nType=Application\nName={name}\nExec={id}\nMimeType={types}\nCategories={categories}\n"
+        );
+        fs::write(folder.join(format!("{id}.desktop")), entry).expect("entry");
+    }
+}
+
+fn catalog(app: &App) -> Arc<mime_apps::Catalog> {
+    let dirs = app.paths.apps.clone();
+    Arc::new(mime_apps::Catalog::load_with_terminal(dirs, &[], &[], None))
+}
+
+/// A fake `pactl` in `root`: it writes each command it gets to `pactl.log` and answers as
+/// PipeWire's server does on a laptop with an HDMI output and a headset.
+fn fake_pactl(root: &Path) -> system_services::audio::Pactl {
+    let script = root.join("pactl");
+    let log = root.join("pactl.log");
+    let text = format!(
+        r#"#!/bin/sh
+echo "$@" >> '{log}'
+case "$1 $2" in
+  "list sinks") printf 'Sink #1\n\tName: speakers\n\tDescription: Haut-parleurs intégrés\nSink #2\n\tName: hdmi\n\tDescription: Sortie HDMI\n' ;;
+  "list sources") printf 'Source #3\n\tName: speakers.monitor\n\tMonitor of Sink: speakers\nSource #4\n\tName: mic\n\tDescription: Microphone intégré\n\tMonitor of Sink: n/a\nSource #5\n\tName: headset\n\tDescription: Casque\n\tMonitor of Sink: n/a\n' ;;
+esac
+case "$1" in
+  get-default-sink) echo speakers ;;
+  get-default-source) echo mic ;;
+  get-sink-volume) echo 'Volume: front-left: 40632 /  62% / -12.46 dB' ;;
+  get-source-volume) echo 'Volume: front-left: 29491 /  45% / -20.81 dB' ;;
+  get-sink-mute|get-source-mute) echo 'Mute: no' ;;
+esac
+"#,
+        log = log.display()
+    );
+    fs::write(&script, text).expect("fake pactl");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+    system_services::audio::Pactl {
+        program: script.into_os_string(),
+    }
+}
+
+#[test]
+fn the_sound_page_reads_and_sets_through_pactl() {
+    let (tmp, mut app) = bench("sound", Vec::new());
+    let pactl = fake_pactl(&tmp.0);
+    let audio = sound::read(&pactl).expect("devices");
+    let names: Vec<&str> = audio
+        .output
+        .devices
+        .iter()
+        .map(|d| d.description.as_str())
+        .collect();
+    assert_eq!(names, ["Haut-parleurs intégrés", "Sortie HDMI"]);
+    assert_eq!(audio.input.devices.len(), 2, "the monitor is no microphone");
+    assert_eq!(
+        (audio.output.default.as_str(), audio.output.volume),
+        ("speakers", 62)
+    );
+    assert_eq!(
+        (audio.input.default.as_str(), audio.input.volume),
+        ("mic", 45)
+    );
+    let _ = app.update(Message::Audio(Ok(audio)));
+    // Chosen in the page: shown at once, then asked of pactl.
+    use system_services::audio::Device;
+    let choose = sound::Change::Default(Device::Output, "hdmi".into());
+    let _ = app.update(Message::SetSound(choose.clone()));
+    let Sound::Ready(shown) = &app.sound else {
+        panic!("devices shown");
+    };
+    assert_eq!(shown.output.default, "hdmi");
+    sound::apply(&pactl, &choose).expect("set");
+    sound::apply(&pactl, &sound::Change::Volume(Device::Microphone, 30)).expect("volume");
+    let log = fs::read_to_string(tmp.0.join("pactl.log")).expect("log");
+    assert!(log.contains("set-default-sink hdmi\n"), "{log}");
+    assert!(
+        log.contains("set-source-volume @DEFAULT_SOURCE@ 30%\n"),
+        "{log}"
+    );
+    // No pactl at all: the page says so.
+    let missing = system_services::audio::Pactl {
+        program: tmp.0.join("no-pactl").into_os_string(),
+    };
+    let _ = app.update(Message::Audio(sound::read(&missing)));
+    assert_eq!(app.sound, Sound::Unavailable);
+}
+
+#[test]
+fn default_applications_are_written_to_mimeapps_list() {
+    let (tmp, mut app) = bench("apps", Vec::new());
+    install_apps(&tmp.0);
+    let _ = app.update(Message::Catalog(catalog(&app)));
+    let catalog = catalog(&app);
+    let (offered, _) = apps::choices(&catalog, Kind::Browser);
+    let names: Vec<&str> = offered.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Firefox", "Zen Browser"]);
+    let zen = offered[1].clone();
+    let dirs = &app.paths.apps;
+    apps::set(dirs, &[], Kind::Browser, &zen.id).expect("written");
+    apps::set(dirs, &[], Kind::Terminal, "foot.desktop").expect("written");
+    let list = fs::read_to_string(dirs.config_home.join("mimeapps.list")).expect("list");
+    for mime in Kind::Browser.types() {
+        assert!(
+            list.contains(&format!("{mime}=app.zen_browser.zen.desktop;")),
+            "{list}"
+        );
+    }
+    // Read back as every program reads it.
+    let catalog = mime_apps::Catalog::load_with_terminal(dirs.clone(), &[], &[], None);
+    assert_eq!(apps::choices(&catalog, Kind::Browser).1, Some(zen));
+    let terminal = apps::choices(&catalog, Kind::Terminal).1.map(|c| c.name);
+    assert_eq!(terminal.as_deref(), Some("Foot"));
+    // Nothing else of the author's: everything stays in the temporary folder.
+    assert!(dirs.config_home.starts_with(&tmp.0));
 }

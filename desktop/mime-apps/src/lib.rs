@@ -3,7 +3,7 @@
 //! MIME Applications Associations (`mimeapps.list`).
 //!
 //! Evidence uses it for "Open with" and default applications; the "Default applications"
-//! page of Control Room (D-26) will reuse it. It reads and writes plain files only: no
+//! page of Control Room (D-26a) uses it too, and `terminals` for the default terminal. It reads and writes plain files only: no
 //! D-Bus, no `xdg-mime` process. See `docs/mime-apps.md`.
 
 use std::ffi::OsString;
@@ -12,6 +12,7 @@ pub mod dirs;
 pub mod entry;
 pub mod list;
 pub mod mime;
+pub mod terminals;
 
 pub use dirs::Dirs;
 pub use entry::{DesktopEntry, read_applications};

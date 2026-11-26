@@ -65,6 +65,12 @@ pub const SPOTLIGHT: Duration = Duration::from_millis(1400);
 /// A changed setting is written this long after the last change: a slider dragged writes once
 /// it rests, not at every step.
 pub const SAVE_DELAY: Duration = Duration::from_millis(metrics::EVENT_COALESCE_MS);
+/// The delays before the lock the menu offers, in minutes; 0, never, last.
+pub const LOCK_DELAYS: [u32; 8] = [1, 2, 5, 10, 15, 30, 60, 0];
+/// Width of the menus of the lock delay and of the default applications.
+pub const DELAY_WIDTH: f32 = 160.0;
+pub const APP_MENU_WIDTH: f32 = CONTROL_WIDTH;
+
 /// Step of the hours of the automatic theme, in minutes.
 pub const HOUR_STEP: u32 = 30;
 
@@ -82,6 +88,12 @@ pub mod texts {
     pub const APPEARANCE_ABOUT: &str = "Le thème, le fond d'écran et le dock.";
     pub const TOUCHPAD: &str = "Pavé tactile et souris";
     pub const TOUCHPAD_ABOUT: &str = "Comment tes doigts cliquent, glissent et défilent.";
+    pub const SOUND: &str = "Son";
+    pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
+    pub const LOCK: &str = "Verrouillage";
+    pub const LOCK_ABOUT: &str = "Quand ta session se verrouille toute seule.";
+    pub const DEFAULT_APPS: &str = "Applications par défaut";
+    pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -137,6 +149,59 @@ pub mod texts {
     pub const SHOW_CLICKS: &str = "Montrer les clics";
     pub const SHOW_CLICKS_HELP: &str = "Un anneau vert marque chaque clic.";
 
+    // « Son ».
+    pub const OUTPUT: &str = "Sortie";
+    pub const OUTPUT_DEVICE: &str = "Sortie du son";
+    pub const OUTPUT_DEVICE_HELP: &str = "Le son passe par l'appareil choisi.";
+    pub const OUTPUT_VOLUME: &str = "Volume de sortie";
+    pub const INPUT: &str = "Entrée";
+    pub const INPUT_DEVICE: &str = "Micro";
+    pub const INPUT_DEVICE_HELP: &str = "Le micro que les applications entendent.";
+    pub const INPUT_VOLUME: &str = "Volume d'entrée";
+    pub const VOLUME_HELP: &str = "Glisse pour monter ou baisser.";
+    pub const NO_DEVICE: &str = "Aucun appareil trouvé.";
+    pub const SOUND_UNAVAILABLE: &str = "Le son ne répond pas pour l'instant.";
+    pub const SOUND_LOADING: &str = "Recherche des appareils…";
+
+    // « Verrouillage ».
+    pub const AUTO_LOCK: &str = "Verrouillage automatique";
+    pub const LOCK_AFTER: &str = "Verrouiller après";
+    pub const LOCK_AFTER_HELP: &str =
+        "Sans clavier ni souris pendant ce temps, la session se verrouille.";
+    pub const NEVER: &str = "Jamais";
+    pub const ONE_HOUR: &str = "1 heure";
+
+    /// A delay before the lock: « 1 minute », « 5 minutes ».
+    pub fn minutes(count: u32) -> String {
+        match count {
+            1 => String::from("1 minute"),
+            n => format!("{n} minutes"),
+        }
+    }
+
+    // « Applications par défaut ».
+    pub const APPS_FOR_LINKS: &str = "Internet";
+    pub const APPS_FOR_WORK: &str = "Travail";
+    pub const APPS_FOR_MEDIA: &str = "Médias";
+    pub const BROWSER: &str = "Navigateur";
+    pub const BROWSER_HELP: &str = "Ouvre les liens et les pages web.";
+    pub const MAIL: &str = "Mail";
+    pub const MAIL_HELP: &str = "Écrit quand tu cliques sur une adresse.";
+    pub const EDITOR: &str = "Éditeur de texte";
+    pub const EDITOR_HELP: &str = "Ouvre les fichiers texte et le code.";
+    pub const TERMINAL: &str = "Terminal";
+    pub const TERMINAL_HELP: &str = "S'ouvre pour les programmes en ligne de commande.";
+    pub const FILES: &str = "Fichiers";
+    pub const FILES_HELP: &str = "Ouvre les dossiers.";
+    pub const IMAGES: &str = "Images";
+    pub const IMAGES_HELP: &str = "Ouvre les photos et les captures.";
+    pub const VIDEO: &str = "Vidéo";
+    pub const VIDEO_HELP: &str = "Lit les films et les vidéos.";
+    pub const MUSIC: &str = "Musique";
+    pub const MUSIC_HELP: &str = "Lit les morceaux.";
+    pub const NO_APP: &str = "Aucune application installée.";
+    pub const APPS_LOADING: &str = "Lecture des applications…";
+
     // The search: names of the dock settings out of their card, and the other words each
     // setting is found by.
     pub const DOCK_SIZE_SEARCH: &str = "Taille du dock";
@@ -151,6 +216,10 @@ pub mod texts {
     pub const SCROLL_WORDS: &str = "défiler molette sens inverser trackpad";
     pub const POINTER_WORDS: &str = "pointeur souris curseur trackpad";
     pub const TOUCHPAD_WORDS: &str = "trackpad souris paume clavier";
+    pub const SOUND_WORDS: &str = "son audio haut-parleurs casque enceinte hdmi";
+    pub const MICROPHONE_WORDS: &str = "son audio micro microphone entrée casque";
+    pub const LOCK_WORDS: &str = "verrouillage écran veille inactivité délai sécurité";
+    pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 
     /// Hour of the day as the menus show it: « 07:30 ».
     pub fn hour(minutes: u32) -> String {

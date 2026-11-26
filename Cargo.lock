@@ -640,7 +640,9 @@ dependencies = [
  "iced",
  "iced_test",
  "image",
+ "mime-apps",
  "sherlock-ui",
+ "system-services",
  "tracing",
  "tracing-subscriber",
 ]

@@ -22,6 +22,12 @@ sherlock-ui = { path = "../sherlock-ui" }
 appearance-config = { path = "../appearance-config" }
 desktop-config = { path = "../desktop-config" }
 dock-config = { path = "../dock-config" }
+# Installed applications and default applications (`mimeapps.list`): the one implementation,
+# shared with Evidence (workspace crate).
+mime-apps = { path = "../mime-apps" }
+# Outputs, microphones and their volumes through `pactl`, as the bar and the media keys
+# (workspace crate).
+system-services = { path = "../system-services" }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",

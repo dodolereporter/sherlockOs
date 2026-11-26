@@ -16,8 +16,8 @@ To try it without touching your own settings, give it a configuration folder of 
 
 ## Pages
 
-This first part (D-26a1) has two pages. Sound, default applications and lock come with D-26a2,
-displays with D-26a3.
+D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications.
+Displays come with D-26a3.
 
 | Page | Setting | File | Read by |
 | --- | --- | --- | --- |
@@ -26,6 +26,9 @@ displays with D-26a3.
 | « Apparence » | Dock: size, magnification and its strength, hiding, edge | `$XDG_CONFIG_HOME/dock/dock.conf` | Dock |
 | « Pavé tactile et souris » | Right click: « Appuyer à deux doigts » (default) or « Coin en bas à droite »; tap to click; natural scrolling; speed; off while typing | `$XDG_CONFIG_HOME/sherlockos/touchpad.conf` | Compositor |
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
+| « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
+| « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
+| « Applications par défaut » | Browser, mail, text editor, terminal, files, images, video, music | `$XDG_CONFIG_HOME/mimeapps.list`; the terminal in `xdg-terminals.list` | Every program that opens a file or a link |
 
 A file is only written once a setting changes: until then, the programs keep their own
 defaults. A file is written whole or not at all (a temporary file renamed over it), and a
@@ -33,6 +36,26 @@ symbolic link keeps pointing at it. The dock file keeps the keys Control Room do
 (pinned applications, icon theme). A switch, a segmented control or a menu writes at once; a
 slider writes `SAVE_DELAY` (150 ms) after its last step, and closing the window writes what
 waits. A file that cannot be read shows its defaults and goes to the log.
+
+**Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
+`list sources` (the monitors of the outputs left out), their defaults and volumes, off the
+interface thread (`system_services::audio`). Choosing a device runs `set-default-sink` or
+`set-default-source`; PipeWire moves the sound to it. A volume is set once its slider rests.
+Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
+the devices: the media keys still fall back on it, this page does not.
+
+**Lock.** `lock.conf` is the file of D-25a, read by the compositor. Until D-25a is merged, Control
+Room reads and writes it with a small module of its own (`lock`), in the same words; it gives way
+to `desktop_config::lock` afterwards.
+
+**Default applications.** Each kind covers several types: the browser `x-scheme-handler/https`,
+`http` and `text/html`; images PNG, JPEG, GIF and WebP; and so on (`apps::Kind::types`). The
+menu offers the applications that declare the first type, and writes every type with
+`mime_apps::set_default`, as Evidence's « Toujours ouvrir avec » does. The terminal has no MIME
+type: the page offers the entries of category `TerminalEmulator` and writes
+`xdg-terminals.list`, the file of the proposed freedesktop specification that
+`xdg-terminal-exec` reads (`mime_apps::terminals`). The desktop's own programs still pick their
+terminal from `$TERMINAL` (`mime_apps::pick_terminal`).
 
 The wallpaper picker shows the wallpapers of the collection (`sherlock_ui::wallpapers`) found in
 the wallpaper folders (`desktop_config::wallpaper::dirs`), from the smallest variant of each,
@@ -65,6 +88,9 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 | `settings` | Where the files are, reading them all, writing one | no |
 | `search` | The pages, the settings of each, the search | no |
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
+| `sound` | Outputs, microphones and volumes through `pactl` | no |
+| `apps` | The kinds of default applications, their choices, writing them | no |
+| `lock` | `lock.conf`, until D-25a | no |
 | `app` | State, messages, saving, animations | yes |
 | `view` | Window, title bar, sidebar, page and its transition, cards and rows | yes |
 | `pages` | One module per page | yes |
@@ -89,7 +115,12 @@ configuration:
   search opens its page and lights it;
 - a click in the sidebar opens a page; in a narrow window the sidebar is folded, its button
   unfolds it, choosing a page folds it;
-- captures of both pages, dark and light, at 1920 by 1032 (a window maximized on a 1080p
+- sound through a fake `pactl` that logs what it is asked: devices read without the monitors,
+  default and volume set; without `pactl`, the page says so;
+- default applications written to a temporary `mimeapps.list` and `xdg-terminals.list`, then
+  read back by `mime-apps`;
+- the lock delay written and read back;
+- captures of every page, dark and light, at 1920 by 1032 (a window maximized on a 1080p
   screen, under the bar) and 520 by 760, in `target/tmp/control-room-*.png`.
 
 ## Captures

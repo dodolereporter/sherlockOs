@@ -22,6 +22,14 @@ pub struct Paths {
     pub pointer: PathBuf,
     /// Folders of installed wallpapers, most important first.
     pub wallpaper_dirs: Vec<PathBuf>,
+    pub lock: PathBuf,
+    /// Where the applications and `mimeapps.list` are, the current desktops (lower case,
+    /// for `<desktop>-mimeapps.list`) and the locales of the application names.
+    pub apps: mime_apps::Dirs,
+    pub desktops: Vec<String>,
+    pub locales: Vec<String>,
+    /// The `pactl` the sound page runs.
+    pub pactl: OsString,
 }
 
 impl Paths {
@@ -36,7 +44,15 @@ impl Paths {
             wallpaper: desktop.join(wallpaper::FILE),
             touchpad: desktop.join(touchpad::FILE),
             pointer: desktop.join(pointer::FILE),
+            lock: desktop.join(crate::lock::FILE),
             wallpaper_dirs,
+            apps: mime_apps::Dirs {
+                config_home: config_home.into(),
+                ..mime_apps::Dirs::default()
+            },
+            desktops: Vec::new(),
+            locales: Vec::new(),
+            pactl: OsString::from("pactl"),
         }
     }
 
@@ -44,7 +60,19 @@ impl Paths {
     /// folder.
     pub fn from_env() -> Option<Self> {
         let var = |key: &str| std::env::var_os(key);
+        let home = PathBuf::from(var("HOME")?);
+        let desktops = std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .split(':')
+            .filter(|d| !d.is_empty())
+            .map(str::to_lowercase)
+            .collect();
         Some(Self {
+            lock: desktop_config::config_dir(var)?.join(crate::lock::FILE),
+            apps: mime_apps::Dirs::from_env(&home),
+            desktops,
+            locales: locales(),
+            pactl: OsString::from("pactl"),
             appearance: appearance_config::path()?,
             dock: dock_config::path()?,
             wallpaper: wallpaper::config_file(var)?,
@@ -63,16 +91,7 @@ pub enum File {
     Wallpaper,
     Touchpad,
     Pointer,
-}
-
-impl File {
-    pub const ALL: [Self; 5] = [
-        Self::Appearance,
-        Self::Dock,
-        Self::Wallpaper,
-        Self::Touchpad,
-        Self::Pointer,
-    ];
+    Lock,
 }
 
 /// Every setting Control Room shows.
@@ -83,6 +102,7 @@ pub struct Settings {
     pub wallpaper: wallpaper::Config,
     pub touchpad: touchpad::Config,
     pub pointer: pointer::Config,
+    pub lock: crate::lock::Config,
 }
 
 impl Settings {
@@ -118,6 +138,7 @@ impl Settings {
             wallpaper: logged(&paths.wallpaper, wallpaper::Config::read(&paths.wallpaper)),
             touchpad: logged(&paths.touchpad, touchpad::Config::read(&paths.touchpad)),
             pointer: logged(&paths.pointer, pointer::Config::read(&paths.pointer)),
+            lock: crate::lock::Config::read(&paths.lock),
         }
     }
 
@@ -129,6 +150,7 @@ impl Settings {
             File::Wallpaper => write(&paths.wallpaper, &self.wallpaper.to_string()),
             File::Touchpad => write(&paths.touchpad, &self.touchpad.to_string()),
             File::Pointer => write(&paths.pointer, &self.pointer.to_string()),
+            File::Lock => write(&paths.lock, &self.lock.to_text()),
         }
     }
 }
@@ -152,4 +174,19 @@ pub fn write(path: &Path, text: &str) -> io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+/// Locales to try for application names, most specific first: `fr_FR`, then `fr` (as
+/// Evidence).
+fn locales() -> Vec<String> {
+    let raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+    let base = raw.split(['.', '@']).next().unwrap_or_default().to_owned();
+    match base.split_once('_') {
+        _ if base.is_empty() || base == "C" || base == "POSIX" => Vec::new(),
+        Some((language, _)) => vec![base.clone(), language.to_owned()],
+        None => vec![base],
+    }
 }
