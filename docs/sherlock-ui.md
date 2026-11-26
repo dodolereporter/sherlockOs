@@ -115,11 +115,14 @@ instant, with no state that advances frame by frame.
 | Token | Value | Use |
 | --- | --- | --- |
 | `SNAP_SPRING` | stiffness 500, damping 33.5 (ratio 0.75, overshoot of 3 %) | Snap, maximize, restore of a window |
-| `OPEN_SPRING` | stiffness 450, damping 34 (ratio 0.80, overshoot of 2 %) | Scale of a window as it opens |
+| `OPEN_SPRING` | stiffness 450, damping 34 (ratio 0.80, overshoot of 2 %) | Arrival of a dock icon, of a notification |
+| `WINDOW_OPEN_SPRING` | stiffness 625, damping 50 (ratio 1.0, no overshoot) | Scale of a window as it opens in the compositor (D-34) |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 (ratio 0.79) | Snap preview |
 | `DECORATION_SPRING` | stiffness 700, damping 53 (ratio 1.0, no overshoot) | Corners, border and shadow of a window that becomes maximized or fullscreen, or leaves it (D-18c1) |
 | `OPEN_SCALE` | 0.92 | Scale of a window at the start of its opening, and of the preview that appears |
-| `FADE` | 150 ms, the top of `metrics::HOVER_MS` | Fade of opening, appearing and clearing |
+| `FADE` | 150 ms, the top of `metrics::HOVER_MS` | Fade of appearing and clearing, hovers |
+| `WINDOW_OPEN_FADE` | 200 ms | Fade of a window opening (D-34) |
+| `WINDOW_CLOSE` | 150 ms | A window closing: its last image shrinks to `OPEN_SCALE` and fades out (D-34) |
 | `FRAME_RATE` | 60 | Frame rate to hold, animations included (`docs/contexte.md`) |
 | `GEOMETRY_PRECISION` | 0.5 px | Offset below which an animated geometry is settled |
 | `SCALE_PRECISION` | 0.001 | Offset below which an animated scale is settled |

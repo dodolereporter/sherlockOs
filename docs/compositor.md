@@ -22,7 +22,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
-| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, the command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, `--window-animations`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches, the frame cycle of each screen |
 | `src/pacing.rs` | When a screen of the real session draws: only after a change or during an animation, at the pace of its vertical blank (lot P-01) |
 | `src/damage.rs` | Stable identity of the elements the compositor draws itself, so that only what changed is redrawn (lot P-01) |
@@ -51,6 +51,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
 | `src/shaders/` | The four GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag`, `genie.frag` |
 | `src/genie.rs` | Minimize effect (lot D-19): the genie into the dock icon, the scale effect without one, the setting |
+| `src/window_anim.rs` | Opening and closing of the windows (lot D-34): the last image of a closed window, its closing, the setting |
 | `src/anim.rs` | Motion of windows, of the preview and of the workspaces: springs applied to rectangles and to the row of workspaces. Pure computation |
 | `src/stats.rs` | Frame statistics for `--measure` |
 | `src/shell/` | Data and control for the shell programs, on the shell socket only (lot D-18a, ADR 0021): `sherlock_shell_v1` (`toplevels.rs`), workspaces through `ext-workspace-v1` (`workspaces.rs`); the workspaces themselves and minimizing (lot D-18w) |
@@ -873,10 +874,12 @@ that the compositor and the shell share the same springs:
 | Token | Value | Damping ratio | Use |
 | --- | --- | --- | --- |
 | `SNAP_SPRING` | stiffness 500, damping 33.5 | 0.75, 3 % overshoot | Snap, maximize, restore |
-| `OPEN_SPRING` | stiffness 450, damping 34 | 0.80, 2 % overshoot | Scale at opening, from `OPEN_SCALE` (0.92) to 1 |
+| `WINDOW_OPEN_SPRING` | stiffness 625, damping 50 | 1.0, no overshoot | Scale of a window opening, from `OPEN_SCALE` (0.92) to 1 (lot D-34) |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 | 0.79 | Snap preview |
 | `DECORATION_SPRING` | stiffness 700, damping 53 | 1.0, no overshoot | Corners, border and shadow of a window maximized, fullscreen, or leaving it |
-| `FADE` | 150 ms | | Opacity at opening, preview appearing and fading out |
+| `FADE` | 150 ms | | Opacity of the preview appearing and fading out |
+| `WINDOW_OPEN_FADE` | 200 ms | | Opacity of a window opening (lot D-34) |
+| `WINDOW_CLOSE` | 150 ms | | Scale and opacity of a window closing (lot D-34) |
 
 `docs/contexte.md` only gives « ressorts » (springs), « léger dépassement » (slight overshoot)
 and hovers of 110 to 150 ms: these values are choices of the lot. Each spring covers 90 % of the
@@ -886,7 +889,7 @@ lasts one hover.
 `anim.rs` applies them to windows:
 
 - **Opening.** At its first frame, the window grows from 0.92 to 1 around its center and goes
-  from transparent to opaque. Its shadow and its border follow.
+  from transparent to opaque. Its shadow and its border follow. See "Opening and closing".
 - **Snap and restore.** `rearrange` (snap, maximize, fullscreen, restore) calls
   `animate_next_change`. The flag only holds for the next frame, where it is consumed in every
   case: if the geometry has changed there, it starts from the last drawn geometry on four
@@ -971,14 +974,64 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
 the three choices, by these names (`genie::Effect` reads them). `none` hides and shows the window
 at once, as before this lot. A change applies to the next minimize; an effect running goes on.
 
+### Opening and closing (lot D-34)
+
+As on macOS: a window that opens grows from `OPEN_SCALE` (0.92) to 1 around its center on
+`WINDOW_OPEN_SPRING`, critically damped (no bounce, 90 % of the way in 155 ms, settled in about
+250), and fades in over `WINDOW_OPEN_FADE` (200 ms). A window that closes shrinks back to 0.92
+and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
+
+![A window halfway through its opening](../desktop/compositor/screenshots/window-opening.png)
+
+- **Before this lot** the opening was already there, on `OPEN_SPRING` and the 150 ms fade of a
+  hover. That fade is cubic, brisk at the start: the window was 70 % opaque after 50 ms, and
+  the spring had made most of its way, so the opening went by in three frames and did not show.
+- **Closing.** The client has already destroyed its window when the compositor learns it
+  (`toplevel_destroyed`, or the unmap of an X11 window): its buffer goes away with its surface.
+  Before the window leaves the space, the backend draws it as at rest into a texture of its size
+  in pixels, at the scale of its screen, corners, border and title bar included, through the
+  offscreen path of the genie (`genie::offscreen`). The `Snapshotter` the backend plugs into
+  the state (`State::set_snapshotter`) does it with its renderer, while the clients are read,
+  never during a frame. That texture, the ghost, is drawn in front of the other windows,
+  stretched (`render::Item::Snapshot`), with a shadow at its scale. A client that removed its
+  content before destroying its window (a null buffer) leaves nothing to draw: the window goes
+  at once.
+- **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
+  pointer goes through it to what is below. A window that opens takes input at once, as before.
+- **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
+  override-redirect windows, anchored surfaces (bar, dock), fullscreen windows, a window closing
+  on another workspace, minimized, or while Mission Control is open.
+- **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
+  animation for `pacing::Pacing`), nothing at rest. The ghost is one element under a stable
+  identity (`damage::Part::Closing`): the damage is its old and new area, inside the window's.
+  Its texture is freed by `State::end_closings` after each loop iteration once the closing is
+  over. The cursor plane (lot P-01) is untouched.
+
+**Setting.** `--window-animations on|off` (on by default), and `State::set_window_animations`
+while the session runs, for Control Room. Off, windows appear and go at once. A window already
+closing finishes.
+
+**Tests.** `anim.rs`: the opening grows and fades in without a bounce, still moving at 150 ms,
+settled by 400; a skipped opening shows at once. `window_anim.rs`: the closing shrinks and fades
+in 150 ms. `tests/headless.rs`: a window closing over another one takes no click, the one below
+does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
+and closes at once; so does any window with the setting off.
+`the_opening_and_the_closing_are_drawn_halfway` draws a decorated window halfway through its
+opening and through its closing with Mesa's software renderer, like the genie test, checks the
+pixels and that the ghost's texture is held then freed, and saves `window-opening.png` and
+`window-closing.png` in `target/tmp`.
+
+**Manual test.** Nested (`--nested`) or in the real session: open Konsole, a GTK application
+and `xterm`; each grows and fades in. Close them (Super + Q, or their close button): each
+shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
+`--window-animations off`, nothing is animated.
+
 ### What rendering does not do yet
 
 - **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
   was already over its size. Its place for anchored surfaces is ready (`Scene::push_backdrop`,
   lot D-12). It needs an offscreen render of what is behind the surface, at reduced
   resolution, then blur passes; the snap preview would be its first client.
-- **Animated closing.** When the client destroys its window, its buffer goes away with it.
-  Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 
