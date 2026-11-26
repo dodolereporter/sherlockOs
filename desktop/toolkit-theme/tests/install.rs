@@ -128,6 +128,13 @@ fn install_backs_up_and_uninstall_restores() {
     // The session switches the palette: the file stays ours.
     apply::qt(&layout, Theme::Light).must();
     assert!(fs::read_to_string(&qt6).must().contains("light.conf"));
+    // Installing again keeps it, and keeps the palette of the moment.
+    let again = install::install(&layout, &files, "20261126-100500").must();
+    assert!(
+        again.iter().all(|a| matches!(a, Action::Unchanged(_))),
+        "{again:?}"
+    );
+    assert!(fs::read_to_string(&qt6).must().contains("light.conf"));
 
     let actions = install::uninstall(&layout, "20261126-110000").must();
     assert!(actions.contains(&Action::Restored {

@@ -370,7 +370,8 @@ pub fn install(layout: &Layout, files: &[File], stamp: &str) -> Result<Vec<Actio
         let mut backup = known.as_ref().and_then(|k| k.backup.clone());
         match (&current, &known) {
             (Some(current), Some(k)) if fingerprint(current) == k.fingerprint => {
-                if *current == file.content {
+                // The same but for the palette line: the session's palette of the moment stays.
+                if fingerprint(current) == fingerprint(&file.content) {
                     actions.push(Action::Unchanged(path.clone()));
                     continue;
                 }
