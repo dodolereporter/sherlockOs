@@ -23,10 +23,13 @@
 
     Versioning: a backward compatible change adds requests, events or enum entries and bumps
     the interface version. An incompatible change renames the interfaces with a new suffix
-    (sherlock_shell_manager_v2) and the protocol (sherlock_shell_v2).
+    (sherlock_shell_manager_v2) and the protocol (sherlock_shell_v2). A toplevel object has the
+    version of the manager that announced it.
+
+    Version 2 adds the snapped value of output_state.
   </description>
 
-  <interface name="sherlock_shell_manager_v1" version="1">
+  <interface name="sherlock_shell_manager_v1" version="2">
     <description summary="list of the windows and state of the screens">
       Once bound, the compositor sends a toplevel event for every window that shows content,
       with its properties, then an output event for every screen, then done. After that, it
@@ -52,6 +55,8 @@
     <enum name="output_state">
       <entry name="maximized" value="1" summary="a maximized window, not minimized, is on the screen"/>
       <entry name="fullscreen" value="2" summary="a fullscreen window, not minimized, is on the screen"/>
+      <entry name="snapped" value="3" since="2"
+             summary="a window snapped to a half or a quarter, not minimized, is on the screen"/>
     </enum>
 
     <event name="output">
@@ -60,7 +65,8 @@
         or a screen appears. A window is on the screen under its center. Only the windows of
         the active workspace count. The state is an array
         of 32-bit values of output_state, in the machine's byte order; an empty array means no
-        maximized nor fullscreen window is on it.
+        maximized, fullscreen nor snapped window is on it. The snapped value is only sent to a
+        manager bound at version 2 or later.
       </description>
       <arg name="name" type="string" summary="wl_output name of the screen"/>
       <arg name="state" type="array" summary="values of output_state"/>
@@ -82,7 +88,7 @@
     </event>
   </interface>
 
-  <interface name="sherlock_shell_toplevel_v1" version="1">
+  <interface name="sherlock_shell_toplevel_v1" version="2">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
       manager. The id comes first, once. A window on a workspace that is not active keeps its

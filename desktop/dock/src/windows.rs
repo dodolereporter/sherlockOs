@@ -52,7 +52,7 @@ pub struct Windows {
     /// Whether the windows can be acted on (brought forward, minimized, closed). Not those of
     /// the placeholder: a click starts the application, « Quitter » stays off.
     pub controllable: bool,
-    /// Names of the screens a maximized or fullscreen window is on (shell protocol only).
+    /// Names of the screens a maximized, fullscreen or snapped window is on (shell protocol only).
     pub covered: BTreeSet<String>,
 }
 

@@ -17,7 +17,9 @@ use shell_protocol::server::sherlock_shell_toplevel_v1::{
 };
 use wayland_client::Connection;
 use wayland_server::backend::{ClientData, ClientId, DisconnectReason};
-use wayland_server::{Client, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New};
+use wayland_server::{
+    Client, DataInit, Dispatch, Display, DisplayHandle, GlobalDispatch, New, Resource,
+};
 
 /// What the test asks the fake compositor to do.
 enum Change {
@@ -27,8 +29,8 @@ enum Change {
     /// `closed` alone: the batch is not over.
     Closing(&'static str),
     Done,
-    /// A screen, and whether a maximized window covers it, then `done`.
-    Cover(&'static str, bool),
+    /// A screen, and what covers it (a maximized or snapped window), then `done`.
+    Cover(&'static str, Option<manager::OutputState>),
 }
 
 /// What the client asked: the `app_id` of the window, and the request.
@@ -45,9 +47,11 @@ struct Compositor {
 impl Compositor {
     fn announce(&mut self, display: &DisplayHandle, app_id: &'static str, active: bool) {
         for (client, manager) in &self.managers {
-            let Ok(toplevel) =
-                client.create_resource::<SherlockShellToplevelV1, (), Self>(display, 1, ())
-            else {
+            let Ok(toplevel) = client.create_resource::<SherlockShellToplevelV1, (), Self>(
+                display,
+                manager.version(),
+                (),
+            ) else {
                 continue;
             };
             manager.toplevel(&toplevel);
@@ -83,13 +87,7 @@ impl Compositor {
                 }
             }
             Change::Cover(name, covered) => {
-                let state = if covered {
-                    (manager::OutputState::Maximized as u32)
-                        .to_ne_bytes()
-                        .to_vec()
-                } else {
-                    Vec::new()
-                };
+                let state = covered.map_or_else(Vec::new, |s| (s as u32).to_ne_bytes().to_vec());
                 for (_, manager) in &self.managers {
                     manager.output(String::from(name), state.clone());
                 }
@@ -187,7 +185,7 @@ impl Fake {
         let mut display = Display::<Compositor>::new()?;
         let mut handle = display.handle();
         if with_protocol {
-            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(1, ());
+            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(2, ());
         }
         let (ours, theirs) = UnixStream::pair()?;
         handle.insert_client(theirs, Arc::new(NoData))?;
@@ -399,15 +397,21 @@ fn the_covered_screens_are_read() {
     let connection = fake.connection.take().expect("connection");
     let mut shell = Shell::with_connection(connection).expect("manager bound");
     assert!(shell.read().expect("read").covered.is_empty());
-    fake.changes
-        .send(Change::Cover("eDP-1", true))
-        .expect("sent");
-    assert!(shell.wait());
-    let covered = shell.read().expect("read").covered;
-    assert!(covered.contains("eDP-1") && covered.len() == 1);
-    fake.changes
-        .send(Change::Cover("eDP-1", false))
-        .expect("sent");
-    assert!(shell.wait());
-    assert!(shell.read().expect("read").covered.is_empty());
+    // A maximized window covers the screen, and so does a snapped one (version 2).
+    for flag in [
+        manager::OutputState::Maximized,
+        manager::OutputState::Snapped,
+    ] {
+        fake.changes
+            .send(Change::Cover("eDP-1", Some(flag)))
+            .expect("sent");
+        assert!(shell.wait());
+        let covered = shell.read().expect("read").covered;
+        assert!(covered.contains("eDP-1") && covered.len() == 1, "{flag:?}");
+        fake.changes
+            .send(Change::Cover("eDP-1", None))
+            .expect("sent");
+        assert!(shell.wait());
+        assert!(shell.read().expect("read").covered.is_empty());
+    }
 }
