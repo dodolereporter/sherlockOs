@@ -1,0 +1,24 @@
+[package]
+name = "shell-protocol"
+description = "Private Wayland protocol between the compositor and the shell programs (sherlock_shell_v1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# One side each, as in wayland-protocols: the compositor takes `server`, the bar and the dock
+# take `client`.
+client = ["dep:wayland-client"]
+server = ["dep:wayland-server"]
+
+[dependencies]
+# Generates the bindings from the XML at build time. The versions are those the workspace
+# already pulls through smithay and the shell programs.
+wayland-scanner = "=0.31.11"
+wayland-backend = "=0.3.17"
+wayland-client = { version = "=0.31.15", optional = true }
+wayland-server = { version = "=0.31.14", optional = true }
+
+[lints]
+workspace = true

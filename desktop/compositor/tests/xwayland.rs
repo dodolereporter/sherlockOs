@@ -21,7 +21,7 @@ mod tests {
         backend::input::{ButtonState, KeyState},
         desktop::Window,
         input::keyboard::Keycode,
-        reexports::calloop::EventLoop,
+        reexports::{calloop::EventLoop, wayland_server::Resource as _},
         utils::{Logical, Rectangle},
         wayland::{
             seat::WaylandFocus,
@@ -110,6 +110,10 @@ mod tests {
         /// Rename the managed window. The window manager sees the new title after everything
         /// the client did before: the test waits for it to know those requests were handled.
         Sync(u32),
+        /// Withdraw the managed window (unmap it), as an application hiding in the tray does.
+        Withdraw,
+        /// Map the managed window again.
+        Map,
         Quit,
     }
 
@@ -215,6 +219,14 @@ mod tests {
                     .unwrap();
                     conn.flush().unwrap();
                 }
+                Ok(Command::Withdraw) => {
+                    conn.unmap_window(window).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Map) => {
+                    conn.map_window(window).unwrap();
+                    conn.flush().unwrap();
+                }
                 Ok(Command::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
@@ -313,6 +325,8 @@ mod tests {
         let (wayland, wayland_lock) = wayland_socket();
         state.listen_at(wayland.clone(), &event_loop).unwrap();
         assert!(wayland.exists() && wayland_lock.exists());
+        let shell = shell_protocol::socket_path(&wayland);
+        assert!(shell.exists(), "no shell socket");
         // The startup result: `Some(None)` if XWayland failed. Its messages are on the test's
         // standard error.
         let started = Rc::new(Cell::new(None));
@@ -350,6 +364,9 @@ mod tests {
             s.focused_window().as_ref() == Some(&window)
         });
         assert!(h.state.window_visual(&window, Duration::ZERO).is_some());
+        // XWayland is an ordinary client: the shell's globals are not offered to it (ADR 0021).
+        let xwayland = window.wl_surface().unwrap().client().unwrap();
+        assert!(!State::is_shell_client(&xwayland));
 
         // The menu is at the place it chose, without taking the keyboard.
         h.run_until("the X11 menu", |s| {
@@ -435,6 +452,27 @@ mod tests {
             (rect(300, 250, 250, 130), rect(300, 250, 250, 130))
         );
 
+        // Minimized by the shell, then withdrawn by its application and mapped again: it is no
+        // longer minimized, and no longer hidden for the X server (_NET_WM_STATE_HIDDEN).
+        let window = x11_window(&h.state, false).unwrap();
+        let surface = window.x11_surface().unwrap().clone();
+        h.state.minimize(&window);
+        assert!(h.state.is_minimized(&window) && surface.is_minimized());
+        assert!(x11_window(&h.state, false).is_none());
+        commands.send(Command::Withdraw).unwrap();
+        h.run_until("the minimized window withdrawn", |s| {
+            !s.is_minimized(&window) && !surface.is_mapped()
+        });
+        assert!(
+            !surface.is_minimized(),
+            "the withdrawn window is still hidden"
+        );
+        commands.send(Command::Map).unwrap();
+        h.run_until("the window mapped again", |s| {
+            x11_window(s, false).is_some_and(|w| w.wl_surface().is_some())
+        });
+        assert!(!surface.is_minimized(), "the window mapped again is hidden");
+
         // Closing: the client leaves, its windows go away and nobody has the keyboard.
         commands.send(Command::Quit).unwrap();
         client.join().unwrap();
@@ -446,6 +484,6 @@ mod tests {
         // lock go away too, although the X11Wm source keeps the event loop alive.
         h.state.shutdown();
         h.run_until("the socket removed", |_| !Path::new(&socket).exists());
-        assert!(!wayland.exists() && !wayland_lock.exists());
+        assert!(!wayland.exists() && !wayland_lock.exists() && !shell.exists());
     }
 }

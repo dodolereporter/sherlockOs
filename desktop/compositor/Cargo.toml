@@ -36,6 +36,8 @@ desktop-config = { path = "../desktop-config" }
 # Wallpaper decoders, PNG (the variants) and JPEG (an image chosen by the user) only. Same
 # version as evidence.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# Private protocol of the shell, server side (lot D-18a, ADR 0021).
+shell-protocol = { path = "../shell-protocol", features = ["server"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.
@@ -55,6 +57,8 @@ wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 # X11 client of the XWayland integration test: the version that smithay already pulls for
 # its X11 window manager.
 x11rb = "=0.13.2"
+# Client side of the shell protocol, for its integration test.
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
 
 [lints]
 workspace = true
