@@ -44,7 +44,7 @@ install-session: cursors
     cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence
     desktop/compositor/session/install.sh "$PWD"
 
-# Installs Evidence for the user, without root: its binary in ~/.local/bin and its desktop entry, which the dock pins and the launcher lists
+# Installs Evidence for the user, without root: its binary in ~/.local/bin, its desktop entry, which the dock pins and the launcher lists, and its icon
 install-evidence:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -61,6 +61,11 @@ install-evidence:
         esac
     done < desktop/evidence/evidence.desktop)
     printf '%s\n' "$entry" | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/evidence.desktop"
+    # Its icon in the user's hicolor theme, at each size of desktop/sherlock-ui/icons/hicolor.
+    theme=desktop/sherlock-ui/icons/hicolor
+    for file in "$theme"/*/apps/evidence.*; do
+        install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
+    done
 
 # Reports French left in development text (ADR 0017), after the checker's own test cases
 check-language *paths:

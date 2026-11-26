@@ -848,6 +848,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "libc",
  "shell-protocol",
  "sherlock-ui",
@@ -3312,6 +3313,7 @@ dependencies = [
  "iced_renderer",
  "iced_runtime",
  "iced_test",
+ "resvg",
  "wgpu",
 ]
 

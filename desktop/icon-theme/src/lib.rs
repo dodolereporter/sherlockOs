@@ -3,8 +3,8 @@
 //! each theme an exact size (and scale) wins, else the closest one. No `icon-theme.cache`: the
 //! files are looked for directly. See `docs/icon-theme.md`.
 //!
-//! The dock (`desktop/dock/src/icons.rs`) and Evidence (`desktop/evidence/src/icons.rs`) still
-//! carry their own copies; they are meant to move onto this crate.
+//! The launcher and the dock use it; Evidence (`desktop/evidence/src/icons.rs`) still carries
+//! its own copy and is meant to move onto this crate.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
