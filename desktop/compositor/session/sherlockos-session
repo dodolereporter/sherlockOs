@@ -5,25 +5,58 @@
 #
 # The programs are looked for next to this script (`just install-session` puts them in
 # /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
-# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`. NOM_OS_XWAYLAND=1 starts XWayland too (off by
-# default: see "Real session" in docs/compositor.md). The log of the session goes to
-# $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
-# to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
-# session with it.
+# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
+# NOM_OS_XWAYLAND=1 starts XWayland too (off by default: see "Real session" in
+# docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus (see below). The log
+# of the session goes to $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log):
+# beyond 5 MiB it moves to session.log.old and starts again. Ctrl + Alt + Backspace stops the
+# compositor, and the session with it.
 set -eu
 
 bin="${NOM_OS_BIN:-$(dirname "$(readlink -f "$0")")}"
+export XDG_CURRENT_DESKTOP=NOM_OS
+export XDG_SESSION_DESKTOP=NOM_OS
+export XDG_SESSION_TYPE=wayland
+
+# Whether another graphical session of this user is open (Plasma on another console), from
+# logind. That session shares the user's D-Bus session bus with this one.
+other_graphical_session() {
+	command -v loginctl >/dev/null 2>&1 || return 1
+	for id in $(loginctl show-user "$(id -un)" -p Sessions --value 2>/dev/null); do
+		[ "$id" = "${XDG_SESSION_ID:-}" ] && continue
+		case "$(loginctl show-session "$id" -p Type --value 2>/dev/null)" in
+		x11 | wayland | mir)
+			[ "$(loginctl show-session "$id" -p State --value 2>/dev/null)" != closing ] &&
+				return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# The session runs on a D-Bus session bus of its own when another graphical session is open:
+# on the shared bus, Qt applications wait 25 s for Plasma's global menu registrar, which does
+# not answer them, and the notification daemon finds the name taken (see "D-Bus session bus"
+# in docs/compositor.md). NOM_OS_SESSION_BUS=own or shared forces the choice; auto by default.
+if [ "${NOM_OS_OWN_BUS:-0}" != 1 ]; then
+	case "${NOM_OS_SESSION_BUS:-auto}" in
+	own) own_bus=1 ;;
+	shared) own_bus=0 ;;
+	*) own_bus=0 && other_graphical_session && own_bus=1 ;;
+	esac
+	if [ "$own_bus" = 1 ] && command -v dbus-run-session >/dev/null 2>&1; then
+		export NOM_OS_OWN_BUS=1
+		exec dbus-run-session -- "$0" "$@"
+	fi
+fi
+
+export PATH="$PATH:$bin"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/nom-os"
 log="$state/session.log"
 mkdir -p "$state"
 if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"
 fi
-
-export PATH="$PATH:$bin"
-export XDG_CURRENT_DESKTOP=NOM_OS
-export XDG_SESSION_DESKTOP=NOM_OS
-export XDG_SESSION_TYPE=wayland
 
 # Copies its input to the log, which moves to .old beyond 5 MiB (checked every 100 lines).
 keep_log() {
@@ -44,6 +77,12 @@ keep_log() {
 # log.
 shell='
 compositor=$PPID
+# On a bus of its own, the services it starts (portals) learn the display of this session.
+if [ "${NOM_OS_OWN_BUS:-0}" = 1 ]; then
+	echo "session: D-Bus session bus of its own" >&2
+	dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY ||
+		echo "session: the activation environment of the bus is not updated" >&2
+fi
 keep() {
 	stops=""
 	delay=1

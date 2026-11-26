@@ -104,10 +104,11 @@ impl Geometry {
     }
 
     /// Size of the dock surface for `count` icons: as long as the longest magnified bar plus
-    /// room for the label at its ends, as deep as the label (beside the icons on the sides).
+    /// room for the label at its ends, as deep as the label (beside the icons on the sides) or
+    /// the top of the highest bounce, whichever reaches farther.
     pub fn surface_size(&self, count: usize, separator: bool) -> Size {
         let along = (self.longest(count, separator) + 2.0 * dock::SURFACE_SLACK).ceil();
-        let depth = (self.reach() + self.gap).ceil();
+        let depth = (self.reach().max(self.bounce_reach()) + self.gap).ceil();
         if self.position.is_vertical() {
             Size::new(depth, along)
         } else {
@@ -127,8 +128,18 @@ impl Geometry {
             )
     }
 
-    /// How far from the edge the dock may draw: the label past the magnified icons, or beside
-    /// them on the left and right edges.
+    /// How far from the edge of the bar an icon is drawn at the top of its bounce, at most:
+    /// the tallest magnified icon, past the overshoot of its spring, lifted by
+    /// `BOUNCE_HEIGHT` of its side (lot D-18d: a bounce under the pointer was cut at the top
+    /// of the surface). Only the surface grows for it: the exclusive zone and the input
+    /// region do not.
+    pub fn bounce_reach(&self) -> f32 {
+        let tallest = self.icon * self.factor * (1.0 + overshoot(dock::SPRING));
+        self.inset() + tallest * (1.0 + dock::BOUNCE_HEIGHT)
+    }
+
+    /// How far from the edge the dock takes the pointer: the label past the magnified icons,
+    /// or beside them on the left and right edges.
     fn reach(&self) -> f32 {
         let room = if self.position.is_vertical() {
             dock::LABEL_SIDE_ROOM
@@ -202,6 +213,30 @@ impl Geometry {
         let strip = dock::HIDE_STRIP.min(deep);
         to_surface(self, surface, 0.0, deep - strip - self.gap, span, strip)
     }
+}
+
+/// The highest a spring started at rest goes past its target, as a share of the distance:
+/// `exp(−ζπ / √(1 − ζ²))` for a damping ratio ζ under 1, nothing otherwise.
+fn overshoot(spring: sherlock_ui::motion::Spring) -> f32 {
+    let ratio = spring.damping_ratio();
+    if ratio >= 1.0 {
+        return 0.0;
+    }
+    (-ratio * std::f64::consts::PI / (1.0 - ratio * ratio).sqrt()).exp() as f32
+}
+
+/// Where an icon laid out at `rect` is drawn at `scale`, from the middle of its side against
+/// the `position` edge, `lift` away from its place (a bounce).
+pub fn drawn(rect: Rectangle, position: Position, scale: f32, lift: f32) -> Rectangle {
+    let side = rect.width * scale;
+    let grow = rect.width - side;
+    let (x, y) = match position {
+        Position::Bottom => (rect.x + grow / 2.0, rect.y + grow - lift),
+        Position::Top => (rect.x + grow / 2.0, rect.y + lift),
+        Position::Left => (rect.x + lift, rect.y + grow / 2.0),
+        Position::Right => (rect.x + grow - lift, rect.y + grow / 2.0),
+    };
+    Rectangle::new(Point::new(x, y), Size::new(side, side))
 }
 
 /// `icon`, drawn in a surface of `surface` at `distance` from the `position` edge of a screen
@@ -716,7 +751,8 @@ mod tests {
         let count = 5;
         let bottom = at(Position::Bottom);
         let surface = bottom.surface_size(count, false);
-        assert_eq!(surface, Size::new(529.0, 132.0));
+        // As deep as the highest bounce, past the label (132).
+        assert_eq!(surface, Size::new(529.0, 156.0));
         let reference = Layout::new(bottom, surface, &bottom.targets(Some(0.3), count), None);
         for position in [Position::Top, Position::Left, Position::Right] {
             let geometry = at(position);
@@ -806,20 +842,29 @@ mod tests {
     fn the_input_region_lets_clicks_through_around_the_dock() {
         let geometry = Geometry::default();
         let surface = geometry.surface_size(5, false);
-        // At rest: the bar only, 318 by 76 at the bottom; the 56 px above it let clicks go
-        // through to the windows, and so do the ends of the surface.
+        // At rest: the bar only, 318 by 76 at the bottom; the room above it lets clicks go
+        // through to the windows, and so do the ends of the surface. The surface is deeper
+        // than the label, for the bounce: that room never takes the pointer.
+        let bottom = surface.height;
         let rest = geometry.input_region(surface, 5, None, false);
         assert_eq!(
             rest,
-            Rectangle::new(Point::new(105.5, 56.0), Size::new(318.0, 76.0))
+            Rectangle::new(Point::new(105.5, bottom - 76.0), Size::new(318.0, 76.0))
         );
         // Whole pixels for the protocol, never smaller than the bar.
-        assert_eq!(pixels(rest), (105, 56, 319, 76));
-        assert!(!rest.contains(Point::new(264.0, 40.0)), "above the bar");
-        // Hovered: the longest magnified bar, up to the top of the label.
+        assert_eq!(pixels(rest), (105, bottom as i32 - 76, 319, 76));
+        assert!(
+            !rest.contains(Point::new(264.0, bottom - 92.0)),
+            "above the bar"
+        );
+        // Hovered: the longest magnified bar, up to the top of the label, not higher.
         let hovered = geometry.input_region(surface, 5, None, true);
         let (_, top, _, height) = pixels(hovered);
-        assert_eq!((top, height), (0, 132), "up to the top of the label");
+        assert_eq!(
+            (top, height),
+            (bottom as i32 - 132, 132),
+            "up to the top of the label"
+        );
         assert_eq!(hovered.width, 425.0);
         assert_eq!(hovered.center_x(), surface.width / 2.0);
         assert!(
@@ -862,5 +907,60 @@ mod tests {
         // Label: 108 above the bar bottom, plus its own height; above the tallest icon.
         assert!(size.height > 108.0 + 2.0 * dock::LABEL_PADDING.0);
         assert!(size.height > 13.0 + 52.0 * 1.7 * 1.08);
+    }
+
+    #[test]
+    fn an_icon_at_the_top_of_its_bounce_fits_in_the_surface() {
+        let positions = [
+            Position::Bottom,
+            Position::Top,
+            Position::Left,
+            Position::Right,
+        ];
+        let settings = [
+            (metrics::DOCK_ICON, metrics::DOCK_MAGNIFICATION),
+            (dock::ICON_SIZE_MAX, dock::MAGNIFICATION_MAX),
+            (dock::ICON_SIZE_MIN, 1.0),
+        ];
+        for position in positions {
+            for (icon, factor) in settings {
+                let geometry = Geometry {
+                    icon,
+                    factor,
+                    position,
+                    gap: dock::MARGIN_BOTTOM,
+                };
+                let surface = geometry.surface_size(5, false);
+                let whole = Rectangle::new(Point::ORIGIN, surface);
+                for index in 0..5 {
+                    // The pointer over the icon that bounces, its spring at its peak.
+                    let p = (index as f32 + 0.5) / 5.0;
+                    let mut sizes = geometry.targets(Some(p), 5);
+                    sizes[index] *= 1.0 + overshoot(dock::SPRING);
+                    let layout = Layout::new(geometry, surface, &sizes, None);
+                    let rect = layout.icons[index];
+                    let top = drawn(rect, position, 1.0, dock::BOUNCE_HEIGHT * rect.width);
+                    let inside = top.x >= -1e-3
+                        && top.y >= -1e-3
+                        && top.x + top.width <= surface.width + 1e-3
+                        && top.y + top.height <= surface.height + 1e-3;
+                    assert!(
+                        inside,
+                        "{position:?}, icon {icon}, factor {factor}: {top:?} out of {whole:?}"
+                    );
+                }
+                // The input region does not grow for the bounce.
+                let hovered = geometry.input_region(surface, 5, None, true);
+                let depth = if position.is_vertical() {
+                    hovered.width
+                } else {
+                    hovered.height
+                };
+                assert!(depth <= geometry.reach() + 1.0, "{position:?}: {depth}");
+            }
+        }
+        // Icons of 52 magnified 1.7 times: 164 deep at the bottom, the gap of 8 included.
+        let default = Geometry::from_config(&DockConfig::default());
+        assert_eq!(default.surface_size(5, false).height, 164.0);
     }
 }

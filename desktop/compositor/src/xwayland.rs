@@ -46,10 +46,10 @@ use smithay::{
 };
 
 use crate::{
-    Error, State,
+    Error, State, decorations,
     focus::KeyboardFocus,
     handlers::{Arrangement, configure_x11},
-    layout::{self, Edges},
+    layout::Edges,
     mesa, window_data,
 };
 
@@ -210,13 +210,13 @@ impl XwmHandler for State {
             return;
         }
         let size = surface.geometry().size;
+        let window = Window::new_x11_window(surface.clone());
         let loc = self
             .output_area()
-            .map(|area| layout::centered(area, size))
+            .map(|area| decorations::centered(&window, area, size))
             .unwrap_or_default();
         tracing::debug!(title = surface.title(), ?loc, ?size, "X11 window");
-        self.space
-            .map_element(Window::new_x11_window(surface.clone()), loc, false);
+        self.space.map_element(window, loc, false);
         configure_x11(&surface, Rectangle::new(loc, size));
     }
 
@@ -296,10 +296,7 @@ impl XwmHandler for State {
 
     fn unmaximize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
         if let Some(window) = self.x11_window(&surface) {
-            self.rearrange(&window, |a, zone| {
-                a.maximized = false;
-                zone.set(None);
-            });
+            self.client_unmaximize(&window);
         }
     }
 
