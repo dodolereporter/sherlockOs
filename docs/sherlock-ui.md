@@ -155,7 +155,7 @@ by state in `theme`, and its constructor in `component`:
 | --- | --- | --- |
 | Primary, secondary button | `primary_button`, `secondary_button` | Reglages, Panneaux |
 | Icon-only button | `icon_button(icon, label, message)` | Title bar of Reglages |
-| Toggle 44 by 26 | `toggle(value, message)` | Reglages |
+| Toggle 44 by 26, animated (UI-01) | `toggle(value, message)` | Reglages |
 | Text field | `text_field` | Search of Reglages |
 | Menu entry, shortcut, submenu, check | `menu_item(label, Trailing, message)`, `open` | Menus |
 | Menu, separator | `menu`, `menu_separator` | Menus |
@@ -163,6 +163,7 @@ by state in `theme`, and its constructor in `component`:
 | Section label | `section_label` | Panneaux, Main |
 | Card, glass panel | `card`, `glass_panel` | Reglages, Panneaux |
 | Texts | `body`, `description`, `title`, `icon` | All |
+| Line cut with « … » (UI-01) | `ellipsis(text)` | All |
 | Workspace chip (D-20) | `chip(label, active, message)` | Main |
 | Sherlock button, logo (D-20) | `sherlock_button(open, message)`, `logo`, `logo_square` | Main, Menus |
 | Top bar indicator (D-20) | `status(icon, value, tint)` | Main |
@@ -445,9 +446,8 @@ looked at. A pixel-exact comparison would fail the CI at the slightest rendering
 - **Stroke of the menu icons**: the Menus board draws the chevron at 2 and the check at 2.4.
   The token keeps 1.7 for every icon: `docs/contexte.md` sets a single range, from 1.6 to 1.7, and a
   shared stroke keeps the icons consistent. At 14 px, the difference is a third of a pixel.
-- **Animations**: iced changes state at once. The springs and the fade exist in `motion`
-  (D-11), but the iced components do not use them yet: the hovers of 110 to 150 ms are not
-  done.
+- **Animations**: the hover and press veils fade (D-27, UI-01) and the toggle slides
+  (UI-01); a filled button (primary, chip) still changes color at once.
 - **Accessibility**: iced 0.14 exposes nothing to screen readers. The label of an icon-only
   button is mandatory in the API and shows as a tooltip on hover, until AccessKit (ADR 0014).
 - **Text rendering**: cosmic-text antialiases in greyscale, without subpixel antialiasing; the
@@ -613,6 +613,49 @@ Captures, rendered without a screen by the tests of each program, next to the li
 Differences with the light boards: the dot under an open application of the dock is cream on
 DockClair, where it reads at 1.1 to 1; it takes `logo_dot`, night blue. The bar's Sherlock
 button has no cream pill: as in the dark theme, the logo sits on the glass (D-20).
+
+## Additions of UI-01
+
+From the author's test on the reference laptop: toggles that did not move, texts cut in the
+middle of a letter, small icons, and pointers that did not change.
+
+- **Toggle** (`animated::Switch`, inside the button of `component::toggle`). Switched, the knob
+  slides on `motion::TOGGLE_SPRING` (stiffness 600, damping 38: ratio 0.78, overshoot of 2 %,
+  settled in about 220 ms) and the track mixes from its off colors to the green over
+  `motion::FADE`; switched back halfway, it turns back from where it is, with its velocity.
+  Hovered, the track lightens over the same fade; pressed, the knob stretches by
+  `metrics::TOGGLE_KNOB_STRETCH` (4) over `motion::PRESS_FADE`. The first state shows at once,
+  and it asks for frames only while something moves. Its colors are those of D-01:
+  `toggle_off`, `toggle_off_hover`, `accent`, `accent_hover`, `accent_pressed`, knob in
+  `text_secondary` then `deepest`. `theme::toggle_press` is the transparent button around it;
+  `toggle_track` and `toggle_knob` are gone.
+- **Press** (`animated::Hoverable`). A control without a background at rest now also fades its
+  press veil (`pressed`, 90 ms, `motion::PRESS_FADE`, a choice of UI-01: under a hover's 110, so
+  that the press answers at once), and the button draws neither. `Level` is the small state that
+  fades between off and on, shared by the veils and the toggle. A bar button also shrinks to
+  `panels::BAR_PRESS_SCALE` (0.94) while pressed, and keeps a veil (`top_bar_button_open`) and a
+  green mark (`metrics::OPEN_MARK`, 14 by 2, in `accent_text`) while its panel is open, both
+  faded in and out.
+- **Ellipsis** (`ellipsis::Ellipsis`, `component::ellipsis`). One line of text that ends with
+  « … » at the last whole character that fits, never in the middle of a letter. The text is
+  shaped by the renderer, the cut found by a binary search over the character boundaries
+  (`ellipsis::fit`, tested with a fake measure), computed again only when the text, its font,
+  its size or its width changes. `Shrink` takes the text's width at most; `Fill` takes what its
+  neighbours leave. Selectors get the whole text. Used by the menu entries (a Wi-Fi network),
+  the quick tiles (the network in use), the Bluetooth devices, the name of the sound output, the
+  user, the application name of the bar, and the application and title of a notification.
+- **Pointer shapes** (`pointer`). Every clickable component asks for the pointing hand when it
+  acts and the forbidden sign when it is disabled (`Focusable` decides, from `pointer::control`);
+  iced's slider asks for the open hand on hover and the closed one while dragged, its text field
+  for the text cursor. `pointer::disabled` gives the forbidden sign to what has no button: the
+  faded rail of a slider without a service, a disabled text field. The compositor gets the shape
+  through `wp_cursor_shape_v1`. `tests/interaction.rs` checks each component in each state.
+- **Bar icons**: `metrics::STATUS_ICON`, 18 instead of the board's 16. Live icons drawn from
+  their level: `icon::wifi_svg(level, WifiMark)`, `sound_svg(level, muted)`,
+  `bluetooth_svg(Radio)`, with `wifi_level` and `sound_level`; the parts not lit are drawn at
+  `icon::UNLIT` (0.3). `component::live_icon` shows them through `animated::GlyphFade`, which
+  cross-fades a new document over `motion::GLYPH_FADE` and cycles several every
+  `motion::PULSE` (400 ms), asking for the next step at its time; the battery uses it too.
 
 ## What the lot does not do
 

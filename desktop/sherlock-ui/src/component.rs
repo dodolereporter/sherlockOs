@@ -10,6 +10,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Length, Padding, Theme};
 
 use crate::color::{self, Color, Palette};
+pub use crate::ellipsis::{Ellipsis, ellipsis};
 use crate::focus::Focusable;
 use crate::icon::Icon;
 use crate::logo::Logo;
@@ -26,6 +27,12 @@ pub struct Control<'a, Message> {
     forced: Option<button::Status>,
     ring: bool,
     pub(crate) label: Option<&'a str>,
+    /// Whether what it opens is open: a veil and a mark that fade (`bar_button`).
+    pub(crate) open: Option<bool>,
+    /// Scale the content shrinks to while pressed.
+    pub(crate) press_scale: f32,
+    /// A toggle, rebuilt when the gallery forces its state.
+    toggle: Option<bool>,
 }
 
 impl<'a, Message: Clone + 'a> Control<'a, Message> {
@@ -43,12 +50,19 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
             forced: None,
             ring: false,
             label: None,
+            open: None,
+            press_scale: 1.0,
+            toggle: None,
         }
     }
 
     /// Forces a state, instead of the one the mouse and the keyboard give. For the gallery.
     pub fn status(mut self, status: button::Status) -> Self {
         self.forced = Some(status);
+        if let Some(on) = self.toggle {
+            let enabled = self.on_press.is_some();
+            self.button = toggle_button(on, enabled, Some(status), self.on_press.clone());
+        }
         self
     }
 
@@ -77,21 +91,38 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
             forced,
             ring,
             label,
+            open,
+            press_scale,
+            toggle: _,
         } = control;
         // A component without a background at rest (menu entry, icon button, secondary
-        // button…) fades its hover veil in: the button no longer draws it, `Hoverable` lays it
-        // underneath. A forced state (gallery) is still drawn as is.
+        // button…) fades its hover and press veils in: the button no longer draws them,
+        // `Hoverable` lays them underneath. A forced state (gallery) is still drawn as is.
         let hover = hover_fill(&style, forced.is_some(), on_press.is_some());
+        let pressed = hover.and_then(|_| fill_of(&style, button::Status::Pressed));
         let styled = button.style(move |theme, status| {
             let mut s = style(theme, forced.unwrap_or(status));
-            if hover.is_some() && status == button::Status::Hovered {
+            let veiled = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            if hover.is_some() && veiled {
                 s.background = None;
             }
             s
         });
-        let content: Element<'a, Message> = match hover {
-            Some(fill) => crate::animated::hoverable(styled, fill.into(), radius).into(),
-            None => styled.into(),
+        let content: Element<'a, Message> = match (hover, open) {
+            (None, None) => styled.into(),
+            (hover, open) => {
+                let p = color::palette();
+                let fill = hover.map_or(color::TRANSPARENT, Color::from);
+                let mut veiled = crate::animated::hoverable(styled, fill, radius)
+                    .press_scale(if forced.is_some() { 1.0 } else { press_scale });
+                if let Some(pressed) = pressed {
+                    veiled = veiled.pressed(pressed.into());
+                }
+                if let Some(open) = open {
+                    veiled = veiled.open(open, p.top_bar_button_open).mark(p.accent_text);
+                }
+                veiled.into()
+            }
         };
         let focusable = Focusable::new(content, on_press, radius).ring(ring);
         match label {
@@ -110,6 +141,14 @@ impl<'a, Message: Clone + 'a> From<Control<'a, Message>> for Element<'a, Message
     }
 }
 
+/// The background a control's style gives in `status`, as a plain color.
+fn fill_of(style: &StyleFn<'_>, status: button::Status) -> Option<iced::Color> {
+    match style(&theme::theme(), status).background {
+        Some(iced::Background::Color(c)) => Some(c),
+        _ => None,
+    }
+}
+
 /// The veil a control fades in on hover: only for an enabled control without a background
 /// at rest, and not when the gallery forces its state.
 fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::Color> {
@@ -117,10 +156,9 @@ fn hover_fill(style: &StyleFn<'_>, forced: bool, enabled: bool) -> Option<iced::
         return None;
     }
     let theme = theme::theme();
-    let rest = style(&theme, button::Status::Active).background;
-    match style(&theme, button::Status::Hovered).background {
-        Some(iced::Background::Color(c)) if rest.is_none() => Some(c),
-        _ => None,
+    match style(&theme, button::Status::Active).background {
+        None => fill_of(style, button::Status::Hovered),
+        Some(_) => None,
     }
 }
 
@@ -341,28 +379,37 @@ pub fn icon_button<'a, Message: Clone + 'a>(
     control
 }
 
-/// Toggle of 44 by 26. `on_toggle` receives the new value.
+/// Toggle of 44 by 26. `on_toggle` receives the new value. Switched, its knob slides on a
+/// spring and its track fades (`animated::Switch`).
 pub fn toggle<'a, Message: Clone + 'a>(
     on: bool,
     on_toggle: Option<fn(bool) -> Message>,
 ) -> Control<'a, Message> {
-    let knob_size = metrics::TOGGLE_HEIGHT - 2.0 * metrics::TOGGLE_INSET;
-    let knob = container(space()).width(knob_size).height(knob_size);
-    let knob = knob.style(theme::toggle_knob(on, on_toggle.is_some()));
-    let align = if on { Alignment::End } else { Alignment::Start };
-    let track = container(knob).width(Length::Fill).align_x(align);
+    let on_press = on_toggle.map(|f| f(!on));
     let mut control = Control::new(
-        track,
-        theme::toggle_track(on),
-        on_toggle.map(|f| f(!on)),
+        space(),
+        theme::toggle_press,
+        on_press.clone(),
         metrics::TOGGLE_HEIGHT / 2.0,
     );
-    control.button = control
-        .button
+    control.button = toggle_button(on, on_press.is_some(), None, on_press);
+    control.toggle = Some(on);
+    control
+}
+
+/// The button around a switch: it takes the clicks, the switch draws everything.
+fn toggle_button<'a, Message: Clone + 'a>(
+    on: bool,
+    enabled: bool,
+    forced: Option<button::Status>,
+    on_press: Option<Message>,
+) -> Button<'a, Message> {
+    let switch = crate::animated::switch(on, enabled).forced(forced);
+    button(switch)
+        .on_press_maybe(on_press)
         .width(metrics::TOGGLE_WIDTH)
         .height(metrics::TOGGLE_HEIGHT)
-        .padding(metrics::TOGGLE_INSET);
-    control
+        .padding(0)
 }
 
 /// What follows the label of a menu entry, on the right.
@@ -413,14 +460,17 @@ pub fn menu_item_with<'a, Message: Clone + 'a>(
         )
         .into(),
     };
+    // A label too long for the menu ends with « … », before what follows it.
+    let label = ellipsis(label).width(Length::Fill);
     let start: Element<'a, Message> = match leading {
-        Some(leading) => row![leading, body(label).wrapping(text::Wrapping::None)]
+        Some(leading) => row![leading, label]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center)
+            .width(Length::Fill)
             .into(),
-        None => body(label).wrapping(text::Wrapping::None).into(),
+        None => label.into(),
     };
-    let line = row![start, space::horizontal(), end]
+    let line = row![start, end]
         .spacing(metrics::GAP_INLINE)
         .align_y(Alignment::Center)
         .height(Length::Fill);
@@ -856,11 +906,14 @@ pub fn sherlock_button<'a, Message: Clone + 'a>(
     let content = container(glyph).center(Length::Fill);
     let mut control = Control::new(
         content,
-        theme::sherlock_button(open),
+        theme::sherlock_button(false),
         on_press,
         metrics::SHERLOCK_BUTTON_RADIUS,
     );
     control.button = control.button.width(width).height(height).padding(0);
+    // Its menu open: a veil and the green mark, faded in and out like the panels' buttons.
+    control.open = Some(open);
+    control.press_scale = crate::panels::BAR_PRESS_SCALE;
     control
 }
 
@@ -870,7 +923,7 @@ pub fn status<'a, Message: 'a>(
     value: Option<String>,
     tint: Color,
 ) -> Element<'a, Message> {
-    let mut line = row![icon(glyph, metrics::ICON_SIZE, tint)]
+    let mut line = row![icon(glyph, metrics::STATUS_ICON, tint)]
         .spacing(metrics::STATUS_ICON_GAP)
         .align_y(Alignment::Center);
     if let Some(value) = value {
@@ -879,22 +932,21 @@ pub fn status<'a, Message: 'a>(
     line.into()
 }
 
+/// A live icon of the bar (`icon::wifi_svg`, `sound_svg`, `bluetooth_svg`): it fades from one
+/// level or state to the next; several documents are shown in turn (a Wi-Fi connecting).
+pub fn live_icon<'a, Message: 'a>(frames: Vec<String>, tint: Color) -> Element<'a, Message> {
+    crate::animated::glyph_fade(frames, metrics::STATUS_ICON, tint).into()
+}
+
 /// The battery of the bar, filled to `percent` with its mark (`icon::battery_svg`), and its
-/// value, in `tint`. The same document for the same state: iced draws it once.
+/// value, in `tint`. A new level fades in over the last one.
 pub fn battery<'a, Message: 'a>(
     percent: u8,
     mark: crate::icon::BatteryMark,
     value: Option<String>,
     tint: Color,
 ) -> Element<'a, Message> {
-    let gauge = svg(svg::Handle::from_memory(
-        crate::icon::battery_svg(percent, mark).into_bytes(),
-    ))
-    .width(metrics::ICON_SIZE)
-    .height(metrics::ICON_SIZE)
-    .style(move |_, _| svg::Style {
-        color: Some(tint.into()),
-    });
+    let gauge = live_icon(vec![crate::icon::battery_svg(percent, mark)], tint);
     let mut line = row![gauge]
         .spacing(metrics::STATUS_ICON_GAP)
         .align_y(Alignment::Center);
