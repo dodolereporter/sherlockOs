@@ -79,13 +79,14 @@ pub const CALENDAR_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + AGENDA_HEIGHT;
 
 /// Quick settings: a tile of the grid (height, radius, gap, side padding, glyph, gap between
-/// the glyph and its texts), the chevron of the Wi-Fi tile.
+/// the glyph and its texts), the chevron of the Wi-Fi tile. The padding and the gap are 2 under
+/// the board's, so that « Ne pas déranger » fits in Inter as iced lays it out.
 pub const TILE_HEIGHT: f32 = 56.0;
 pub const QUICK_TILE_RADIUS: f32 = 14.0;
 pub const TILE_GAP: f32 = 8.0;
-pub const TILE_PADDING: f32 = 12.0;
+pub const TILE_PADDING: f32 = 10.0;
 pub const GLYPH: f32 = 18.0;
-pub const TILE_ICON_GAP: f32 = 10.0;
+pub const TILE_ICON_GAP: f32 = 8.0;
 pub const CHEVRON: f32 = 28.0;
 /// A slider row: the button or icon on its left, the gap, the rail and handle; the room under
 /// the volume for the name of the output.
