@@ -6,7 +6,9 @@
 //!   with an entry (`dort`, `reflechit`) plays its entry, then loops; leaving it plays its exit.
 //! - The face layers play over the action, never alone: `yeux_fermes` is held on its last frame
 //!   while the eyes stay closed, then fades back; `cligne` comes now and then while they are
-//!   open. A weight per eyelid closes one eye alone (`Mood::Peek`).
+//!   open. Each eye plays it at its own time: one eye closes alone, the other stops half way
+//!   (`Mood::Peek`). An eye shut by the clip is hidden: the clip shrinks it to 2 % of its size,
+//!   which still shows as a dot next to the arc of the closed eye.
 //! - The eyes (`eye_L`, `eye_R`, which no clip drives) turn toward a point given by code.
 
 use std::sync::Arc;
@@ -18,13 +20,17 @@ use crate::model::Model;
 
 /// Length of a cross-fade between two body actions, and of the eyes reopening.
 pub const FADE: f32 = 0.25;
-/// How closed the open eye of `Mood::Peek` is: it stays 40 % open.
-pub const PEEK_CLOSURE: f32 = 0.6;
+/// How open the ajar eye of `Mood::Peek` is: the height of its eyelid, 1 being wide open. The
+/// clip flattens the eye before it shrinks it, so a height of 0.65 is a real half-open eye.
+pub const PEEK_OPENING: f32 = 0.65;
+/// An eyelid smaller than this in every direction is hidden (scale 0).
+pub const HIDDEN_EYELID: f32 = 0.1;
 /// Head roll of `Mood::Peek`, in radians (about 8 degrees).
 pub const PEEK_TILT: f32 = 0.14;
-/// How far an eye turns toward what it looks at, in radians: further, it would slide off the
-/// face.
-pub const GAZE_LIMIT: f32 = 0.22;
+/// How far an eye turns toward what it looks at, in radians (about 7 degrees, as the model's
+/// own player does): further, the eyes slide down onto the mouth when they look at the
+/// password field below.
+pub const GAZE_LIMIT: f32 = 0.12;
 /// Shortest and longest wait between two blinks, in seconds.
 const BLINK_WAIT: (f32, f32) = (2.5, 6.0);
 /// Rate of the exponential smoothing of the gaze and of the head roll, per second.
@@ -74,14 +80,32 @@ impl Mood {
         }
     }
 
-    /// How closed each eye is, left then right.
-    fn eyes(self) -> (f32, f32) {
+    /// What each eye does, left then right.
+    fn eyes(self) -> [Eye; 2] {
         match self {
-            Self::EyesClosed => (1.0, 1.0),
-            Self::Peek => (PEEK_CLOSURE, 1.0),
-            _ => (0.0, 0.0),
+            Self::EyesClosed => [Eye::Closed; 2],
+            Self::Peek => [Eye::Ajar, Eye::Closed],
+            _ => [Eye::Open; 2],
         }
     }
+}
+
+/// What one eye does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Eye {
+    Open,
+    /// Held at `PEEK_OPENING`.
+    Ajar,
+    Closed,
+}
+
+/// One eye in `yeux_fermes`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Eyelid {
+    /// Time in the clip: it moves toward the time of the eye's target, then holds.
+    time: f32,
+    /// Weight of the clip on the eye: 1 while it closes or holds, down to 0 as it reopens.
+    weight: f32,
 }
 
 /// A body action under way.
@@ -101,6 +125,8 @@ struct Face {
     head: usize,
     closing: usize,
     blink: usize,
+    /// Time of `yeux_fermes` where the eye is `PEEK_OPENING` high.
+    ajar_time: f32,
 }
 
 /// Plays a mood on the model, frame after frame.
@@ -114,10 +140,8 @@ pub struct Animator {
     queue: Vec<usize>,
     /// The pose being faded from, and how long ago the fade started.
     fading: Option<(Pose, f32)>,
-    /// Time in `yeux_fermes`, held at its end.
-    closing_time: f32,
-    /// Weight of `yeux_fermes` on each eye, left then right.
-    closure: [f32; 2],
+    /// Each eye in `yeux_fermes`, left then right.
+    eyelids: [Eyelid; 2],
     /// Time in `cligne`, or `None` between blinks.
     blink_time: Option<f32>,
     until_blink: f32,
@@ -134,13 +158,16 @@ impl Animator {
         let face = (|| {
             let node = |name| model.node(name);
             let clip = |name| model.clips.iter().position(|c| c.name == name);
+            let eyelid = node("eyelid_L")?;
+            let closing = clip("yeux_fermes")?;
             Some(Face {
-                eyelids: [node("eyelid_L")?, node("eyelid_R")?],
+                eyelids: [eyelid, node("eyelid_R")?],
                 arcs: [node("eye_happy_L")?, node("eye_happy_R")?],
                 eyes: [node("eye_L")?, node("eye_R")?],
                 head: node("head")?,
-                closing: clip("yeux_fermes")?,
+                closing,
                 blink: clip("cligne")?,
+                ajar_time: time_at_height(&model.clips[closing], eyelid, PEEK_OPENING),
             })
         })();
         let mut animator = Self {
@@ -150,8 +177,7 @@ impl Animator {
             action: None,
             queue: Vec::new(),
             fading: None,
-            closing_time: 0.0,
-            closure: [0.0; 2],
+            eyelids: [Eyelid::default(); 2],
             blink_time: None,
             until_blink: BLINK_WAIT.0,
             seed: 0x5EED,
@@ -178,11 +204,6 @@ impl Animator {
     pub fn set_mood(&mut self, mood: Mood) {
         if mood == self.mood {
             return;
-        }
-        let (left, right) = mood.eyes();
-        if self.closure == [0.0; 2] && (left > 0.0 || right > 0.0) {
-            // The eyes start closing: the layer plays from its first frame.
-            self.closing_time = 0.0;
         }
         let mut plan = Vec::new();
         if let Some(exit) = self.mood.exit() {
@@ -226,16 +247,38 @@ impl Animator {
             }
         }
 
-        // Eyes: close at once along the clip, reopen by a fade from its last frame.
-        let (left, right) = self.mood.eyes();
-        self.closing_time += dt;
-        let step = dt / FADE;
-        for (weight, target) in self.closure.iter_mut().zip([left, right]) {
-            *weight = if target >= *weight {
-                target
-            } else {
-                (*weight - step).max(target)
-            };
+        // Eyes: play the clip to the eye's target and hold it; reopen by a fade.
+        if let Some(face) = self.face {
+            let end = self.model.clips[face.closing].duration;
+            let step = dt / FADE;
+            for (eyelid, eye) in self.eyelids.iter_mut().zip(self.mood.eyes()) {
+                let target = match eye {
+                    Eye::Open => None,
+                    Eye::Ajar => Some(face.ajar_time),
+                    Eye::Closed => Some(end),
+                };
+                match target {
+                    Some(target) => {
+                        if eyelid.weight <= 0.0 {
+                            // An open eye starts the clip from its first frame, the open eye.
+                            *eyelid = Eyelid {
+                                time: 0.0,
+                                weight: 1.0,
+                            };
+                        } else {
+                            eyelid.weight = (eyelid.weight + step).min(1.0);
+                        }
+                        // Toward the target, backward too (from closed to ajar).
+                        eyelid.time += (target - eyelid.time).clamp(-dt, dt);
+                    }
+                    None => {
+                        eyelid.weight = (eyelid.weight - step).max(0.0);
+                        if eyelid.weight <= 0.0 {
+                            eyelid.time = 0.0;
+                        }
+                    }
+                }
+            }
         }
 
         // Blinks, while both eyes are open.
@@ -253,7 +296,7 @@ impl Animator {
             None => {
                 self.until_blink -= dt;
                 if self.until_blink <= 0.0 {
-                    if self.closure == [0.0; 2] {
+                    if self.eyelids.iter().all(|e| e.weight <= 0.0) {
                         self.blink_time = Some(0.0);
                     } else {
                         self.until_blink = self.random_wait();
@@ -282,26 +325,20 @@ impl Animator {
             return pose;
         };
         let closing = &self.model.clips[face.closing];
-        let time = self.closing_time.min(closing.duration);
-        let [left, right] = self.closure;
-        // The arcs of closed eyes only show when an eye is (nearly) shut.
-        let arc = |w: f32| ((w - 0.8) / 0.2).clamp(0.0, 1.0);
-        closing.apply(&mut pose, time, 1.0, |node| {
-            if node == face.eyelids[0] {
-                left
-            } else if node == face.eyelids[1] {
-                right
-            } else if node == face.arcs[0] {
-                arc(left)
-            } else if node == face.arcs[1] {
-                arc(right)
-            } else {
-                0.0
-            }
-        });
+        for (side, eyelid) in self.eyelids.iter().enumerate() {
+            let (lid, arc) = (face.eyelids[side], face.arcs[side]);
+            let mask = |node| if node == lid || node == arc { 1.0 } else { 0.0 };
+            closing.apply(&mut pose, eyelid.time, eyelid.weight, mask);
+        }
         if let Some(time) = self.blink_time {
-            let open = 1.0 - left.max(right);
+            let open = 1.0 - self.eyelids[0].weight.max(self.eyelids[1].weight);
             self.model.clips[face.blink].apply(&mut pose, time, open, |_| 1.0);
+        }
+        for lid in face.eyelids {
+            let scale = &mut pose.transforms[lid].scale;
+            if scale.max_element() < HIDDEN_EYELID {
+                *scale = Vec3::ZERO;
+            }
         }
         let head = &mut pose.transforms[face.head];
         head.rotation = (head.rotation * Quat::from_rotation_z(self.tilt)).normalize();
@@ -317,9 +354,13 @@ impl Animator {
         self.pose().joint_matrices(&self.model)
     }
 
-    /// How closed each eye is, left then right: 0 open, 1 closed.
-    pub fn closure(&self) -> [f32; 2] {
-        self.closure
+    /// How open each eye is in this frame, left then right: the height of its eyelid, 1 wide
+    /// open, 0 hidden.
+    pub fn openness(&self) -> [f32; 2] {
+        let pose = self.pose();
+        self.face.map_or([1.0; 2], |face| {
+            face.eyelids.map(|lid| pose.transforms[lid].scale.z)
+        })
     }
 
     /// The name of the body action playing.
@@ -407,4 +448,21 @@ impl Animator {
 fn smooth(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// The first time where `clip` makes the eyelid `node` `height` high (its Z scale), or 0.
+fn time_at_height(clip: &crate::clip::Clip, node: usize, height: f32) -> f32 {
+    use crate::clip::Property;
+    let Some(channel) = clip
+        .channels
+        .iter()
+        .find(|c| c.node == node && c.property == Property::Scale)
+    else {
+        return 0.0;
+    };
+    let steps = 960;
+    (0..=steps)
+        .map(|i| clip.duration * i as f32 / steps as f32)
+        .find(|&t| channel.sample(t).z <= height)
+        .unwrap_or(0.0)
 }

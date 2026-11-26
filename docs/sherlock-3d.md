@@ -33,7 +33,7 @@ Never change the model here: it is produced by Blender scripts in its own reposi
 | --- | --- |
 | Skeleton | 30 bones; `eye_L` and `eye_R` are driven by code only, `eyelid_L` and `eyelid_R` are separate |
 | Mesh | One mesh, 14 primitives: position, normal, UV, color, joints, weights |
-| Materials | 14, unlit: the soft shadows are baked in the vertex colors |
+| Materials | 14, PBR in the file, drawn unlit here: the occlusion of the hollows is baked in the vertex colors (`COLOR_0`, 16-bit, linear, 0.55 to 1) |
 | Textures | 2 JPEG (the scarf's knit and its normal map, which is ignored) |
 | Clips | 30: loops, entries and exits, reactions, face layers |
 
@@ -60,8 +60,13 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
   it drives only (`Clip::apply` with a mask). Never fade to a layer alone: the body would fall
   back to the T-pose.
 - `yeux_fermes` ends with the eyes closed: hold its last frame, then fade back.
-- A mask closes one eye alone: `yeux_fermes` on `eyelid_R` at full weight, on `eyelid_L` at 0.6
-  (the eye stays 40 % open).
+- Each eye plays `yeux_fermes` at a time of its own (a mask per eye): one eye closes alone.
+- The clip first flattens the eye (eyelid scale Z 0.55, then 0.07), then shrinks it to 2 % in
+  every direction while the arc of the closed eye rises. That 2 % still shows as a dot beside
+  the arc: an eyelid under `HIDDEN_EYELID` (0.1) in every direction is set to scale 0.
+- Half way along the flattening, the eye is a real half-open eye: `Peek` holds the left eye at
+  the time where its height is `PEEK_OPENING` (0.65). Blending the clip's last frame at a
+  weight would shrink the whole eye instead, into a dot.
 
 ## Moods
 
@@ -73,7 +78,7 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
 | `Idle` | `repos` | `cligne` every 2.5 to 6 s |
 | `Wave` | `salut` once, then `repos` | |
 | `EyesClosed` | `repos` | `yeux_fermes`, last frame held |
-| `Peek` | `repos`, head rolled by 0.14 rad | `yeux_fermes` on the right eye; the left one 40 % open |
+| `Peek` | `repos`, head rolled by 0.14 rad | `yeux_fermes` on the right eye; the left one held at 65 % of its height |
 | `Sorry` | `desole` once, then `repos` | |
 | `Success` | `reussite` once, then `repos` | |
 | `Sleep` | `dort_entree`, then `dort`, its exit clip when it ends | |
@@ -82,11 +87,13 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
 - A loop already playing goes on: `Idle`, `EyesClosed` and `Peek` share `repos`, so going from
   one to the other only moves the eyes.
 - Every change of body action cross-fades from the pose shown, eased, over `FADE` (0.25 s).
-- The eyes close along `yeux_fermes` and reopen by a fade from its last frame. The arcs of
-  closed eyes (`eye_happy_*`) only rise when an eye is nearly shut, so the ajar eye of `Peek`
-  shows no arc. Blinks only come while both eyes are open.
+- Each eye moves along `yeux_fermes` toward its target time (the end for a closed eye, the
+  half-open time for the ajar one, backward too) and holds it; it reopens by a fade from
+  there. The arcs of closed eyes (`eye_happy_*`) only rise late in the clip, so the ajar eye
+  of `Peek` shows no arc. Blinks only come while both eyes are open.
 - `look_at(Some(point))` turns `eye_L` and `eye_R` toward a point of the model's space, by
-  `GAZE_LIMIT` (0.22 rad) at most, smoothed; `None` looks ahead again.
+  `GAZE_LIMIT` (0.12 rad, as the model's own player) at most, smoothed; `None` looks ahead
+  again. Further, the eyes slide down onto the mouth when they look at the field below.
 
 ## The widget
 
@@ -124,14 +131,23 @@ Two passes per frame:
 
 1. **Scene.** The skinned mesh in a texture of the size of the widget, `Rgba8UnormSrgb`,
    multisampled ×4 with a 32-bit depth buffer, cleared transparent, then resolved. Color =
-   vertex color × base color × texture, written premultiplied; materials are double-sided.
-   Opaque parts first, then any blended part (the model has none).
+   vertex color × base color × texture × a darkening of up to 18 % toward the bottom of the
+   body (heights 1.9 down to 0.9 in the model's space), written premultiplied; materials are
+   double-sided. Opaque parts first, then any blended part (the model has none).
 2. **Composite.** The resolved texture laid over the target in premultiplied alpha, like iced,
-   cut to a disc (`Cut::Circle`, one pixel of antialiasing) or not, over an optional background.
-   When the target has no sRGB format (iced with web colors), the shader encodes to sRGB itself.
+   cut to a disc (`Cut::Circle`, one pixel of antialiasing) or not, over a drop shadow and an
+   optional background. The shadow is the mascot's silhouette moved right and down (2.5 % and
+   4.5 % of the smaller side, the light of the reference renders comes from the top left),
+   blurred over 5 % with 24 linear taps, at 28 % opacity. When the target has no sRGB format
+   (iced with web colors), the shader encodes to sRGB itself.
+
+There is no lighting. The reference renders of the model's repository (Blender) and its web
+player (three.js) light the PBR materials with a key, a fill and a back light: that is where
+most of their relief comes from. The vertex colors only hold the occlusion of the hollows.
 
 `Camera::UPPER_BODY` frames the cap, the face, the scarf and the top of the body, legs out of
-the frame; `Camera::FULL_BODY` the whole mascot.
+the frame, with a margin between the pompom and the top of the bubble; `Camera::FULL_BODY` the
+whole mascot.
 
 The renderer uses the wgpu of iced (`=27.0.1`, Vulkan only, ADR 0018). A program picks the
 driver first (`sherlock_ui::gpu::Choice`): only the AMD chip that drives the screen, never the
@@ -148,8 +164,8 @@ cargo test -p sherlock-3d
 | --- | --- |
 | `tests/model.rs` | Counts of bones, clips, primitives, materials, textures; no clip drives the eyes; sampling on and between keys; `yeux_fermes` ends closed; the bone mask closes one eye; cross-fade; skinning |
 | `tests/offscreen.rs` | Renders off screen and checks pixels: transparent corners, opaque face, antialiased edges, nothing outside the bubble, its background inside |
-| `tests/animator.rs` | `repos` at start with the accessories hidden; `Peek` closes `eyelid_R` only, `eyelid_L` ajar, head tilted; closed eyes hold, then reopen by a fade; a reaction fades in without a jump and `repos` comes back; `Sleep` enters, loops and leaves by its exit; the gaze turns within its limit |
-| `tests/captures.rs` | Captures rest, wave (mid-gesture), eyes closed, peek and sorry in the bubble, dark and light, at 170 and 340 pixels, and checks that the eyes differ |
+| `tests/animator.rs` | `repos` at start with the accessories hidden; `Peek` closes `eyelid_R` only, `eyelid_L` ajar, head tilted; `Peek` holds the left eye at 65 % of its height, as wide as an open eye; on every frame of `EyesClosed` and `Peek`, with or without a gaze, an eye whose arc is out is hidden; the ajar eye shows no arc; from `EyesClosed` to `Peek` the left eye opens half way; closed eyes hold, then reopen by a fade; a reaction fades in without a jump and `repos` comes back; `Sleep` enters, loops and leaves by its exit; the gaze turns within its limit |
+| `tests/captures.rs` | Captures rest, wave (mid-gesture), eyes closed, peek and sorry in the bubble, dark and light, at 170 and 340 pixels, and checks that the eyes differ; then 8 frames of `EyesClosed` and of `Peek` looking at the field below (`seq-*.png`), with no reflection left once the eyes are shut |
 
 Without the model, or without a Vulkan driver, the tests say why and pass.
 `SHERLOCK_3D_REQUIRE=1` turns that into a failure: the CI sets it, downloads the model with

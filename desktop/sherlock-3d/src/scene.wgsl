@@ -1,5 +1,6 @@
-// The mascot, unlit: its soft shadows are baked in the vertex colors. Color = vertex color x
-// base color x texture, written premultiplied. Skinning with 4 bones per vertex.
+// The mascot, unlit: its soft shadows (the occlusion of the hollows) are baked in the vertex
+// colors. Color = vertex color x base color x texture x a slight darkening toward the bottom of
+// the body, written premultiplied. Skinning with 4 bones per vertex.
 
 struct Globals {
     view_proj: mat4x4<f32>,
@@ -32,7 +33,15 @@ struct VertexOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // Height in the space of the model, the feet at 0.
+    @location(2) height: f32,
 };
+
+// The bottom of the body is darkened by up to this share, fading out from LOW to HIGH (heights
+// in the space of the model: the scarf is at about 1.8, the top of the cap at about 3).
+const BOTTOM_SHADE: f32 = 0.18;
+const LOW: f32 = 0.9;
+const HIGH: f32 = 1.9;
 
 @vertex
 fn vs_main(v: VertexIn) -> VertexOut {
@@ -41,7 +50,9 @@ fn vs_main(v: VertexIn) -> VertexOut {
         + globals.joints[v.joints.z] * v.weights.z
         + globals.joints[v.joints.w] * v.weights.w;
     var out: VertexOut;
-    out.clip = globals.view_proj * skin * vec4<f32>(v.position, 1.0);
+    let world = skin * vec4<f32>(v.position, 1.0);
+    out.clip = globals.view_proj * world;
+    out.height = world.y;
     out.uv = v.uv;
     out.color = v.color;
     return out;
@@ -50,7 +61,8 @@ fn vs_main(v: VertexIn) -> VertexOut {
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(base_texture, base_sampler, in.uv);
-    let color = in.color * material.base * texel;
+    let shade = 1.0 - BOTTOM_SHADE * (1.0 - smoothstep(LOW, HIGH, in.height));
+    let color = in.color * material.base * texel * vec4<f32>(vec3<f32>(shade), 1.0);
     if color.a < material.alpha_cutoff {
         discard;
     }
