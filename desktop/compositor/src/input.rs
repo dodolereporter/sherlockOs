@@ -30,6 +30,7 @@ use smithay::{
 
 use crate::{
     State,
+    decorations::{self, Control},
     handlers::{Arrangement, is_fullscreen, is_maximized},
     is_override_redirect,
     layout::{self, Edges, Resize, Zone},
@@ -37,7 +38,7 @@ use crate::{
 };
 
 // Button codes, taken from linux/input-event-codes.h.
-const BTN_LEFT: u32 = 0x110;
+pub(crate) const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 
 /// Gesture key of the compositor. Super in a real session. In nested mode, the host session
@@ -66,6 +67,8 @@ pub(crate) enum GestureSource {
     Border,
     /// Client request: `xdg_toplevel.move` or `xdg_toplevel.resize`.
     Client,
+    /// Drag of the title bar the compositor draws (lot D-08).
+    TitleBar,
 }
 
 /// Gesture in progress: the compositor moves or resizes a window.
@@ -94,6 +97,8 @@ pub(crate) enum Hit {
     Surface(Window, WlSurface, Point<f64, Logical>),
     /// The grab band around a window, and the edges it pulls.
     Border(Window, Edges),
+    /// The title bar the compositor draws above a window, or one of its buttons.
+    Decoration(Window, Control),
     /// An anchored surface (or one of its menus or subsurfaces): its main surface, the surface
     /// hit and the position of its origin.
     Layer(WlSurface, WlSurface, Point<f64, Logical>),
@@ -333,7 +338,11 @@ impl State {
         let size = (!restore.size.is_empty()).then_some(restore.size);
         self.request_size(&gesture.window, size);
         if let Some(size) = size {
-            let loc = layout::unsnapped(gesture.initial, size, gesture.start);
+            // The pointer keeps its place in the whole window, title bar included.
+            let inset = decorations::inset(&gesture.window);
+            let frame = decorations::frame(&gesture.window, gesture.initial);
+            let whole = Size::from((size.w, size.h + inset));
+            let loc = layout::unsnapped(frame, whole, gesture.start) + Point::from((0, inset));
             gesture.initial = Rectangle::new(loc, size);
             self.move_window(&gesture.window, loc, true);
         }
@@ -445,9 +454,14 @@ impl State {
             if let Some((surface, origin)) = under {
                 return Some(Hit::Surface(window.clone(), surface, origin.to_f64()));
             }
+            if let Some(control) = self.decoration_at(window, pos) {
+                return Some(Hit::Decoration(window.clone(), control));
+            }
+            // The band surrounds the whole window, its title bar included.
             let edges = self
                 .space
                 .element_geometry(window)
+                .map(|r| decorations::frame(window, r))
                 .filter(|r| {
                     !r.size.is_empty() && !is_fullscreen(window) && !is_override_redirect(window)
                 })
@@ -595,9 +609,15 @@ impl State {
         // During a gesture, no client has the pointer.
         let under = if self.gesture_active() {
             self.update_gesture(location);
+            self.hover_decoration(None);
             None
         } else {
-            match self.hit(location) {
+            let hit = self.hit(location);
+            self.hover_decoration(match &hit {
+                Some(Hit::Decoration(window, control)) => Some((window.clone(), *control)),
+                _ => None,
+            });
+            match hit {
                 Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin)) => {
                     Some((surface, origin))
                 }
@@ -649,6 +669,9 @@ impl State {
             }
             return;
         }
+        if state == ButtonState::Released && button == BTN_LEFT {
+            self.release_decoration(location);
+        }
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
             let hit = self.hit(location);
             // An open menu closes on a click on another client; the click still goes through.
@@ -664,7 +687,9 @@ impl State {
                 }
             }
             let window = match &hit {
-                Some(Hit::Surface(window, ..) | Hit::Border(window, _)) => Some(window.clone()),
+                Some(
+                    Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
+                ) => Some(window.clone()),
                 Some(Hit::Layer(layer, ..)) => {
                     self.click_layer(layer);
                     pointer.button(self, &event);
@@ -682,6 +707,17 @@ impl State {
             self.focus(window.clone());
             let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
             let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
+            // The title bar and its buttons: the client does not see the press.
+            if let (false, Some(Hit::Decoration(window, control))) = (held, &hit) {
+                self.press_decoration(window.clone(), *control, button, (location, time));
+                if self.gesture_active() {
+                    self.pointer_motion(location, time);
+                    return;
+                }
+                pointer.button(self, &event);
+                pointer.frame(self);
+                return;
+            }
             let gesture = match (button, held, hit) {
                 // Gesture key + button: the client does not see the press.
                 (BTN_LEFT, true, _) => Some((None, GestureSource::Modifier)),
