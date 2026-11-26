@@ -66,6 +66,8 @@ pub struct Node {
 #[derive(Debug, Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
+    /// Unit normal, for the fixed lights.
+    pub normal: [f32; 3],
     pub uv: [f32; 2],
     /// Linear color, the baked soft shadows.
     pub color: [f32; 4],
@@ -100,6 +102,10 @@ pub struct Material {
     /// Index into `Model::textures`.
     pub texture: Option<usize>,
     pub alpha: Alpha,
+    /// From 0, shiny, to 1, matt: sets the soft highlight of the fixed lights.
+    pub roughness: f32,
+    /// Linear light the material gives off: the reflections of the eyes, the bulb.
+    pub emissive: [f32; 3],
 }
 
 /// An sRGB texture with its mipmaps, largest first, RGBA8.
@@ -196,6 +202,11 @@ impl Model {
                     .ok_or(Error::Incomplete("a primitive without positions"))?
                     .collect();
                 let count = positions.len();
+                let mut normals = reader
+                    .read_normals()
+                    .map(|n| n.collect::<Vec<_>>())
+                    .unwrap_or_default();
+                normals.resize(count, [0.0, 0.0, 1.0]);
                 let mut uvs = reader
                     .read_tex_coords(0)
                     .map(|t| t.into_f32().collect::<Vec<_>>())
@@ -231,6 +242,7 @@ impl Model {
                 for i in 0..count {
                     vertices.push(Vertex {
                         position: positions[i],
+                        normal: normals[i],
                         uv: uvs[i],
                         color: colors[i],
                         joints: bones[i],
@@ -252,6 +264,8 @@ impl Model {
                 base_color: [1.0; 4],
                 texture: None,
                 alpha: Alpha::Opaque,
+                roughness: 1.0,
+                emissive: [0.0; 3],
             });
         }
 
@@ -331,6 +345,8 @@ fn material(material: gltf::Material<'_>) -> Material {
         base_color: pbr.base_color_factor(),
         texture: pbr.base_color_texture().map(|info| info.texture().index()),
         alpha,
+        roughness: pbr.roughness_factor(),
+        emissive: material.emissive_factor(),
     }
 }
 

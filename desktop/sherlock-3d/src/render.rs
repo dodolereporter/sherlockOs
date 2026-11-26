@@ -60,11 +60,15 @@ impl Camera {
 
     /// Projection and view for a frame `aspect` times wider than high.
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
+        let projection = Mat4::perspective_rh(self.fov_y, aspect.max(0.01), 0.1, 100.0);
+        projection * self.view()
+    }
+
+    /// From the space of the model to that of the camera, which looks along -Z.
+    pub fn view(&self) -> Mat4 {
         let direction = Vec3::new(0.0, self.pitch.sin(), self.pitch.cos());
         let eye = self.target + direction * self.distance;
-        let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
-        let projection = Mat4::perspective_rh(self.fov_y, aspect.max(0.01), 0.1, 100.0);
-        projection * view
+        Mat4::look_at_rh(eye, self.target, Vec3::Y)
     }
 
     /// The point of the plane `z = depth` (in the space of the model) seen at `ndc`, from -1 to
@@ -120,6 +124,8 @@ pub enum Error {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
     view_projection: [f32; 16],
+    /// The camera's view: the lights are fixed to it.
+    view: [f32; 16],
     joints: [[f32; 16]; MAX_JOINTS],
 }
 
@@ -127,6 +133,8 @@ struct Globals {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MaterialUniform {
     base: [f32; 4],
+    /// Linear emission, then roughness.
+    emissive_roughness: [f32; 4],
     alpha_cutoff: f32,
     padding: [f32; 3],
 }
@@ -266,10 +274,11 @@ impl Renderer {
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![
                             0 => Float32x3,
-                            1 => Float32x2,
-                            2 => Float32x4,
-                            3 => Uint16x4,
-                            4 => Float32x4,
+                            1 => Float32x3,
+                            2 => Float32x2,
+                            3 => Float32x4,
+                            4 => Uint16x4,
+                            5 => Float32x4,
                         ],
                     }],
                 },
@@ -392,6 +401,12 @@ impl Renderer {
                     label: Some("sherlock-3d material"),
                     contents: bytemuck::bytes_of(&MaterialUniform {
                         base: material.base_color,
+                        emissive_roughness: [
+                            material.emissive[0],
+                            material.emissive[1],
+                            material.emissive[2],
+                            material.roughness,
+                        ],
                         alpha_cutoff,
                         padding: [0.0; 3],
                     }),
@@ -485,6 +500,7 @@ impl Renderer {
                 .camera
                 .view_projection(size[0] as f32 / size[1] as f32)
                 .to_cols_array(),
+            view: frame.camera.view().to_cols_array(),
             joints: [Mat4::IDENTITY.to_cols_array(); MAX_JOINTS],
         };
         for (slot, joint) in globals.joints.iter_mut().zip(frame.joints) {
