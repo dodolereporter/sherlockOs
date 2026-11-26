@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use bar::app::{Bar, Indicator, Message};
+use bar::app::{Bar, Message};
 use bar::calendar::Month;
 use bar::history::{Entry, Group};
 use bar::menu;
@@ -514,8 +514,8 @@ fn the_centre_runs_an_action_and_clears() {
     ));
 }
 
-/// The bar with the control centre open from the battery: its button keeps a veil and the
-/// green mark (UI-01). `bar-open`, then `bar-open-light`.
+/// The bar with the control centre open: the indicators, one button, keep one veil and the
+/// green mark under the whole group (UI-02). `bar-open`, then `bar-open-light`.
 #[test]
 fn the_button_of_the_open_panel_is_marked() {
     for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
@@ -523,19 +523,54 @@ fn the_button_of_the_open_panel_is_marked() {
             let mut state = sample();
             state.panel_motion = Some(false);
             let _ = state.update(Message::Surface(iced::window::Id::unique()));
-            let _ = state.update(Message::Indicator(Indicator::Battery));
-            assert_eq!(state.panel_open(), Some(Panel::Control));
-            assert_eq!(state.opener, Some(Indicator::Battery));
-            // Another indicator moves the mark and leaves the centre open.
-            let _ = state.update(Message::Indicator(Indicator::Sound));
+            let _ = state.update(Message::TogglePanel(Panel::Control));
             assert_eq!(state.panel_open(), Some(Panel::Control));
             let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
             assert_written(capture(ui, &format!("bar-open{suffix}")));
-            // The same one again closes it.
-            let _ = state.update(Message::Indicator(Indicator::Sound));
+            // The whole bar of the author's 1920 × 1080, the group marked under the open
+            // control centre.
+            if which == Theme::Dark {
+                let size = (
+                    1920.0 - 2.0 * metrics::TOP_BAR_MARGIN_SIDE,
+                    metrics::TOP_BAR_HEIGHT,
+                );
+                let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+                assert_written(capture(ui, "bar-open-1920"));
+            }
+            let _ = state.update(Message::TogglePanel(Panel::Control));
             assert_eq!(state.panel_open(), None);
         });
     }
+}
+
+/// A click anywhere on the group of indicators, on any of its icons or between them, opens the
+/// control centre (UI-02).
+#[test]
+fn a_click_anywhere_on_the_indicators_opens_the_control_centre() {
+    let state = sample();
+    let (width, height) = bar_size();
+    // The group sits left of the clock: its battery value, then points across it.
+    let mut ui = Simulator::with_size(bar::settings(), (width, height), state.view_bar());
+    let battery = ui.find("82\u{202F}%").expect("battery found");
+    let right = battery.visible_bounds().map_or(0.0, |b| b.x + b.width);
+    let mut points = Vec::new();
+    // From the battery value leftwards, every 12 px over the group: the icons and the gaps.
+    let mut x = right - 2.0;
+    for _ in 0..8 {
+        points.push(iced::Point::new(x, height / 2.0));
+        x -= 12.0;
+    }
+    for point in &points {
+        ui.point_at(*point);
+        ui.simulate(iced_test::simulator::click());
+    }
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert_eq!(messages.len(), points.len(), "{messages:?}");
+    assert!(
+        messages
+            .iter()
+            .all(|m| matches!(m, Message::TogglePanel(Panel::Control)))
+    );
 }
 
 #[test]
@@ -549,7 +584,7 @@ fn a_click_on_the_indicators_or_the_clock_opens_their_panel() {
         messages[..],
         [
             Message::TogglePanel(Panel::Calendar),
-            Message::Indicator(Indicator::Battery)
+            Message::TogglePanel(Panel::Control)
         ]
     ));
 }
