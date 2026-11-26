@@ -9,6 +9,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
+use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::metrics;
@@ -225,7 +226,6 @@ pub enum Message {
     Forward,
     Up,
     Click(usize),
-    DoubleClick(usize),
     RightClick(Option<usize>),
     Sort(Column),
     Search(String),
@@ -324,6 +324,9 @@ pub struct App {
     pub(crate) notice: Option<Notice>,
     pub(crate) busy: usize,
     pointer: Point,
+    /// Presses on the rows, by path, to recognise a double click whatever the first click
+    /// changes in the view or a reload in the order of the rows.
+    clicks: DoubleClick<PathBuf>,
     modifiers: Modifiers,
     pub(crate) size: Size,
     /// Scroll of the listing and visible height, to keep the cursor in view.
@@ -392,6 +395,7 @@ impl App {
             notice: None,
             busy: 0,
             pointer: Point::ORIGIN,
+            clicks: DoubleClick::default(),
             modifiers: Modifiers::default(),
             size: Size::new(width, height),
             scroll: (0.0, height),
@@ -589,10 +593,16 @@ impl App {
                 } else {
                     self.select_only(index);
                 }
-            }
-            Message::DoubleClick(index) => {
-                self.select_only(index);
-                return self.open();
+                // The first click selects, which changes the view: the second is recognised
+                // here, not by the row widget, whose state that change may drop.
+                let position = (self.pointer.x, self.pointer.y);
+                let target = self.entries.get(index).map(|e| e.path.clone());
+                if let Some(target) = target
+                    && self.clicks.press(target, position, self.now())
+                {
+                    self.select_only(index);
+                    return self.open();
+                }
             }
             Message::RightClick(index) => {
                 self.renaming = None;
