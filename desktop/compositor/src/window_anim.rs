@@ -197,6 +197,7 @@ pub(crate) fn push_closing(
             items.push(Item::Shadow {
                 key: Key::of(owner, Part::Shadow),
                 shadow: Shadow::of(rect, view.scale),
+                color: sherlock_ui::color::palette().shadow.premultiplied(),
                 radius,
                 alpha: alpha * ghost.decoration,
             });
@@ -255,7 +256,7 @@ pub fn snapshot(
     let mode = state.wallpaper.mode;
     let elements: Vec<SceneElement> = items
         .into_iter()
-        .flat_map(|item| scene.elements(renderer, &mut ids, item, &view, None, mode))
+        .flat_map(|item| scene.elements(renderer, &mut ids, item, &view, &[], mode))
         .collect();
     draw(renderer, size, &elements)
         .inspect_err(|err| tracing::warn!("closing: drawing the window: {err}"))
