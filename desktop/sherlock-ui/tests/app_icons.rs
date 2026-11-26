@@ -14,7 +14,11 @@ fn render(svg: &str, size: u32) -> Pixmap {
     let tree = Tree::from_str(svg, &Options::default()).expect("SVG parsed");
     let mut pixmap = Pixmap::new(size, size).expect("pixmap");
     let scale = size as f32 / tree.size().width();
-    resvg::render(&tree, Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
     pixmap
 }
 
@@ -38,7 +42,10 @@ fn every_icon_renders_at_every_size() {
             // Near the top middle every drawing leaves its tile bare; the hairline border along
             // the edge lightens it a little.
             let (x, y) = (size / 2, (size / 16).max(1));
-            assert!(is_color(&pixmap, x, y, icon.tile(), 28), "{icon:?} at {size}");
+            assert!(
+                is_color(&pixmap, x, y, icon.tile(), 28),
+                "{icon:?} at {size}"
+            );
             // The corners are rounded off: transparent.
             assert_eq!(pixmap.pixel(0, 0).map(|p| p.alpha()), Some(0), "{icon:?}");
             // Something is drawn on the tile.

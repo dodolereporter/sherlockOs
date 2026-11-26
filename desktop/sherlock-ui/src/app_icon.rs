@@ -118,7 +118,9 @@ mod tests {
     fn png_size(path: &Path) -> (u32, u32) {
         let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{}", path.display());
-        let word = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let word = |at: usize| {
+            u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
         (word(16), word(20))
     }
 
@@ -126,7 +128,11 @@ mod tests {
     fn drawings() -> Vec<(AppIcon, &'static str)> {
         AppIcon::ALL
             .iter()
-            .flat_map(|&i| std::iter::once(i.svg()).chain(i.optical()).map(move |s| (i, s)))
+            .flat_map(|&i| {
+                std::iter::once(i.svg())
+                    .chain(i.optical())
+                    .map(move |s| (i, s))
+            })
             .collect()
     }
 
@@ -163,7 +169,10 @@ mod tests {
         // The desktop entries of our programs, one folder per crate under `desktop/`.
         let desktop = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut seen = Vec::new();
-        for program in std::fs::read_dir(&desktop).expect("desktop folder").flatten() {
+        for program in std::fs::read_dir(&desktop)
+            .expect("desktop folder")
+            .flatten()
+        {
             let Ok(files) = std::fs::read_dir(program.path()) else {
                 continue;
             };
@@ -176,7 +185,10 @@ mod tests {
                 let Some(icon) = text.lines().find_map(|l| l.strip_prefix("Icon=")) else {
                     continue;
                 };
-                let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
                 assert!(
                     AppIcon::ALL.iter().any(|i| i.id() == icon),
                     "{path:?}: Icon={icon} is not in the theme"

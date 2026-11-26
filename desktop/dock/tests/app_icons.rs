@@ -55,9 +55,8 @@ fn write_applications() -> PathBuf {
     ];
     for (icon, name) in others {
         let id = icon.id();
-        let entry = format!(
-            "[Desktop Entry]\nType=Application\nName={name}\nExec={id}\nIcon={id}\n"
-        );
+        let entry =
+            format!("[Desktop Entry]\nType=Application\nName={name}\nExec={id}\nIcon={id}\n");
         std::fs::write(applications.join(format!("{id}.desktop")), entry).expect("entry");
     }
     data
