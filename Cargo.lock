@@ -3866,6 +3866,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolkit-theme"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -81,7 +81,9 @@ All tokens are named by their role, in English like the rest of the code.
 - **`typography`**: families, sizes, weights, and the three font files to load.
 - **`strings`** (added by D-20): shared interface texts. Abbreviated days and months, short
   date (« mar. 24 nov. »), time, percentage with the narrow no-break space, workspace label
-  (« 1 · Code ») and the Sherlock menu entries (`strings::top_bar`).
+  (« 1 · Code ») and the Sherlock menu entries (`strings::top_bar`). D-09 adds the names
+  of the GTK and KDE color themes, « SherlockOS sombre » and « SherlockOS clair »
+  (`strings::toolkit_theme`).
 - **Top bar** (D-20): `color::TOP_BAR_GLASS` and `TOP_BAR_BORDER` (Main board, slightly
   lighter than `GLASS` and `BORDER`), `CHIP` and `CHIP_HOVER` for the workspace chips;
   `metrics::TOP_BAR_*`, `SHERLOCK_*`, `CHIP_*`, `STATUS_*`, `MENU_AVATAR`,
