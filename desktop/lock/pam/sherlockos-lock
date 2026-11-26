@@ -1,0 +1,7 @@
+#%PAM-1.0
+# The lock screen of SherlockOS (sherlockos-lock): the password of the session's user, checked
+# as the console login checks it, like swaylock's service. pam_faillock, when login uses it,
+# limits the tries. Installed in /etc/pam.d/ by the author: `just install-session` prints the
+# command.
+auth     include  login
+account  include  login

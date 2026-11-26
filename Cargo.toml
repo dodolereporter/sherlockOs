@@ -11,6 +11,7 @@ members = [
     "desktop/evidence",
     "desktop/icon-theme",
     "desktop/launcher",
+    "desktop/lock",
     "desktop/mime-apps",
     "desktop/notifications",
     "desktop/notifications-config",

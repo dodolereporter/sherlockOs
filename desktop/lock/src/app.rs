@@ -1,0 +1,645 @@
+//! The lock screen: one lock surface per screen. The screen of the pointer (the one whose lock
+//! surface the compositor gives the keyboard to) shows the time, Sherlock, the user's name, the
+//! password pill and the machine buttons; the others show the background and the time. Every
+//! size follows the height of its screen (`sherlock_ui::lock::screen`).
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use iced::futures::channel::{mpsc, oneshot};
+use iced::widget::{Space, button, column, container, image, row, text, text_input};
+use iced::{
+    Alignment, Background, Border, Color as IcedColor, Element, Event, Font, Length, Padding,
+    Radians, Size, Subscription, Task, keyboard, mouse, window,
+};
+use iced_exwlshell::to_exwlshell_message;
+use sherlock_ui::color::{self, Color};
+use sherlock_ui::component;
+use sherlock_ui::icon::Icon;
+use sherlock_ui::lock::screen::{self as ui, Colors};
+use sherlock_ui::motion::Animation;
+use sherlock_ui::{strings, typography};
+use system_services::secret::Secret;
+
+use crate::machine::{Armed, Machine, Runner};
+use crate::pam::{AuthError, Authenticator};
+
+/// The picture of Sherlock in his bubble, until his 3D model comes (lot D-25b).
+const SHERLOCK: &[u8] = include_bytes!("../../../docs/design/images/sherlock-neutre.png");
+
+/// The id of the password field.
+pub fn field() -> iced::widget::Id {
+    iced::widget::Id::new("password")
+}
+
+#[to_exwlshell_message]
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// A lock surface, on one screen.
+    Surface(window::Id),
+    /// Its size, in logical pixels.
+    Resized(window::Id, Size),
+    /// The pointer or the keyboard is on that surface's screen.
+    Here(window::Id),
+    /// A key pressed: the animations end at once.
+    Key,
+    Typed(Secret),
+    Submit,
+    Checked(Result<(), AuthError>),
+    Reveal,
+    Machine(Machine),
+    Clock(Clock),
+    Frame(Instant),
+}
+
+/// The time shown, to the minute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Clock {
+    pub weekday: u8,
+    pub day: u8,
+    pub month: u8,
+    pub hour: u8,
+    pub minute: u8,
+}
+
+impl Clock {
+    /// The local time now, from the C library like the bar.
+    pub fn now() -> Option<Self> {
+        let epoch = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let tm = appearance_config::local(i64::try_from(epoch).ok()?).ok()?;
+        let field = |v: i32| u8::try_from(v).ok();
+        Some(Self {
+            // Monday is 1 and Sunday 7.
+            weekday: field(if tm.tm_wday == 0 { 7 } else { tm.tm_wday })?,
+            day: field(tm.tm_mday)?,
+            month: field(tm.tm_mon + 1)?,
+            hour: field(tm.tm_hour)?,
+            minute: field(tm.tm_min)?,
+        })
+    }
+}
+
+/// Where the password stands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Phase {
+    Typing,
+    /// PAM is checking it, since then.
+    Checking(Duration),
+    /// It was refused, then: the pill shakes and empties.
+    Refused(Duration, Refusal),
+    /// Unlocked: the screen leaves, since then.
+    Leaving(Duration),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    Wrong,
+    TooMany,
+    Unavailable,
+}
+
+pub struct Lock {
+    user: String,
+    password: Secret,
+    reveal: bool,
+    phase: Phase,
+    surfaces: Vec<window::Id>,
+    sizes: HashMap<window::Id, Size>,
+    primary: Option<window::Id>,
+    clock: Clock,
+    armed: Armed,
+    /// When the screen came: the clock of the animations.
+    start: Instant,
+    now: Instant,
+    /// A key ended the entrance.
+    entered: bool,
+    authenticator: Arc<dyn Authenticator>,
+    runner: Arc<dyn Runner>,
+}
+
+impl Lock {
+    pub fn new(
+        user: String,
+        authenticator: Arc<dyn Authenticator>,
+        runner: Arc<dyn Runner>,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            user,
+            password: Secret::default(),
+            reveal: false,
+            phase: Phase::Typing,
+            surfaces: Vec::new(),
+            sizes: HashMap::new(),
+            primary: None,
+            clock: Clock::now().unwrap_or_default(),
+            armed: Armed::default(),
+            start: now,
+            now,
+            entered: false,
+            authenticator,
+            runner,
+        }
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    pub fn primary(&self) -> Option<window::Id> {
+        self.primary
+    }
+
+    pub fn armed(&self) -> Option<Machine> {
+        self.armed.get()
+    }
+
+    pub fn password_len(&self) -> usize {
+        self.password.as_str().chars().count()
+    }
+
+    /// The clock of the animations, set by the tests.
+    pub fn set_now(&mut self, now: Instant) {
+        self.now = now;
+    }
+
+    pub fn set_clock(&mut self, clock: Clock) {
+        self.clock = clock;
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.now.saturating_duration_since(self.start)
+    }
+
+    fn animating(&self) -> bool {
+        let t = self.elapsed();
+        let entrance = !self.entered && t < Duration::from_millis(1200);
+        let phase = match self.phase {
+            Phase::Typing => false,
+            Phase::Checking(_) => true,
+            Phase::Refused(at, _) => t < at + ui::SHAKE + Duration::from_millis(400),
+            Phase::Leaving(_) => true,
+        };
+        entrance || phase
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        let frames = if self.animating() {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([
+            frames,
+            Subscription::run(clock).map(Message::Clock),
+            iced::event::listen_with(on_event),
+        ])
+    }
+
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::Surface(id) => {
+                self.surfaces.push(id);
+                if self.primary.is_none() {
+                    self.primary = Some(id);
+                }
+                return iced::widget::operation::focus(field());
+            }
+            Message::Resized(id, size) => {
+                self.sizes.insert(id, size);
+            }
+            Message::Here(id) => {
+                if self.primary != Some(id) && self.surfaces.contains(&id) {
+                    self.primary = Some(id);
+                    return iced::widget::operation::focus(field());
+                }
+            }
+            Message::Key => self.entered = true,
+            Message::Typed(typed) => {
+                if matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
+                    self.password = typed;
+                    self.phase = Phase::Typing;
+                    self.armed.disarm();
+                }
+            }
+            Message::Reveal => self.reveal = !self.reveal,
+            Message::Submit => return self.submit(),
+            Message::Checked(Ok(())) => {
+                tracing::info!("unlocked");
+                self.phase = Phase::Leaving(self.elapsed());
+            }
+            Message::Checked(Err(err)) => {
+                tracing::warn!("authentication: {err}");
+                let refusal = match err {
+                    AuthError::Refused => Refusal::Wrong,
+                    AuthError::TooManyTries => Refusal::TooMany,
+                    AuthError::Unavailable(_) => Refusal::Unavailable,
+                };
+                self.phase = Phase::Refused(self.elapsed(), refusal);
+                return iced::widget::operation::focus(field());
+            }
+            Message::Machine(machine) => {
+                let now = Instant::now();
+                if self.armed.click(machine, now) {
+                    tracing::info!(verb = machine.verb(), "machine command");
+                    self.runner.run(machine);
+                }
+            }
+            Message::Clock(clock) => {
+                self.clock = clock;
+                self.armed.expire(Instant::now());
+            }
+            Message::Frame(now) => {
+                self.now = now;
+                if let Phase::Leaving(at) = self.phase
+                    && self.elapsed() >= at + ui::EXIT
+                {
+                    // The lock ends, then the program.
+                    return Task::done(Message::UnLock).chain(iced::exit());
+                }
+            }
+            _ => {}
+        }
+        Task::none()
+    }
+
+    fn submit(&mut self) -> Task<Message> {
+        if self.password.is_empty() || !matches!(self.phase, Phase::Typing) {
+            return Task::none();
+        }
+        self.entered = true;
+        self.phase = Phase::Checking(self.elapsed());
+        // The field empties now: the password goes to PAM, and nowhere else.
+        let password = std::mem::take(&mut self.password);
+        let (user, authenticator) = (self.user.clone(), self.authenticator.clone());
+        let (sender, receiver) = oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name("pam".into())
+            .spawn(move || {
+                let _ = sender.send(authenticator.check(&user, password));
+            });
+        if let Err(err) = spawned {
+            return Task::done(Message::Checked(Err(AuthError::Unavailable(
+                err.to_string(),
+            ))));
+        }
+        Task::perform(receiver, |result| {
+            Message::Checked(
+                result.unwrap_or_else(|_| Err(AuthError::Unavailable("no answer".into()))),
+            )
+        })
+    }
+
+    /// Progress of the entrance of element `index` (0 for the time, then the bubble, the name,
+    /// the pill and the machine buttons), from 0 to 1, times the exit.
+    fn presence(&self, index: u32) -> f32 {
+        let t = self.elapsed();
+        let entrance = if self.entered {
+            1.0
+        } else {
+            let start = ui::STAGGER * index;
+            Animation::new(ui::SPRING, 0.0, 1.0, start).value(t)
+        };
+        let exit = match self.phase {
+            Phase::Leaving(at) => {
+                let behind = ui::STAGGER * (4 - index.min(4));
+                let t = t.saturating_sub(at + behind / 4).as_secs_f64();
+                1.0 - (t / ui::EXIT.as_secs_f64()).clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        };
+        (entrance * exit).clamp(0.0, 1.0) as f32
+    }
+
+    pub fn view(&self, id: window::Id) -> Element<'_, Message> {
+        let colors = Colors::of(color::palette());
+        let size = self
+            .sizes
+            .get(&id)
+            .copied()
+            .unwrap_or(Size::new(1920.0, 1080.0));
+        let height = size.height;
+        let primary = self.primary.is_none_or(|p| p == id);
+        let time = rise(
+            column![
+                text(
+                    ui::date(self.clock.weekday, self.clock.day, self.clock.month)
+                        .unwrap_or_default()
+                )
+                .size(ui::DATE_SIZE)
+                .font(weight(ui::DATE_WEIGHT))
+                .color(fade(colors.text, self.presence(0))),
+                text(strings::clock(self.clock.hour, self.clock.minute))
+                    .size(ui::clock_size(height))
+                    .font(weight(ui::CLOCK_WEIGHT))
+                    .color(fade(colors.text, self.presence(0))),
+            ]
+            .align_x(Alignment::Center),
+            self.presence(0),
+        );
+        let mut page = column![
+            Space::new().height(ui::top(height)),
+            time,
+            Space::new().height(Length::Fill)
+        ]
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .height(Length::Fill);
+        if primary {
+            page = page
+                .push(rise(self.bubble(height, &colors), self.presence(1)))
+                .push(Space::new().height(ui::BUBBLE_GAP))
+                .push(rise(
+                    text(self.user.as_str())
+                        .size(ui::NAME_SIZE)
+                        .font(weight(typography::WEIGHT_SEMIBOLD))
+                        .color(fade(colors.text, self.presence(2))),
+                    self.presence(2),
+                ))
+                .push(Space::new().height(ui::NAME_GAP))
+                .push(rise(self.pill(&colors), self.presence(3)))
+                .push(Space::new().height(ui::HINT_GAP))
+                .push(self.hint(&colors))
+                .push(Space::new().height(ui::machine_gap(height)))
+                .push(rise(self.machines(&colors), self.presence(4)))
+                .push(Space::new().height(ui::bottom(height)));
+        }
+        let background = colors.background;
+        container(page)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(background.into())),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    fn bubble(&self, height: f32, colors: &Colors) -> Element<'_, Message> {
+        let diameter = ui::bubble(height);
+        let fill = fade(colors.bubble, self.presence(1));
+        let picture = image(image::Handle::from_bytes(SHERLOCK))
+            .height(diameter * 1.15)
+            .opacity(self.presence(1));
+        container(picture)
+            .width(diameter)
+            .height(diameter)
+            .padding(Padding::default().top(diameter * 0.1))
+            .align_x(Alignment::Center)
+            .clip(true)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(fill)),
+                border: Border::default().rounded(diameter / 2.0),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    /// The pill: the field, the eye and the arrow; a circle with the spinner while PAM checks.
+    fn pill(&self, colors: &Colors) -> Element<'_, Message> {
+        let t = self.elapsed();
+        let presence = self.presence(3);
+        let (fill, edge) = (
+            fade(colors.field, presence),
+            fade(colors.field_border, presence),
+        );
+        let style = move |_: &iced::Theme| container::Style {
+            background: Some(Background::Color(fill)),
+            border: Border::default()
+                .rounded(ui::FIELD_RADIUS)
+                .width(1.0)
+                .color(edge),
+            ..container::Style::default()
+        };
+        let shrink = match self.phase {
+            Phase::Checking(at) => Animation::new(ui::SPRING, 0.0, 1.0, at).value(t) as f32,
+            _ => 0.0,
+        };
+        let width = ui::FIELD_WIDTH + (ui::FIELD_HEIGHT - ui::FIELD_WIDTH) * shrink.clamp(0.0, 1.0);
+        let content: Element<'_, Message> = if let Phase::Checking(at) = self.phase {
+            let turns = (t.saturating_sub(at)).as_secs_f32() / ui::SPIN.as_secs_f32();
+            component::icon(Icon::Spinner, ui::FIELD_ICON, colors.text)
+                .rotation(Radians(turns * std::f32::consts::TAU))
+                .into()
+        } else {
+            let text_color = fade(colors.text, presence);
+            let placeholder = fade(colors.placeholder, presence);
+            let input = text_input(ui::PASSWORD, self.password.as_str())
+                .id(field())
+                .secure(!self.reveal)
+                .on_input(|typed| Message::Typed(Secret::new(typed)))
+                .on_submit(Message::Submit)
+                .size(ui::FIELD_TEXT_SIZE)
+                .padding(Padding::default().left(ui::FIELD_RADIUS - 4.0))
+                .style(move |_, _| text_input::Style {
+                    background: Background::Color(IcedColor::TRANSPARENT),
+                    border: Border::default(),
+                    icon: placeholder,
+                    placeholder,
+                    value: text_color,
+                    selection: fade(colors_selection(), presence),
+                });
+            let eye = if self.reveal { Icon::EyeOff } else { Icon::Eye };
+            row![
+                input.width(Length::Fill),
+                self.field_button(eye, Message::Reveal, colors),
+                self.field_button(Icon::ArrowRight, Message::Submit, colors),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(2)
+            .padding(Padding::default().right(4.0))
+            .into()
+        };
+        let pill = container(content)
+            .width(width)
+            .height(ui::FIELD_HEIGHT)
+            .align_x(Alignment::Center)
+            .align_y(Alignment::Center)
+            .style(style);
+        // The shake of a refusal: three swings that die out.
+        let dx = match self.phase {
+            Phase::Refused(at, _) => {
+                let p = (t.saturating_sub(at)).as_secs_f32() / ui::SHAKE.as_secs_f32();
+                if p < 1.0 {
+                    ui::SHAKE_AMPLITUDE * (p * ui::SHAKES * std::f32::consts::TAU).sin() * (1.0 - p)
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+        row![
+            Space::new().width(ui::SHAKE_AMPLITUDE + dx),
+            pill,
+            Space::new().width(ui::SHAKE_AMPLITUDE - dx),
+        ]
+        .into()
+    }
+
+    fn field_button(&self, icon: Icon, message: Message, colors: &Colors) -> Element<'_, Message> {
+        let tint = fade(colors.text, self.presence(3));
+        let hover = colors.button_hover;
+        button(
+            container(component::icon(icon, ui::FIELD_ICON, color_of(tint)))
+                .center(ui::FIELD_BUTTON),
+        )
+        .on_press(message)
+        .padding(0)
+        .style(move |_, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then(|| Background::Color(hover.into())),
+            border: Border::default().rounded(ui::FIELD_BUTTON / 2.0),
+            ..button::Style::default()
+        })
+        .into()
+    }
+
+    /// The line under the pill: why the password was refused.
+    fn hint(&self, colors: &Colors) -> Element<'_, Message> {
+        let words = match self.phase {
+            Phase::Refused(_, Refusal::Wrong) => ui::WRONG,
+            Phase::Refused(_, Refusal::TooMany) => ui::TOO_MANY,
+            Phase::Refused(_, Refusal::Unavailable) => ui::UNAVAILABLE,
+            _ => "",
+        };
+        text(words)
+            .size(ui::HINT_SIZE)
+            .height(ui::HINT_SIZE * typography::LINE_HEIGHT)
+            .color(colors.error)
+            .into()
+    }
+
+    fn machines(&self, colors: &Colors) -> Element<'_, Message> {
+        let presence = self.presence(4);
+        let buttons = Machine::ALL.map(|machine| {
+            let armed = self.armed.get() == Some(machine);
+            let (icon, label) = match machine {
+                Machine::Sleep => (Icon::Sleep, ui::SLEEP),
+                Machine::Reboot => (Icon::Restart, ui::REBOOT),
+                Machine::PowerOff => (Icon::Power, ui::POWER_OFF),
+            };
+            let label = if armed { ui::CONFIRM } else { label };
+            let (fill, hover, edge) = (
+                fade(if armed { colors.armed } else { colors.button }, presence),
+                fade(colors.button_hover, presence),
+                fade(colors.field_border, presence),
+            );
+            let round = button(
+                container(component::icon(
+                    icon,
+                    ui::MACHINE_ICON,
+                    color_of(fade(colors.text, presence)),
+                ))
+                .center(ui::MACHINE_BUTTON),
+            )
+            .on_press(Message::Machine(machine))
+            .padding(0)
+            .style(move |_, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hover,
+                    _ => fill,
+                })),
+                border: Border::default()
+                    .rounded(ui::MACHINE_BUTTON / 2.0)
+                    .width(1.0)
+                    .color(edge),
+                ..button::Style::default()
+            });
+            column![
+                round,
+                text(label)
+                    .size(ui::MACHINE_LABEL_SIZE)
+                    .color(fade(colors.secondary, presence)),
+            ]
+            .spacing(6)
+            .align_x(Alignment::Center)
+            .into()
+        });
+        row(buttons).spacing(ui::MACHINE_GAP).into()
+    }
+}
+
+/// An element that rises into place as `presence` goes from 0 to 1, in a box of constant
+/// height so that nothing around it moves.
+fn rise<'a>(element: impl Into<Element<'a, Message>>, presence: f32) -> Element<'a, Message> {
+    let offset = ui::RISE * (1.0 - presence.clamp(0.0, 1.0));
+    container(element)
+        .padding(Padding::default().top(offset).bottom(ui::RISE - offset))
+        .into()
+}
+
+fn weight(weight: u16) -> Font {
+    let weight = match weight {
+        0..=150 => iced::font::Weight::Thin,
+        151..=250 => iced::font::Weight::ExtraLight,
+        251..=350 => iced::font::Weight::Light,
+        351..=450 => iced::font::Weight::Normal,
+        451..=550 => iced::font::Weight::Medium,
+        _ => iced::font::Weight::Semibold,
+    };
+    Font {
+        weight,
+        ..typography::UI
+    }
+}
+
+/// A color of the palette, its opacity times `presence`.
+fn fade(color: Color, presence: f32) -> IcedColor {
+    let mut color: IcedColor = color.into();
+    color.a *= presence;
+    color
+}
+
+fn color_of(color: IcedColor) -> Color {
+    Color {
+        r: (color.r * 255.0).round() as u8,
+        g: (color.g * 255.0).round() as u8,
+        b: (color.b * 255.0).round() as u8,
+        a: color.a,
+    }
+}
+
+fn colors_selection() -> Color {
+    color::palette().selected_row
+}
+
+fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
+    match event {
+        Event::Mouse(mouse::Event::CursorEntered | mouse::Event::ButtonPressed(_)) => {
+            Some(Message::Here(id))
+        }
+        Event::Window(window::Event::Focused) => Some(Message::Here(id)),
+        Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
+            Some(Message::Resized(id, size))
+        }
+        Event::Keyboard(keyboard::Event::KeyPressed { .. }) => Some(Message::Key),
+        _ => None,
+    }
+}
+
+/// The time, read again every few seconds on a thread of its own: sent when the minute changes.
+fn clock() -> mpsc::UnboundedReceiver<Clock> {
+    let (sender, receiver) = mpsc::unbounded();
+    let spawned = std::thread::Builder::new()
+        .name("clock".into())
+        .spawn(move || {
+            let mut last = None;
+            loop {
+                let now = Clock::now();
+                if now.is_some() && now != last {
+                    last = now;
+                    if let Some(now) = now
+                        && sender.unbounded_send(now).is_err()
+                    {
+                        return;
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+    if let Err(err) = spawned {
+        tracing::warn!("clock: {err}");
+    }
+    receiver
+}

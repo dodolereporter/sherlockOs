@@ -62,11 +62,21 @@ pub enum Icon {
     MicrophoneMuted,
     /// Screen brightness: a sun.
     Brightness,
+    /// The password field of the lock screen (lot D-25a): show the password, hide it, send it.
+    Eye,
+    EyeOff,
+    ArrowRight,
+    /// The machine buttons of the lock screen: sleep (a moon), restart, power off.
+    Sleep,
+    Restart,
+    Power,
+    /// An open arc, turned while the password is checked.
+    Spinner,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 41] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -101,6 +111,13 @@ impl Icon {
         Self::Microphone,
         Self::MicrophoneMuted,
         Self::Brightness,
+        Self::Eye,
+        Self::EyeOff,
+        Self::ArrowRight,
+        Self::Sleep,
+        Self::Restart,
+        Self::Power,
+        Self::Spinner,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -176,6 +193,17 @@ impl Icon {
             Self::Brightness => {
                 "M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"
             }
+            Self::Eye => {
+                "M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6z"
+            }
+            Self::EyeOff => {
+                "M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6zM4 4l16 16"
+            }
+            Self::ArrowRight => "M5 12h14M13 6l6 6-6 6",
+            Self::Sleep => "M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z",
+            Self::Restart => "M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4",
+            Self::Power => "M12 3v8M7.2 6.2a7.5 7.5 0 1 0 9.6 0",
+            Self::Spinner => "M12 4a8 8 0 1 1-8 8",
         }
     }
 

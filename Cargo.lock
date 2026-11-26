@@ -2153,6 +2153,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b614978e47ce529faee66579f2b2fe19c94aa96d910a6a9a8043b2b02d8175"
 
 [[package]]
+name = "lock"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "image",
+ "libc",
+ "libloading",
+ "sherlock-ui",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
