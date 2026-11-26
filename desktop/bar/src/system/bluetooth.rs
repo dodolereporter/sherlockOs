@@ -10,6 +10,7 @@ use iced::futures::channel::{mpsc, oneshot};
 use iced::futures::stream::{self, BoxStream};
 use iced::futures::{FutureExt, StreamExt};
 use zbus::Connection;
+use zbus::message::Header;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
 use super::{Problem, Result, set};
@@ -224,8 +225,6 @@ pub enum Asked {
     Type(String),
     /// The code the device asks to be typed on it; nothing to answer.
     Show(String),
-    /// The device asks to pair, without a code.
-    Authorize,
 }
 
 /// The answer to a question of the agent, once: `true` for « Confirmer ». Dropped unanswered,
@@ -269,13 +268,44 @@ enum Refusal {
     Canceled,
 }
 
-/// The agent of the bar: each question goes to the panel, and waits for its answer there.
+/// The agent of the bar: each question goes to the panel, and waits for its answer there. It
+/// answers BlueZ alone (`bluez`, the unique name that owned `org.bluez` when the agent was
+/// registered), and about the device being paired alone; anything else is rejected.
 struct Agent {
     events: mpsc::UnboundedSender<Pairing>,
+    bluez: String,
     device: String,
 }
 
 impl Agent {
+    fn sent_by_bluez(&self, header: &Header<'_>) -> std::result::Result<(), Refusal> {
+        match header.sender() {
+            Some(sender) if sender.as_str() == self.bluez => Ok(()),
+            sender => {
+                tracing::warn!(
+                    ?sender,
+                    "a call to the Bluetooth agent not from BlueZ, rejected"
+                );
+                Err(Refusal::Rejected)
+            }
+        }
+    }
+
+    /// From BlueZ, about the device being paired.
+    fn about(
+        &self,
+        header: &Header<'_>,
+        device: &OwnedObjectPath,
+    ) -> std::result::Result<(), Refusal> {
+        self.sent_by_bluez(header)?;
+        if device.as_str() == self.device {
+            Ok(())
+        } else {
+            tracing::warn!(%device, "the Bluetooth agent asked about another device, rejected");
+            Err(Refusal::Rejected)
+        }
+    }
+
     async fn ask(&self, asked: Asked) -> std::result::Result<(), Refusal> {
         let (sender, answer) = oneshot::channel();
         self.events
@@ -317,76 +347,104 @@ fn code(passkey: u32) -> String {
 
 #[zbus::interface(name = "org.bluez.Agent1")]
 impl Agent {
-    fn release(&self) {}
+    fn release(&self, #[zbus(header)] header: Header<'_>) -> std::result::Result<(), Refusal> {
+        self.sent_by_bluez(&header)
+    }
 
     async fn request_pin_code(
         &self,
-        _device: OwnedObjectPath,
+        device: OwnedObjectPath,
+        #[zbus(header)] header: Header<'_>,
     ) -> std::result::Result<String, Refusal> {
+        self.about(&header, &device)?;
         let pin = code(fresh_code());
         self.ask(Asked::Type(pin.clone())).await?;
         Ok(pin)
     }
 
-    fn display_pin_code(&self, _device: OwnedObjectPath, pincode: String) {
+    fn display_pin_code(
+        &self,
+        device: OwnedObjectPath,
+        pincode: String,
+        #[zbus(header)] header: Header<'_>,
+    ) -> std::result::Result<(), Refusal> {
+        self.about(&header, &device)?;
         self.show(pincode);
+        Ok(())
     }
 
-    async fn request_passkey(&self, _device: OwnedObjectPath) -> std::result::Result<u32, Refusal> {
+    async fn request_passkey(
+        &self,
+        device: OwnedObjectPath,
+        #[zbus(header)] header: Header<'_>,
+    ) -> std::result::Result<u32, Refusal> {
+        self.about(&header, &device)?;
         let passkey = fresh_code();
         self.ask(Asked::Type(code(passkey))).await?;
         Ok(passkey)
     }
 
-    fn display_passkey(&self, _device: OwnedObjectPath, passkey: u32, _entered: u16) {
+    fn display_passkey(
+        &self,
+        device: OwnedObjectPath,
+        passkey: u32,
+        _entered: u16,
+        #[zbus(header)] header: Header<'_>,
+    ) -> std::result::Result<(), Refusal> {
+        self.about(&header, &device)?;
         self.show(code(passkey));
+        Ok(())
     }
 
     async fn request_confirmation(
         &self,
-        _device: OwnedObjectPath,
+        device: OwnedObjectPath,
         passkey: u32,
+        #[zbus(header)] header: Header<'_>,
     ) -> std::result::Result<(), Refusal> {
+        self.about(&header, &device)?;
         self.ask(Asked::Confirm(code(passkey))).await
     }
 
-    async fn request_authorization(
+    /// A pairing without a code that BlueZ asks the agent to allow: refused. A « Just Works »
+    /// pairing started by `Pair` does not ask.
+    fn request_authorization(
         &self,
         _device: OwnedObjectPath,
+        #[zbus(header)] header: Header<'_>,
     ) -> std::result::Result<(), Refusal> {
-        self.ask(Asked::Authorize).await
+        self.sent_by_bluez(&header)?;
+        Err(Refusal::Rejected)
     }
 
-    /// Only the services of the device being paired.
+    /// A service of a device that asks to connect: refused, always.
     fn authorize_service(
         &self,
-        device: OwnedObjectPath,
+        _device: OwnedObjectPath,
         _uuid: String,
+        #[zbus(header)] header: Header<'_>,
     ) -> std::result::Result<(), Refusal> {
-        if device.as_str() == self.device {
-            Ok(())
-        } else {
-            Err(Refusal::Rejected)
-        }
+        self.sent_by_bluez(&header)?;
+        Err(Refusal::Rejected)
     }
 
-    fn cancel(&self) {
+    fn cancel(&self, #[zbus(header)] header: Header<'_>) -> std::result::Result<(), Refusal> {
+        self.sent_by_bluez(&header)?;
         let _ = self.events.unbounded_send(Pairing::Canceled);
+        Ok(())
     }
 }
 
 /// Pairs `device`, then trusts it and connects it. The agent is served and registered for this
 /// pairing only; its questions come in the stream, which ends with `Done`. `bus` has the time
 /// limit of the actions: a device that does not answer ends in an error, never in a wait.
+/// Dropped before its end (the panel closed), the stream cancels the pairing and unregisters
+/// the agent at once.
 pub fn pair(bus: Connection, device: String) -> BoxStream<'static, Pairing> {
     let (events, questions) = mpsc::unbounded();
     let done = events.clone();
-    let agent = Agent {
-        events,
-        device: device.clone(),
-    };
     let work = async move {
-        let result = pair_with(&bus, &device, agent).await;
+        let result = pair_with(&bus, &device, events).await;
         let _ = done.unbounded_send(Pairing::Done(result));
     };
     // The questions end once the agent and `done` are dropped: after `Done`.
@@ -394,9 +452,84 @@ pub fn pair(bus: Connection, device: String) -> BoxStream<'static, Pairing> {
     stream::select(questions, driven).boxed()
 }
 
-async fn pair_with(bus: &Connection, device: &str, agent: Agent) -> Result<()> {
-    let server = bus.object_server();
-    server.at(AGENT_PATH, agent).await?;
+/// The unique name that owns `org.bluez` now: the only caller the agent answers.
+async fn bluez_owner(bus: &Connection) -> Result<String> {
+    let reply = bus
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "GetNameOwner",
+            &(SERVICE,),
+        )
+        .await?;
+    Ok(reply.body().deserialize::<String>()?)
+}
+
+async fn unregister(bus: &Connection) {
+    let path = ObjectPath::from_static_str_unchecked(AGENT_PATH);
+    let _ = bus
+        .call_method(
+            Some(SERVICE),
+            "/org/bluez",
+            Some(AGENT_MANAGER),
+            "UnregisterAgent",
+            &(&path,),
+        )
+        .await;
+    let _ = bus.object_server().remove::<Agent, _>(AGENT_PATH).await;
+}
+
+/// Undoes a pairing left before its end: `CancelPairing` while `Pair` is under way, then the
+/// agent unregistered, on the connection's own executor since the pairing's future is gone.
+struct Cleanup {
+    bus: Connection,
+    device: String,
+    /// `Pair` has not answered yet.
+    pairing: bool,
+    armed: bool,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (bus, device, pairing) = (self.bus.clone(), self.device.clone(), self.pairing);
+        let undo = async move {
+            if pairing && let Err(problem) = cancel_pairing(&bus, &device).await {
+                tracing::warn!(%problem, "the pairing left could not be cancelled");
+            }
+            unregister(&bus).await;
+        };
+        self.bus
+            .executor()
+            .spawn(undo, "bluetooth-pairing-cleanup")
+            .detach();
+    }
+}
+
+async fn pair_with(
+    bus: &Connection,
+    device: &str,
+    events: mpsc::UnboundedSender<Pairing>,
+) -> Result<()> {
+    let agent = Agent {
+        events,
+        bluez: bluez_owner(bus).await?,
+        device: device.to_owned(),
+    };
+    if !bus.object_server().at(AGENT_PATH, agent).await? {
+        return Err(Problem::Failed(String::from(
+            "a pairing is already under way",
+        )));
+    }
+    let mut cleanup = Cleanup {
+        bus: bus.clone(),
+        device: device.to_owned(),
+        pairing: false,
+        armed: true,
+    };
     let path = ObjectPath::from_static_str_unchecked(AGENT_PATH);
     let registered = bus
         .call_method(
@@ -408,24 +541,23 @@ async fn pair_with(bus: &Connection, device: &str, agent: Agent) -> Result<()> {
         )
         .await;
     let paired = match registered {
-        Ok(_) => pair_trust_connect(bus, device).await,
+        Ok(_) => {
+            cleanup.pairing = true;
+            let paired = call(bus, device, DEVICE, "Pair").await;
+            cleanup.pairing = false;
+            match paired {
+                Ok(()) => trust_connect(bus, device).await,
+                Err(problem) => Err(problem),
+            }
+        }
         Err(error) => Err(Problem::from(error)),
     };
-    let _ = bus
-        .call_method(
-            Some(SERVICE),
-            "/org/bluez",
-            Some(AGENT_MANAGER),
-            "UnregisterAgent",
-            &(&path,),
-        )
-        .await;
-    let _ = server.remove::<Agent, _>(AGENT_PATH).await;
+    cleanup.armed = false;
+    unregister(bus).await;
     paired
 }
 
-async fn pair_trust_connect(bus: &Connection, device: &str) -> Result<()> {
-    call(bus, device, DEVICE, "Pair").await?;
+async fn trust_connect(bus: &Connection, device: &str) -> Result<()> {
     set(bus, SERVICE, device, DEVICE, "Trusted", Value::from(true)).await?;
     connect(bus, device).await
 }

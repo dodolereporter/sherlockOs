@@ -309,6 +309,8 @@ pub struct Quick {
     pub forgetting: Option<String>,
     /// The adapter a scan runs on while the device list is open.
     pub scanning: Option<String>,
+    /// The pairing under way, stopped if the panel closes.
+    pub pairing: Option<iced::task::Handle>,
 }
 
 #[derive(Debug, Clone)]
@@ -330,6 +332,8 @@ pub enum Message {
     /// A device of the list: connected or disconnected when paired, else paired.
     Device(String),
     Pairing(bluetooth::Pairing),
+    /// The connection or disconnection of a device ended.
+    DeviceDone(Result<(), Problem>),
     /// « Confirmer » or « Annuler » under a question of the agent.
     Answer(bool),
     /// « Oublier » a paired device, then its confirmation.
@@ -513,6 +517,7 @@ impl Quick {
             message,
             Message::Session(_)
                 | Message::Pairing(_)
+                | Message::DeviceDone(_)
                 | Message::Done(..)
                 | Message::Changed(_)
                 | Message::Wifi(_)
@@ -647,6 +652,7 @@ impl Quick {
             Message::ShowDevices(show) => return self.show_devices(show),
             Message::Device(path) => return self.device(path),
             Message::Pairing(event) => return self.pairing(event),
+            Message::DeviceDone(result) => return self.device_done(result),
             Message::Answer(yes) => return self.answer(yes),
             Message::Forget(path) => self.forgetting = Some(path),
             Message::ConfirmForget(yes) => return self.forget(yes),
@@ -683,9 +689,6 @@ impl Quick {
                 }
             }
         }
-        if service == Service::Bluetooth {
-            self.device_busy = None;
-        }
         let next = match service {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
@@ -715,9 +718,7 @@ impl Quick {
         self.password.wipe();
         self.joining = None;
         self.forgetting = None;
-        if let Some((_, reply)) = self.asked.take() {
-            reply.send(false);
-        }
+        self.stop_pairing();
         self.stop_scan()
     }
 
@@ -1554,7 +1555,10 @@ mod tests {
         // Another click waits for the first one.
         let keyboard = String::from("/org/bluez/hci0/dev_3");
         assert_eq!(quick.update(Message::Device(keyboard.clone())).units(), 0);
+        // Another Bluetooth action ending (a scan, the switch) does not free the list.
         let _ = quick.update(Message::Done(Service::Bluetooth, Ok(())));
+        assert_eq!(quick.device_busy.as_deref(), Some(mouse.as_str()));
+        let _ = quick.update(Message::DeviceDone(Ok(())));
         assert_eq!(quick.device_busy, None);
         // A device found pairs; the agent asks, the panel answers what the user clicks.
         assert!(quick.update(Message::Device(keyboard.clone())).units() > 0);
@@ -1569,6 +1573,15 @@ mod tests {
         let _ = quick.update(Message::Pairing(Pairing::Done(refused)));
         assert_eq!(quick.device_busy, None);
         assert_eq!(quick.failed(Service::Bluetooth), Some(words::REFUSED));
+        // The panel closes while a device pairs: the pairing stops and the list is free.
+        assert!(quick.update(Message::Device(keyboard.clone())).units() > 0);
+        let pairing = quick.pairing.clone().expect("a pairing under way");
+        let _ = quick.close();
+        assert!(pairing.is_aborted());
+        assert_eq!(
+            (quick.device_busy.as_ref(), quick.pairing.is_none()),
+            (None, true)
+        );
         // « Oublier » asks first; « Annuler » keeps the device.
         let _ = quick.update(Message::Forget(mouse.clone()));
         assert_eq!(quick.forgetting.as_deref(), Some(mouse.as_str()));

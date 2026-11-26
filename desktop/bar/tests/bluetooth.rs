@@ -9,6 +9,7 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
@@ -91,6 +92,8 @@ mod tests {
         unregistered: usize,
         scanning: Vec<bool>,
         removed: Vec<String>,
+        /// Devices whose pairing was cancelled.
+        cancelled: Vec<String>,
     }
 
     type Shared = Arc<Mutex<State>>;
@@ -153,7 +156,7 @@ mod tests {
         state: Shared,
         name: &'static str,
         icon: &'static str,
-        paired: bool,
+        paired: AtomicBool,
         connected: bool,
         trusted: bool,
         answers: bool,
@@ -165,7 +168,7 @@ mod tests {
                 state: Arc::clone(state),
                 name,
                 icon,
-                paired,
+                paired: AtomicBool::new(paired),
                 connected: false,
                 trusted: paired,
                 answers: true,
@@ -187,7 +190,7 @@ mod tests {
 
         #[zbus(property)]
         fn paired(&self) -> bool {
-            self.paired
+            self.paired.load(Ordering::Relaxed)
         }
 
         #[zbus(property)]
@@ -215,9 +218,15 @@ mod tests {
             let _ = self.connected_changed(&emitter).await;
         }
 
-        /// Asks the registered agent to confirm 123456, as a device with a screen does.
+        fn cancel_pairing(&self, #[zbus(header)] header: zbus::message::Header<'_>) {
+            let device = header.path().map(|p| p.to_string()).unwrap_or_default();
+            lock(&self.state).cancelled.push(device);
+        }
+
+        /// Asks the registered agent to confirm 123456, as a device with a screen does. Takes
+        /// `&self`: a `CancelPairing` can come while it waits.
         async fn pair(
-            &mut self,
+            &self,
             #[zbus(connection)] connection: &zbus::Connection,
             #[zbus(header)] header: zbus::message::Header<'_>,
         ) -> fdo::Result<()> {
@@ -240,7 +249,7 @@ mod tests {
                 .await;
             match confirmed {
                 Ok(_) => {
-                    self.paired = true;
+                    self.paired.store(true, Ordering::Relaxed);
                     Ok(())
                 }
                 Err(error) => Err(fdo::Error::AccessDenied(error.to_string())),
@@ -432,6 +441,96 @@ mod tests {
             1,
             "the agent goes with the failure"
         );
+    }
+
+    /// Waits for `done` on the fake's state, five seconds at most.
+    fn wait(state: &Shared, what: &str, done: impl Fn(&State) -> bool) {
+        let start = Instant::now();
+        while !done(&lock(state)) {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "timed out waiting for {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_agent_answers_bluez_alone_and_a_closed_panel_cancels_the_pairing() {
+        let mut bus = Bus::start("intruder");
+        let state = Shared::default();
+        bluez(&mut bus, &state);
+        let client = bus.connect();
+        // A pairing that waits: the watch never answers `Pair`. The panel shows it until
+        // `stop` (the panel closes), which drops the stream.
+        let (stop, stopped) = iced::futures::channel::oneshot::channel::<()>();
+        let pairing = client.clone();
+        let panel = std::thread::spawn(move || {
+            zbus::block_on(async move {
+                let events = bluetooth::pair(pairing, WATCH.to_owned());
+                let mut events = events.take_until(stopped);
+                let mut asked = 0;
+                while let Some(event) = events.next().await {
+                    if matches!(event, Pairing::Ask(..)) {
+                        asked += 1;
+                    }
+                }
+                asked
+            })
+        });
+        wait(&state, "the agent", |s| s.agent.is_some());
+        let (owner, path) = lock(&state).agent.clone().unwrap();
+        let ask = |from: &zbus::blocking::Connection, device: &str| {
+            let device = ObjectPath::try_from(device).unwrap();
+            from.call_method(
+                Some(owner.as_str()),
+                path.as_str(),
+                Some("org.bluez.Agent1"),
+                "RequestConfirmation",
+                &(device, 111_111u32),
+            )
+        };
+        let rejected = |answer: zbus::Result<zbus::Message>| match answer {
+            Err(zbus::Error::MethodError(name, _, _)) => {
+                name.as_str() == "org.bluez.Error.Rejected"
+            }
+            _ => false,
+        };
+        // Another client of the bus: rejected.
+        let intruder = zbus::blocking::connection::Builder::address(bus.address.as_str())
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(rejected(ask(&intruder, WATCH)));
+        // BlueZ itself, about another device than the one being paired: rejected.
+        assert!(rejected(ask(&bus.served[0], KEYBOARD)));
+        // BlueZ asking to authorize a service or a pairing without code: rejected.
+        let service = bus.served[0].call_method(
+            Some(owner.as_str()),
+            path.as_str(),
+            Some("org.bluez.Agent1"),
+            "AuthorizeService",
+            &(
+                ObjectPath::try_from(WATCH).unwrap(),
+                "0000110b-0000-1000-8000-00805f9b34fb",
+            ),
+        );
+        assert!(rejected(service));
+        let authorization = bus.served[0].call_method(
+            Some(owner.as_str()),
+            path.as_str(),
+            Some("org.bluez.Agent1"),
+            "RequestAuthorization",
+            &(ObjectPath::try_from(WATCH).unwrap(),),
+        );
+        assert!(rejected(authorization));
+        // The panel closes: `CancelPairing`, and the agent unregistered at once.
+        stop.send(()).unwrap();
+        assert_eq!(panel.join().unwrap(), 0, "no question reached the panel");
+        wait(&state, "the pairing cancelled", |s| s.cancelled == [WATCH]);
+        wait(&state, "the agent unregistered", |s| {
+            s.agent.is_none() && s.unregistered == 1
+        });
     }
 
     #[test]

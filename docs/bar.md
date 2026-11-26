@@ -408,13 +408,19 @@ the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
   « Appairage… ».
 - **The agent.** For each pairing only, the bar serves `org.bluez.Agent1` at
   `/org/sherlockos/bar/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
-  end, whatever the end. Its questions come into the panel, in a card under the list: a code to
-  check on the device (`RequestConfirmation`), a code to type on it (`RequestPinCode`,
-  `RequestPasskey`: drawn from `/dev/urandom`), a code it shows (`DisplayPinCode`,
-  `DisplayPasskey`), or a pairing without code (`RequestAuthorization`), with « Confirmer » and
-  « Annuler ». Nothing is answered by itself: the agent waits for the click, and a panel that
-  closes answers no (`org.bluez.Error.Rejected`). It authorizes the services of the device
-  being paired only.
+  end, whatever the end. It answers BlueZ alone: the unique name that owns `org.bluez`, read
+  with `GetNameOwner` when the agent is registered, compared with the sender of every call; and
+  about the device being paired alone. Anything else gets `org.bluez.Error.Rejected`. Its
+  questions come into the panel, in a card under the list: a code to check on the device
+  (`RequestConfirmation`), a code to type on it (`RequestPinCode`, `RequestPasskey`: drawn from
+  `/dev/urandom`), or a code it shows (`DisplayPinCode`, `DisplayPasskey`), with « Confirmer »
+  and « Annuler ». Nothing is answered by itself: the agent waits for the click.
+  `RequestAuthorization` and `AuthorizeService` are refused, always; a « Just Works » pairing
+  started by `Pair` does not ask.
+- **Closing the panel during a pairing** stops it at once: the iced task of the pairing is
+  aborted, its stream dropped, and a guard cancels the pairing (`CancelPairing`, while `Pair`
+  has not answered) and unregisters the agent, on the connection's own executor. Only the end
+  of the pairing, connection or disconnection under way frees the list for another device.
 - **« Oublier »**: the bin button of a paired device asks « Oublier Casque ? Il faudra
   l'appairer de nouveau. » under its line, then `RemoveDevice`.
 - **Time limits**: 5 s for the reads and the scan, 60 s for connecting, pairing and forgetting
@@ -648,7 +654,9 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   never the system bus) with fictitious devices: the list, paired first, kinds, battery, an
   unnamed device left out; connecting and disconnecting; a scan started and stopped; a pairing
   confirmed (paired, trusted, connected) and one cancelled, the agent registered for each
-  pairing only; a device that never answers `Pair`, failing within the time limit; a device
+  pairing only; another client of the bus calling the agent, BlueZ asking about another device,
+  `AuthorizeService` and `RequestAuthorization`, all rejected; the panel closing during a
+  pairing, which cancels it and unregisters the agent; a device that never answers `Pair`, failing within the time limit; a device
   forgotten; BlueZ absent. In `quick.rs`, the scan while the list is open and stopped when it
   or the panel closes, one device at a time, the agent's question answered by the click, a
   refusal shown, « Oublier » asking first.

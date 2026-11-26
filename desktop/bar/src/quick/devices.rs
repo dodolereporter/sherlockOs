@@ -12,6 +12,7 @@ use sherlock_ui::panels::{self, Glyph, text as words};
 use sherlock_ui::{metrics, typography};
 
 use super::{Message, Page, Quick, Service, act, notice, on_system};
+use crate::system::Problem;
 use crate::system::bluetooth::{self, Asked, Device, Kind, Pairing};
 use crate::system::{self};
 use crate::unfold::Unfold;
@@ -82,15 +83,42 @@ impl Quick {
                     Ok(bus) => bluetooth::pair(bus, path.clone()),
                     Err(problem) => stream::once(async { Pairing::Done(Err(problem)) }).boxed(),
                 });
-            return Task::run(pairing, Message::Pairing);
+            let (task, handle) = Task::run(pairing, Message::Pairing).abortable();
+            self.pairing = Some(handle);
+            return task;
         }
-        act(Service::Bluetooth, move |bus| async move {
-            if device.connected {
-                bluetooth::disconnect(&bus, &path).await
-            } else {
-                bluetooth::connect(&bus, &path).await
-            }
-        })
+        Task::perform(
+            async move {
+                let bus = system::system_for_actions().await?;
+                if device.connected {
+                    bluetooth::disconnect(&bus, &path).await
+                } else {
+                    bluetooth::connect(&bus, &path).await
+                }
+            },
+            Message::DeviceDone,
+        )
+    }
+
+    /// The connection, the disconnection or the pairing under way ended: only that frees the
+    /// list for another device.
+    pub(super) fn device_done(&mut self, result: Result<(), Problem>) -> Task<Message> {
+        self.device_busy = None;
+        self.pairing = None;
+        self.asked = None;
+        self.done(Service::Bluetooth, result)
+    }
+
+    /// The panel closes while a device pairs: the pairing stops at once. Dropping its stream
+    /// cancels it in BlueZ and unregisters the agent (`bluetooth::pair`).
+    pub(super) fn stop_pairing(&mut self) {
+        if let Some((_, reply)) = self.asked.take() {
+            reply.send(false);
+        }
+        if let Some(handle) = self.pairing.take() {
+            handle.abort();
+        }
+        self.device_busy = None;
     }
 
     fn find(&self, path: &str) -> Option<&Device> {
@@ -112,10 +140,7 @@ impl Quick {
                 self.asked = None;
                 Task::none()
             }
-            Pairing::Done(result) => {
-                self.asked = None;
-                self.done(Service::Bluetooth, result)
-            }
+            Pairing::Done(result) => self.device_done(result),
         }
     }
 
@@ -253,19 +278,14 @@ impl Quick {
             .and_then(|path| self.find(path))
             .map_or("", |d| d.name.as_str());
         let (line, code, confirm) = match asked {
-            Asked::Confirm(code) => (words::confirm_code(name), Some(code), true),
-            Asked::Type(code) => (words::type_code(name), Some(code), true),
-            Asked::Show(code) => (words::type_code(name), Some(code), false),
-            Asked::Authorize => (words::authorize(name), None, true),
+            Asked::Confirm(code) => (words::confirm_code(name), code, true),
+            Asked::Type(code) => (words::type_code(name), code, true),
+            Asked::Show(code) => (words::type_code(name), code, false),
         };
-        let mut card = column![ui::body(line)].spacing(panels::CARD_GAP);
-        if let Some(code) = code {
-            card = card.push(
-                text(code.as_str())
-                    .font(typography::TITLE)
-                    .size(panels::CODE_SIZE),
-            );
-        }
+        let code = text(code.as_str())
+            .font(typography::TITLE)
+            .size(panels::CODE_SIZE);
+        let card = column![ui::body(line), code].spacing(panels::CARD_GAP);
         let mut buttons = row![].spacing(metrics::GAP_INLINE / 2.0);
         if confirm {
             buttons = buttons.push(ui::primary_button(

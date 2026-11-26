@@ -414,10 +414,6 @@ pub mod text {
         format!("Tape ce code sur {name}, puis Entrée.")
     }
 
-    pub fn authorize(name: &str) -> String {
-        format!("Appairer {name} ?")
-    }
-
     pub fn forget_question(name: &str) -> String {
         format!("Oublier {name} ? Il faudra l’appairer de nouveau.")
     }
