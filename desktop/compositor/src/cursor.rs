@@ -3,9 +3,10 @@
 //! (`docs/design/cursors-dark.html`, `docs/design/cursors-light.html`).
 //!
 //! - **Theme**: the house theme, generated from `assets/cursors/` and installed by
-//!   `just install-session`: `nom-os`, or `nom-os-light` when the appearance file asks for the
-//!   light theme at startup. Without it, the user's theme: `XCURSOR_THEME`, else the system's
-//!   `default`. A shape missing from the theme shows the arrow.
+//!   `just install-session`: the one the session names in `XCURSOR_THEME` for every program,
+//!   else `nom-os`, or `nom-os-light` when the appearance file asks for the light theme at
+//!   startup. Without it, the user's theme: `XCURSOR_THEME`, else the system's `default`. A
+//!   shape missing from the theme shows the arrow.
 //! - **Size**: `XCURSOR_SIZE` (24 by default) times the screen's scale. The image of the nearest
 //!   size above is shown pixel for pixel, never stretched: sharp at a fractional scale too.
 //! - **Motion**: the waiting cursors turn, a turn per second, each image shown at its time by a
@@ -83,14 +84,14 @@ enum Source {
 }
 
 impl Source {
-    /// The house theme of `theme` if it is installed, else that of the dark desktop, else the
-    /// user's theme.
+    /// The house theme `XCURSOR_THEME` names, else the one of `theme`, if it is installed; else
+    /// that of the dark desktop; else the user's theme.
     fn load(theme: Theme) -> Self {
-        let houses = match theme {
-            Theme::Light => [cursor_theme::LIGHT_THEME, cursor_theme::THEME],
-            Theme::Dark => [cursor_theme::THEME, cursor_theme::THEME],
-        };
-        Self::from_house(houses.iter().find_map(|name| {
+        let asked = std::env::var("XCURSOR_THEME").ok();
+        let first = house_theme(asked.as_deref(), theme);
+        let houses = std::iter::once(first)
+            .chain((first != cursor_theme::THEME).then_some(cursor_theme::THEME));
+        Self::from_house(houses.into_iter().find_map(|name| {
             // Depth 0: the theme itself has the arrow, not one it inherits from.
             let (arrow, depth) =
                 xcursor::CursorTheme::load(name).load_icon_with_depth("default")?;
@@ -122,6 +123,18 @@ impl Source {
             Self::House(dir) => names.map(|n| dir.join(n)).find(|p| p.is_file()),
             Self::System(theme) => names.find_map(|n| theme.load_icon(n)),
         }
+    }
+}
+
+/// The house theme to show. The session names it in `XCURSOR_THEME` for every program
+/// (`sherlockos-session`): the compositor takes the same, so that two themes never mix.
+/// Otherwise, the one of the desktop's `theme`.
+fn house_theme(asked: Option<&str>, theme: Theme) -> &'static str {
+    match (asked, theme) {
+        (Some(cursor_theme::THEME), _) => cursor_theme::THEME,
+        (Some(cursor_theme::LIGHT_THEME), _) => cursor_theme::LIGHT_THEME,
+        (_, Theme::Light) => cursor_theme::LIGHT_THEME,
+        (_, Theme::Dark) => cursor_theme::THEME,
     }
 }
 
@@ -605,6 +618,19 @@ mod tests {
         assert_eq!(shake.factor(shrink + 100 * MS).1, Next::Frame);
         assert_eq!(shake.factor(shrink + SHAKE_TRANSITION), (1.0, Next::Rest));
         assert_eq!(shake.grown, None);
+    }
+
+    #[test]
+    fn the_theme_the_session_names_wins() {
+        use cursor_theme::{LIGHT_THEME, THEME};
+        assert_eq!(house_theme(Some(LIGHT_THEME), Theme::Dark), LIGHT_THEME);
+        assert_eq!(house_theme(Some(THEME), Theme::Light), THEME);
+        // Another theme, or none: the desktop's.
+        assert_eq!(
+            house_theme(Some("breeze_cursors"), Theme::Light),
+            LIGHT_THEME
+        );
+        assert_eq!(house_theme(None, Theme::Dark), THEME);
     }
 
     #[test]
