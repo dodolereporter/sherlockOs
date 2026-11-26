@@ -44,9 +44,8 @@ interface thread (`system_services::audio`). Choosing a device runs `set-default
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
 
-**Lock.** `lock.conf` is the file of D-25a, read by the compositor. Until D-25a is merged, Control
-Room reads and writes it with a small module of its own (`lock`), in the same words; it gives way
-to `desktop_config::lock` afterwards.
+**Lock.** `lock.conf` is the file of D-25a, read by the compositor live; Control Room writes it
+with `desktop_config::lock`.
 
 **Default applications.** Each kind covers several types: the browser `x-scheme-handler/https`,
 `http` and `text/html`; images PNG, JPEG, GIF and WebP; and so on (`apps::Kind::types`). The
@@ -90,7 +89,6 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
 | `sound` | Outputs, microphones and volumes through `pactl` | no |
 | `apps` | The kinds of default applications, their choices, writing them | no |
-| `lock` | `lock.conf`, until D-25a | no |
 | `app` | State, messages, saving, animations | yes |
 | `view` | Window, title bar, sidebar, page and its transition, cards and rows | yes |
 | `pages` | One module per page | yes |
@@ -140,6 +138,13 @@ Narrow window: one column, the sidebar folded, then unfolded over the page durin
 ![Appearance, narrow](control-room/appearance-narrow-dark.png)
 ![Touchpad, narrow, light](control-room/touchpad-narrow-light.png)
 ![Sidebar unfolded](control-room/sidebar-narrow.png)
+
+Sound, lock and default applications:
+
+![Sound](control-room/sound-wide-dark.png)
+![Lock, light](control-room/lock-wide-light.png)
+![Default applications](control-room/default-apps-wide-dark.png)
+![Default applications, narrow, light](control-room/default-apps-narrow-light.png)
 
 Search: the part of each name that matched, in green:
 

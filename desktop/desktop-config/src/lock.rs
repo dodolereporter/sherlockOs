@@ -1,6 +1,6 @@
 //! The lock setting, `<config dir>/lock.conf`: after how long without input the compositor
 //! locks the session (lot D-25a). The compositor reads it at start and again when it changes;
-//! Control Room will write it.
+//! Control Room's lock page writes it (lot D-26a).
 //!
 //! ```text
 //! # Minutes without input before the session locks; 0: never (5 by default).
@@ -9,7 +9,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    fmt, fs, io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -99,6 +99,13 @@ impl Config {
     }
 }
 
+impl fmt::Display for Config {
+    /// The file as Control Room writes it: `parse` reads it back.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "idle-minutes = {}", self.idle_minutes)
+    }
+}
+
 /// `<config dir>/lock.conf`.
 pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     crate::config_dir(var).map(|dir| dir.join(FILE))
@@ -107,6 +114,14 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_control_room_writes_reads_back() {
+        for idle_minutes in [0, 1, 15, MAX_IDLE_MINUTES] {
+            let config = Config { idle_minutes };
+            assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
+        }
+    }
 
     #[test]
     fn the_session_locks_after_five_minutes_by_default() {

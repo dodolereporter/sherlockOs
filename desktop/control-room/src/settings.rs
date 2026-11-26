@@ -9,7 +9,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use appearance_config::AppearanceConfig;
-use desktop_config::{pointer, touchpad, wallpaper};
+use desktop_config::{lock, pointer, touchpad, wallpaper};
 use dock_config::DockConfig;
 
 /// Where each file is, and where the installed wallpapers are.
@@ -44,7 +44,7 @@ impl Paths {
             wallpaper: desktop.join(wallpaper::FILE),
             touchpad: desktop.join(touchpad::FILE),
             pointer: desktop.join(pointer::FILE),
-            lock: desktop.join(crate::lock::FILE),
+            lock: desktop.join(lock::FILE),
             wallpaper_dirs,
             apps: mime_apps::Dirs {
                 config_home: config_home.into(),
@@ -68,7 +68,7 @@ impl Paths {
             .map(str::to_lowercase)
             .collect();
         Some(Self {
-            lock: desktop_config::config_dir(var)?.join(crate::lock::FILE),
+            lock: lock::config_file(var)?,
             apps: mime_apps::Dirs::from_env(&home),
             desktops,
             locales: locales(),
@@ -102,7 +102,7 @@ pub struct Settings {
     pub wallpaper: wallpaper::Config,
     pub touchpad: touchpad::Config,
     pub pointer: pointer::Config,
-    pub lock: crate::lock::Config,
+    pub lock: lock::Config,
 }
 
 impl Settings {
@@ -138,7 +138,7 @@ impl Settings {
             wallpaper: logged(&paths.wallpaper, wallpaper::Config::read(&paths.wallpaper)),
             touchpad: logged(&paths.touchpad, touchpad::Config::read(&paths.touchpad)),
             pointer: logged(&paths.pointer, pointer::Config::read(&paths.pointer)),
-            lock: crate::lock::Config::read(&paths.lock),
+            lock: logged(&paths.lock, lock::Config::read(&paths.lock)),
         }
     }
 
@@ -150,7 +150,7 @@ impl Settings {
             File::Wallpaper => write(&paths.wallpaper, &self.wallpaper.to_string()),
             File::Touchpad => write(&paths.touchpad, &self.touchpad.to_string()),
             File::Pointer => write(&paths.pointer, &self.pointer.to_string()),
-            File::Lock => write(&paths.lock, &self.lock.to_text()),
+            File::Lock => write(&paths.lock, &self.lock.to_string()),
         }
     }
 }
