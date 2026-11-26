@@ -15,8 +15,8 @@ use sherlock_ui::color::{Color, Palette, Theme};
 /// Name of the GTK theme of a variant, which is also the folder it goes in.
 pub fn gtk_theme_name(theme: Theme) -> &'static str {
     match theme {
-        Theme::Dark => "NOM_OS-dark",
-        Theme::Light => "NOM_OS-light",
+        Theme::Dark => "SherlockOS-dark",
+        Theme::Light => "SherlockOS-light",
     }
 }
 

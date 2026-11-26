@@ -86,3 +86,11 @@ mod tests {
         assert_eq!(percent(55), "55\u{202F}%");
     }
 }
+
+/// Texts of Mission Control (lot D-33).
+pub mod mission_control {
+    /// Under the thumbnail of a workspace: « Bureau 2 ».
+    pub fn workspace(number: usize) -> String {
+        format!("Bureau {number}")
+    }
+}

@@ -9,7 +9,7 @@ toolkit is iced 0.14 (ADR 0014), rendered on the AMD chip or in software (ADR 00
 
 | Layer | Modules | Depends on |
 | --- | --- | --- |
-| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `gpu` | Nothing |
+| Tokens | `color`, `metrics`, `motion`, `strings`, `typography`, `icon`, `app_icon`, `logo`, `window`, `decorations`, `click`, `gpu` | Nothing |
 | iced | `theme`, `component`, `focus` | iced 0.14, behind the `iced` feature |
 
 The gallery is not in the library: it lives in `examples/gallery/` and its tests include it.
@@ -96,6 +96,9 @@ All tokens are named by their role, in English like the rest of the code.
   it their decoration: `INSET` (42: border, bar of 40, divider), title, pill and buttons taken
   from `metrics` and `typography`, `RESTORE_ICON`, `DOUBLE_CLICK` (400 ms), and `Colors::of`, the
   colors of a palette, those of the title bar of Evidence.
+- **`click`** (Q-13): `DoubleClick`, a double click recognised in the state of the
+  application, two presses on one target within `decorations::DOUBLE_CLICK` and
+  `DOUBLE_CLICK_DISTANCE` (6 px). A widget's own detection is lost when iced rebuilds its tree.
 - **`metrics::DESKTOP_DISC_GEOMETRY`**: position and diameter of the three wallpaper discs on
   the reference screen (Main board), added by D-11.
 
@@ -115,11 +118,14 @@ instant, with no state that advances frame by frame.
 | Token | Value | Use |
 | --- | --- | --- |
 | `SNAP_SPRING` | stiffness 500, damping 33.5 (ratio 0.75, overshoot of 3 %) | Snap, maximize, restore of a window |
-| `OPEN_SPRING` | stiffness 450, damping 34 (ratio 0.80, overshoot of 2 %) | Scale of a window as it opens |
+| `OPEN_SPRING` | stiffness 450, damping 34 (ratio 0.80, overshoot of 2 %) | Arrival of a dock icon, of a notification |
+| `WINDOW_OPEN_SPRING` | stiffness 625, damping 50 (ratio 1.0, no overshoot) | Scale of a window as it opens in the compositor (D-34) |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 (ratio 0.79) | Snap preview |
 | `DECORATION_SPRING` | stiffness 700, damping 53 (ratio 1.0, no overshoot) | Corners, border and shadow of a window that becomes maximized or fullscreen, or leaves it (D-18c1) |
 | `OPEN_SCALE` | 0.92 | Scale of a window at the start of its opening, and of the preview that appears |
-| `FADE` | 150 ms, the top of `metrics::HOVER_MS` | Fade of opening, appearing and clearing |
+| `FADE` | 150 ms, the top of `metrics::HOVER_MS` | Fade of appearing and clearing, hovers |
+| `WINDOW_OPEN_FADE` | 200 ms | Fade of a window opening (D-34) |
+| `WINDOW_CLOSE` | 150 ms | A window closing: its last image shrinks to `OPEN_SCALE` and fades out (D-34) |
 | `FRAME_RATE` | 60 | Frame rate to hold, animations included (`docs/contexte.md`) |
 | `GEOMETRY_PRECISION` | 0.5 px | Offset below which an animated geometry is settled |
 | `SCALE_PRECISION` | 0.001 | Offset below which an animated scale is settled |
@@ -322,9 +328,9 @@ the index of the first data folder that has one, and the other applications' ico
 would no longer be found.
 
 **Installed.** `just install-session` prints a copy of the theme to
-`/usr/local/share/nom-os/icons/hicolor/`, and `sherlockos-session` puts
-`/usr/local/share/nom-os` first in `XDG_DATA_DIRS` (another folder with `NOM_OS_DATA`, for
-instance `NOM_OS_DATA=$PWD/desktop/sherlock-ui` from the repository). Only the session sees it:
+`/usr/local/share/sherlockos/icons/hicolor/`, and `sherlockos-session` puts
+`/usr/local/share/sherlockos` first in `XDG_DATA_DIRS` (another folder with `SHERLOCKOS_DATA`, for
+instance `SHERLOCKOS_DATA=$PWD/desktop/sherlock-ui` from the repository). Only the session sees it:
 Plasma's own hicolor is not touched. `just install-evidence` also installs Evidence's icon in
 `~/.local/share/icons/hicolor/`, beside its desktop entry, where the dock and the launcher of a
 nested session find it.
@@ -518,8 +524,8 @@ A program sets its theme with `color::set_active` (at once) or a `color::ThemeFa
 fade, see below) and returns `theme::theme()` from its iced `theme` function. The styles read
 the palette of the iced theme they are given (`theme::palette`), the constructors of
 `component` read `color::palette()`: no component tests the theme. The module constants of
-`color` stay, with the dark values, for the compositor, which follows the theme in D-05c; the
-shell programs no longer use them. The file and the automatic mode are in
+`color` keep the dark values for the tests and the few tokens built on them; neither the shell
+programs nor the compositor draw with them any more (lot D-05c). The file and the automatic mode are in
 `docs/appearance.md`.
 
 The gallery follows the appearance file live, and two chips, « Sombre » and « Clair », switch

@@ -13,6 +13,8 @@
 //! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default). `--snap-gap PX`
 //! sets the margin around snapped windows, from 0 to 64 (8 by default). `--minimize-effect`
 //! chooses what minimizing a window shows: `genie` (by default), `scale` or `none`.
+//! `--window-animations on|off` turns the opening and closing of the windows on (by default)
+//! or off.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -42,8 +44,8 @@ fn main() -> Result<(), Error> {
 
     let mut event_loop = EventLoop::try_new()?;
     let mut state = State::new(&event_loop)?;
-    // The decorations follow the theme of the appearance file.
-    compositor::decorations::follow_theme(&event_loop);
+    // Everything the compositor draws follows the theme of the appearance file.
+    compositor::theme::follow(&event_loop.handle(), &mut state);
     if options.measure {
         state.frame_stats = Some(FrameStats::default());
     }
@@ -55,6 +57,9 @@ fn main() -> Result<(), Error> {
     }
     if let Some(effect) = options.minimize_effect {
         state.set_minimize_effect(effect);
+    }
+    if let Some(on) = options.window_animations {
+        state.set_window_animations(on);
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.

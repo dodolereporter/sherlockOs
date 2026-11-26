@@ -100,10 +100,45 @@ impl Color {
 }
 
 #[cfg(feature = "iced")]
+impl Color {
+    /// The iced color, whatever `with_opacity` is under way: what a theme is built on.
+    pub fn exact(self) -> iced::Color {
+        iced::Color::from_rgba8(self.r, self.g, self.b, self.a)
+    }
+}
+
+/// Every color given to iced, its opacity multiplied by `opacity()`.
+#[cfg(feature = "iced")]
 impl From<Color> for iced::Color {
     fn from(c: Color) -> Self {
-        Self::from_rgba8(c.r, c.g, c.b, c.a)
+        Self::from_rgba8(c.r, c.g, c.b, c.a * opacity())
     }
+}
+
+thread_local! {
+    static OPACITY: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// The opacity colors take on this thread: 1 but inside `with_opacity`.
+pub fn opacity() -> f32 {
+    OPACITY.with(std::cell::Cell::get)
+}
+
+/// Runs `f` with every color converted for iced faded to `opacity` (0 to 1): how a whole
+/// panel fades in and out, iced having no opacity for a group of widgets. A program builds the
+/// view of the panel inside it, and `animated::Reveal` draws it inside it, since styles take
+/// their colors when they are drawn. Nested calls multiply.
+pub fn with_opacity<R>(opacity: f32, f: impl FnOnce() -> R) -> R {
+    /// Puts the previous opacity back, even if `f` panics.
+    struct Restore(f32);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OPACITY.with(|o| o.set(self.0));
+        }
+    }
+    let previous = OPACITY.with(|o| o.replace(o.get() * opacity.clamp(0.0, 1.0)));
+    let _restore = Restore(previous);
+    f()
 }
 
 #[cfg(feature = "iced")]
@@ -449,9 +484,8 @@ impl ThemeFade {
     }
 }
 
-/// Every color of a theme, named by its role. The module constants above are the dark values,
-/// kept for the compositor, which does not follow the theme yet (lot D-05c): new code reads
-/// `palette()`.
+/// Every color of a theme, named by its role. The module constants above are the dark values;
+/// code that draws reads `palette()`, which follows the theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub desktop: Color,
@@ -826,6 +860,28 @@ mod tests {
     fn a_translucent_color_is_multiplied_by_its_opacity() {
         let [r, g, b, a] = Color::rgba(255, 255, 0, 0.5).premultiplied();
         assert_eq!((r, g, b, a), (0.5, 0.5, 0.0, 0.5));
+    }
+
+    #[cfg(feature = "iced")]
+    #[test]
+    fn a_faded_scope_fades_the_colors_given_to_iced_and_only_inside() {
+        let glass = Color::rgba(16, 26, 44, 0.8);
+        let (outer, inner, exact) = with_opacity(0.5, || {
+            let inner = with_opacity(0.5, || iced::Color::from(glass).a);
+            (iced::Color::from(glass).a, inner, glass.exact().a)
+        });
+        assert!((outer - 0.4).abs() < 1e-6 && (inner - 0.2).abs() < 1e-6);
+        assert!(
+            (exact - 0.8).abs() < 1e-6,
+            "the exact color keeps its opacity"
+        );
+        assert!((iced::Color::from(glass).a - 0.8).abs() < 1e-6);
+        // The palette of a theme is still recognised inside the scope.
+        let theme = crate::theme::theme_for(Theme::Light);
+        assert_eq!(
+            with_opacity(0.3, || crate::theme::palette(&theme)),
+            &Palette::LIGHT
+        );
     }
 
     #[test]

@@ -84,6 +84,8 @@ pub struct WindowMotion {
     /// Opening: scale and opacity. `None` once finished.
     open: Option<(Animation, Fade)>,
     opened: bool,
+    /// Shown at once at its first frame: fullscreen, or window animations off (lot D-34).
+    no_opening: bool,
     /// Animated geometry. `None` at rest: the window is drawn at its real place.
     geometry: Option<AnimatedRect>,
     /// Last geometry drawn, before the opening scale.
@@ -125,6 +127,12 @@ impl WindowMotion {
     /// on `DECORATION_SPRING`, and come back when it leaves that state.
     pub fn set_bare(&mut self, bare: bool) {
         self.bare = bare;
+    }
+
+    /// The window has not been drawn yet: it will appear at once, without its opening. Called
+    /// for a fullscreen window, or with window animations off (lot D-34).
+    pub fn skip_opening(&mut self) {
+        self.no_opening = !self.opened;
     }
 
     /// Where to draw the window whose real geometry is `target`: there, or at the size it was
@@ -178,13 +186,13 @@ impl WindowMotion {
     pub fn frame(&mut self, now: Duration, target: Rectangle<i32, Logical>) -> Visual {
         let target = target.to_f64();
         let first = !self.opened;
-        if first {
-            self.opened = true;
+        if first && !self.no_opening {
             self.open = Some((
-                Animation::new(motion::OPEN_SPRING, motion::OPEN_SCALE, 1.0, now),
-                Fade::new(0.0, 1.0, now, motion::FADE),
+                Animation::new(motion::WINDOW_OPEN_SPRING, motion::OPEN_SCALE, 1.0, now),
+                Fade::new(0.0, 1.0, now, motion::WINDOW_OPEN_FADE),
             ));
         }
+        self.opened = true;
         let decoration = self.decoration(now, first) as f32;
         let goal = self.goal(now, target);
         // The flag is consumed on every frame, whether an animation starts or not: otherwise the
@@ -418,6 +426,39 @@ mod tests {
         assert_eq!(end.rect, place.to_f64());
         assert_eq!(end.opacity, 1.0);
         assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn the_opening_grows_and_fades_in_over_about_200_ms() {
+        let mut motion = WindowMotion::default();
+        let place = rect(100, 100, 400, 300);
+        let steps: Vec<Visual> = [0, 50, 100, 150, 199]
+            .map(|t| motion.frame(ms(t), place))
+            .to_vec();
+        // Scale and opacity only grow, without a bounce, and are still moving at 150 ms.
+        for pair in steps.windows(2) {
+            assert!(pair[1].rect.size.w > pair[0].rect.size.w);
+            assert!(pair[1].opacity > pair[0].opacity);
+        }
+        let at_150 = steps[3];
+        assert!(at_150.opacity < 1.0 && at_150.rect.size.w < 400.0);
+        assert!(at_150.rect.size.w > 400.0 * 0.98, "nearly there");
+        assert!(motion.is_animating());
+        assert_eq!(motion.frame(ms(400), place).rect, place.to_f64());
+        assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn a_window_whose_opening_is_skipped_appears_at_once() {
+        let mut motion = WindowMotion::default();
+        let place = rect(0, 0, 800, 600);
+        motion.skip_opening();
+        let first = motion.frame(ms(0), place);
+        assert_eq!((first.rect, first.opacity), (place.to_f64(), 1.0));
+        assert!(!motion.is_animating());
+        // Too late once drawn: nothing changes.
+        motion.skip_opening();
+        assert_eq!(motion.frame(ms(10), place).opacity, 1.0);
     }
 
     #[test]

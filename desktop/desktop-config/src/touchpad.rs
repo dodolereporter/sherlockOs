@@ -20,8 +20,8 @@
 //! # fingers (one finger clicks, two right click, three middle click) or areas (the bottom
 //! # right corner right clicks).
 //! click = fingers
-//! # Three fingers down: minimize the active window, or nothing.
-//! swipe-down = minimize
+//! # Three fingers down out of Mission Control: nothing, or minimize the active window.
+//! swipe-down = nothing
 //! ```
 
 use std::{
@@ -65,12 +65,13 @@ pub enum Click {
     Areas,
 }
 
-/// What a three finger swipe down does.
+/// What a three finger swipe down does out of Mission Control, which it closes otherwise.
+/// Nothing by default (lot D-33): a window should not go away by a gesture made by mistake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SwipeDown {
     /// Minimizes the window that has the keyboard.
-    #[default]
     Minimize,
+    #[default]
     Nothing,
 }
 
@@ -232,14 +233,14 @@ mod tests {
         assert_eq!(config, Config::default());
         assert!(config.tap_to_click && config.natural_scroll && config.disable_while_typing);
         assert_eq!(config.click, Click::Fingers);
-        assert_eq!(config.swipe_down, SwipeDown::Minimize);
+        assert_eq!(config.swipe_down, SwipeDown::Nothing);
     }
 
     #[test]
     fn every_key_is_read() {
         let text = "tap-to-click = false\ntap-and-drag=false\ndrag-lock = true\n\
                     natural-scroll = false\ndisable-while-typing = false\nspeed = -0.5\n\
-                    acceleration = flat\nclick = areas\nswipe-down = nothing\n";
+                    acceleration = flat\nclick = areas\nswipe-down = minimize\n";
         let config = Config::parse(text).unwrap();
         let expected = Config {
             tap_to_click: false,
@@ -250,7 +251,7 @@ mod tests {
             speed: -0.5,
             acceleration: Acceleration::Flat,
             click: Click::Areas,
-            swipe_down: SwipeDown::Nothing,
+            swipe_down: SwipeDown::Minimize,
         };
         assert_eq!(config, expected);
         // What Control Room writes reads back the same.
@@ -281,12 +282,12 @@ mod tests {
 
     #[test]
     fn a_missing_file_is_the_default() {
-        let path = Path::new("/nonexistent/nom-os/touchpad.conf");
+        let path = Path::new("/nonexistent/sherlockos/touchpad.conf");
         assert_eq!(Config::read(path).unwrap(), Config::default());
         let env = |key: &str| (key == "HOME").then(|| OsString::from("/home/u"));
         assert_eq!(
             config_file(env),
-            Some("/home/u/.config/nom-os/touchpad.conf".into())
+            Some("/home/u/.config/sherlockos/touchpad.conf".into())
         );
     }
 }

@@ -42,9 +42,9 @@ use crate::{
     anim::Visual,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
-    genie, is_override_redirect,
+    genie, is_override_redirect, mission_control,
     output::View,
-    wallpaper, window_data,
+    wallpaper, window_anim, window_data,
 };
 
 /// No fill: only the border of a shape is drawn.
@@ -59,6 +59,7 @@ render_elements! {
     Wallpaper=TextureRenderElement<GlesTexture>,
     Genie=Stamped<genie::GenieElement>,
     Decoration=Stamped<TextureRenderElement<GlesTexture>>,
+    Thumbnail=RoundedSurface<TextureRenderElement<GlesTexture>>,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -69,6 +70,8 @@ pub struct Scene {
     genie: genie::Painter,
     /// Textures of the title bars the compositor draws (lot D-08).
     bars: RefCell<decorations::Textures>,
+    /// Textures of the titles of Mission Control (lot D-33).
+    labels: RefCell<mission_control::Labels>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -105,10 +108,11 @@ pub enum Item {
         radius: f32,
         alpha: f32,
     },
-    /// The shadow of a window.
+    /// The shadow of a window, of `color` (premultiplied).
     Shadow {
         key: Key,
         shadow: Shadow,
+        color: [f32; 4],
         radius: f32,
         alpha: f32,
     },
@@ -121,6 +125,26 @@ pub enum Item {
         key: Key,
         rect: Rectangle<i32, Physical>,
         look: Look,
+        alpha: f32,
+    },
+    /// A title of Mission Control in `rect` (lot D-33).
+    Label {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        label: mission_control::Label,
+        alpha: f32,
+    },
+    /// The wallpaper of the screen in `rect`, cut to its rounded corners: a workspace thumbnail
+    /// of Mission Control.
+    Thumbnail {
+        rect: Rectangle<i32, Physical>,
+        radius: f32,
+    },
+    /// The last image of a window that closes, stretched into `rect` (lot D-34).
+    Snapshot {
+        key: Key,
+        texture: GlesTexture,
+        rect: Rectangle<i32, Physical>,
         alpha: f32,
     },
 }
@@ -141,15 +165,17 @@ impl Item {
             } => params_hash(&[&fill[..], border, &[*border_width, *radius, *alpha]].concat()),
             Item::Shadow {
                 shadow,
+                color,
                 radius,
                 alpha,
                 ..
             } => {
                 let scalars = [*radius, shadow.sigma, *alpha];
-                params_hash(&[&shadow.caster[..], &shadow.window, &scalars].concat())
+                params_hash(&[&shadow.caster[..], &shadow.window, color, &scalars].concat())
             }
             Item::Genie(frame) => frame.params(),
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -190,12 +216,14 @@ impl Scene {
             clip,
             genie: genie::Painter::new(renderer)?,
             bars: RefCell::default(),
+            labels: RefCell::default(),
         })
     }
 
     /// Elements of each screen of `views`, in its own frame pixels, at time `now`, and whether
-    /// an animation is running. The wallpaper of each screen is uploaded once as a texture per
-    /// variant; the textures no screen of `state` uses any more are freed. The elements the
+    /// an animation is running: a fade of the theme or of the wallpaper counts. The wallpaper
+    /// of each screen is uploaded once as a texture per variant; the textures no screen of
+    /// `state` uses any more are freed. The elements the
     /// compositor draws itself take their identity from `ids`. Shared by the windowed backend
     /// and the real session.
     #[allow(clippy::too_many_arguments)]
@@ -209,41 +237,44 @@ impl Scene {
         preview: Option<Visual>,
         now: Duration,
     ) -> (Vec<Vec<SceneElement>>, bool) {
+        let mut animating = state.tick_theme();
         textures.update(renderer, &mut state.wallpaper);
-        let mut animating = false;
         let mut screens = Vec::new();
         for (output, view) in views {
             let image = state.wallpaper.image_for(view.frame.size);
-            let wallpaper = image.as_deref().and_then(|path| textures.get(path));
-            let (items, moving) = items(state, (output, view), preview, wallpaper.is_some(), now);
-            animating |= moving;
+            let (wallpaper, fading) = textures.layers(&output.name(), image.as_deref(), now);
+            let shown = !wallpaper.is_empty();
+            let (items, moving) = items(state, (output, view), preview, shown, now);
+            animating |= moving || fading;
             let mode = state.wallpaper.mode;
             let elements = items
                 .into_iter()
-                .flat_map(|item| self.elements(renderer, ids, item, view, wallpaper, mode))
+                .flat_map(|item| self.elements(renderer, ids, item, view, &wallpaper, mode))
                 .collect();
             screens.push(elements);
         }
         ids.sweep();
         self.genie.sweep();
         self.bars.borrow_mut().sweep();
-        let used: Vec<_> = state
-            .views()
+        self.labels.borrow_mut().sweep();
+        let all = state.views();
+        let used: Vec<_> = all
             .iter()
             .filter_map(|(_, view)| state.wallpaper.image_for(view.frame.size))
             .collect();
-        textures.retain(&used);
+        let names: Vec<_> = all.iter().map(|(output, _)| output.name()).collect();
+        textures.retain(&used, &names);
         (screens, animating)
     }
 
     /// The render elements of one item.
-    fn elements(
+    pub(crate) fn elements(
         &self,
         renderer: &mut GlesRenderer,
         ids: &mut Ids,
         item: Item,
         view: &View,
-        wallpaper: Option<&wallpaper::Texture>,
+        wallpaper: &[(wallpaper::Texture, f32)],
         mode: desktop_config::wallpaper::Mode,
     ) -> Vec<SceneElement> {
         let params = item.params();
@@ -331,6 +362,7 @@ impl Scene {
             Item::Shadow {
                 key,
                 shadow,
+                color,
                 radius,
                 alpha,
             } => {
@@ -340,7 +372,7 @@ impl Scene {
                     None,
                     alpha,
                     vec![
-                        Uniform::new("color", color::SHADOW.premultiplied()),
+                        Uniform::new("color", color),
                         Uniform::new("caster", shadow.caster),
                         Uniform::new("window", shadow.window),
                         Uniform::new("radius", radius),
@@ -351,15 +383,17 @@ impl Scene {
                 vec![SceneElement::Shape(ids.stamp(key, params, element))]
             }
             Item::Wallpaper => wallpaper
-                .map(|texture| SceneElement::Wallpaper(wallpaper::element(texture, mode, view)))
-                .into_iter()
+                .iter()
+                .map(|(texture, alpha)| {
+                    SceneElement::Wallpaper(wallpaper::element(texture, *alpha, mode, view))
+                })
                 .collect(),
             Item::Genie(mut frame) => {
                 // Its content goes into a texture: identities of its own, out of the screen's.
                 let (inside, mut own) = (frame.view(), Ids::default());
                 let content: Vec<_> = std::mem::take(&mut frame.content)
                     .into_iter()
-                    .flat_map(|item| self.elements(renderer, &mut own, item, &inside, None, mode))
+                    .flat_map(|item| self.elements(renderer, &mut own, item, &inside, &[], mode))
                     .collect();
                 let element = self.genie.element(renderer, ids, &frame, &content);
                 element.map(SceneElement::Genie).into_iter().collect()
@@ -375,6 +409,44 @@ impl Scene {
                 bar.map(|bar| SceneElement::Decoration(ids.stamp(key, params, bar)))
                     .into_iter()
                     .collect()
+            }
+            Item::Label {
+                key,
+                rect,
+                label,
+                alpha,
+            } => {
+                let mut labels = self.labels.borrow_mut();
+                let label = labels.element(renderer, key.clone(), &label, rect, alpha);
+                label
+                    .map(|label| SceneElement::Decoration(ids.stamp(key, params, label)))
+                    .into_iter()
+                    .collect()
+            }
+            Item::Thumbnail { rect, radius } => wallpaper
+                .iter()
+                .map(|(texture, alpha)| {
+                    let inside = View {
+                        frame: rect,
+                        ..*view
+                    };
+                    SceneElement::Thumbnail(RoundedSurface {
+                        inner: wallpaper::element(texture, *alpha, mode, &inside),
+                        program: self.clip.clone(),
+                        clip: rect.to_f64(),
+                        radius,
+                        frame_size: view.frame_size,
+                    })
+                })
+                .collect(),
+            Item::Snapshot {
+                key,
+                texture,
+                rect,
+                alpha,
+            } => {
+                let element = window_anim::element(renderer, texture, rect, alpha);
+                vec![SceneElement::Decoration(ids.stamp(key, params, element))]
             }
         }
     }
@@ -394,23 +466,27 @@ pub fn items(
     let mut items = Vec::new();
     let mut animating = preview.is_some();
     let scale = view.scale as f32;
-    push_layers(&mut items, output, view, &[Layer::Overlay]);
-    // A window minimized or restored goes in front of the dock, into its icon (lot D-19).
+    push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
+    // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
     animating |= genie::push_effects(&mut items, state, (output, view), now);
-    push_layers(&mut items, output, view, &[Layer::Top]);
     if let Some(preview) = preview {
         items.push(Item::Shape {
             key: Key::of(None, Part::Preview),
             rect: view.rect(preview.rect),
-            fill: ui::SNAP_PREVIEW_FILL.premultiplied(),
-            border: ui::SNAP_PREVIEW_BORDER.premultiplied(),
+            fill: ui::snap_preview_fill().premultiplied(),
+            border: ui::snap_preview_border().premultiplied(),
             border_width: ui::SNAP_PREVIEW_BORDER_WIDTH as f32 * scale,
             radius: corner_radius(preview.rect.size.to_i32_round()) * scale,
             alpha: preview.opacity,
         });
     }
     animating |= state.workspaces_sliding(now);
-    for window in state.space.elements().rev() {
+    // Mission Control draws the windows of its own (lot D-33).
+    let overview = mission_control::push_items(&mut items, state, (output, view), now);
+    animating |= overview.unwrap_or(false);
+    // Windows closing (lot D-34): their last image, in front of the others.
+    animating |= window_anim::push_closing(&mut items, state, (output, view), now);
+    for window in state.space.elements().rev().filter(|_| overview.is_none()) {
         // Minimized, or on a workspace out of view.
         let Some(shift) = state.workspace_shift(window, now) else {
             continue;
@@ -563,7 +639,7 @@ pub(crate) fn push_window(
             key: Key::of(owner.clone(), Part::Border),
             rect: frame,
             fill: NO_FILL,
-            border: color::BORDER.premultiplied(),
+            border: color::palette().border.premultiplied(),
             border_width: metrics::BORDER_WIDTH * scale,
             radius,
             alpha: visual.opacity * decoration,
@@ -600,6 +676,7 @@ pub(crate) fn push_window(
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
             shadow: Shadow::of(frame, view.scale),
+            color: color::palette().shadow.premultiplied(),
             radius,
             alpha: visual.opacity * decoration,
         });
@@ -630,8 +707,8 @@ pub fn corner_radius(size: Size<i32, Logical>) -> f32 {
     metrics::WINDOW_RADIUS.min(half.max(0.0))
 }
 
-/// Background discs for a screen of `size`, with their color: the places of the Main board,
-/// stretched with the screen. The diameter follows the larger of the two ratios: the discs stay
+/// Background discs for a screen of `size`, with their color in the palette shown: the places of
+/// the Main board, stretched with the screen. The diameter follows the larger of the two ratios: the discs stay
 /// round and cover the same regions.
 pub fn desktop_discs(size: Size<i32, Logical>) -> [(Rectangle<i32, Logical>, Color); 3] {
     let (width, height) = metrics::REFERENCE_SCREEN;
@@ -649,7 +726,7 @@ pub fn desktop_discs(size: Size<i32, Logical>) -> [(Rectangle<i32, Logical>, Col
                 .into(),
             (d.round() as i32, d.round() as i32).into(),
         );
-        (rect, color::DESKTOP_DISCS[i])
+        (rect, color::palette().desktop_discs[i])
     })
 }
 
@@ -725,10 +802,10 @@ pub fn rounded_opaque(
         .collect()
 }
 
-/// A client surface clipped by the rounded rectangle of its window. The texture program
-/// replaces Smithay's while the surface is drawn.
-pub struct RoundedSurface {
-    inner: RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+/// A client surface clipped by the rounded rectangle of its window, or the wallpaper by that of
+/// a workspace thumbnail. The texture program replaces Smithay's while it is drawn.
+pub struct RoundedSurface<E = RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>> {
+    inner: E,
     program: GlesTexProgram,
     /// Clip rectangle, in the frame, before its transform.
     clip: Rectangle<f64, Physical>,
@@ -736,7 +813,7 @@ pub struct RoundedSurface {
     frame_size: Size<i32, Physical>,
 }
 
-impl Element for RoundedSurface {
+impl<E: Element> Element for RoundedSurface<E> {
     fn id(&self) -> &Id {
         self.inner.id()
     }
@@ -791,7 +868,7 @@ impl Element for RoundedSurface {
     }
 }
 
-impl RenderElement<GlesRenderer> for RoundedSurface {
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for RoundedSurface<E> {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -836,15 +913,24 @@ mod tests {
         let discs = desktop_discs((1440, 900).into());
         assert_eq!(
             discs[0],
-            (rect(-260, 340, 1100, 1100), color::DESKTOP_DISCS[0])
+            (
+                rect(-260, 340, 1100, 1100),
+                color::Palette::DARK.desktop_discs[0]
+            )
         );
         assert_eq!(
             discs[1],
-            (rect(860, -420, 900, 900), color::DESKTOP_DISCS[1])
+            (
+                rect(860, -420, 900, 900),
+                color::Palette::DARK.desktop_discs[1]
+            )
         );
         assert_eq!(
             discs[2],
-            (rect(980, 520, 520, 520), color::DESKTOP_DISCS[2])
+            (
+                rect(980, 520, 520, 520),
+                color::Palette::DARK.desktop_discs[2]
+            )
         );
         // On a screen twice as large, everything doubles.
         let large = desktop_discs((2880, 1800).into());

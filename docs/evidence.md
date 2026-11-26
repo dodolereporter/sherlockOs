@@ -84,7 +84,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   search in the current folder.
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
   state (modified, new, ignored). Click a column header to sort, again to reverse. Folders
-  stay first. Hidden files with Ctrl+H.
+  stay first. Hidden files with Ctrl+H. A double click opens an item, selected or not: the
+  application recognises it (`sherlock_ui::click`, within `decorations::DOUBLE_CLICK`, 400 ms,
+  and 6 px), not the row widget, whose state iced drops when the first click reshapes the view
+  (the selection highlight wraps the rows in a stack). Lot Q-13.
+- Title bar: the icon of Evidence (`sherlock_ui::app_icon`, D-03) at 18 px, where the design
+  board has its badge (it was a plain tile until Q-13): `docs/evidence/header-dark.png` and
+  `header-light.png`.
 - Preview: header with tile, size and git state; first lines of a text file in JetBrains Mono
   with keywords and comments coloured (Dockerfile, Rust, TOML, shell, Python); PNG and JPEG
   images; date, kind and place for the rest. Buttons: Open, Copy path (Restore in the trash).
@@ -306,7 +312,9 @@ user's; no test calls the real UDisks.
 - `scenarios`: keyboard navigation, copy/cut/paste and conflicts, rename and new folder, trash
   with restore and confirmed emptying, context menu from the keyboard, devices through a fake
   source, « Ouvrir avec » with fake applications and a default written to a temporary
-  `mimeapps.list`, and a headless capture of the window.
+  `mimeapps.list`, a headless capture of the window, double clicks on a selected or
+  unselected item, slow clicks and clicks on two items, and captures of the title bar in
+  `target/tmp/evidence-header-dark.png` and `-light.png` with the icon in its badge.
 - `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.

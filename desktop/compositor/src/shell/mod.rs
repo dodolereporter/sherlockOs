@@ -204,6 +204,12 @@ impl State {
         true
     }
 
+    /// Stops the slide between workspaces: the active one is shown at once (Mission Control
+    /// switches under its own animation, lot D-33).
+    pub(crate) fn stop_workspace_slide(&mut self) {
+        self.shell.slide.stop();
+    }
+
     /// Activates the workspace `steps` away from the active one, if there is one.
     pub fn activate_workspace_by(&mut self, steps: isize) {
         let model = &self.shell.workspace_model;

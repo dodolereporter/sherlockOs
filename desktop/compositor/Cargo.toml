@@ -46,8 +46,8 @@ shell-protocol = { path = "../shell-protocol", features = ["server"] }
 # built.
 ab_glyph = "=0.2.32"
 tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
-# The theme of the appearance file, followed live by the decorations, and read at startup for
-# the cursors (workspace crate).
+# The theme of the appearance file, followed live by everything the compositor draws: colors,
+# wallpaper and cursors (workspace crate).
 appearance-config = { path = "../appearance-config" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"

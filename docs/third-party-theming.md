@@ -3,7 +3,7 @@
 `desktop/toolkit-theme` gives the colors of the desktop to the applications that draw their own
 interface: GTK 3, GTK 4, Qt 5, Qt 6 and KDE. Every file is generated from the palettes of
 sherlock-ui (`Palette::DARK` and `Palette::LIGHT` in `desktop/sherlock-ui/src/color.rs`), in a
-dark and a light variant. The NOM_OS session follows the active theme of `appearance.conf`
+dark and a light variant. The SherlockOS session follows the active theme of `appearance.conf`
 (see `docs/appearance.md`). Plasma sees none of it.
 
 ```text
@@ -17,16 +17,16 @@ just uninstall-themes    # takes them away and puts the backups back
 
 | File | Read by |
 | --- | --- |
-| `~/.local/share/themes/NOM_OS-{dark,light}/gtk-3.0/gtk.css` | GTK 3, when the session sets `gtk-theme` |
-| `~/.local/share/themes/NOM_OS-{dark,light}/gtk-4.0/gtk.css` | GTK 4 without libadwaita, the same way |
-| `~/.local/share/color-schemes/NOMOS{Dark,Light}.colors` | KDE: listed among the color schemes as « SherlockOS sombre » and « SherlockOS clair », applied nowhere |
-| `~/.local/share/nom-os/themes/qt5ct/{dark,light}.conf` | qt5ct, palette of 21 roles |
-| `~/.local/share/nom-os/themes/qt6ct/{dark,light}.conf` | qt6ct, palette of 22 roles (`Accent` included) |
+| `~/.local/share/themes/SherlockOS-{dark,light}/gtk-3.0/gtk.css` | GTK 3, when the session sets `gtk-theme` |
+| `~/.local/share/themes/SherlockOS-{dark,light}/gtk-4.0/gtk.css` | GTK 4 without libadwaita, the same way |
+| `~/.local/share/color-schemes/SherlockOS{Dark,Light}.colors` | KDE: listed among the color schemes as « SherlockOS sombre » and « SherlockOS clair », applied nowhere |
+| `~/.local/share/sherlockos/themes/qt5ct/{dark,light}.conf` | qt5ct, palette of 21 roles |
+| `~/.local/share/sherlockos/themes/qt6ct/{dark,light}.conf` | qt6ct, palette of 22 roles (`Accent` included) |
 | `~/.config/qt5ct/qt5ct.conf`, `~/.config/qt6ct/qt6ct.conf` | qt5ct and qt6ct: the palette, the Fusion style |
-| `~/.local/share/nom-os/themes/libadwaita/{dark,light}.css` | Nothing by default (see "libadwaita") |
-| `~/.local/share/nom-os/themes/dconf-profile` | dconf, in the NOM_OS session only |
-| `~/.local/share/nom-os/themes/toolkit-theme` | The session, which runs it to follow the theme |
-| `~/.local/share/nom-os/themes/manifest` | `uninstall`: the installed files, their backups, and the folders created for them |
+| `~/.local/share/sherlockos/themes/libadwaita/{dark,light}.css` | Nothing by default (see "libadwaita") |
+| `~/.local/share/sherlockos/themes/dconf-profile` | dconf, in the SherlockOS session only |
+| `~/.local/share/sherlockos/themes/toolkit-theme` | The session, which runs it to follow the theme |
+| `~/.local/share/sherlockos/themes/manifest` | `uninstall`: the installed files, their backups, and the folders created for them |
 
 The GTK theme imports a base theme, defines the named colors, then paints the main surfaces
 with them: the window, the header bar, views and lists, the sidebar, fields and buttons, the
@@ -65,17 +65,17 @@ When `dconf-profile` and the program are installed, `sherlockos-session` exports
 
 | Variable | Why |
 | --- | --- |
-| `DCONF_PROFILE` | The GTK settings of the session live in a dconf database of their own, `nom_os`, written first; the user's database, `user`, is read after it and never written. The GTK theme and the color scheme set in the session never reach Plasma |
+| `DCONF_PROFILE` | The GTK settings of the session live in a dconf database of their own, `sherlockos`, written first; the user's database, `user`, is read after it and never written. The GTK theme and the color scheme set in the session never reach Plasma |
 | `ADW_DISABLE_PORTAL=1` | Without it, libadwaita asks the portal for the color scheme, and `xdg-desktop-portal` answers with Plasma's (its KDE backend is the fallback for an unknown desktop). With it, libadwaita reads the session's dconf database |
 | `QT_QPA_PLATFORMTHEME=qt6ct` | Qt 6 takes its palette and style from qt6ct |
 
 The session then runs `toolkit-theme follow`, like the bar and the dock (restarted when it
 stops). It sets the theme of the appearance file at start, then at every change:
 
-- `gtk-theme` becomes `NOM_OS-dark` or `NOM_OS-light`, and `color-scheme` becomes `prefer-dark`
+- `gtk-theme` becomes `SherlockOS-dark` or `SherlockOS-light`, and `color-scheme` becomes `prefer-dark`
   or `default`, with `gsettings`. The program refuses to call `gsettings` when `DCONF_PROFILE`
   is not the installed profile: run by hand under Plasma, it never writes the user's database.
-- `cursor-theme` becomes `nom-os` or `nom-os-light`, the house cursors of `docs/cursor.md`, and
+- `cursor-theme` becomes `sherlockos` or `sherlockos-light`, the house cursors of `docs/cursor.md`, and
   `cursor-size` becomes `XCURSOR_SIZE`, 24 when it is not a whole number above 0. Under
   Wayland, GTK takes its cursor from these keys and not from `XCURSOR_THEME`: without them, it
   read Plasma's (Breeze) from the user's database. Same database, same refusal outside the
@@ -96,7 +96,7 @@ stops). It sets the theme of the appearance file at start, then at every change:
 | Qt through qt6ct | qt6ct watches its settings folder and reads the palette again a few seconds later |
 | KDE applications | Their palette follows qt6ct; the colors they read through `KColorScheme` come from `kdeglobals` (see "Limits") |
 | Firefox, Zen | GTK widgets follow the GTK theme; the dark mode of web pages is to be checked |
-| Cursor | GTK follows `cursor-theme` live; the compositor and Qt keep the cursor of `XCURSOR_THEME`, set at startup, until lot D-05c |
+| Cursor | GTK follows `cursor-theme` live, and the compositor follows the appearance file (lot D-05c); XWayland and Qt keep the cursor of `XCURSOR_THEME`, set at startup (see "Limit: XWayland and Qt" in `docs/cursor.md`) |
 
 Checked without a screen: the GTK 3 and GTK 4 themes as rendered, and the live switch of
 libadwaita through the session's database. Not checked: the reload of GTK under Wayland when
@@ -139,8 +139,8 @@ That choice is the author's.
 
 - KDE applications read part of their colors through `KColorScheme`, from `kdeglobals`, and so
   from Plasma's scheme. Most KDE applications can be given « SherlockOS sombre » (the
-  `NOMOSDark` scheme) from their own color scheme menu, but that choice is kept in their own settings file, under Plasma too.
-- The `nom_os` dconf database also holds every GTK setting changed while in the session (the
+  `SherlockOSDark` scheme) from their own color scheme menu, but that choice is kept in their own settings file, under Plasma too.
+- The `sherlockos` dconf database also holds every GTK setting changed while in the session (the
   preferences of Nautilus, the size of a window, for instance): they do not reach Plasma, and
   Plasma's later changes show in the session only where the session never set the key.
 - An application started by D-Bus activation (`DBusActivatable=true` in its `.desktop` file)
@@ -162,7 +162,7 @@ The manifest is written after each file: when the removal stops on an error, run
 goes on where it stopped. Installing writes it before each file, so that a backup is always
 listed, whatever stops the installation. Without the profile and
 the program, the session exports nothing and runs no follower. The session's dconf database,
-`~/.config/dconf/nom_os`, is left in place: delete it to forget the GTK settings of the session.
+`~/.config/dconf/sherlockos`, is left in place: delete it to forget the GTK settings of the session.
 
 `just install-themes` run again rewrites only what changed and keeps the first backups.
 

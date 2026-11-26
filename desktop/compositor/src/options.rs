@@ -1,7 +1,8 @@
 //! Command line of the compositor.
 //!
 //! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [--workspaces N]
-//! [--snap-gap PX] [--minimize-effect genie|scale|none] [command [arguments…]]`.
+//! [--snap-gap PX] [--minimize-effect genie|scale|none] [--window-animations on|off]
+//! [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
 //! the login screen, never inside another graphical session.
 
@@ -29,6 +30,9 @@ pub struct Options {
     /// What minimizing a window shows (`--minimize-effect`); `None` keeps the default, the
     /// genie.
     pub minimize_effect: Option<Effect>,
+    /// Opening and closing animations of the windows (`--window-animations on|off`); `None`
+    /// keeps the default, on.
+    pub window_animations: Option<bool>,
     /// Command launched once XWayland is ready.
     pub command: Vec<OsString>,
 }
@@ -43,6 +47,7 @@ impl Options {
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
         let (mut workspaces, mut snap_gap, mut minimize_effect) = (None, None, None);
+        let mut window_animations = None;
         loop {
             match command.first().and_then(|a| a.to_str()) {
                 Some("--measure") => measure = true,
@@ -52,6 +57,7 @@ impl Options {
                 Some("--workspaces") => workspaces = Some(option(&mut command, 1..=9)?),
                 Some("--snap-gap") => snap_gap = Some(option(&mut command, 0..=64)?),
                 Some("--minimize-effect") => minimize_effect = Some(named(&mut command)?),
+                Some("--window-animations") => window_animations = Some(switch(&mut command)?),
                 Some("--outputs" | "--nested") => return Err(Error::Usage),
                 _ => break,
             }
@@ -71,6 +77,7 @@ impl Options {
             workspaces,
             snap_gap,
             minimize_effect,
+            window_animations,
             command,
         })
     }
@@ -113,6 +120,15 @@ fn named<T: std::str::FromStr>(args: &mut Vec<OsString>) -> Result<T, Error> {
         .to_str()
         .and_then(|v| v.parse().ok())
         .ok_or(Error::Usage)
+}
+
+/// `on` or `off` in front of `args`, removed as `option` does.
+fn switch(args: &mut Vec<OsString>) -> Result<bool, Error> {
+    match named::<String>(args)?.as_str() {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(Error::Usage),
+    }
 }
 
 /// Value of the option in front of `args`, which is removed with it, the option itself being
@@ -168,6 +184,8 @@ mod tests {
             "0",
             "--minimize-effect",
             "scale",
+            "--window-animations",
+            "off",
             "konsole",
             "--scale",
         ])
@@ -179,6 +197,10 @@ mod tests {
         assert_eq!(parse(&[]).unwrap().snap_gap, None);
         assert_eq!(options.minimize_effect, Some(Effect::Scale));
         assert_eq!(parse(&[]).unwrap().minimize_effect, None);
+        assert_eq!(options.window_animations, Some(false));
+        assert_eq!(parse(&[]).unwrap().window_animations, None);
+        let on = parse(&["--window-animations", "on"]).unwrap();
+        assert_eq!(on.window_animations, Some(true));
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
@@ -233,6 +255,8 @@ mod tests {
             &["--snap-gap", "65"],
             &["--minimize-effect", "lamp"],
             &["--minimize-effect"],
+            &["--window-animations", "yes"],
+            &["--window-animations"],
         ] {
             assert!(matches!(parse(args), Err(Error::Usage)), "{args:?}");
         }

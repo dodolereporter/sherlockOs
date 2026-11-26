@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use futures::StreamExt;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
@@ -104,6 +105,13 @@ impl Bench {
             .collect()
     }
 
+    /// Clicks the named item, the pointer kept still.
+    fn click(&mut self, name: &str) {
+        let index = self.names().iter().position(|n| *n == name);
+        let index = index.unwrap_or_else(|| panic!("{name} not found"));
+        self.send(Message::Click(index));
+    }
+
     /// Puts the cursor on the named item, with the keyboard.
     fn select(&mut self, name: &str) {
         self.press(Named::Home);
@@ -134,6 +142,41 @@ fn drain(app: &mut App, task: Task<Message>) {
 
 fn read(path: &Path) -> String {
     fs::read_to_string(path).expect("read")
+}
+
+/// Two quick clicks open an item, selected or not; the first one selects it (lot Q-13).
+#[test]
+fn double_click_opens_an_item_selected_or_not() {
+    let mut bench = Bench::new("double-click");
+    let project = Location::Folder(bench.path("projet"));
+    let src = Location::Folder(bench.path("projet/src"));
+    assert!(bench.selected().is_empty());
+    bench.click("src");
+    assert_eq!(bench.selected(), ["src"]);
+    assert_eq!(bench.app.location, project);
+    bench.click("src");
+    assert_eq!(bench.app.location, src);
+
+    // Already selected.
+    bench.press(Named::Backspace);
+    assert_eq!(bench.selected(), ["src"]);
+    bench.click("src");
+    bench.click("src");
+    assert_eq!(bench.app.location, src);
+}
+
+/// Slow clicks, or quick clicks on two items, open nothing.
+#[test]
+fn slow_clicks_or_two_items_open_nothing() {
+    let mut bench = Bench::new("two-clicks");
+    let project = Location::Folder(bench.path("projet"));
+    bench.click("a.txt");
+    bench.click("src");
+    assert_eq!(bench.selected(), ["src"]);
+    assert_eq!(bench.app.location, project);
+    std::thread::sleep(sherlock_ui::decorations::DOUBLE_CLICK + Duration::from_millis(50));
+    bench.click("src");
+    assert_eq!(bench.app.location, project);
 }
 
 #[test]
@@ -515,6 +558,63 @@ fn a_new_theme_fades_the_window() {
     assert_eq!(color::palette(), &Palette::LIGHT);
     assert_eq!(theme::palette(&theme::window_theme()), &Palette::LIGHT);
     color::set_active(Theme::Dark);
+}
+
+/// Captures of the title bar, dark and light, in `target/tmp/evidence-header-<theme>.png`:
+/// the badge on the left is the icon of Evidence, not a plain tile (lot Q-13).
+#[test]
+fn header_shows_the_app_icon() {
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = crate::testing::in_theme(which);
+        let mut bench = Bench::new("header");
+        bench.app.settle();
+        let settings = Settings {
+            fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+            default_font: typography::UI,
+            default_text_size: Pixels(typography::UI_SIZE),
+            ..Settings::default()
+        };
+        let (width, height) = metrics::REFERENCE_WINDOW;
+        let mut ui = simulator::Simulator::with_size(settings, (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let full = bench.tmp.path().join("window.png");
+        let _ = fs::remove_file(&full);
+        assert!(snapshot.matches_image(&full).expect("writing the capture"));
+        let written = fs::read_dir(bench.tmp.path())
+            .expect("captures")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "png"))
+            .expect("capture written");
+        let picture = ::image::open(&written).expect("capture").to_rgb8();
+        let scale = picture.width() as f32 / width;
+        let bar = (metrics::TITLE_BAR_HEIGHT * scale) as u32;
+        let header = ::image::imageops::crop_imm(&picture, 0, 0, picture.width(), bar).to_image();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp");
+        fs::create_dir_all(&dir).expect("captures folder");
+        header
+            .save(dir.join(format!("evidence-header-{name}.png")))
+            .expect("header capture");
+
+        // The middle of the badge holds the light strokes of the icon on its blue tile.
+        let left = metrics::TITLE_BAR_PADDING.0;
+        let middle = metrics::TITLE_BAR_HEIGHT / 2.0;
+        let quarter = metrics::APP_BADGE / 4.0;
+        let (x0, x1) = ((left + quarter) * scale, (left + 3.0 * quarter) * scale);
+        let (y0, y1) = ((middle - quarter) * scale, (middle + quarter) * scale);
+        let (mut light, mut tile) = (0, 0);
+        for y in y0 as u32..y1 as u32 {
+            for x in x0 as u32..x1 as u32 {
+                let [r, g, b] = picture.get_pixel(x, y).0.map(u16::from);
+                light += usize::from(r > 200 && g > 200 && b > 180);
+                tile += usize::from(b > r + 40 && b < 160);
+            }
+        }
+        assert!(
+            light > 0 && tile > 0,
+            "{name}: {light} light, {tile} tile pixels"
+        );
+    }
 }
 
 /// Cost of one frame with 5,000 entries: view, layout, then software rendering. Run with

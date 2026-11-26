@@ -118,8 +118,8 @@ pub fn with_palette(settings: &str, palette: &Path) -> Option<String> {
 /// File name of a KDE color scheme.
 pub fn kde_file_name(theme: Theme) -> &'static str {
     match theme {
-        Theme::Dark => "NOMOSDark.colors",
-        Theme::Light => "NOMOSLight.colors",
+        Theme::Dark => "SherlockOSDark.colors",
+        Theme::Light => "SherlockOSLight.colors",
     }
 }
 

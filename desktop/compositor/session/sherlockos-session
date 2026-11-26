@@ -1,22 +1,22 @@
 #!/bin/sh
-# Starts a NOM_OS session, from the login screen (sherlockos.desktop) or from a text console:
+# Starts a SherlockOS session, from the login screen (sherlockos.desktop) or from a text console:
 # the compositor on the screens of the machine, then the bar, the dock and the notification
 # daemon inside it.
 #
 # The programs are looked for next to this script (`just install-session` puts them in
-# /usr/local/libexec/nom-os), or in NOM_OS_BIN. That folder goes at the end of PATH: the
+# /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN. That folder goes at the end of PATH: the
 # session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
-# NOM_OS_XWAYLAND=1 starts XWayland too (off by default: see "Real session" in
-# docs/compositor.md). NOM_OS_SESSION_BUS chooses the D-Bus session bus, NOM_OS_DATA the
+# SHERLOCKOS_XWAYLAND=1 starts XWayland too (off by default: see "Real session" in
+# docs/compositor.md). SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
 # folder of the application icons (see below). The log of the session goes to
-# $XDG_STATE_HOME/nom-os/session.log (~/.local/state/nom-os/session.log): beyond 5 MiB it moves
+# $XDG_STATE_HOME/sherlockos/session.log (~/.local/state/sherlockos/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
 # session with it.
 set -eu
 
-bin="${NOM_OS_BIN:-$(dirname "$(readlink -f "$0")")}"
-export XDG_CURRENT_DESKTOP=NOM_OS
-export XDG_SESSION_DESKTOP=NOM_OS
+bin="${SHERLOCKOS_BIN:-$(dirname "$(readlink -f "$0")")}"
+export XDG_CURRENT_DESKTOP=SherlockOS
+export XDG_SESSION_DESKTOP=SherlockOS
 export XDG_SESSION_TYPE=wayland
 
 # Whether another graphical session of this user is open (Plasma on another console), from
@@ -38,11 +38,11 @@ other_graphical_session() {
 # The session runs on a D-Bus session bus of its own when another graphical session is open:
 # on the shared bus, Qt applications wait 25 s for Plasma's global menu registrar, which does
 # not answer them, and the notification daemon finds the name taken (see "D-Bus session bus"
-# in docs/compositor.md). NOM_OS_SESSION_BUS=own or shared forces the choice; auto by default.
+# in docs/compositor.md). SHERLOCKOS_SESSION_BUS=own or shared forces the choice; auto by default.
 # The bus daemon is started here, not through `dbus-run-session`: the compositor must stay a
 # child of this script, or libseat cannot take the screen ("Resource temporarily unavailable"
 # when it opens the card, seen on the author's machine).
-case "${NOM_OS_SESSION_BUS:-auto}" in
+case "${SHERLOCKOS_SESSION_BUS:-auto}" in
 own) own_bus=1 ;;
 shared) own_bus=0 ;;
 *) own_bus=0 && other_graphical_session && own_bus=1 ;;
@@ -51,24 +51,24 @@ if [ "$own_bus" = 1 ] && command -v dbus-daemon >/dev/null 2>&1 &&
 	bus=$(dbus-daemon --session --fork --print-address=1 --print-pid=1); then
 	DBUS_SESSION_BUS_ADDRESS=$(printf '%s\n' "$bus" | sed -n 1p)
 	bus_pid=$(printf '%s\n' "$bus" | sed -n 2p)
-	export DBUS_SESSION_BUS_ADDRESS NOM_OS_OWN_BUS=1
+	export DBUS_SESSION_BUS_ADDRESS SHERLOCKOS_OWN_BUS=1
 	# The bus goes away with the session, whichever way it ends.
 	trap 'kill "$bus_pid" 2>/dev/null' EXIT
 	trap 'exit 129' HUP
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 else
-	unset NOM_OS_OWN_BUS
+	unset SHERLOCKOS_OWN_BUS
 fi
 
 export PATH="$PATH:$bin"
-# The data of the session, the application icons as a hicolor theme: in share/nom-os beside the
-# libexec folder (/usr/local/share/nom-os, where `just install-session` puts them), or in
-# NOM_OS_DATA. First in XDG_DATA_DIRS, for the programs of the session only. After the re-exec
+# The data of the session, the application icons as a hicolor theme: in share/sherlockos beside the
+# libexec folder (/usr/local/share/sherlockos, where `just install-session` puts them), or in
+# SHERLOCKOS_DATA. First in XDG_DATA_DIRS, for the programs of the session only. After the re-exec
 # above, so that it is added once.
-data="${NOM_OS_DATA:-$(dirname "$(dirname "$bin")")/share/nom-os}"
+data="${SHERLOCKOS_DATA:-$(dirname "$(dirname "$bin")")/share/sherlockos}"
 export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-state="${XDG_STATE_HOME:-$HOME/.local/state}/nom-os"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/sherlockos"
 log="$state/session.log"
 mkdir -p "$state"
 if [ -f "$log" ]; then
@@ -78,18 +78,18 @@ fi
 # Once `just install-themes` ran, third-party applications take the colors of the desktop
 # (docs/third-party-theming.md): the GTK settings live in a dconf database of the session's own,
 # libadwaita reads them without the portal, Qt goes through qt6ct. Plasma sees none of it.
-themes="${XDG_DATA_HOME:-$HOME/.local/share}/nom-os/themes"
+themes="${XDG_DATA_HOME:-$HOME/.local/share}/sherlockos/themes"
 if [ -f "$themes/dconf-profile" ] && [ -x "$themes/toolkit-theme" ]; then
 	export DCONF_PROFILE="$themes/dconf-profile" ADW_DISABLE_PORTAL=1 QT_QPA_PLATFORMTHEME=qt6ct
-	export NOM_OS_THEMES="$themes"
+	export SHERLOCKOS_THEMES="$themes"
 fi
 
 # Cursors (lot D-07): every program draws the house theme, the compositor's, so that two themes
-# never mix: nom-os-light if the appearance file gives the light theme now, nom-os otherwise.
+# never mix: sherlockos-light if the appearance file gives the light theme now, sherlockos otherwise.
 # `cursors` beside the programs' folder is searched first: target/cursors, which `just cursors`
-# writes, when the session is tried from the repository with NOM_OS_BIN=target/release.
+# writes, when the session is tried from the repository with SHERLOCKOS_BIN=target/release.
 appearance="${XDG_CONFIG_HOME:-$HOME/.config}/appearance/appearance.conf"
-cursors=nom-os
+cursors=sherlockos
 if [ -r "$appearance" ]; then
 	cursors=$(awk -F= -v now="$(date +%H:%M:%S)" '
 		function secs(t, f) { split(t, f, ":"); return f[1] * 3600 + f[2] * 60 + f[3] }
@@ -100,7 +100,7 @@ if [ -r "$appearance" ]; then
 			dark = secs(("AutoDarkFrom" in a) ? a["AutoDarkFrom"] : "19:00")
 			n = secs(now)
 			day = light < dark ? (n >= light && n < dark) : (n >= light || n < dark)
-			print (a["Theme"] == "light" || (a["Theme"] == "auto" && day)) ? "nom-os-light" : "nom-os"
+			print (a["Theme"] == "light" || (a["Theme"] == "auto" && day)) ? "sherlockos-light" : "sherlockos"
 		}' "$appearance")
 fi
 icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/local/share/icons:/usr/share/icons"
@@ -128,7 +128,7 @@ keep_log() {
 shell='
 compositor=$PPID
 # On a bus of its own, the services it starts (portals) learn the display of this session.
-if [ "${NOM_OS_OWN_BUS:-0}" = 1 ]; then
+if [ "${SHERLOCKOS_OWN_BUS:-0}" = 1 ]; then
 	echo "session: D-Bus session bus of its own" >&2
 	dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY ||
 		echo "session: the activation environment of the bus is not updated" >&2
@@ -159,11 +159,11 @@ keep "$0/bar" &
 keep "$0/dock" &
 keep "$0/notifications" &
 # Switches the GTK theme and the Qt palette with the appearance file.
-[ -n "${NOM_OS_THEMES:-}" ] && keep "$NOM_OS_THEMES/toolkit-theme" follow &
+[ -n "${SHERLOCKOS_THEMES:-}" ] && keep "$SHERLOCKOS_THEMES/toolkit-theme" follow &
 wait
 '
 xwayland=""
-if [ "${NOM_OS_XWAYLAND:-0}" = 1 ]; then
+if [ "${SHERLOCKOS_XWAYLAND:-0}" = 1 ]; then
 	xwayland=--xwayland
 fi
 # shellcheck disable=SC2086 # $xwayland is empty or one word.

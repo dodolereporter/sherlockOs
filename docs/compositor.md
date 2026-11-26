@@ -10,7 +10,8 @@ anchored surfaces (layer-shell) for the bar, the dock and the panels, several sc
 fractional scaling. Lot D-04 draws the wallpaper. Lot D-06 accepts the buffers of clients that
 draw on the GPU (linux-dmabuf). Lot D-14 runs it as a real session, on the screens of the
 machine, from a text console or the login screen (see "Real session"). Lot D-31 gives the
-touchpad its setting and its gestures (see "Touchpad").
+touchpad its setting and its gestures (see "Touchpad"). Lot D-33 adds Mission Control (see
+"Mission Control").
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -21,7 +22,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
-| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, the command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, `--window-animations`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches, the frame cycle of each screen |
 | `src/pacing.rs` | When a screen of the real session draws: only after a change or during an animation, at the pace of its vertical blank (lot P-01) |
 | `src/damage.rs` | Stable identity of the elements the compositor draws itself, so that only what changed is redrawn (lot P-01) |
@@ -41,6 +42,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
 | `src/gestures.rs` | Touchpad gestures (lot D-31): three finger swipes for the compositor, the others to the clients (`zwp_pointer_gestures_v1`) |
 | `src/touchpad.rs` | Touchpad setting applied to libinput, read again when it changes (lot D-31) |
+| `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
@@ -49,6 +51,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
 | `src/shaders/` | The four GLSL programs of the renderer: `shape.frag`, `shadow.frag`, `clip.frag`, `genie.frag` |
 | `src/genie.rs` | Minimize effect (lot D-19): the genie into the dock icon, the scale effect without one, the setting |
+| `src/window_anim.rs` | Opening and closing of the windows (lot D-34): the last image of a closed window, its closing, the setting |
 | `src/anim.rs` | Motion of windows, of the preview and of the workspaces: springs applied to rectangles and to the row of workspaces. Pure computation |
 | `src/stats.rs` | Frame statistics for `--measure` |
 | `src/shell/` | Data and control for the shell programs, on the shell socket only (lot D-18a, ADR 0021): `sherlock_shell_v1` (`toplevels.rs`), workspaces through `ext-workspace-v1` (`workspaces.rs`); the workspaces themselves and minimizing (lot D-18w) |
@@ -399,8 +402,8 @@ D-18w gives them their behavior.
 - **Moving a window** (`State::move_to_workspace`): out of the active workspace, it hides
   without being followed, and if it was the active window, the keyboard goes back as above.
   Refused during a gesture, which would go on with a hidden window.
-- **Who changes workspace.** Only the user, by the keys and the three finger swipe (see
-  "Touchpad"), and the shell, by `activate` (of a
+- **Who changes workspace.** Only the user, by the keys, the three finger swipe (see
+  "Touchpad") and Mission Control, and the shell, by `activate` (of a
   workspace or of a window) and `move_to_workspace`. No application can: the compositor offers
   no `xdg-activation`, and smithay 0.7 ignores `_NET_ACTIVE_WINDOW`. An
   application may minimize its own window (lot D-18c1), never bring it back. A new window opens on the active workspace and
@@ -779,15 +782,16 @@ Each frame is redrawn in full with Smithay's GLES renderer (`GlesRenderer`), in 
 single thread. `render::Scene` compiles three programs at startup and lays out the elements from
 front to back, as Smithay expects them:
 
-1. anchored surfaces of the overlay layer, then the windows during their minimize effect (lot
-   D-19), then the anchored surfaces of the top layer, each with its menus in front;
-2. the snap preview: translucent green rounded rectangle, 2 px green border;
-3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
+1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
+   front;
+2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
+3. the snap preview: translucent green rounded rectangle, 2 px green border;
+4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
    scaled), its border, its title bar if the compositor draws it, its clipped content, its
-   shadow;
-4. anchored surfaces of the bottom and background layers;
-5. the wallpaper, or without one the three background discs (see "Wallpapers");
-6. the desktop color, which fills the rest.
+   shadow; while Mission Control is shown, its own items instead (see "Mission Control");
+5. anchored surfaces of the bottom and background layers;
+6. the wallpaper, or without one the three background discs (see "Wallpapers");
+7. the desktop color, which fills the rest.
 
 **Screens and scale (lot D-12).** Each screen has its own list of elements, built in pixels of
 the frame by its `View`: its area of the space, its slice of the frame, its scale. Rectangles are
@@ -810,15 +814,17 @@ drawn at scale 1: the elements' "logical" coordinates are frame pixels.
 | `clip.frag` | Texture | Client content multiplied by the coverage of its window's rounded rectangle |
 | `genie.frag` | Texture | A window during its genie, deformed toward its dock icon (see "Minimize effect") |
 
-The values, all taken from `sherlock-ui`:
+The values, all taken from `sherlock-ui`. The colors are those of the palette shown,
+`color::palette()`, which follows the theme (see "Theme"); the dark values are given here:
 
-| Element | Value | Token |
+| Element | Value (dark) | Token |
 | --- | --- | --- |
-| Background | `#0E1A2E` | `color::DESKTOP` |
-| Discs | `#132A49`, `#16314F`, `#1B3F63`, places and diameters from the Main board | `color::DESKTOP_DISCS`, `metrics::DESKTOP_DISC_GEOMETRY` |
+| Background | `#0E1A2E` | `desktop` |
+| Discs | `#132A49`, `#16314F`, `#1B3F63`, places and diameters from the Main board | `desktop_discs`, `metrics::DESKTOP_DISC_GEOMETRY` |
 | Corners | Radius 16, reduced for a window smaller than two corners | `metrics::WINDOW_RADIUS` |
-| Border | 1 px `rgba(255,255,255,0.10)`, inside the window as in CSS | `metrics::BORDER_WIDTH`, `color::BORDER` |
-| Shadow | `0 28px 70px rgba(3,8,18,0.55)` | `metrics::SHADOW_OFFSET`, `metrics::SHADOW_BLUR`, `color::SHADOW` |
+| Border | 1 px `rgba(255,255,255,0.10)`, inside the window as in CSS | `metrics::BORDER_WIDTH`, `border` |
+| Shadow | `0 28px 70px rgba(3,8,18,0.55)` | `metrics::SHADOW_OFFSET`, `metrics::SHADOW_BLUR`, `shadow` |
+| Snap preview | `rgba(133,197,149,0.16)`, border 2 px `#85C595` | `window::snap_preview_fill()`, `snap_preview_border()` |
 
 **Background.** On a 1440 by 900 screen, the discs are exactly at their place on the board:
 (-260, 340) diameter 1100, (860, -420) diameter 900, (980, 520) diameter 520, the last one in
@@ -870,10 +876,12 @@ that the compositor and the shell share the same springs:
 | Token | Value | Damping ratio | Use |
 | --- | --- | --- | --- |
 | `SNAP_SPRING` | stiffness 500, damping 33.5 | 0.75, 3 % overshoot | Snap, maximize, restore |
-| `OPEN_SPRING` | stiffness 450, damping 34 | 0.80, 2 % overshoot | Scale at opening, from `OPEN_SCALE` (0.92) to 1 |
+| `WINDOW_OPEN_SPRING` | stiffness 625, damping 50 | 1.0, no overshoot | Scale of a window opening, from `OPEN_SCALE` (0.92) to 1 (lot D-34) |
 | `PREVIEW_SPRING` | stiffness 700, damping 42 | 0.79 | Snap preview |
 | `DECORATION_SPRING` | stiffness 700, damping 53 | 1.0, no overshoot | Corners, border and shadow of a window maximized, fullscreen, or leaving it |
-| `FADE` | 150 ms | | Opacity at opening, preview appearing and fading out |
+| `FADE` | 150 ms | | Opacity of the preview appearing and fading out |
+| `WINDOW_OPEN_FADE` | 200 ms | | Opacity of a window opening (lot D-34) |
+| `WINDOW_CLOSE` | 150 ms | | Scale and opacity of a window closing (lot D-34) |
 
 `docs/contexte.md` only gives « ressorts » (springs), « léger dépassement » (slight overshoot)
 and hovers of 110 to 150 ms: these values are choices of the lot. Each spring covers 90 % of the
@@ -883,7 +891,7 @@ lasts one hover.
 `anim.rs` applies them to windows:
 
 - **Opening.** At its first frame, the window grows from 0.92 to 1 around its center and goes
-  from transparent to opaque. Its shadow and its border follow.
+  from transparent to opaque. Its shadow and its border follow. See "Opening and closing".
 - **Snap and restore.** `rearrange` (snap, maximize, fullscreen, restore) calls
   `animate_next_change`. The flag only holds for the next frame, where it is consumed in every
   case: if the geometry has changed there, it starts from the last drawn geometry on four
@@ -918,8 +926,9 @@ Minimized, by the dock, its keys or its application, a window is sucked into its
 activated, it comes back out the same way, backwards. `src/genie.rs`.
 
 - **Genie.** The icon is the rectangle the dock gives with `set_rectangle`
-  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (450 ms),
-  at a constant pace. During the first 40 % the sides bend: what is level with the window's top
+  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (300 ms
+  since lot Q-14, 450 ms before: found slow on the machine), at a constant pace, the same both
+  ways. During the first 40 % the sides bend: what is level with the window's top
   keeps its width, what reaches the icon's top takes the icon's width, along a smoothstep curve
   in between; the bottom of the window narrows toward the icon. During the rest, the window
   slides down this funnel and is squeezed into the icon, whose rectangle it covers exactly at the
@@ -937,8 +946,11 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
   drawn into the texture, follow the deformation; the edges of the funnel are smoothed over one
   pixel on the screen. The shadow is not deformed: it fades out while the sides bend. `Genie`
   holds the same computation in Rust, for the area and the tests; the two must stay in line.
-- **In front of the dock.** The window goes into its icon, so it is drawn in front of the
-  anchored surfaces of the top layer (bar, dock), behind those of the overlay layer.
+- **Under the dock** (lot Q-14). The window is sucked into its icon, as on macOS: it is drawn
+  behind the anchored surfaces of the top and overlay layers (bar, dock, notifications), in
+  front of the other windows. From the back: the wallpaper, the windows, the genie, then the
+  bar, the dock and the notifications. In front of the dock (lot D-19), the window covered the
+  icon it went into.
 - **Without an icon** (no dock, or a window without an icon in it), the scale effect: the window
   shrinks to `motion::MINIMIZE_SCALE` (a fifth) toward the bottom of its screen, centered under
   itself, and fades out; drawn like a window, stretched (`RescaleRenderElement`), with its
@@ -964,14 +976,64 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
 the three choices, by these names (`genie::Effect` reads them). `none` hides and shows the window
 at once, as before this lot. A change applies to the next minimize; an effect running goes on.
 
+### Opening and closing (lot D-34)
+
+As on macOS: a window that opens grows from `OPEN_SCALE` (0.92) to 1 around its center on
+`WINDOW_OPEN_SPRING`, critically damped (no bounce, 90 % of the way in 155 ms, settled in about
+250), and fades in over `WINDOW_OPEN_FADE` (200 ms). A window that closes shrinks back to 0.92
+and fades out over `WINDOW_CLOSE` (150 ms), then is freed. `src/window_anim.rs`.
+
+![A window halfway through its opening](../desktop/compositor/screenshots/window-opening.png)
+
+- **Before this lot** the opening was already there, on `OPEN_SPRING` and the 150 ms fade of a
+  hover. That fade is cubic, brisk at the start: the window was 70 % opaque after 50 ms, and
+  the spring had made most of its way, so the opening went by in three frames and did not show.
+- **Closing.** The client has already destroyed its window when the compositor learns it
+  (`toplevel_destroyed`, or the unmap of an X11 window): its buffer goes away with its surface.
+  Before the window leaves the space, the backend draws it as at rest into a texture of its size
+  in pixels, at the scale of its screen, corners, border and title bar included, through the
+  offscreen path of the genie (`genie::offscreen`). The `Snapshotter` the backend plugs into
+  the state (`State::set_snapshotter`) does it with its renderer, while the clients are read,
+  never during a frame. That texture, the ghost, is drawn in front of the other windows,
+  stretched (`render::Item::Snapshot`), with a shadow at its scale. A client that removed its
+  content before destroying its window (a null buffer) leaves nothing to draw: the window goes
+  at once.
+- **Input.** The ghost is out of the space: it takes no click, no hover, no keyboard; the
+  pointer goes through it to what is below. A window that opens takes input at once, as before.
+- **Not animated:** menus and popups (`xdg_popup`, drawn with their window), X11
+  override-redirect windows, anchored surfaces (bar, dock), fullscreen windows, a window closing
+  on another workspace, minimized, or while Mission Control is open.
+- **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
+  animation for `pacing::Pacing`), nothing at rest. The ghost is one element under a stable
+  identity (`damage::Part::Closing`): the damage is its old and new area, inside the window's.
+  Its texture is freed by `State::end_closings` after each loop iteration once the closing is
+  over. The cursor plane (lot P-01) is untouched.
+
+**Setting.** `--window-animations on|off` (on by default), and `State::set_window_animations`
+while the session runs, for Control Room. Off, windows appear and go at once. A window already
+closing finishes.
+
+**Tests.** `anim.rs`: the opening grows and fades in without a bounce, still moving at 150 ms,
+settled by 400; a skipped opening shows at once. `window_anim.rs`: the closing shrinks and fades
+in 150 ms. `tests/headless.rs`: a window closing over another one takes no click, the one below
+does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
+and closes at once; so does any window with the setting off.
+`the_opening_and_the_closing_are_drawn_halfway` draws a decorated window halfway through its
+opening and through its closing with Mesa's software renderer, like the genie test, checks the
+pixels and that the ghost's texture is held then freed, and saves `window-opening.png` and
+`window-closing.png` in `target/tmp`.
+
+**Manual test.** Nested (`--nested`) or in the real session: open Konsole, a GTK application
+and `xterm`; each grows and fades in. Close them (Super + Q, or their close button): each
+shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
+`--window-animations off`, nothing is animated.
+
 ### What rendering does not do yet
 
 - **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
   was already over its size. Its place for anchored surfaces is ready (`Scene::push_backdrop`,
   lot D-12). It needs an offscreen render of what is behind the surface, at reduced
   resolution, then blur passes; the snap preview would be its first client.
-- **Animated closing.** When the client destroys its window, its buffer goes away with it.
-  Animating it requires keeping a copy of its last frame (texture) at the time of destruction.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 
@@ -1015,9 +1077,8 @@ corners, `divider` line under it; the title on the left from 15 (border and padd
 radius 9, padding 2) of three buttons of 28 by 24 (radius 7, 2 apart), 9 from the right edge,
 with the icons of `sherlock_ui::icon` (14 px, stroke 1.7, `text_secondary`). A button under the
 pointer takes `hover`, held down `pressed`. Maximized, the maximize button shows the restore icon
-(`decorations::RESTORE_ICON`). The colors are those of the active palette: the compositor makes
-the theme of the appearance file active at start and follows it (`decorations::follow_theme`),
-without the fade of the shell programs.
+(`decorations::RESTORE_ICON`). The colors are those of the palette shown, which follows the
+theme with a fade (see "Theme").
 
 **Behavior.**
 
@@ -1144,7 +1205,7 @@ original `<folder>/<id>/1920x1080.png`, `2560x1440.png` and `3840x2160.png`:
   way as the others are reduced.
 
 The variants are not versioned: the image factory will generate them and install them in
-`/usr/share/nom-os/wallpapers/` (lot of the session on our base). On the reference laptop, the
+`/usr/share/sherlockos/wallpapers/` (lot of the session on our base). On the reference laptop, the
 fifteen wallpapers take 174 seconds (8 to 13 per wallpaper, on one core) and 202 MB: 38 MB at
 1920, 64 MB at 2560, 99 MB at 3840. The dithered grain keeps PNG from compressing the reduced
 variants much, which is also why they are generated and not stored. Generating
@@ -1153,7 +1214,7 @@ costs nothing in the session.
 
 ### Setting
 
-`$XDG_CONFIG_HOME/nom-os/wallpaper.conf` (`~/.config/nom-os/…` by default). `nom-os` stands for
+`$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` (`~/.config/sherlockos/…` by default). `sherlockos` stands for
 the name of the OS, not chosen yet: it is written once, in `desktop_config::DIR`.
 
 ```text
@@ -1169,12 +1230,12 @@ mode = cover
 ```
 
 - Without a file, or without `path` and `wallpaper`: the default pair, which follows the theme.
-- A wallpaper of the collection is looked for in `$XDG_DATA_HOME/nom-os/wallpapers/<id>`, then
+- A wallpaper of the collection is looked for in `$XDG_DATA_HOME/sherlockos/wallpapers/<id>`, then
   in each `$XDG_DATA_DIRS`.
 - `Config::choice(variant)` (crate `desktop-config`) gives what to show in a theme: the user's
   path, or the installed wallpaper to look for. The compositor keeps the theme in
-  `Wallpaper::set_theme`; it stays dark for now. Lot D-05 brings the theme setting
-  (`appearance-config`) and lot D-05c will call `set_theme` when it changes.
+  `Wallpaper::set_theme`, called at each change of the appearance file (see "Theme"): with
+  `follow-theme = true`, the default first-clue becomes first-clue-light, and back.
 - `cover` fills the screen, centered, and cuts what overflows. `contain` shows the whole image,
   centered, with the desktop color in the bands. `center` puts one image pixel on one screen
   pixel, centered.
@@ -1195,12 +1256,19 @@ mode = cover
   already in it: a screen at 1 and a screen at 2 of the same size in pixels show exactly the
   same part of the image.
 - **Loading.** The image is decoded on a thread of its own (a 4K PNG takes a while): the
-  frames go on, with the board's background until it is ready. The decoder refuses an image
+  frames go on, with the image shown before, or the board's background at start, until it is
+  ready. The decoder refuses an image
   larger than 8192 pixels on a side or needing more than 256 MiB (a PNG "decompression bomb"),
   and a thread that the system refuses is logged: both give the board's background. It is then uploaded once as a
   texture, shared by the screens that use the same variant, and drawn every frame as one
-  textured rectangle. A texture that no screen uses any more is freed; a new setting drops
-  them all.
+  textured rectangle. A texture that no screen uses any more is freed.
+- **Change of image (lot D-05c).** A new source (another wallpaper, the pendant of the other
+  theme) keeps, for each screen, the texture it shows (`Textures::layers`). Once the new image
+  is uploaded, it fades in over the old one over `motion::THEME_FADE` (250 ms, the cubic of
+  `Fade`), then the old texture is freed: two textured rectangles during the fade, one after,
+  and no frame asked for once it is over. A setting whose source does not change (the file
+  written again, `mode` alone, a theme without a pendant) keeps its images: no reload, no
+  flash. A source that gives the board's background (not installed, broken) shows it at once.
 - **Cost at rest.** One textured rectangle per screen in place of the three discs, and one
   `stat` every 2 seconds.
 - **Blur (lot D-11b).** The wallpaper is an element of the same list as the rest of the scene,
@@ -1233,17 +1301,13 @@ Notes:
 - The settings file is read as it is found: a program that writes it (Control Room) must write
   a temporary file and `rename` it, or a half-written file may be refused for 2 seconds.
 - Variants installed after the start are seen at the next change of the settings file.
-- Both backends redraw continuously (the real session at the pace of each screen). When they
-  draw on damage, a new setting (`reload`) and a decoded image (`receive`) will have to request
-  a frame.
+- A new setting, a new theme and a decoded image ask for a frame (`State::queue_redraw`): the
+  real session draws on damage (see "Frames of the real session").
 
 Left for lot D-04b, from the review of D-04:
 
-1. **No flash when the source changes.** Every reload (file rewritten identically, `mode`
-   alone changed, `set_theme` on a wallpaper without a pendant) and every scale change of a
-   screen drop the textures: the board's background shows while decoding. Change the
-   generation only when the source changes, and keep the last ready texture until the new one
-   is uploaded. To do before or with D-05c.
+1. **No flash when the source changes.** Done by lot D-05c, but for a scale change of a screen,
+   which still drops its texture: the board's background shows while the new variant decodes.
 2. **Development fallback on the original.** In a debug build, when the wallpaper is not
    installed, show `assets/wallpapers/<id>.jpg`; and reduce on the decoding thread an image
    more than twice the screen (`thumbnail`), against the aliasing of the GPU's bilinear
@@ -1259,13 +1323,67 @@ To try it, with the variants in a test folder:
 
 ```sh
 just wallpapers
-mkdir -p /tmp/wallpaper-test/share/nom-os
-ln -s "$PWD/target/wallpapers" /tmp/wallpaper-test/share/nom-os/wallpapers
+mkdir -p /tmp/wallpaper-test/share/sherlockos
+ln -s "$PWD/target/wallpapers" /tmp/wallpaper-test/share/sherlockos/wallpapers
 XDG_DATA_HOME=/tmp/wallpaper-test/share cargo run -p compositor -- --nested
 ```
 
-Then write `wallpaper = ring` and `mode = contain` in `~/.config/nom-os/wallpaper.conf`: the
+Then write `wallpaper = ring` and `mode = contain` in `~/.config/sherlockos/wallpaper.conf`: the
 wallpaper changes within 2 seconds.
+
+## Theme (lot D-05c)
+
+The compositor follows the theme of the appearance file (`docs/appearance.md`) live, like the
+shell programs. `theme::follow` makes the theme of the file active before the first frame, then
+receives each change from `appearance_config::follow_themes` (inotify and the timer of the
+automatic mode, no polling) through a calloop channel, and calls `State::set_theme`:
+
+| What | How it follows |
+| --- | --- |
+| Colors | A `color::ThemeFade` fades `color::palette()` over `motion::THEME_FADE` (250 ms), in 32 steps. Background, discs, window borders, shadows, snap preview and title bars read the palette shown when the frame is built: nothing else holds a color |
+| Wallpaper | `Wallpaper::set_theme`: a wallpaper that follows the theme takes its pendant, decoded then crossfaded (see "Wallpapers") |
+| Cursor | Real session: `Cursors::follow` reads the house theme of the new theme, `sherlockos` or `sherlockos-light`, at the next frame (see `docs/cursor.md`) |
+
+The fade is ticked at the start of each frame (`State::tick_theme`, in `Scene::screens`): while
+it runs, each screen draws at each blank; the frame where it ends draws the final palette, and
+nothing is asked for afterwards. A change of theme damages the whole screen during the fade
+(background, discs, every border, shadow and title bar change color); the real session's
+`DrmCompositor` also redraws in full when its clear color changes. A title bar is drawn again on
+the processor at each step of the fade (its colors are in its `Look`): at most 32 times per
+window, then never.
+
+The palette is global to the process (`color::set_active`, `ThemeFade`): the bench that changes
+the theme (`tests/perf.rs`) runs alone, the others wait for it.
+
+Clients draw their own colors: GTK follows the session's dconf database (`toolkit-theme
+follow`, `docs/third-party-theming.md`), the shell programs follow the appearance file. The
+dock is checked by `the_dock_follows_a_new_theme_in_the_file` (`desktop/dock/tests/render.rs`):
+glass, separator, dots, label and focus ring read the palette shown, Sherlock's tile keeps its
+cream in both themes, as on the boards.
+
+**Tests.**
+
+- `tests/theme.rs`: `Theme=` rewritten in an appearance file of the test: the light palette
+  after the fade, the redraw asked for, the wallpaper changed to first-clue-light, then back.
+- `tests/perf.rs`, `a_theme_change_fades_everything_then_rests`: the whole screen is damaged
+  during the fade, frames at each blank, then no frame is even built at rest.
+- `wallpaper.rs` (unit): the new image fades in over the old one and the old one goes away;
+  the same source keeps its images. `cursor.rs` (unit): the house theme follows the desktop.
+- `captures_of_the_desktop_in_both_themes` (ignored, needs Mesa's EGL and the dock built):
+  the scene with the default wallpaper pair, a decorated window and the real dock hovered over
+  Sherlock, rendered with the software renderer, dark, then light after rewriting `Theme=`.
+  The dock draws in software there too: its buffers have no alpha (see "Layer-shell toolkit of
+  the shell"), so the room around its glass is black; in the real session it draws with
+  Vulkan and stays transparent.
+
+```sh
+cargo build -p dock
+cargo test -p compositor --test headless -- --ignored captures_of_the_desktop
+```
+
+| Dark | Light, after the change |
+| --- | --- |
+| ![Dark](../desktop/compositor/screenshots/desktop-dark.png) | ![Light](../desktop/compositor/screenshots/desktop-light.png) |
 
 ## Running
 
@@ -1383,7 +1501,7 @@ How it works (`src/udev.rs`):
   for now by hand.
 - **XWayland: off unless asked for (`--xwayland`).** Smithay starts Xwayland with an empty
   environment; `src/mesa.rs` gives it the EGL restriction and `GBM_BACKENDS_PATH` pointing to
-  `$XDG_RUNTIME_DIR/nom-os/gbm-backends`, a folder of links to the system's GBM backends without
+  `$XDG_RUNTIME_DIR/sherlockos/gbm-backends`, a folder of links to the system's GBM backends without
   NVIDIA's (`nvidia-drm_gbm.so`), so that libgbm falls back to Mesa's. Measured with
   `tests/xwayland.rs` on the reference laptop (Xwayland 24.1.6), sampling the descriptors of
   Xwayland every 10 ms:
@@ -1401,7 +1519,7 @@ How it works (`src/udev.rs`):
   may wake the card. The feedback, which the real session now offers, names the AMD node; lot
   D-06 saw XWayland open no NVIDIA device with it in nested mode, but that is not measured in
   the real session yet. So the real session starts XWayland only with `--xwayland`
-  (`NOM_OS_XWAYLAND=1` for the start script): without it, X11 applications do not show up, and
+  (`SHERLOCKOS_XWAYLAND=1` for the start script): without it, X11 applications do not show up, and
   the launched command gets no `DISPLAY`. Nested mode starts it as before, with the same
   environment.
 - **Screens.** Every connector with a screen gets a CRTC, its preferred mode and a
@@ -1422,7 +1540,7 @@ How it works (`src/udev.rs`):
   there, so that moving the pointer draws nothing. A screen draws only when something changed,
   at the pace of its vertical blank, and only what changed (see "Frames of the real session").
   The cursor is drawn in
-  front of the scene, from the house cursor theme (`nom-os`, `nom-os-light` for the light
+  front of the scene, from the house cursor theme (`sherlockos`, `sherlockos-light` for the light
   desktop; the user's `XCURSOR_THEME` or the system's `default` when it is not installed;
   `XCURSOR_SIZE`, 24 by default, times the screen's scale, the nearest size above), in the
   shape `cursor_icon` asks for; a client that draws its own cursor image gets the arrow, as in
@@ -1462,9 +1580,9 @@ it.
    ```
 
    Or the whole session, as the login screen starts it:
-   `NOM_OS_BIN=$PWD/target/release NOM_OS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
-   (`NOM_OS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
-   With `--xwayland` after `compositor` (`NOM_OS_XWAYLAND=1` for the script), X11 applications
+   `SHERLOCKOS_BIN=$PWD/target/release SHERLOCKOS_DATA=$PWD/desktop/sherlock-ui desktop/compositor/session/sherlockos-session`
+   (`SHERLOCKOS_DATA`: where the application icons are, see `docs/sherlock-ui.md`).
+   With `--xwayland` after `compositor` (`SHERLOCKOS_XWAYLAND=1` for the script), X11 applications
    too, at the risk of waking the NVIDIA card (see above).
 
 4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
@@ -1477,23 +1595,23 @@ it.
 daemon and Evidence in release, then **prints** the commands that install the session, without
 running them:
 
-- the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/nom-os/`;
-- the entry `sherlockos.desktop` (`Name=NOM_OS`) goes to `/usr/share/wayland-sessions/`, where
+- the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/sherlockos/`;
+- the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
   launcher find it; it runs `evidence`, which the session finds in its `PATH`;
-- the application icons, a hicolor theme, go to `/usr/local/share/nom-os/icons/` (D-03);
+- the application icons, a hicolor theme, go to `/usr/local/share/sherlockos/icons/` (D-03);
 - `sudo apt install libseat1` is added when libseat is missing.
 
-At the next login, SDDM offers « NOM_OS » next to Plasma in its session menu. The start script
-sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `NOM_OS`) and `XDG_SESSION_TYPE=wayland`,
+At the next login, SDDM offers « SherlockOS » next to Plasma in its session menu. The start script
+sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `SherlockOS`) and `XDG_SESSION_TYPE=wayland`,
 adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there) and `/usr/local/share/nom-os` at the start of `XDG_DATA_DIRS` (the icons), then
+there) and `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
 launches the compositor, which launches the bar, the dock and the notification daemon once it
 is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
 up, with a line in the log (`session: … given up`).
-To remove the session: `sudo rm -r /usr/local/libexec/nom-os /usr/local/share/nom-os /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
+To remove the session: `sudo rm -r /usr/local/libexec/sherlockos /usr/local/share/sherlockos /usr/share/wayland-sessions/sherlockos.desktop /usr/local/share/applications/evidence.desktop`.
 
 Why `desktop/compositor/session/` and not `distro/`: these files start the compositor and the
 shell built from this workspace, and are tried on the author's Debian before the base exists.
@@ -1505,7 +1623,7 @@ Started from a text console while Plasma stays open on another one, the session 
 Plasma's D-Bus session bus (`/run/user/1000/bus`: one bus per user, whatever the session).
 Konsole then took 25 to 50 seconds to show its window. The cause, found without a screen:
 
-- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `NOM_OS` it takes the generic
+- Qt chooses its platform theme from `XDG_CURRENT_DESKTOP`; with `SherlockOS` it takes the generic
   theme, which gives each window a D-Bus global menu (`QDBusMenuBar`) as soon as the name
   `com.canonical.AppMenu.Registrar` has an owner on the bus. On the author's bus it does:
   `kded6`, the appmenu module of the X11 Plasma session (checked by asking the bus daemon for
@@ -1515,7 +1633,7 @@ Konsole then took 25 to 50 seconds to show its window. The cause, found without 
   author's session showed `Failed to register window menu, reason:
   org.freedesktop.DBus.Error.NoReply`.
 - Reproduced on a private bus with a headless KWin (`kwin_wayland --virtual`), Konsole 25.04.2
-  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=NOM_OS`: with a registrar that never answers (a script that
+  and Qt 6.8.2, `XDG_CURRENT_DESKTOP=SherlockOS`: with a registrar that never answers (a script that
   owns the name), the window had no content after 40 s and Konsole logged the same `NoReply`;
   without the registrar, its first content came 0.42 s after the start, and Konsole made no
   other call that waits on Plasma.
@@ -1537,7 +1655,7 @@ portal started by Konsole crashed again and again, and Konsole waited 9 seconds 
 it, 0.42 s. Alone on the machine (the OS itself, or Plasma logged out), the session keeps the
 user's bus.
 
-`NOM_OS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
+`SHERLOCKOS_SESSION_BUS=own` or `shared` forces the choice (`auto` by default). The log says
 `session: D-Bus session bus of its own` when the session has one. Not chosen: disabling the
 global menu alone (Qt's generic theme has no switch for it; `KDE_NO_GLOBAL_MENU` only exists
 for Plasma's theme, which the Qt theme batch may pick), since it would leave the notification
@@ -1568,7 +1686,7 @@ session started from SDDM while Plasma runs on another console, which takes the 
 | Started from | Log |
 | --- | --- |
 | A console, `compositor` | Its standard error: `2> /tmp/compositor.log` as above |
-| `sherlockos-session` (SDDM or a console) | `~/.local/state/nom-os/session.log`; the previous session, or the first 5 MiB of a long one, in `session.log.old` |
+| `sherlockos-session` (SDDM or a console) | `~/.local/state/sherlockos/session.log`; the previous session, or the first 5 MiB of a long one, in `session.log.old` |
 | SDDM, before the script runs | `~/.local/share/sddm/wayland-session.log`, and `journalctl -b -u sddm` |
 
 The level follows `RUST_LOG`; the start-up lines name the card (`real session card=/dev/dri/…`),
@@ -1623,7 +1741,7 @@ Touchpad page will write, and gestures that follow the fingers.
 
 ### Setting
 
-`$XDG_CONFIG_HOME/nom-os/touchpad.conf` (`~/.config/nom-os/touchpad.conf`), read by
+`$XDG_CONFIG_HOME/sherlockos/touchpad.conf` (`~/.config/sherlockos/touchpad.conf`), read by
 `desktop_config::touchpad`, in the same `key = value` form as `wallpaper.conf`. Every key is
 optional; without the file, the defaults below apply.
 
@@ -1637,7 +1755,7 @@ optional; without the file, the defaults below apply.
 | `speed` | `0` | `-1` to `1` | Pointer speed |
 | `acceleration` | `adaptive` | `adaptive`, `flat` | Faster movements go further, or not |
 | `click` | `fingers` | `fingers`, `areas` | A press clicks by the number of fingers (clickfinger), or by where it presses (bottom right corner: right button) |
-| `swipe-down` | `minimize` | `minimize`, `nothing` | What three fingers down do |
+| `swipe-down` | `nothing` | `nothing`, `minimize` | What three fingers down do out of Mission Control (`minimize` was the default before lot D-33) |
 
 Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
 when they are plugged in, and again within 2 seconds of a change of the file (modification time
@@ -1658,8 +1776,8 @@ gives no two finger swipe, but a device that would is passed on.
 | Fingers | Gesture | Effect |
 | --- | --- | --- |
 | 3 | Left or right | The row of workspaces follows the fingers, then lands on the neighbour or comes back |
-| 3 | Up | The overview: reserved for Mission Control, a lot of its own. A line in the log, nothing on screen |
-| 3 | Down | Minimizes the window that has the keyboard (`swipe-down = minimize`), or nothing |
+| 3 | Up | Opens Mission Control, which follows the fingers (see "Mission Control") |
+| 3 | Down | Closes Mission Control; out of it, nothing, or minimizes the window that has the keyboard with `swipe-down = minimize` |
 | 3 | Pinch, hold | Reserved |
 | 4 and more | Any | Reserved |
 | 1 and 2 | Pinch, hold, swipe | To the client under the pointer |
@@ -1717,8 +1835,8 @@ libinput events to `State::process_input_event`:
   objects, with a window under the pointer: it receives a two finger pinch (begin, scale, end),
   a hold (cancelled) and a two finger swipe; it receives nothing of three or four finger swipes,
   pinches or holds.
-- **Three fingers down.** Not far enough, or `swipe-down = nothing`: the window stays; by
-  default, it is minimized.
+- **Three fingers down.** Not far enough, or by default: the window stays; with
+  `swipe-down = minimize`, it is minimized.
 
 ### Manual test on the reference laptop
 
@@ -1731,9 +1849,175 @@ libinput events to `State::process_input_event`:
 4. With three windows on three workspaces: three fingers left, slowly, and stop halfway: both
    workspaces show, side by side, where the fingers are. Lift: it comes back. Flick: it goes to
    the next one. On the first workspace, three fingers right: it resists and springs back.
-5. Three fingers down on a window: it is minimized. Write `swipe-down = nothing` in
-   `~/.config/nom-os/touchpad.conf`: within 2 seconds the log shows the new setting, and the
-   gesture does nothing. `natural-scroll = false`: the scrolling turns around.
+5. Three fingers down on a window: nothing. Write `swipe-down = minimize` in
+   `~/.config/sherlockos/touchpad.conf`: within 2 seconds the log shows the new setting, and the
+   gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
+
+## Mission Control
+
+Lots D-33a and D-33b: every window of the active workspace side by side, under the strip of the
+workspaces, as macOS does, in the style of the desktop. D-33b adds the strip, dragging a window
+to another workspace, and the view that follows the fingers. No board draws it: the measures are choices of the
+lot (`sherlock_ui::mission_control`), to review with the design.
+
+![Mission Control, dark](../desktop/compositor/screenshots/mission-control-dark.png)
+
+![Mission Control, light](../desktop/compositor/screenshots/mission-control-light.png)
+
+### Opening and closing
+
+| Input (Alt in place of Super with `--nested`) | Effect |
+| --- | --- |
+| Super alone, pressed then released with nothing in between | Opens, or closes |
+| Super + Tab | Opens, or closes |
+| Escape | Closes |
+| Three fingers up | Opens; the view follows the fingers |
+| Three fingers down | Closes; the view follows the fingers |
+| A click on nothing | Closes |
+| A click on a window | That window comes on top with the keyboard, and the view closes |
+| A click on a thumbnail | Goes to that workspace, and the view closes |
+
+Super is not alone if another key or a mouse button is pressed before it is released: Super + 1,
+Super + drag, Super + arrow never open the view. The client under the keyboard still sees the
+press and the release of Super, as before. Super + Tab was free; Tab and Escape, like the other
+shortcuts, do not reach the client.
+
+**Following the fingers.** Once a three finger swipe picks the vertical direction (see
+"Touchpad"), the view is held where the fingers put it: 300 units up open it fully
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
+past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
+closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
+leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
+
+**What it may not do.** It does not open during a move or resize gesture, nor while an anchored
+surface keeps the keyboard (a lock screen).
+
+### The view
+
+- **The windows** of the active workspace, not minimized, X11 menus aside, each on the screen
+  under its center: each screen shows its own. They fill the work area under the strip, with a
+  margin of 32 (`MARGIN`).
+- **The grid** (`layout::arrange`, pure computation): every window takes the same scale, so that
+  their sizes compare as on the desktop, at most 0.8 (`MAX_SCALE`): even alone, a window shrinks
+  a little. Each number of rows from 1 to n is tried; the windows are cut into rows by the
+  height of their center, as evenly as possible, each row from left to right by the center:
+  the number of rows that gives the largest scale wins, the fewest rows on a tie. Rows are
+  centered, windows centered in their row, 24 apart (`GAP`), each with room for its title below.
+  Nothing overlaps, and each window travels little: what is above stays above, what is on the
+  left stays on the left.
+- **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
+  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
+  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  window gets its corners back as it shrinks.
+- **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
+  opens. No blur: the compositor has none yet (see "What rendering does not do yet").
+- **The strip**, at the top of the work area: one thumbnail per workspace, as wide as the screen
+  for 84 of height (smaller if they do not fit), with the wallpaper, the windows of that
+  workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
+  workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
+  over. The strip comes down from above the screen as the view opens.
+- **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
+  as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
+  window chosen by a click is raised first, then every window goes back to its place.
+
+### Dragging to another workspace
+
+A window pressed and moved past the drag threshold (4 px) follows the pointer, in front of
+everything, without its title. Dropped on a thumbnail, it moves to that workspace
+(`State::move_to_workspace`) and leaves the grid; the view stays open. Dropped elsewhere, it
+goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
+row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
+The bar follows through `ext-workspace-v1`, as for any switch.
+
+### Input while it is open
+
+- **Keyboard.** No window has it: `set_keyboard_focus` gives none while the view is open, and
+  the clients get `leave`. A window that opens in the view does not get it either; the view
+  gives the keyboard back when it closes: to the window clicked, or else to the window that had
+  it last (`State::top_window`), the new window if one opened. An anchored surface with an
+  exclusive keyboard keeps its own, as always.
+- **Pointer.** It is on no client: neither the windows nor the bar and the dock receive motion,
+  buttons, scrolling or gestures. The cursor is the arrow.
+- **Windows that come and go.** A window opened in the view takes its slot in the grid (with its
+  opening animation), one closed leaves it; the grid is computed again at each frame, so the
+  others jump to their new slot (see below).
+
+### Rendering
+
+The thumbnails are the windows' own surfaces, scaled by the renderer (`render::Item::Window`
+with a smaller rectangle): no copy on the processor. The title bar is the texture of the desktop
+(`decorations::Textures`), stretched, made again only if its look changes; the titles are
+textures of their own (`mission_control::Labels`), made once per text. The wallpaper of a
+thumbnail is the screen's texture, drawn into the thumbnail and cut to its rounded corners by
+the clip program (`render::RoundedSurface` over a texture). X11 and Wayland windows go through
+the same items.
+
+`mission_control::push_items` takes the place of the windows in `render::items`, behind the bar
+and the dock: the bar and the dock stay as they are, undimmed. While the view opens or closes,
+a frame is drawn at every vertical blank; open and at rest, nothing is drawn (lot P-01): only
+an input event (a hover) or a client draws a frame.
+
+### Tests
+
+`src/mission_control/layout.rs`: 1, 2, 5 and 12 windows of every size, and 12 on a small
+screen, never overlap (titles included), stay in the area, keep their proportions and one
+scale; a window alone shrinks to 0.8 and is centered; the grid keeps the order of the desktop
+(left stays left, top stays top). `src/mission_control/label.rs`: a label fits its text and
+draws it. `tests/mission_control.rs`, like `tests/headless.rs`, with a client of decorated
+windows on a screen of 1440 × 900:
+
+- **Keys.** Super alone opens (animated, then fully open) and takes the keyboard; Escape closes
+  and gives it back; Super + Tab opens and closes; Super with A or with a click between is not
+  alone; Super alone twice opens and closes.
+- **Three fingers.** 150 units up: half open, held without an animation, following the fingers
+  back down; lifted past the trigger, it opens the rest of the way from there; 30 down stays
+  open; 150 down closes and gives the keyboard back; 40 up, or cancelled, stays closed.
+- **Click.** The left window is on the left; a click on it raises it with the keyboard and
+  closes the view; a click on nothing closes it.
+- **Input.** Keys typed and a click on a window during the view: the client receives no key,
+  no button, has neither keyboard nor pointer; the cursor is the arrow; closed, keys go through.
+- **Drag.** A window dragged onto the second thumbnail goes to workspace 2 and leaves the grid,
+  the view open; a click on that thumbnail goes there, without a slide, the window with the
+  keyboard.
+- **Windows that come and go.** A window opened in the view joins the grid without the
+  keyboard, one closed leaves it; closed, the view gives the keyboard to the new window.
+- **No frame at rest.** The scene animates while the view opens and not once it is open; the
+  epoch does not move with time alone.
+- **Two screens.** Each shows its own window and its strip; a click on the second screen's
+  window chooses it.
+
+`tests/xwayland.rs` opens the view with the X11 window: it is in the grid, its menu is not, and a
+click gives it the keyboard back. `tests/gestures.rs`: three fingers down minimize only with
+`swipe-down = minimize`.
+
+`captures_of_the_view_with_five_windows` (ignored, needs Mesa's EGL) draws the scene with five
+decorated windows, the pointer on one, into `screenshots/mission-control-dark.png` and
+`-light.png`, and checks the accent border:
+`cargo test -p compositor --test mission_control -- --ignored`.
+
+### Manual test
+
+1. Start the session (nested: `--nested`, the gesture key is then Alt), open four or five
+   windows, Konsole (Qt), a GTK application and an X11 one (`xterm`).
+2. Super alone: the windows shrink into the grid on a spring, titles below, the strip comes
+   down, the wallpaper dims. Hover: the accent border follows the pointer. Click a window: it
+   comes on top with the keyboard, the others go back to their place.
+3. Super + Tab, then Escape. Typing in the view reaches no application.
+4. Three fingers up slowly, stop halfway: the windows stay halfway. Lift: the view opens. Three
+   fingers down: it closes.
+5. Drag a window onto the second thumbnail: it leaves the grid. Click the second thumbnail: the
+   bar shows workspace 2, the window there has the keyboard.
+6. With two screens, each shows its windows.
+7. `RUST_LOG=compositor=debug`: the log says when the view opens and closes.
+
+### Left for later
+
+- **The grid moves at once** when a window opens or closes in the view: the others jump to
+  their new slot instead of sliding there.
+- **Keyboard navigation** in the view (arrows, Enter) and the search that filters the windows
+  (proposition 2.3) are not there.
+- **Blur** of the wallpaper: the dim stands for it until the compositor blurs (lot D-11b).
 
 ## Measuring
 
@@ -1770,11 +2054,11 @@ work:
    includes it too):
 
    ```sh
-   RUST_LOG=info,compositor::perf=debug NOM_OS_BIN=$PWD/target/release \
+   RUST_LOG=info,compositor::perf=debug SHERLOCKOS_BIN=$PWD/target/release \
      desktop/compositor/session/sherlockos-session
    ```
 
-   The log is `~/.local/state/nom-os/session.log`.
+   The log is `~/.local/state/sherlockos/session.log`.
 2. Use the desktop for a few minutes: rest without touching anything for 30 s, move the pointer,
    hover the dock, open Kate and Nautilus, snap and maximize them with Super + arrows, drag and
    resize a window, switch workspaces.
@@ -1902,6 +2186,7 @@ just verify
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
+| `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
 The tests in `tests/headless.rs`:
 
@@ -2022,8 +2307,9 @@ windows of 800 × 600, a bar and a dock:
 - **A workspace switch redraws everything while it slides.** A frame at each blank during the
   slide, whose damages cover the whole screen, then rest.
 - **A minimized window sweeps into its icon, then rests** (lot D-19). The window on top, given
-  an icon in the dock, is minimized: its genie is drawn in front of the dock, a frame at each
-  blank, the damages cover the window and the icon, then nothing at rest and no genie left.
+  an icon in the dock, is minimized: its genie is drawn behind the dock and in front of the
+  other windows (lot Q-14), a frame at each blank, the damages cover the window and the icon,
+  then nothing at rest and no genie left.
 - **Without an icon, the window shrinks toward the bottom**: drawn as a window, smaller, lower
   and fading, then rest.
 - **Restored halfway, it comes back from where it is**: the progress does not jump and goes
@@ -2038,8 +2324,11 @@ renderer (llvmpipe), through its EGL device (`EGL_MESA_device_software`), draws 
 240 × 160 with a title bar and a grid, halfway to an icon of 32 × 32, into a texture read back.
 The title bar is at the top row `Genie::row` gives, the body at the bottom one, the desktop
 just outside the narrowed bottom, above the window that slid down and in the icon not reached
-yet. The image is saved in `target/tmp/genie-half.png`. Without Mesa's EGL (`libegl-mesa0`)
-the test says it has nothing to draw with, and fails on the CI, which installs it.
+yet. The image is saved in `target/tmp/genie-half.png`. The whole way, in six steps, is saved
+in `target/tmp/genie-steps.png`, with an opaque dock and its icon drawn in front of the genie as
+the compositor orders them (lot Q-14): at the end, only the icon shows. Without Mesa's EGL
+(`libegl-mesa0`) the test says it has nothing to draw with, and fails on the CI, which installs
+it.
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):

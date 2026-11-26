@@ -1,5 +1,6 @@
 //! Battery, read from UPower with the `upower` command. The "DisplayDevice" is the device
-//! UPower composes for display: all the laptop's batteries as one.
+//! UPower composes for display: all the laptop's batteries as one. `upower --monitor` prints a
+//! line on each `PropertiesChanged` of a device: the battery is read again then, never polled.
 
 use super::{Monitor, Source, SourceError, field, run};
 
@@ -22,6 +23,8 @@ pub enum Charge {
 pub struct Battery {
     pub percent: u8,
     pub charge: Charge,
+    /// Minutes until empty while discharging, until full while charging, when UPower knows.
+    pub minutes: Option<u32>,
 }
 
 impl Battery {
@@ -55,10 +58,31 @@ pub fn parse(output: &str) -> Result<Option<Battery>, SourceError> {
         Some("fully-charged") => Charge::Full,
         _ => Charge::Idle,
     };
+    let left = match charge {
+        Charge::Charging => field(output, "time to full"),
+        Charge::Discharging => field(output, "time to empty"),
+        Charge::Full | Charge::Idle => None,
+    };
     Ok(Some(Battery {
         percent: percent.round().clamp(0.0, 100.0) as u8,
         charge,
+        minutes: left.and_then(minutes),
     }))
+}
+
+/// A duration as `upower` prints it (« 3.2 hours », « 45.0 minutes »), in minutes.
+fn minutes(value: &str) -> Option<u32> {
+    let (number, unit) = value.split_once(' ')?;
+    let number: f32 = number.trim().parse().ok()?;
+    let per = match unit.trim() {
+        "seconds" | "second" => 1.0 / 60.0,
+        "minutes" | "minute" => 1.0,
+        "hours" | "hour" => 60.0,
+        "days" | "day" => 1440.0,
+        _ => return None,
+    };
+    let total = (number * per).round();
+    (total.is_finite() && total > 0.0 && total < 1e6).then_some(total as u32)
 }
 
 /// The machine's battery, watched with `upower --monitor`.
@@ -102,7 +126,8 @@ mod tests {
             battery,
             Some(Battery {
                 percent: 100,
-                charge: Charge::Full
+                charge: Charge::Full,
+                minutes: None,
             })
         );
         assert!(!battery.unwrap().is_low());
@@ -137,5 +162,19 @@ mod tests {
         let output = "  battery\n    present: yes\n    state: charging\n    percentage: 54.6%\n";
         let battery = parse(output).unwrap().unwrap();
         assert_eq!((battery.percent, battery.charge), (55, Charge::Charging));
+    }
+
+    #[test]
+    fn the_time_left_comes_with_the_state() {
+        let output = "  battery\n    present: yes\n    state: discharging\n    \
+                      time to empty:       3.2 hours\n    percentage: 40%\n";
+        assert_eq!(parse(output).unwrap().unwrap().minutes, Some(192));
+        let output = "  battery\n    present: yes\n    state: charging\n    \
+                      time to full:        45.0 minutes\n    time to empty: 2 hours\n    \
+                      percentage: 70%\n";
+        assert_eq!(parse(output).unwrap().unwrap().minutes, Some(45));
+        assert_eq!(minutes("1.5 days"), Some(2160));
+        assert_eq!(minutes("soon"), None);
+        assert_eq!(minutes("0.0 seconds"), None);
     }
 }

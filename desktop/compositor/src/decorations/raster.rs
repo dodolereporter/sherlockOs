@@ -75,10 +75,14 @@ impl Look {
 /// Frames a texture stays without being drawn, before it is freed.
 const KEEP_FRAMES: u64 = 600;
 
-/// The textures of the bars: one per window and scale, the one of its last look.
+/// A bar texture: its window, its scale, and whether it is stretched.
+type Slot = (Key, u32, bool);
+
+/// The textures of the bars: one per window, scale and use (desktop or stretched), the one of
+/// its last look.
 pub struct Textures {
     font: Option<FontRef<'static>>,
-    bars: HashMap<(Key, u32), (u64, TextureBuffer<GlesTexture>, u64)>,
+    bars: HashMap<Slot, (u64, TextureBuffer<GlesTexture>, u64)>,
     frame: u64,
 }
 
@@ -103,14 +107,18 @@ impl Textures {
         rect: Rectangle<i32, Physical>,
         alpha: f32,
     ) -> Option<TextureRenderElement<GlesTexture>> {
-        let slot = (key, look.scale.to_bits());
+        // Drawn smaller than its pixels (Mission Control): a texture of its own, without an
+        // opaque region, which smithay rounds up past the element once stretched.
+        let stretched = (rect.size.w as u32, rect.size.h as u32) != look.size;
+        let slot = (key, look.scale.to_bits(), stretched);
         let fresh = self.bars.get(&slot).filter(|(h, ..)| *h == hash);
         let buffer = match fresh {
             Some((_, buffer, _)) => buffer.clone(),
             None => {
                 let pixmap = draw(look, self.font.as_ref())?;
                 let size = (pixmap.width() as i32, pixmap.height() as i32);
-                let opaque = (look.colors.bar.a >= 1.0).then(|| opaque(size, look.radius));
+                let solid = look.colors.bar.a >= 1.0 && !stretched;
+                let opaque = solid.then(|| opaque(size, look.radius));
                 let made = TextureBuffer::from_memory(
                     renderer,
                     pixmap.data(),
@@ -132,11 +140,14 @@ impl Textures {
         };
         self.bars.insert(slot, (hash, buffer.clone(), self.frame));
         let size = (rect.size.w, rect.size.h).into();
+        // The whole texture, stretched into `rect`: Mission Control draws the bar smaller.
+        let (w, h) = look.size;
+        let src = Rectangle::from_size((f64::from(w), f64::from(h)).into());
         Some(TextureRenderElement::from_texture_buffer(
             rect.loc.to_f64(),
             &buffer,
             Some(alpha),
-            None,
+            Some(src),
             Some(size),
             Kind::Unspecified,
         ))
@@ -162,7 +173,7 @@ fn opaque((w, h): (i32, i32), radius: f32) -> Vec<Rectangle<i32, Buffer>> {
 
 /// Inter, at the weight of the title. `None` if the font cannot be read: the bars go without
 /// their title.
-fn title_font() -> Option<FontRef<'static>> {
+pub(crate) fn title_font() -> Option<FontRef<'static>> {
     match FontRef::try_from_slice(typography::FONTS[0]) {
         Ok(mut font) => {
             font.set_variation(b"wght", f32::from(ui::TITLE_WEIGHT));
@@ -242,7 +253,7 @@ pub fn draw(look: &Look, font: Option<&FontRef<'_>>) -> Option<Pixmap> {
 
 /// A rectangle `(x, y, w, h)` with its top corners of radius `top` and its bottom ones of
 /// radius `bottom`.
-fn rounded((x, y, w, h): (f32, f32, f32, f32), top: f32, bottom: f32) -> Option<Path> {
+pub(crate) fn rounded((x, y, w, h): (f32, f32, f32, f32), top: f32, bottom: f32) -> Option<Path> {
     let (top, bottom) = (top.min(w / 2.0).min(h), bottom.min(w / 2.0).min(h - top));
     // Distance of the control points of a quarter circle from its corner, as a share of the
     // radius: 1 - 0.5523.
@@ -270,7 +281,7 @@ fn paint(color: Color) -> Paint<'static> {
     paint
 }
 
-fn fill(pixmap: &mut Pixmap, path: Option<Path>, color: Color) {
+pub(crate) fn fill(pixmap: &mut Pixmap, path: Option<Path>, color: Color) {
     if let Some(path) = path {
         let identity = tiny_skia::Transform::identity();
         pixmap.fill_path(&path, &paint(color), FillRule::Winding, identity, None);
@@ -344,7 +355,7 @@ fn icon_path(d: &str) -> Option<Path> {
 
 /// Writes `text` from `start`, centered on `middle` in height, at the title size times `s`.
 /// What does not fit before `end` ends with an ellipsis.
-fn title(
+pub(crate) fn title(
     pixmap: &mut Pixmap,
     font: &FontRef<'_>,
     text: &str,

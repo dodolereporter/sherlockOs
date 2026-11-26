@@ -11,9 +11,8 @@ pub mod wallpaper;
 pub mod variants;
 
 /// Folder of the desktop in the XDG directories: `$XDG_CONFIG_HOME/<DIR>`,
-/// `$XDG_DATA_DIRS/<DIR>`. Stands for the name of the OS, not chosen yet (NOM_OS): this is the
-/// only place to change once it is.
-pub const DIR: &str = "nom-os";
+/// `$XDG_DATA_DIRS/<DIR>`: the name of the OS in paths (ADR 0022).
+pub const DIR: &str = "sherlockos";
 
 /// `$XDG_CONFIG_HOME/<DIR>`, or `~/.config/<DIR>`. `var` reads the environment.
 pub fn config_dir(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
@@ -58,14 +57,14 @@ mod tests {
         let home = [("HOME", "/home/u")];
         assert_eq!(
             config_dir(env(&home)),
-            Some("/home/u/.config/nom-os".into())
+            Some("/home/u/.config/sherlockos".into())
         );
         assert_eq!(
             data_dirs(env(&home)),
             [
-                PathBuf::from("/home/u/.local/share/nom-os"),
-                "/usr/local/share/nom-os".into(),
-                "/usr/share/nom-os".into(),
+                PathBuf::from("/home/u/.local/share/sherlockos"),
+                "/usr/local/share/sherlockos".into(),
+                "/usr/share/sherlockos".into(),
             ]
         );
         let set = [
@@ -74,13 +73,13 @@ mod tests {
             ("XDG_DATA_HOME", "relative"),
             ("XDG_DATA_DIRS", "/a:relative:/b"),
         ];
-        assert_eq!(config_dir(env(&set)), Some("/cfg/nom-os".into()));
+        assert_eq!(config_dir(env(&set)), Some("/cfg/sherlockos".into()));
         assert_eq!(
             data_dirs(env(&set)),
             [
-                PathBuf::from("/home/u/.local/share/nom-os"),
-                "/a/nom-os".into(),
-                "/b/nom-os".into(),
+                PathBuf::from("/home/u/.local/share/sherlockos"),
+                "/a/sherlockos".into(),
+                "/b/sherlockos".into(),
             ]
         );
         assert_eq!(config_dir(env(&[])), None);
