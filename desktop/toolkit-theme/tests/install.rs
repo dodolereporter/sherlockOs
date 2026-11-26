@@ -239,15 +239,30 @@ fn the_session_alone_touches_the_gtk_settings() {
     let qt6 = layout.qtct_settings(Qt::V6);
     write(&qt6, "[Appearance]\ncolor_scheme_path=/elsewhere.conf\n");
     assert!(apply::qt(&layout, Theme::Light).must().is_empty());
+    let pairs = |theme, size| {
+        apply::gsettings_keys(theme, size)
+            .map(|(key, value)| format!("{key}={value}"))
+            .join(" ")
+    };
     assert_eq!(
-        apply::gsettings_keys(Theme::Light)[0],
-        ("gtk-theme", "NOM_OS-light")
+        pairs(Theme::Light, 24),
+        "gtk-theme=NOM_OS-light color-scheme=default cursor-theme=nom-os-light cursor-size=24"
     );
     assert_eq!(
-        apply::gsettings_keys(Theme::Dark)[1],
-        ("color-scheme", "prefer-dark")
+        pairs(Theme::Dark, 48),
+        "gtk-theme=NOM_OS-dark color-scheme=prefer-dark cursor-theme=nom-os cursor-size=48"
     );
     let _ = fs::remove_dir_all(&layout.home);
+}
+
+#[test]
+fn the_cursor_size_comes_from_xcursor_size_or_is_24() {
+    assert_eq!(apply::cursor_size(None), 24);
+    assert_eq!(apply::cursor_size(Some("32".as_ref())), 32);
+    assert_eq!(apply::cursor_size(Some(" 48 ".as_ref())), 48);
+    for wrong in ["", "0", "-8", "big", "24px"] {
+        assert_eq!(apply::cursor_size(Some(wrong.as_ref())), 24, "{wrong:?}");
+    }
 }
 
 #[test]

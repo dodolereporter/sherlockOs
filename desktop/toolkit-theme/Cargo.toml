@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # The theme followed live, and the local time of the backup names.
 appearance-config = { path = "../appearance-config" }
+# The names of the cursor themes, without the generator.
+cursor-theme = { path = "../cursor-theme" }
 # The palettes: the tokens only, without iced.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 thiserror = "=2.0.21"

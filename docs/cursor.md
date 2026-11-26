@@ -103,8 +103,10 @@ its own cursor.
   `XCURSOR_PATH`, with `cursors` beside the programs' folder first (`target/cursors` when the
   session runs from the repository with `NOM_OS_BIN=target/release`), then the usual folders
   (`~/.local/share/icons`, `~/.icons`, `/usr/local/share/icons`, `/usr/share/icons`). The
-  compositor takes the house theme that `XCURSOR_THEME` names, so XWayland, GTK and Qt, when
-  they draw their cursor themselves, draw the same one: two themes never mix. Started
+  compositor takes the house theme that `XCURSOR_THEME` names, so XWayland and Qt, when they
+  draw their cursor themselves, draw the same one: two themes never mix. GTK under Wayland
+  reads `cursor-theme` and `cursor-size` in dconf instead, which `toolkit-theme` sets in the
+  session's database (`docs/third-party-theming.md`). Started
   otherwise, the compositor picks the house theme from the appearance file itself. Without the
   house theme installed, `XCURSOR_THEME`, else the system's `default`. A shape missing from the theme shows the
   arrow. Following a theme change live comes with the theme setting of the compositor (lot
