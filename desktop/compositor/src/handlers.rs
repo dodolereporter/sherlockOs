@@ -99,12 +99,25 @@ impl CompositorHandler for State {
     }
 }
 
+/// The largest content `window` may have in the work area `area`: the area, less its title
+/// bar.
+pub(crate) fn room(window: &Window, area: Rectangle<i32, Logical>) -> Size<i32, Logical> {
+    let inset = crate::decorations::inset(window);
+    Size::from((area.size.w, (area.size.h - inset).max(1)))
+}
+
 impl State {
     fn toplevel_commit(&mut self, window: Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
         if !toplevel.is_initial_configure_sent() {
+            // The room the window has (`configure_bounds`): the work area, under its title
+            // bar. A client that knows it does not open larger than the screen.
+            if let Some(area) = self.output_area() {
+                let room = room(&window, area);
+                toplevel.with_pending_state(|s| s.bounds = Some(room));
+            }
             toplevel.send_configure();
             return;
         }
@@ -117,6 +130,19 @@ impl State {
         // First content: center the window (unless it takes the whole screen) and give it the
         // keyboard.
         if !data.shown.get() && size.w > 0 && size.h > 0 {
+            // Larger than the work area (a size kept from a larger screen): it is asked to fit
+            // and shows at its next content, its edges and corners in reach. Once only: a
+            // client that keeps its size shows at it.
+            if let (false, Some(area)) = (filled, self.output_area()) {
+                let room = room(&window, area);
+                let fit = Size::from((size.w.min(room.w), size.h.min(room.h)));
+                if fit != size && !data.fitting.replace(true) {
+                    tracing::debug!(?size, ?fit, "first content larger than the work area");
+                    self.request_size(&window, Some(fit));
+                    toplevel.send_pending_configure();
+                    return;
+                }
+            }
             data.shown.set(true);
             self.join_active_workspace(&window);
             if let (false, Some(area)) = (filled, self.output_area()) {

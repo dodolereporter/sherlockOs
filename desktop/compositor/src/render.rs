@@ -513,6 +513,8 @@ pub fn items(
     animating |= overview.unwrap_or(false);
     // Windows closing (lot D-34): their last image, in front of the others.
     animating |= window_anim::push_closing(&mut items, state, (output, view), now);
+    // The buttons of a title bar, hovered or pressed (lot C-01).
+    animating |= state.decorations_animating(now);
     for window in state.space.elements().rev().filter(|_| overview.is_none()) {
         // Minimized, or on a workspace out of view.
         let Some(shift) = state.workspace_shift(window, now) else {
@@ -533,7 +535,7 @@ pub fn items(
         };
         visual.rect.loc.x += shift;
         animating |= window_data(window).motion.borrow().is_animating();
-        let bar = state.decoration_bar(window);
+        let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
     }
     push_layers(
@@ -650,16 +652,19 @@ pub(crate) fn push_window(
     let decoration = visual.decoration;
     let decorated = decoration > 0.0;
     let scale = view.scale as f32;
+    // While it opens, the whole window is scaled: its bar, corners and shadow with it.
+    let opening = visual.scale;
     // The title bar the compositor draws sits above the content: the corners, the border, the
     // shadow and the clip go around both.
     let inset = bar
         .as_ref()
-        .map_or(0.0, |_| f64::from(ui_decorations::INSET));
+        .map_or(0.0, |_| f64::from(ui_decorations::INSET) * opening);
     let mut whole = visual.rect;
     whole.loc.y -= inset;
     whole.size.h += inset;
     let frame = view.rect(whole);
-    let radius = corner_radius(whole.size.to_i32_round()) * scale * decoration;
+    let at_rest = whole.size.to_f64().downscale(opening).to_i32_round();
+    let radius = corner_radius(at_rest) * scale * opening as f32 * decoration;
     let owner = Some(surface.id());
     if decorated {
         items.push(Item::Shape {
@@ -675,11 +680,21 @@ pub(crate) fn push_window(
     if let Some(bar) = bar {
         whole.size.h = inset;
         let rect = view.rect(whole);
+        // Drawn at its size at rest, stretched while the window opens: one texture, not one
+        // per frame.
+        let size = match opening == 1.0 {
+            true => rect.size,
+            false => whole
+                .size
+                .downscale(opening)
+                .to_physical(view.scale)
+                .to_i32_round(),
+        };
         let look = Look {
             bar,
-            size: (rect.size.w.max(1) as u32, rect.size.h.max(1) as u32),
+            size: (size.w.max(1) as u32, size.h.max(1) as u32),
             scale,
-            radius,
+            radius: radius / opening as f32,
             colors: Colors::of(color::palette()),
         };
         items.push(Item::Decoration {
@@ -702,7 +717,7 @@ pub(crate) fn push_window(
     if decorated && shadow {
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
-            shadow: Shadow::of(frame, view.scale),
+            shadow: Shadow::of(frame, view.scale * opening),
             color: color::palette().shadow.premultiplied(),
             radius,
             alpha: visual.opacity * decoration,

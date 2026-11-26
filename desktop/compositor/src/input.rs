@@ -305,6 +305,7 @@ impl State {
                 self.detach_for_move(gesture);
             }
             let loc = layout::moved(gesture.initial.loc, gesture.start, pointer);
+            let loc = self.below_top_bar(&gesture.window, loc, pointer);
             self.move_window(&gesture.window, loc, true);
             // The screen under the pointer: its edges snap, its work area receives the window.
             gesture.zone = self.space.output_under(pointer).next().and_then(|output| {
@@ -315,8 +316,14 @@ impl State {
             return;
         };
         let (min, max) = size_limits(&gesture.window);
-        gesture.last_size =
-            layout::resized(gesture.initial, edges, pointer - gesture.start, min, max);
+        let mut delta = pointer - gesture.start;
+        // The top edge stops under the top bar, like a move.
+        if edges.top
+            && let Some(top) = self.top_limit(&gesture.window, pointer)
+        {
+            delta.y = delta.y.max(f64::from(top - gesture.initial.loc.y).min(0.0));
+        }
+        gesture.last_size = layout::resized(gesture.initial, edges, delta, min, max);
         match gesture.window.toplevel() {
             Some(toplevel) => {
                 toplevel.with_pending_state(|s| {
@@ -357,6 +364,7 @@ impl State {
             let frame = decorations::frame(&gesture.window, gesture.initial);
             let whole = Size::from((size.w, size.h + inset));
             let loc = layout::unsnapped(frame, whole, gesture.start) + Point::from((0, inset));
+            let loc = self.below_top_bar(&gesture.window, loc, gesture.start);
             gesture.initial = Rectangle::new(loc, size);
             self.move_window(&gesture.window, loc, true);
         }
@@ -465,6 +473,14 @@ impl State {
                 // drag.
                 window_data(&window).restore.set(Some(floating));
                 self.snap(&window, Some(zone), Some(output));
+            } else if let Some(rect) = self.space.element_geometry(&window) {
+                // Dropped: its title bar stays reachable, whatever moved it.
+                let pointer = self.seat.get_pointer().map(|p| p.current_location());
+                let at = pointer.unwrap_or_else(|| rect.loc.to_f64());
+                let loc = self.below_top_bar(&window, rect.loc, at);
+                if loc != rect.loc {
+                    self.move_window(&window, loc, false);
+                }
             }
             return;
         };
@@ -494,6 +510,47 @@ impl State {
         self.intercepted_keys.clear();
         self.cancel_area();
         self.stop_media_repeat(None);
+    }
+
+    /// `loc`, the place of the content of `window`, moved down if needed so that the top of the
+    /// window, its title bar when the compositor draws one, stays below the anchored surfaces
+    /// at the top of the screen under `at`: as on macOS, a window never goes under the top bar,
+    /// where it could no longer be grabbed (lot C-01).
+    pub(crate) fn below_top_bar(
+        &self,
+        window: &Window,
+        loc: Point<i32, Logical>,
+        at: Point<f64, Logical>,
+    ) -> Point<i32, Logical> {
+        match self.top_limit(window, at) {
+            Some(top) if loc.y < top => (loc.x, top).into(),
+            _ => loc,
+        }
+    }
+
+    /// Highest place of the content of `window` on the screen under `at` (or its own): the top
+    /// of its work area, plus its title bar. `None` for menus and fullscreen windows, and when
+    /// another screen lies just above: the window may go there.
+    pub(crate) fn top_limit(&self, window: &Window, at: Point<f64, Logical>) -> Option<i32> {
+        if is_override_redirect(window) || is_fullscreen(window) {
+            return None;
+        }
+        let output = self
+            .space
+            .output_under(at)
+            .next()
+            .cloned()
+            .or_else(|| self.window_output(window))?;
+        let screen = self.space.output_geometry(&output)?;
+        let x = at.x.clamp(
+            f64::from(screen.loc.x),
+            f64::from(screen.loc.x + screen.size.w - 1),
+        );
+        let above = Point::from((x, f64::from(screen.loc.y) - 1.0));
+        if self.space.output_under(above).next().is_some() {
+            return None;
+        }
+        Some(self.work_area(&output)?.loc.y + decorations::inset(window))
     }
 
     /// A move or resize gesture is in progress.
@@ -848,7 +905,16 @@ impl State {
             self.release_decoration(location);
         }
         if state == ButtonState::Pressed && !pointer.is_grabbed() {
-            let hit = self.hit(location);
+            let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
+            // With the gesture key, a window under the top bar or the dock can still be moved:
+            // the way back for a window lost there. The overlay (lock screen) keeps its clicks.
+            let hit = match held {
+                true => self
+                    .layer_hit(location, &[Layer::Overlay])
+                    .or_else(|| self.window_hit(location))
+                    .or_else(|| self.hit(location)),
+                false => self.hit(location),
+            };
             // An open menu closes on a click on another client; the click still goes through.
             if let Some(grab) = &self.popup_grab {
                 let same_client = match &hit {
@@ -881,7 +947,6 @@ impl State {
             }
             self.focus(window.clone());
             let rect = window.as_ref().and_then(|w| self.space.element_geometry(w));
-            let held = gesture_modifier_held(self.nested, &keyboard.modifier_state());
             // The title bar and its buttons: the client does not see the press.
             if let (false, Some(Hit::Decoration(window, control))) = (held, &hit) {
                 self.press_decoration(window.clone(), *control, button, (location, time));
