@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use bar::app::{Bar, Message};
 use bar::menu;
@@ -9,7 +10,7 @@ use bar::source::battery::{Battery, Charge};
 use bar::source::clock::LocalTime;
 use bar::source::network::{Link, Network};
 use bar::source::sound::Sound;
-use bar::source::workspaces::Workspaces;
+use bar::source::workspaces::Desktop;
 use iced_test::simulator::Simulator;
 use sherlock_ui::color::{self, Theme};
 use sherlock_ui::{metrics, theme};
@@ -50,10 +51,7 @@ fn sample() -> Bar {
             volume: 55,
             muted: false,
         }),
-        Message::Workspaces(Workspaces::placeholder(
-            Some("Code,Web,Jeu"),
-            Some("Éditeur"),
-        )),
+        Message::Desktop(Desktop::placeholder(Some("Code,Web,Jeu"), Some("Éditeur"))),
     ];
     for message in messages {
         let _ = state.update(message);
@@ -112,6 +110,27 @@ fn the_bar_and_its_menu_render_in_both_themes() {
             let size = menu_size(&state);
             let ui = Simulator::with_size(bar::settings(), size, state.view_menu());
             assert_written(capture(ui, &format!("sherlock-menu{suffix}")));
+        });
+    }
+}
+
+/// The bar attached to the top edge, as over a maximized window: the whole width, square
+/// corners, opaque. The third workspace holds no window: its chip is bare. `bar-attached`, then
+/// `bar-attached-light`.
+#[test]
+fn the_attached_bar_renders_in_both_themes() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            let mut desktop = Desktop::placeholder(Some("Code,Web,Jeu"), Some("Éditeur"));
+            desktop.groups[0].workspaces[2].windows = Some(0);
+            let _ = state.update(Message::Desktop(desktop));
+            let now = Instant::now();
+            assert!(state.shape.set(true, now));
+            state.shape.tick(now + Duration::from_secs(1));
+            let size = (metrics::REFERENCE_SCREEN.0, metrics::TOP_BAR_HEIGHT);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+            assert_written(capture(ui, &format!("bar-attached{suffix}")));
         });
     }
 }
