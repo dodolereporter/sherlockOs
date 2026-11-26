@@ -233,9 +233,237 @@ pub fn battery_svg(percent: u8, mark: BatteryMark) -> String {
     )
 }
 
+// The live icons of the bar's indicators (UI-01): drawn from their level, like the battery,
+// rather than chosen among pictures.
+
+/// Opacity of the arcs of a Wi-Fi signal or the Bluetooth rune that are not lit: the outline
+/// of what could be, as on macOS.
+pub const UNLIT: f32 = 0.3;
+
+/// Levels of a Wi-Fi signal and of the sound: 0 to 3 arcs or waves.
+pub const LEVELS: u8 = 3;
+
+/// The three arcs of the Wi-Fi signal, inner first, and its dot (`Icon::Network`).
+const WIFI_ARCS: [&str; 3] = [
+    "M9.4 16.4a4 4 0 0 1 5.2 0",
+    "M6.2 13a8.5 8.5 0 0 1 11.6 0",
+    "M3 9.5a13 13 0 0 1 18 0",
+];
+const WIFI_DOT: &str = "M12 19.5h.01";
+
+/// What the Wi-Fi icon shows besides its level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WifiMark {
+    None,
+    /// Connected, but NetworkManager finds no way to the Internet: an exclamation mark.
+    NoInternet,
+    /// No network: every arc faded and a slash across.
+    Off,
+}
+
+/// A stroked SVG document with its lit paths, then its unlit ones at `UNLIT`, and plain
+/// filled shapes.
+fn layered(lit: &str, unlit: &str, filled: &str) -> String {
+    let stroke = |d: &str, opacity: f32| {
+        if d.is_empty() {
+            String::new()
+        } else {
+            format!("<path d=\"{d}\" stroke-opacity=\"{opacity}\"/>")
+        }
+    };
+    let filled = if filled.is_empty() {
+        String::new()
+    } else {
+        format!("<path d=\"{filled}\" fill=\"#000\" stroke=\"none\"/>")
+    };
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {grid} {grid}\" fill=\"none\" \
+         stroke=\"#000\" stroke-width=\"{width}\" stroke-linecap=\"round\" \
+         stroke-linejoin=\"round\">{lit}{unlit}{filled}</svg>",
+        grid = metrics::ICON_GRID,
+        width = metrics::ICON_STROKE,
+        lit = stroke(lit, 1.0),
+        unlit = stroke(unlit, UNLIT),
+    )
+}
+
+/// The level of a Wi-Fi signal from its strength (0 to 100, NetworkManager's `Strength`):
+/// 0 to 3 arcs, as the bars of a phone.
+pub fn wifi_level(strength: u8) -> u8 {
+    match strength {
+        0..=24 => 0,
+        25..=49 => 1,
+        50..=74 => 2,
+        _ => 3,
+    }
+}
+
+/// The Wi-Fi of the bar: the dot, then `level` arcs lit (0 to 3) and the others faded, and its
+/// `mark`.
+pub fn wifi_svg(level: u8, mark: WifiMark) -> String {
+    let level = if mark == WifiMark::Off {
+        0
+    } else {
+        usize::from(level.min(LEVELS))
+    };
+    let mut lit = String::from(WIFI_DOT);
+    let mut unlit = String::new();
+    for (i, arc) in WIFI_ARCS.iter().enumerate() {
+        if i < level {
+            lit.push_str(arc);
+        } else {
+            unlit.push_str(arc);
+        }
+    }
+    match mark {
+        WifiMark::None => {}
+        // Bottom right, where no arc goes.
+        WifiMark::NoInternet => lit.push_str("M20 14v3.5M20 20.5h.01"),
+        WifiMark::Off => {
+            lit = format!("{WIFI_DOT}M4 4l16 16");
+            unlit = WIFI_ARCS.concat();
+        }
+    }
+    layered(&lit, &unlit, "")
+}
+
+/// The speaker of `Icon::Sound` and its three waves, inner first.
+const SPEAKER: &str = "M4 10v4h3.5L12 18V6L7.5 10z";
+const WAVES: [&str; 3] = [
+    "M15.5 9.5a3.5 3.5 0 0 1 0 5",
+    "M18 7a7 7 0 0 1 0 10",
+    "M20.5 4.5a10.5 10.5 0 0 1 0 15",
+];
+
+/// The level of the sound from its volume in percent: no wave at 0, then one to three.
+pub fn sound_level(volume: u32) -> u8 {
+    match volume {
+        0 => 0,
+        1..=33 => 1,
+        34..=66 => 2,
+        _ => 3,
+    }
+}
+
+/// The sound of the bar: the speaker and `level` waves (0 to 3), or the speaker crossed out
+/// when it is muted (`Icon::SoundMuted`).
+pub fn sound_svg(level: u8, muted: bool) -> String {
+    if muted {
+        return layered(Icon::SoundMuted.path(), "", "");
+    }
+    let waves: String = WAVES
+        .iter()
+        .take(usize::from(level.min(LEVELS)))
+        .copied()
+        .collect();
+    layered(&format!("{SPEAKER}{waves}"), "", "")
+}
+
+/// The Bluetooth rune.
+const RUNE: &str = "M7 7l10 10-5 4V3l5 4L7 17";
+
+/// What the Bluetooth radio is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Radio {
+    Off,
+    On,
+    /// On, with a device connected: a dot on the right of the rune.
+    Connected,
+}
+
+/// The Bluetooth of the bar: the rune faded when off, lit when on, and a dot beside it when a
+/// device is connected.
+pub fn bluetooth_svg(radio: Radio) -> String {
+    match radio {
+        Radio::Off => layered("", RUNE, ""),
+        Radio::On => layered(RUNE, "", ""),
+        Radio::Connected => layered(
+            RUNE,
+            "",
+            "M21.8 12a1.8 1.8 0 1 1-3.6 0a1.8 1.8 0 1 1 3.6 0z",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How many of `paths` the document draws at full strength.
+    fn lit(svg: &str, paths: &[&str]) -> usize {
+        let full = svg
+            .split("<path d=\"")
+            .skip(1)
+            .filter_map(|chunk| chunk.split_once('"'))
+            .find(|(_, rest)| rest.starts_with(" stroke-opacity=\"1\""))
+            .map_or("", |(d, _)| d);
+        paths.iter().filter(|p| full.contains(**p)).count()
+    }
+
+    #[test]
+    fn the_wifi_lights_one_arc_per_level() {
+        for level in 0..=LEVELS {
+            let svg = wifi_svg(level, WifiMark::None);
+            assert_eq!(lit(&svg, &WIFI_ARCS), usize::from(level), "level {level}");
+            assert!(svg.contains(WIFI_DOT));
+            // The arcs not lit are still drawn, faded.
+            assert_eq!(svg.contains("stroke-opacity=\"0.3\""), level < LEVELS);
+        }
+        assert_eq!(wifi_svg(9, WifiMark::None), wifi_svg(3, WifiMark::None));
+        let none = wifi_svg(2, WifiMark::NoInternet);
+        assert!(none.contains("M20 14v3.5") && lit(&none, &WIFI_ARCS) == 2);
+        let off = wifi_svg(3, WifiMark::Off);
+        assert!(off.contains("M4 4l16 16") && lit(&off, &WIFI_ARCS) == 0);
+        assert_eq!(
+            [0, 24, 25, 49, 50, 74, 75, 100].map(wifi_level),
+            [0, 0, 1, 1, 2, 2, 3, 3]
+        );
+    }
+
+    #[test]
+    fn the_sound_draws_one_wave_per_level_and_crosses_out_when_muted() {
+        for level in 0..=LEVELS {
+            let svg = sound_svg(level, false);
+            let waves = WAVES.iter().filter(|w| svg.contains(**w)).count();
+            assert_eq!(waves, usize::from(level), "level {level}");
+            assert!(svg.contains(SPEAKER));
+        }
+        assert!(sound_svg(2, true).contains(Icon::SoundMuted.path()));
+        assert!(!sound_svg(2, true).contains(WAVES[0]));
+        assert_eq!(
+            [0, 1, 33, 34, 66, 67, 150].map(sound_level),
+            [0, 1, 1, 2, 2, 3, 3]
+        );
+    }
+
+    #[test]
+    fn the_bluetooth_is_faded_off_lit_on_and_dotted_when_connected() {
+        let off = bluetooth_svg(Radio::Off);
+        assert!(off.contains("stroke-opacity=\"0.3\"") && !off.contains("fill=\"#000\""));
+        let on = bluetooth_svg(Radio::On);
+        assert!(on.contains("stroke-opacity=\"1\"") && !on.contains("fill=\"#000\""));
+        assert!(bluetooth_svg(Radio::Connected).contains("fill=\"#000\""));
+    }
+
+    #[test]
+    fn the_live_icons_stay_in_the_grid() {
+        let all = WIFI_ARCS.iter().chain(&WAVES).chain(&[
+            RUNE,
+            SPEAKER,
+            WIFI_DOT,
+            "M20 14v3.5M20 20.5h.01",
+            "M4 4l16 16",
+        ]);
+        for path in all {
+            let numbers = path
+                .split(|c: char| c.is_ascii_alphabetic() || c == ' ' || c == ',')
+                .flat_map(|chunk| chunk.split_inclusive('-'))
+                .filter_map(|n| n.trim_end_matches('-').parse::<f32>().ok());
+            for n in numbers {
+                assert!(n.abs() <= metrics::ICON_GRID, "{path}: {n}");
+            }
+        }
+    }
 
     #[test]
     fn the_battery_fills_with_its_level_and_shows_its_mark() {

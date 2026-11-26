@@ -886,6 +886,177 @@ impl<'a, Message: 'a> From<Switch> for Element<'a, Message> {
     }
 }
 
+/// A line icon that cross-fades when it changes (UI-01): a Wi-Fi gaining an arc, a sound
+/// muted. Given several documents, it shows them in turn every `motion::PULSE`, each change
+/// faded: the arcs of a Wi-Fi connecting. It asks for a frame only while it fades, and for the
+/// next step of a cycle at its time.
+pub struct GlyphFade {
+    frames: Vec<String>,
+    size: f32,
+    tint: Color,
+}
+
+/// `frames` (one, or a cycle) at `size`, in `tint`.
+pub fn glyph_fade(frames: Vec<String>, size: f32, tint: Color) -> GlyphFade {
+    GlyphFade { frames, size, tint }
+}
+
+impl GlyphFade {
+    /// The document shown at `now`.
+    fn frame(&self, now: Duration) -> &str {
+        let count = self.frames.len().max(1) as u128;
+        let step = now.as_millis() / motion::PULSE.as_millis().max(1) % count;
+        self.frames
+            .get(usize::try_from(step).unwrap_or_default())
+            .map_or("", String::as_str)
+    }
+}
+
+/// The document shown, the one it replaced, and the fade between them.
+#[derive(Debug, Default)]
+struct GlyphState {
+    shown: String,
+    previous: Option<String>,
+    fade: Level,
+}
+
+impl GlyphState {
+    /// Shows `document` from `now`, fading from the one shown. Returns whether it changed.
+    fn show(&mut self, document: &str, now: Duration) -> bool {
+        if self.shown == document {
+            return false;
+        }
+        if self.shown.is_empty() {
+            self.shown = document.to_owned();
+            return false;
+        }
+        self.previous = Some(std::mem::replace(&mut self.shown, document.to_owned()));
+        self.fade = Level::new(false);
+        self.fade.set(true, now, motion::GLYPH_FADE);
+        true
+    }
+
+    /// Share of the new document, from 0 to 1.
+    fn share(&self, now: Duration) -> f32 {
+        if self.previous.is_some() {
+            self.fade.value(now)
+        } else {
+            1.0
+        }
+    }
+
+    /// Forgets a finished fade. Returns whether one still runs.
+    fn tick(&mut self, now: Duration) -> bool {
+        if self.fade.tick(now) {
+            return true;
+        }
+        self.previous = None;
+        false
+    }
+}
+
+fn glyph_handle(document: &str) -> iced::advanced::svg::Handle {
+    iced::advanced::svg::Handle::from_memory(document.as_bytes().to_vec())
+}
+
+impl<Message> Widget<Message, Theme, Renderer> for GlyphFade {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<GlyphState>()
+    }
+
+    fn state(&self) -> tree::State {
+        let mut state = GlyphState::default();
+        state.show(self.frame(clock()), Duration::ZERO);
+        tree::State::new(state)
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.state
+            .downcast_mut::<GlyphState>()
+            .show(self.frame(clock()), clock());
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(self.size), Length::Fixed(self.size))
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let side = Length::Fixed(self.size);
+        layout::Node::new(limits.resolve(side, side, Size::new(self.size, self.size)))
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _renderer: &Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        _viewport: &Rectangle,
+    ) {
+        let Event::Window(window::Event::RedrawRequested(_)) = event else {
+            return;
+        };
+        let state = tree.state.downcast_mut::<GlyphState>();
+        let now = clock();
+        let changed = state.show(self.frame(now), now);
+        if state.tick(now) || changed {
+            shell.request_redraw();
+        } else if self.frames.len() > 1 {
+            // The next step of the cycle, at its time: no frame in between.
+            let pulse = motion::PULSE.as_millis().max(1);
+            let wait = pulse - now.as_millis() % pulse;
+            let wait = Duration::from_millis(u64::try_from(wait).unwrap_or(1));
+            shell.request_redraw_at(window::RedrawRequest::At(Instant::now() + wait));
+        }
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        use iced::advanced::svg::{Renderer as _, Svg};
+        let state = tree.state.downcast_ref::<GlyphState>();
+        let share = state.share(clock());
+        let bounds = layout.bounds();
+        let tint: iced::Color = self.tint.into();
+        let mut paint = |document: &str, opacity: f32| {
+            if opacity > 0.0 && !document.is_empty() {
+                let svg = Svg {
+                    handle: glyph_handle(document),
+                    color: Some(tint),
+                    rotation: iced::Radians(0.0),
+                    opacity,
+                };
+                renderer.draw_svg(svg, bounds, bounds);
+            }
+        };
+        if let Some(previous) = &state.previous {
+            paint(previous, 1.0 - share);
+        }
+        paint(&state.shown, share);
+    }
+}
+
+impl<'a, Message: 'a> From<GlyphFade> for Element<'a, Message> {
+    fn from(widget: GlyphFade) -> Self {
+        Element::new(widget)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,6 +1179,38 @@ mod tests {
         assert_eq!(mask.clip_area(bounds).map(|a| a.height), Some(120.0));
         let beyond = reveal::<()>(iced::widget::space()).clip_height(900.0);
         assert_eq!(beyond.clip_area(bounds).map(|a| a.height), Some(400.0));
+    }
+
+    #[test]
+    fn a_glyph_cross_fades_to_its_new_level_then_rests() {
+        let mut state = GlyphState::default();
+        assert!(
+            !state.show("a", Duration::ZERO),
+            "the first one shows at once"
+        );
+        assert_eq!(state.share(Duration::ZERO), 1.0);
+        assert!(!state.tick(Duration::ZERO));
+        assert!(state.show("b", 100 * MS));
+        let half = state.share(140 * MS);
+        assert!(half > 0.0 && half < 1.0, "{half}");
+        assert!(state.tick(140 * MS));
+        assert!(!state.tick(100 * MS + motion::GLYPH_FADE));
+        assert!(state.previous.is_none());
+        assert_eq!(state.share(Duration::from_secs(1)), 1.0);
+    }
+
+    #[test]
+    fn a_cycle_shows_its_frames_in_turn() {
+        let cycle = glyph_fade(
+            vec!["a".into(), "b".into(), "c".into()],
+            16.0,
+            Color::rgb(0, 0, 0),
+        );
+        assert_eq!(cycle.frame(Duration::ZERO), "a");
+        assert_eq!(cycle.frame(motion::PULSE), "b");
+        assert_eq!(cycle.frame(motion::PULSE * 3), "a");
+        let still = glyph_fade(vec!["a".into()], 16.0, Color::rgb(0, 0, 0));
+        assert_eq!(still.frame(motion::PULSE * 7), "a");
     }
 
     #[test]

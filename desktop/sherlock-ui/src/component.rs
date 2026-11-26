@@ -932,22 +932,21 @@ pub fn status<'a, Message: 'a>(
     line.into()
 }
 
+/// A live icon of the bar (`icon::wifi_svg`, `sound_svg`, `bluetooth_svg`): it fades from one
+/// level or state to the next; several documents are shown in turn (a Wi-Fi connecting).
+pub fn live_icon<'a, Message: 'a>(frames: Vec<String>, tint: Color) -> Element<'a, Message> {
+    crate::animated::glyph_fade(frames, metrics::STATUS_ICON, tint).into()
+}
+
 /// The battery of the bar, filled to `percent` with its mark (`icon::battery_svg`), and its
-/// value, in `tint`. The same document for the same state: iced draws it once.
+/// value, in `tint`. A new level fades in over the last one.
 pub fn battery<'a, Message: 'a>(
     percent: u8,
     mark: crate::icon::BatteryMark,
     value: Option<String>,
     tint: Color,
 ) -> Element<'a, Message> {
-    let gauge = svg(svg::Handle::from_memory(
-        crate::icon::battery_svg(percent, mark).into_bytes(),
-    ))
-    .width(metrics::STATUS_ICON)
-    .height(metrics::STATUS_ICON)
-    .style(move |_, _| svg::Style {
-        color: Some(tint.into()),
-    });
+    let gauge = live_icon(vec![crate::icon::battery_svg(percent, mark)], tint);
     let mut line = row![gauge]
         .spacing(metrics::STATUS_ICON_GAP)
         .align_y(Alignment::Center);

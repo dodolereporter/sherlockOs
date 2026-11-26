@@ -650,7 +650,12 @@ middle of a letter, small icons, and pointers that did not change.
   for the text cursor. `pointer::disabled` gives the forbidden sign to what has no button: the
   faded rail of a slider without a service, a disabled text field. The compositor gets the shape
   through `wp_cursor_shape_v1`. `tests/interaction.rs` checks each component in each state.
-- **Bar icons**: `metrics::STATUS_ICON`, 18 instead of the board's 16.
+- **Bar icons**: `metrics::STATUS_ICON`, 18 instead of the board's 16. Live icons drawn from
+  their level: `icon::wifi_svg(level, WifiMark)`, `sound_svg(level, muted)`,
+  `bluetooth_svg(Radio)`, with `wifi_level` and `sound_level`; the parts not lit are drawn at
+  `icon::UNLIT` (0.3). `component::live_icon` shows them through `animated::GlyphFade`, which
+  cross-fades a new document over `motion::GLYPH_FADE` and cycles several every
+  `motion::PULSE` (400 ms), asking for the next step at its time; the battery uses it too.
 
 ## What the lot does not do
 
