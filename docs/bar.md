@@ -43,6 +43,24 @@ is at 8.8 or more.
 An indicator that has not been read yet is not shown. Without a battery, the battery
 indicator disappears. A battery discharging below 15 % turns amber.
 
+**Indicators** (UI-01). Network, sound and battery are each a button of their own, with an
+18 px icon (`metrics::STATUS_ICON`, the board's 16 was found too small), 30 high and 7 on each
+side (`panels::BAR_BUTTON_HEIGHT`, `BAR_BUTTON_PADDING`): a pill fades in on hover and deepens on
+press, and the content shrinks a little while pressed. Each opens the control centre; the one
+it was opened from carries the open mark, a short green line under it, and the veil. A click on
+another indicator while the centre is open moves the mark there and leaves the centre open; a
+click on the same one closes it. The clock and the Sherlock button have the same pill, veil and
+mark. Tab reaches each indicator. The application name ends with « … » where the left half of
+the bar ends.
+
+![The control centre opened from the sound, its button marked](../desktop/bar/screenshots/bar-open.png)
+![The same in the light theme](../desktop/bar/screenshots/bar-open-light.png)
+
+A network name too long for its tile or its line ends with « … » (`sherlock_ui::ellipsis`):
+
+![A long network name in its tile](../desktop/bar/screenshots/control-centre-long-name.png)
+![The same in the list of networks](../desktop/bar/screenshots/wifi-long-name.png)
+
 **Battery** (D-20c). The gauge is drawn, not chosen among a few glyphs: the outline of the
 `Battery` icon, filled from the left to the real percentage (`icon::battery_svg`, 12 units of
 the 24 grid for 100 %). A bolt while it charges, a plug when it is plugged in and full or not
@@ -691,8 +709,8 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   On the GPU, the menu surface is enlarged to hold the board's shadow (`0 22px 54px`), cut on
   the left where the screen ends; a click on the shadow closes the menu. In software the
   surface is opaque and the menu has no shadow.
-- **Animations**: the menu opens at once, hovers change at once (`sherlock-ui` does not wire
-  `motion` into its components yet). The panels unfold since D-20c (see Animations).
+- **Animations**: the menu opens at once. The hovers and presses of the bar buttons fade
+  (UI-01); the panels unfold since D-20c (see Animations).
 - **Screen reader labels**: iced 0.14 exposes nothing. The tooltips of `icon_button` do not fit
   in a 36 high surface: the indicators have none.
 - **Background**: the nested KWin has no wallpaper; the bar shows over black there.

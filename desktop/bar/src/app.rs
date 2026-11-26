@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use iced::futures::channel::mpsc::UnboundedReceiver;
-use iced::widget::{container, mouse_area, opaque, row, text};
+use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
@@ -85,6 +85,16 @@ pub struct Bar {
     pub history: History,
     /// The quick settings of the control centre.
     pub quick: Quick,
+    /// The indicator the control centre was opened from: it carries the open mark.
+    pub opener: Option<Indicator>,
+}
+
+/// An indicator of the bar: each one is a button that opens the control centre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Indicator {
+    Network,
+    Sound,
+    Battery,
 }
 
 /// A bar button that Tab can reach.
@@ -92,8 +102,8 @@ pub struct Bar {
 pub enum Target {
     Sherlock,
     Workspace(usize),
-    /// The indicators: the control centre.
-    Status,
+    /// An indicator: the control centre.
+    Status(Indicator),
     /// The date and time: the calendar.
     Clock,
 }
@@ -122,6 +132,9 @@ pub enum Message {
     Resized(Id, f32),
     /// Opens a panel, or closes it when it is open.
     TogglePanel(Panel),
+    /// An indicator was clicked: the control centre opens, or closes when it was opened from
+    /// that indicator; opened from another one, it stays and that one takes the mark.
+    Indicator(Indicator),
     ClosePanel,
     /// The calendar shows this month.
     ShowMonth(Month),
@@ -241,6 +254,14 @@ impl Bar {
             }
             Message::ToggleMenu => return self.toggle_menu(),
             Message::TogglePanel(panel) => return self.toggle_panel(panel),
+            Message::Indicator(indicator) => {
+                let switch = self.panel_open() == Some(Panel::Control)
+                    && self.opener.is_some_and(|o| o != indicator);
+                self.opener = Some(indicator);
+                if !switch {
+                    return self.toggle_panel(Panel::Control);
+                }
+            }
             Message::ClosePanel => return self.close_panel(),
             Message::Resized(id, width) => {
                 if Some(id) == self.surface {
@@ -449,10 +470,14 @@ impl Bar {
     /// The bar buttons, in Tab order: Sherlock, the workspaces, the indicators, the clock.
     pub fn targets(&self) -> Vec<Target> {
         let workspaces = self.group().map_or(0, |g| g.workspaces.len());
-        let status = self.network.is_some() || self.sound.is_some() || self.battery.is_some();
+        let indicators = [
+            self.network.is_some().then_some(Indicator::Network),
+            self.sound.is_some().then_some(Indicator::Sound),
+            matches!(self.battery, Some(Some(_))).then_some(Indicator::Battery),
+        ];
         std::iter::once(Target::Sherlock)
             .chain((0..workspaces).map(Target::Workspace))
-            .chain(status.then_some(Target::Status))
+            .chain(indicators.into_iter().flatten().map(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
     }
@@ -467,7 +492,7 @@ impl Bar {
         self.focused().map(|target| match target {
             Target::Sherlock => Message::ToggleMenu,
             Target::Workspace(i) => Message::SelectWorkspace(i),
-            Target::Status => Message::TogglePanel(Panel::Control),
+            Target::Status(indicator) => Message::Indicator(indicator),
             Target::Clock => Message::TogglePanel(Panel::Calendar),
         })
     }
@@ -673,11 +698,9 @@ impl Bar {
             .align_y(Alignment::Center);
         if let Some(app) = self.desktop.as_ref().and_then(|d| d.app.as_deref()) {
             let (pad_left, pad_right) = metrics::APP_NAME_PADDING;
-            // A long window title is cut where the left half of the bar ends.
-            let name = ui::body(app)
-                .font(typography::UI_SEMIBOLD)
-                .wrapping(text::Wrapping::None);
-            let name = container(name).clip(true).padding(Padding {
+            // A long window title ends with « … » where the left half of the bar ends.
+            let name = ui::ellipsis(app).font(typography::UI_SEMIBOLD);
+            let name = container(name).padding(Padding {
                 left: pad_left,
                 right: pad_right,
                 ..Padding::ZERO
@@ -727,42 +750,40 @@ impl Bar {
         surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }
 
-    /// The indicators, which open the control centre, then the date and time, which open the
-    /// calendar: two ghost buttons, whose padding the gaps give back.
+    /// The indicators, each a button that opens the control centre, then the date and time,
+    /// which open the calendar: ghost buttons, whose padding the gaps give back.
     fn view_indicators(
         &self,
         ring: &impl Fn(ui::Control<'static, Message>, Target) -> ui::Control<'static, Message>,
     ) -> Element<'static, Message> {
         let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
-        let (status, clock) = self.indicators();
         let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
-        if !status.is_empty() {
-            let open = self.panel_open() == Some(Panel::Control);
-            let line = row(status)
-                .spacing(metrics::STATUS_GAP)
-                .align_y(Alignment::Center);
-            let toggle = Some(Message::TogglePanel(Panel::Control));
-            buttons = buttons.push(ring(panels::bar_button(line, open, toggle), Target::Status));
+        let control = self.panel_open() == Some(Panel::Control);
+        for (indicator, content) in self.indicators() {
+            let open = control && self.opener.unwrap_or(indicator) == indicator;
+            let press = Some(Message::Indicator(indicator));
+            let button = panels::bar_button(content, open, press);
+            buttons = buttons.push(ring(button, Target::Status(indicator)));
         }
-        if !clock.is_empty() {
+        if let Some(clock) = self.clock.as_ref() {
+            let p = color::palette();
+            let line = row![
+                ui::body(clock.date()).color(p.text_secondary),
+                ui::body(clock.time())
+                    .font(typography::UI_SEMIBOLD)
+                    .color(p.text_primary),
+            ]
+            .spacing(metrics::STATUS_GAP)
+            .align_y(Alignment::Center);
             let open = self.panel_open() == Some(Panel::Calendar);
-            let line = row(clock)
-                .spacing(metrics::STATUS_GAP)
-                .align_y(Alignment::Center);
             let toggle = Some(Message::TogglePanel(Panel::Calendar));
             buttons = buttons.push(ring(panels::bar_button(line, open, toggle), Target::Clock));
         }
         buttons.into()
     }
 
-    /// Network, sound and battery; then date and time. An indicator not read yet is not shown.
-    #[allow(clippy::type_complexity)]
-    fn indicators(
-        &self,
-    ) -> (
-        Vec<Element<'static, Message>>,
-        Vec<Element<'static, Message>>,
-    ) {
+    /// Network, sound and battery, each with its indicator. One not read yet is not shown.
+    fn indicators(&self) -> Vec<(Indicator, Element<'static, Message>)> {
         let p = color::palette();
         let tint = p.text_secondary;
         let mut items = Vec::new();
@@ -771,7 +792,7 @@ impl Bar {
                 Network::Connected { .. } => Icon::Network,
                 Network::Disconnected => Icon::NetworkOff,
             };
-            items.push(ui::status(glyph, None, tint));
+            items.push((Indicator::Network, ui::status(glyph, None, tint)));
         }
         if let Some(sound) = &self.sound {
             let glyph = if sound.muted {
@@ -779,7 +800,7 @@ impl Bar {
             } else {
                 Icon::Sound
             };
-            items.push(ui::status(glyph, None, tint));
+            items.push((Indicator::Sound, ui::status(glyph, None, tint)));
         }
         if let Some(Some(battery)) = &self.battery {
             let mark = match battery.charge {
@@ -789,17 +810,10 @@ impl Bar {
             };
             let tint = if battery.is_low() { p.amber_text } else { tint };
             let value = strings::percent(battery.percent);
-            items.push(ui::battery(battery.percent, mark, Some(value), tint));
+            let gauge = ui::battery(battery.percent, mark, Some(value), tint);
+            items.push((Indicator::Battery, gauge));
         }
-        let mut clock_items = Vec::new();
-        if let Some(clock) = &self.clock {
-            clock_items.push(ui::body(clock.date()).color(tint).into());
-            let time = ui::body(clock.time())
-                .font(typography::UI_SEMIBOLD)
-                .color(p.text_primary);
-            clock_items.push(time.into());
-        }
-        (items, clock_items)
+        items
     }
 
     pub fn view_menu(&self) -> Element<'_, Message> {
@@ -1000,7 +1014,7 @@ mod tests {
                 Target::Workspace(i) => {
                     assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
                 }
-                Target::Status | Target::Clock => panic!("no indicator in this bar"),
+                Target::Status(_) | Target::Clock => panic!("no indicator in this bar"),
             }
         }
         let _ = bar.update(Message::Focus(Direction::Previous));
@@ -1029,10 +1043,10 @@ mod tests {
             Some(Message::TogglePanel(Panel::Calendar))
         ));
         let _ = bar.update(Message::Focus(Direction::Previous));
-        assert_eq!(bar.focused(), Some(Target::Status));
+        assert_eq!(bar.focused(), Some(Target::Status(Indicator::Sound)));
         assert!(matches!(
             bar.activation(),
-            Some(Message::TogglePanel(Panel::Control))
+            Some(Message::Indicator(Indicator::Sound))
         ));
         // Opened, then the other one: one panel at a time, and Escape closes it.
         let _ = bar.update(Message::Surface(Id::unique()));

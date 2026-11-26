@@ -192,11 +192,15 @@ fn card(group: &Group) -> Element<'_, Message> {
             .into()
     };
     let single = group.entries.len() == 1;
-    let mut header = row![tile, small(&group.app)]
+    let app = ui::ellipsis(group.app.as_str())
+        .size(typography::SMALL_SIZE)
+        .style(panels::secondary_text)
+        .width(Length::Fill);
+    let mut header = row![tile, app]
         .spacing(panels::HEADER_GAP)
         .align_y(Alignment::Center);
     if let (true, Some(first)) = (single, group.entries.first()) {
-        header = header.push(space::horizontal()).push(small(&first.when));
+        header = header.push(small(&first.when));
     }
     let mut rows = vec![header.into()];
     for entry in group.entries.iter().take(panels::GROUP_MAX) {
@@ -216,7 +220,10 @@ fn card(group: &Group) -> Element<'_, Message> {
 /// One notification of a card: title, body, and its buttons while it is open. `timed`: its
 /// time on the right of its title, when the card holds several.
 fn notification(entry: &Entry, timed: bool) -> Element<'_, Message> {
-    let title = ui::body(entry.summary.as_str()).font(typography::UI_SEMIBOLD);
+    // A long title ends with « … »; the body below wraps.
+    let title = ui::ellipsis(entry.summary.as_str())
+        .font(typography::UI_SEMIBOLD)
+        .width(Length::Fill);
     let mut lines: Vec<Element<'_, Message>> = if timed {
         let when = text(entry.when.as_str())
             .font(typography::UI)

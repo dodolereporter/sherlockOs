@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use bar::app::{Bar, Message};
+use bar::app::{Bar, Indicator, Message};
 use bar::calendar::Month;
 use bar::history::{Entry, Group};
 use bar::menu;
@@ -390,6 +390,22 @@ fn the_panels_render_in_both_themes() {
             state.quick.password = quick::Secret::new(String::from("secret"));
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("wifi-networks{suffix}")));
+
+            // A network name too long for its tile and its line ends with « … » (UI-01).
+            let long = "Livebox-Résidence-des-Lilas-étage-3-5GHz";
+            if let Load::Ready(wifi) = &mut state.quick.wifi {
+                wifi.networks[0].ssid = String::from(long);
+            }
+            state.quick.joining = None;
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-long-name{suffix}")));
+            let _ = state.quick.update(quick::Message::ShowNetworks(false));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let mut ui =
+                Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            // Selectors still find the whole name.
+            assert!(ui.find(long).is_ok());
+            assert_written(capture(ui, &format!("control-centre-long-name{suffix}")));
         });
     }
 }
@@ -456,6 +472,30 @@ fn the_centre_runs_an_action_and_clears() {
     ));
 }
 
+/// The bar with the control centre open from the battery: its button keeps a veil and the
+/// green mark (UI-01). `bar-open`, then `bar-open-light`.
+#[test]
+fn the_button_of_the_open_panel_is_marked() {
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_motion = Some(false);
+            let _ = state.update(Message::Surface(iced::window::Id::unique()));
+            let _ = state.update(Message::Indicator(Indicator::Battery));
+            assert_eq!(state.panel_open(), Some(Panel::Control));
+            assert_eq!(state.opener, Some(Indicator::Battery));
+            // Another indicator moves the mark and leaves the centre open.
+            let _ = state.update(Message::Indicator(Indicator::Sound));
+            assert_eq!(state.panel_open(), Some(Panel::Control));
+            let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+            assert_written(capture(ui, &format!("bar-open{suffix}")));
+            // The same one again closes it.
+            let _ = state.update(Message::Indicator(Indicator::Sound));
+            assert_eq!(state.panel_open(), None);
+        });
+    }
+}
+
 #[test]
 fn a_click_on_the_indicators_or_the_clock_opens_their_panel() {
     let state = sample();
@@ -467,7 +507,7 @@ fn a_click_on_the_indicators_or_the_clock_opens_their_panel() {
         messages[..],
         [
             Message::TogglePanel(Panel::Calendar),
-            Message::TogglePanel(Panel::Control)
+            Message::Indicator(Indicator::Battery)
         ]
     ));
 }

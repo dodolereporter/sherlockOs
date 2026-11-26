@@ -200,6 +200,15 @@ pub const PREVIEW_SPRING: Spring = Spring::new(700.0, 42.0);
 /// (ratio 1.0: no overshoot, so the radius never goes below 0 nor the shadow above its own).
 pub const DECORATION_SPRING: Spring = Spring::new(700.0, 53.0);
 
+/// Knob of a toggle sliding from one end to the other (lot UI-01): brisker than a window, with
+/// the slight overshoot of the desktop's springs (ratio 0.78, 2 %), settled in about 220 ms.
+pub const TOGGLE_SPRING: Spring = Spring::new(600.0, 38.0);
+/// Share of the knob's run below which it is settled: under a fifth of a pixel on its 18.
+pub const KNOB_PRECISION: f32 = 0.01;
+/// A control pressed or released: its veil deepens faster than a hover, so that the press
+/// answers the finger at once (a choice of UI-01, under the 110 ms of a hover).
+pub const PRESS_FADE: Duration = Duration::from_millis(90);
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
@@ -241,7 +250,7 @@ pub const SCALE_PRECISION: f64 = 0.001;
 mod tests {
     use super::*;
 
-    const ALL: [Spring; 3] = [SNAP_SPRING, OPEN_SPRING, PREVIEW_SPRING];
+    const ALL: [Spring; 4] = [SNAP_SPRING, OPEN_SPRING, PREVIEW_SPRING, TOGGLE_SPRING];
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
