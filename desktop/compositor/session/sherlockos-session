@@ -65,6 +65,30 @@ if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"
 fi
 
+# Cursors (lot D-07): every program draws the house theme, the compositor's, so that two themes
+# never mix: nom-os-light if the appearance file gives the light theme now, nom-os otherwise.
+# `cursors` beside the programs' folder is searched first: target/cursors, which `just cursors`
+# writes, when the session is tried from the repository with NOM_OS_BIN=target/release.
+appearance="${XDG_CONFIG_HOME:-$HOME/.config}/appearance/appearance.conf"
+cursors=nom-os
+if [ -r "$appearance" ]; then
+	cursors=$(awk -F= -v now="$(date +%H:%M:%S)" '
+		function secs(t, f) { split(t, f, ":"); return f[1] * 3600 + f[2] * 60 + f[3] }
+		/^[ \t]*\[/ { group = $0; gsub(/[][ \t]/, "", group); next }
+		group == "Appearance" { k = $1; v = $2; gsub(/[ \t]/, "", k); gsub(/[ \t]/, "", v); a[k] = v }
+		END {
+			light = secs(("AutoLightFrom" in a) ? a["AutoLightFrom"] : "07:00")
+			dark = secs(("AutoDarkFrom" in a) ? a["AutoDarkFrom"] : "19:00")
+			n = secs(now)
+			day = light < dark ? (n >= light && n < dark) : (n >= light || n < dark)
+			print (a["Theme"] == "light" || (a["Theme"] == "auto" && day)) ? "nom-os-light" : "nom-os"
+		}' "$appearance")
+fi
+icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons:$HOME/.icons:/usr/local/share/icons:/usr/share/icons"
+export XCURSOR_PATH="$(dirname "$bin")/cursors:${XCURSOR_PATH:-$icons:/usr/share/pixmaps}"
+export XCURSOR_THEME="$cursors"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+
 # Copies its input to the log, which moves to .old beyond 5 MiB (checked every 100 lines).
 keep_log() {
 	lines=0

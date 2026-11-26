@@ -12,6 +12,15 @@ applications=/usr/local/share/applications
 data=/usr/local/share/nom-os
 programs="compositor bar dock launcher notifications evidence"
 
+icons=/usr/local/share/icons
+themes="nom-os nom-os-light"
+for theme in $themes; do
+	if [ ! -f "$repo/target/cursors/$theme/index.theme" ]; then
+		echo "missing $repo/target/cursors/$theme: just cursors" >&2
+		exit 1
+	fi
+done
+
 for program in $programs; do
 	if [ ! -x "$repo/target/release/$program" ]; then
 		echo "missing $repo/target/release/$program: cargo build --release -p $program" >&2
@@ -30,9 +39,14 @@ sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
+# The cursor themes, their aliases kept as links:
+sudo install -d $icons
+sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
+sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done)$icons/
 
 # To remove it:
 #   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop
+#   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 
 # The compositor needs libseat at run time (seatd or logind behind it). ldconfig is in the
