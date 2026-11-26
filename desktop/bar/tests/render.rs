@@ -67,7 +67,7 @@ fn sample() -> Bar {
     for message in messages {
         let _ = state.update(message);
     }
-    state.user = String::from("Dodo");
+    state.user = String::from("Camille");
     state.menu_margins = menu::margins(false);
     state
 }
@@ -194,7 +194,7 @@ fn the_bar_shows_time_date_and_workspaces() {
 fn a_click_in_the_menu_picks_its_entry() {
     let state = sample();
     let mut ui = Simulator::with_size(bar::settings(), menu_size(&state), state.view_menu());
-    assert!(ui.find("Dodo").is_ok());
+    assert!(ui.find("Camille").is_ok());
     ui.click("Verrouiller").expect("entry found");
     let activated = ui
         .into_messages()
@@ -484,7 +484,7 @@ fn the_quick_settings_answer_their_clicks() {
         "Bientôt",
         "Haut-parleurs intégrés",
         "Équilibré",
-        "Dodo",
+        "Camille",
     ] {
         assert!(
             ui.find(text).is_ok(),

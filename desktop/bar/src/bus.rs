@@ -3,8 +3,13 @@
 //! the bar at a private bus.
 
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use zbus::Connection;
+
+/// Longest wait for an answer on the session bus: a daemon that hangs gives an error, never a
+/// panel that waits for ever.
+pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The session bus.
 pub async fn session() -> zbus::Result<Connection> {
@@ -12,6 +17,9 @@ pub async fn session() -> zbus::Result<Connection> {
     if let Some(bus) = BUS.get() {
         return Ok(bus.clone());
     }
-    let bus = Connection::session().await?;
+    let bus = zbus::connection::Builder::session()?
+        .method_timeout(TIMEOUT)
+        .build()
+        .await?;
     Ok(BUS.get_or_init(|| bus).clone())
 }

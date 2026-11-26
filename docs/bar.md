@@ -11,7 +11,7 @@ namespace are all `bar`. The texts it shows stay in French, from `sherlock-ui`.
 ![The Sherlock menu open](../desktop/bar/screenshots/menu-kwin.png)
 
 Both screenshots come from a nested KWin running inside a Xephyr display started for the test,
-with `USER=Dodo` so that no login name of the machine shows (see « Running and checking by
+with `USER=Camille` so that no login name of the machine shows (see « Running and checking by
 hand »).
 
 ### Logo
@@ -309,7 +309,8 @@ screen. Without a notification, « Aucune notification »; without the daemon, �
 notifications ne répond pas. » and a warning in the log.
 
 The list is read when the centre opens, and again on each `Changed` of the daemon while it is
-open (an iced subscription on the session bus, `history::watch`): nothing polls. The calls run
+open (an iced subscription on the session bus, `history::watch`), from the daemon that owns
+the name only: nothing polls, and no other client makes the centre read again. The calls run
 in iced tasks, never on the interface thread. The interface is described in
 `docs/notifications.md` (History over D-Bus).
 
@@ -339,7 +340,20 @@ polkit when its policy wants it (NetworkManager: `enable-disable-wifi`, `network
 `settings.modify.system`; power-profiles-daemon: `switch-profile`); logind lets the user of the
 active session set the brightness. Nothing runs as root, nothing uses `sudo`. Sound is the
 exception: PipeWire has no D-Bus interface, and `pactl` talks to the user's own sound server.
-The calls run in iced tasks, never on the interface thread. A slider sends one call at a time,
+The calls run in iced tasks, never on the interface thread; `pactl` and the sysfs reads on a
+thread of their own each, never on iced's pool.
+
+**Time limits.** Every D-Bus connection of the bar has a `method_timeout`: 5 s on the session
+bus and for the reads on the system bus, 60 s for the actions on the system bus, long enough
+for polkit to ask for a password. `pactl` is killed after 3 s (`system::audio::TIMEOUT`). A
+service that does not answer in time ends unavailable, never « … » for ever. The sound server
+gets one `pactl` at a time: a volume or a mute asked meanwhile waits, the latest of each
+replacing the previous one (`SoundQueue`).
+
+**Password.** The Wi-Fi password lives in a `Secret`: its `Debug` shows `***`, it is
+overwritten with zeros when dropped, and the panel wipes it whenever it closes (Escape, its
+button, a click elsewhere, the compositor) and once it is sent to NetworkManager. The text
+field of iced keeps its own copy while the field is on screen. A slider sends one call at a time,
 the latest value winning (`Throttle`): a drag does not queue dozens of calls. The brightness
 never goes below 1 %.
 
@@ -355,7 +369,9 @@ refused.
 
 **Wi-Fi.** A click on the tile switches the Wi-Fi; its line is the network it is on. The
 chevron on its right (« Réseaux Wi-Fi ») opens the list of networks after asking for a scan: one
-line per name (the access point in use, else the strongest), twelve at most, a padlock on a
+line per name (the access point in use, else the strongest), twelve at most, read again when
+the scan's results come (`PropertiesChanged` of the device's Wi-Fi interface, `AccessPointAdded`,
+`AccessPointRemoved`), a padlock on a
 protected one, a check on the one in use. An open or saved network is joined at once. A new
 protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
 NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
@@ -368,7 +384,8 @@ power-profiles-daemon, on the system bus (`quick::watch`), and reads that servic
 and brightness are read when the panel opens and after each change.
 
 **Session.** The user row of the board, with the launcher's commands and rules
-(`docs/launcher.md`): « Verrouiller » at once; « Se déconnecter », « Redémarrer » and
+(`docs/launcher.md`): « Verrouiller » at once (`loginctl lock-session`: until the lock screen of
+D-25 exists, logind has no locker to tell, and the button does nothing visible); « Se déconnecter », « Redémarrer » and
 « Éteindre » want a second click at least 400 ms after the first (`launcher::CONFIRM_DELAY`),
 so that a double click only arms them. The armed button turns amber and « Reclique pour
 confirmer » replaces the user's name; any other click cancels it.
@@ -480,7 +497,7 @@ inside a Xephyr display started for the test, and work on that display only:
 ```sh
 Xephyr :5 -screen 1440x900 -br -nolisten tcp &
 DISPLAY=:5 kwin_wayland --x11-display :5 --width 1440 --height 900 --socket wayland-bar &
-WAYLAND_DISPLAY=wayland-bar USER=Dodo BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar &
+WAYLAND_DISPLAY=wayland-bar USER=Camille BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" target/debug/bar &
 DISPLAY=:5 import -window root screenshot.png
 ```
 
@@ -555,7 +572,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   batches.
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
-- **User name**: the board says « Dodo ». The bar reads the user's GECOS, otherwise the login.
+- **User name**: the board shows a sample name. The bar reads the user's GECOS, otherwise the login.
 - **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
   yet, so they are not shown.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.

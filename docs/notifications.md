@@ -195,6 +195,12 @@ itself: never from inside the method call that changed the history.
 Anyone on the session bus can call it, as anyone there can already watch the notifications go
 by: the session bus is the user's. The centre shows what applications sent, as plain text.
 
+`InvokeAction` too is open to every client of the session bus: any of them can press a button of
+another application's open notification, among the keys that application declared, and the
+application receives `ActionInvoked` as if the user had clicked. Before this interface, only the
+bubbles of the daemon could. Hence a rule for the consent broker of Sherlock: no consent is ever
+taken through a notification action; consents go through the window the compositor draws.
+
 ## Running and checking by hand
 
 **Never on the author's session bus**: Plasma owns the name there, and the daemon would only

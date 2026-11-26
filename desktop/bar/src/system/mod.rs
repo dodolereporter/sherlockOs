@@ -13,6 +13,9 @@ pub mod bluetooth;
 pub mod network;
 pub mod power;
 
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use zbus::Connection;
 use zbus::DBusError;
 use zbus::zvariant::{OwnedValue, Value};
@@ -125,14 +128,34 @@ pub async fn set(
     Ok(())
 }
 
-/// The system bus, opened on first use and shared. It follows `DBUS_SYSTEM_BUS_ADDRESS`.
-pub async fn system() -> Result<Connection> {
-    static BUS: std::sync::OnceLock<Connection> = std::sync::OnceLock::new();
-    if let Some(bus) = BUS.get() {
+/// Longest wait for a read: a service that does not answer leaves its control unavailable,
+/// never « … » for ever.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest wait for an action: long enough for polkit to ask the user for a password.
+pub const ACTION_TIMEOUT: Duration = Duration::from_secs(60);
+
+async fn open(cell: &'static OnceLock<Connection>, timeout: Duration) -> Result<Connection> {
+    if let Some(bus) = cell.get() {
         return Ok(bus.clone());
     }
-    let bus = Connection::system().await?;
-    Ok(BUS.get_or_init(|| bus).clone())
+    let bus = zbus::connection::Builder::system()?
+        .method_timeout(timeout)
+        .build()
+        .await?;
+    Ok(cell.get_or_init(|| bus).clone())
+}
+
+/// The system bus for reads (`READ_TIMEOUT`), opened on first use and shared. It follows
+/// `DBUS_SYSTEM_BUS_ADDRESS`.
+pub async fn system() -> Result<Connection> {
+    static BUS: OnceLock<Connection> = OnceLock::new();
+    open(&BUS, READ_TIMEOUT).await
+}
+
+/// The system bus for actions (`ACTION_TIMEOUT`), which may wait for polkit.
+pub async fn system_for_actions() -> Result<Connection> {
+    static BUS: OnceLock<Connection> = OnceLock::new();
+    open(&BUS, ACTION_TIMEOUT).await
 }
 
 #[cfg(test)]

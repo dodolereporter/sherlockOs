@@ -348,6 +348,7 @@ impl Bar {
                 }
                 if self.panel.is_some_and(|(_, panel)| panel == id) {
                     self.panel = None;
+                    self.quick.close();
                 }
             }
             _ => {}
@@ -493,6 +494,7 @@ impl Bar {
     }
 
     fn close_panel(&mut self) -> Task<Message> {
+        self.quick.close();
         match self.panel.take() {
             Some((_, id)) => window::close(id),
             None => Task::none(),

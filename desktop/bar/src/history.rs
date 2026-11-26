@@ -113,6 +113,8 @@ pub async fn invoke(bus: &Connection, id: u32, key: &str) -> zbus::Result<()> {
 pub async fn changes(bus: &Connection) -> zbus::Result<impl Stream<Item = ()> + use<>> {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
+        // Only the daemon that owns the name: no other client makes the centre read again.
+        .sender(NAME)?
         .interface(INTERFACE)?
         .member("Changed")?
         .path(PATH)?

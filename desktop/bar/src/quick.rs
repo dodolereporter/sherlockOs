@@ -119,6 +119,90 @@ impl Throttle {
     }
 }
 
+/// A password being typed: never shown by `Debug`, overwritten with zeros when dropped. The
+/// text field of iced keeps its own copy while it is on screen; that copy goes with the field.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(typed: String) -> Self {
+        Self(typed)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Overwrites the password with zeros, then empties it.
+    pub fn wipe(&mut self) {
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        bytes.fill(0);
+        // Keeps the writes: the buffer is read after them.
+        std::hint::black_box(&bytes);
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("***")
+    }
+}
+
+impl Drop for Secret {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
+/// What the sound server is asked, one `pactl` at a time: the latest volume and the latest mute
+/// state wait while a call is under way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SoundQueue {
+    busy: bool,
+    volume: Option<u8>,
+    mute: Option<bool>,
+}
+
+/// A call to the sound server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundCall {
+    Volume(u8),
+    Mute(bool),
+}
+
+impl SoundQueue {
+    /// `call` now, if no call is under way; else it waits, replacing one of its kind.
+    pub fn push(&mut self, call: SoundCall) -> Option<SoundCall> {
+        if !self.busy {
+            self.busy = true;
+            return Some(call);
+        }
+        match call {
+            SoundCall::Volume(value) => self.volume = Some(value),
+            SoundCall::Mute(muted) => self.mute = Some(muted),
+        }
+        None
+    }
+
+    /// The call ended: the next one waiting, the mute state first.
+    pub fn done(&mut self) -> Option<SoundCall> {
+        let next = match (self.mute.take(), self.volume.take()) {
+            (Some(muted), volume) => {
+                self.volume = volume;
+                Some(SoundCall::Mute(muted))
+            }
+            (None, Some(value)) => Some(SoundCall::Volume(value)),
+            (None, None) => None,
+        };
+        self.busy = next.is_some();
+        next
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Quick {
     pub wifi: Load<Wifi>,
@@ -130,7 +214,7 @@ pub struct Quick {
     pub page: Page,
     /// The network chosen that needs its password, and the password typed.
     pub joining: Option<Network>,
-    pub password: String,
+    pub password: Secret,
     /// The network being joined, until NetworkManager reports it.
     pub connecting: Option<String>,
     /// A session command waiting for its second click, and when it was armed.
@@ -142,8 +226,12 @@ pub struct Quick {
     pub pactl: Pactl,
     pub settings: Option<PathBuf>,
     pub sysfs: PathBuf,
-    volume: Throttle,
+    sound_calls: SoundQueue,
     light: Throttle,
+    /// A read of the Wi-Fi is under way, and another one was asked for meanwhile: the signals
+    /// of a scan come in bursts.
+    wifi_reading: bool,
+    wifi_again: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +246,7 @@ pub enum Message {
     Join(Network),
     /// The network chosen has no saved connection: its password is asked for.
     AskPassword,
-    Password(String),
+    Password(Secret),
     SubmitPassword,
     ToggleBluetooth,
     ToggleDoNotDisturb,
@@ -199,15 +287,38 @@ fn act<F>(
 where
     F: Future<Output = system::Result<()>> + Send,
 {
-    on_system(call, move |done| Message::Done(service, done))
+    Task::perform(
+        async move {
+            let bus = system::system_for_actions().await?;
+            call(bus).await
+        },
+        move |done| Message::Done(service, done),
+    )
 }
 
-/// Runs blocking `work` (a command, a file) in an iced task.
+/// Runs blocking `work` (a command, a file) on a thread of its own, never on iced's pool: a
+/// sound server that hangs holds that thread only, for `pactl`'s time limit at most.
 fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> T + Send + 'static,
-    done: impl Fn(T) -> Message + Send + 'static,
+    work: impl FnOnce() -> system::Result<T> + Send + 'static,
+    done: impl Fn(system::Result<T>) -> Message + Send + 'static,
 ) -> Task<Message> {
-    Task::perform(async move { work() }, done)
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(String::from("quick-settings"))
+        .spawn(move || {
+            let _ = sender.send(work());
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cannot start a thread for the quick settings");
+    }
+    Task::perform(
+        async move {
+            receiver
+                .await
+                .unwrap_or_else(|_| Err(Problem::Failed(String::from("the call was lost"))))
+        },
+        done,
+    )
 }
 
 impl Quick {
@@ -223,9 +334,8 @@ impl Quick {
 
     /// Reads every service: when the panel opens.
     pub fn open(&mut self) -> Task<Message> {
+        self.close();
         self.page = Page::Main;
-        self.joining = None;
-        self.password.clear();
         self.armed = None;
         self.failure = None;
         self.do_not_disturb = self.settings.as_deref().map(|path| {
@@ -240,12 +350,16 @@ impl Quick {
         ])
     }
 
-    fn read(&self, service: Service) -> Task<Message> {
+    fn read(&mut self, service: Service) -> Task<Message> {
         match service {
-            Service::Wifi => on_system(
-                |bus| async move { network::read(&bus).await },
-                |r| Message::Wifi(Load::from_result(r)),
-            ),
+            Service::Wifi if self.wifi_reading => {
+                self.wifi_again = true;
+                Task::none()
+            }
+            Service::Wifi => {
+                self.wifi_reading = true;
+                self.read_wifi()
+            }
             Service::Bluetooth => on_system(
                 |bus| async move { bluetooth::read(&bus).await },
                 |r| Message::Bluetooth(Load::from_result(r)),
@@ -270,6 +384,13 @@ impl Quick {
             }
             Service::DoNotDisturb | Service::Session => Task::none(),
         }
+    }
+
+    fn read_wifi(&self) -> Task<Message> {
+        on_system(
+            |bus| async move { network::read(&bus).await },
+            |r| Message::Wifi(Load::from_result(r)),
+        )
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -300,6 +421,10 @@ impl Quick {
                     self.connecting = None;
                 }
                 self.wifi = wifi;
+                self.wifi_reading = false;
+                if std::mem::take(&mut self.wifi_again) {
+                    return self.read(Service::Wifi);
+                }
             }
             Message::Bluetooth(read) => self.bluetooth = read,
             Message::Sound(read) => self.sound = read,
@@ -316,16 +441,17 @@ impl Quick {
             Message::ShowNetworks(show) => {
                 self.page = if show { Page::Networks } else { Page::Main };
                 self.joining = None;
-                self.password.clear();
+                self.password.wipe();
                 let device = self.wifi.ready().and_then(|w| w.device.clone());
                 if let (true, Some(device)) = (show, device) {
-                    // The list is read again once the scan is asked for.
+                    // The networks found come later, with the signals of the device
+                    // (`watch`): the list is read again then.
                     return on_system(
-                        move |bus| async move {
-                            network::scan(&bus, &device).await?;
-                            network::read(&bus).await
+                        move |bus| async move { network::scan(&bus, &device).await },
+                        |r| match r {
+                            Ok(()) => Message::Changed(Service::Wifi),
+                            Err(problem) => Message::Done(Service::Wifi, Err(problem)),
                         },
-                        |r| Message::Wifi(Load::from_result(r)),
                     );
                 }
             }
@@ -336,6 +462,7 @@ impl Quick {
                 if let Some(chosen) = self.joining.clone()
                     && !self.password.is_empty()
                 {
+                    // Moved out: the field empties, the secret is wiped once sent.
                     let password = std::mem::take(&mut self.password);
                     return self.connect(chosen, Some(password));
                 }
@@ -353,18 +480,17 @@ impl Quick {
                 if let Load::Ready(output) = &mut self.sound {
                     output.sound.volume = u16::from(value);
                 }
-                if let Some(value) = self.volume.want(value) {
-                    return self.send_volume(value);
+                if let Some(call) = self.sound_calls.push(SoundCall::Volume(value)) {
+                    return self.send_sound(call);
                 }
             }
             Message::Mute => {
                 if let Load::Ready(output) = &mut self.sound {
                     output.sound.muted = !output.sound.muted;
-                    let (pactl, muted) = (self.pactl.clone(), output.sound.muted);
-                    return blocking(
-                        move || pactl.set_mute(muted),
-                        |r| Message::Done(Service::Sound, r),
-                    );
+                    let call = SoundCall::Mute(output.sound.muted);
+                    if let Some(call) = self.sound_calls.push(call) {
+                        return self.send_sound(call);
+                    }
                 }
             }
             Message::Light(value) => {
@@ -408,7 +534,7 @@ impl Quick {
             }
         }
         let next = match service {
-            Service::Sound => self.volume.done().map(|v| self.send_volume(v)),
+            Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
             _ => None,
         };
@@ -419,12 +545,22 @@ impl Quick {
         }
     }
 
-    fn send_volume(&self, value: u8) -> Task<Message> {
+    fn send_sound(&self, call: SoundCall) -> Task<Message> {
         let pactl = self.pactl.clone();
         blocking(
-            move || pactl.set_volume(value),
+            move || match call {
+                SoundCall::Volume(value) => pactl.set_volume(value),
+                SoundCall::Mute(muted) => pactl.set_mute(muted),
+            },
             |r| Message::Done(Service::Sound, r),
         )
+    }
+
+    /// The panel closed, whichever way: the password typed is wiped, the network chosen
+    /// forgotten.
+    pub fn close(&mut self) {
+        self.password.wipe();
+        self.joining = None;
     }
 
     fn send_light(&self, value: u8) -> Task<Message> {
@@ -445,7 +581,7 @@ impl Quick {
         if chosen.security == Security::Open {
             return self.connect(chosen, None);
         }
-        self.password.clear();
+        self.password.wipe();
         self.joining = Some(chosen.clone());
         if chosen.security == Security::Other {
             return Task::none();
@@ -469,14 +605,15 @@ impl Quick {
         )
     }
 
-    fn connect(&mut self, chosen: Network, password: Option<String>) -> Task<Message> {
+    fn connect(&mut self, chosen: Network, password: Option<Secret>) -> Task<Message> {
         let Some(device) = self.wifi.ready().and_then(|w| w.device.clone()) else {
             return Task::none();
         };
         self.joining = None;
         self.connecting = Some(chosen.ssid.clone());
         act(Service::Wifi, move |bus| async move {
-            network::connect(&bus, &device, &chosen, password.as_deref()).await
+            let password = password.as_ref().map(Secret::as_str);
+            network::connect(&bus, &device, &chosen, password).await
         })
     }
 
@@ -584,6 +721,36 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
                 .sender(network::SERVICE)?
                 .interface(network::DEVICE)?
                 .member("StateChanged")?
+                .build(),
+            Service::Wifi,
+        ),
+        // The end of a scan: `LastScan` and `AccessPoints` of the Wi-Fi device, and the access
+        // points that come and go.
+        (
+            zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(network::SERVICE)?
+                .interface("org.freedesktop.DBus.Properties")?
+                .member("PropertiesChanged")?
+                .arg(0, network::WIRELESS)?
+                .build(),
+            Service::Wifi,
+        ),
+        (
+            zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(network::SERVICE)?
+                .interface(network::WIRELESS)?
+                .member("AccessPointAdded")?
+                .build(),
+            Service::Wifi,
+        ),
+        (
+            zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(network::SERVICE)?
+                .interface(network::WIRELESS)?
+                .member("AccessPointRemoved")?
                 .build(),
             Service::Wifi,
         ),
@@ -881,7 +1048,7 @@ impl Quick {
             let line = ui::description(words::ENTERPRISE);
             return column![item, container(line).padding(inset)].into();
         }
-        let field = ui::text_field(words::PASSWORD, &self.password, Some(Message::Password))
+        let field = ui::text_field(words::PASSWORD, self.password.as_str(), Some(typed))
             .secure(true)
             .on_submit(Message::SubmitPassword)
             .width(Length::Fill);
@@ -891,6 +1058,10 @@ impl Quick {
             .align_y(Alignment::Center);
         column![item, container(ask).padding(inset)].into()
     }
+}
+
+fn typed(password: String) -> Message {
+    Message::Password(Secret::new(password))
 }
 
 fn switch_wifi(_: bool) -> Message {
@@ -948,6 +1119,46 @@ mod tests {
         assert_eq!(throttle.done(), Some(30));
         assert_eq!(throttle.done(), None);
         assert_eq!(throttle.want(40), Some(40));
+    }
+
+    #[test]
+    fn the_password_never_shows_and_goes_when_the_panel_closes() {
+        let typed = "hunter2-wifi";
+        let mut quick = Quick::default();
+        let network = Network {
+            ssid: String::from("Voisin"),
+            strength: 50,
+            security: Security::Psk,
+            active: false,
+            path: String::from("/ap/3"),
+        };
+        quick.joining = Some(network);
+        let message = Message::Password(Secret::new(typed.to_owned()));
+        assert!(!format!("{message:?}").contains(typed));
+        let _ = quick.update(message);
+        assert_eq!(quick.password.as_str(), typed);
+        assert!(!format!("{quick:?}").contains(typed), "{quick:?}");
+        assert!(format!("{quick:?}").contains("***"));
+        quick.close();
+        assert!(quick.password.is_empty());
+        assert!(quick.joining.is_none());
+        let mut secret = Secret::new(typed.to_owned());
+        secret.wipe();
+        assert_eq!(secret, Secret::default());
+    }
+
+    #[test]
+    fn the_sound_server_gets_one_call_at_a_time_the_latest_winning() {
+        let mut queue = SoundQueue::default();
+        assert_eq!(queue.push(SoundCall::Volume(10)), Some(SoundCall::Volume(10)));
+        assert_eq!(queue.push(SoundCall::Volume(20)), None);
+        assert_eq!(queue.push(SoundCall::Mute(true)), None);
+        assert_eq!(queue.push(SoundCall::Volume(30)), None);
+        assert_eq!(queue.done(), Some(SoundCall::Mute(true)));
+        assert_eq!(queue.push(SoundCall::Volume(40)), None);
+        assert_eq!(queue.done(), Some(SoundCall::Volume(40)));
+        assert_eq!(queue.done(), None);
+        assert_eq!(queue.push(SoundCall::Mute(false)), Some(SoundCall::Mute(false)));
     }
 
     /// A session that records the commands it is given.

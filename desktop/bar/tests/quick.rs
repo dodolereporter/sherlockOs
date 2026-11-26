@@ -226,6 +226,12 @@ mod tests {
         }
 
         fn request_scan(&self, _options: HashMap<String, OwnedValue>) {}
+
+        #[zbus(signal)]
+        async fn access_point_added(
+            emitter: &SignalEmitter<'_>,
+            point: OwnedObjectPath,
+        ) -> zbus::Result<()>;
     }
 
     struct Point {
@@ -621,6 +627,51 @@ mod tests {
         zbus::block_on(emitted).unwrap();
         let got = received.recv_timeout(Duration::from_secs(5));
         assert_eq!(got.ok(), Some(Service::Wifi));
+        // A scan finds an access point: the list is read again.
+        let object = emitter
+            .object_server()
+            .interface::<_, Wireless>("/nm/Devices/2")
+            .unwrap();
+        let point = path("/nm/AccessPoint/4");
+        let emitted = Wireless::access_point_added(object.signal_emitter(), point);
+        zbus::block_on(emitted).unwrap();
+        let got = received.recv_timeout(Duration::from_secs(5));
+        assert_eq!(got.ok(), Some(Service::Wifi));
+    }
+
+    /// A NetworkManager that takes the name and never answers.
+    struct Hung;
+
+    #[zbus::interface(name = "org.freedesktop.NetworkManager")]
+    impl Hung {
+        #[zbus(property)]
+        async fn wireless_enabled(&self) -> bool {
+            std::future::pending::<()>().await;
+            false
+        }
+    }
+
+    #[test]
+    fn a_service_that_hangs_ends_unavailable() {
+        let mut bus = Bus::start("hung");
+        bus.service(network::SERVICE, |builder| {
+            builder.serve_at(network::PATH, Hung).unwrap()
+        });
+        let client = zbus::block_on(async {
+            zbus::connection::Builder::address(bus.address.as_str())
+                .unwrap()
+                .method_timeout(Duration::from_millis(500))
+                .build()
+                .await
+                .unwrap()
+        });
+        let start = std::time::Instant::now();
+        let read = zbus::block_on(network::read(&client));
+        assert!(matches!(read, Err(Problem::Absent(_))), "{read:?}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        // What the tile then shows: unavailable, not « … ».
+        let load = quick::Load::from_result(read);
+        assert!(matches!(load, quick::Load::Failed(Problem::Absent(_))));
     }
 
     /// A fake `pactl` that answers from the fixtures and writes each call to a log.
@@ -651,6 +702,26 @@ mod tests {
             },
             log,
         )
+    }
+
+    #[test]
+    fn a_sound_server_that_hangs_is_given_up_after_the_time_limit() {
+        let dir = std::env::temp_dir().join(format!("bar-pactl-hung-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("pactl");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        let chmod = Command::new("chmod").arg("+x").arg(&script).status().unwrap();
+        assert!(chmod.success());
+        let pactl = Pactl {
+            program: script.into_os_string(),
+        };
+        let start = std::time::Instant::now();
+        assert!(matches!(pactl.read(), Err(Problem::Absent(_))));
+        let waited = start.elapsed();
+        assert!(waited >= bar::system::audio::TIMEOUT, "{waited:?}");
+        assert!(waited < bar::system::audio::TIMEOUT * 2, "{waited:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

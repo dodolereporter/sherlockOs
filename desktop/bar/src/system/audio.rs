@@ -3,10 +3,27 @@
 //! output. The bar's indicator reads the same values (`source::sound`).
 
 use std::ffi::OsString;
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use super::{Problem, Result};
 use crate::source::sound::{self, Sound};
+
+/// Longest wait for `pactl`: past it, the command is killed and the sound reads as
+/// unavailable.
+pub const TIMEOUT: Duration = Duration::from_secs(3);
+/// How often a running `pactl` is looked at.
+const POLL: Duration = Duration::from_millis(10);
+
+/// Reads `pipe` to its end on a thread of its own.
+fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
 
 /// The default output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,19 +49,46 @@ impl Default for Pactl {
 
 impl Pactl {
     fn run(&self, args: &[&str]) -> Result<String> {
-        let output = Command::new(&self.program)
+        let mut child = Command::new(&self.program)
             .args(args)
             .env("LC_ALL", "C")
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| Problem::Absent(format!("pactl: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        // Read on threads of their own: a full pipe never holds the command back.
+        let stdout = child.stdout.take().map(drain);
+        let stderr = child.stderr.take().map(drain);
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if start.elapsed() < TIMEOUT => std::thread::sleep(POLL),
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(Problem::Absent(format!(
+                        "pactl {} gave no answer in {TIMEOUT:?}",
+                        args.join(" ")
+                    )));
+                }
+                Err(e) => return Err(Problem::Failed(format!("pactl: {e}"))),
+            }
+        };
+        let text = |reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
+            let bytes = reader.and_then(|r| r.join().ok()).unwrap_or_default();
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        let (out, err) = (text(stdout), text(stderr));
+        if !status.success() {
             return Err(Problem::Failed(format!(
-                "pactl {}: {stderr}",
-                args.join(" ")
+                "pactl {}: {}",
+                args.join(" "),
+                err.trim()
             )));
         }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(out)
     }
 
     /// The default output, its volume and its name.
