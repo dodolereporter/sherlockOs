@@ -815,8 +815,9 @@ mod tests {
         assert_eq!(right - QUICK_WIDTH, 1092.0);
         assert_eq!(right - QUICK_WIDTH - PANEL_GAP - CENTER_WIDTH, 756.0);
         // The control centre stays clear of the dock on the reference screen.
-        assert!(bar + BELOW_BAR + CONTROL_HEIGHT < metrics::REFERENCE_SCREEN.1 - 150.0);
-        assert!(CALENDAR_HEIGHT < CONTROL_HEIGHT);
+        let bottom = bar + BELOW_BAR + CONTROL_HEIGHT;
+        assert!(bottom < metrics::REFERENCE_SCREEN.1 - 150.0, "{bottom}");
+        const { assert!(CALENDAR_HEIGHT < CONTROL_HEIGHT) };
     }
 
     #[test]

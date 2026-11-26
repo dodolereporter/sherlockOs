@@ -926,10 +926,71 @@ mod tests {
                 Target::Workspace(i) => {
                     assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
                 }
+                Target::Status | Target::Clock => panic!("no indicator in this bar"),
             }
         }
         let _ = bar.update(Message::Focus(Direction::Previous));
         assert_eq!(bar.focused(), Some(Target::Workspace(2)));
+    }
+
+    #[test]
+    fn tab_reaches_the_indicators_and_the_clock_which_open_their_panels() {
+        let mut bar = with_workspaces();
+        let _ = bar.update(Message::Sound(crate::source::sound::Sound {
+            volume: 40,
+            muted: false,
+        }));
+        let _ = bar.update(Message::Clock(LocalTime {
+            year: 2026,
+            weekday: 2,
+            day: 24,
+            month: 11,
+            hour: 21,
+            minute: 46,
+        }));
+        let _ = bar.update(Message::Focus(Direction::Previous));
+        assert_eq!(bar.focused(), Some(Target::Clock));
+        assert!(matches!(
+            bar.activation(),
+            Some(Message::TogglePanel(Panel::Calendar))
+        ));
+        let _ = bar.update(Message::Focus(Direction::Previous));
+        assert_eq!(bar.focused(), Some(Target::Status));
+        assert!(matches!(
+            bar.activation(),
+            Some(Message::TogglePanel(Panel::Control))
+        ));
+        // Opened, then the other one: one panel at a time, and Escape closes it.
+        let _ = bar.update(Message::Surface(Id::unique()));
+        let _ = bar.update(Message::TogglePanel(Panel::Calendar));
+        assert_eq!(bar.panel_open(), Some(Panel::Calendar));
+        assert_eq!(
+            bar.month,
+            Some(Month {
+                year: 2026,
+                month: 11
+            })
+        );
+        let _ = bar.update(Message::Page(true));
+        assert_eq!(
+            bar.month,
+            Some(Month {
+                year: 2026,
+                month: 12
+            })
+        );
+        let _ = bar.update(Message::MenuKey(menu::Key::First));
+        assert_eq!(
+            bar.month,
+            Some(Month {
+                year: 2026,
+                month: 11
+            })
+        );
+        let _ = bar.update(Message::TogglePanel(Panel::Control));
+        assert_eq!(bar.panel_open(), Some(Panel::Control));
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        assert_eq!(bar.panel_open(), None);
     }
 
     #[test]

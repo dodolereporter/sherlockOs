@@ -19,7 +19,7 @@ use bar::system::Problem;
 use bar::system::audio::Output;
 use bar::system::backlight::Backlight;
 use bar::system::bluetooth::Bluetooth;
-use bar::system::network::{Network, Security, Wifi};
+use bar::system::network::{Network as WifiNetwork, Security, Wifi};
 use bar::system::power::{Power, Profile};
 use iced_test::simulator::Simulator;
 use sherlock_ui::color::{self, Theme};
@@ -285,14 +285,14 @@ fn panel_size(state: &Bar, which: Panel) -> (f32, f32) {
 /// The quick settings of the Panels board: Wi-Fi on « Maison », Bluetooth off, sound at 62 %,
 /// brightness at 80 %, the balanced profile; no service actually read.
 fn board_quick(state: &mut Bar) {
-    let maison = Network {
+    let maison = WifiNetwork {
         ssid: String::from("Maison"),
         strength: 90,
         security: Security::Psk,
         active: true,
         path: String::from("/ap/1"),
     };
-    let cafe = Network {
+    let cafe = WifiNetwork {
         ssid: String::from("Café du coin"),
         strength: 60,
         security: Security::Open,
