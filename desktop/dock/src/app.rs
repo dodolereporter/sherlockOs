@@ -890,7 +890,12 @@ impl Dock {
                 .and_then(|place| candidate.middle(place))
                 .map_or(f32::INFINITY, |middle| (middle - along).abs())
         };
-        let Some(best) = drag::orders(pinned, sherlock, index)
+        let fixed = self
+            .items
+            .iter()
+            .take_while(|i| i.kind == Kind::Applications)
+            .count();
+        let Some(best) = drag::orders(fixed, pinned, sherlock, index)
             .into_iter()
             .min_by(|a, b| distance(a).total_cmp(&distance(b)))
         else {
@@ -1129,6 +1134,18 @@ impl Dock {
     /// A click on icon `index`: brings its windows forward, minimizes them when they already
     /// are, or starts the application.
     pub fn click(&mut self, index: usize) {
+        if self
+            .items
+            .get(index)
+            .is_some_and(|i| i.kind == Kind::Applications)
+        {
+            // Started again while open, the view closes: the button toggles it.
+            match launch::toggle_applications() {
+                Ok(pid) => tracing::info!(pid, "applications view"),
+                Err(error) => tracing::warn!(%error, "cannot open the applications view"),
+            }
+            return;
+        }
         match windows::click(self.open_windows(index), self.controllable()) {
             Click::Launch => self.activate(index, What::App),
             Click::Activate => self.request(index, Request::Activate),

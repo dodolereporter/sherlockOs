@@ -22,6 +22,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "wayland",
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# The pinned list as the dock shows it, and its file (workspace crates).
+dock = { path = "../dock" }
+dock-config = { path = "../dock-config" }
 # Application icons (workspace crate).
 icon-theme = { path = "../icon-theme" }
 # The launcher's reading of the applications, its search, its start without a shell and its

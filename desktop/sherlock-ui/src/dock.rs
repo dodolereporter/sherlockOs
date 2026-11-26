@@ -123,8 +123,10 @@ pub mod text {
     pub const SHERLOCK: &str = "Sherlock";
     pub const OPEN: &str = "Ouvrir";
     pub const NEW_WINDOW: &str = "Nouvelle fenêtre";
-    pub const KEEP: &str = "Garder dans le dock";
-    pub const UNPIN: &str = "Retirer du dock";
+    pub const KEEP: &str = "Garder dans le Dock";
+    pub const UNPIN: &str = "Retirer du Dock";
+    /// The button that opens the applications view (D-41), in its label and menu.
+    pub const APPLICATIONS: &str = "Applications";
     pub const QUIT: &str = "Quitter";
 
     /// Number of open windows, at the top right of the menu, like « 3 en marche » on the board.
@@ -134,6 +136,38 @@ pub mod text {
             n => format!("{n} fenêtres"),
         }
     }
+}
+
+/// The « Applications » button (D-41): nine squares on a slate tile, in the style of the
+/// application icons of `app_icon` (24 grid, tile radius 5.28, faint white border).
+pub fn applications_icon() -> String {
+    const PLACES: [f32; 3] = [5.3, 10.3, 15.3];
+    let squares: String = (0..9)
+        .map(|n| {
+            // The middle one in the accent green, the others cream.
+            let fill = if n == 4 {
+                hex(crate::color::ACCENT)
+            } else {
+                hex(crate::color::CREAM)
+            };
+            let (x, y) = (PLACES[n % 3], PLACES[n / 3]);
+            format!(
+                "<rect x=\"{x}\" y=\"{y}\" width=\"3.4\" height=\"3.4\" rx=\"1\" fill=\"{fill}\"/>"
+            )
+        })
+        .collect();
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><defs><clipPath id=\"tile\">\
+         <rect width=\"24\" height=\"24\" rx=\"5.28\"/></clipPath></defs><g clip-path=\"url(#tile)\">\
+         <rect width=\"24\" height=\"24\" fill=\"{tile}\"/>{squares}</g><rect x=\".09\" y=\".09\" \
+         width=\"23.82\" height=\"23.82\" rx=\"5.19\" fill=\"none\" stroke=\"white\" \
+         stroke-opacity=\".1\" stroke-width=\".18\"/></svg>",
+        tile = hex(crate::color::TILE_APPLICATIONS),
+    )
+}
+
+fn hex(c: Color) -> String {
+    format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
 }
 
 #[cfg(feature = "iced")]

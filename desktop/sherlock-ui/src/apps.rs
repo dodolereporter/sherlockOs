@@ -39,6 +39,10 @@ pub const GRID_BOTTOM: f32 = 140.0;
 pub const DOT: f32 = 8.0;
 pub const DOT_GAP: f32 = 12.0;
 pub const DOTS_BOTTOM: f32 = 112.0;
+/// The menu of an application: the dock menu's width, and its least distance from the screen
+/// edges.
+pub const MENU_WIDTH: f32 = crate::dock::MENU_WIDTH;
+pub const MENU_MARGIN: f32 = 8.0;
 /// How far the sizes follow the screen: from three quarters (a small laptop, a projector) to
 /// 1.3 times (1920 × 1080 and larger) the reference ones.
 pub const MIN_FACTOR: f32 = 0.75;
@@ -198,6 +202,9 @@ pub mod text {
     pub const PLACEHOLDER: &str = "Rechercher";
     /// Nothing matches the search.
     pub const NOTHING: &str = "Aucune application";
+    /// The right-click menu of an application: pinning to the dock (`dock::text::KEEP`,
+    /// `UNPIN`), then showing its desktop file in the file manager.
+    pub const SHOW: &str = "Afficher dans Evidence";
 }
 
 #[cfg(feature = "iced")]

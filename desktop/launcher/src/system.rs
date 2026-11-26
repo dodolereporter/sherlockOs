@@ -163,6 +163,7 @@ impl Source for System {
                     title: title.to_owned(),
                     subtitle: Some(line.to_owned()),
                     tile: Tile::Glyph(glyph),
+                    app: None,
                     action: Action::Session(power),
                 }
             })

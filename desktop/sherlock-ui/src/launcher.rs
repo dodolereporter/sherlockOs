@@ -48,6 +48,8 @@ pub const MAX_SECTIONS: usize = 5;
 /// Least time between arming a session command (« Se déconnecter », « Redémarrer »,
 /// « Éteindre ») and confirming it: longer than a double click and than a key bounce.
 pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+/// Width of the menu of an application (« Garder dans le Dock »), drawn inside its row.
+pub const MENU_WIDTH: f32 = 200.0;
 /// Width of the ring around the selected Sherlock row, which keeps its cream.
 pub const SHERLOCK_RING: f32 = 2.0;
 

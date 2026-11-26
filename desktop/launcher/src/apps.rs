@@ -132,6 +132,12 @@ impl Source for Apps {
                     title: app.name.clone(),
                     subtitle: app.generic_name.clone(),
                     tile: Tile::App(self.icon(app)),
+                    app: Some(
+                        app.id
+                            .strip_suffix(".desktop")
+                            .unwrap_or(&app.id)
+                            .to_owned(),
+                    ),
                     action: Action::Start(self.start(app)?),
                 })
             })

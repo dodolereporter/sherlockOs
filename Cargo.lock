@@ -115,6 +115,8 @@ dependencies = [
 name = "apps"
 version = "0.0.0"
 dependencies = [
+ "dock",
+ "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
@@ -2046,6 +2048,8 @@ name = "launcher"
 version = "0.0.0"
 dependencies = [
  "appearance-config",
+ "dock",
+ "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
