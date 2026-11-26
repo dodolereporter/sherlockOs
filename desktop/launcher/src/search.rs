@@ -5,7 +5,7 @@
 const EXACT: u32 = 1000;
 const PREFIX: u32 = 900;
 const WORD: u32 = 800;
-const SUBSTRING: u32 = 600;
+pub const SUBSTRING: u32 = 600;
 /// The letters of the term in order, apart: lose `GAP` per letter skipped, `FUZZY_FLOOR` at
 /// least, and win `WORD_START` when the first one starts a word.
 const FUZZY: u32 = 400;

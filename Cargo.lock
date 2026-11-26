@@ -1788,6 +1788,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "icon-theme"
+version = "0.0.0"
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2002,6 +2006,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "libc",
  "mime-apps",
  "sherlock-ui",

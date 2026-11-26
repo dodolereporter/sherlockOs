@@ -1,19 +1,28 @@
 //! The installed applications, read by `mime-apps`: every desktop entry that is not hidden
-//! from menus (`NoDisplay`), deleted (`Hidden`) or missing its program (`TryExec`).
+//! from menus (`NoDisplay`), deleted (`Hidden`) or missing its program (`TryExec`). Their icons
+//! come from `icon-theme`, looked up the first time an application is shown.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
+use icon_theme::Lookup;
 use mime_apps::{Catalog, DesktopEntry, Dirs};
-use sherlock_ui::launcher::text;
+use sherlock_ui::launcher::{self as look, text};
 
 use crate::search::Haystack;
-use crate::source::{Action, Command, Hit, Source};
+use crate::source::{Action, Command, Hit, Query, Source, Tile};
 
 /// The applications and what they are called, folded once.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct Apps {
     catalog: Catalog,
     names: Vec<Haystack>,
+    /// Where the icons are; none: every application shows its initial.
+    icons: Option<Lookup>,
+    /// Icons already looked up, by icon name.
+    found: Mutex<HashMap<String, Option<PathBuf>>>,
 }
 
 impl Apps {
@@ -37,7 +46,28 @@ impl Apps {
             terminal,
             ..Catalog::default()
         };
-        Self { catalog, names }
+        Self {
+            catalog,
+            names,
+            icons: None,
+            found: Mutex::default(),
+        }
+    }
+
+    /// Shows the icons `lookup` finds.
+    pub fn with_icons(mut self, lookup: Lookup) -> Self {
+        self.icons = Some(lookup);
+        self
+    }
+
+    /// The icon file of `app`, looked up once.
+    fn icon(&self, app: &DesktopEntry) -> Option<PathBuf> {
+        let (lookup, name) = (self.icons.as_ref()?, app.icon.as_deref()?);
+        let mut found = self.found.lock().ok()?;
+        found
+            .entry(name.to_owned())
+            .or_insert_with(|| lookup.find(name, look::APP_ICON as u32, look::ICON_SCALE))
+            .clone()
     }
 
     pub fn len(&self) -> usize {
@@ -56,7 +86,8 @@ impl Source for Apps {
 
     /// Best score first; then by folded name, then by desktop id: the order never depends on
     /// the order of the files.
-    fn search(&self, terms: &[String], limit: usize) -> Vec<Hit> {
+    fn search(&self, query: &Query, limit: usize) -> Vec<Hit> {
+        let terms = &query.terms;
         let mut found: Vec<(u32, &Haystack, &DesktopEntry)> = self
             .names
             .iter()
@@ -75,6 +106,7 @@ impl Source for Apps {
                 Some(Hit {
                     title: app.name.clone(),
                     subtitle: app.generic_name.clone(),
+                    tile: Tile::App(self.icon(app)),
                     action: Action::Start(Command {
                         program,
                         args,

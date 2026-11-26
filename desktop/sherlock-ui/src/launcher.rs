@@ -1,6 +1,6 @@
-//! Launcher (batch D-22a): the tokens, styles and texts of the application launcher. Values
-//! from the launcher of the Panels design board, `docs/design/planches/Panneaux.dc.html`, and
-//! of its light version.
+//! Launcher (batches D-22a and D-22b): the tokens, styles and texts of the application
+//! launcher. Values from the launcher of the Panels design board,
+//! `docs/design/planches/Panneaux.dc.html`, and of its light version.
 
 use crate::color::{self, Color, Palette};
 
@@ -32,9 +32,24 @@ pub const ROW_RADIUS: f32 = 10.0;
 pub const TILE: f32 = 30.0;
 pub const TILE_RADIUS: f32 = 8.0;
 pub const TILE_LETTER_SIZE: f32 = 14.0;
-/// Results shown at most, all sections together. A choice of D-22a: the panel stays clear of
-/// the dock on the 900 high reference screen.
-pub const MAX_RESULTS: usize = 8;
+/// Side of an application icon drawn on a tile, and the glyph drawn on a colored tile.
+pub const APP_ICON: f32 = TILE;
+pub const TILE_GLYPH: f32 = 16.0;
+/// Scale application icons are looked up for: sharp on a scale 2 screen, scaled down on the
+/// others.
+pub const ICON_SCALE: u32 = 2;
+/// Results shown at most, all sections together: with the five sections, the panel stays
+/// clear of the dock on the 900 high reference screen.
+pub const MAX_RESULTS: usize = 9;
+/// Results of one section at most.
+pub const SECTION_RESULTS: usize = 5;
+/// Sections at most: calculator, applications, system, files, Sherlock.
+pub const MAX_SECTIONS: usize = 5;
+/// Least time between arming a session command (« Se déconnecter », « Redémarrer »,
+/// « Éteindre ») and confirming it: longer than a double click and than a key bounce.
+pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+/// Width of the ring around the selected Sherlock row, which keeps its cream.
+pub const SHERLOCK_RING: f32 = 2.0;
 
 /// Height of the panel holding `sections` section labels and `rows` result rows: its border
 /// and padding, the search row and the line under it, the labels, the rows.
@@ -65,6 +80,16 @@ pub struct Colors {
     /// Tile of an application, and its initial (the « Conteneurs » tile of the board).
     pub tile: Color,
     pub tile_letter: Color,
+    /// Tile of a system command (the « Réglages » tile of the board) and of a file (the
+    /// board's « Fichiers » tiles); their glyph is cream.
+    pub system_tile: Color,
+    pub file_tile: Color,
+    pub tile_glyph: Color,
+    /// The « Demander à Sherlock » row: cream, its title, its line, the ring when selected.
+    pub sherlock_row: Color,
+    pub sherlock_title: Color,
+    pub sherlock_line: Color,
+    pub sherlock_ring: Color,
 }
 
 impl Colors {
@@ -76,6 +101,13 @@ impl Colors {
         key_row: Color::rgba(255, 255, 255, 0.12),
         tile: color::BLUE_BRIGHT,
         tile_letter: color::DEEPEST,
+        system_tile: Color::rgb(0x3A, 0x4A, 0x63),
+        file_tile: color::BLUE_DARK,
+        tile_glyph: color::CREAM,
+        sherlock_row: color::CREAM,
+        sherlock_title: color::TEXT_ON_CREAM,
+        sherlock_line: Color::rgb(0x2B, 0x3A, 0x54),
+        sherlock_ring: color::BLUE_BRIGHT,
     };
 
     /// The light board: white glass, night blue veils at the same opacity.
@@ -87,6 +119,13 @@ impl Colors {
         key_row: Color::rgba(20, 35, 59, 0.12),
         tile: color::BLUE_BRIGHT,
         tile_letter: color::DEEPEST,
+        system_tile: Color::rgb(0x3A, 0x4A, 0x63),
+        file_tile: color::BLUE_DARK,
+        tile_glyph: color::CREAM,
+        sherlock_row: color::CREAM,
+        sherlock_title: color::TEXT_ON_CREAM,
+        sherlock_line: Color::rgb(0x2B, 0x3A, 0x54),
+        sherlock_ring: color::BLUE_BRIGHT,
     };
 
     /// The colors that go with `palette`.
@@ -109,6 +148,115 @@ pub mod text {
     pub const APPLICATIONS: &str = "Applications";
     /// Shown when nothing matches. The board has no such state.
     pub const NOTHING: &str = "Aucun résultat";
+
+    /// Sections, in the order of the panel. The board has neither the calculator nor the
+    /// system commands.
+    pub const CALCULATOR: &str = "Calculatrice";
+    pub const SYSTEM: &str = "Système";
+    pub const FILES: &str = "Fichiers";
+    pub const SHERLOCK: &str = "Sherlock";
+
+    /// The calculator's line, then the line once the result is copied.
+    pub const COPY: &str = "Entrée pour copier le résultat";
+    pub const COPIED: &str = "Copié";
+
+    /// System commands: title, line, and the words that find them (folded, without accents).
+    pub const LOCK: &str = "Verrouiller";
+    pub const LOCK_LINE: &str = "Verrouille ta session";
+    pub const LOCK_WORDS: [&str; 3] = ["verrouiller", "verrou", "lock"];
+    pub const LOG_OUT: &str = "Se déconnecter";
+    pub const LOG_OUT_LINE: &str = "Ferme ta session";
+    pub const LOG_OUT_WORDS: [&str; 4] = ["deconnexion", "deconnecter", "logout", "quitter"];
+    pub const REBOOT: &str = "Redémarrer";
+    pub const REBOOT_LINE: &str = "Redémarre l'ordinateur";
+    pub const REBOOT_WORDS: [&str; 3] = ["redemarrer", "reboot", "restart"];
+    pub const POWER_OFF: &str = "Éteindre";
+    pub const POWER_OFF_LINE: &str = "Éteins l'ordinateur";
+    pub const POWER_OFF_WORDS: [&str; 4] = ["eteindre", "arreter", "shutdown", "poweroff"];
+    /// The line of « Se déconnecter », « Redémarrer » and « Éteindre » after a first Enter.
+    pub const CONFIRM: &str = "Appuie encore sur Entrée pour confirmer";
+
+    /// A file right in the personal folder: the line under its name.
+    pub const HOME: &str = "Dossier personnel";
+
+    /// The last entry, its line from the board, and its line while sherlockd cannot take a
+    /// request from the shell.
+    pub const ASK: &str = "Demander à Sherlock";
+    pub const ASK_LINE: &str = "Tab pour lui passer la recherche";
+    pub const SOON: &str = "Bientôt";
+}
+
+/// Line glyphs of the result tiles, on the grid and stroke of `crate::icon`. The board draws
+/// the file one; the others follow its stroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    Calculator,
+    Lock,
+    LogOut,
+    Reboot,
+    PowerOff,
+    File,
+    Folder,
+}
+
+impl Glyph {
+    pub const ALL: [Self; 7] = [
+        Self::Calculator,
+        Self::Lock,
+        Self::LogOut,
+        Self::Reboot,
+        Self::PowerOff,
+        Self::File,
+        Self::Folder,
+    ];
+
+    /// Path on the 24 grid.
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Calculator => {
+                "M6 3h12v18H6zM9 7h6M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01"
+            }
+            Self::Lock => crate::icon::Icon::Lock.path(),
+            Self::LogOut => "M10 4H5v16h5M14 8l4 4-4 4M18 12H9",
+            Self::Reboot => "M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4",
+            // The « Éteindre » button of the board's quick settings.
+            Self::PowerOff => "M12 4v8M7.5 7a7 7 0 1 0 9 0",
+            Self::File => crate::icon::Icon::Document.path(),
+            Self::Folder => crate::icon::Icon::Folder.path(),
+        }
+    }
+
+    /// Whether it sits on the system tile (else on the file tile, or the application tile for
+    /// the calculator).
+    pub const fn is_system(self) -> bool {
+        matches!(
+            self,
+            Self::Lock | Self::LogOut | Self::Reboot | Self::PowerOff
+        )
+    }
+
+    /// Full SVG document, stroked in black: the display recolors it.
+    pub fn svg(self) -> String {
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {grid} {grid}\" fill=\"none\" \
+             stroke=\"#000\" stroke-width=\"{stroke}\" stroke-linecap=\"round\" \
+             stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>",
+            grid = crate::metrics::ICON_GRID,
+            stroke = crate::metrics::ICON_STROKE,
+            path = self.path(),
+        )
+    }
+}
+
+impl Colors {
+    /// Tile behind a glyph, and the glyph's color.
+    pub fn glyph_tile(&self, glyph: Glyph) -> (Color, Color) {
+        match glyph {
+            Glyph::Calculator => (self.tile, self.tile_letter),
+            g if g.is_system() => (self.system_tile, self.tile_glyph),
+            _ => (self.file_tile, self.tile_glyph),
+        }
+    }
 }
 
 #[cfg(feature = "iced")]
@@ -192,6 +340,34 @@ mod styles {
         }
     }
 
+    /// Tile of a glyph: its color by kind.
+    pub fn glyph_tile(glyph: Glyph) -> impl Fn(&Theme) -> container::Style {
+        move |theme| {
+            fill(
+                colors(theme).glyph_tile(glyph).0,
+                border::rounded(TILE_RADIUS),
+            )
+        }
+    }
+
+    /// The « Demander à Sherlock » row: always cream, a ring when it is selected.
+    pub fn sherlock_row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+        move |theme, _| {
+            let c = colors(theme);
+            let edge = if selected {
+                border::width(SHERLOCK_RING).color(c.sherlock_ring)
+            } else {
+                Border::default()
+            };
+            button::Style {
+                background: Some(Background::Color(c.sherlock_row.into())),
+                text_color: c.sherlock_title.into(),
+                border: edge.rounded(ROW_RADIUS),
+                ..button::Style::default()
+            }
+        }
+    }
+
     /// The search field itself: no box of its own, the panel is its frame.
     pub fn query(
         theme: &Theme,
@@ -230,6 +406,14 @@ mod tests {
             let key = colors.key_row.over(selected);
             assert!(palette.text_secondary.contrast(key) >= 4.5);
             assert!(colors.tile_letter.contrast(colors.tile) >= 4.5);
+            for line in [colors.sherlock_title, colors.sherlock_line] {
+                assert!(line.contrast(colors.sherlock_row) >= 4.5);
+            }
+            // The glyphs are not text: 3 to 1 is enough for them.
+            for glyph in Glyph::ALL {
+                let (tile, stroke) = colors.glyph_tile(glyph);
+                assert!(stroke.contrast(tile) >= 3.0, "{glyph:?}");
+            }
             assert_eq!(Colors::of(palette), colors);
         }
     }
@@ -239,7 +423,23 @@ mod tests {
         assert_eq!(panel_height(0, 0), 71.0);
         let one = panel_height(1, 1);
         assert!((one - (71.0 + 14.0 + 11.0 * 1.4 + 46.0)).abs() < 1e-3);
-        assert!(panel_height(1, MAX_RESULTS) < metrics_room());
+        assert!(panel_height(MAX_SECTIONS, MAX_RESULTS) < metrics_room());
+        const { assert!(SECTION_RESULTS < MAX_RESULTS) };
+    }
+
+    #[test]
+    fn the_glyphs_stay_in_the_grid() {
+        for glyph in Glyph::ALL {
+            let numbers = glyph
+                .path()
+                .split(|c: char| c.is_ascii_alphabetic() || c == ' ' || c == ',')
+                .flat_map(|chunk| chunk.split_inclusive('-'))
+                .filter_map(|n| n.trim_end_matches('-').parse::<f32>().ok());
+            for n in numbers {
+                assert!(n.abs() <= crate::metrics::ICON_GRID, "{glyph:?}: {n}");
+            }
+            assert!(glyph.svg().contains("stroke-linecap=\"round\""));
+        }
     }
 
     /// Room between the launcher's top and the dock on the reference screen.
