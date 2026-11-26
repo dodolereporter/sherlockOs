@@ -114,7 +114,11 @@ impl Shown {
             }
             _ => Animation::new(ui::STRETCH_SPRING, 0.0, 1.0, now),
         };
-        self.push = Some(Push { edge, rise, at: now });
+        self.push = Some(Push {
+            edge,
+            rise,
+            at: now,
+        });
     }
 }
 
@@ -211,7 +215,12 @@ impl Osd {
 
     /// The pill at `now` on `screen`, whose dock reserves `reserved` logical pixels at the
     /// bottom; `None` once it is gone.
-    pub fn frame(&self, now: Duration, screen: Rectangle<f64, Logical>, reserved: f64) -> Option<Frame> {
+    pub fn frame(
+        &self,
+        now: Duration,
+        screen: Rectangle<f64, Logical>,
+        reserved: f64,
+    ) -> Option<Frame> {
         let shown = self.shown.as_ref()?;
         let presence = f64::from(shown.presence.value(now).clamp(0.0, 1.0));
         let moving = !shown.presence.is_done(now)
@@ -345,7 +354,10 @@ pub fn push_item(items: &mut Vec<Item>, state: &State, (output, view): (&Output,
     // What the dock, or any surface anchored at the bottom, keeps from the windows.
     let zone = layer_map_for_output(output).non_exclusive_zone();
     let reserved = (screen.size.h - zone.loc.y - zone.size.h).max(0);
-    let Some(frame) = state.osd.frame(state.now(), screen.to_f64(), f64::from(reserved)) else {
+    let Some(frame) = state
+        .osd
+        .frame(state.now(), screen.to_f64(), f64::from(reserved))
+    else {
         return false;
     };
     items.push(Item::Osd {
@@ -632,7 +644,9 @@ mod tests {
         let top = peak(&osd, ms(1000), 400);
         // About 5 % of its length, then back to rest on the spring.
         assert!(top > 0.9 && top < 1.1, "{top}");
-        let at = (0..400).map(|t| ms(1000 + t)).find(|t| osd.stretch(*t) >= top - 1e-9);
+        let at = (0..400)
+            .map(|t| ms(1000 + t))
+            .find(|t| osd.stretch(*t) >= top - 1e-9);
         let frame = osd.frame(at.unwrap(), screen(), 0.0).unwrap();
         let grown = frame.size.0 / rest.size.0 - 1.0;
         assert!(grown > 0.04 && grown < 0.06, "{grown}");
@@ -650,7 +664,9 @@ mod tests {
     fn a_key_that_insists_at_the_bottom_stretches_it_to_the_left() {
         let osd = pushed(Edge::Low, ms(1000));
         let rest = osd.frame(ms(999), screen(), 0.0).unwrap();
-        let frame = osd.frame(ms(1000) + ui::STRETCH_HOLD, screen(), 0.0).unwrap();
+        let frame = osd
+            .frame(ms(1000) + ui::STRETCH_HOLD, screen(), 0.0)
+            .unwrap();
         let right = |f: &Frame| f.rect.loc.x + f.rect.size.w;
         assert!((right(&frame) - right(&rest)).abs() < 0.5);
         assert!(rest.rect.loc.x - frame.rect.loc.x > 6.0);
@@ -682,7 +698,10 @@ mod tests {
         let gauge = |t| osd.frame(ms(t), screen(), 0.0).unwrap().gauge;
         assert!((gauge(500) - 0.4).abs() < 1e-9, "no jump");
         let values: Vec<f64> = (500..800).map(gauge).collect();
-        assert!(values.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02), "small moves");
+        assert!(
+            values.windows(2).all(|w| (w[1] - w[0]).abs() < 0.02),
+            "small moves"
+        );
         assert!((gauge(900) - 0.6).abs() < 1e-3);
         assert_eq!(osd.stretch(ms(600)), 0.0, "no stretch inside the range");
     }
@@ -700,7 +719,11 @@ mod tests {
         assert!((center(&first) - center(&shown)).abs() < 1e-6);
         assert!(osd.frame(ms(100), screen(), 0.0).unwrap().moving);
         // In place and still: drawn, but nothing moves, so no new frame is asked for.
-        assert!(!osd.frame(ui::ENTER + ms(300), screen(), 0.0).unwrap().moving);
+        assert!(
+            !osd.frame(ui::ENTER + ms(300), screen(), 0.0)
+                .unwrap()
+                .moving
+        );
         osd.hide(ms(2000));
         let going = osd.frame(ms(2000) + ui::LEAVE / 2, screen(), 0.0).unwrap();
         assert!(going.moving && going.alpha < 1.0);
@@ -723,8 +746,8 @@ mod tests {
         // A dock that reserves more pushes it up.
         let higher = on(1920.0, 1080.0, 150.0);
         assert!((rect.loc.y - higher.loc.y - (150.0 - f64::from(ui::DOCK_BAND))).abs() < 1e-6);
-        // Bounded on a small and on a wide screen.
-        assert!((on(1366.0, 768.0, 0.0).size.w - f64::from(ui::WIDTH_MIN)).abs() < 1e-6);
-        assert!((on(5120.0, 2880.0, 0.0).size.w - f64::from(ui::WIDTH_MAX)).abs() < 1e-6);
+        // Bounded on a small and on a wide screen (the scale is an f32).
+        assert!((on(1366.0, 768.0, 0.0).size.w - f64::from(ui::WIDTH_MIN)).abs() < 1e-3);
+        assert!((on(5120.0, 2880.0, 0.0).size.w - f64::from(ui::WIDTH_MAX)).abs() < 1e-3);
     }
 }

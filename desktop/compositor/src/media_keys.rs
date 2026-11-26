@@ -432,7 +432,12 @@ mod tests {
             KeyboardDown,
         ];
         let merged = merge(&keys);
-        let want = [(VolumeUp, 2), (Mute, 0), (BrightnessUp, -2), (KeyboardUp, -1)];
+        let want = [
+            (VolumeUp, 2),
+            (Mute, 0),
+            (BrightnessUp, -2),
+            (KeyboardUp, -1),
+        ];
         assert_eq!(merged, want);
         // Steps that cancel out do nothing; other keys stay in their place.
         assert_eq!(merge(&[VolumeUp, VolumeDown, play]), [(play, 0)]);

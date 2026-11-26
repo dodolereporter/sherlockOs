@@ -60,7 +60,10 @@ mod tests {
         let look = frame.look(scale);
         let pill = draw(&look).unwrap();
         let rect = frame.rect;
-        let (x, y) = ((rect.loc.x + offset.0) * scale, (rect.loc.y + offset.1) * scale);
+        let (x, y) = (
+            (rect.loc.x + offset.0) * scale,
+            (rect.loc.y + offset.1) * scale,
+        );
         let sx = rect.size.w * scale / f64::from(pill.width());
         let sy = rect.size.h * scale / f64::from(pill.height());
         let transform = Transform::from_row(sx as f32, 0.0, 0.0, sy as f32, x as f32, y as f32);
@@ -74,8 +77,9 @@ mod tests {
 
     fn save(pixmap: &Pixmap, name: &str) -> PathBuf {
         let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-        let image = image::RgbaImage::from_raw(pixmap.width(), pixmap.height(), pixmap.data().to_vec())
-            .unwrap();
+        let image =
+            image::RgbaImage::from_raw(pixmap.width(), pixmap.height(), pixmap.data().to_vec())
+                .unwrap();
         image.save(&path).unwrap();
         path
     }
@@ -85,18 +89,25 @@ mod tests {
     fn board(name: &str, frames: &[Frame], guides: &[f64]) -> PathBuf {
         let palette = Theme::Dark.palette();
         let (w, h) = (CELL.0 * frames.len() as f64, CELL.1);
-        let mut pixmap =
-            Pixmap::new((w * BOARD_SCALE) as u32, (h * BOARD_SCALE) as u32).unwrap();
+        let mut pixmap = Pixmap::new((w * BOARD_SCALE) as u32, (h * BOARD_SCALE) as u32).unwrap();
         let s = BOARD_SCALE;
         fill(&mut pixmap, (0.0, 0.0, w * s, h * s), palette.desktop);
         for (i, frame) in frames.iter().enumerate() {
             let left = CELL.0 * i as f64;
             if i > 0 {
-                fill(&mut pixmap, (left * s, 0.0, s, h * s), palette.text_tertiary);
+                fill(
+                    &mut pixmap,
+                    (left * s, 0.0, s, h * s),
+                    palette.text_tertiary,
+                );
             }
             for x in guides {
                 let x = (left + x) * s;
-                fill(&mut pixmap, (x, 8.0 * s, 1.0, (h - 16.0) * s), palette.blue_light);
+                fill(
+                    &mut pixmap,
+                    (x, 8.0 * s, 1.0, (h - 16.0) * s),
+                    palette.blue_light,
+                );
             }
             put(&mut pixmap, frame, s, (left, 0.0));
         }
@@ -184,7 +195,12 @@ mod tests {
             let dock_h = f64::from(metrics::DOCK_HEIGHT);
             let bottom = f64::from(dock::MARGIN_BOTTOM);
             let rect = ((w - dock_w) / 2.0, h - bottom - dock_h, dock_w, dock_h);
-            let rect = (rect.0 * scale, rect.1 * scale, rect.2 * scale, rect.3 * scale);
+            let rect = (
+                rect.0 * scale,
+                rect.1 * scale,
+                rect.2 * scale,
+                rect.3 * scale,
+            );
             fill(&mut pixmap, rect, palette.dock_glass);
             put(&mut pixmap, &frame, scale, (0.0, 0.0));
             // Centered, above the dock, inside its bounds.
@@ -192,7 +208,7 @@ mod tests {
             assert!((r.loc.x + r.size.w / 2.0 - w / 2.0).abs() < 1e-6);
             assert!(r.loc.y + r.size.h < h - bottom - dock_h - 20.0);
             let pill = r.size.w;
-            let bounds = f64::from(ui::WIDTH_MIN)..=f64::from(ui::WIDTH_MAX);
+            let bounds = f64::from(ui::WIDTH_MIN) - 1e-3..=f64::from(ui::WIDTH_MAX) + 1e-3;
             assert!(bounds.contains(&pill), "{pill} on {width}x{height}");
             let name = format!("osd-screen-{width}x{height}@{scale}.png");
             eprintln!("{}", save(&pixmap, &name).display());

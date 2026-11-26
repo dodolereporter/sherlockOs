@@ -117,7 +117,13 @@ mod tests {
 
     #[test]
     fn a_press_at_the_end_pushes_against_it() {
-        let step = |v: u8, up: bool| if up { (v + 5).min(100) } else { v.saturating_sub(5) };
+        let step = |v: u8, up: bool| {
+            if up {
+                (v + 5).min(100)
+            } else {
+                v.saturating_sub(5)
+            }
+        };
         assert_eq!(press(90, 1, step), (95, false));
         assert_eq!(press(95, 1, step), (100, false));
         assert_eq!(press(100, 1, step), (100, true));

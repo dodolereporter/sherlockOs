@@ -334,7 +334,9 @@ mod tests {
         h.run_until("the top pushed", |h| {
             h.state.osd_level() == shown && h.state.osd_stretch() > 0.5
         });
-        h.run_until("the pill back", |h| h.state.osd_stretch().abs() < 1e-3);
+        // Back at rest, past the spring's slight swing beyond it.
+        h.run_for(Duration::from_millis(700));
+        assert!(h.state.osd_stretch().abs() < 1e-3);
         // Inside the range, no stretch.
         h.tap(VOLUME_DOWN);
         let shown = level(Kind::Volume, 95, false);

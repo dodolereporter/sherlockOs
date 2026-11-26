@@ -60,7 +60,8 @@ pub fn step(brightness: u32, max: u32, up: bool) -> u32 {
     let levels = max.clamp(1, LEVELS);
     let mut raws = (0..=levels).map(|k| level(k, levels, max));
     if up {
-        raws.find(|raw| *raw > brightness).unwrap_or(brightness.max(max))
+        raws.find(|raw| *raw > brightness)
+            .unwrap_or(brightness.max(max))
     } else {
         raws.rev().find(|raw| *raw < brightness).unwrap_or(0)
     }
@@ -157,17 +158,20 @@ pub async fn set(bus: &Connection, light: &KeyboardLight, raw: u32) -> Result<()
 
 /// `steps` steps of the keyboard backlight, up when positive, down when negative, set at once.
 /// Returns it lit anew, and whether a step pushed against the end (`crate::press`).
-pub async fn step_from(
-    bus: &Connection,
-    leds: &Path,
-    steps: i32,
-) -> Result<(KeyboardLight, bool)> {
+pub async fn step_from(bus: &Connection, leds: &Path, steps: i32) -> Result<(KeyboardLight, bool)> {
     let light = read(bus, leds).await?;
-    let (brightness, pushed) = crate::press(light.brightness, steps, |b, up| step(b, light.max, up));
+    let (brightness, pushed) =
+        crate::press(light.brightness, steps, |b, up| step(b, light.max, up));
     if brightness != light.brightness {
         set(bus, &light, brightness).await?;
     }
-    Ok((KeyboardLight { brightness, ..light }, pushed))
+    Ok((
+        KeyboardLight {
+            brightness,
+            ..light
+        },
+        pushed,
+    ))
 }
 
 /// Turns the keyboard backlight off when it is lit, else back on at `restore`, or at half its
@@ -185,7 +189,13 @@ pub async fn toggle(
         (back.unwrap_or_else(|| half(light.max)), None)
     };
     set(bus, &light, brightness).await?;
-    Ok((KeyboardLight { brightness, ..light }, turned_off))
+    Ok((
+        KeyboardLight {
+            brightness,
+            ..light
+        },
+        turned_off,
+    ))
 }
 
 #[cfg(test)]
@@ -234,7 +244,10 @@ mod tests {
             std::fs::write(dir.join(name).join("max_brightness"), "2\n").unwrap();
         }
         let light = led(&dir).unwrap();
-        assert_eq!(light.through, Through::Logind("tpacpi::kbd_backlight".into()));
+        assert_eq!(
+            light.through,
+            Through::Logind("tpacpi::kbd_backlight".into())
+        );
         assert_eq!((light.brightness, light.max), (1, 2));
         std::fs::remove_dir_all(dir.join("tpacpi::kbd_backlight")).unwrap();
         assert!(matches!(led(&dir), Err(Problem::Absent(_))));

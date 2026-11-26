@@ -61,10 +61,7 @@ pub const STRETCH_HOLD: Duration = Duration::from_millis(120);
 /// screen 1920 wide.
 pub fn fit(width: f32) -> f32 {
     let room = (width - 2.0 * PADDING).max(1.0);
-    (width * WIDTH_SHARE)
-        .clamp(WIDTH_MIN, WIDTH_MAX)
-        .min(room)
-        / WIDTH
+    (width * WIDTH_SHARE).clamp(WIDTH_MIN, WIDTH_MAX).min(room) / WIDTH
 }
 
 /// From the bottom edge of a screen `height` logical pixels high to the bottom of the pill at
