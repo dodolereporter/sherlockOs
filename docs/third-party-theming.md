@@ -8,6 +8,7 @@ dark and a light variant. The NOM_OS session follows the active theme of `appear
 
 ```text
 just themes [folder]     # writes every file under target/themes, laid out like a home folder
+just themes folder --force  # the same, over files already there (refused without it)
 just install-themes      # installs them for the user, without root
 just uninstall-themes    # takes them away and puts the backups back
 ```
@@ -25,7 +26,7 @@ just uninstall-themes    # takes them away and puts the backups back
 | `~/.local/share/nom-os/themes/libadwaita/{dark,light}.css` | Nothing by default (see "libadwaita") |
 | `~/.local/share/nom-os/themes/dconf-profile` | dconf, in the NOM_OS session only |
 | `~/.local/share/nom-os/themes/toolkit-theme` | The session, which runs it to follow the theme |
-| `~/.local/share/nom-os/themes/manifest` | `uninstall`: the installed files and their backups |
+| `~/.local/share/nom-os/themes/manifest` | `uninstall`: the installed files, their backups, and the folders created for them |
 
 The GTK theme imports a base theme, defines the named colors, then paints the main surfaces
 with them: the window, the header bar, views and lists, the sidebar, fields and buttons, the
@@ -132,8 +133,12 @@ That choice is the author's.
   from Plasma's scheme. Most KDE applications can be given `NOMOSDark` from their own color
   scheme menu, but that choice is kept in their own settings file, under Plasma too.
 - The `nom_os` dconf database also holds every GTK setting changed while in the session (the
-  preferences of Nautilus, for instance): they do not reach Plasma, and Plasma's later changes
-  show in the session only where the session never set the key.
+  preferences of Nautilus, the size of a window, for instance): they do not reach Plasma, and
+  Plasma's later changes show in the session only where the session never set the key.
+- An application started by D-Bus activation (`DBusActivatable=true` in its `.desktop` file)
+  is started by the bus, which does not have `DCONF_PROFILE`: the session does not import its
+  environment into the bus. Such an application reads and writes the user's database, `user`,
+  and does not follow the theme of the session.
 - An adw-gtk3 installed after `just install-themes` is used after running it again.
 - `/etc/dconf/profile/user`, when it exists, may name system databases: the session's profile
   does not read them.
@@ -141,9 +146,13 @@ That choice is the author's.
 ## Going back
 
 `just uninstall-themes`. Each installed file is deleted, and the file it had replaced, kept as
-`<name>.bak-<date>`, takes its place again. A file of ours that was changed since (the qt6ct
+`<name>.bak-<date>`, takes its place again. A symbolic link is kept as it is, even one that
+leads nowhere (dotfiles managed with stow, for instance), and comes back the same. A file of ours that was changed since (the qt6ct
 settings edited with qt6ct, for instance) is not deleted: it is kept as
-`<name>.bak-<date>` too. The folders that hold nothing more of ours go. Without the profile and
+`<name>.bak-<date>` too. The folders that installing created go once empty, and only those.
+The manifest is written after each file: when the removal stops on an error, running it again
+goes on where it stopped. Installing writes it before each file, so that a backup is always
+listed, whatever stops the installation. Without the profile and
 the program, the session exports nothing and runs no follower. The session's dconf database,
 `~/.config/dconf/nom_os`, is left in place: delete it to forget the GTK settings of the session.
 
@@ -177,7 +186,10 @@ its default look, and GTK 3 is painted over its built-in Adwaita. Kvantum is not
 - in a temporary home: installing backs up the user's qt6ct settings and leaves the GTK files
   of Plasma alone; removing gives the home back exactly as it was; installing twice keeps the
   first backup; a file changed since is kept on reinstall and on removal; a taken backup name
-  gets a number; the GTK settings are left alone outside the session.
+  gets a number; a symbolic link that leads nowhere is kept and comes back; a removal stopped
+  halfway and run again puts every file back in place; the folders created go, those that
+  were there stay; the GTK settings are left alone outside the session;
+- `generate` refuses a folder where a file is already there, unless `force` is given.
 
 The captures in `desktop/toolkit-theme/screenshots/` were taken without a screen, in a
 temporary home on a private D-Bus: GTK 3 and GTK 4 through Broadway with the generated themes,

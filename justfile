@@ -54,9 +54,9 @@ install-evidence:
     done < desktop/evidence/evidence.desktop)
     printf '%s\n' "$entry" | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/evidence.desktop"
 
-# Writes the GTK, Qt and KDE themes under a folder laid out like a home folder, to look at them
-themes output="target/themes":
-    cargo run -p toolkit-theme -- generate {{ quote(output) }}
+# Writes the GTK, Qt and KDE themes under a folder laid out like a home folder, to look at them; overwrites nothing unless `force` is `--force`
+themes output="target/themes" force="":
+    cargo run -p toolkit-theme -- generate {{ force }} {{ quote(output) }}
 
 # Installs the colors of the desktop for GTK, Qt and KDE applications, without root: every file it replaces is kept as <name>.bak-<date>
 install-themes:

@@ -1,7 +1,8 @@
 //! `toolkit-theme`: the colors of the desktop for GTK, Qt and KDE applications.
 //!
-//! - `generate <folder>` writes every generated file under `<folder>`, laid out as in a home
-//!   folder (`.config/…`, `.local/share/…`), to look at them;
+//! - `generate [--force] <folder>` writes every generated file under `<folder>`, laid out as
+//!   in a home folder (`.config/…`, `.local/share/…`), to look at them; it overwrites nothing
+//!   without `--force`;
 //! - `install` puts them in the user's folders, itself included, backing up what was there;
 //! - `uninstall` takes them away and puts the backups back;
 //! - `apply [dark|light]` switches the session to a theme, that of the appearance file by
@@ -20,8 +21,7 @@ use sherlock_ui::color::Theme;
 use toolkit_theme::{apply, install};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str =
-    "usage: toolkit-theme generate <folder> | install | uninstall | apply [dark|light] | follow";
+const USAGE: &str = "usage: toolkit-theme generate [--force] <folder> | install | uninstall | apply [dark|light] | follow";
 
 fn main() -> ExitCode {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -44,16 +44,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let layout = install::Layout::from_env()?;
     match args.as_slice() {
         ["generate", folder] => {
-            let root = PathBuf::from(folder);
-            let target = install::Layout {
-                config: root.join(".config"),
-                data: root.join(".local/share"),
-                home: root,
-            };
-            for file in install::files(&target) {
-                std::fs::create_dir_all(file.path.parent().ok_or("no parent folder")?)?;
-                std::fs::write(&file.path, &file.content)?;
-            }
+            install::generate(&PathBuf::from(folder), false)?;
+            Ok(())
+        }
+        ["generate", "--force", folder] => {
+            install::generate(&PathBuf::from(folder), true)?;
             Ok(())
         }
         ["install"] => {

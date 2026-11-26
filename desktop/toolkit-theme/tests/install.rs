@@ -249,3 +249,107 @@ fn the_session_alone_touches_the_gtk_settings() {
     );
     let _ = fs::remove_dir_all(&layout.home);
 }
+
+#[test]
+fn a_link_that_leads_nowhere_comes_back() {
+    let layout = home("dangling");
+    let qt6 = layout.qtct_settings(Qt::V6);
+    let target = Path::new("/nonexistent/qt6ct.conf");
+    fs::create_dir_all(qt6.parent().must()).must();
+    std::os::unix::fs::symlink(target, &qt6).must();
+    // An empty folder of the user's, there before: it stays.
+    fs::create_dir_all(layout.data.join("themes")).must();
+
+    let files = install::files(&layout);
+    let actions = install::install(&layout, &files, "20261126-100000").must();
+    let backup = qt6.with_file_name("qt6ct.conf.bak-20261126-100000");
+    assert!(actions.contains(&Action::BackedUp {
+        path: qt6.clone(),
+        backup: backup.clone()
+    }));
+    assert_eq!(fs::read_link(&backup).must(), target);
+
+    install::uninstall(&layout, "20261126-110000").must();
+    assert_eq!(fs::read_link(&qt6).must(), target);
+    assert!(backup.symlink_metadata().is_err());
+    // The folders installing created are gone, the others stay.
+    assert!(!layout.config.join("qt5ct").exists());
+    assert!(!layout.data.join("nom-os").exists());
+    assert!(layout.data.join("themes").is_dir());
+    assert!(qt6.parent().must().is_dir());
+    let _ = fs::remove_dir_all(&layout.home);
+}
+
+#[test]
+fn a_removal_stopped_halfway_goes_on_when_run_again() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let layout = home("halfway");
+    write(&layout.qtct_settings(Qt::V5), "mine5\n");
+    write(&layout.qtct_settings(Qt::V6), "mine6\n");
+    let before = tree(&layout.home);
+    install::install(&layout, &install::files(&layout), "20261126-100000").must();
+
+    // qt5ct comes last: its folder read only stops the removal there, qt6ct already restored.
+    let qt5 = layout.config.join("qt5ct");
+    fs::set_permissions(&qt5, fs::Permissions::from_mode(0o555)).must();
+    let probe = qt5.join("probe");
+    // Run as root, the folder stays writable and nothing stops.
+    let blocked = fs::write(&probe, "").is_err();
+    let _ = fs::remove_file(&probe);
+    let first = install::uninstall(&layout, "20261126-110000");
+    fs::set_permissions(&qt5, fs::Permissions::from_mode(0o755)).must();
+    if blocked {
+        assert!(first.is_err(), "{first:?}");
+        assert_eq!(
+            fs::read_to_string(layout.qtct_settings(Qt::V6)).must(),
+            "mine6\n"
+        );
+    }
+
+    install::uninstall(&layout, "20261126-110500").must();
+    assert_eq!(tree(&layout.home), before);
+    assert!(!layout.home.join(".local").exists());
+    let _ = fs::remove_dir_all(&layout.home);
+}
+
+#[test]
+fn a_backup_is_listed_before_the_file_is_written() {
+    let layout = home("listed");
+    let qt6 = layout.qtct_settings(Qt::V6);
+    write(&qt6, "mine6\n");
+    // A folder where the temporary file goes: writing ours fails after the backup.
+    let blocker = qt6.with_file_name("qt6ct.conf.toolkit-theme-new");
+    fs::create_dir_all(&blocker).must();
+    let file = File {
+        path: qt6.clone(),
+        content: b"ours\n".to_vec(),
+        executable: false,
+    };
+    assert!(install::install(&layout, &[file], "20261126-100000").is_err());
+    assert!(!qt6.exists());
+
+    fs::remove_dir(&blocker).must();
+    install::uninstall(&layout, "20261126-110000").must();
+    assert_eq!(fs::read_to_string(&qt6).must(), "mine6\n");
+    let _ = fs::remove_dir_all(&layout.home);
+}
+
+#[test]
+fn generate_overwrites_nothing_without_force() {
+    let layout = home("generate");
+    let root = layout.home.join("out");
+    let written = install::generate(&root, false).must();
+    let first = written.first().must();
+    fs::write(first, "mine\n").must();
+
+    let refused = install::generate(&root, false);
+    assert!(
+        matches!(&refused, Err(install::Error::Exists(p)) if p == first),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read_to_string(first).must(), "mine\n");
+
+    install::generate(&root, true).must();
+    assert_ne!(fs::read_to_string(first).must(), "mine\n");
+    let _ = fs::remove_dir_all(&layout.home);
+}
