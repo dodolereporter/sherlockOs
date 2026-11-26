@@ -121,6 +121,10 @@ enum Shortcut {
     Snap(Zone),
     /// Down arrow: restores the previous place.
     Restore,
+    /// Tab: opens or closes Mission Control (lot D-33).
+    ToggleOverview,
+    /// Escape while Mission Control is open: closes it.
+    CloseOverview,
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
     SwitchVt(i32),
     /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
@@ -168,6 +172,7 @@ impl Shortcut {
             Keysym::Left => Some(Self::Snap(Zone::Left)),
             Keysym::Right => Some(Self::Snap(Zone::Right)),
             Keysym::Down => Some(Self::Restore),
+            Keysym::Tab => Some(Self::ToggleOverview),
             _ => None,
         }
     }
@@ -500,6 +505,9 @@ impl State {
     /// chooses it. Over a client, the client does, if it names it (cursor shape protocol); if it
     /// draws its cursor itself, the arrow.
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
+        if self.overview_open() {
+            return Some(CursorIcon::Default);
+        }
         if let Some(gesture) = &self.gesture {
             return Some(gesture.edges.map_or(CursorIcon::Move, resize_cursor));
         }
@@ -568,6 +576,13 @@ impl State {
         };
         let serial = SERIAL_COUNTER.next_serial();
         let shortcut = keyboard.input(self, key, key_state, serial, time, |state, mods, sym| {
+            let sym = sym.modified_sym();
+            // The gesture key pressed and released alone toggles Mission Control (lot D-33).
+            let other = if state.nested { mods.logo } else { mods.alt };
+            let alone = !mods.ctrl && !mods.shift && !other;
+            let gesture_key = crate::mission_control::is_gesture_key(state.nested, sym);
+            let pressed = key_state == KeyState::Pressed;
+            state.overview.key(gesture_key, pressed, alone);
             if key_state == KeyState::Released {
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
@@ -579,7 +594,10 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
-            let sym = sym.modified_sym();
+            if state.overview_open() && sym == Keysym::Escape {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(Shortcut::CloseOverview));
+            }
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym));
             if let Some(shortcut) = shortcut {
@@ -596,6 +614,9 @@ impl State {
         });
         if let Some(Some(shortcut)) = shortcut {
             self.run_shortcut(shortcut);
+        }
+        if self.overview.take_toggle() {
+            self.toggle_overview();
         }
     }
 
@@ -621,6 +642,14 @@ impl State {
             }
             Shortcut::NeighborWorkspace(steps) => {
                 self.activate_workspace_by(steps);
+                return;
+            }
+            Shortcut::ToggleOverview => {
+                self.toggle_overview();
+                return;
+            }
+            Shortcut::CloseOverview => {
+                self.close_overview();
                 return;
             }
             Shortcut::SendToWorkspace(index) => {
@@ -697,6 +726,10 @@ impl State {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
+        } else if self.overview_open() {
+            // Mission Control: no client has the pointer (lot D-33).
+            self.overview_motion(location);
+            None
         } else {
             let hit = self.hit(location);
             self.hover_decoration(match &hit {
@@ -738,6 +771,14 @@ impl State {
             serial,
             time,
         };
+        self.overview.cancel_tap();
+        if self.overview_open() {
+            // Mission Control: the click goes to no client (lot D-33).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            self.overview_button(button, state == ButtonState::Pressed, location);
+            return;
+        }
         if let Some(gesture) = self.gesture.take() {
             // The pointer has no focus during the gesture: no client sees the other buttons, but
             // the seat tracks them.
