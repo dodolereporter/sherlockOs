@@ -12,7 +12,8 @@ draw on the GPU (linux-dmabuf). Lot D-14 runs it as a real session, on the scree
 machine, from a text console or the login screen (see "Real session"). Lot D-31 gives the
 touchpad its setting and its gestures (see "Touchpad"). Lot D-33 adds Mission Control (see
 "Mission Control"). Lot D-35 takes the media keys and shows their on-screen display
-(`docs/media-keys.md`), and takes screenshots (`docs/screenshots.md`).
+(`docs/media-keys.md`), and takes screenshots (`docs/screenshots.md`). Lot D-25a locks the
+session (see "Session lock").
 
 Machine prerequisites, on top of those in `CLAUDE.md`: the `Xwayland` server (`xwayland` package
 on Debian). Tried with version 24.1.6 from Debian 13; the CI installs the one from Ubuntu 24.04.
@@ -47,6 +48,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/capture.rs` | Screenshots (lot D-35c): Print Screen, the area, the drawing offscreen, the PNG, the clipboard (see `docs/screenshots.md`) |
 | `src/osd.rs` | On-screen display of the media keys: the pill, its springs, its texture (lot D-35) |
 | `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
+| `src/lock.rs` | Session lock (lot D-25a, ADR 0023): `ext-session-lock-v1` with its checks, what a locked screen shows, the lock program started again |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
@@ -267,7 +269,8 @@ the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
     drawn by the compositor itself and hit before `layer_hit`;
   - a forced keyboard focus that comes before `exclusive_layer()`;
   - a filter on the layer-shell global, kept for the shell programs that the session starts;
-  - `ext-session-lock` for D-25, rather than an overlay surface.
+  - `ext-session-lock` for D-25, rather than an overlay surface: done by lot D-25a (see
+    "Session lock").
 
 ### Layer-shell toolkit of the shell (answer to ADR 0014)
 
@@ -2182,6 +2185,57 @@ decorated windows, the pointer on one, into `screenshots/mission-control-dark.pn
 - **Keyboard navigation** in the view (arrows, Enter) and the search that filters the windows
   (proposition 2.3) are not there.
 - **Blur** of the wallpaper: the dim stands for it until the compositor blurs (lot D-11b).
+
+## Session lock (lot D-25a)
+
+The compositor implements `ext-session-lock-v1` (smithay's `session_lock`, with checks of our
+own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; colors and texts:
+`sherlock_ui::lock`.
+
+- **Locking.** Super + L locks the session at once, then starts the lock program,
+  `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). Any
+  client may also lock an unlocked session through the protocol, as `swaylock` does.
+- **What is drawn.** Each screen shows its lock surface, in front of the background of the
+  system screens (`#0A1424` in the dark theme), or that background alone. Nothing else, except
+  the on-screen display of the volume and brightness keys: no window, bar, dock, menu, Mission
+  Control or screenshot area. Screens plugged in while locked show the background until the
+  lock program gives them a surface. Lock surfaces get their size (the screen's), their scale
+  and frame callbacks like the other surfaces.
+- **`locked`.** Sent once every screen has shown a frame built while locked, at its vertical
+  blank (nested mode: after the host frame). The console away, it waits for its return.
+- **Input.** The keyboard goes only to a lock surface (that of the screen under the pointer,
+  which a press on another screen changes), the pointer only to the lock surface under it.
+  Grabs, menus, gestures and Mission Control are cancelled at the lock; touchpad gestures do
+  nothing. The only keys the compositor still takes: Ctrl + Alt + F1 to F12 (console switch),
+  Ctrl + Alt + Backspace (stops the compositor, which ends the session, it does not open it),
+  the volume, microphone and brightness keys, and Enter on the rescue screen.
+- **Unlocking.** Only `unlock_and_destroy` from the lock that holds the session, once `locked`
+  was sent; any other is the `invalid_unlock` protocol error. A second lock is refused
+  (`finished`).
+- **When the lock program dies.** The session stays locked on the background. The program is
+  started again after 500 ms; once locked, only a program the compositor started may take the
+  lock over (its connection's pid). A program that ends without locking, or does not lock
+  within 10 seconds, is a failure. After 3 failures, `swaylock --color 0a1424`; if it is not
+  there or fails too, the compositor draws its rescue screen: « Verrouillé » and « Appuie sur
+  Entrée pour réessayer », Enter starting the programs again.
+
+Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
+surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
+open; a window and an overlay surface with an exclusive keyboard created while locked are
+neither drawn nor given input; a refused lock cannot unlock, the lock that holds the session
+can, and the window gets the keyboard back; an unlock before `locked` is refused; a killed
+lock client leaves the session locked, the lock programs fail three times, the rescue program
+too, and the rescue screen shows, Enter trying again; an ordinary client cannot take a lock
+over, a lock program can; Super + L locks at once.
+
+Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
+
+1. In a real session, Super + L: the lock screen shows, nothing of the desktop is visible.
+2. `pkill -KILL sherlockos-lock` from another console: back on the session's console, it is
+   still locked (background, then the lock screen again).
+3. Ctrl + Alt + F3 then back: still locked. Plug a screen in while locked: it shows the
+   background or the lock, never the desktop.
+4. Ctrl + Alt + Backspace while locked: the session ends, SDDM or the console comes back.
 
 ## Measuring
 

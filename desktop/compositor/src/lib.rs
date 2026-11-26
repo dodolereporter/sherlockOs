@@ -20,6 +20,7 @@ pub mod keyboard;
 pub mod launcher;
 mod layer;
 pub mod layout;
+pub mod lock;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -225,6 +226,8 @@ pub struct State {
     osd: osd::Osd,
     /// Screenshots (lot D-35c).
     capture: capture::Capture,
+    /// The session lock (lot D-25a, ADR 0023).
+    lock: lock::SessionLock,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -363,6 +366,7 @@ impl State {
             media_keys: None,
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
+            lock: lock::SessionLock::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -526,11 +530,17 @@ impl State {
     }
 
     /// Gives the keyboard to `target`, unless an anchored surface with an exclusive keyboard
-    /// keeps it. While Mission Control is open, no window has it.
+    /// keeps it. While Mission Control is open, no window has it. While the session is
+    /// locked, only a lock surface has it, whatever `target` is (lot D-25a).
     pub(crate) fn set_keyboard_focus(&mut self, target: Option<KeyboardFocus>) {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
+        if self.is_locked() {
+            let target = self.lock_focus();
+            keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+            return;
+        }
         let target = target.filter(|_| !self.overview.is_open());
         let target = self
             .exclusive_layer()
@@ -651,6 +661,7 @@ impl State {
             self.popup_grab = None;
         }
         self.update_scales();
+        self.refresh_lock();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {
             let since = self.perf.start();

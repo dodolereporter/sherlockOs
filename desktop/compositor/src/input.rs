@@ -139,6 +139,10 @@ enum Shortcut {
     Screenshot(capture::Kind),
     /// Escape while the area of a screenshot is chosen.
     CancelArea,
+    /// L: locks the session (lot D-25a).
+    Lock,
+    /// Enter on the rescue screen of the lock: the lock programs are tried again.
+    RetryLock,
 }
 
 impl Shortcut {
@@ -183,8 +187,21 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::l => Some(Self::Lock),
             _ => None,
         }
+    }
+
+    /// The only keys the compositor takes while the session is locked: the console switch,
+    /// Ctrl + Alt + Backspace, the volume and brightness keys, and Enter on the rescue screen.
+    /// Every other key goes to the lock surface, or nowhere.
+    fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
+        let media =
+            MediaKey::of(sym).filter(|media| media.acts_while_locked() && state.takes_media_keys());
+        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
+        Self::for_session(state.nested, m, sym)
+            .or(media.map(|media| Self::Media(media, key)))
+            .or(retry.then_some(Self::RetryLock))
     }
 }
 
@@ -712,7 +729,9 @@ impl State {
             let alone = !mods.ctrl && !mods.shift && !other;
             let gesture_key = crate::mission_control::is_gesture_key(state.nested, sym);
             let pressed = key_state == KeyState::Pressed;
-            state.overview.key(gesture_key, pressed, alone);
+            if !state.is_locked() {
+                state.overview.key(gesture_key, pressed, alone);
+            }
             if key_state == KeyState::Released {
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
@@ -724,6 +743,13 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            if state.is_locked() {
+                let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
+                    return FilterResult::Forward;
+                };
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             if state.picking_area() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CancelArea));
@@ -753,7 +779,7 @@ impl State {
         if let Some(Some(shortcut)) = shortcut {
             self.run_shortcut(shortcut);
         }
-        if self.overview.take_toggle() {
+        if self.overview.take_toggle() && !self.is_locked() {
             self.toggle_overview();
         }
     }
@@ -804,6 +830,15 @@ impl State {
             }
             Shortcut::CancelArea => {
                 self.cancel_area();
+                return;
+            }
+            Shortcut::Lock => {
+                tracing::info!("Super + L: the session locks");
+                self.lock_session();
+                return;
+            }
+            Shortcut::RetryLock => {
+                self.retry_lock_program();
                 return;
             }
             Shortcut::SendToWorkspace(index) => {
@@ -875,8 +910,11 @@ impl State {
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
-        // During a gesture, no client has the pointer.
-        let under = if self.gesture_active() {
+        // Locked: only a lock surface may have the pointer (lot D-25a). During a gesture, no
+        // client has it.
+        let under = if self.is_locked() {
+            self.lock_hit(location)
+        } else if self.gesture_active() {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
@@ -930,6 +968,16 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        if self.is_locked() {
+            // Locked: the button goes to the lock surface under the pointer, which takes the
+            // keyboard on a press (lot D-25a).
+            if state == ButtonState::Pressed {
+                self.set_keyboard_focus(None);
+            }
+            pointer.button(self, &event);
+            pointer.frame(self);
+            return;
+        }
         if state == ButtonState::Pressed {
             // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
             self.click_at(location);

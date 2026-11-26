@@ -52,6 +52,11 @@ pub enum MediaKey {
 }
 
 impl MediaKey {
+    /// Volume and brightness act on a locked session too; the players do not (lot D-25a).
+    pub fn acts_while_locked(self) -> bool {
+        !matches!(self, Self::Player(_))
+    }
+
     pub fn of(sym: Keysym) -> Option<Self> {
         Some(match sym {
             Keysym::XF86_AudioRaiseVolume => Self::VolumeUp,
