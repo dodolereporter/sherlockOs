@@ -2,5 +2,5 @@
 Type=Application
 Name=Evidence
 GenericName[fr]=Gestionnaire de fichiers
-Exec=evidence
+Exec=evidence %U
 Icon=evidence

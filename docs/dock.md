@@ -393,6 +393,11 @@ toggles it. It is not in `Pinned`, cannot be dragged, and the dragged applicatio
 its place (`drag::orders` keeps it first). Its menu, like Sherlock's, has every entry disabled.
 Sherlock stays in the middle of the pinned applications.
 
+![The « Applications » button, the pointer over it](../desktop/dock/screenshots/dock-applications.png)
+
+The tests of the other icons build the dock without it (`Sources::applications`), so that
+their places stay those of the design board; `the_applications_button_comes_first` checks it.
+
 **Pinned from elsewhere.** `dock::pins` gives the other programs of the shell the list as the
 dock shows it, the defaults included when the file has none, and pins or unpins an application
 there: « Garder dans le Dock » of the applications view and of the launcher. The dock reads its

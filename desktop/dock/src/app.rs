@@ -109,6 +109,9 @@ pub struct Sources {
     pub gtk_theme: Option<String>,
     /// What acts on the windows: the compositor's protocol, or a fake in tests.
     pub control: Arc<dyn Control>,
+    /// The « Applications » button first (D-41): always in the session; the tests of the other
+    /// icons leave it out, so that their places stay those of the design board.
+    pub applications: bool,
 }
 
 pub struct Dock {
@@ -343,6 +346,7 @@ impl Dock {
         let before = animate.then(|| self.layout(now));
         let icon_size = (self.geometry.icon * self.geometry.factor).round() as u32;
         let mut builder = Builder {
+            applications: self.sources.applications,
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,

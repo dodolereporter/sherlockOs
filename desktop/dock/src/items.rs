@@ -108,6 +108,8 @@ impl Item {
 
 /// Builds the icons, and finds their glyphs once: `glyphs` keeps them by desktop file id.
 pub struct Builder<'a> {
+    /// The « Applications » button first.
+    pub applications: bool,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -136,7 +138,9 @@ impl Builder<'_> {
             })
             .collect();
         items.insert(items.len().div_ceil(2), Item::sherlock());
-        items.insert(0, Item::applications());
+        if self.applications {
+            items.insert(0, Item::applications());
+        }
         let first_open = items.len();
         for window in windows.map(|w| w.list.as_slice()).unwrap_or_default() {
             if items.iter().any(|item| item.owns(&window.app_id)) {
@@ -220,6 +224,7 @@ mod tests {
         let lookup = IconLookup::new(&[data], None, None);
         let mut glyphs = HashMap::new();
         let mut builder = Builder {
+            applications: true,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
