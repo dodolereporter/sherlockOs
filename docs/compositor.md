@@ -781,15 +781,16 @@ Each frame is redrawn in full with Smithay's GLES renderer (`GlesRenderer`), in 
 single thread. `render::Scene` compiles three programs at startup and lays out the elements from
 front to back, as Smithay expects them:
 
-1. anchored surfaces of the overlay layer, then the windows during their minimize effect (lot
-   D-19), then the anchored surfaces of the top layer, each with its menus in front;
-2. the snap preview: translucent green rounded rectangle, 2 px green border;
-3. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
+1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
+   front;
+2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
+3. the snap preview: translucent green rounded rectangle, 2 px green border;
+4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
    scaled), its border, its title bar if the compositor draws it, its clipped content, its
    shadow; while Mission Control is shown, its own items instead (see "Mission Control");
-4. anchored surfaces of the bottom and background layers;
-5. the wallpaper, or without one the three background discs (see "Wallpapers");
-6. the desktop color, which fills the rest.
+5. anchored surfaces of the bottom and background layers;
+6. the wallpaper, or without one the three background discs (see "Wallpapers");
+7. the desktop color, which fills the rest.
 
 **Screens and scale (lot D-12).** Each screen has its own list of elements, built in pixels of
 the frame by its `View`: its area of the space, its slice of the frame, its scale. Rectangles are
@@ -922,8 +923,9 @@ Minimized, by the dock, its keys or its application, a window is sucked into its
 activated, it comes back out the same way, backwards. `src/genie.rs`.
 
 - **Genie.** The icon is the rectangle the dock gives with `set_rectangle`
-  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (450 ms),
-  at a constant pace. During the first 40 % the sides bend: what is level with the window's top
+  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (300 ms
+  since lot Q-14, 450 ms before: found slow on the machine), at a constant pace, the same both
+  ways. During the first 40 % the sides bend: what is level with the window's top
   keeps its width, what reaches the icon's top takes the icon's width, along a smoothstep curve
   in between; the bottom of the window narrows toward the icon. During the rest, the window
   slides down this funnel and is squeezed into the icon, whose rectangle it covers exactly at the
@@ -941,8 +943,11 @@ activated, it comes back out the same way, backwards. `src/genie.rs`.
   drawn into the texture, follow the deformation; the edges of the funnel are smoothed over one
   pixel on the screen. The shadow is not deformed: it fades out while the sides bend. `Genie`
   holds the same computation in Rust, for the area and the tests; the two must stay in line.
-- **In front of the dock.** The window goes into its icon, so it is drawn in front of the
-  anchored surfaces of the top layer (bar, dock), behind those of the overlay layer.
+- **Under the dock** (lot Q-14). The window is sucked into its icon, as on macOS: it is drawn
+  behind the anchored surfaces of the top and overlay layers (bar, dock, notifications), in
+  front of the other windows. From the back: the wallpaper, the windows, the genie, then the
+  bar, the dock and the notifications. In front of the dock (lot D-19), the window covered the
+  icon it went into.
 - **Without an icon** (no dock, or a window without an icon in it), the scale effect: the window
   shrinks to `motion::MINIMIZE_SCALE` (a fifth) toward the bottom of its screen, centered under
   itself, and fades out; drawn like a window, stretched (`RescaleRenderElement`), with its
@@ -2245,8 +2250,9 @@ windows of 800 × 600, a bar and a dock:
 - **A workspace switch redraws everything while it slides.** A frame at each blank during the
   slide, whose damages cover the whole screen, then rest.
 - **A minimized window sweeps into its icon, then rests** (lot D-19). The window on top, given
-  an icon in the dock, is minimized: its genie is drawn in front of the dock, a frame at each
-  blank, the damages cover the window and the icon, then nothing at rest and no genie left.
+  an icon in the dock, is minimized: its genie is drawn behind the dock and in front of the
+  other windows (lot Q-14), a frame at each blank, the damages cover the window and the icon,
+  then nothing at rest and no genie left.
 - **Without an icon, the window shrinks toward the bottom**: drawn as a window, smaller, lower
   and fading, then rest.
 - **Restored halfway, it comes back from where it is**: the progress does not jump and goes
@@ -2261,8 +2267,11 @@ renderer (llvmpipe), through its EGL device (`EGL_MESA_device_software`), draws 
 240 × 160 with a title bar and a grid, halfway to an icon of 32 × 32, into a texture read back.
 The title bar is at the top row `Genie::row` gives, the body at the bottom one, the desktop
 just outside the narrowed bottom, above the window that slid down and in the icon not reached
-yet. The image is saved in `target/tmp/genie-half.png`. Without Mesa's EGL (`libegl-mesa0`)
-the test says it has nothing to draw with, and fails on the CI, which installs it.
+yet. The image is saved in `target/tmp/genie-half.png`. The whole way, in six steps, is saved
+in `target/tmp/genie-steps.png`, with an opaque dock and its icon drawn in front of the genie as
+the compositor orders them (lot Q-14): at the end, only the icon shows. Without Mesa's EGL
+(`libegl-mesa0`) the test says it has nothing to draw with, and fails on the CI, which installs
+it.
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):
