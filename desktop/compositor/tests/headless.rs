@@ -1619,10 +1619,10 @@ mod tests {
         }
     }
     /// Lot D-18d: some clients leave the maximized state themselves when their title bar is
-    /// pulled, before or after asking for the move. The window still comes off under the
+    /// dragged, before or after asking for the move. The window still comes off under the
     /// pointer, never back at its place from before it was maximized.
     #[test]
-    fn a_client_that_unmaximizes_itself_while_pulled_comes_off_under_the_pointer() {
+    fn a_client_that_unmaximizes_itself_while_dragged_comes_off_under_the_pointer() {
         for unmaximize_first in [true, false] {
             let mut h = Harness::start();
             let shown = h.show_window();
@@ -1632,44 +1632,58 @@ mod tests {
             let _a = h.redraw(&shown, 800, 600);
             h.drawn(1_000);
 
+            // Pressed on the title bar, then dragged 14 px: past the threshold of 4.
             let serial = h.press(400.0, 10.0);
             if unmaximize_first {
+                h.state.pointer_motion((410.0, 20.0).into(), 3);
                 shown.toplevel.unset_maximized();
                 shown.toplevel._move(&shown.seat, serial);
             } else {
                 shown.toplevel._move(&shown.seat, serial);
                 h.run_until("the gesture start", |_, s| s.gesture_active());
+                h.state.pointer_motion((410.0, 20.0).into(), 3);
                 shown.toplevel.unset_maximized();
             }
             h.run_until("the gesture start", |_, s| s.gesture_active());
             let states = h.wait_size("the previous size", 100, 80);
             assert!(!states.contains(&XdgState::Maximized));
-            // Under the pointer, grabbed at the same proportion of its width: 400 of 800 is
-            // the middle, 50 of 100; never at (350, 260), its place before.
-            assert_eq!(
-                location(&h.state),
-                Some((350, 0).into()),
-                "{unmaximize_first}"
-            );
+            // Grabbed in the middle of its width, as it was pressed: 400 of 800, 50 of 100;
+            // never at (350, 260), its place before.
             let _b = h.redraw(&shown, 100, 80);
             h.state.pointer_motion((420.0, 200.0).into(), 4);
-            assert_eq!(
-                location(&h.state),
-                Some((370, 190).into()),
-                "{unmaximize_first}"
-            );
+            let place = Some((370, 190).into());
+            assert_eq!(location(&h.state), place, "{unmaximize_first}");
             h.release();
             settle(&mut h);
-            assert_eq!(
-                location(&h.state),
-                Some((370, 190).into()),
-                "{unmaximize_first}"
-            );
+            assert_eq!(location(&h.state), place, "{unmaximize_first}");
             for t in [1_010, 1_100, 1_500, 5_000] {
                 let (drawn, real) = h.drawn(t);
                 assert_eq!(drawn, real, "{unmaximize_first}: drawn away at {t} ms");
             }
         }
+    }
+
+    /// Lot D-18d: a double click on a title bar that the client draws. GTK 4 unmaximizes at
+    /// the second press, the button held and the pointer still: the window goes back to its
+    /// place, it does not come off under the pointer.
+    #[test]
+    fn a_double_click_on_a_client_title_bar_restores_the_window_to_its_place() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        h.shortcut(KEY_UP);
+        h.wait_size("maximized", 800, 600);
+        let _a = h.redraw(&shown, 800, 600);
+        h.press(400.0, 10.0);
+        h.release();
+        h.press(400.0, 10.0);
+        shown.toplevel.unset_maximized();
+        let states = h.wait_size("the previous size", 100, 80);
+        assert!(!states.contains(&XdgState::Maximized));
+        assert_eq!(location(&h.state), Some((350, 260).into()));
+        assert!(!h.state.gesture_active());
+        h.release();
+        settle(&mut h);
+        assert_eq!(location(&h.state), Some((350, 260).into()));
     }
 
     #[test]

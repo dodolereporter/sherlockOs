@@ -295,13 +295,8 @@ impl XwmHandler for State {
     }
 
     fn unmaximize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
-        if let Some(window) = self.x11_window(&surface)
-            && !self.unmaximize_held(&window)
-        {
-            self.rearrange(&window, |a, zone| {
-                a.maximized = false;
-                zone.set(None);
-            });
+        if let Some(window) = self.x11_window(&surface) {
+            self.client_unmaximize(&window);
         }
     }
 

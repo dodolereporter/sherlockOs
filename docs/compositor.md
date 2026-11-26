@@ -113,10 +113,14 @@ Snapping:
 - A window snapped by a drop returns, when leaving its zone, to its place from before the drag.
 - Some clients leave the maximized state themselves (`xdg_toplevel.unset_maximized`, or
   `_NET_WM_STATE` for X11) when their title bar is pulled, before or after asking for the move.
-  While the window is held, by a move or by a button pressed on it, it then comes off under the
-  pointer at its previous size, as a move takes it out (`State::unmaximize_held`, lot D-18d).
-  Before, it went back to its place from before it was maximized, the pointer far from it, and
-  the move went on from there. Not held, an unmaximize still gives the window back its place.
+  While the window is dragged, it then comes off under the pointer at its previous size, as a
+  move takes it out (`State::client_unmaximize`, lot D-18d). Dragged means a move of this
+  window, or a button held on it, with the pointer past the drag threshold (4 px) from the
+  press. Before, it went back to its place from before it was maximized, the pointer far from
+  it, and the move went on from there. Otherwise an unmaximize gives the window back its place:
+  a double click on a title bar the client draws (GTK 4 unmaximizes at the second press, the
+  pointer still) restores it, and a move that has not shifted the window yet goes on from that
+  place.
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -1778,8 +1782,10 @@ The tests in `tests/headless.rs`:
   a dock of 76 that then hides (zone -1): pulled by its title bar, the window comes off at
   100 × 80 under the pointer and stays where it is let go, also once the dock takes its zone
   back; drawn at its place on every frame. A client that unmaximizes itself while its title
-  bar is held, before or after asking for the move, comes off in (350, 0) under the pointer,
-  not in (350, 260) where it was before being maximized (this test failed before the fix).
+  bar is dragged 14 px, before or after asking for the move, comes off under the pointer and
+  ends in (370, 190) after a drag to (420, 200), not from (350, 260) where it was before being
+  maximized (this test failed before the fix). A double click on its title bar, the client
+  unmaximizing at the second press without a move, puts it back in (350, 260).
 
 The integration test runs the compositor and the client in the same thread, over a pair of Unix
 sockets: it depends neither on a screen nor on `XDG_RUNTIME_DIR`. It loads `libwayland-client`

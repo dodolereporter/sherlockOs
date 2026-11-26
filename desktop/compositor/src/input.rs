@@ -14,7 +14,9 @@ use smithay::{
     desktop::{Window, WindowSurfaceType},
     input::{
         keyboard::{FilterResult, Keycode, Keysym, ModifiersState},
-        pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent},
+        pointer::{
+            AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, GrabStartData, MotionEvent,
+        },
     },
     output::Output,
     reexports::{
@@ -353,35 +355,73 @@ impl State {
     }
 
     /// The client leaves the maximized state itself (`unset_maximized`, or `_NET_WM_STATE` for
-    /// X11) while its window is held: some clients do so when their title bar is pulled,
-    /// before or after asking for the move. The window comes off under the pointer at its
-    /// previous size, as a move takes it out, instead of going back to its place from before
-    /// it was maximized (lot D-18d). `false` when the window is not held by a move or a
-    /// pressed button: the caller restores it to that place.
-    pub(crate) fn unmaximize_held(&mut self, window: &Window) -> bool {
-        if let Some(mut gesture) = self.gesture.take() {
-            let held = gesture.window == *window && gesture.edges.is_none();
-            if held {
-                self.detach_for_move(&mut gesture);
+    /// X11). Some clients do so when their title bar is pulled, before or after asking for the
+    /// move: while the window is being dragged, it comes off under the pointer at its previous
+    /// size, as a move takes it out, instead of going back to its place from before it was
+    /// maximized (lot D-18d). Dragged means a move of this window (the client's or the gesture
+    /// key's) or a button held on it, with the pointer past the drag threshold from the press:
+    /// a double click on a title bar that the client draws (GTK 4 unmaximizes at the second
+    /// press) restores the window to its place, as any other unmaximize does.
+    pub(crate) fn client_unmaximize(&mut self, window: &Window) {
+        if self.dragged(window) {
+            match self.gesture.take() {
+                Some(mut gesture) => {
+                    self.detach_for_move(&mut gesture);
+                    self.gesture = Some(gesture);
+                }
+                None => self.detach_held(window),
             }
-            self.gesture = Some(gesture);
-            return held;
+            return;
         }
-        let start = self
-            .seat
-            .get_pointer()
-            .filter(|pointer| pointer.is_grabbed())
-            .and_then(|pointer| pointer.grab_start_data());
-        let Some(start) = start.filter(|start| {
-            let focus = start.focus.as_ref().map(|(focus, _)| focus);
-            let own = smithay::wayland::seat::WaylandFocus::wl_surface(window);
-            focus.is_some() && focus == own.as_deref()
-        }) else {
+        self.rearrange(window, |a, zone| {
+            a.maximized = false;
+            zone.set(None);
+        });
+        // A move that has not shifted the window yet goes on from its restored place.
+        if let Some(gesture) = self.gesture.as_mut().filter(|g| g.window == *window)
+            && let Some(rect) = self.space.element_geometry(window)
+        {
+            gesture.initial = rect;
+        }
+    }
+
+    /// `window` is being dragged: a move of it, or a button held on it, and the pointer past
+    /// the drag threshold from where the button was pressed.
+    fn dragged(&self, window: &Window) -> bool {
+        let Some(pointer) = self.seat.get_pointer() else {
             return false;
+        };
+        let start = match &self.gesture {
+            Some(gesture) if gesture.window == *window && gesture.edges.is_none() => {
+                Some(gesture.start)
+            }
+            Some(_) => None,
+            None => self.held_from(window).map(|start| start.location),
+        };
+        start.is_some_and(|start| {
+            let delta = pointer.current_location() - start;
+            delta.x.hypot(delta.y) >= f64::from(ui::DRAG_THRESHOLD)
+        })
+    }
+
+    /// The press that holds a button on `window`, if one does.
+    fn held_from(&self, window: &Window) -> Option<GrabStartData<State>> {
+        let pointer = self.seat.get_pointer().filter(|p| p.is_grabbed())?;
+        let start = pointer.grab_start_data()?;
+        let focus = start.focus.as_ref().map(|(focus, _)| focus);
+        let own = smithay::wayland::seat::WaylandFocus::wl_surface(window);
+        (focus.is_some() && focus == own.as_deref()).then_some(start)
+    }
+
+    /// A window held by a button and dragged, before the client asks for the move: it comes
+    /// off under the point where the button was pressed, at its previous size.
+    fn detach_held(&mut self, window: &Window) {
+        let Some(start) = self.held_from(window) else {
+            return;
         };
         let current = self.space.element_geometry(window);
         let Some(restore) = leave_arrangement(window) else {
-            return false;
+            return;
         };
         window_data(window).motion.borrow_mut().follow();
         let size = (!restore.size.is_empty()).then_some(restore.size);
@@ -393,7 +433,6 @@ impl State {
         if let Some(toplevel) = window.toplevel() {
             toplevel.send_pending_configure();
         }
-        true
     }
 
     fn finish_gesture(&mut self, gesture: Gesture) {
