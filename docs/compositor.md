@@ -1130,6 +1130,23 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
   already taken its content away, and keeping its last image (as for a window) would leave a
   ghost over what the click reaches; the menus of the bar and the dock (their own surfaces)
   have their own animations. X11 menus (override-redirect windows) appear at once.
+- **Menus and panels of the shell (lot UI-06).** The `xdg_popup`s of anchored surfaces, the
+  bar's panels and menus and the dock's menus, fold back by themselves on Escape, on their
+  button or on an entry chosen. But when the compositor closes them (a click elsewhere, a
+  workspace switch, Mission Control, the lock) iced_exwlshell destroys them at once on
+  `popup_done`, and a client that opens one menu in place of another drops the first at once.
+  So the compositor keeps their last image (`src/popup_anim.rs`): at the dismissal
+  (`State::dismiss_popups`, before `popup_done`) or when the client destroys the popup
+  (`XdgShellHandler::popup_destroyed`), while its buffer is still there, the backend draws the
+  popup into a texture (`set_popup_snapshotter`, the window snapshotter's offscreen path). That
+  image shrinks to `motion::POPUP_CLOSE_SCALE` (0.96) around its center and fades out over
+  `motion::POPUP_CLOSE` (150 ms) on `WINDOW_CLOSE_EASE`, in front of the anchored surfaces, then
+  is freed with the window ghosts (`end_popup_closings`). It takes no input: the click that
+  closed the menu reaches what is under it. Once per popup: a menu dismissed, then destroyed
+  by its client, closes once. A popup that faded out by itself leaves a transparent image, and
+  nothing shows; a popup without a buffer leaves none. Off with `--window-animations off`, and
+  while locked. Reopened during that fade, the menu opens by its own animation, over its
+  fading image.
 - **Not animated:** X11 override-redirect windows, anchored surfaces (bar, dock), fullscreen
   windows, a window closing on another workspace, minimized, or while Mission Control is open.
 - **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
@@ -1146,7 +1163,9 @@ closing finishes.
 grows and fades in together without a bounce, still moving at 200 ms, over at 250; the bar
 scales with the window around the center of both; a skipped opening shows at once.
 `window_anim.rs`: the closing shrinks and fades in 180 ms, each step longer than the one
-before. `tests/headless.rs`: a window closing over another one takes no click, the one below
+before. `tests/shell.rs` (lot UI-06): a menu of the dock dismissed by a click elsewhere closes
+with its last image, which goes after its fade; one dropped by its client too; none with the
+animations off. `tests/headless.rs`: a window closing over another one takes no click, the one below
 does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
 and closes at once; so does any window with the setting off.
 `the_opening_and_the_closing_are_drawn_halfway` draws a decorated window through its opening
