@@ -556,7 +556,8 @@ mod tests {
     }
 
     /// The shapes the components of the shell ask for (lot UI-01), and the Sherlock cursor of
-    /// Super + click, show their drawings: the hand that points, the closed hand, the I-beam,
+    /// Super + click, show their drawings: the hand that points, the open and the closed hand
+    /// (lot UI-07), the I-beam,
     /// the forbidden sign.
     #[test]
     fn the_shapes_of_the_shell_find_their_drawings() {
@@ -568,7 +569,11 @@ mod tests {
             path.file_name().unwrap().to_string_lossy().into_owned()
         };
         assert_eq!(drawing(Shape::Icon(CursorIcon::Pointer)), "pointer");
-        assert_eq!(drawing(Shape::Icon(CursorIcon::Grab)), "grabbing");
+        assert_eq!(
+            drawing(Shape::Icon(CursorIcon::Grab)),
+            "grab",
+            "the open hand (UI-07)"
+        );
         assert_eq!(drawing(Shape::Icon(CursorIcon::Grabbing)), "grabbing");
         assert_eq!(drawing(Shape::Icon(CursorIcon::Text)), "text");
         assert_eq!(drawing(Shape::Icon(CursorIcon::NotAllowed)), "not-allowed");

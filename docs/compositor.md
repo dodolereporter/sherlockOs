@@ -40,6 +40,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/inhibit.rs`, `src/screensaver.rs` | What keeps the session awake: idle inhibitors, `org.freedesktop.ScreenSaver`, logind (lot D-43) |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
@@ -212,6 +213,34 @@ size and margins, and computes the work area.
   above them, the snap preview between the top surfaces and the windows. The pointer follows
   the same order. Anchored surfaces are drawn as they are: no rounded corners, border or
   shadow, which are the client's business (the bar draws its own glass).
+- **Fullscreen covers the bar and the dock (lot D-21e).** As on macOS, a fullscreen window
+  (Wayland `set_fullscreen` or X11 `_NET_WM_STATE_FULLSCREEN`: F11 in Chrome, or a video put
+  fullscreen, which makes the whole browser window fullscreen) covers the top layer of its
+  screen: the bar, the dock and the notifications are drawn just behind it, and the pointer
+  reaches them there no more. Windows above the fullscreen one (its dialogs) stay above. Only
+  the overlay layer stays in front: on-screen displays, urgent notifications, the lock screen.
+  Mission Control shows the bar as usual. `fullscreen::State::fullscreen_on` names the
+  frontmost fullscreen window of a screen, on the active workspace and not minimized.
+  - **Coming back.** The pointer resting against an edge for `motion::EDGE_REVEAL_DELAY`
+    (150 ms) brings the top surfaces lying along that edge back over the window: those
+    anchored to it and not to the opposite one, to both sides across or to neither (the bar
+    at the top, the dock at the bottom; not the notifications, in a corner). They slide in from
+    beyond the edge over `motion::EDGE_REVEAL` (250 ms, ease-out), take the pointer, and their
+    menus work as usual. A pointer passing by the edge does not bring them out: leaving it
+    restarts the wait.
+  - **Going back.** They slide out the same way once the pointer has left the band from the
+    edge to their far side, and none of them has a menu open. The keyboard, if one of them
+    had it, goes back to the window.
+  - **A dock hiding by itself.** A surface partly beyond its screen hides by itself (the dock
+    hidden for a fullscreen window, lot D-18c2): the band it keeps at the edge takes the
+    pointer over the window, as before, and its client brings it back with its own slide,
+    which the reveal does not add to; it is drawn in front once its edge is revealed.
+  - **Tests.** In `tests/headless.rs`, a window made fullscreen goes in front of the bar and
+    takes the pointer over its row, an overlay surface stays in front of it, and the bar is in
+    front again once the window leaves fullscreen. The pointer against the top edge brings the
+    bar no sooner than 150 ms later, sliding from above to its place, where it then has the
+    pointer. Moved away, it slides back behind the window; revealed again with a panel open,
+    the panel takes the pointer over the window and the bar stays until the panel closes.
 - **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
   taken from the work area. Windows are centered, maximized and snapped inside it. When it
   changes (the bar starts, stops or resizes), maximized, fullscreen and snapped windows of that
@@ -748,6 +777,38 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   therefore cannot change what the user pastes into a Wayland application. The rule is strict,
   with no exception for command line tools: `xclip -i` launched from a Konsole (Wayland) sets
   nothing on the Wayland side. The log says so at the `debug` level: `X11 selection refused`.
+- Text goes through smithay, which maps `text/plain;charset=utf-8` to `UTF8_STRING` and
+  `text/plain` to `TEXT`. The other types (`image/png`, `text/uri-list`, `text/html`) keep their
+  name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
+  looks their atom up in a property that nothing writes, and the paste failed: the compositor
+  reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
+  with its own connection, and writes what comes into the Wayland client's pipe.
+- Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
+  by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
+  non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
+  (as `wl-copy` does) stopped at the first full pipe, and X11 got the first 64 KiB of a picture.
+  The compositor makes that end blocking again before handing it over.
+- A screenshot copied by the compositor (lot D-35c) is offered to X11 too, as `image/png`.
+- **Locked session: nothing passes.** No Wayland client is offered a selection, not even the lock
+  program, which has the keyboard; an offer received before the lock gives nothing when read;
+  an X11 client neither reads nor sets one. The selections may still change (a screenshot taken
+  just before lands), and XWayland still learns of it, but no one reads them before the unlock.
+  Limit: a Wayland client that kept an offer from another Wayland client, received before the
+  lock, reads it straight from that client, without the compositor.
+- smithay 0.7 calls `focus_changed` for a new keyboard focus only. When nobody has the keyboard
+  (lock without its surface yet, `focus(None)`), the compositor takes the selections away from
+  the client that had it, which kept being offered them before lot D-29.
+- **The hook for the clipboard history (lot D-42).** Every new selection, CLIPBOARD and PRIMARY,
+  from a Wayland client, an X11 application or the compositor, passes through
+  `State::selection_set` (`handlers.rs`) with its types and its origin (`SelectionOrigin`: the
+  Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
+  manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
+  that hint does not cross from an X11 application.
+- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
+  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
+  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
+  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
+  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
 
 ## GPU buffers (linux-dmabuf)
 
@@ -868,7 +929,8 @@ single thread. `render::Scene` compiles three programs at startup and lays out t
 front to back, as Smithay expects them:
 
 1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
-   front;
+   front; on a screen with a fullscreen window, the top layer goes just behind that window,
+   unless an edge brought it back (see "Fullscreen covers the bar and the dock");
 2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
 3. the snap preview: translucent green rounded rectangle, 2 px green border;
 4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
@@ -2620,6 +2682,7 @@ just verify
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
 | `tests/idle_inhibit.rs` | What keeps the session awake, see "Session lock" (lot D-43) |
+| `tests/clipboard.rs` | Clipboard and primary selection between a Wayland client and X11 clients (x11rb): text, pictures of several MB (INCR), screenshot, nothing while locked (lot D-29) |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 

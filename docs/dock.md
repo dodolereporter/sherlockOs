@@ -86,9 +86,9 @@ desktop entries and icon themes. The menu reuses `menu`,
 The layer-shell surface is anchored to the bottom only, so the compositor centers it, on the
 `Top` layer. Since D-18c2 the surface reaches the screen edge (margin 0) and the gap of 8 below
 the bar is inside it (`Geometry::gap`): a dock brought back over a maximized window keeps the
-pointer up to the edge (see Hiding). It declares an exclusive zone of 84, the gap and the bar's
-height, the 76 of the bar and the margin of 8 it reserved before: maximized windows stop just
-above the bar. The keyboard comes on demand (`OnDemand`), on a click
+pointer up to the edge (see Hiding). In the `never` mode it declares an exclusive zone of 84,
+the gap and the bar's height, the 76 of the bar and the margin of 8 it reserved before:
+maximized windows stop just above the bar. In the other modes, none (lot D-21g). The keyboard comes on demand (`OnDemand`), on a click
 into the dock, for its keyboard navigation.
 
 The surface is taller and wider than the bar: the magnified icons grow above the bar (88 at
@@ -145,9 +145,17 @@ wl_surface#28.set_input_region(wl_region#41)
 
 | Mode | The dock |
 | --- | --- |
-| `smart` (default) | Shown with its exclusive zone, except while a maximized, fullscreen or snapped window is on its screen |
+| `smart` (default) | Shown, except while a maximized, fullscreen or snapped window is on its screen; never an exclusive zone |
 | `always` | Hidden, without exclusive zone |
 | `never` | Always shown, with its exclusive zone |
+
+**A dock that hides never reserves room** (lot D-21g). As on macOS, the work area depends on
+the mode alone: only `never` keeps its exclusive zone. In `smart` and `always` the zone stays -1
+in every state (shown, covered, sliding, brought back by the pointer, hidden again), and the
+dock goes over the windows. Before, `smart` took its zone back whenever no window covered it.
+The author saw a maximized Konsole shrink when the dock appeared and grow back when it hid: the
+work area followed the dock's state. A maximized window was also resized twice on the way in:
+first above the dock, then over its room once the dock gave it up.
 
 Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
 screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
@@ -155,7 +163,7 @@ screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 
 iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
-- **A window is maximized or snapped.** The dock gives up its exclusive zone at once: -1, so
+- **A window is maximized or snapped.** The dock has no exclusive zone to give up: -1, so
   that the compositor places it against the screen edge itself, never against what another surface
   reserves (a dock at the top would otherwise hide under the top bar's zone, its band below
   the bar). The compositor gives the maximized window the whole screen below the bar, the
@@ -174,9 +182,8 @@ nothing; a screen not known yet counts as uncovered.
   pointer came back, a menu is open or an icon is held. While a menu is open or an icon held,
   nothing counts and no frame is asked for; the delay starts when the menu closes or the icon
   is let go.
-- **No maximized nor snapped window any more.** The dock slides back, and takes its exclusive
-  zone again once in place: the compositor reserves the zone plus the margin, negative while the dock is
-  still sliding in, so the zone waits for the margin to be 8 again.
+- **No maximized nor snapped window any more.** The dock slides back, still without an
+  exclusive zone (lot D-21g).
 
 Frames are asked for while the dock slides and while it waits to hide. On the left and right
 edges the same happens sideways. A new mode in the configuration file applies at once.
@@ -664,8 +671,8 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
 (XTest) go to `:21` only, after checking the display name.
 
 1. **Anchoring**: the dock floats 8 above the bottom edge, centered, Sherlock in the middle.
-2. **Exclusive zone**: click KWrite in the dock. Its window opens maximized and stops just above
-   the bar (y = 816 on 900), without covering it.
+2. **Exclusive zone** (`AutoHide=never`): click KWrite in the dock. Its window opens maximized
+   and stops just above the bar (y = 816 on 900), without covering it.
    Then click in the black band just above the dock (outside the bar): the click reaches the
    window (the text cursor moves there), not the dock.
 3. **Magnification**: move the pointer slowly along the dock. The icon under the pointer grows
@@ -787,10 +794,14 @@ X focus): the keyboard steps were checked in the nested KWin.
   that is not over yet published only at `done`, a covered screen and back, the requests
   (minimize, close, activate) on the right windows, a rectangle sent once while it stays, given
   to a window that comes, moved, then removed; and a compositor without the protocol.
-- **Hiding** (`hide.rs`, `tests/hide.rs`): on the four edges, a maximized window takes the zone
-  at once (84 reserved, then 0), the dock slides until only the band of 2 is on the screen, the
-  input region is that band on the side away from the edge, and the window restored gives the
-  zone back once the dock is in place; a window on another screen changes nothing; the edge
+- **Hiding** (`hide.rs`, `tests/hide.rs`): on the four edges, nothing reserved in `smart`, a
+  maximized window makes the dock slide until only the band of 2 is on the screen, the input
+  region is that band on the side away from the edge, and the window restored brings it back,
+  still reserving nothing; a window on another screen changes nothing; in `smart` and `always`
+  the zone stays -1 at every frame of covering, hiding, revealing, hiding again and uncovering
+  (`a_dock_that_hides_never_reserves_room`, lot D-21g), 84 in `never`. Without a screen
+  (`tests/headless.rs` of the compositor), a maximized window gets no new configure while a dock
+  without zone is revealed and hidden again; the edge
   brings the dock back over the window without zone, it hides again after the delay and not
   before, a menu holds it; `always` hidden from the start, `never` never; the icon rectangles
   on the screen, Sherlock owning no window, unchanged while the pointer magnifies or the dock
