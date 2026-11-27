@@ -658,6 +658,15 @@ application and closes it. « Tout effacer » empties the history; open notifica
 screen. Without a notification, « Aucune notification »; without the daemon, « Le service des
 notifications ne répond pas. » and a warning in the log.
 
+Since D-23d, as on macOS: « N autres notifications » opens the card on all its notifications
+(« Afficher moins » closes it again); a click on a notification still open with a `default`
+action runs it, then takes it out of the history; « × » on the right of a time takes that
+notification out, « × » in the header of a card the whole application. Taken out, a
+notification still on screen closes too, dismissed (`Remove(au ids)` of the daemon, at most 100
+ids).
+
+![A card of five notifications](../desktop/bar/screenshots/centre-group.png)
+
 The list is read when the centre opens, and again on each `Changed` of the daemon while it is
 open (an iced subscription on the session bus, `history::watch`), from the daemon that owns
 the name only: nothing polls, and no other client makes the centre read again. The calls run

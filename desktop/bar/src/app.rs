@@ -107,6 +107,8 @@ pub struct Bar {
     pub history: History,
     /// The notification of the centre whose « Options » list is open (D-23c).
     pub options: Option<u32>,
+    /// The applications of the centre whose card shows all their notifications (D-23d).
+    pub expanded_groups: std::collections::HashSet<String>,
     /// The quick settings of the control centre.
     pub quick: Quick,
     /// The Wi-Fi signal, a connection under way, the Internet, from NetworkManager.
@@ -191,6 +193,13 @@ pub enum Message {
     InvokeAction(u32, String),
     /// « Options » of a notification of the centre with more actions than its row holds.
     NotificationOptions(u32),
+    /// « × » of a notification of the centre, or of an application's card: they leave the
+    /// history, and close if they are still on screen.
+    RemoveNotifications(Vec<u32>),
+    /// « N autres notifications » of a card, and « Afficher moins ».
+    ExpandGroup(String, bool),
+    /// A click on a notification of the centre: its default action if it is open and has one.
+    OpenNotification(u32),
     /// A call to the daemon ended.
     HistoryDone(Result<(), String>),
     /// The quick settings.
@@ -443,6 +452,45 @@ impl Bar {
                     async { history::clear(&bus::session().await?).await },
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
+            }
+            Message::RemoveNotifications(ids) => {
+                return Task::perform(
+                    async move { history::remove(&bus::session().await?, &ids).await },
+                    |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
+                );
+            }
+            Message::ExpandGroup(app, open) => {
+                if open {
+                    self.expanded_groups.insert(app);
+                } else {
+                    self.expanded_groups.remove(&app);
+                }
+            }
+            Message::OpenNotification(id) => {
+                let entry = match &self.history {
+                    History::Ready(groups) => groups
+                        .iter()
+                        .flat_map(|g| &g.entries)
+                        .find(|e| e.id == id)
+                        .cloned(),
+                    _ => None,
+                };
+                let default = entry.is_some_and(|e| {
+                    e.open
+                        && e.actions
+                            .iter()
+                            .any(|(key, _)| key == history::DEFAULT_ACTION)
+                });
+                if default {
+                    return Task::perform(
+                        async move {
+                            let bus = bus::session().await?;
+                            history::invoke(&bus, id, history::DEFAULT_ACTION).await?;
+                            history::remove(&bus, &[id]).await
+                        },
+                        |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
+                    );
+                }
             }
             Message::NotificationOptions(id) => {
                 self.options = (self.options != Some(id)).then_some(id);
@@ -1054,7 +1102,7 @@ impl Bar {
                 iced::widget::column![
                     panel::glass(calendar, width, panels::CALENDAR_HEIGHT),
                     panel::glass(
-                        panel::center(&self.history, self.options),
+                        panel::center(&self.history, self.options, &self.expanded_groups),
                         width,
                         panels::CENTER_HEIGHT
                     ),
