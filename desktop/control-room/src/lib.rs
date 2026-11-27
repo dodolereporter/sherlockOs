@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod apps;
+pub mod follow;
 mod pages;
 pub mod scroll;
 pub mod search;
