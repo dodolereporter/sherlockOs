@@ -7,11 +7,14 @@ pub mod anim;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+// The clipboard history of Super + V (lot D-42).
+pub mod clipboard_history;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod displays;
 pub mod dmabuf;
+mod dnd;
 pub mod edid;
 pub mod focus;
 pub mod fullscreen;
@@ -49,6 +52,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod x11_paste;
+mod xdnd;
 mod xwayland;
 
 use std::{
@@ -194,6 +198,8 @@ pub struct State {
     keyboard_setting: keyboard::KeyboardSetting,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
+    /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
+    dnd: dnd::Dnd,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -254,6 +260,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What was copied, for Super + V (lot D-42).
+    clipboard: clipboard_history::ClipboardHistory,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second, until the keyboard
@@ -374,6 +382,7 @@ impl State {
             touchpad: touchpad::Touchpad::default(),
             keyboard_setting: keyboard::KeyboardSetting::default(),
             clicks: clicks::Clicks::default(),
+            dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -404,6 +413,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -701,6 +711,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
