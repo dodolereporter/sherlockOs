@@ -319,7 +319,7 @@ mod tests {
         let mut textures = wallpaper::Textures::default();
         let target = Target::Screen(output);
         let mut draw = |state: &mut State| {
-            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target)?;
+            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target, None)?;
             image::RgbaImage::from_raw(shot.width, shot.height, shot.rgba)
         };
         let before = draw(&mut state)?;

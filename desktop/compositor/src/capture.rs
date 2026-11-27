@@ -43,14 +43,14 @@ use smithay::{
         },
         rustix,
     },
-    utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
+    utils::{Physical, Rectangle, Scale, Size, Transform},
     wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
     State,
     cursor::Cursors,
-    damage::{Ids, Key, Part},
+    damage::Ids,
     output::View,
     render::Scene,
     screenshot_tool::{Pending, Tool},
