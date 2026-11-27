@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose something new, or a change to how something works.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the roadmap (ROADMAP.md) first: it may already be planned under a lot ID.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you would like
+      description: The need, in a few sentences. What would you do with it?
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: How it should feel
+      description: How it looks and moves, if it is visible. A reference from macOS or iOS, a sketch or a screenshot is welcome.
+  - type: input
+    id: lot
+    attributes:
+      label: Related lot
+      description: The ID from the roadmap, if there is one.
+      placeholder: "D-42"
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you considered, and what exists today.

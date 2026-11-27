@@ -1,5 +1,6 @@
 //! Applications view: `cargo run -p apps`, in a Wayland session that supports layer-shell. Run
-//! it again to close it.
+//! it again to close it. `--show` and `--hide` only show or only hide the resident view: the
+//! compositor's four finger pinch (lot D-41c).
 
 use std::process::ExitCode;
 
@@ -10,6 +11,9 @@ use tracing_subscriber::EnvFilter;
 
 /// The option that starts the resident service.
 const RESIDENT: &str = "--resident";
+/// The options that only show, or only hide, the view of the service.
+const SHOW: &str = "--show";
+const HIDE: &str = "--hide";
 
 fn main() -> ExitCode {
     // Before anything else: the renderer is chosen through the environment (ADR 0018). It only
@@ -18,18 +22,27 @@ fn main() -> ExitCode {
     // SAFETY: first statements of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
     startup::begin();
-    let resident = std::env::args_os().nth(1).is_some_and(|a| a == RESIDENT);
+    let option = std::env::args_os().nth(1);
+    let resident = option.as_ref().is_some_and(|a| a == RESIDENT);
+    let hide = option.as_ref().is_some_and(|a| a == HIDE);
+    let request = if hide {
+        Request::Hide
+    } else if option.as_ref().is_some_and(|a| a == SHOW) {
+        Request::Show
+    } else {
+        Request::Toggle
+    };
     let dir = instance::runtime_dir();
-    // A key or the dock's button while the service runs: handed over before anything that
-    // costs, and done.
+    // A key, the dock's button or a pinch while the service runs: handed over before anything
+    // that costs, and done.
     if !resident
         && let Some(dir) = &dir
-        && service::send(
-            &service::socket(dir, service::APPLICATIONS),
-            Request::Toggle,
-        )
-        .is_ok()
+        && service::send(&service::socket(dir, service::APPLICATIONS), request).is_ok()
     {
+        return ExitCode::SUCCESS;
+    }
+    // Nothing to hide without the service: no view is started for that.
+    if hide {
         return ExitCode::SUCCESS;
     }
     // Log level from RUST_LOG (for example `RUST_LOG=apps=debug`), info otherwise.

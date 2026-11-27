@@ -34,7 +34,8 @@ pub fn is_pinned(path: &Path, id: &str) -> bool {
 }
 
 /// Pins `id` at the end of the list, or unpins it, in the file at `path`. The file is written
-/// only when the list changes; the list written is the one the dock showed, defaults included.
+/// only when the list changes; the list written is the one the dock showed, defaults included,
+/// Sherlock's token (`dock_config::SHERLOCK`) kept where it is.
 /// Returns whether it changed.
 pub fn set(path: &Path, id: &str, pinned: bool) -> io::Result<bool> {
     set_with(path, id, pinned, defaults)
@@ -64,6 +65,17 @@ pub fn set_with(
     config.pinned = Some(list);
     config.save(path)?;
     Ok(true)
+}
+
+/// Writes the pinned list and whether Sherlock is shown to the file at `path`, read again
+/// just before: what another program changed in it since the dock last read it (a setting
+/// of Control Room, a comment) is kept. The dock's list wins: it is the order on screen.
+pub fn write(path: &Path, pinned: &[String], sherlock: bool) -> io::Result<()> {
+    DockConfig::update(path, |config| {
+        config.pinned = Some(pinned.to_vec());
+        config.sherlock = sherlock;
+    })
+    .map(|_| ())
 }
 
 /// A desktop file id without `.desktop`, as the file lists it.
@@ -107,6 +119,29 @@ mod tests {
             "[Dock]\nPinned=evidence;kitty;\nIconSize=64\nFuture=1\n"
         );
         assert!(is_pinned(&path, "kitty.desktop") && !is_pinned(&path, "firefox"));
+        // Sherlock's token stays where the dock put it.
+        std::fs::write(&path, "[Dock]\nPinned=sherlock;evidence;\n").unwrap();
+        assert!(set_with(&path, "kitty", true, defaults).unwrap());
+        assert_eq!(read(&path), Some(list(&["sherlock", "evidence", "kitty"])));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_file_is_read_again_before_it_is_written() {
+        let dir = std::env::temp_dir().join(format!("dock-pins-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dock/dock.conf");
+        std::fs::create_dir_all(dir.join("dock")).unwrap();
+        // Another program changed the size since the dock read the file.
+        std::fs::write(&path, "[Dock]\n# mine\nPinned=a;b;\nIconSize=64\n").unwrap();
+        write(&path, &list(&["b", "sherlock", "a"]), true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[Dock]\n# mine\nPinned=b;sherlock;a;\nIconSize=64\n"
+        );
+        write(&path, &list(&["b", "a"]), false).unwrap();
+        let (config, _) = DockConfig::load(&path).unwrap();
+        assert_eq!((config.icon_size, config.sherlock), (64.0, false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

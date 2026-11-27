@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! [Dock]
-//! Pinned=evidence;org.kde.konsole;app.zen_browser.zen;
+//! Pinned=evidence;sherlock;org.kde.konsole;app.zen_browser.zen;
+//! ShowSherlock=true
 //! IconTheme=breeze
 //! IconSize=52
 //! Magnification=true
@@ -35,6 +36,11 @@ const MAGNIFICATION: &str = "Magnification";
 const FACTOR: &str = "MagnificationFactor";
 const AUTO_HIDE: &str = "AutoHide";
 const POSITION: &str = "Position";
+const SHOW_SHERLOCK: &str = "ShowSherlock";
+
+/// The place of Sherlock in the pinned list. Without it, Sherlock is in the middle of the
+/// pinned applications, as before it could be moved.
+pub const SHERLOCK: &str = "sherlock";
 
 /// Edge of the screen the dock sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -122,6 +128,8 @@ pub struct DockConfig {
     pub magnification_factor: f32,
     pub auto_hide: AutoHide,
     pub position: Position,
+    /// Sherlock is in the dock: at its place in `pinned`, or in their middle without it.
+    pub sherlock: bool,
     /// The file as read, so that writing it back keeps the keys this version does not know.
     file: KeyFile,
 }
@@ -136,6 +144,7 @@ impl Default for DockConfig {
             magnification_factor: metrics::DOCK_MAGNIFICATION,
             auto_hide: AutoHide::Smart,
             position: Position::Bottom,
+            sherlock: true,
             file: KeyFile::default(),
         }
     }
@@ -188,6 +197,13 @@ impl DockConfig {
             defaults.position,
             &mut problems,
         );
+        let sherlock = word(
+            &file,
+            SHOW_SHERLOCK,
+            &[(true, "true"), (false, "false")],
+            defaults.sherlock,
+            &mut problems,
+        );
         let config = Self {
             pinned,
             icon_theme: file.get(GROUP, ICON_THEME).filter(|t| !t.is_empty()),
@@ -196,6 +212,7 @@ impl DockConfig {
             magnification_factor,
             auto_hide,
             position,
+            sherlock,
             file,
         };
         (config, problems)
@@ -259,6 +276,11 @@ impl DockConfig {
             POSITION,
             self.position.key().to_owned(),
             read.position.key().to_owned(),
+        );
+        put(
+            SHOW_SHERLOCK,
+            self.sherlock.to_string(),
+            read.sherlock.to_string(),
         );
         file.to_text()
     }
@@ -385,6 +407,28 @@ mod tests {
         assert!(!move_pinned(&mut pinned, "c", Some("a")));
         assert!(!move_pinned(&mut pinned, "z", Some("a")));
         assert_eq!(pinned, list("b c a d"));
+    }
+
+    #[test]
+    fn sherlock_keeps_its_place_in_the_pinned_list() {
+        // An old file, without the token: nothing about Sherlock, which stays in the middle.
+        let old = "[Dock]\nPinned=a;b;\n";
+        let (config, problems) = DockConfig::parse(old);
+        assert!(problems.is_empty() && config.sherlock);
+        assert_eq!(config.pinned, Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(config.to_text(), old, "read and written back unchanged");
+        // Moved, then taken out of the dock.
+        let (mut config, _) = DockConfig::parse("[Dock]\nPinned=sherlock;a;b;\n");
+        assert_eq!(
+            config.pinned.as_ref().map(|p| p[0].as_str()),
+            Some(SHERLOCK)
+        );
+        config.pinned = Some(vec!["a".to_owned(), "b".to_owned()]);
+        config.sherlock = false;
+        let text = config.to_text();
+        assert_eq!(text, "[Dock]\nPinned=a;b;\nShowSherlock=false\n");
+        assert!(!DockConfig::parse(&text).0.sherlock);
+        assert_eq!(DockConfig::parse("[Dock]\nShowSherlock=no\n").1.len(), 1);
     }
 
     #[test]
