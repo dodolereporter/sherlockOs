@@ -25,7 +25,10 @@ mod tests {
         let program = dir.join("bin/record");
         write(
             &program,
-            &format!("#!/bin/sh\nprintf '%s|' \"$@\" > \"{}/$1\"\n", out.display()),
+            &format!(
+                "#!/bin/sh\nprintf '%s|' \"$@\" > \"{}/$1\"\n",
+                out.display()
+            ),
         );
         let status = Command::new("chmod")
             .arg("+x")
