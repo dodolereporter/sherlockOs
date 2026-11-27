@@ -1797,6 +1797,43 @@ mod tests {
         keyboard: KeyboardInteractivity::OnDemand,
     };
 
+    /// Lot D-21g: as on macOS, a dock that hides by itself reserves no room. A maximized window,
+    /// then the dock hidden as the real one is (no zone, all but 2 of its 76 below the edge),
+    /// brought back by the pointer (its margin back to 0) and hidden again: the window gets no
+    /// new configure, and keeps its size.
+    #[test]
+    fn a_dock_revealed_then_hidden_does_not_resize_a_maximized_window() {
+        let mut h = Harness::start();
+        let _shown = h.show_window_with(true);
+        h.wait_size("maximized", 800, 600);
+        let hidden = Spec {
+            zone: -1,
+            margin: (0, 0, 2 - 76, 0),
+            ..DOCK
+        };
+        let dock = anchor(&mut h, hidden);
+        settle(&mut h);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let size = h.state.space.element_geometry(&window).map(|g| g.size);
+        let configures = h.client.configures.len();
+        // Revealed, then hidden again, a few steps of its slide each way.
+        for bottom in [-50, -20, 0, -20, -50, 2 - 76] {
+            dock.layer.set_margin(0, 0, bottom, 0);
+            dock.surface.commit();
+            settle(&mut h);
+            assert_eq!(
+                h.state.output_area(),
+                Some(rect(0, 0, 800, 600)),
+                "{bottom}"
+            );
+        }
+        assert_eq!(h.client.configures.len(), configures, "no new configure");
+        assert_eq!(
+            h.state.space.element_geometry(&window).map(|g| g.size),
+            size
+        );
+    }
+
     /// Lot D-18d: a maximized or snapped window pulled by its title bar comes off under the
     /// pointer at its previous size and stays where it is dropped, also when the dock comes
     /// back and the work area shrinks.
