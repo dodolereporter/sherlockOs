@@ -589,7 +589,10 @@ mod tests {
             .filter(|n| notifier.try_send(format!("shot {n}")).is_ok())
             .count();
         assert!(start.elapsed() < Duration::from_millis(500));
-        assert!((NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken), "{taken}");
+        assert!(
+            (NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken),
+            "{taken}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
