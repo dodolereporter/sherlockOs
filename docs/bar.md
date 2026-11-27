@@ -74,6 +74,12 @@ The Wi-Fi and Bluetooth states come from the system bus (`live.rs`): read when t
 then again on NetworkManager's `PropertiesChanged` (its state, its connectivity, the strength of
 an access point) and on BlueZ's `PropertiesChanged`, `InterfacesAdded` and `InterfacesRemoved`,
 coalesced like the panels' (`bus::coalesce`), each read sent only when it changed: nothing polls.
+Each rule names the objects of its service (`path_namespace` `/org/freedesktop/NetworkManager`
+or `/org/bluez`, BlueZ's `ObjectManager` on `/`, Q-43): the system connection is shared and zbus
+does not filter a well-known sender name on its side, so without the path an RSSI of BlueZ read
+NetworkManager again, and the other way round, panel closed. When the system bus closes (D-Bus
+restarted), the icons show unavailable, then follow again on a new connection after 1 s, 2 s, 4 s…
+up to 60 s; the cached connections of `system::system` are opened again once closed.
 Without NetworkManager on the bus, a Wi-Fi network shows every arc, as before. The microphone has
 no indicator in the bar, so its mute is not shown.
 
@@ -783,7 +789,17 @@ notification centre follows `Changed` the same way.
 D-25 exists, logind has no locker to tell, and the button does nothing visible); « Se déconnecter », « Redémarrer » and
 « Éteindre » want a second click at least 400 ms after the first (`launcher::CONFIRM_DELAY`),
 so that a double click only arms them. The armed button turns amber and « Reclique pour
-confirmer » replaces the user's name; any other click cancels it.
+confirmer » replaces the user's name; any other click cancels it. The command's exit code is
+read for 300 ms (`launcher::system::REFUSAL_WAIT`, Q-43): logind or polkit refusing (another
+session open, no right) shows « Refusé » under the buttons, with the reason in the log; a
+command still running then (polkit asking for a password) is left to end, reaped by a thread.
+
+**Names from far away (Q-43).** A Bluetooth device's name and a sound output's description (a
+Bluetooth headset's is its own name) are cleaned before they are shown
+(`system_services::names::shown`): control characters and bidirectional formatting characters
+left out, 64 characters at most with « … ». A device named with a right-to-left override or a
+line break cannot pass for another one under « Oublier » or « Confirmer ». The SSID of a Wi-Fi
+network is not cleaned yet (it waits for D-20e, which changes `network.rs`).
 
 ![The control centre](../desktop/bar/screenshots/control-centre.png)
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)

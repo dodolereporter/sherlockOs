@@ -177,7 +177,9 @@ program starter. `Systemd`, the real one, runs without a shell:
 | « Éteindre » | `systemctl poweroff` |
 
 `<id>` is `$XDG_SESSION_ID`, or an empty argument, which `loginctl` reads as the caller's
-session. Locking only asks logind to lock: the session needs a locker that listens (the lock
+session. `Systemd` reads the exit code for 300 ms (`REFUSAL_WAIT`, Q-43): a refusal of logind
+or polkit is a `LaunchError::Refused` with its reason (the bar shows « Refusé »; the launcher
+stays open and logs it); a command still running then is reaped by a thread. Locking only asks logind to lock: the session needs a locker that listens (the lock
 screen is a later batch). Everything but locking loses unsaved work, so « Se déconnecter »,
 « Redémarrer » and « Éteindre » ask for confirmation: the first Enter (or click) turns their
 line into « Appuie encore sur Entrée pour confirmer »; a second one runs the command, if it is
