@@ -59,6 +59,10 @@ resvg = { version = "=0.45.1", default-features = false }
 name = "gallery"
 required-features = ["iced"]
 
+[[example]]
+name = "startup"
+required-features = ["iced"]
+
 [[test]]
 name = "gallery"
 required-features = ["iced"]

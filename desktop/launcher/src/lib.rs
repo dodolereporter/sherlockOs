@@ -10,14 +10,20 @@ pub mod files;
 pub mod instance;
 pub mod launch;
 pub mod search;
+pub mod service;
 pub mod source;
+pub mod startup;
 pub mod system;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use iced::Settings;
-use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, Margin};
+use iced::futures::Stream;
+use iced::futures::channel::mpsc;
+use iced_exwlshell::reexport::{
+    Anchor, KeyboardInteractivity, Layer, LayerSize, Margin, NewLayerShellSettings,
+};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
 use sherlock_ui::{color, launcher, theme, typography};
@@ -27,7 +33,7 @@ use apps::Apps;
 use iced::futures::channel::oneshot;
 
 /// Name of the layer-shell surface, readable by the compositor.
-const NAMESPACE: &str = "launcher";
+pub const NAMESPACE: &str = "launcher";
 
 /// Surface settings for a panel `height` high: anchored to the top only, so centered, at the
 /// board's distance from the screen top whatever the bar reserves (exclusive zone -1), above
@@ -48,6 +54,67 @@ pub fn surface(height: f32) -> LayerShellSettings {
     }
 }
 
+/// The surface of a resident launcher when the renderer has alpha (lot P-02): the whole screen,
+/// so that a click beside the panel closes it and goes no further, as Spotlight does. The
+/// panel sits at the same place as on its own surface.
+pub fn screen_surface() -> NewLayerShellSettings {
+    NewLayerShellSettings {
+        anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
+        layer: Layer::Overlay,
+        size: LayerSize::FILL,
+        exclusive_zone: Some(-1),
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        namespace: Some(String::from(NAMESPACE)),
+        ..NewLayerShellSettings::default()
+    }
+}
+
+/// The surface of a resident launcher in software, whose surfaces are opaque: the panel alone,
+/// as `surface` places it.
+pub fn panel_surface(height: f32) -> NewLayerShellSettings {
+    let panel = surface(height);
+    NewLayerShellSettings {
+        anchor: panel.anchor,
+        layer: panel.layer,
+        size: panel.size,
+        exclusive_zone: Some(panel.exclusive_zone),
+        margin: Some(panel.margin),
+        keyboard_interactivity: panel.keyboard_interactivity,
+        namespace: Some(String::from(NAMESPACE)),
+        ..NewLayerShellSettings::default()
+    }
+}
+
+/// The surface drawn once as a service starts, to ready the renderer: one pixel in a corner,
+/// under the windows, without input nor keyboard. `namespace`: the program's.
+pub fn warm_surface(namespace: &str) -> NewLayerShellSettings {
+    NewLayerShellSettings {
+        anchor: Anchor::Top | Anchor::Left,
+        layer: Layer::Background,
+        size: LayerSize::px(1, 1),
+        exclusive_zone: Some(0),
+        keyboard_interactivity: KeyboardInteractivity::None,
+        events_transparent: true,
+        namespace: Some(format!("{namespace}-warm-up")),
+        ..NewLayerShellSettings::default()
+    }
+}
+
+/// The theme of the appearance file each time it changes, for a launcher that stays.
+pub fn appearance() -> impl Stream<Item = color::Theme> {
+    let (sender, receiver) = mpsc::unbounded();
+    if let Some(path) = appearance_config::path() {
+        let followed = appearance_config::follow(path, move |event| match event {
+            appearance_config::Event::Theme(theme) => sender.unbounded_send(theme).is_ok(),
+            _ => true,
+        });
+        if let Err(error) = followed {
+            tracing::warn!(%error, "cannot follow the theme");
+        }
+    }
+    receiver
+}
+
 /// iced settings: sherlock-ui fonts and interface text size.
 pub fn settings() -> Settings {
     Settings {
@@ -58,8 +125,8 @@ pub fn settings() -> Settings {
     }
 }
 
-/// Makes the theme of the appearance file the active one. The launcher lives a few seconds:
-/// it reads the file once and does not follow it.
+/// Makes the theme of the appearance file the active one, before the first frame; the
+/// subscription follows it then (`appearance`).
 pub fn apply_theme() {
     let Some(path) = appearance_config::path() else {
         return;
@@ -101,7 +168,7 @@ fn desktops() -> Vec<String> {
 
 /// The sources of results, in the order of their sections, and what tells when the files
 /// are walked.
-pub fn sources() -> (Vec<Box<dyn source::Source>>, oneshot::Receiver<usize>) {
+pub fn sources() -> app::Sources {
     let home = std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from);
     let dirs = mime_apps::Dirs::from_env(&home);
     let terminal = mime_apps::pick_terminal(std::env::var("TERMINAL").ok().as_deref());
@@ -110,7 +177,10 @@ pub fn sources() -> (Vec<Box<dyn source::Source>>, oneshot::Receiver<usize>) {
     let icons =
         icon_theme::Lookup::new(&data, Some(&home), theme.as_deref()).context("Applications");
     let locales = locales();
-    let apps = Apps::load(&dirs, &locales, terminal.clone()).with_icons(icons);
+    let apps = startup::timed("desktop entries read", || {
+        Apps::load(&dirs, &locales, terminal.clone())
+    })
+    .with_icons(icons);
     tracing::info!(applications = apps.len(), ?theme, "launcher sources");
     let (catalog_dirs, catalog_terminal) = (dirs.clone(), terminal.clone());
     let (files, walked) = files::Files::start(home, move || {
@@ -151,21 +221,48 @@ fn launcher() -> (Launcher, oneshot::Receiver<usize>) {
     (launcher, walked)
 }
 
-/// Runs the launcher until a program starts or Escape closes it.
-pub fn run() -> Result<(), iced_exwlshell::Error> {
-    apply_theme();
+/// How the launcher lives.
+#[derive(Debug)]
+pub enum Mode {
+    /// Started by a key, it ends when it closes.
+    OnDemand,
+    /// Started with the session, hidden, and shown by the requests of its clients (lot P-02).
+    Resident(service::Inbox),
+}
+
+/// Runs the launcher: until a program starts or Escape closes it, or for the whole session when
+/// it is resident.
+pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
+    startup::timed("theme read", apply_theme);
+    let resident = match mode {
+        Mode::OnDemand => None,
+        Mode::Resident(inbox) => Some(inbox),
+    };
     let started = launcher();
-    let layer = surface(started.0.height());
+    let layer = match resident {
+        Some(_) => LayerShellSettings {
+            start_mode: StartMode::Background,
+            ..LayerShellSettings::default()
+        },
+        None => surface(started.0.height()),
+    };
+    let reload: app::Reload = Arc::new(sources);
     // The daemon wants a boot function it may call again: the launcher is handed over once.
     let first = std::sync::Mutex::new(Some(started));
     let boot = move || {
-        let (launcher, walked) = first
+        let (mut launcher, walked) = first
             .lock()
             .ok()
             .and_then(|mut l| l.take())
             .unwrap_or_else(launcher);
+        let mut tasks = Vec::new();
+        if let Some(inbox) = resident.clone() {
+            launcher = launcher.resident(inbox, reload.clone());
+            tasks.push(launcher.warm_up());
+        }
         // Once the files are walked, the query typed meanwhile is searched again.
-        (launcher, iced::Task::perform(walked, |_| Message::Refresh))
+        tasks.push(iced::Task::perform(walked, |_| Message::Refresh));
+        (launcher, iced::Task::batch(tasks))
     };
     iced_exwlshell::daemon(boot, namespace, Launcher::update, Launcher::view)
         .theme(|_: &Launcher, _| Some(theme::theme()))
