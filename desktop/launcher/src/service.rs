@@ -39,8 +39,11 @@ const MAX_LINE: u64 = 64;
 pub enum Request {
     /// Shows the surface if it is hidden, hides it otherwise.
     Toggle,
-    /// Hides the surface if it is shown: another overlay of the shell opens.
+    /// Hides the surface if it is shown: another overlay of the shell opens, or four fingers
+    /// spread out over the applications view (lot D-41c).
     Hide,
+    /// Shows the surface if it is hidden, leaves it otherwise: four fingers pinching in.
+    Show,
 }
 
 impl Request {
@@ -48,6 +51,7 @@ impl Request {
         match self {
             Self::Toggle => "toggle",
             Self::Hide => "hide",
+            Self::Show => "show",
         }
     }
 
@@ -55,6 +59,7 @@ impl Request {
         match line.trim() {
             "toggle" => Some(Self::Toggle),
             "hide" => Some(Self::Hide),
+            "show" => Some(Self::Show),
             _ => None,
         }
     }
@@ -262,6 +267,9 @@ mod tests {
         assert_eq!(reply, "unknown\n");
         assert_eq!(Request::parse(" toggle \n"), Some(Request::Toggle));
         assert_eq!(Request::parse("TOGGLE"), None);
+        for request in [Request::Toggle, Request::Hide, Request::Show] {
+            assert_eq!(Request::parse(request.word()), Some(request));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
