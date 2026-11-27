@@ -1,8 +1,9 @@
 # Applications view
 
 `desktop/apps` is the desktop's applications view, after the Launchpad of macOS: every installed
-application in a grid of pages, to start one or to find it again. It is a separate program
-started on demand, shown over the whole screen with layer-shell (ADR 0005), written with iced
+application in a grid of pages, to start one or to find it again. It is a separate program,
+resident: started with the session and kept in memory, its surface shown and hidden at once (lot
+P-02, see Resident service), over the whole screen with layer-shell (ADR 0005), written with iced
 0.14 and `iced_exwlshell` 0.21.4 like the launcher (`docs/launcher.md`), whose reading of the
 applications, search, start and single instance it reuses. The crate is `apps`, the binary and
 the layer-shell namespace `sherlockos-apps`. Batch D-41a builds the view, the search and the
@@ -71,11 +72,12 @@ more that the grid fits between the margins and above the dots, and the dots abo
 
 | Module | Role |
 | --- | --- |
-| `main.rs` | Renderer choice, logs, single instance, then `run` |
+| `main.rs` | The press handed to the service, renderer choice, logs, single instance, then `run` |
 | `lib.rs` | Layer-shell surface, the applications of the session, startup |
 | `catalog.rs` | The applications, sorted by name, and the search |
 | `pager.rs` | Pages, wheel, swipe, rubber band, all computed from the time |
 | `app.rs` | State (`View`), messages, keys, update, view |
+| `icons.rs` | The icons drawn once at their size on the screen (lot P-02) |
 
 **Reused from the launcher.** `launcher::apps::Apps` reads the desktop entries through
 `mime-apps` and looks the icons up through `icon-theme`. This batch only opens it up:
@@ -88,8 +90,11 @@ lock file now takes a name).
 
 Anchored to the four edges with a size of 0 (`LayerSize::FILL`): the compositor gives it the
 whole screen. Layer `Overlay`, above the windows, the bar and the dock, exclusive zone -1. The
-keyboard is `Exclusive`; the field takes the focus as the surface maps. The size of the
-surface comes with `window::Event::Resized`; until then the reference screen is assumed.
+keyboard is `Exclusive`; the field takes the focus as the surface maps. iced_exwlshell reports
+no size for a new surface: the view asks for it (`window::size`) as the surface maps, and
+follows `window::Event::Resized` then. A resident view knows the screen before: the logical size
+and scale of the screen its surfaces land on (`ExWlSettings::shell_broadcast`); without either,
+the reference screen is assumed.
 
 ### Applications
 
@@ -172,7 +177,35 @@ but the dock is under the view: there is nothing to drop on. « Garder dans le D
 
 The four finger pinch is another batch.
 
-### One view at a time
+### Resident service
+
+As the launcher (`docs/launcher.md`, Resident service), and for the same reason: the session
+starts `sherlockos-apps --resident` and starts it again if it stops. The service listens on
+`$XDG_RUNTIME_DIR/sherlockos-apps.sock`, draws its one-pixel surface once to ready the renderer,
+and opens its surface at each `toggle`. Once the view faded out, the surface is parked rather
+than removed: one transparent pixel in a corner, on the background layer, without the keyboard,
+its text field let go (its caret would blink, and draw the surface again). Its renderer keeps
+what it drew: the icons uploaded, the glyphs, the shaped names, the layout. Shown again, it is
+anchored back to the four edges, on the `Overlay` layer, with the keyboard: its first frame comes
+about 10 ms after the press, where a new surface took 75 ms. A surface drawn in software has no
+alpha (ADR 0018): there it is removed, not parked, as the pixel would show black. Each opening starts
+afresh: the search empty, the first page, nothing selected, no menu; the applications are read
+again on a thread of the pool (the first opening uses those read at start). The view hides the
+launcher as it opens, and the launcher hides the view. F4, the dock's button and a terminal still
+start `sherlockos-apps`, which hands the press to the service and stops.
+
+### Icons
+
+iced's SVG widget rasterizes an icon at the size it is drawn, and forgets what a frame did not
+draw. The view's icons were therefore rasterized again at every frame of the opening (their scale
+moves from 1.1 to 1), and a whole page of them each time a page came back on screen. Now each icon
+is drawn once into pixels (`icons.rs`, with resvg, the renderer iced uses), at the grid's icon size
+in the screen's pixels (its logical size times the surface's scale, `window::scale_factor`), on
+four threads of the pool, and shown with iced's image widget: the GPU only scales that picture.
+They are drawn again only when that size changes (another screen, another scale) or for the
+applications installed meanwhile; until an icon is drawn, the SVG widget shows it.
+
+### One view at a time, without the service
 
 `$XDG_RUNTIME_DIR/sherlockos-apps.lock`, the launcher's mechanism (`docs/launcher.md`, One
 launcher at a time): started again while open, the program closes the open view. The view
@@ -195,6 +228,46 @@ After macOS. Everything is computed from the time, from the springs of `sherlock
 closes, while the pages move, or during a swipe; typing, an arrow or a resize draw once.
 Tested (`nothing_is_drawn_at_rest`).
 
+## Performance
+
+Lot P-02, after the author found the view « laggy ». Measured as for the launcher
+(`docs/launcher.md`, Performance): reference laptop, RADV on the AMD chip, release builds, a
+headless KWin at 1920 × 1080 in `bwrap` with the AMD render node only, the author's 203
+applications (189 shown) and his `kora` icon theme, frames read from `WAYLAND_DEBUG`.
+
+| From the press to the first frame | Before: a new program | After: the resident service |
+| --- | --- | --- |
+| First press | 1,629 ms (the very first run) | 78 to 90 ms (the surface created) |
+| Next presses | 222 to 632 ms, median 329 ms (5 runs) | 10 to 27 ms, median 13 ms (7 runs, the surface parked) |
+
+The first frame is drawn transparent, at the start of the opening: the view shows from the next
+one, 17 ms later.
+
+The animations, from the `pages` example (`cargo run --release -p apps --example pages`: opens
+the view, turns two pages forward and two back, closes it, opens it again, by itself, and counts
+the SVG pictures iced rasterizes, from iced_wgpu's own log). « Before » is the same program with
+the icons drawn by the SVG widget (`PAGES_SVG=1`), as before this lot.
+
+| Step | SVG rasterized, before → after | CPU time of the process, before → after |
+| --- | --- | --- |
+| Opening (from the start of the program) | 179 → 10 | 440 → 430 ms |
+| First page turn | 65 → 0 | 100 → 70 ms |
+| Second page turn | 33 → 0 | 70 → 60 ms |
+| Turning back, twice | 0 → 0 | 70 + 50 → 80 + 50 ms |
+| Closing | 318 → 12 | 170 → 60 ms |
+
+The few left are the search field's magnifier, an SVG scaled with the view. Every animation kept
+60 frames per second in both: 17 to 28 frames each, intervals of 16.4 to 16.8 ms (median), 17.2 to
+19.4 ms (95th percentile); the longest, 33.6 ms, was at the opening with the SVG widget. In this
+headless compositor the frames held before too: what the author saw comes from what this
+measure leaves out, starting a program at each press above all (the first frame 222 to 632 ms
+later, 1.6 s the first time) and the rasterizing it repeated at every opening and closing.
+
+Drawing the 189 icons at 96 pixels takes 23 to 42 ms on four threads, once, as the service
+starts; looking them up in the icon theme, 31 to 38 ms. The service, hidden: no frame and no CPU
+time in 5 s, 90 MiB resident, 67 MiB proportional (the icons drawn: 189 × 96 × 96 × 4 bytes,
+7 MiB, 28 MiB on a screen at scale 2).
+
 ## Tests
 
 | Test | What it checks |
@@ -212,11 +285,15 @@ Tested (`nothing_is_drawn_at_rest`).
 | `dock::pins::tests` | The list written, defaults included, other keys kept |
 | `pager::tests` | Page count, notches, bounce, swipe, rubber band |
 | `sherlock_ui::apps::tests` | Contrasts, the grid on eight screens |
+| `a_resident_view_toggles_and_opens_afresh_on_its_first_page` | Hidden at first, shown and hidden by the service, the search empty and the first page at each opening, nothing drawn while hidden, the launcher's opening hiding it |
+| `the_icons_are_drawn_once_at_their_size_on_the_screen` | Every icon drawn at the grid's size in pixels of the screen (scale 1.5), none drawn twice |
+| `icons::tests` | An SVG drawn in its proportions, centred, at its side in pixels |
 
 ## Running it
 
 ```sh
 cargo run -p apps
+cargo run -p apps -- --resident   # the service, hidden; `sherlockos-apps` then shows or hides it
 ```
 
 In a Wayland session with layer-shell (our compositor, KWin). Run it again, or press Escape, to
