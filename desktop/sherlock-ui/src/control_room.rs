@@ -54,6 +54,12 @@ pub const THUMBNAIL_SCALE: f32 = 2.0;
 pub const PAGE_RISE: f32 = 12.0;
 pub const PAGE_SPRING: motion::Spring = motion::OPEN_SPRING;
 pub const PAGE_FADE: Duration = motion::FADE;
+/// The results of the search come in one after the other, this far apart, each fading in over
+/// `PAGE_FADE`; `HITS_ENTRANCE` is how long the whole list takes at most.
+pub const HIT_STAGGER: Duration = Duration::from_millis(30);
+pub const HITS_ENTRANCE: Duration = Duration::from_millis(30 * 12 + 200);
+/// The results come up from this far below.
+pub const HIT_RISE: f32 = 6.0;
 /// The folded sidebar slides in from the left edge on the same spring; the page darkens.
 pub const SIDEBAR_SPRING: motion::Spring = motion::OPEN_SPRING;
 pub const SIDEBAR_FADE: Duration = motion::FADE;

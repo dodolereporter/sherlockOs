@@ -13,6 +13,7 @@ pub mod backlight;
 pub mod bus;
 pub mod keyboard;
 pub mod mpris;
+pub mod names;
 pub mod network;
 pub mod notify;
 pub mod secret;

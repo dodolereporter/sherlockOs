@@ -235,6 +235,12 @@ pub fn tree(state: &State) -> Node {
             state.can_forward,
         ),
         entry(52, texts::PARENT_FOLDER, Action::Up, &["Alt", "Up"]),
+        entry(
+            54,
+            texts::GO_TO_FOLDER_MENU,
+            Action::Run(Command::GoToFolder),
+            &["Control", "Shift", "g"],
+        ),
         separator(53),
     ];
     for (i, (label, path)) in state.places.iter().enumerate() {
