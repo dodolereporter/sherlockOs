@@ -559,12 +559,32 @@ refused.
 chevron on its right (« Réseaux Wi-Fi ») opens the list of networks after asking for a scan: one
 line per name (the access point in use, else the strongest), twelve at most, read again when
 the scan's results come (`PropertiesChanged` of the device's Wi-Fi interface, `AccessPointAdded`,
-`AccessPointRemoved`), a padlock on a
+`AccessPointRemoved`), the arcs of its signal on the left (`icon::wifi_level`), a padlock on a
 protected one, a check on the one in use. An open or saved network is joined at once. A new
-protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
-NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
-(`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
-depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+protected one asks for its password below its line (a hidden field with an eye that shows it,
+Enter or « Rejoindre »); NetworkManager keeps the connection, its password readable by root
+only. WPA and WPA2 personal (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks
+say « Ce réseau se rejoint depuis les Réglages. ». « Autre réseau… », at the end of the list,
+joins a hidden network by its name (32 bytes at most), its protection and its password
+(`802-11-wireless.hidden`, any access point).
+
+**Joining, to its end** (D-20e). `AddAndActivateConnection` and `ActivateConnection` answer
+before the network is joined: the bar then follows the activation they return (`StateChanged`
+of `org.freedesktop.NetworkManager.Connection.Active`, listened to before its `State` is read),
+for `network::ACTIVATION_LIMIT` (60 s) at most. The tile and the network's line read
+« Connexion… » until it ends, for a saved network too, and a second click waits. Activated, the
+network shows checked. Deactivated without secrets or after a failed login (reasons 9 and
+10), the password was wrong: the line and the tile say « Mot de passe incorrect », the field
+comes back under the line and shakes as on the lock screen (`panels::shake`). Another reason
+says « Connexion impossible », the limit « Le réseau ne répond pas ». A connection the bar
+created for that join is deleted when it fails: NetworkManager never keeps a wrong password. A
+saved network whose password is typed again keeps its connection: the new password replaces
+the old one in it (`Update` of its settings), then it is activated. The calls go through the
+bus for actions (`ACTION_TIMEOUT`, 60 s): polkit has time to ask for a password.
+
+**Forgetting.** A saved network, and the one in use, have a bin on their right (« Oublier ce
+réseau »), which asks for a confirmation under the line, then deletes every saved connection of
+that name (`Delete`, polkit `settings.modify.system`).
 
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
 the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
@@ -642,6 +662,10 @@ confirmer » replaces the user's name; any other click cancels it.
 ![The control centre](../desktop/bar/screenshots/control-centre.png)
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
 ![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
+
+![A wrong password, asked again](../desktop/bar/screenshots/wifi-wrong-password.png)
+
+![« Autre réseau… », the password shown](../desktop/bar/screenshots/wifi-other-network.png)
 ![The control centre without any service](../desktop/bar/screenshots/control-centre-empty.png)
 ![The same in the light theme](../desktop/bar/screenshots/control-centre-empty-light.png)
 
