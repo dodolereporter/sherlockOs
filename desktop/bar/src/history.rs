@@ -4,12 +4,22 @@
 
 use iced::futures::stream::{self, BoxStream};
 use iced::futures::{Stream, StreamExt};
+use sherlock_ui::notifications as ui;
 use zbus::Connection;
 
 /// Where the daemon serves the interface.
 pub const NAME: &str = "org.freedesktop.Notifications";
 pub const PATH: &str = "/org/sherlockos/Notifications";
 pub const INTERFACE: &str = "org.sherlockos.Notifications.History";
+
+// What the centre keeps of `List` (Q-38): the daemon's own bounds, here again because any
+// program that takes the name after it could send more, and the centre lays it all out.
+
+/// Notifications kept, the newest ones: the daemon's history.
+pub const MAX_ENTRIES: usize = ui::HISTORY;
+/// Actions kept of one notification, and bytes of an action key (the daemon's bounds).
+pub const MAX_ACTIONS: usize = 32;
+pub const MAX_KEY_BYTES: usize = 256;
 
 /// What `List` sends for one notification (see the daemon's `history::Entry`).
 type Wire = (
@@ -40,14 +50,29 @@ pub struct Entry {
     pub when: String,
 }
 
+/// `text`, its first `max` characters and the « … » the daemon may add.
+fn cut(text: String, max: usize) -> String {
+    match text.char_indices().nth(max + 1) {
+        Some((at, _)) => text[..at].to_owned(),
+        None => text,
+    }
+}
+
 impl From<Wire> for Entry {
+    /// Within the daemon's bounds, whoever sent it.
     fn from(wire: Wire) -> Self {
         let (id, app, summary, body, actions, open, received, critical) = wire;
+        let actions = actions
+            .into_iter()
+            .filter(|(key, _)| !key.is_empty() && key.len() <= MAX_KEY_BYTES)
+            .take(MAX_ACTIONS)
+            .map(|(key, label)| (key, cut(label, ui::MAX_LABEL_CHARS)))
+            .collect();
         Self {
             id,
-            app,
-            summary,
-            body,
+            app: cut(app, ui::MAX_APP_NAME_CHARS),
+            summary: cut(summary, ui::MAX_SUMMARY_CHARS),
+            body: cut(body, ui::MAX_BODY_CHARS),
             actions,
             open,
             received,
@@ -86,7 +111,11 @@ pub async fn list(bus: &Connection) -> zbus::Result<Vec<Entry>> {
         .call_method(Some(NAME), PATH, Some(INTERFACE), "List", &())
         .await?;
     let wire: Vec<Wire> = reply.body().deserialize()?;
-    Ok(wire.into_iter().map(Entry::from).collect())
+    Ok(wire
+        .into_iter()
+        .take(MAX_ENTRIES)
+        .map(Entry::from)
+        .collect())
 }
 
 /// « Tout effacer ».
@@ -175,5 +204,40 @@ mod tests {
         let ids: Vec<_> = groups[1].entries.iter().map(|e| e.id).collect();
         assert_eq!(ids, [4, 1]);
         assert!(group(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn an_entry_is_kept_within_the_daemon_bounds() {
+        let actions = (0..1000)
+            .map(|i| (format!("k{i}"), "Libellé".repeat(100)))
+            .chain([
+                (String::new(), String::from("vide")),
+                ("k".repeat(300), String::new()),
+            ])
+            .collect();
+        let entry = Entry::from((
+            1,
+            "a".repeat(10_000),
+            "é".repeat(10_000),
+            "b".repeat(1 << 20),
+            actions,
+            true,
+            0,
+            false,
+        ));
+        assert_eq!(entry.app.chars().count(), ui::MAX_APP_NAME_CHARS + 1);
+        assert_eq!(entry.summary.chars().count(), ui::MAX_SUMMARY_CHARS + 1);
+        assert_eq!(entry.body.chars().count(), ui::MAX_BODY_CHARS + 1);
+        assert_eq!(entry.actions.len(), MAX_ACTIONS);
+        assert!(entry.actions.iter().all(|(k, l)| {
+            !k.is_empty()
+                && k.len() <= MAX_KEY_BYTES
+                && l.chars().count() <= ui::MAX_LABEL_CHARS + 1
+        }));
+        // What is within the bounds stays whole.
+        assert_eq!(
+            cut(String::from("Sherlock"), ui::MAX_APP_NAME_CHARS),
+            "Sherlock"
+        );
     }
 }
