@@ -582,7 +582,7 @@ then « À propos de cet ordinateur », « Réglages », « Mises à jour », «
 
 | Entry | What it does |
 | --- | --- |
-| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
+| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`, beside the session's programs in `$SHERLOCKOS_BIN` when it is there, else in the `PATH`: lot Q-39), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
 | « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
 | « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
 | « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |

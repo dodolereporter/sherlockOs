@@ -112,7 +112,19 @@ longest magnified bar, up to the top of the label, so that a magnified icon past
 reachable and the dock sees the pointer leave; the room kept at both ends for the label of an
 edge icon never takes the pointer. Checked in the nested KWin with a maximized KWrite: a click
 in the black band above the dock puts KWrite's cursor on the line under it, and the dock gets
-no pointer event.
+no pointer event. Since lot D-21f the region always reaches the screen edge over the length of
+the dock, the gap of 8 included (`Geometry::to_edge`): see "Fitts's law" below.
+
+**Fitts's law** (lot D-21f). As on macOS, the gap between the glass and the screen edge, and the
+spaces between the icons, are the dock: launching an application no longer means going down to
+the edge and coming back up. On the bar and between it and the edge, along the bar, the edge
+itself included, a press acts on the icon of its column: a click, a right click (its menu), a
+middle click, a drag (`Layout::icon_for`). Between two icons, the closer one wins, except for a
+right click on the bar itself, which opens the dock's own menu (D-21h, below). The pointer
+there is over the dock: the magnification and the label follow the column. On the left and
+right edges, the same towards the screen side. A hidden dock keeps its band of
+`dock::HIDE_STRIP`, which brings it back after `REVEAL_DELAY`; once it is out, the band at the
+edge is for clicks again. Past the ends of the glass, nothing is picked.
 
 ![A click above the dock reaches the window below](../desktop/dock/screenshots/dock-click-through.png)
 
@@ -174,8 +186,15 @@ nothing; a screen not known yet counts as uncovered.
   surface stay on the screen, its side away from the edge; its input region shrinks to that
   band, over the whole length of the surface. A dock under the pointer when the window is
   maximized stays until the pointer leaves it.
-- **The pointer touches the edge.** The band takes the pointer: the dock slides back over the
-  window, on the `Top` layer, still without exclusive zone. Its input region reaches the screen
+- **The pointer rests against the edge.** The band takes the pointer; once the pointer has
+  stayed on it `dock::REVEAL_DELAY` (150 ms, lot D-21d), the dock slides back over the window, on
+  the `Top` layer, still without exclusive zone. As on macOS, a pointer that only passes by the
+  edge, or aims at the bottom of a fullscreen video, does not bring it out. The compositor
+  puts the anchored surfaces of the top layer before every window, fullscreen ones included,
+  for drawing and for the pointer: the band takes the pointer over a fullscreen window
+  (`tests/shell.rs` of the compositor). A button held in that window keeps the pointer there,
+  as any drag does; the compositor offers no pointer lock nor confinement
+  (`zwp_pointer_constraints_v1`) yet, so no client can keep the pointer from the edge. Its input region reaches the screen
   edge, the gap of 8 included: the pointer that brought it back, resting against the edge,
   keeps it.
 - **The pointer leaves it.** It hides again `dock::HIDE_DELAY` (300 ms) later, unless the
@@ -203,8 +222,9 @@ The label goes to the closest icon, `floor(p × n)`. The pointer comes over the 
 the bar or over an icon grown past it. Once over it, it stays over it in the whole hover band:
 along the bar as drawn, from the screen edge to the top of the tallest icon
 (`Layout::hover_band`). So the magnification holds when the pointer runs along the top of the
-grown icons and crosses the gap between two of them; a click in that gap picks no icon. Out of
-the band, every icon heads back to 52.
+grown icons and crosses the gap between two of them; a click in that gap, above the bar, picks
+no icon (on the bar and below it, it picks the closer one: "Fitts's law"). Out of the band,
+every icon heads back to 52.
 
 Each icon side is a `motion::Animation` led by `dock::SPRING` (stiffness 1740, damping 52.6,
 damping ratio 0.63). The board's `cubic-bezier(0.2, 0.9, 0.3, 1.25)` over 150 ms peaks about
@@ -250,11 +270,14 @@ folders that come after (that is how a user removes a system application). So is
 whose `TryExec` program is missing. `NoDisplay=true` keeps the application, but the defaults
 never pick it.
 
-The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
-neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
-default roles, its open windows and « Nouvelle fenêtre », and this batch may not change it. The
-dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
-(and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
+The `mime-apps` crate (D-27) lists and reads the dock's desktop entries (since S-DOCK-1): the
+same folders as the launcher and the applications view, sub-folders included (Wine's
+`wine/Programs/…` gives the id `wine-Programs-…`, which « Garder dans le Dock » writes), and the
+same bounds: a regular file once its links are followed, of 256 KiB at most, in UTF-8. A link to
+`/dev/zero` or a huge file is skipped instead of filling the dock's memory. Its `DesktopEntry`
+has neither `StartupWMClass` nor the actions, so the dock still parses the text it is given
+with its own `KeyFile`. `dock.conf` and the user's `mimeapps.list` are read the same way, 64 KiB
+at most (`mime_apps::file::read_bounded`).
 
 Icons are looked up by the shared `icon-theme` crate (`docs/icon-theme.md`, since D-03), as
 the Icon Theme specification says, without the cache file: in the theme of `IconTheme` in the
@@ -383,7 +406,8 @@ author's choice, as on Windows and Plasma:
 | --- | --- |
 | Has no window, or its windows cannot be acted on (unknown, placeholder) | Starts it |
 | Is open, but not in front | Brings its windows that are not minimized forward, the least recent first: the most recent ends on top with the keyboard. When they are all minimized, only the most recent one comes back |
-| Is in front (one of its windows is active) | Minimizes its windows |
+| Is in front (one of its windows is active) with other windows shown | Brings the next one forward: the least recent, so that clicks go round them all (lot D-21d) |
+| Is in front with a single window shown | Minimizes it |
 | Middle button, or Ctrl+click | Starts it again for a new window (see below), whatever its windows |
 
 **Several windows.** As on macOS, an application has one icon however many windows it has, and
@@ -393,9 +417,10 @@ that got the keyboard last: each source stamps a window when it becomes active
 (`windows::Stamps`); a window not seen active since the dock started counts as older, and among
 those the one that came last is the most recent.
 
-Cycling through the windows on a second click was set aside: the macOS dock does not do it (it
-is ⌘` on the keyboard), and the order would not show. To pick one window among several, the
-menu lists them (see Menu of an icon), and lot D-21c2 adds « Afficher toutes les fenêtres ».
+Lot D-21c had set aside going from one window to the next on a click, which the macOS dock
+does not do; the author found the dock « did not handle several windows » without it, and lot
+D-21d adds it: a click on the application in front goes to its next window. The menu lists the
+windows too (see Menu of an icon).
 
 **A new window.** The middle button, a Ctrl+click and « Nouvelle fenêtre » start the
 application again: its « new window » action when the desktop entry declares one, otherwise its
@@ -499,12 +524,23 @@ nothing. While the button is held the dock follows the pointer
 through iced's events (`drag::gesture`), past the edges of its surface as well: the surface
 keeps the pointer until the button comes up.
 
+**Across the separator** (lot D-21d). An open application after the separator can be dragged
+too: once the pointer is a quarter of an icon (`dock::CROSS_MARGIN`) on the side of the pinned
+ones, it is pinned, the separator moves past it, and it then takes the place nearest the
+pointer like a pinned one, the others making room. Dragged back past the separator (or past the
+last icon when there is none), a pinned application that is open is unpinned and goes after
+it. Let go, the list is written if it changed. The file is read again just before it is
+written (`DockConfig::load`, then only `Pinned` set), as Control Room does: what another
+program wrote since the dock read it stays.
+
 **Dragged out.** When the pointer is more than half the icon past the bar, away from the edge,
 the icon is out: its room closes, it is drawn at half opacity. Back over the dock, its room
 opens again. Let go out of the dock, a pinned application is unpinned and the file written; it
-shrinks and fades where it was let go. Sherlock does the same, and `ShowSherlock=false` is
-written. A pinned application that is open moves after the
-separator instead, as with « Retirer du dock ». The icon is drawn inside the dock surface:
+shrinks and fades where it was let go, in a puff of smoke as on macOS (lot D-21d: five puffs
+that drift out, grow and fade over `dock::POOF_DURATION`, 400 ms, in the secondary text color).
+Sherlock does the same, and `ShowSherlock=false` is written. A pinned application that is open
+moves after the separator instead, as with « Retirer du dock », out of the same smoke. An open
+application that is not pinned comes back where it was. The icon is drawn inside the dock surface:
 higher than it, it stays at its top edge (a drag icon of its own, `wl_data_device`, is not
 offered by `iced_exwlshell`).
 
@@ -563,7 +599,9 @@ They are tried in this order. `windows::Auto`, the control of the running dock, 
 the shell protocol while its source runs, through the wlroots one otherwise.
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
-id, its last part (`konsole` for `org.kde.konsole`), or its `StartupWMClass`, ignoring case.
+id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is
+not, the last part of it: `konsole` belongs to `org.kde.konsole.desktop`, and since lot D-21d
+`org.kde.konsole` belongs to `konsole.desktop` as well.
 
 **On our compositor** (D-18c2). The dock opens one connection to the shell socket, on the
 thread of its source, and sends its requests on that same connection from the interface thread
@@ -587,7 +625,10 @@ the manager only, so a window closing and another opening in one batch never rea
   the compositor places it), for the minimize animation (D-19). Sent again only when an icon
   moves (icons added or removed, another size or edge, another screen), never while the icons
   magnify or the dock slides; a window that comes gets it at its first `done`; a window whose
-  icon left gets a size of 0, which removes it. On the left and right edges the compositor
+  icon left gets a size of 0, which removes it. Before a click minimizes an application (lot D-21d), the
+  icons are sent as they are drawn, the one under the pointer magnified, so that the genie
+  lands on the icon as seen; they are sent at rest again when the pointer leaves the dock. A
+  magnification that changes during the 300 ms of the minimize is not sent again. On the left and right edges the compositor
   centers the dock in the area the bar leaves, a few pixels off this rectangle.
 
 The list is restricted to the shell (ADR 0021): only the shell socket offers it. KWin offers no
@@ -781,6 +822,10 @@ X focus): the keyboard steps were checked in the nested KWin.
   is found by its id `evidence` and pinned first, before the file manager `mimeapps` names.
 - **Theme**: the dock fades to the light palette over the frames; captures at rest, hovered and
   of an icon's menu in the light theme (`dock-*-light-tiny-skia.png`).
+- **Fitts's law** (lot D-21f, `tests/animations.rs`): a click against the bottom edge and 2 px
+  above it starts the icon of its column, one 1 px from either icon of a gap starts the closer
+  one, the input region reaches the edge, nothing past the ends of the glass; on the left edge,
+  a click against the edge starts the icon of its row.
 - **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
   the longest magnified bar up to the label while hovered, on the bottom and right edges;
   rounding to whole pixels never shrinks it.

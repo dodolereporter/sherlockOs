@@ -13,7 +13,8 @@ pub const CONTROL_ROOM: &str = "control-room";
 /// Its network page, for a network the bar cannot join (lot D-26n).
 pub const NETWORK_PAGE: [&str; 2] = ["--page", "network"];
 
-/// Starts a program by its name, found in `PATH`.
+/// Starts a program by its name: beside the session's programs (`SHERLOCKOS_BIN`), which are
+/// not in the `PATH` (lot Q-39), when it is there, else found in the `PATH`.
 pub trait Start: Send + Sync {
     fn start(&self, program: &str) -> io::Result<()>;
 
@@ -32,7 +33,11 @@ impl Start for Spawn {
     }
 
     fn start_with(&self, program: &str, args: &[&str]) -> io::Result<()> {
-        let mut command = Command::new(program);
+        let path = std::env::var_os("SHERLOCKOS_BIN")
+            .map(|dir| std::path::Path::new(&dir).join(program))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| program.into());
+        let mut command = Command::new(path);
         command.args(args);
         sherlock_ui::gpu::for_child(&mut command);
         let mut child = command.spawn()?;

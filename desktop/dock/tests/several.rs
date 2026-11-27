@@ -165,6 +165,38 @@ fn a_click_with_zero_one_or_several_windows() {
     assert_eq!(recorder.requests(), [Request::Minimize]);
 }
 
+/// Lot D-21d, the author's report « le multi-fenêtre ne marche pas »: seen with the real dock,
+/// Konsole and three of its windows in a compositor without a screen, a click on Konsole in
+/// front minimized all three, and the next click brought back the most recent only. A click in
+/// front now goes from one window to the next, round them all.
+#[test]
+fn a_click_in_front_goes_from_one_window_to_the_next() {
+    let recorder = Recorder::default();
+    let mut dock = dock_with(&[], &FOUR, &recorder);
+    let mut windows = mixed();
+    // The browser's windows, least recent first: 11, 13, then 12 in front.
+    windows.list[1].activated = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    let mut recency = 3;
+    for expected in [11, 13, 12, 11] {
+        dock.click(BROWSER);
+        assert_eq!(
+            recorder.targeted().last(),
+            Some(&(Request::Activate, expected))
+        );
+        // The compositor gives it the keyboard: it becomes the most recent.
+        recency += 1;
+        for window in &mut windows.list[..3] {
+            window.activated = window.id == expected;
+            if window.activated {
+                window.recency = recency;
+            }
+        }
+        let _ = dock.update(Message::Windows(windows.clone()));
+    }
+    assert!(recorder.requests().is_empty(), "nothing minimized");
+}
+
 /// A data folder with an application that starts and exits at once (`true`), whose windows
 /// are `QuickExample`, with a « new window » action when `action`.
 fn quick_app(name: &str, action: bool) -> PathBuf {
