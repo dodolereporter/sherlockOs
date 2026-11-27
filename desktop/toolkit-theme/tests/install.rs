@@ -384,7 +384,8 @@ fn settings_changed_by_hand_are_completed_not_written_again() {
     // The user chose fonts in qt6ct, which wrote its file without our palette line.
     let mine = "[Fonts]\ngeneral=\"Inter,11\"\n";
     write(&qt6, mine);
-    assert_eq!(apply::qt(&layout, Theme::Light).must(), vec![qt6.clone()]);
+    // qt5ct's file, untouched, only changes its palette line; qt6ct's gets the key added.
+    assert!(apply::qt(&layout, Theme::Light).must().contains(&qt6));
     let text = fs::read_to_string(&qt6).must();
     assert!(text.starts_with(mine), "{text}");
     assert!(
