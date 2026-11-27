@@ -245,9 +245,10 @@ impl Dock {
         hide::margin(self.hide.progress(), depth)
     }
 
-    /// The exclusive zone: the gap and the bar's thickness; while the dock hides, -1, so that
-    /// the compositor places it against the screen edge itself, not against what other
-    /// surfaces reserve (the top bar, for a dock at the top).
+    /// The exclusive zone: the gap and the bar's thickness in the `never` mode; otherwise -1,
+    /// so that the compositor places it against the screen edge itself, not against what other
+    /// surfaces reserve (the top bar, for a dock at the top), and reserves nothing for it: a
+    /// dock that hides by itself goes over the windows (lot D-21g).
     fn zone(&self) -> i32 {
         if self.hide.exclusive() {
             (self.geometry.bar_thickness() + self.geometry.gap).round() as i32
