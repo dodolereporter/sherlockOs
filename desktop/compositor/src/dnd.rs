@@ -266,6 +266,7 @@ impl State {
                 .map(|s| (s.clone(), *origin)),
             _ => None,
         };
+        tracing::trace!(?location, over_x11 = x11.is_some(), "drag motion");
         let (Some(source), Some(side)) = (drag.source.clone(), self.dnd.x11.as_mut()) else {
             return x11.is_some();
         };
