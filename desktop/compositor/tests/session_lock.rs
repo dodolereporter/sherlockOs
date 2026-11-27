@@ -58,6 +58,7 @@ mod tests {
     const KEY_L: u32 = 38 + 8;
     const KEY_A: u32 = 16 + 8;
     const KEY_LEFTSHIFT: u32 = 42 + 8;
+    const KEY_SPACE: u32 = 57 + 8;
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
     const BTN_LEFT: u32 = 0x110;
@@ -1334,5 +1335,68 @@ mod tests {
             h.state.lock_attempts() == 1
         });
         assert!(h.state.is_locked(), "the session stays locked");
+    }
+
+    /// The real lock program (`LOCK_PROGRAM`, `target/debug/sherlockos-lock`), in software, on
+    /// this headless compositor: one key on the lock at rest brings the form (lot D-25g).
+    /// Ignored without the program: `cargo build -p lock` first.
+    #[test]
+    #[ignore = "needs the lock program built: LOCK_PROGRAM=target/debug/sherlockos-lock"]
+    fn the_real_lock_program_shows_its_form_at_the_first_key() {
+        let Ok(program) = std::env::var("LOCK_PROGRAM") else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("lock-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("lock.log");
+        // A shell keeps the connection the compositor hands over (`WAYLAND_SOCKET`) and sends
+        // the program's log to a file; a home of its own, software rendering, no real service.
+        let script = format!(
+            "exec env -u DBUS_SESSION_BUS_ADDRESS -u DISPLAY HOME={dir} XDG_CONFIG_HOME={dir} XDG_CACHE_HOME={dir} ICED_BACKEND=tiny-skia \
+             RUST_LOG=info {program} 2>>{log}",
+            dir = dir.display(),
+            log = log.display()
+        );
+        let mut h = Harness::start(&["sh", "-c", &script], &["false"]);
+        let output = h.state.outputs()[0].clone();
+        let frames = |h: &mut Harness| {
+            let output = h.state.outputs()[0].clone();
+            h.state.send_lock_frames(&output, h.state.now());
+        };
+        h.state.lock_session();
+        let start = std::time::Instant::now();
+        while !h.state.lock_confirmed() && start.elapsed() < Duration::from_secs(20) {
+            h.settle();
+            h.state.lock_frame_shown(&output);
+            frames(&mut h);
+        }
+        assert!(
+            h.state.lock_confirmed(),
+            "{}",
+            std::fs::read_to_string(&log).unwrap_or_default()
+        );
+        // The lock at rest: its entrance played.
+        for _ in 0..200 {
+            frames(&mut h);
+            h.settle();
+        }
+        let read = || std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!read().contains("form shown"));
+        h.key(KEY_SPACE);
+        let start = std::time::Instant::now();
+        loop {
+            frames(&mut h);
+            h.settle();
+            if read().contains("form shown") || start.elapsed() > Duration::from_secs(5) {
+                break;
+            }
+        }
+        let text = read();
+        let _ = std::process::Command::new("pkill")
+            .args(["-KILL", "-f", &program])
+            .status();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(text.contains("form shown"), "one Space, no form:\n{text}");
     }
 }
