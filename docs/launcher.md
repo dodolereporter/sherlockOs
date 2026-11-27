@@ -209,10 +209,13 @@ disabled. A real index (watching changes, more folders) is a later batch.
 
 « Demander à Sherlock » is always the last row when the query is not empty. sherlockd has no
 interface for the shell yet, nor an option that takes a request: it knows `--demo`,
-`--claude-code <request>` (a demonstration), `--proxy` and `--test-server`. The row is
-therefore shown disabled, its line « Bientôt », and Enter does nothing. `ask::ASK_OPTION` names
-the option once it exists (`--ask`): the row then runs `<terminal> -e sherlockd --ask
-"<query>"`, the query in a single argument, without a shell (tested with the option set).
+`--claude-code` (a demonstration, its request on standard input), `--proxy` and
+`--test-server`. The row is therefore shown disabled, its line « Bientôt », and Enter does
+nothing. `ask::ASK_OPTION` names the option once it exists (`--ask`): the row then runs
+`<terminal> -e sherlockd --ask <file>`, without a shell (tested with the option set). The query
+is never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`, S-11): it
+is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd-requests/`,
+0600 from its creation in 0700 folders, which sherlockd reads then removes.
 
 What the interface should provide, for the launcher and the rest of the shell:
 

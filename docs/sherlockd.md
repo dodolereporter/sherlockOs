@@ -103,6 +103,19 @@ Following ADR 0015, the level is read from the standard annotations, for our ser
 level. A contradiction (`readOnlyHint` and `destructiveHint` both true), a value that is not a
 boolean or missing annotations therefore give the destructive level.
 
+**A read that reaches outside the machine is an action (S-11).** A read tool that declares
+`openWorldHint: true` (a web search, a page or a URL read, anything that sends a request out) is
+given the action level, and so is refused while the broker does not exist; an `openWorldHint`
+that is not a boolean gives the destructive level. Its arguments come from the model: an
+injection read in a file or a page could otherwise send out, as the query of a "read", what
+Sherlock read, without any consent. This is a rule for A-11 too: the broker treats every call
+that leaves the machine as an action, whatever its server says of its level, and our future
+network servers declare `openWorldHint: true` on such tools.
+
+Descriptions and schemas are bounded: a description is cut to `MAX_TOOL_DESCRIPTION` (1 KiB,
+« … » at the end) before it reaches the model, which reads it as it is (tool poisoning), and a
+list with a schema longer than `MAX_TOOL_SCHEMA` (16 KiB, serialized) is refused.
+
 A server is third-party by default (`Trust::ThirdParty`): its annotations are ignored and all its
 tools are destructive. Only `ServerConfig::ours()` marks a server as one of ours. A duplicate tool
 name, within a page, across two pages or across two servers, is refused (`DuplicateTool`) and the
@@ -239,6 +252,19 @@ the fields Sherlock reads, with session and call identifiers replaced.
 | `MAX_HISTORY_BYTES` | 64 KiB | The kept history: the oldest messages drop beyond |
 | `MAX_STDERR_BYTES` | 2 KiB | The standard error kept and logged |
 | `DEFAULT_TIMEOUT` | 300 s | A whole request. Claude Code is then killed, then reaped |
+| request | 64 KiB | The request read on standard input by `--claude-code` |
+
+**Processes (S-11).** Claude Code starts in a process group of its own, with
+`PR_SET_PDEATHSIG(SIGKILL)`: killed with sherlockd however it ends (a crash, SIGKILL). The proxy
+it starts is in that group and sets the same signal on itself (it dies with Claude Code), and the
+MCP servers get it from their own parent. A timeout or an error kills the whole group, then
+reaps Claude Code. After the final answer, the answer is given at once: Claude Code is given
+20 s to end on its own in a task of its own, then its group is killed; if sherlockd ends first,
+the group goes with it.
+
+**Working directory (S-11).** `$XDG_RUNTIME_DIR/sherlockd` is checked after its creation, even
+when it was there before: a folder, not a link, owned by the user; opened to others, it is
+closed again to 0700. Anything else is refused.
 
 ### The recap of exchanges
 
@@ -280,9 +306,13 @@ result without being executed. At the end of its input, it stops its servers.
 ## The trial command
 
 ```sh
-cargo run -p sherlockd -- --claude-code "Utilise l'outil echo avec le texte Bonjour puis dis-moi ce qu'il a répondu"
-RUST_LOG=sherlockd=info cargo run -p sherlockd -- --claude-code "…"   # with the event trace
+echo "Utilise l'outil echo avec le texte Bonjour puis dis-moi ce qu'il a répondu" | cargo run -p sherlockd -- --claude-code
+echo "…" | RUST_LOG=sherlockd=info cargo run -p sherlockd -- --claude-code   # with the event trace
 ```
+
+The request is read on standard input (64 KiB at most, UTF-8), never in the arguments: every
+local account reads those (`ps`, `/proc/*/cmdline`), and a request may hold personal data
+(S-11). `--claude-code <request>` is refused.
 
 It prints the conversation: the request, the call of `echo` through the proxy, its result, the
 answer. A request to read a file or run a command does not go through: Claude Code has no tool for
@@ -375,6 +405,8 @@ put no tight bound on their own duration.
 - The setting through which the user grants another level to a tool of a third-party server
   (ADR 0015).
 - The test that proves that no call bypasses the broker.
+- A call that leaves the machine is an action (see "Tool levels", S-11): a third-party server's
+  read never runs without consent when it can send data out.
 
 Later: an API-key provider and its keyring reading, masking of secrets before sending them to the
 model, the service that links `sherlockd` to Sherlock's panel (A-19), and the MCP servers per

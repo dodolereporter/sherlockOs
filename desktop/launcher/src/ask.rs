@@ -2,10 +2,16 @@
 //! interface for the shell yet, nor an option that takes a request from it (it knows `--demo`,
 //! `--claude-code`, `--proxy` and `--test-server`): the entry stays visible, disabled, with
 //! « Bientôt ». Once `ASK_OPTION` names such an option, the entry runs
-//! `sherlockd <option> <query>` in a terminal. See `docs/launcher.md` for what the interface
+//! `sherlockd <option> <file>` in a terminal, the query written in `<file>`, readable by the user
+//! alone: never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`).
+//! sherlockd reads that file and removes it. See `docs/launcher.md` for what the interface
 //! should offer.
 
 use std::ffi::OsString;
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sherlock_ui::launcher::text;
 
@@ -43,7 +49,7 @@ impl Source for Ask {
         text::SHERLOCK
     }
 
-    /// One entry, the query as typed handed over in a single argument.
+    /// One entry, the query as typed handed over in a private file when it is chosen.
     fn search(&self, query: &Query, limit: usize) -> Vec<Hit> {
         if query.terms.is_empty() || limit == 0 {
             return Vec::new();
@@ -52,14 +58,13 @@ impl Source for Ask {
             Some(prefix) => {
                 let mut words = prefix.iter().cloned();
                 let program = words.next().unwrap_or_default();
-                let mut args: Vec<OsString> = words.collect();
-                args.push(query.raw.trim().into());
                 let command = Command {
                     program,
-                    args,
+                    args: words.collect(),
                     dir: None,
                 };
-                (text::ASK_LINE, Action::Start(command))
+                let request = query.raw.trim().to_owned();
+                (text::ASK_LINE, Action::Ask { command, request })
             }
             None => (text::SOON, Action::Disabled),
         };
@@ -75,6 +80,29 @@ impl Source for Ask {
     fn reserved(&self) -> usize {
         1
     }
+}
+
+/// Requests written by this process, for names of their own.
+static REQUESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Writes `request` into a new file of `<runtime>/sherlockd-requests` (apart from the folder
+/// Claude Code works in), made 0600 from the start (the folder 0700), and returns its path. The file is created, never opened if it was there.
+pub fn request_file(runtime: &Path, request: &str) -> io::Result<PathBuf> {
+    let dir = runtime.join("sherlockd-requests");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    let count = REQUESTS.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("{}-{count}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)?;
+    file.write_all(request.as_bytes())?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -95,18 +123,27 @@ mod tests {
     }
 
     #[test]
-    fn enabled_it_hands_the_query_over_in_one_argument() {
+    fn enabled_it_hands_the_query_over_in_a_private_file() {
+        use std::os::unix::fs::PermissionsExt;
         let ask = Ask::new(Some(vec!["kitty".into(), "-e".into()]), Some("--ask"));
         let hits = ask.search(&Query::new(" range « mes » photos; rm -rf ~ "), 1);
-        let Action::Start(command) = &hits[0].action else {
-            panic!("a command");
+        let Action::Ask { command, request } = &hits[0].action else {
+            panic!("a request");
         };
         assert_eq!(command.program, "kitty");
+        // Never the query in the arguments.
         let args: Vec<&OsString> = command.args.iter().collect();
-        assert_eq!(
-            args,
-            ["-e", "sherlockd", "--ask", "range « mes » photos; rm -rf ~"]
-        );
+        assert_eq!(args, ["-e", "sherlockd", "--ask"]);
+        assert_eq!(request, "range « mes » photos; rm -rf ~");
+        let runtime = std::env::temp_dir().join(format!("launcher-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&runtime);
+        let path = request_file(&runtime, request).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), *request);
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        assert_ne!(request_file(&runtime, request).unwrap(), path);
+        let _ = std::fs::remove_dir_all(&runtime);
         // No terminal: disabled.
         assert!(!Ask::new(None, Some("--ask")).is_enabled());
     }
