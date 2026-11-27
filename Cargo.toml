@@ -48,3 +48,25 @@ missing_safety_doc = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
 dbg_macro = "deny"
+
+# The software renderer and the picture decoders, optimized even in the dev profile: in debug,
+# the 4K captures of the snapshot tests (the lock screen's above all) took most of the
+# 15 minutes the CI gives `just verify`. Only these crates; the workspace stays in debug.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.iced_tiny_skia]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.swash]
+opt-level = 3
