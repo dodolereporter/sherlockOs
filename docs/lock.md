@@ -1,22 +1,22 @@
 # Lock screen
 
-`sherlockos-lock` (crate `desktop/lock`, lot D-25a2) shows the lock screen and checks the
+`sherlockos-lock` (crate `desktop/lock`, lots D-25a2 and D-25b) shows the lock screen and checks the
 password. The compositor holds the lock itself (`ext-session-lock-v1`, see "Session lock" in
 `docs/compositor.md`), and the security model is ADR 0023: this program only draws the screen
 and asks PAM. If it crashes, the session stays locked and the compositor starts it again.
 
 ## What it shows
 
-macOS-like, as the author asked; no board draws it (the board of the login screen inspires it). Every
-color, size, duration and text is in `sherlock_ui::lock::screen`.
+macOS-like, as the author asked; no board draws it (the board of the login screen inspires it).
+Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
-- **Every screen** has a lock surface of its own, at its size and scale, on the background of
-  the system screens, with the date (« jeudi 26 novembre ») and the large time at the top (regular Inter: iced 0.14
-  draws the variable font at its default weight only, a thin weight would fall back to another
-  font).
-- **The screen of the pointer** also shows, at the bottom middle: the round bubble of Sherlock
-  (the still picture `docs/design/images/sherlock-neutre.png`; the 3D model comes with D-25b),
-  the user's name, the password pill of glass with the eye (show or hide the password) and the
+- **At rest** (lot D-25b), every screen has a lock surface of its own, at its size and scale,
+  with only the background, the date (« jeudi 26 novembre ») and the large time at the top
+  (regular Inter: iced 0.14 draws the variable font at its default weight only, a thin weight
+  would fall back to another font). No form, as on macOS.
+- **A key, a click or the pointer** bring the form on the screen of the pointer, at the bottom
+  middle: the round bubble of Sherlock in 3D (`sherlock_3d::Sherlock3d`; the still picture
+  `docs/design/images/sherlock-neutre.png` in software or without the model), the user's name, the password pill of glass with the eye (show or hide the password) and the
   arrow, the line of the error under it, then the machine buttons: « Veille », « Redémarrer »,
   « Éteindre ». The pill and the buttons move to the screen the pointer enters, or the one that
   gets the keyboard; the compositor gives the keyboard to the lock surface of the screen under
@@ -25,15 +25,45 @@ color, size, duration and text is in `sherlock_ui::lock::screen`.
   of the screen's logical height, kept between a minimum and a maximum (`screen::fit`); the
   rest has fixed logical sizes, which the screen's scale multiplies. Tried on 1366 × 768,
   1920 × 1080, 2560 × 1600 at 1.5 and 3840 × 2160 at 2.
-- **Background:** plain, for now. The blurred and darkened wallpaper of the board is left for
-  later: the compositor has no blur yet (lot D-37), and reading and blurring the wallpaper in the
-  client would slow the first frame of the lock.
+- **Background** (lot D-25b), in this order: `background = /absolute/path` in
+  `~/.config/sherlockos/lock.conf` (`desktop_config::lock`), shown as is; else the pictures of
+  the lock given by the author, `assets/lock/lock-dark.jpg` and `lock-light.jpg` (a desk seen
+  from above, the middle left free for the time and the bubble), which `just install-session`
+  puts in `/usr/local/share/sherlockos/lock/` and which are looked for in the data folders of
+  the desktop, one per theme; else the wallpaper of the desktop, blurred and darkened. Each
+  picture is decoded once, on a thread, once the size of the screens is known, and reduced to
+  cover the largest one in pixels (logical size times its scale): centered, neither stretched
+  nor banded, never kept at 4K for a small screen. It follows the theme of the appearance
+  file, with its fade (the light picture fades in over the dark one). The paths come from the
+  user: a picture is read only from a regular file (links followed) of 64 MiB at most, read with
+  that bound, and decoded with sides of 16 384 pixels and 256 MiB at most, reduced before any
+  other copy; anything else (`/dev/zero`, a FIFO, a huge or lying file) falls to the next
+  source or the plain background. The model of Sherlock follows the same rule in `sherlock-3d`
+  (32 MiB at most, textures bounded too). The middle of the pictures
+  is plain enough: no veil is laid behind the time or the field. The plain background of the
+  system screens shows until the picture is ready.
 
 ## Behavior
 
-- **Entrance:** the time, the bubble, the name, the pill and the buttons rise into place and fade
-  in, 70 ms apart, on the spring of a window that opens. The first key ends every animation at
-  once: typing is never slowed down.
+- **Entrance:** the time comes with the screen. The form comes on demand (`src/form.rs`): the
+  bubble grows from 60 % of its size on a spring, then the name, the pill and the buttons rise
+  and fade in, 70 ms apart. A key once the form shows ends the animations: typing is never
+  slowed down.
+- **The key that brings the form is not lost:** a letter, a digit or a sign goes into the field;
+  Space and Enter only bring the form (Enter sends nothing to PAM). Escape sends the form away.
+- **Leaving:** after 20 s without input (unless PAM is checking), the form leaves in reverse
+  order, and the field empties, the eye closed.
+- **Sleep:** confirming « Veille » sends the form away and wipes the field first. The 20 s are
+  counted on the monotonic clock, which stops during a suspension: so a jump of more than 5 s
+  of the time since boot (`CLOCK_BOOTTIME`) between two ticks of a second (the lid closed, a
+  sleep started elsewhere) sends the form away and wipes the field too. Nothing typed waits for
+  whoever opens the lid.
+- **Sherlock** follows the field: he waves (`Wave`) when the form comes, closes his eyes
+  (`EyesClosed`) while something is typed, opens one eye (`Peek`) when the eye shows the
+  password, opens them and looks at the field when it is empty again, thinks (`Think`) while
+  PAM checks, is sorry (`Sorry`) for 2.5 s after a refusal, happy (`Success`) when it is
+  accepted, and sleeps (`Sleep`) once « Veille » is confirmed. The model is read on a thread at
+  start (`sherlock_3d::locate`); hidden, he costs nothing.
 - **Enter or the arrow:** the field empties at once, the pill shrinks into a circle and the arrow
   becomes a spinner while PAM checks the password, on a thread of its own.
 - **Refused:** the pill comes back, shakes three times and stays empty, with « Mot de passe
@@ -59,6 +89,7 @@ color, size, duration and text is in `sherlock_ui::lock::screen`.
   bar): `Debug` prints `***`, and it is overwritten with zeros (`zeroize`, volatile writes)
   when dropped. The conversation function gives PAM a `malloc` copy, which PAM frees; our copy
   is overwritten as soon as it is handed over. It is never logged.
+- The first key, which brings the form, travels as a `Secret` too (`form::Input`).
 - **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
   text in its own state, and `on_input` hands a new `String` at each key before it becomes a
   `Secret`; iced frees them without overwriting them. They live in the memory of this process
@@ -84,11 +115,19 @@ color, size, duration and text is in `sherlock_ui::lock::screen`.
   prompt gets the password once, the visible one the user, the others nothing); never the
   system's PAM, never a real password.
 - `src/machine.rs`: the second click and its delay.
-- `tests/render.rs`, with a fake PAM and a fake `systemctl`: the right password unlocks, a wrong
-  one empties the field, an empty one sends nothing; only PAM's acceptance leads to the exit; the typed password never shows in a
-  message (`Typed(***)`); the pill follows the screen of the pointer; a machine button needs a
-  second click. Screenshots in `target/tmp/lock/`: rest, typing, spinner and error in both
-  themes, the second screen, and the rest on the four sizes above.
+- `src/form.rs`: the form on demand (a letter goes into the field, Space and Enter do not,
+  Escape and 20 s without input send it away, not while PAM checks) and Sherlock's mood.
+- `src/background.rs`: the picture reduced, blurred and darkened; `lock.conf` before the
+  wallpaper.
+- `tests/render.rs`, with a fake PAM and a fake `systemctl`: the form, the letter that brings
+  it, Space and Enter, the form leaving and the field emptied, the mood of Sherlock; the right
+  password unlocks, a wrong one empties the field, an empty one sends nothing; only PAM's
+  acceptance leads to the exit; the typed password never shows in a message (`Typed(***)`);
+  the pill follows the screen of the pointer; a machine button needs a second click.
+  Screenshots in `target/tmp/lock/`, on the blurred wallpaper: rest (no form), form, typing,
+  password shown (`peek`), spinner and error in both themes, the second screen, and the rest
+  and the form on the four sizes above. In software, Sherlock is his still picture: the 3D
+  bubble is seen on the machine.
 
 ## Manual test (rule 9)
 
@@ -101,3 +140,28 @@ On the reference laptop, the PAM service installed:
 3. Plug a screen in while locked: it shows the background and the time; the pill follows the
    pointer.
 4. « Veille »: two clicks, the laptop sleeps; at wake-up it is still locked.
+5. (D-25b) Super + L: only the blurred wallpaper, the date and the time. Type a letter: the form
+   comes, Sherlock waves, the letter is in the field, his eyes close. Press the eye: one eye
+   opens. Empty the field: he looks at it. Wait 20 s: the form leaves, the field is empty.
+   Space or Enter bring it back with an empty field.
+6. (D-25b) `background = /path/to/picture.jpg` in `~/.config/sherlockos/lock.conf`: that picture,
+   blurred, at the next lock.
+
+## Rescue mode (lot D-25c)
+
+`sherlockos-lock --rescue` is what the compositor starts once the lock screen failed three
+times in a row (before `swaylock`, which no recipe installs): the same program, on a connection
+the compositor opens itself, so the same identity rule (ADR 0023). It draws in software
+(`gpu::Reason::Rescue`), without Sherlock, background, animation nor machine buttons: the line
+« Écran de verrouillage de secours », the user's name, the password pill and its error line, in
+the middle of the plain background of the system screens. PAM is called exactly as in the
+normal mode. The field always shows: Escape and the 20 s without input do not send it away, but
+a wake-up (a jump of `CLOCK_BOOTTIME`) still empties it. If it dies, the compositor starts it
+again, three times, then `swaylock` if installed, then its own screen.
+
+Tests: `tests/render.rs` (the rescue unlocks with a fake PAM, keeps its field; capture
+`rescue-tiny-skia.png`), and the compositor's `tests/session_lock.rs`: the lock program fails
+three times, the rescue mode (a child process of the test, on the connection the compositor
+gave it) takes the lock, an ordinary client can neither lock nor unlock meanwhile, and the
+rescue killed is started again and takes the lock again.
+

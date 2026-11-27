@@ -7,9 +7,12 @@ use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
     // Before anything else: the renderer is chosen through the environment (ADR 0018).
-    let renderer = sherlock_ui::gpu::Choice::detect();
-    // SAFETY: first statement of `main`, no other thread exists yet.
+    // `--rescue`: the rescue mode, which the compositor starts once the lock screen failed
+    // three times; in software, whatever the machine (lot D-25c).
+    let renderer = sherlock_ui::gpu::Choice::detect().or_rescue(lock::rescue_asked());
+    // SAFETY: first statements of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
+    let rescue = renderer == sherlock_ui::gpu::Choice::Software(sherlock_ui::gpu::Reason::Rescue);
     // A panic aborts, without unwinding through the toolkit: a clean exit of the toolkit would
     // end the lock (see `app.rs`). The compositor keeps the session locked and starts the
     // program again.
@@ -24,7 +27,7 @@ fn main() -> ExitCode {
         .with_writer(std::io::stderr)
         .init();
     tracing::info!(?renderer, "renderer");
-    match lock::run() {
+    match lock::run(rescue) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "the lock screen stopped");

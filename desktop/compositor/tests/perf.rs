@@ -921,11 +921,17 @@ mod tests {
         let shown = frames.iter().filter(|f| !f.damage.is_empty()).count();
         assert!(shown > 10, "a frame at each blank while it runs: {shown}");
         assert!(frames.len() < 40, "then rest: {} frames", frames.len());
-        // The damage covers the whole way, from the window to its icon.
+        // The damage covers the whole way, from the window to the edge of the dock's glass
+        // over its icon, where it goes in (lot D-19b).
         let damage: Vec<_> = frames.iter().flat_map(|f| f.damage.clone()).collect();
         let swept = bounds(&damage).unwrap();
+        let glass = compositor::genie::GLASS_MARGIN as i32;
+        let entry = Rectangle::new(
+            (icon.loc.x, icon.loc.y - glass - 2).into(),
+            (icon.size.w, 2).into(),
+        );
         assert!(
-            swept.contains_rect(rect) && swept.contains_rect(icon),
+            swept.contains_rect(rect) && swept.contains_rect(entry),
             "{swept:?}"
         );
         // Nothing at rest once it is over: no frame, no effect, the window hidden.

@@ -40,12 +40,18 @@ fn terminal() -> Option<Vec<OsString>> {
 }
 
 /// A `hicolor` theme holding the desktop's own application icons (`sherlock-ui/icons`).
+/// Written once per test process: tests running side by side used to copy the files again while
+/// another one read them, and found an icon missing now and then.
 fn icons() -> icon_theme::Lookup {
-    let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
-    if let Err(error) = write_icons(&data) {
-        panic!("cannot copy the icons: {error}");
-    }
-    icon_theme::Lookup::new(&[data], None, None)
+    static WRITTEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let data = WRITTEN.get_or_init(|| {
+        let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
+        if let Err(error) = write_icons(&data) {
+            panic!("cannot copy the icons: {error}");
+        }
+        data
+    });
+    icon_theme::Lookup::new(std::slice::from_ref(data), None, None)
 }
 
 fn write_icons(data: &std::path::Path) -> std::io::Result<()> {
@@ -291,6 +297,21 @@ fn a_click_starts_a_tile_and_a_click_beside_closes() {
     }
 }
 
+/// Fading out, the view takes no more input: a right click opens no menu (lot UI-06).
+#[test]
+fn a_view_fading_out_opens_no_menu() {
+    let (mut view, started) = recorded(catalog());
+    let _ = view.update(Message::Resized(Size::new(1920.0, 1080.0)));
+    let mut view = view.opened();
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_some(), "a menu opens while the view is shown");
+    let _ = view.update(Message::CloseMenu);
+    let _ = view.update(Message::Dismiss);
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_none(), "no menu while it fades out");
+    assert!(started.lock().unwrap().is_empty());
+}
+
 #[test]
 fn nothing_is_drawn_at_rest() {
     let (mut view, _) = recorded(many(80));
@@ -493,4 +514,58 @@ fn the_menu_renders_in_both_themes() {
         assert!(capture(&view, &name).expect("screenshot written") > 10_000);
     }
     color::set_active(Theme::Dark);
+}
+
+/// A resident view of `catalog` (lot P-02), hidden.
+fn resident(catalog: Catalog) -> View {
+    let (view, _) = recorded(catalog);
+    let (_, receiver) = iced::futures::channel::mpsc::unbounded();
+    let reload: apps::app::Reload = Arc::new(Catalog::default);
+    view.resident(launcher::service::Inbox::from_receiver(receiver), reload)
+}
+
+#[test]
+fn a_resident_view_toggles_and_opens_afresh_on_its_first_page() {
+    use launcher::service::Request;
+    let mut view = resident(many(80));
+    assert!(!view.shown() && !view.animating(), "hidden, nothing drawn");
+    let _ = view.update(Message::Service(Request::Toggle));
+    assert!(view.shown());
+    let _ = view.update(Message::Resized(Size::new(1366.0, 768.0)));
+    let _ = view.update(Message::Query("application 0".into()));
+    let _ = view.update(Message::Key(Key::Right));
+    let _ = view.update(Message::Page(1));
+    // The second press hides it: it fades out, then its surface goes, the program stays.
+    let _ = view.update(Message::Service(Request::Toggle));
+    assert!(!view.shown() && view.closing);
+    assert!(view.update(later(3)).units() > 0, "the surface removed");
+    assert!(!view.animating(), "hidden: nothing drawn");
+    // Shown again: the search is empty, the first page, nothing selected.
+    let _ = view.update(Message::Service(Request::Toggle));
+    assert!(view.shown());
+    assert_eq!(view.query, "");
+    assert_eq!((view.pager.page(), view.selected), (0, None));
+    assert_eq!(view.tiles().count(), 80);
+    // The launcher opening hides it.
+    let _ = view.update(Message::Service(Request::Hide));
+    assert!(!view.shown());
+}
+
+#[test]
+fn the_icons_are_drawn_once_at_their_size_on_the_screen() {
+    let catalog = catalog();
+    let with_icon = catalog
+        .tiles()
+        .iter()
+        .filter(|t| catalog.icon(t).is_some())
+        .count();
+    assert!(with_icon > 0);
+    // 96 logical pixels on a 1920 × 1080 screen, at scale 1.5: 144 pixels.
+    let side = apps::icons::side(96.0, 1.5);
+    let drawn = apps::icons::draw(&catalog, side, &apps::icons::Rasters::default());
+    assert_eq!(drawn.side, 144);
+    assert_eq!(drawn.icons.len(), with_icon);
+    // Drawn already: nothing more to draw.
+    let again = apps::icons::draw(&catalog, side, &drawn);
+    assert!(again.icons.is_empty());
 }

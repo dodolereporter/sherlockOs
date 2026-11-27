@@ -372,6 +372,8 @@ impl State {
     /// Closes the menu chain that waits for an outside click.
     pub(crate) fn dismiss_popups(&mut self) {
         if let Some(grab) = self.popup_grab.take() {
+            // The shell's menus close with their last image (lot UI-06).
+            self.ghost_popups_of(&grab.root);
             PopupManager::dismiss_popup(&grab.root, &grab.popup).ok();
         }
     }
@@ -478,6 +480,11 @@ impl XdgShellHandler for State {
                 self.focus(self.top_window());
             }
         }
+    }
+
+    /// A menu goes: one of the shell's closes with its last image (lot UI-06).
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.ghost_popup(&PopupKind::Xdg(surface));
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
