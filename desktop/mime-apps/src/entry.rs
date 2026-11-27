@@ -183,6 +183,16 @@ fn walk(root: &Path, dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<(Str
     }
 }
 
+/// The `.desktop` files under an `applications` folder, sorted by path, with their desktop file
+/// id: the path under `root`, `/` replaced by `-` (`wine/Programs/x.desktop` is
+/// `wine-Programs-x.desktop`). Sub-folders are entered, never twice.
+pub fn desktop_files(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut files = Vec::new();
+    walk(root, root, &mut HashSet::new(), &mut files);
+    files.sort();
+    files
+}
+
 /// Every application installed under the data directories. A desktop id found in a more
 /// important directory hides the same id further down, even when that first file is
 /// `Hidden` (that is how a user removes a system application).
@@ -190,11 +200,7 @@ pub fn read_applications(dirs: &Dirs, locales: &[String]) -> Vec<DesktopEntry> {
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
     for data in dirs.data() {
-        let root = data.join("applications");
-        let mut files = Vec::new();
-        walk(&root, &root, &mut HashSet::new(), &mut files);
-        files.sort();
-        for (id, path) in files {
+        for (id, path) in desktop_files(&data.join("applications")) {
             if !seen.insert(id.clone()) {
                 continue;
             }
@@ -215,22 +221,10 @@ pub const MAX_ENTRY_SIZE: u64 = 256 * 1024;
 
 /// The text of the desktop entry at `path`: only a regular file once its links are followed,
 /// of `MAX_ENTRY_SIZE` at most, in UTF-8. A link to `/dev/zero`, a pipe or a huge file in an
-/// `applications` folder would otherwise take all the memory of whoever lists them.
+/// `applications` folder would otherwise take all the memory of whoever lists them. The dock
+/// reads its entries with it too.
 pub fn read_entry(path: &Path) -> Option<String> {
-    use std::io::Read;
-    if !std::fs::metadata(path).ok()?.is_file() {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(MAX_ENTRY_SIZE + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() as u64 > MAX_ENTRY_SIZE {
-        return None;
-    }
-    String::from_utf8(bytes).ok()
+    crate::file::read_bounded(path, MAX_ENTRY_SIZE).ok()
 }
 
 /// Splits an `Exec` value into arguments: spaces separate them, double quotes group them,
