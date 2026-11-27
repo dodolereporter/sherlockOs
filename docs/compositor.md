@@ -215,6 +215,34 @@ size and margins, and computes the work area.
   above them, the snap preview between the top surfaces and the windows. The pointer follows
   the same order. Anchored surfaces are drawn as they are: no rounded corners, border or
   shadow, which are the client's business (the bar draws its own glass).
+- **Fullscreen covers the bar and the dock (lot D-21e).** As on macOS, a fullscreen window
+  (Wayland `set_fullscreen` or X11 `_NET_WM_STATE_FULLSCREEN`: F11 in Chrome, or a video put
+  fullscreen, which makes the whole browser window fullscreen) covers the top layer of its
+  screen: the bar, the dock and the notifications are drawn just behind it, and the pointer
+  reaches them there no more. Windows above the fullscreen one (its dialogs) stay above. Only
+  the overlay layer stays in front: on-screen displays, urgent notifications, the lock screen.
+  Mission Control shows the bar as usual. `fullscreen::State::fullscreen_on` names the
+  frontmost fullscreen window of a screen, on the active workspace and not minimized.
+  - **Coming back.** The pointer resting against an edge for `motion::EDGE_REVEAL_DELAY`
+    (150 ms) brings the top surfaces lying along that edge back over the window: those
+    anchored to it and not to the opposite one, to both sides across or to neither (the bar
+    at the top, the dock at the bottom; not the notifications, in a corner). They slide in from
+    beyond the edge over `motion::EDGE_REVEAL` (250 ms, ease-out), take the pointer, and their
+    menus work as usual. A pointer passing by the edge does not bring them out: leaving it
+    restarts the wait.
+  - **Going back.** They slide out the same way once the pointer has left the band from the
+    edge to their far side, and none of them has a menu open. The keyboard, if one of them
+    had it, goes back to the window.
+  - **A dock hiding by itself.** A surface partly beyond its screen hides by itself (the dock
+    hidden for a fullscreen window, lot D-18c2): the band it keeps at the edge takes the
+    pointer over the window, as before, and its client brings it back with its own slide,
+    which the reveal does not add to; it is drawn in front once its edge is revealed.
+  - **Tests.** In `tests/headless.rs`, a window made fullscreen goes in front of the bar and
+    takes the pointer over its row, an overlay surface stays in front of it, and the bar is in
+    front again once the window leaves fullscreen. The pointer against the top edge brings the
+    bar no sooner than 150 ms later, sliding from above to its place, where it then has the
+    pointer. Moved away, it slides back behind the window; revealed again with a panel open,
+    the panel takes the pointer over the window and the bar stays until the panel closes.
 - **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
   taken from the work area. Windows are centered, maximized and snapped inside it. When it
   changes (the bar starts, stops or resizes), maximized, fullscreen and snapped windows of that
@@ -903,7 +931,8 @@ single thread. `render::Scene` compiles three programs at startup and lays out t
 front to back, as Smithay expects them:
 
 1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
-   front;
+   front; on a screen with a fullscreen window, the top layer goes just behind that window,
+   unless an edge brought it back (see "Fullscreen covers the bar and the dock");
 2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
 3. the snap preview: translucent green rounded rectangle, 2 px green border;
 4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor

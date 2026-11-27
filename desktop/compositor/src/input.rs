@@ -684,10 +684,13 @@ impl State {
 
     /// What is under the pointer at `pos`. The band of a window comes before the windows it
     /// covers, not before those above it. Overlay and top anchored
-    /// surfaces come before the windows, bottom and background ones after.
+    /// surfaces come before the windows, bottom and background ones after. A fullscreen
+    /// window covers the top layer, unless its edge brought it back (lot D-21e).
     pub(crate) fn hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
-        self.layer_hit(pos, &[Layer::Overlay, Layer::Top])
+        self.layer_hit(pos, &[Layer::Overlay])
+            .or_else(|| self.top_hit(pos, true))
             .or_else(|| self.window_hit(pos))
+            .or_else(|| self.top_hit(pos, false))
             .or_else(|| self.layer_hit(pos, &[Layer::Bottom, Layer::Background]))
     }
 
@@ -699,7 +702,7 @@ impl State {
         if let Some(hit) = self.layer_hit(pos, &[Layer::Overlay]) {
             return Some(hit);
         }
-        match self.layer_hit(pos, &[Layer::Top]) {
+        match self.top_hit(pos, true) {
             Some(Hit::Layer(main, surface, origin)) if main != surface => {
                 Some(Hit::Layer(main, surface, origin))
             }
