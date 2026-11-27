@@ -406,6 +406,7 @@ pub fn scale_visual(window: RectF, screen: RectF, progress: f64, decoration: f32
         moving: true,
         decoration,
         scale: 1.0,
+        shadow: 1.0,
     }
 }
 
@@ -605,6 +606,7 @@ fn push_genie(
         moving: false,
         decoration,
         scale: 1.0,
+        shadow: 1.0,
     };
     render::push_window(
         &mut content,
