@@ -291,6 +291,21 @@ fn a_click_starts_a_tile_and_a_click_beside_closes() {
     }
 }
 
+/// Fading out, the view takes no more input: a right click opens no menu (lot UI-06).
+#[test]
+fn a_view_fading_out_opens_no_menu() {
+    let (mut view, started) = recorded(catalog());
+    let _ = view.update(Message::Resized(Size::new(1920.0, 1080.0)));
+    let mut view = view.opened();
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_some(), "a menu opens while the view is shown");
+    let _ = view.update(Message::CloseMenu);
+    let _ = view.update(Message::Dismiss);
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_none(), "no menu while it fades out");
+    assert!(started.lock().unwrap().is_empty());
+}
+
 #[test]
 fn nothing_is_drawn_at_rest() {
     let (mut view, _) = recorded(many(80));
