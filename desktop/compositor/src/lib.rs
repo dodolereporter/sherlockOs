@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
+pub mod edid;
 pub mod focus;
 pub mod fullscreen;
 pub mod genie;
