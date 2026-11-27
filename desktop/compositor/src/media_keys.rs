@@ -169,7 +169,8 @@ struct Bus {
 
 impl Bus {
     fn get(&mut self) -> Result<zbus::Connection, Problem> {
-        if let Some(connection) = &self.connection {
+        // A connection closed (the bus restarted) is made again: the keys never stay dead.
+        if let Some(connection) = self.connection.as_ref().filter(|c| !c.is_closed()) {
             return Ok(connection.clone());
         }
         let builder = match (&self.address, self.system) {

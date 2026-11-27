@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work, or does not look or feel right.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before you post: no personal data in the text, logs or
+        screenshots (names, user names, network names, serial numbers, e-mail addresses).
+        A security flaw goes through SECURITY.md, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you see, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the dock's menu on an application with three windows
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or video
+      description: Drop them here. For an animation, a short video or a few frames helps a lot.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit you built (`git rev-parse --short HEAD`), or the branch.
+      placeholder: "e1273ca on main"
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: How it runs
+      options:
+        - Nested in a window (`compositor --nested`)
+        - Real session (from a display manager or a console)
+        - A program on its own, in another desktop
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distribution, graphics card vendor (AMD, Intel, NVIDIA, hybrid), screen size and scale, dark or light theme.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The relevant lines, for instance from `~/.local/state/sherlockos/session.log` or `RUST_LOG=debug`.
+      render: text
