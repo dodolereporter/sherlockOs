@@ -44,7 +44,7 @@ mod tests {
                 &dir.join("bin/compositor"),
                 &format!(
                     "#!/bin/sh\necho \"$@\" > '{o}/args'\nenv > '{o}/env'\n\
-                     [ \"$1\" = --xwayland ] && shift\n\
+                     [ \"$1\" = --xwayland ] && shift && export DISPLAY=:9\n\
                      WAYLAND_DISPLAY=wayland-test \"$@\" &\nsleep 2\n"
                 ),
             );
@@ -163,6 +163,42 @@ mod tests {
         assert!(env.contains("XDG_CURRENT_DESKTOP=SherlockOS"), "{env}");
         let data = format!("XDG_DATA_DIRS={}:", s.dir.join("data").display());
         assert!(env.contains(&data), "{env}");
+    }
+
+    /// The proxy of the old X11 tray (lot D-45b): started with XWayland's display when it is
+    /// installed, left out when it is not, or when `SHERLOCKOS_XEMBED=0`.
+    #[test]
+    fn the_x11_tray_proxy_starts_when_it_is_installed() {
+        let s = Session::new("xembed");
+        let o = s.dir.join("out");
+        s.fake(
+            "xembedsniproxy",
+            &format!(
+                "#!/bin/sh\necho \"$DISPLAY\" > '{}/xembed'\nsleep 3\n",
+                o.display()
+            ),
+        );
+        let log = s.run(&[]);
+        assert!(log.contains("X11 tray icons: "), "{log}");
+        assert_eq!(s.out("xembed").trim(), ":9", "{log}");
+
+        let off = Session::new("xembed-off");
+        off.fake(
+            "xembedsniproxy",
+            &format!(
+                "#!/bin/sh\necho > '{}/xembed'\n",
+                off.dir.join("out").display()
+            ),
+        );
+        let log = off.run(&[("SHERLOCKOS_XEMBED", String::from("0"))]);
+        assert!(!log.contains("X11 tray icons"), "{log}");
+        assert!(!off.dir.join("out/xembed").exists(), "{log}");
+
+        // Not installed: nothing said, the shell starts.
+        let none = Session::new("xembed-none");
+        let log = none.run(&[]);
+        assert!(!log.contains("X11 tray icons"), "{log}");
+        assert!(none.dir.join("out/bar").exists(), "{log}");
     }
 
     #[test]
