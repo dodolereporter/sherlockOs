@@ -332,9 +332,14 @@ fn a_backup_is_listed_before_the_file_is_written() {
     let layout = home("listed");
     let qt6 = layout.qtct_settings(Qt::V6);
     write(&qt6, "mine6\n");
-    // A folder where the temporary file goes: writing ours fails after the backup.
-    let blocker = qt6.with_file_name("qt6ct.conf.toolkit-theme-new");
-    fs::create_dir_all(&blocker).must();
+    // Folders where the temporary file goes (`mime_apps::write_bytes_atomically` names it
+    // after this process and its count of writes): writing ours fails after the backup.
+    let blockers: Vec<_> = (0..4096)
+        .map(|count| qt6.with_file_name(format!(".qt6ct.conf.{}.{count}.tmp", std::process::id())))
+        .collect();
+    for blocker in &blockers {
+        fs::create_dir_all(blocker).must();
+    }
     let file = File {
         path: qt6.clone(),
         content: b"ours\n".to_vec(),
@@ -343,7 +348,9 @@ fn a_backup_is_listed_before_the_file_is_written() {
     assert!(install::install(&layout, &[file], "20261126-100000").is_err());
     assert!(!qt6.exists());
 
-    fs::remove_dir(&blocker).must();
+    for blocker in &blockers {
+        fs::remove_dir(blocker).must();
+    }
     install::uninstall(&layout, "20261126-110000").must();
     assert_eq!(fs::read_to_string(&qt6).must(), "mine6\n");
     let _ = fs::remove_dir_all(&layout.home);
@@ -366,5 +373,27 @@ fn generate_overwrites_nothing_without_force() {
 
     install::generate(&root, true).must();
     assert_ne!(fs::read_to_string(first).must(), "mine\n");
+    let _ = fs::remove_dir_all(&layout.home);
+}
+
+#[test]
+fn settings_changed_by_hand_are_completed_not_written_again() {
+    let layout = home("by-hand");
+    install::install(&layout, &install::files(&layout), "20261126-100000").must();
+    let qt6 = layout.qtct_settings(Qt::V6);
+    // The user chose fonts in qt6ct, which wrote its file without our palette line.
+    let mine = "[Fonts]\ngeneral=\"Inter,11\"\n";
+    write(&qt6, mine);
+    assert_eq!(apply::qt(&layout, Theme::Light).must(), vec![qt6.clone()]);
+    let text = fs::read_to_string(&qt6).must();
+    assert!(text.starts_with(mine), "{text}");
+    assert!(
+        text.contains("color_scheme_path=") && text.contains("light"),
+        "{text}"
+    );
+    assert_eq!(
+        fs::read_to_string(qt6.with_file_name("qt6ct.conf.bak")).must(),
+        mine
+    );
     let _ = fs::remove_dir_all(&layout.home);
 }

@@ -11,6 +11,8 @@ publish.workspace = true
 appearance-config = { path = "../appearance-config" }
 # The names of the cursor themes, without the generator.
 cursor-theme = { path = "../cursor-theme" }
+# Every settings file of the desktop is read with a bound and written atomically the same way.
+mime-apps = { path = "../mime-apps" }
 # The palettes: the tokens only, without iced.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 thiserror = "=2.0.21"

@@ -206,7 +206,7 @@ impl Config {
     /// the whole file back to the defaults (a lock set to never would lock after 5 minutes).
     /// Only a file that cannot be read at all is an error.
     pub fn read_lenient(path: &Path) -> Result<(Self, Vec<Error>), Error> {
-        match fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Ok(Self::parse_lenient(&text)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
             Err(source) => Err(Error::Read {

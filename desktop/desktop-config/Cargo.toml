@@ -17,6 +17,8 @@ image = { version = "=0.25.10", optional = true, default-features = false, featu
     "jpeg",
     "png",
 ] }
+# The settings files read with a bound and written atomically, as every program of the desktop.
+mime-apps = { path = "../mime-apps" }
 # The wallpaper index (ids, pairs between themes). Only the tokens, without iced.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 thiserror = "=2.0.21"

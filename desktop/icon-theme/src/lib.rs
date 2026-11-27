@@ -43,7 +43,9 @@ impl KeyFile {
     }
 
     fn read(path: &Path) -> Option<Self> {
-        std::fs::read_to_string(path).ok().map(|t| Self::parse(&t))
+        mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE)
+            .ok()
+            .map(|t| Self::parse(&t))
     }
 
     fn get(&self, group: &str, key: &str) -> Option<&str> {

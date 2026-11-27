@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The file read with a bound, as every settings file of the desktop.
+mime-apps = { path = "../mime-apps" }
 # The `Theme` the file chooses: the tokens only, without iced.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
 # inotify, timerfd, poll and the local time (localtime_r, mktime): the version the bar and

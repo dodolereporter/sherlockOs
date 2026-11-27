@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # The key file reader and writer of the desktop, and `config_home` (workspace crate).
 dock-config = { path = "../dock-config" }
+# Every settings file of the desktop is read with a bound and written atomically the same way.
+mime-apps = { path = "../mime-apps" }
 
 [lints]
 workspace = true

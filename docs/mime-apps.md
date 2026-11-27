@@ -64,7 +64,29 @@ mime_apps::set_default(&catalog.dirs, &desktops, &mime, &app.id)?; // remember a
 - Writing: the file is written beside the old one, flushed, then renamed over it, so another
   program reading it sees the old file or the new one, never half of one. Its permissions are
   kept. When `mimeapps.list` is a symbolic link (dotfiles kept in a repository), the file it
-  points to is written, in its own folder, and the link stays.
+  points to is written, in its own folder, and the link stays. A mime type or an application id
+  with a line break, `;` or `=` is refused: it would add entries nobody chose.
+
+## Settings files of the desktop
+
+`mime_apps::file` is the one reader and writer of every settings file of the desktop (Q-41):
+`mimeapps.list`, `dock.conf`, `appearance.conf`, the `key = value` files of `desktop-config`,
+`notifications.conf`, the qt5ct and qt6ct files of `toolkit-theme`, and the themes'
+`index.theme` (read only).
+
+- `write_atomically(path, text)` and `write_bytes_atomically(path, bytes, new_mode)`: a
+  temporary file of its own in the folder of the file the links name
+  (`.<name>.<pid>.<count>.tmp`, created with `O_EXCL`), with the permissions of the file it
+  replaces from the start and its owner when the process may give it, flushed, renamed over the
+  old file; then the folder is flushed. A folder that refuses the flush (some network file
+  systems) leaves the write done, not failed. A new file gets `new_mode` through the umask.
+  Temporary files left by a write that was stopped (their process is gone) are removed before
+  the next write of the same file.
+- `read_bounded(path, MAX_SETTINGS_SIZE)`: a regular file only, once its links are followed,
+  1 MiB at most, in UTF-8. A link to `/dev/zero` or a huge file is refused instead of taking all
+  the memory of the compositor, the bar or the dock. A missing file stays `NotFound`.
+- `breaks_line(value)`: every writer refuses a value with a line break, which would end its
+  line and add others (`desktop-config` keeps the value of the file for that key).
 
 ## Order of the files
 

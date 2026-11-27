@@ -203,7 +203,7 @@ impl DockConfig {
 
     /// Reads the file at `path`; an absent file is the default configuration.
     pub fn load(path: &Path) -> io::Result<(Self, Vec<Problem>)> {
-        match std::fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Ok(Self::parse(&text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 Ok((Self::default(), Vec::new()))
