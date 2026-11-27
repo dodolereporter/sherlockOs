@@ -2306,6 +2306,30 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
   then the compositor's own screen, which cannot unlock: « Verrouillé » and « Appuie sur Entrée
   pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
+- **When the lock program hangs** (lot D-25f). A key or a click while locked pings the program
+  that holds the lock (`xdg_wm_base.ping`, at most once a second): its event loop answers. Without
+  an answer within 5 s (`PING_TIMEOUT`), it is killed: its lock goes without an unlock, so the
+  session stays locked and the next program starts, as when it dies; after 3 such failures, the
+  rescue mode. The compositor knows the program's shell client from the binding of
+  `xdg_wm_base` on the connection it opened. A program that never binds it (`swaylock`) is not
+  pinged.
+- **The console switch** (Ctrl + Alt + F1 to F12) works while locked, as on the other
+  compositors: the session stays locked, and another console can start things again.
+- **The log on disk.** `sherlockos-session` names its log in `SHERLOCKOS_LOG`; at each lock and
+  unlock, every 5 s while locked (`LOG_SYNC`) and when a hung program is killed, a thread of the
+  compositor has it written to disk (`fsync`, `log_sync.rs`), 300 ms later so that the pipe's
+  reader has appended the last lines: a forced restart no longer loses the end of a lock.
+- **The input while locked** (lot D-25g). Each key or click while locked gives the keyboard back
+  to the lock surface of the screen if anything took it (logged), and the first one is logged
+  with the surface that has the keyboard. After a key that types (a key of the main block or of
+  the keypad, without Ctrl, Alt nor the logo key), the lock program must present an image within
+  3 s (`IMAGE_TIMEOUT`), or it is replaced like a program that does not answer its pings.
+- **The input watched** (lot D-25g, `udev.rs`). Twice the screen kept drawing while no key, no
+  click, not even the console switch, did anything. Every 2 s the compositor checks libinput: if
+  its descriptor has events that nothing read for 5 s (`INPUT_STALL`; the loop reads a readable
+  source at its next turn), it logs it, with the lock and the session's state, then suspends and
+  resumes libinput, which opens the devices again. Each pause and resume of the seat logs that
+  libinput is suspended or resumed.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
@@ -2322,7 +2346,9 @@ another session's does not, and `PrepareForSleep` locks, keeps the inhibitor unt
 frame is shown, then a new one is taken at wake-up; on four screens side by side (1366 × 768,
 1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
-scale.
+scale; a lock program that answers its pings stays, one that hangs (a client that reads
+nothing any more) is killed after the time limit and another starts, the session staying locked
+and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 
@@ -2332,6 +2358,56 @@ Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock s
 3. Ctrl + Alt + F3 then back: still locked. Plug a screen in while locked: it shows the
    background or the lock, never the desktop.
 4. Ctrl + Alt + Backspace while locked: the session ends, SDDM or the console comes back.
+
+## Screen off (lot D-38)
+
+The screens go off like an old television (`src/power.rs`, tokens in `sherlock_ui::screen_off`):
+the picture is squashed from the top and the bottom into a bright line in the middle (55 % of
+the time, with a light growing over it), the line shrinks to a dot (to 85 %), and the dot fades
+out, in 350 ms, on black. The line and the dot are the cream of Sherlock, with a soft halo.
+Backwards when the screens come back, over what they show (the lock screen when locked). The
+picture is the screen's own items drawn into a texture, then stretched into the squashed
+rectangle (`Item::Squashed`); the line and the dot are shapes.
+
+- **When.**
+  - Before the sleep: on `PrepareForSleep(true)`, the session locks, the screens go off, and the
+    `delay` inhibitor of logind is released once they are dark, or after 1.5 s in all.
+  - When the lid closes: the session locks and the screens go off; the lid opened brings them
+    back.
+  - After `screen-off-minutes` without input (`~/.config/sherlockos/power.conf`, 10 by default,
+    0 for never; `desktop_config::power`, read again when it changes): without sleeping.
+  - **Super + Shift + Escape**: the session locks and the screens go off at once (the gesture
+    key is Alt in nested mode). Chosen over Shift + the lock key, which a laptop may not have; it
+    works while locked too.
+- **Dark.** Nothing is drawn (`render::items` gives black, and nothing animates, so no frame is
+  asked for); the real session turns each screen off once (`DrmCompositor::clear`, DPMS off), and
+  the next frame queued turns it on again. Only the card already driven is touched: the NVIDIA
+  card is never opened. A locked frame is not needed while dark: the lock is confirmed at once.
+- **Frames while dark.** Nothing is drawn, but every client still gets its frame callbacks,
+  once a second (`power::DARK_FRAMES`): a client that waits for its callback before it presents
+  again (Mesa's Vulkan and EGL do) would otherwise stay blocked, the lock program first. While
+  the screens are off or coming back, the lock program is not pinged, and the time of a ping
+  pending starts again (lot D-25f).
+- **Back.** A key, the pointer, a click, a gesture, the lid opened or the wake-up
+  (`PrepareForSleep(false)`) bring the screens back; the key or the click that wakes them goes
+  nowhere else (the pointer still moves). Locked, the key goes on to the lock screen: the first
+  key brings its form, as on macOS.
+- **Held on.** While a surface holds an idle inhibitor (`zwp_idle_inhibit_manager_v1`, which
+  Firefox and mpv take during a video), or while logind blocks `idle` (`BlockInhibited`, read
+  every 5 s), neither the inactivity lock nor the screens off for inactivity happen; the
+  inactivity counts again from the end of the inhibition.
+- **The veil before.** As on macOS, 5 s before the inactivity locks the session or turns the
+  screens off (`DIM_LEAD`), a black veil of the compositor darkens the screens to 35 % (`DIM`)
+  over 1.5 s; the backlight is not touched. The slightest input (a key, the pointer, a click, a
+  gesture) lifts it at once, and the inactivity counts again. Tokens in
+  `sherlock_ui::screen_off`; test `a_veil_darkens_the_screens_before_the_idle_lock_and_any_input_lifts_it`.
+
+Tests: `tests/session_lock.rs` (the frames of the animation, from the whole picture to the
+line, its halo and black; nothing animates once dark; the waking key is not typed; Super + Shift
++ Escape; an idle inhibitor holds off the lock and the screens off, then its end lets them come;
+before the sleep, the lock, then the animation, then the inhibitor released once dark) and
+`tests/screen_off.rs` (the board of eight frames, drawn by Mesa's software renderer, in
+`target/tmp/screen-off-board.png`; the last frame is black).
 
 ## Login screen (`--greeter`, lot D-24)
 
@@ -2349,6 +2425,10 @@ greetd starts `compositor --greeter -- sherlockos-greeter` as its `_greetd` user
 - **Nothing of the desktop.** No shell socket (no bar nor dock can connect), no screenshot, and
   nothing locks: neither Super + L, the delay without input, logind nor the lid start
   `sherlockos-lock`.
+- **The screens still go off** (lot D-38) after `screen-off-minutes` without input, read from the
+  `_greetd` user's own `power.conf` (10 minutes by default), after the veil; a key, the pointer
+  or a click brings them back and goes nowhere else. Super + Shift + Escape is not taken: it
+  locks first, and there is nothing to lock.
 - **It stops with the greeter**, as with `--measure`: greetd starts the chosen session once its
   greeter, this compositor, has left.
 - `--` ends the options, so that greetd's command line reads the same whatever the greeter's
@@ -2358,7 +2438,9 @@ Tests (`tests/greeter.rs`, headless, a test client as the greeter, on a screen o
 1366 × 768): its window is configured fullscreen at the screen's size, at the origin, and stays
 so when it asks to leave fullscreen; Super + Tab, Space, L and Right, F4 and Super alone all
 reach it, Mission Control does not open, nothing locks and the window is not snapped;
-`lock_session` does nothing; no shell socket is opened beside the Wayland socket.
+`lock_session` does nothing; no shell socket is opened beside the Wayland socket; without input,
+the veil comes, then the screens go dark, nothing locks, and the key that wakes them does not
+reach the greeter.
 
 ## Arrival of the desktop (lot D-24)
 

@@ -45,6 +45,8 @@ pub enum Logind {
     Sleep(bool),
     /// A new `delay` inhibitor of the sleep.
     Inhibitor(OwnedFd),
+    /// Another program blocks `idle` (lot D-38).
+    IdleBlocked(bool),
 }
 
 /// The triggers held by the state.
@@ -60,6 +62,8 @@ pub struct Triggers {
     inhibitor: Option<OwnedFd>,
     /// The machine is about to sleep, since then: the inhibitor goes once the lock shows.
     sleeping: Option<Instant>,
+    /// The veil before the inactivity's lock or screens off, since then (lot D-38).
+    dimmed: Option<Instant>,
 }
 
 fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
@@ -118,16 +122,74 @@ impl State {
     /// An input happened: the inactivity starts again.
     pub(crate) fn note_input(&mut self) {
         self.triggers.last_input = Some(Instant::now());
+        // The veil lifts at once.
+        if self.triggers.dimmed.take().is_some() {
+            tracing::debug!("input: the veil lifts");
+            self.queue_redraw();
+        }
+    }
+
+    /// What is left before the inactivity locks the session or turns the screens off,
+    /// whichever comes first; `None`: neither is coming.
+    fn idle_left(&self) -> Option<Duration> {
+        let last = self.triggers.last_input?;
+        let lock = self.triggers.idle_delay().filter(|_| !self.is_locked());
+        let off = self
+            .screen_off_delay()
+            .filter(|_| self.power_phase() == crate::power::Phase::On);
+        let delay = match (lock, off) {
+            (Some(a), Some(b)) => a.min(b),
+            (a, b) => a.or(b)?,
+        };
+        Some(delay.saturating_sub(last.elapsed()))
+    }
+
+    /// The opacity of the veil over the screens, from 0 to `DIM`, and whether it still darkens.
+    pub fn dim(&self) -> (f32, bool) {
+        use sherlock_ui::screen_off as ui;
+        let Some(since) = self.triggers.dimmed else {
+            return (0.0, false);
+        };
+        let t = (since.elapsed().as_secs_f32() / ui::DIM_FADE.as_secs_f32()).min(1.0);
+        // Ease in and out.
+        let eased = t * t * (3.0 - 2.0 * t);
+        (ui::DIM * eased, t < 1.0)
     }
 
     fn check_idle(&mut self) {
-        let (Some(delay), Some(last)) = (self.triggers.idle_delay(), self.triggers.last_input)
-        else {
+        // A video in full screen, or logind blocking `idle`: the inactivity waits (lot D-38).
+        if self.idle_inhibited() {
+            self.note_input();
+            return;
+        }
+        let Some(last) = self.triggers.last_input else {
             return;
         };
-        if !self.is_locked() && last.elapsed() >= delay {
+        // A few seconds before, the veil darkens the screens.
+        if self.triggers.dimmed.is_none()
+            && self
+                .idle_left()
+                .is_some_and(|left| left <= sherlock_ui::screen_off::DIM_LEAD)
+        {
+            tracing::debug!("no input: the veil darkens the screens");
+            self.triggers.dimmed = Some(Instant::now());
+            self.queue_redraw();
+        }
+        if let Some(delay) = self.triggers.idle_delay()
+            && !self.is_locked()
+            && last.elapsed() >= delay
+        {
             tracing::info!(?delay, "no input: the session locks");
+            self.triggers.dimmed = None;
             self.lock_session();
+        }
+        if let Some(delay) = self.screen_off_delay()
+            && self.power_phase() == crate::power::Phase::On
+            && last.elapsed() >= delay
+        {
+            tracing::info!(?delay, "no input: the screens go off");
+            self.triggers.dimmed = None;
+            self.screens_off(crate::power::Then::Stay);
         }
     }
 
@@ -146,11 +208,22 @@ impl State {
                 }
             })
             .map_err(|err| err.error)?;
+        let (idle_address, idle_sender) = (address.clone(), sender.clone());
         let spawned = std::thread::Builder::new()
             .name("logind".into())
             .spawn(move || {
                 if let Err(err) = listen(address, &sender) {
                     tracing::warn!("logind: {err}: no lock from logind, nor before the sleep");
+                }
+            });
+        if let Err(err) = spawned {
+            tracing::warn!("logind: no thread: {err}");
+        }
+        let spawned = std::thread::Builder::new()
+            .name("logind-idle".into())
+            .spawn(move || {
+                if let Err(err) = watch_idle_block(idle_address, &idle_sender) {
+                    tracing::warn!("logind: {err}: its idle inhibitors are not followed");
                 }
             });
         if let Err(err) = spawned {
@@ -173,6 +246,7 @@ impl State {
             Logind::Sleep(true) => {
                 tracing::info!("logind: the machine goes to sleep: the session locks");
                 self.lock_session();
+                self.screens_off(crate::power::Then::Sleep);
                 self.triggers.sleeping = Some(Instant::now());
                 let grace = self.loop_handle.insert_source(
                     Timer::from_duration(SLEEP_GRACE),
@@ -186,25 +260,57 @@ impl State {
                 }
                 self.release_sleep();
             }
-            Logind::Sleep(false) => self.triggers.sleeping = None,
+            Logind::Sleep(false) => {
+                self.triggers.sleeping = None;
+                self.screens_on();
+            }
+            Logind::IdleBlocked(blocked) => self.set_logind_idle(blocked),
             Logind::Inhibitor(fd) => self.triggers.inhibitor = Some(fd),
         }
     }
 
-    /// Releases the sleep inhibitor once every screen shows the lock, or after
-    /// `SLEEP_GRACE`. Called on the events above and after each loop iteration.
+    /// Releases the sleep inhibitor once the session is locked and the screens are dark (the
+    /// lock first, then the old television, lot D-38), or after `SLEEP_GRACE` in all.
+    /// Called on the events above and after each loop iteration.
     pub(crate) fn release_sleep(&mut self) {
         let Some(since) = self.triggers.sleeping else {
             return;
         };
-        if self.lock_shown_everywhere() || since.elapsed() >= SLEEP_GRACE {
-            tracing::info!(
-                shown = self.lock_shown_everywhere(),
-                "logind: the machine may sleep"
-            );
+        let ready = self.is_locked() && self.screens_dark();
+        if ready || since.elapsed() >= SLEEP_GRACE {
+            tracing::info!(ready, "logind: the machine may sleep");
             self.triggers.sleeping = None;
             self.triggers.inhibitor = None;
         }
+    }
+}
+
+/// How often logind's `BlockInhibited` is read.
+const IDLE_BLOCK_EVERY: Duration = Duration::from_secs(5);
+
+/// Reads whether another program blocks `idle` through logind (`BlockInhibited`), every
+/// `IDLE_BLOCK_EVERY`, and says so when it changes.
+fn watch_idle_block(
+    address: Option<String>,
+    sender: &channel::Sender<Logind>,
+) -> Result<(), zbus::Error> {
+    use zbus::blocking::{Connection, Proxy, connection::Builder};
+    let connection = match address {
+        Some(address) => Builder::address(address.as_str())?.build()?,
+        None => Connection::system()?,
+    };
+    let manager = Proxy::new(&connection, LOGIND, MANAGER_PATH, MANAGER)?;
+    let mut last = None;
+    loop {
+        let blocked: String = manager.get_property("BlockInhibited")?;
+        let idle = blocked.split(':').any(|what| what == "idle");
+        if last != Some(idle) {
+            last = Some(idle);
+            if sender.send(Logind::IdleBlocked(idle)).is_err() {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(IDLE_BLOCK_EVERY);
     }
 }
 
