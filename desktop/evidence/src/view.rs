@@ -100,6 +100,7 @@ impl App {
             ui::divider(),
             self.toolbar(),
             ui::divider(),
+            self.tab_bar(),
             body.height(Length::Fill),
             ui::divider(),
             self.status_bar(),
@@ -588,6 +589,7 @@ impl App {
         mouse_area(line)
             .on_press(Message::Click(i))
             .on_right_press(Message::RightClick(Some(i)))
+            .on_middle_press(Message::MiddleClick(i))
             .into()
     }
 
@@ -762,6 +764,56 @@ impl App {
         } else {
             menu.map(|_| Message::Inert)
         }
+    }
+
+    /// The tabs (lot D-27b), shown from two on, coming in and out with a fade and their
+    /// height: each with its folder's name and a close button; a press shows it and starts
+    /// dragging it, the middle button closes it.
+    fn tab_bar(&self) -> Element<'_, Message> {
+        let level = self.tab_bar_level();
+        if level <= 0.0 {
+            return space().height(0).into();
+        }
+        let tabs = self.tab_list();
+        let mut bar = Row::new().spacing(metrics::GAP_TIGHT);
+        for (i, location) in tabs.iter().enumerate() {
+            let active = i == self.tabs.active;
+            let name = crate::pathbar::visible(&self.name_of(location)).into_owned();
+            let font = if active {
+                typography::UI_SEMIBOLD
+            } else {
+                typography::UI
+            };
+            let close = ui::icon_button(Icon::Close, t::CLOSE_TAB, Some(Message::CloseTab(i)));
+            let line = row![
+                sherlock_ui::ellipsis::ellipsis(name)
+                    .font(font)
+                    .width(Length::Fill),
+                close
+            ]
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(Alignment::Center);
+            let tab = container(line)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding([0.0, more::TAB_PADDING * 2.0])
+                .align_y(Alignment::Center);
+            let tab = if active { tab.style(theme::inset) } else { tab };
+            let tab = hoverable(tab, color::palette().hover, metrics::CRUMB_RADIUS).key(i as u64);
+            bar = bar.push(
+                mouse_area(tab)
+                    .on_press(Message::PressTab(i))
+                    .on_enter(Message::OverTab(i))
+                    .on_middle_press(Message::CloseTab(i)),
+            );
+        }
+        let height = (more::TAB_BAR_HEIGHT * level).round();
+        let bar = container(bar)
+            .width(Length::Fill)
+            .height(height)
+            .padding([more::TAB_PADDING, metrics::TOOLBAR_PADDING])
+            .clip(true);
+        column![reveal(bar).opacity(level), ui::divider()].into()
     }
 
     fn dialog(&self) -> Element<'_, Message> {

@@ -81,6 +81,10 @@ pub const COMPLETION_MAX_SHOWN: usize = 200;
 /// Width of the « Aller au dossier » sheet.
 pub const GO_TO_WIDTH: f32 = 460.0;
 
+/// The tab bar (lot D-27b), shown from two tabs on: its height, and the padding of a tab.
+pub const TAB_BAR_HEIGHT: f32 = 34.0;
+pub const TAB_PADDING: f32 = 4.0;
+
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";
 pub const PROPERTIES: &str = "Propriétés";
