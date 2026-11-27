@@ -768,6 +768,57 @@ of the tile, enlarged four times:
 - **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
   and `Sidebar`, drawn on the same grid and stroke.
 
+## Scroll areas (UI-11)
+
+The author: « je n'aime pas les barres de défilement, elles ne font pas macOS ». iced's default
+scrollbar is always there, on a visible rail that takes room from the content. Every scroll area
+of the shell and the applications now goes through one component, `scroll::scroll(content)`,
+which behaves like macOS Sequoia with « Afficher les barres de défilement : automatiquement »:
+
+| What | How |
+| --- | --- |
+| Overlay | The scroller floats over the content: no rail at rest, no room taken. |
+| At rest | Hidden. It fades in (`SHOW`, 100 ms) as soon as the area scrolls, whoever scrolls it (wheel, touchpad, keyboard, a program through `operation::scroll_to`), and fades out (`HIDE`, 300 ms) `LINGER` (1 s) after the last move. |
+| Knob | A pill `THIN` (6 px) wide, 3 px from the edge and the ends, in the text color of the theme at 42 % (dark on light, light on dark), with a 1 px edge in the window color so that it shows on any background. Its length is the share of the content shown, never below `MIN_LENGTH` (24 px). |
+| Hover | Over its zone (`ZONE`, the 16 px at the right edge) the knob widens to `WIDE` (10 px) over `EXPAND` (150 ms) and a faint rail appears, with a line on its left side. The content under the zone loses the pointer, which is the arrow. |
+| Drag | The knob held follows the pointer, even off the zone, and stays wide. |
+| Rail | A click above or below the knob jumps by a page: the height shown less `PAGE_OVERLAP` (24 px). |
+| Limits | The wheel and the touchpad pulled past the start or the end stretch the content like a rubber band (`rubber`, the curve of macOS with `ELASTICITY` 0.55); it springs back (`BOUNCE_SPRING`, no overshoot) once they rest for `RELEASE` (80 ms). Meanwhile the knob shrinks against its end, down to a dot. |
+| Fits | Nothing shows, the wheel is left to whatever holds the area, and nothing stretches. |
+| Reduce motion | `motion::set_reduced(true)` makes the scroller appear and vanish without fading or widening, and turns the stretch off. |
+
+How it is built: `Scroll` wraps an iced `Scrollable` whose own scrollbar is hidden
+(`Scrollbar::hidden()`: zero wide and floating, so it takes no room and catches no click). iced
+keeps the offset, the clipping, `on_scroll` and the `id` that the programs' `scroll_to` reach.
+The wrapper reads the offset through iced's scrollable operation at every event (an offset that
+changed is a scroll, whoever made it), moves it through the same operation (drag, page jump),
+draws the stretched content translated, and draws the scroller itself on a layer above. Its
+state is pure and timed (`Presence`, `Stretch`, `knob`, `offset_at`, `rubber`), so the tests set
+the time. Like `animated`, it asks for frames only while something moves, and for one frame at
+the end of the linger.
+
+Use it as iced's: `scroll(column).id(LIST).on_scroll(...).height(Length::Fill)`;
+`.elastic(false)` turns the stretch off for one area. It scrolls vertically only: no area of the
+desktop scrolls sideways.
+
+"Reduce motion": the desktop has no such setting yet. The switch is `motion::set_reduced`, one
+per process, off by default; the program that will read the setting (from the appearance file,
+as the theme) calls it at start-up and on change.
+
+Tests: `scroll::tests` follow the scroller through time (hidden, shown, lingering, hidden; hover
+and drag widen it; reduce motion switches at once), the knob's length and place (proportional,
+minimum, absent when the content fits, squeezed by a stretch, the offset a drag gives back) and
+the rubber band. `tests/scroll.rs` drives the widget headless: content that fits leaves the
+wheel alone, the wheel stretches at the top then scrolls, a click in the rail jumps by a page,
+the knob drags the content; and it captures a window with a sidebar and a page, each its own
+scroll area, at rest, while scrolling and hovered, dark and light, at 1280 × 800 and
+1920 × 1080, into `target/tmp/scroll/`.
+
+| | Dark | Light |
+| --- | --- | --- |
+| Scrolling | ![](sherlock-ui/scroll/dark-scrolling.png) | ![](sherlock-ui/scroll/light-scrolling.png) |
+| Hovered | ![](sherlock-ui/scroll/dark-hovered.png) | ![](sherlock-ui/scroll/light-hovered.png) |
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like
