@@ -13,6 +13,7 @@
 //! screen and their arrangement, and rendering, input and focus skip them (`State::is_visible`).
 
 mod appmenu;
+mod clipboard;
 mod toplevels;
 mod workspaces;
 
@@ -57,6 +58,10 @@ pub(crate) struct Shell {
     slide: crate::anim::WorkspaceSlide,
     /// Menu registrations that no window took yet.
     app_menus: appmenu::AppMenus,
+    /// Bound `sherlock_clipboard_history_v1`: the Super + V panels (lot D-42).
+    clipboards: Vec<
+        shell_protocol::clipboard::server::sherlock_clipboard_history_v1::SherlockClipboardHistoryV1,
+    >,
 }
 
 /// Workspace of a window, by id: the active one when the window shows up.
@@ -68,6 +73,7 @@ impl Shell {
         toplevels::create_global(dh);
         workspaces::create_global(dh);
         appmenu::create_global(dh);
+        clipboard::create_global(dh);
         Self::default()
     }
 }
@@ -559,7 +565,7 @@ fn is_activated(window: &Window) -> bool {
 }
 
 /// The xdg-shell app_id, or the class of an X11 window.
-fn app_id(window: &Window) -> String {
+pub(crate) fn app_id(window: &Window) -> String {
     if let Some(surface) = window.x11_surface() {
         return surface.class();
     }
