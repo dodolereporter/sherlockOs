@@ -140,8 +140,10 @@ enum Shortcut {
     Media(MediaKey, Keycode),
     /// Print Screen, with Shift or Alt, in a real session (lot D-35c).
     Screenshot(capture::Kind),
-    /// Escape while the area of a screenshot is chosen.
-    CancelArea,
+    /// Super + Shift + S (Alt + Shift + S nested): the screenshot tool (lot D-35e).
+    ScreenshotTool,
+    /// A key while the screenshot tool is open: every key stays with it.
+    ToolKey(Keysym),
     /// L: locks the session (lot D-25a).
     Lock,
     /// Enter on the rescue screen of the lock: the lock programs are tried again.
@@ -612,7 +614,7 @@ impl State {
     /// draws its cursor itself, the arrow.
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
         if self.picking_area() {
-            return Some(CursorIcon::Crosshair);
+            return self.tool_cursor();
         }
         if self.overview_open() {
             return Some(CursorIcon::Default);
@@ -755,6 +757,10 @@ impl State {
                 state.overview.key(gesture_key, pressed, alone);
             }
             if key_state == KeyState::Released {
+                // Space let go while the area moved: it is drawn again (lot D-35e).
+                if state.screenshot_tool_open() && sym == Keysym::space {
+                    state.tool_key(sym, false);
+                }
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
                 return if state.intercepted_keys.len() < len {
@@ -772,20 +778,29 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
             }
-            if state.picking_area() && sym == Keysym::Escape {
+            if state.screenshot_tool_open() {
                 state.intercepted_keys.push(key);
-                return FilterResult::Intercept(Some(Shortcut::CancelArea));
+                return FilterResult::Intercept(Some(Shortcut::ToolKey(sym)));
             }
             if state.overview_open() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
             let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
-            let screenshot = capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots());
+            // Nested, Print Screen stays with the host session.
+            let screenshot =
+                capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots() && !state.nested);
+            let tool = (matches!(sym, Keysym::s | Keysym::S)
+                && mods.shift
+                && !mods.ctrl
+                && gesture_modifier_held(state.nested, mods)
+                && state.takes_screenshots())
+            .then_some(Shortcut::ScreenshotTool);
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
                 .or(media.map(|media| Shortcut::Media(media, key)))
                 .or(screenshot.map(Shortcut::Screenshot))
+                .or(tool)
                 .or_else(|| Shortcut::for_applications(mods, sym));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
@@ -855,8 +870,12 @@ impl State {
                 self.screenshot(kind);
                 return;
             }
-            Shortcut::CancelArea => {
-                self.cancel_area();
+            Shortcut::ScreenshotTool => {
+                self.open_screenshot_tool();
+                return;
+            }
+            Shortcut::ToolKey(sym) => {
+                self.tool_key(sym, true);
                 return;
             }
             Shortcut::Lock => {
@@ -970,7 +989,7 @@ impl State {
             None
         } else if self.picking_area() {
             // The area of a screenshot: no client has the pointer (lot D-35c).
-            self.area_motion(location);
+            self.tool_motion(location);
             None
         } else if self.overview_open() {
             // Mission Control: no client has the pointer (lot D-33).
@@ -1038,7 +1057,7 @@ impl State {
             pointer.button(self, &event);
             pointer.frame(self);
             let pressed = state == ButtonState::Pressed;
-            self.area_button(button == BTN_LEFT, pressed, location);
+            self.tool_button(button == BTN_LEFT, pressed, location);
             return;
         }
         if self.overview_open() {

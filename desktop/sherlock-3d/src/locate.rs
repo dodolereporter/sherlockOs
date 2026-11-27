@@ -74,7 +74,7 @@ mod tests {
         let vars = env(&[
             (VARIABLE, "/tmp/sherlock.glb"),
             ("XDG_DATA_HOME", "/data"),
-            ("HOME", "/home/dodo"),
+            ("HOME", "/home/alex"),
             ("XDG_DATA_DIRS", "/usr/share"),
         ]);
         assert_eq!(
@@ -82,7 +82,7 @@ mod tests {
             [
                 "/tmp/sherlock.glb",
                 "/data/sherlockos/mascot/sherlock.glb",
-                "/home/dodo/.local/share/sherlockos/mascot/sherlock.glb",
+                "/home/alex/.local/share/sherlockos/mascot/sherlock.glb",
                 "/usr/share/sherlockos/mascot/sherlock.glb",
             ]
             .map(PathBuf::from)
@@ -91,11 +91,11 @@ mod tests {
 
     #[test]
     fn defaults_without_variables() {
-        let vars = env(&[("HOME", "/home/dodo"), ("XDG_DATA_HOME", "relative")]);
+        let vars = env(&[("HOME", "/home/alex"), ("XDG_DATA_HOME", "relative")]);
         assert_eq!(
             candidates_from(&vars),
             [
-                "/home/dodo/.local/share/sherlockos/mascot/sherlock.glb",
+                "/home/alex/.local/share/sherlockos/mascot/sherlock.glb",
                 "/usr/local/share/sherlockos/mascot/sherlock.glb",
                 "/usr/share/sherlockos/mascot/sherlock.glb",
             ]

@@ -14,6 +14,9 @@ pub enum LaunchError {
     MissingDir { program: String, dir: String },
     #[error("cannot start {program}: {source}")]
     Spawn { program: String, source: io::Error },
+    /// The program ran and said no: logind or polkit refused a session command.
+    #[error("{program} refused: {detail}")]
+    Refused { program: String, detail: String },
 }
 
 /// Starts `command` and returns at once with its process id. The program outlives the

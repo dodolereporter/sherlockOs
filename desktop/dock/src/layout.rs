@@ -260,6 +260,25 @@ pub fn on_screen(
     (x + left, y + top, w, h)
 }
 
+/// `rectangle` (`x, y, width, height` on a screen of `screen`) laid flat along the `position`
+/// edge, in the band a hidden dock keeps there (`dock::HIDE_STRIP`, lot D-19e): where a window
+/// minimized into a hidden dock goes, toward the edge the dock comes back from, never to the
+/// empty place its icon has when shown.
+pub fn at_edge(
+    position: Position,
+    screen: (i32, i32),
+    rectangle: (i32, i32, i32, i32),
+) -> (i32, i32, i32, i32) {
+    let (x, y, width, height) = rectangle;
+    let strip = dock::HIDE_STRIP.ceil() as i32;
+    match position {
+        Position::Bottom => (x, screen.1 - strip, width, strip),
+        Position::Top => (x, 0, width, strip),
+        Position::Left => (0, y, strip, height),
+        Position::Right => (screen.0 - strip, y, strip, height),
+    }
+}
+
 /// `rectangle` in whole pixels, as `x, y, width, height`, covering all of it.
 pub fn pixels(rectangle: Rectangle) -> (i32, i32, i32, i32) {
     let (left, top) = (rectangle.x.floor(), rectangle.y.floor());

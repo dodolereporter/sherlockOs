@@ -693,6 +693,24 @@ impl Launcher {
         };
         match action {
             Action::Start(command) => self.start(&command),
+            Action::Ask {
+                mut command,
+                request,
+            } => {
+                let written = crate::instance::runtime_dir()
+                    .ok_or_else(|| std::io::Error::other("no XDG_RUNTIME_DIR"))
+                    .and_then(|runtime| crate::ask::request_file(&runtime, &request));
+                match written {
+                    Ok(path) => {
+                        command.args.push(path.into_os_string());
+                        self.start(&command)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "cannot hand the request to Sherlock");
+                        Task::none()
+                    }
+                }
+            }
             Action::Copy(value) => self.copy(index, value),
             Action::Session(power) if power.needs_confirmation() => match self.armed {
                 // Confirmed by a new press, not too soon: a double click or a key bounce
@@ -871,10 +889,12 @@ impl Launcher {
                     .center_y(look::ROW_HEIGHT),
             );
         }
-        // The selection, a veil sliding under the rows.
-        let content: Element<'_, Message> = if self.hits().next().is_some() {
+        // The selection, a veil sliding under the rows. The list stays the stack's second layer
+        // with or without results: a tree that changed shape would rebuild the search field and
+        // drop its focus at the first letter (lot Q-45).
+        let veil: Element<'_, Message> = if self.hits().next().is_some() {
             let above = look::SEARCH_HEIGHT + metrics::BORDER_WIDTH;
-            let veil = column![
+            column![
                 Space::new().height(above + self.highlight.value(self.now) as f32),
                 container(Space::new())
                     .width(Length::Fill)
@@ -882,11 +902,12 @@ impl Launcher {
                     .style(look::selection),
             ]
             // The first layer gives the stack its size: the whole panel, not the veil's rows.
-            .height(Length::Fill);
-            stack![veil, list].into()
+            .height(Length::Fill)
+            .into()
         } else {
-            list.into()
+            Space::new().width(Length::Fill).height(Length::Fill).into()
         };
+        let content = stack![veil, list];
         container(content)
             .width(look::WIDTH)
             .height(self.drawn_height())
