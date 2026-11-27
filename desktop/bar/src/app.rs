@@ -9,7 +9,9 @@ use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{Margin, PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{
+    Margin, PixelSize, PopupAnchor, PopupConstraintAdjustment, PopupGravity, Position,
+};
 use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::animated;
@@ -17,6 +19,7 @@ use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::{self, BatteryMark, Radio, WifiMark};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
@@ -715,8 +718,10 @@ impl Bar {
             return closed;
         };
         self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
-        // Room for the keyboard backlight only on a machine that has one (UI-04).
+        // Room for the keyboard backlight only on a machine that has one (UI-04), and a height
+        // within the screen (UI-08).
         panel::reserve_keyboard(self.quick.has_keyboard());
+        panel::reserve_screen(self.screen_height());
         self.panel_shared = self.animates();
         self.swap = None;
         let shared = self.panel_shared;
@@ -729,7 +734,10 @@ impl Bar {
             PixelSize::px(anchor_width, anchor_height),
         )
         .anchor(PopupAnchor::Bottom)
-        .gravity(PopupGravity::Bottom);
+        .gravity(PopupGravity::Bottom)
+        // Kept on the screen by the compositor, sliding along its edges; never flipped above
+        // the bar (UI-08).
+        .constraint_adjustment(PopupConstraintAdjustment::SlideX | PopupConstraintAdjustment::SlideY);
         let id = Id::unique();
         self.panel = Some((which, id));
         self.unfold = if self.animates() {
@@ -1034,7 +1042,14 @@ impl Bar {
                 let battery = self.battery.flatten();
                 let quick = self.quick.view(&self.user, battery).map(Message::Quick);
                 let (width, height) = which.size();
-                panel::glass(quick, width, height)
+                let (_, full) = which.content_size();
+                if full <= height {
+                    return panel::glass(quick, width, height);
+                }
+                // A screen too short for it: the settings keep their height and scroll (UI-08).
+                let inset = 2.0 * (panels::PADDING + metrics::BORDER_WIDTH);
+                let quick = container(quick).height(full - inset);
+                panel::glass(scroll(quick).height(Length::Fill), width, height)
             }
             Panel::Calendar => {
                 let today = panel::today(self.clock.as_ref());
@@ -1044,12 +1059,17 @@ impl Bar {
                     None => iced::widget::space().into(),
                 };
                 let width = panels::CENTER_WIDTH;
-                iced::widget::column![
+                let both = iced::widget::column![
                     panel::glass(calendar, width, panels::CALENDAR_HEIGHT),
-                    panel::glass(panel::center(&self.history), width, panels::CENTER_HEIGHT),
+                    panel::glass(panel::center(&self.history), width, panel::center_height()),
                 ]
-                .spacing(panels::PANEL_GAP)
-                .into()
+                .spacing(panels::PANEL_GAP);
+                let (_, height) = which.size();
+                if which.content_size().1 <= height {
+                    return both.into();
+                }
+                // Too short for both: the calendar and the centre scroll together (UI-08).
+                scroll(both).width(width).height(height).into()
             }
         }
     }
