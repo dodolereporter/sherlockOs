@@ -4,7 +4,8 @@
 //! same shortcut opens and closes it (`docs/launcher.md`). The program is
 //! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
 //! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41); the
-//! four finger pinch starts it with `--show` or `--hide` (lot D-41c). Super + comma (Alt + comma
+//! four finger pinch starts it with `--show` or `--hide` (lot D-41c). Super + V starts the
+//! clipboard history panel, `sherlockos-clipboard` (lot D-42). Super + comma (Alt + comma
 //! nested) starts Control Room, as « Réglages » in the Sherlock menu of the bar does (lot Q-31).
 
 use std::{
@@ -28,6 +29,9 @@ pub const SETTINGS: &str = "control-room";
 /// The options of `APPLICATIONS` that only show, or only hide, the view (lot D-41c).
 pub const SHOW: &str = "--show";
 pub const HIDE: &str = "--hide";
+
+/// The clipboard history panel (lot D-42), found the same way, started by Super + V.
+pub const CLIPBOARD: &str = "sherlockos-clipboard";
 
 /// The folder of the session's programs, as `sherlockos-session` exports it.
 pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
@@ -101,6 +105,12 @@ impl State {
     /// Replaces the program of the applications view (the tests).
     pub fn set_applications_program(&mut self, program: PathBuf) {
         self.applications_program = Some(program);
+    }
+
+    /// Opens the clipboard history panel, or closes it if it is open, the same way (lot D-42).
+    pub(crate) fn start_clipboard_panel(&mut self) {
+        let program = program_named(CLIPBOARD, |key| std::env::var_os(key));
+        self.start_shell_program(program, None);
     }
 
     /// Starts `program`, with `option` if any, with the compositor's Wayland socket and X11

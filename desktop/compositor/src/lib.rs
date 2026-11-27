@@ -7,6 +7,8 @@ pub mod anim;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+// The clipboard history of Super + V (lot D-42).
+pub mod clipboard_history;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
@@ -254,6 +256,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What was copied, for Super + V (lot D-42).
+    clipboard: clipboard_history::ClipboardHistory,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -403,6 +407,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
