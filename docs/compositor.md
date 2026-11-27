@@ -777,7 +777,12 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
   looks their atom up in a property that nothing writes, and the paste failed: the compositor
   reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
-  with its own connection, and writes what comes into the Wayland client's pipe.
+  with its own connection, and writes what comes into the Wayland client's pipe. Bounded since
+  lot D-29b: 4 such pastes at once (one more closes the client's pipe at once, the client
+  reads nothing), 256 MiB and 60 s each, and the client's pipe written without blocking, each
+  piece within 5 s: a client that asks for pastes and never reads them cannot pile up threads
+  nor connections to XWayland, whose number of clients is limited. Each paste ends with its
+  thread, its connection and its window.
 - Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
   by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
   non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
