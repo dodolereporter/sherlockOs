@@ -2556,6 +2556,17 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   unlock, every 5 s while locked (`LOG_SYNC`) and when a hung program is killed, a thread of the
   compositor has it written to disk (`fsync`, `log_sync.rs`), 300 ms later so that the pipe's
   reader has appended the last lines: a forced restart no longer loses the end of a lock.
+- **The input while locked** (lot D-25g). Each key or click while locked gives the keyboard back
+  to the lock surface of the screen if anything took it (logged), and the first one is logged
+  with the surface that has the keyboard. After a key that types (a key of the main block or of
+  the keypad, without Ctrl, Alt nor the logo key), the lock program must present an image within
+  3 s (`IMAGE_TIMEOUT`), or it is replaced like a program that does not answer its pings.
+- **The input watched** (lot D-25g, `udev.rs`). Twice the screen kept drawing while no key, no
+  click, not even the console switch, did anything. Every 2 s the compositor checks libinput: if
+  its descriptor has events that nothing read for 5 s (`INPUT_STALL`; the loop reads a readable
+  source at its next turn), it logs it, with the lock and the session's state, then suspends and
+  resumes libinput, which opens the devices again. Each pause and resume of the seat logs that
+  libinput is suspended or resumed.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not

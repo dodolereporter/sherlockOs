@@ -13,7 +13,7 @@
 //! See "Real session" in `docs/compositor.md`.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
     time::{Duration, Instant},
@@ -345,14 +345,19 @@ pub fn init(
     let handle = event_loop.handle();
     let mut sources = insert_sources(&handle, &backend, notifier, drm_events, udev)?;
     let input = LibinputInputBackend::new(libinput);
+    // When libinput's events were last read (lot D-25g).
+    let read = Rc::new(Cell::new(Instant::now()));
+    let seen = read.clone();
     let token = handle
-        .insert_source(input, |event, _, state| {
+        .insert_source(input, move |event, _, state| {
+            seen.set(Instant::now());
             let since = state.perf.start();
             input_event(event, state);
             state.perf.stop(perf::Phase::Input, since);
         })
         .map_err(|e| e.error)?;
     sources.push(token);
+    sources.push(watch_input(&handle, &backend, read)?);
     // Every change that may show wakes the screens up (`State::queue_redraw`).
     let (ping, wake) = make_ping().map_err(|e| fail("frame scheduling", &e))?;
     let b = backend.clone();
@@ -442,6 +447,60 @@ fn insert_sources(
         udev.map_err(|e| e.error)?,
         timer.map_err(|e| e.error)?,
     ])
+}
+
+/// How often the input is checked on (lot D-25g).
+const INPUT_WATCH: Duration = Duration::from_secs(2);
+/// Events waiting that long, the source of libinput is not read any more.
+pub const INPUT_STALL: Duration = Duration::from_secs(5);
+
+/// The input is stalled: libinput has events waiting (`readable`) that nothing read for
+/// `quiet`. The loop reads a readable source at its next turn, within milliseconds: waiting
+/// seconds means it no longer does.
+pub fn input_stalled(quiet: Duration, readable: bool) -> bool {
+    readable && quiet >= INPUT_STALL
+}
+
+/// Watches the input (lot D-25g): the screen kept drawing while no key nor click came, and
+/// even the console switch did not work, twice while locked. When libinput has events nobody
+/// reads, it is logged with the state of the session, then libinput is suspended and resumed,
+/// which opens the devices again.
+fn watch_input(
+    handle: &LoopHandle<'static, State>,
+    backend: &Rc<RefCell<Backend>>,
+    read: Rc<Cell<Instant>>,
+) -> Result<RegistrationToken, Error> {
+    let b = backend.clone();
+    let timer = Timer::from_duration(INPUT_WATCH);
+    let token = handle.insert_source(timer, move |_, _, state| {
+        let mut backend = b.borrow_mut();
+        let quiet = read.get().elapsed();
+        let mut fds = [smithay::reexports::rustix::event::PollFd::new(
+            &backend.libinput,
+            smithay::reexports::rustix::event::PollFlags::IN,
+        )];
+        let zero = smithay::reexports::rustix::event::Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let readable =
+            smithay::reexports::rustix::event::poll(&mut fds, Some(&zero)).is_ok_and(|n| n > 0);
+        if input_stalled(quiet, readable) {
+            tracing::warn!(
+                ?quiet,
+                locked = state.is_locked(),
+                active = backend.session.is_active(),
+                "input stalled: libinput has events nobody reads; libinput suspended and resumed"
+            );
+            backend.libinput.suspend();
+            if backend.libinput.resume().is_err() {
+                tracing::warn!("libinput did not resume");
+            }
+            read.set(Instant::now());
+        }
+        TimeoutAction::ToDuration(INPUT_WATCH)
+    });
+    token.map_err(|e| Error::Session(format!("input watch: {}", e.error)))
 }
 
 fn input_event(event: InputEvent<LibinputInputBackend>, state: &mut State) {
@@ -663,7 +722,7 @@ impl Backend {
     /// The console was left: no more drawing nor input until it comes back. The keys held
     /// now are released for the clients: their releases will not come.
     fn pause(&mut self, state: &mut State) {
-        tracing::info!("session paused");
+        tracing::info!("session paused: libinput suspended");
         self.libinput.suspend();
         if let Some(keyboard) = state.seat.get_keyboard() {
             let time = state.start_time.elapsed().as_millis() as u32;
@@ -677,7 +736,7 @@ impl Backend {
     }
 
     fn activate(&mut self, state: &mut State) {
-        tracing::info!("session active again");
+        tracing::info!("session active again: libinput resumed");
         if self.libinput.resume().is_err() {
             tracing::warn!("libinput did not resume");
         }
@@ -910,6 +969,17 @@ fn send_frames(state: &State, output: &Output) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_input_is_stalled_only_when_events_wait_unread() {
+        let long = INPUT_STALL + Duration::from_secs(1);
+        // Nobody touches the machine: nothing waits, nothing is wrong.
+        assert!(!input_stalled(long, false));
+        // Events just came: the loop reads them at its next turn.
+        assert!(!input_stalled(Duration::from_millis(10), true));
+        // Events wait for seconds: the source is not read any more.
+        assert!(input_stalled(long, true));
+    }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())

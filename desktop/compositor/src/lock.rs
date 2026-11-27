@@ -102,6 +102,8 @@ const WATCH: Duration = Duration::from_millis(100);
 pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
 /// At most one ping in this time: input comes in bursts.
 const PING_EVERY: Duration = Duration::from_secs(1);
+/// Time the lock program has to present an image after a key that types (lot D-25g).
+pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(3);
 /// How often the log is written to disk while locked.
 pub const LOG_SYNC: Duration = Duration::from_secs(5);
 
@@ -218,6 +220,11 @@ pub(crate) struct SessionLock {
     ping_timeout: Duration,
     /// The last time the log was written to disk.
     synced: Option<Instant>,
+    /// A key that types went to the lock program, since then, and no image came after it.
+    waiting_image: Option<Instant>,
+    image_timeout: Duration,
+    /// The first input while locked was logged.
+    input_logged: bool,
 }
 
 impl SessionLock {
@@ -244,6 +251,9 @@ impl SessionLock {
             pinged: None,
             ping_timeout: PING_TIMEOUT,
             synced: None,
+            waiting_image: None,
+            image_timeout: IMAGE_TIMEOUT,
+            input_logged: false,
         }
     }
 }
@@ -281,6 +291,47 @@ impl State {
     /// Replaces the time a lock program has to answer a ping (the tests).
     pub fn set_lock_ping_timeout(&mut self, timeout: Duration) {
         self.lock.ping_timeout = timeout;
+    }
+
+    /// Replaces the time a lock program has to present an image after a key (the tests).
+    pub fn set_lock_image_timeout(&mut self, timeout: Duration) {
+        self.lock.image_timeout = timeout;
+    }
+
+    /// An input while locked (lot D-25g): the keyboard goes back to the lock surface of the
+    /// screen if anything took it, the first one is logged with the surface that has the
+    /// keyboard, and after a key that types, the lock program must present an image.
+    pub(crate) fn lock_input(&mut self, types: bool) {
+        if !self.lock.locked {
+            return;
+        }
+        let wanted = self.lock_focus();
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        if wanted.is_some() && focus != wanted {
+            tracing::warn!(?focus, "locked: the keyboard goes back to the lock surface");
+            self.set_keyboard_focus(None);
+        }
+        if !std::mem::replace(&mut self.lock.input_logged, true) {
+            let surface = self.keyboard_focus().map(|s| s.id());
+            tracing::info!(?surface, "first input delivered while locked");
+        }
+        if types && self.lock.owner.is_some() && self.lock.waiting_image.is_none() {
+            self.lock.waiting_image = Some(Instant::now());
+        }
+        self.ping_lock_program();
+    }
+
+    /// A surface committed: a lock surface with a new image ends the wait for one.
+    pub(crate) fn lock_surface_committed(&mut self, surface: &WlSurface) {
+        if self.lock.waiting_image.is_some()
+            && self
+                .lock
+                .surfaces
+                .iter()
+                .any(|s| s.surface.wl_surface() == surface)
+        {
+            self.lock.waiting_image = None;
+        }
     }
 
     /// The connection of the lock program is open.
@@ -385,6 +436,7 @@ impl State {
     fn enter_lock(&mut self) {
         tracing::info!("session locked");
         self.sync_log();
+        (self.lock.input_logged, self.lock.waiting_image) = (false, None);
         let lock = &mut self.lock;
         (lock.locked, lock.rescue_screen) = (true, false);
         lock.shown.clear();
@@ -543,6 +595,7 @@ impl State {
     /// one starts.
     fn forget_lock_program(&mut self) {
         (self.lock.shell, self.lock.ping) = (None, None);
+        self.lock.waiting_image = None;
         if let Some(id) = self.lock.program.take() {
             self.display_handle
                 .backend_handle()
@@ -560,14 +613,20 @@ impl State {
         if self.lock.synced.is_none_or(|at| at.elapsed() >= LOG_SYNC) {
             self.sync_log();
         }
-        if self
+        let silent = self
             .lock
             .ping
-            .is_some_and(|at| at.elapsed() > self.lock.ping_timeout)
-        {
+            .is_some_and(|at| at.elapsed() > self.lock.ping_timeout);
+        let blind = self
+            .lock
+            .waiting_image
+            .is_some_and(|at| at.elapsed() > self.lock.image_timeout);
+        if silent || blind {
             tracing::warn!(
-                timeout = ?self.lock.ping_timeout,
-                "the lock program does not answer: killed, the session stays locked"
+                silent,
+                blind,
+                "the lock program does not answer, or shows nothing after a key: killed, the \
+                 session stays locked"
             );
             self.sync_log();
             // As if its lock went without an unlock, without waiting for the connection's end.

@@ -482,8 +482,14 @@ impl Lock {
         if !key {
             task = self.update(Message::Here(id));
         }
+        if !self.form.shown() {
+            // Nothing of what is typed: only that an input came to the lock at rest (D-25g).
+            tracing::info!(key, "input on the lock at rest");
+        }
         match self.form.input(self.elapsed(), input) {
             Outcome::Shown { typed } => {
+                // Nothing of what is typed: only that the form came (lot D-25g).
+                tracing::info!(key, "form shown");
                 self.entered = false;
                 self.typed = false;
                 // The ticks start again with the form: no jump to compare with yet.
