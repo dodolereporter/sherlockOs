@@ -251,20 +251,27 @@ pub enum Click {
     /// Bring these windows forward, in this order: the last one, the most recent, ends on top
     /// with the keyboard.
     Bring(Vec<u64>),
-    /// Minimize its windows: already in front (the author's choice, as on Windows and Plasma).
+    /// Minimize its windows: already in front with a single window shown (the author's choice,
+    /// as on Windows and Plasma).
     Minimize,
 }
 
 /// The click on an icon whose application has `windows`, the least recent first
 /// (`Windows::owned`), when they can be acted on (`controllable`). As on macOS, an application
 /// behind comes forward with all its windows shown, the most recent on top; when they are all
-/// minimized, only the most recent one comes back.
+/// minimized, only the most recent one comes back. In front with several windows shown, a
+/// click goes to the next one: the least recent, which then becomes the most recent, so that
+/// clicks go round them all (lot D-21d, the author's report: « le clic qui passe d'une fenêtre
+/// à l'autre »). In front with a single window shown, it is minimized.
 pub fn click(windows: &[&Window], controllable: bool) -> Click {
     let Some(last) = windows.last().filter(|_| controllable) else {
         return Click::Launch;
     };
     if windows.iter().any(|w| w.activated) {
-        return Click::Minimize;
+        return match windows.iter().find(|w| !w.activated && !w.minimized) {
+            Some(next) => Click::Bring(vec![next.id]),
+            None => Click::Minimize,
+        };
     }
     let shown: Vec<u64> = windows
         .iter()
@@ -767,6 +774,14 @@ mod tests {
         let mut several = three();
         let owned = several.owned(|_| true);
         assert_eq!(click(&owned, true), Click::Bring(vec![6, 5, 7]));
+        // In front with several shown: the next one, the least recent; with one: minimized.
+        let mut front = three();
+        front.list[2].activated = true;
+        assert_eq!(click(&front.owned(|_| true), true), Click::Bring(vec![6]));
+        front.list[1].minimized = true;
+        assert_eq!(click(&front.owned(|_| true), true), Click::Bring(vec![5]));
+        front.list[0].minimized = true;
+        assert_eq!(click(&front.owned(|_| true), true), Click::Minimize);
         // Minimized ones stay down while others are shown; all minimized, the most recent
         // comes back alone.
         several.list[2].minimized = true;
