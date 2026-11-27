@@ -559,7 +559,7 @@ fn is_activated(window: &Window) -> bool {
 }
 
 /// The xdg-shell app_id, or the class of an X11 window.
-fn app_id(window: &Window) -> String {
+pub(crate) fn app_id(window: &Window) -> String {
     if let Some(surface) = window.x11_surface() {
         return surface.class();
     }

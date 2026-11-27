@@ -806,6 +806,12 @@ mod tests {
         reply
     }
 
+    /// The preview of the newest item of the clipboard history.
+    fn top(state: &State) -> Option<String> {
+        let entries = state.clipboard_history().entries();
+        entries.first().map(|e| e.content.preview.clone())
+    }
+
     #[test]
     fn selections_pass_between_wayland_and_x11_but_not_while_locked() {
         let event_loop = EventLoop::try_new().unwrap();
@@ -900,10 +906,23 @@ mod tests {
         assert_eq!(h.wl_paste(false, TEXT), *text);
         assert_eq!(h.wl_paste(false, PNG), *picture);
 
+        // The clipboard history keeps a text copied in X11 (lot D-42).
+        h.focus(&x11);
+        let kept = Arc::new(b"kept from X11".to_vec());
+        let owner = x11_own(display, "CLIPBOARD", vec![("UTF8_STRING", kept)]);
+        h.join("the X11 targets asked", owner.asked);
+        h.wait("the X11 copy in the history", |h| {
+            (top(&h.state).as_deref() == Some("kept from X11")).then_some(())
+        });
+
         let primary = Arc::new(b"selected in X11".to_vec());
         h.focus(&x11);
         let owner = x11_own(display, "PRIMARY", vec![("UTF8_STRING", primary.clone())]);
         h.join("the X11 targets asked", owner.asked);
+        h.wait("the X11 primary selection on the Wayland side", |h| {
+            let data = current_primary_selection_userdata(&h.state.seat);
+            data.is_some_and(|d| d.is_none()).then_some(())
+        });
         let before = h.seen.selections;
         h.focus(&wayland);
         h.wl_offered(true, before, TEXT);
@@ -934,6 +953,111 @@ mod tests {
         h.idle(Duration::from_millis(100));
         assert_eq!(h.seen.selections, before);
 
+        h.state.shutdown();
+    }
+
+    /// The clipboard history (lot D-42) between Wayland clients: copies kept, a copy already
+    /// there moved to the top, pictures with a thumbnail, no secret, an item put back, nothing
+    /// once the history is off.
+    #[test]
+    fn the_history_keeps_copies_but_no_secret() {
+        let event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((800, 600).into(), 1.0);
+        let (server_side, client_side) = UnixStream::pair().unwrap();
+        state.insert_client(server_side);
+        let conn = Connection::from_socket(client_side).unwrap();
+        let queue = conn.new_event_queue();
+        let registry = conn.display().get_registry(&queue.handle(), ());
+        let mut h = Harness {
+            event_loop,
+            state,
+            conn,
+            queue,
+            seen: Seen::default(),
+            registry,
+            devices: None,
+            _file: None,
+        };
+        h.wait("the globals", |h| {
+            (!h.seen.globals.is_empty()).then_some(())
+        });
+        h.show_window();
+        let window = wayland_window(&h.state).unwrap();
+        h.focus(&window);
+        let copy = |h: &mut Harness, text: &str| {
+            h.wl_copy(false, &[(TEXT, &Arc::new(text.as_bytes().to_vec()))]);
+            let text = text.to_owned();
+            h.wait("the copy in the history", |h| {
+                (top(&h.state) == Some(text.clone())).then_some(())
+            });
+        };
+        copy(&mut h, "first");
+        copy(&mut h, "second");
+        copy(&mut h, "first");
+        assert_eq!(h.state.clipboard_history().entries().len(), 2);
+
+        // A password manager's copy is never kept.
+        let secret = Arc::new(b"hunter2".to_vec());
+        let hint = Arc::new(b"secret".to_vec());
+        h.wl_copy(false, &[(TEXT, &secret), (compositor::SECRET_HINT, &hint)]);
+        h.idle(Duration::from_millis(300));
+        assert_eq!(top(&h.state).as_deref(), Some("first"));
+
+        // A picture, with its thumbnail.
+        let mut png = Vec::new();
+        image::RgbaImage::new(64, 32)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        h.wl_copy(false, &[(PNG, &Arc::new(png))]);
+        h.wait("the picture in the history", |h| {
+            (top(&h.state).as_deref() == Some("64 × 32")).then_some(())
+        });
+        let entry = h.state.clipboard_history().entries()[0].clone();
+        assert_eq!(
+            entry.content.kind,
+            compositor::clipboard_history::Kind::Image
+        );
+        assert!(entry.content.thumbnail.is_some());
+
+        // An item put back is offered again, and goes to the top without being read twice.
+        let second = h.state.clipboard_history().entries()[2].id;
+        let before = h.seen.selections;
+        h.state.put_back(second);
+        h.wl_offered(false, before, TEXT);
+        assert_eq!(h.wl_paste(false, TEXT), b"second");
+        assert_eq!(top(&h.state).as_deref(), Some("second"));
+        assert_eq!(h.state.clipboard_history().entries().len(), 3);
+        // Pinned, it stays when the rest is cleared.
+        h.state.pin_clipboard_item(second, true);
+        h.state.clear_clipboard_history();
+        assert_eq!(h.state.clipboard_history().entries().len(), 1);
+
+        // Kept on disk, for the user alone, and the file goes when the setting is off.
+        let file = std::env::temp_dir().join(format!("clipboard-history-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        h.state.set_clipboard_disk(Some(file.clone()));
+        let mut settings = h.state.clipboard_settings();
+        settings.keep_on_disk = true;
+        h.state.set_clipboard_settings(settings);
+        h.idle(Duration::from_millis(100));
+        copy(&mut h, "on disk");
+        h.wait("the history on disk", |_| {
+            std::fs::read(&file)
+                .ok()
+                .filter(|bytes| bytes.windows(7).any(|w| w == b"on disk"))
+        });
+        settings.keep_on_disk = false;
+        h.state.set_clipboard_settings(settings);
+        h.wait("the file removed", |_| (!file.exists()).then_some(()));
+
+        // Turned off: forgotten, and nothing more is kept.
+        settings.history = false;
+        h.state.set_clipboard_settings(settings);
+        assert!(h.state.clipboard_history().entries().is_empty());
+        h.wl_copy(false, &[(TEXT, &Arc::new(b"off".to_vec()))]);
+        h.idle(Duration::from_millis(300));
+        assert!(h.state.clipboard_history().entries().is_empty());
         h.state.shutdown();
     }
 }
