@@ -28,6 +28,9 @@ mime-apps = { path = "../mime-apps" }
 # The icons of the notification area by their name, in the user's icon theme (workspace crate,
 # lot D-45, the lookup the dock and the launcher share).
 icon-theme = { path = "../icon-theme" }
+# The bar's settings file, read and written as the key files of the desktop (workspace crate,
+# lot D-45a: the icons of the notification area kept in the bar).
+dock-config = { path = "../dock-config" }
 # Do not disturb, the notification daemon's file (workspace crate).
 notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
