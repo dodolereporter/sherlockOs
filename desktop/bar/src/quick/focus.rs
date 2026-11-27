@@ -82,6 +82,11 @@ impl Quick {
         self.dnd_until = wanted.until;
         blocking(
             move || {
+                // Two changes at once are written one after the other: neither is lost.
+                static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+                let _turn = ONE_AT_A_TIME
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let (mut config, _) = NotificationsConfig::load(&path).unwrap_or_default();
                 config.do_not_disturb = wanted.do_not_disturb;
                 config.until = wanted.until;

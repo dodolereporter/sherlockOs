@@ -29,7 +29,6 @@ use crate::items::{self, Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
-use crate::pins;
 use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
 /// The menu of an icon, or the dock's own, while it is open.
@@ -68,6 +67,8 @@ pub enum Message {
     Gesture(Gesture),
     /// The configuration file changed.
     Config(Box<DockConfig>),
+    /// The icons looked up again, off the interface thread, for the icon theme of the file.
+    Icons(Option<String>, Box<IconLookup>),
     Key(Key),
     /// The modifiers held: Ctrl with a click asks for a new window.
     Modifiers(keyboard::Modifiers),
@@ -79,6 +80,8 @@ pub enum Message {
     Closed(Id),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
+    /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
+    IconDrawn,
 }
 
 /// A screen, as the dock needs it.
@@ -179,6 +182,8 @@ pub struct Dock {
     sent: Sent,
     /// The icons last placed on their screen (`Control::place`).
     placed: Vec<IconPlace>,
+    /// Writes the pinned list on a thread of its own.
+    saver: crate::save::Saver,
 }
 
 impl Dock {
@@ -221,6 +226,7 @@ impl Dock {
             screens: None,
             sent: Sent::default(),
             placed: Vec::new(),
+            saver: crate::save::Saver::default(),
         };
         dock.rebuild(false);
         dock
@@ -570,6 +576,7 @@ impl Dock {
             keyboard::listen().filter_map(on_key),
             config,
             frames,
+            sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
     }
 
@@ -658,6 +665,7 @@ impl Dock {
                 return self.tick(instant.saturating_duration_since(self.origin));
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::IconDrawn => {}
             Message::Windows(windows) => {
                 self.clock();
                 // The first list is the dock at startup: in place at once.
@@ -669,6 +677,14 @@ impl Dock {
             }
             Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
+            Message::Icons(theme, lookup) => {
+                // A lookup for a theme the file no longer names came late: the newer one comes.
+                if theme == self.sources.config.icon_theme {
+                    self.sources.lookup = *lookup;
+                    self.glyphs.clear();
+                    return self.refresh(self.geometry);
+                }
+            }
             Message::Key(key) => return self.key(key),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
             Message::Scroll(delta) => {
@@ -709,17 +725,11 @@ impl Dock {
     /// Applies a configuration read from the file: settings, icon theme, pinned list.
     pub fn configure(&mut self, config: DockConfig) -> Task<Message> {
         let previous = self.geometry;
+        let mut icons = Task::none();
         if config.icon_theme != self.sources.config.icon_theme {
-            let theme = config
-                .icon_theme
-                .clone()
-                .or_else(|| self.sources.gtk_theme.clone());
-            self.sources.lookup = IconLookup::new(
-                &self.sources.data_dirs,
-                self.sources.home.as_deref(),
-                theme.as_deref(),
-            );
-            self.glyphs.clear();
+            // Reading the themes' folders takes as long as the disk wants: on a thread of its
+            // own, the icons of the old theme shown meanwhile.
+            icons = self.look_up_icons(config.icon_theme.clone());
         }
         if let Some(pinned) = &config.pinned {
             self.pinned.clone_from(pinned);
@@ -730,7 +740,31 @@ impl Dock {
         self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
         let refreshed = self.refresh(previous);
-        Task::batch([refreshed, self.follow_windows()])
+        Task::batch([refreshed, self.follow_windows(), icons])
+    }
+
+    /// Looks the icons up for the icon theme `named` by the file (the GTK one without), on a
+    /// thread of its own; `Message::Icons` brings them back.
+    fn look_up_icons(&self, named: Option<String>) -> Task<Message> {
+        let theme = named.clone().or_else(|| self.sources.gtk_theme.clone());
+        let dirs = self.sources.data_dirs.clone();
+        let home = self.sources.home.clone();
+        let (sender, receiver) = iced::futures::channel::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name(String::from("dock-icons"))
+            .spawn(move || {
+                let lookup = IconLookup::new(&dirs, home.as_deref(), theme.as_deref());
+                let _ = sender.send(lookup);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "cannot start the thread that looks the icons up");
+            return Task::none();
+        }
+        Task::future(async move {
+            let lookup = receiver.await.ok()?;
+            Some(Message::Icons(named, Box::new(lookup)))
+        })
+        .and_then(Task::done)
     }
 
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
@@ -1761,17 +1795,16 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration and rebuilds the dock. The file is read
-    /// again first and only its list changes (`pins::write`): the dock never writes what it has
-    /// in memory, so a file it could not read at startup is not replaced by one with the pinned
-    /// list alone.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The writing is done
+    /// off the interface thread (`save::Saver`); the file is read again first and only its list
+    /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
+    /// so a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
-        if let Some(path) = &self.sources.config_path
-            && let Err(error) = pins::write(path, &self.pinned, self.sherlock)
-        {
-            tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
+        if let Some(path) = &self.sources.config_path {
+            self.saver
+                .save(path.clone(), self.pinned.clone(), self.sherlock);
         }
         self.refresh(self.geometry)
     }
