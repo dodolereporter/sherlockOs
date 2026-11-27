@@ -621,6 +621,8 @@ fn screen_items(
     // front of everything (lot D-35).
     // The rings of the clicks shown, in front of everything (lot C-01).
     animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
+    // What a drag carries, under the pointer (lot D-29c).
+    animating |= crate::dnd::push_icon(&mut items, state, view, now);
     animating |= crate::screenshot_tool::push_items(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
     // The shell's menus closing (lot UI-06), in front of their anchored surfaces.

@@ -260,6 +260,11 @@ pub fn init(
     // login screen has no session to lock (`greeter.rs`): its inactivity only turns the screens
     // off, after the veil.
     state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
     if !state.is_greeter() {
         state.watch_logind(&event_loop.handle(), None)?;
     }

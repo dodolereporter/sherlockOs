@@ -8,12 +8,15 @@ pub mod arrival;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+// The clipboard history of Super + V (lot D-42).
+pub mod clipboard_history;
 pub mod cursor;
 pub mod curtain;
 pub mod damage;
 pub mod decorations;
 pub mod displays;
 pub mod dmabuf;
+mod dnd;
 pub mod edid;
 pub mod focus;
 pub mod fullscreen;
@@ -56,6 +59,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod x11_paste;
+mod xdnd;
 mod xwayland;
 pub use xwayland::TEST_X_DISPLAY;
 
@@ -211,6 +215,8 @@ pub struct State {
     touchpad: touchpad::Touchpad,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
+    /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
+    dnd: dnd::Dnd,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -286,6 +292,8 @@ pub struct State {
     inhibitors: inhibit::Inhibitors,
     /// The screens off, like an old television (lot D-38).
     power: power::Power,
+    /// What was copied, for Super + V (lot D-42).
+    clipboard: clipboard_history::ClipboardHistory,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -411,6 +419,7 @@ impl State {
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
             clicks: clicks::Clicks::default(),
+            dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -450,6 +459,7 @@ impl State {
             triggers: triggers::Triggers::default(),
             inhibitors: inhibit::Inhibitors::new(&dh),
             power: power::Power::new(),
+            clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -726,6 +736,7 @@ impl State {
             });
         }
         self.send_lock_frames(output, time);
+        self.send_drag_frames(output, time);
     }
 
     /// Something that may show on a screen changed: the screens draw a frame, those of the
@@ -768,6 +779,7 @@ impl State {
         self.end_popup_closings();
         self.end_clicks();
         self.refresh_curtain();
+        self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
