@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, key::Named};
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::{
-    Space, button, column, container, image, mouse_area, operation, pin, row, stack, svg, text,
+    Space, button, column, container, mouse_area, operation, pin, row, stack, text,
 };
 use iced::window::{self, Id};
 use iced::{Alignment, Element, Event, Length, Padding, Point, Size, Subscription, Task, event};
@@ -915,22 +915,11 @@ impl View {
         let Some(tile) = self.catalog.tiles().get(index) else {
             return Space::new().into();
         };
-        let side = self.icon_side();
         let icon: Element<'_, Message> = match self.catalog.icon(tile) {
-            Some(path) => match self.rasters.get(&path, side) {
-                // Drawn once at its size on the screen: the GPU only scales it.
-                Some(drawn) => image(drawn.clone())
-                    .width(layout.icon)
-                    .height(layout.icon)
-                    .opacity(opacity)
-                    .into(),
-                // Until then, the SVG renderer draws it.
-                None => svg(icon_handle(&path))
-                    .width(layout.icon)
-                    .height(layout.icon)
-                    .opacity(opacity)
-                    .into(),
-            },
+            // Smooth edges on the GPU, rasterized once per size step (UI-05).
+            Some(path) => sherlock_ui::raster::icon(&icon_handle(&path), layout.icon)
+                .opacity(opacity)
+                .into(),
             None => {
                 let initial = tile
                     .name()

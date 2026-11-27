@@ -703,6 +703,71 @@ Each one in its states, dark then light (`tests/gallery.rs`, `each_component_ren
 The gallery shows the new components live (« Composants ajoutés par UI-01 »), and its table of
 states gains the check box, the radio button and the workspace chip.
 
+## Icons that fade (UI-04)
+
+The author saw the control centre unfold on the GPU with its texts and tiles fading and its
+icons at full strength. Cause: iced's renderers, wgpu and tiny-skia alike, take only the red,
+green and blue of an SVG's color, never its alpha; `color::with_opacity`, which fades every
+color, could not reach an icon. The transformation of `animated::Reveal` already moved and scaled
+them (both renderers transform an SVG's bounds).
+
+Now every icon the library draws takes its opacity from `color::icon_opacity(tint)`, the tint's
+alpha times the opacity of the fade: `component::icon`, `logo`, `logo_square`, the Sherlock
+button, the glyphs of the panels (built inside the fade, like the texts), and
+`animated::GlyphFade` and the `controls` (drawn inside it). `tests/fade.rs` renders a square, an
+icon and a glyph at half opacity, moved by a `Reveal`: the icons are no brighter than the square
+and move with it.
+
+## Smooth application icons (UI-05)
+
+The author saw rough, « pixelisés » edges on the application icons of the dock and elsewhere, on
+the GPU at scale 1. iced 0.14's wgpu renderer draws an SVG in three steps that each harm a
+full-color icon (`iced_wgpu/src/image/vector.rs` and `image/mod.rs`):
+
+- it uploads resvg's **premultiplied** pixels as they are and blends them as **straight**
+  alpha (`SrcAlpha`, `OneMinusSrcAlpha`): an edge pixel at half alpha is darkened twice, and
+  every antialiased edge gets a dark fringe, most visible on a light background;
+- it rasterizes at the drawn size **rounded up** and samples that raster with its
+  **nearest-neighbour** sampler: at a size that is not a whole number of pixels (the dock
+  magnifying, a fractional scale), rows and columns are doubled or dropped;
+- it rasterizes again at **every new size**: a magnifying dock rasterized every frame.
+
+A single-color line icon escapes the first (its color replaces the premultiplied one) and is
+left to iced. The software renderer has none of these defects.
+
+`raster::icon(handle, side)` draws an application icon as an image instead: rasterized by the
+same resvg, the alpha taken out of the colors and the color of the visible edge given to the
+transparent pixels around it (the linear sampler mixes colors before alpha: a black transparent
+pixel would darken the edge again), at twice its logical size rounded up to a step of
+16 pixels (`raster::raster_side`, at most 512), so that it is never enlarged up to scale 2 and
+every size of a magnification between two steps shares one raster; drawn with the linear
+sampler; each raster kept by document and size (1,024 at most), so no frame rasterizes what an
+earlier one did. The dock (at rest and magnified), the launcher, the Applications view and
+Evidence's « Ouvrir avec » use it. iced's `image-without-codecs` feature and resvg were already
+compiled by the workspace.
+
+`tests/raster.rs` computes « before » exactly as the wgpu renderer does (premultiplied pixels at
+the size rounded up, nearest sampling, straight blending) and « after » from `raster` (linear
+sampling), for the Sherlock tile at a dock icon magnified 1.37 times, at scale 1, over the
+desktop of each theme: before shows a dark fringe on the light desktop, after none. The corner
+of the tile, enlarged four times:
+
+![Edges before and after, dark](sherlock-ui/icon-edges.png)
+![Edges before and after, light](sherlock-ui/icon-edges-light.png)
+
+## Additions of D-26a (Control Room)
+
+- **`control_room`**: sizes, motions and French texts of Control Room (`docs/control-room.md`).
+- **Dropdown menu** (`component::dropdown`): iced's `pick_list`, drawn as a secondary button with
+  its arrow in tertiary text, its choices in a menu's glass, the one under the pointer on the
+  selection's blue (`theme::dropdown`, `theme::dropdown_menu`). Its texts are in the contrast
+  test, on every surface and in its list over a window and a card. Its list opens inside the
+  window; it is not in the gallery yet.
+- **Picture to choose** (`component::picture_choice`, `theme::picture_ring`): a wallpaper of the
+  picker, veiled on hover, ringed in green when chosen.
+- **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
+  and `Sidebar`, drawn on the same grid and stroke.
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like

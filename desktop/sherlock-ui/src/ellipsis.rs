@@ -50,6 +50,26 @@ pub fn fit<'a>(content: &'a str, max: f32, mut measure: impl FnMut(&str) -> f32)
     }
 }
 
+/// Width of `content` on one line, in `font` at `size`, shaped by the renderer as `Ellipsis`
+/// shapes it: what a row of labels needs, to decide what fits before laying it out (the global
+/// menu of the bar, lot D-36).
+pub fn width(content: &str, font: Font, size: f32) -> f32 {
+    let line = core_text::Text {
+        content,
+        bounds: Size::new(f32::INFINITY, f32::INFINITY),
+        size: Pixels(size),
+        line_height: LineHeight::default(),
+        font,
+        align_x: text::Alignment::Default,
+        align_y: alignment::Vertical::Top,
+        shaping: text::Shaping::Auto,
+        wrapping: Wrapping::None,
+    };
+    <Renderer as core_text::Renderer>::Paragraph::with_text(line)
+        .min_bounds()
+        .width
+}
+
 type StyleFn<'a> = Box<dyn Fn(&Theme) -> text::Style + 'a>;
 
 /// What a cut depends on: the text, the room, the font and the size.

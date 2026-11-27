@@ -263,6 +263,18 @@ pub mod evidence {
     pub const KEY_HIDDEN: &str = "Ctrl+H";
     pub const KEY_TRASH: &str = "Suppr";
 
+    // Menus in the bar (lot D-36c).
+    pub const MENU_FILE: &str = "Fichier";
+    pub const MENU_EDIT: &str = "Édition";
+    pub const MENU_VIEW: &str = "Présentation";
+    pub const MENU_GO: &str = "Aller";
+    pub const MENU_WINDOW: &str = "Fenêtre";
+    pub const PARENT_FOLDER: &str = "Dossier parent";
+    pub const SHOW_PREVIEW: &str = "Aperçu";
+    pub const REFRESH: &str = "Actualiser";
+    pub const SELECT_ALL: &str = "Tout sélectionner";
+    pub const CLOSE_WINDOW: &str = "Fermer la fenêtre";
+
     // Names given by the application.
     /// Name of a new folder, then "Nouveau dossier 2"…
     pub fn new_folder_name(n: usize) -> String {

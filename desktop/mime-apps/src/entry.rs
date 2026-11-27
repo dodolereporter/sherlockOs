@@ -24,6 +24,8 @@ pub struct DesktopEntry {
     pub working_dir: Option<PathBuf>,
     pub icon: Option<String>,
     pub mime_types: Vec<String>,
+    /// `Categories`, such as `TerminalEmulator`: Control Room lists the terminals by it.
+    pub categories: Vec<String>,
     /// Hidden from menus, but still able to open files.
     pub no_display: bool,
     pub terminal: bool,
@@ -149,6 +151,7 @@ pub fn parse(id: &str, path: &Path, text: &str, locales: &[String]) -> Option<De
             .map(PathBuf::from),
         icon: get("Icon").map(unescape).filter(|i| !i.is_empty()),
         mime_types: list("MimeType"),
+        categories: list("Categories"),
         no_display: flag("NoDisplay"),
         terminal: flag("Terminal"),
         try_exec: get("TryExec").map(unescape).filter(|t| !t.is_empty()),
@@ -350,6 +353,7 @@ mod tests {
         let text = "[Desktop Entry]\nType=Application\nName=Text Editor\nName[fr]=Éditeur de texte\n\
                     GenericName=Editor\nGenericName[fr]=Éditeur\nKeywords=text;code;\n\
                     Keywords[fr]=texte;code;a\\;b;c\\\\;\nPath=/srv/my\\snotes\nExec=kate -b %U\nIcon=kate\nMimeType=text/plain;text/x-c;\n\
+                    Categories=Utility;TextEditor;\n\
                     [Desktop Action new]\nName=New\n";
         let app = parse(
             "kate.desktop",
@@ -360,6 +364,7 @@ mod tests {
         .expect("entry");
         assert_eq!(app.name, "Éditeur de texte");
         assert_eq!(app.mime_types, ["text/plain", "text/x-c"]);
+        assert_eq!(app.categories, ["Utility", "TextEditor"]);
         assert_eq!(app.generic_name.as_deref(), Some("Éditeur"));
         // `\;` stays in its item; `\\` then `;` ends one.
         assert_eq!(app.keywords, ["texte", "code", "a;b", "c\\"]);
@@ -396,6 +401,7 @@ mod tests {
             working_dir: None,
             icon: Some("app".into()),
             mime_types: Vec::new(),
+            categories: Vec::new(),
             no_display: false,
             terminal: false,
             try_exec: None,

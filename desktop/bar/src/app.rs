@@ -20,7 +20,11 @@ use sherlock_ui::icon::{self, BatteryMark, Radio, WifiMark};
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
+mod global;
+
 use crate::calendar::Month;
+use crate::dbusmenu::Item;
+use crate::global_menu::{self, GlobalMenu};
 use crate::history::{self, Entry};
 use crate::live::{self, Link};
 use crate::menu::{self, Action};
@@ -33,7 +37,7 @@ use crate::source::network::{Network, NetworkManager};
 use crate::source::shell::{self, Auto};
 use crate::source::sound::{Pactl, Sound};
 use crate::source::watch;
-use crate::source::workspaces::{Desktop, Group};
+use crate::source::workspaces::{AppMenu, Desktop, Group};
 use crate::unfold::Unfold;
 use crate::{bus, user};
 
@@ -99,6 +103,13 @@ pub struct Bar {
     pub link: Option<Link>,
     /// The Bluetooth radio; `None` without an adapter: no indicator.
     pub radio: Option<Radio>,
+    /// The menus of the active application (lot D-36).
+    pub global: GlobalMenu,
+    /// The name of each application by its `app_id`, from its desktop entry: `None` while it
+    /// is read, or when it has none.
+    pub app_names: HashMap<String, Option<String>>,
+    /// The logical height of the screen each surface is on, when the compositor gives it.
+    heights: HashMap<Id, f32>,
 }
 
 /// An indicator of the bar. Together they make one button, which opens the control centre.
@@ -114,6 +125,8 @@ pub enum Indicator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     Sherlock,
+    /// A menu of the active application, by its id (lot D-36).
+    AppMenu(i32),
     Workspace(usize),
     /// The indicators, one button: the control centre.
     Status,
@@ -130,8 +143,8 @@ pub enum Message {
     Network(Network),
     Sound(Sound),
     Desktop(Desktop),
-    /// The screen a surface is on: its name and its logical width.
-    Output(Id, Option<String>, Option<f32>),
+    /// The screen a surface is on: its name and its logical width and height.
+    Output(Id, Option<String>, Option<(f32, f32)>),
     /// The network as NetworkManager reports it on the system bus.
     Link(Option<Link>),
     /// The Bluetooth radio as BlueZ reports it.
@@ -169,6 +182,26 @@ pub enum Message {
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
     Frame(Instant),
+    /// The name of the application of this `app_id`, from its desktop entry.
+    AppName(String, Option<String>),
+    /// The tree of the application's menus under an id, read, or why not.
+    AppMenuRead(AppMenu, i32, Result<Item, String>),
+    /// The application says its menus changed.
+    AppMenuChanged(AppMenu),
+    /// A menu of the bar clicked: it opens, or closes.
+    OpenAppMenu(i32),
+    /// A menu of the bar opened from the keyboard: its first entry highlighted.
+    OpenAppMenuByKey(i32),
+    /// The pointer enters a menu of the bar.
+    HoverAppMenu(i32),
+    /// The pointer over an entry: the menu's level, the entry's index.
+    HoverEntry(usize, usize),
+    /// An entry clicked: the menu's level, the entry's index.
+    PickEntry(usize, usize),
+    /// The application got the click on an entry, or why not.
+    EntrySent(Result<(), String>),
+    /// A click on the shadow of a menu.
+    CloseAppMenus,
 }
 
 impl Bar {
@@ -206,6 +239,7 @@ impl Bar {
         self.theme.running()
             || self.shape.running()
             || (self.menu.is_some() && self.menu_unfold.running())
+            || self.global.running()
             || (self.panel.is_some() && (self.unfold.running() || self.quick.running() || swapping))
     }
 
@@ -232,10 +266,17 @@ impl Bar {
                 .map(|service| Message::Quick(quick::Message::Changed(service))),
             None => Subscription::none(),
         };
+        let app_menu = match &self.global.address {
+            Some(menu) => {
+                Subscription::run_with(menu.clone(), watch_menu).map(Message::AppMenuChanged)
+            }
+            None => Subscription::none(),
+        };
         Subscription::batch([
             appearance,
             frames,
             history,
+            app_menu,
             Subscription::run(|| watch(SystemClock::default(), "clock")).map(Message::Clock),
             Subscription::run(|| watch(UPower::default(), "battery")).map(Message::Battery),
             Subscription::run(|| watch(NetworkManager::default(), "network")).map(Message::Network),
@@ -266,13 +307,19 @@ impl Bar {
             Message::Radio(radio) => self.radio = radio,
             Message::Desktop(desktop) => {
                 self.desktop = Some(desktop);
-                return self.reshape(Instant::now());
+                return self.reshape(Instant::now()).chain(self.follow_app_menu());
             }
-            Message::Output(id, name, width) => {
+            Message::Output(id, name, size) => {
                 self.outputs.insert(id, name);
-                match width {
-                    Some(width) => self.screens.insert(id, width),
-                    None => self.screens.remove(&id),
+                match size {
+                    Some((width, height)) => {
+                        self.screens.insert(id, width);
+                        self.heights.insert(id, height);
+                    }
+                    None => {
+                        self.screens.remove(&id);
+                        self.heights.remove(&id);
+                    }
                 };
                 return self.reshape(Instant::now());
             }
@@ -345,6 +392,32 @@ impl Bar {
             Message::Focus(direction) if self.panel_open().is_some() => {
                 return focus::advance(direction);
             }
+            Message::MenuKey(key) if self.app_menu_open() => return self.app_menu_key(key),
+            Message::Focus(direction) if self.app_menu_open() => {
+                let key = match direction {
+                    Direction::Next => menu::Key::Next,
+                    Direction::Previous => menu::Key::Previous,
+                };
+                return self.app_menu_key(key);
+            }
+            Message::AppName(id, name) => {
+                self.app_names.insert(id, name);
+            }
+            Message::AppMenuRead(menu, id, read) => return self.app_menu_read(menu, id, read),
+            Message::AppMenuChanged(menu) if self.global.address.as_ref() == Some(&menu) => {
+                return global::read_menu(menu, 0);
+            }
+            Message::AppMenuChanged(_) => {}
+            Message::OpenAppMenu(id) => return self.toggle_app_menu(id),
+            Message::OpenAppMenuByKey(id) => return self.show_app_menu(id, true),
+            Message::HoverAppMenu(id) => return self.hover_app_menu(id),
+            Message::HoverEntry(level, index) => return self.hover_entry(level, index),
+            Message::PickEntry(level, index) => return self.pick_entry(level, index),
+            Message::EntrySent(Err(error)) => {
+                tracing::warn!(%error, "the application did not get the menu entry");
+            }
+            Message::EntrySent(Ok(())) => {}
+            Message::CloseAppMenus => return self.close_app_menus(),
             Message::MenuKey(key) if self.menu_open() => match key {
                 menu::Key::Close => return self.close_menu(),
                 menu::Key::Activate => {
@@ -414,12 +487,13 @@ impl Bar {
                 if self.menu_unfold.folded() {
                     tasks = tasks.chain(self.drop_menu());
                 }
-                return tasks;
+                return tasks.chain(self.tick_app_menus(at));
             }
             Message::Closed(id) => {
                 // The compositor closes the menu and the panels on a click elsewhere
                 // (popup_done).
                 self.outputs.remove(&id);
+                self.app_menu_closed(id);
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
@@ -499,7 +573,12 @@ impl Bar {
             || self.network.is_some()
             || self.sound.is_some()
             || matches!(self.battery, Some(Some(_)));
+        let app_menus = match self.global.root {
+            Some(_) => global_menu::GlobalMenu::buttons(&self.placement()),
+            None => Vec::new(),
+        };
         std::iter::once(Target::Sherlock)
+            .chain(app_menus.into_iter().map(Target::AppMenu))
             .chain((0..workspaces).map(Target::Workspace))
             .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
@@ -515,6 +594,7 @@ impl Bar {
     pub fn activation(&self) -> Option<Message> {
         self.focused().map(|target| match target {
             Target::Sherlock => Message::ToggleMenu,
+            Target::AppMenu(id) => Message::OpenAppMenuByKey(id),
             Target::Workspace(i) => Message::SelectWorkspace(i),
             Target::Status => Message::TogglePanel(Panel::Control),
             Target::Clock => Message::TogglePanel(Panel::Calendar),
@@ -544,12 +624,17 @@ impl Bar {
         }
         // The menu goes at once: a popup folding back would still hold the grab the panel's
         // popup takes.
-        let closed = self.drop_panel().chain(self.drop_menu());
+        let closed = self
+            .drop_panel()
+            .chain(self.drop_menu())
+            .chain(self.drop_app_menus());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the panel cannot open");
             return closed;
         };
         self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
+        // Room for the keyboard backlight only on a machine that has one (UI-04).
+        panel::reserve_keyboard(self.quick.has_keyboard());
         self.panel_shared = self.animates();
         self.swap = None;
         let shared = self.panel_shared;
@@ -623,6 +708,11 @@ impl Bar {
         })
     }
 
+    /// The logical height of the bar's screen, when the compositor gives it.
+    pub fn screen_height(&self) -> Option<f32> {
+        self.surface.and_then(|id| self.heights.get(&id).copied())
+    }
+
     /// The anchor rectangle of `which` in the bar surface, from the bar's real width: the
     /// panel's right edge where the bar ends, under the indicators and the clock, whatever
     /// the size and the scale of the screen.
@@ -682,7 +772,7 @@ impl Bar {
             self.menu_unfold.fold(animated::clock(), true);
             return Task::none();
         }
-        let closed = self.drop_panel();
+        let closed = self.drop_panel().chain(self.drop_app_menus());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
@@ -748,6 +838,9 @@ impl Bar {
         match self.panel {
             Some((which, panel)) if panel == id => return self.view_panel(which),
             _ => {}
+        }
+        if let Some(level) = self.global.level_of(id) {
+            return self.view_app_menu(level);
         }
         if self.menu == Some(id) {
             self.view_menu()
@@ -840,16 +933,26 @@ impl Bar {
         let mut left = row![sherlock]
             .spacing(metrics::TOP_BAR_LEFT_GAP)
             .align_y(Alignment::Center);
-        if let Some(app) = self.desktop.as_ref().and_then(|d| d.app.as_deref()) {
+        if let Some(app) = self.app_name() {
             let (pad_left, pad_right) = metrics::APP_NAME_PADDING;
-            // A long window title ends with « … » where the left half of the bar ends.
+            // A long name ends with « … »: where the left half of the bar ends, or at
+            // APP_NAME_MAX when the application's menus follow it.
             let name = ui::ellipsis(app).font(typography::UI_SEMIBOLD);
-            let name = container(name).padding(Padding {
+            let mut name = container(name).padding(Padding {
                 left: pad_left,
                 right: pad_right,
                 ..Padding::ZERO
             });
-            left = left.push(name);
+            if self.global.root.is_some() {
+                let placement = self.placement();
+                name = name.width(placement.name);
+                left = left.push(name);
+                for button in self.view_app_menus(&placement) {
+                    left = left.push(button);
+                }
+            } else {
+                left = left.push(name);
+            }
         }
 
         let chips = self.group().into_iter().flat_map(|g| {
@@ -1056,14 +1159,22 @@ fn on_output(event: ShellEvent) -> Option<Message> {
     match event {
         ShellEvent::WindowOutputChanged { window, output } => {
             let name = output.as_ref().and_then(|o| o.info.name.clone());
-            let width = output
+            let size = output
                 .as_ref()
                 .and_then(|o| o.info.logical_size)
-                .map(|(width, _)| width as f32);
-            Some(Message::Output(window, name, width))
+                .map(|(width, height)| (width as f32, height as f32));
+            Some(Message::Output(window, name, size))
         }
         _ => None,
     }
+}
+
+/// The changes of the application's menus at `menu`, a burst at a time.
+fn watch_menu(menu: &AppMenu) -> iced::futures::stream::BoxStream<'static, AppMenu> {
+    use iced::futures::StreamExt;
+    let changed = menu.clone();
+    let changes = crate::dbusmenu::watch(menu.clone()).map(move |()| changed.clone());
+    bus::coalesce(changes.boxed(), bus::SIGNAL_GAP)
 }
 
 /// Reads the history of the notification daemon.
@@ -1211,7 +1322,9 @@ mod tests {
                 Target::Workspace(i) => {
                     assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
                 }
-                Target::Status | Target::Clock => panic!("no indicator in this bar"),
+                Target::Status | Target::Clock | Target::AppMenu(_) => {
+                    panic!("no indicator nor menu in this bar")
+                }
             }
         }
         let _ = bar.update(Message::Focus(Direction::Previous));
@@ -1416,7 +1529,7 @@ mod tests {
                 };
                 let id = Id::unique();
                 if from_screen {
-                    let _ = bar.update(Message::Output(id, None, Some(screen)));
+                    let _ = bar.update(Message::Output(id, None, Some((screen, 900.0))));
                     let _ = bar.update(Message::Surface(id));
                 } else if size_first {
                     let _ = bar.update(Message::Resized(id, screen - 2.0 * side));
