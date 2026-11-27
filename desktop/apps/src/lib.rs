@@ -4,6 +4,7 @@
 //! of the applications, search and start it reuses. See `docs/apps.md`.
 
 pub mod app;
+pub mod backdrop;
 pub mod catalog;
 pub mod icons;
 pub mod pager;
@@ -84,7 +85,8 @@ pub fn catalog() -> Catalog {
 /// it is resident (`inbox`, lot P-02).
 pub fn run(inbox: Option<Inbox>) -> Result<(), iced_exwlshell::Error> {
     startup::timed("theme read", launcher::apply_theme);
-    let view = View::new(catalog(), Arc::new(launcher::launch::spawn));
+    let view = View::new(catalog(), Arc::new(launcher::launch::spawn))
+        .with_backdrop_loader(app::session_backdrop());
     let layer = match inbox {
         Some(_) => LayerShellSettings {
             start_mode: StartMode::Background,
@@ -102,7 +104,10 @@ pub fn run(inbox: Option<Inbox>) -> Result<(), iced_exwlshell::Error> {
             .lock()
             .ok()
             .and_then(|mut v| v.take())
-            .unwrap_or_else(|| View::new(catalog(), Arc::new(launcher::launch::spawn)));
+            .unwrap_or_else(|| {
+                View::new(catalog(), Arc::new(launcher::launch::spawn))
+                    .with_backdrop_loader(app::session_backdrop())
+            });
         let task = match inbox.clone() {
             Some(inbox) => {
                 view = view

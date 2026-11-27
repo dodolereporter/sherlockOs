@@ -402,7 +402,9 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
 | `tray/host.rs` | The host: reads the items and follows them, a stream of `Event` |
 | `tray/mod.rs` | An item, its properties, its pixmaps, what a click asks of it (`Request`) |
 | `tray/icon.rs` | Where its icon is found |
-| `app/tray.rs` | The chevron, the popup, the clicks, the breath |
+| `app/tray.rs` | The chevron, the popup, the clicks, the breath, an icon's menu |
+| `app/pins.rs` | Icons kept in the bar: the drag, the drop, their view (D-45a) |
+| `tray/pins.rs` | Which icons are kept, in the bar's settings file (D-45a) |
 | `locate.rs` | Where the chevron is drawn, for the popup to open under it |
 
 - **Protocol.** `StatusNotifierItem`, the protocol KDE wrote, which libappindicator,
@@ -448,7 +450,8 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
   chevron. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
-  `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal.
+  `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
+  the item's menu (D-45a, below).
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
@@ -461,6 +464,47 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   elsewhere or a second click on the chevron close it. One popup holds the grab at a time: a
   panel, the Sherlock menu or an application's menu takes it away at once, and the popup takes
   them away. When the icons shown need another size, it opens again at the new size.
+
+### The menu of an icon, and icons kept in the bar (D-45a)
+
+![The VPN's menu on a right click, Sherlock kept in the bar, 1920 × 1080](../desktop/bar/screenshots/tray-menu-1920.png)
+![The same in the light theme](../desktop/bar/screenshots/tray-menu-1920-light.png)
+![The same on a 1366 × 768 screen](../desktop/bar/screenshots/tray-menu-1366.png)
+![The same in the light theme](../desktop/bar/screenshots/tray-menu-1366-light.png)
+
+- **Menu.** A right click on an icon opens its menu (`Menu`, `com.canonical.dbusmenu`), read and
+  drawn by the global menu's code: the same glass, entries, check marks, submenus, keys, the same
+  limits (`AboutToShow`, then `GetLayout`, 1.5 s each). `GlobalMenu::item` holds it while it is
+  shown; the bar's menus stay as they are. From the popup it opens under the icon's cell, a popup
+  of the popup; from the bar, under the icon, like the bar's menus. An entry that runs sends
+  `Event` « clicked » and closes the menu and the popup; Escape closes the menu, then the popup.
+  An item that only has a menu (`ItemIsMenu`) opens it on a left click too, and so does an item
+  whose `Activate` is refused (`UnknownMethod`), as KDE does. An item without a D-Bus menu gets
+  `ContextMenu` and shows its own.
+- **Kept in the bar.** An icon dragged from the popup onto the bar stays there, before the
+  chevron, in the order it was dropped; the bar shows where it would land, the icon faded in its
+  slot, while the pointer is over it, and the icon left in the popup fades meanwhile. Dragged
+  along the bar, a kept icon changes place; dragged below the bar, it fades and goes back into
+  the popup when let go. A press that does not move 6 pixels is a click. A kept icon answers the
+  clicks and the wheel as in the popup, and breathes when it needs attention; the chevron's dot
+  only counts the icons of the popup. Without an icon left in the popup, no chevron.
+- **Saved.** The icons kept are remembered by their `Id`, the same from one start of the
+  application to the next, in `$XDG_CONFIG_HOME/bar/bar.conf`:
+
+  ```text
+  [Tray]
+  Pinned=sherlock;steam
+  ```
+
+  A drop changes the bar at once, then the file is read again just before it is written, the
+  change applied to what it holds (another bar, an editor), its other lines kept, written to a
+  temporary file renamed over it (`tray/pins.rs`). Read when the bar starts.
+- **Moves during a drag.** While a button is held, Wayland gives the pointer's moves to the
+  surface it was pressed in, outside it too: the popup gets them over the bar, the bar below
+  itself. The bar places them in its own surface from where it put the popup. The moves are only
+  asked for while an icon is pressed (`pins::on_pointer`): a pointer crossing the bar sends no
+  message. The popup and the menus never leave their surfaces: what is dragged shows in the bar's
+  slot, not under the pointer.
 
 ### The X11 tray (XEmbed)
 
@@ -987,7 +1031,15 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   before the pixels, a symbolic icon. In `app/tray.rs`: no chevron without an icon to show, Tab
   and Enter, the popup unfolding, folding, Escape, a click elsewhere, a panel taking its place,
   opening again at a new size, and an icon breathing three times then resting. In `sherlock-ui`:
-  the size of the popup, the breath, and a symbolic icon tinted with its alpha kept.
+  the size of the popup, the breath, and a symbolic icon tinted with its alpha kept. D-45a, in
+  `tests/tray.rs`: a right click opens the item's menu read from the fake application, and a
+  click on « Quitter » reaches it as `Event` « clicked »; the captures of the VPN's menu with an
+  icon kept in the bar. In `tray/pins.rs`: a drop pinning, moving and unpinning, and the file
+  read just before it is written, its other lines kept. In `app/pins.rs`: an icon dragged from
+  the popup onto the bar, shown where it lands, kept, and its release not taken for a click; an
+  icon of the bar changing place, then going back into the popup; a press without a move left to
+  the button; the menu under the second cell, opened once read, Escape closing it then the
+  popup, and an item that only has a menu opening it on a left click.
 - **Registrar** (`tests/registrar.rs`): on a private bus (its own `dbus-daemon`, never the
   user's bus), `RegisterWindow` answered in under 50 ms (the best of five) and passed on with
   the caller's process and bus name, `GetMenuForWindow`; a second registrar leaves the name to
@@ -1115,8 +1167,9 @@ shows against one.
 - The application name from its `.desktop` file came with D-36.
 - The Sherlock menu's game mode and updates, and a page « À propos » in Control Room.
 - The game mode and the choice of the graphics card: their tiles wait for their batches.
-- The notification area: the menu of an item on a right click and its icons kept in the bar
-  come with D-45a; the X11 tray with D-45b (see « The X11 tray »). When Plasma's watcher, whose
+- The notification area: the X11 tray waits for D-45b (see « The X11 tray »). A drag shows
+  nothing under the pointer between the popup and the bar (no drag icon: `iced_exwlshell` has no
+  Wayland drag and drop). When Plasma's watcher, whose
   host the bar is, restarts, the bar does not register again before it restarts too.
 - Bluetooth: the first adapter only; no file transfer, no audio profile choice.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape

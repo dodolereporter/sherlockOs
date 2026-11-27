@@ -34,6 +34,8 @@ pub enum Click {
     Primary,
     /// Middle: `SecondaryActivate`.
     Secondary,
+    /// Right: its menu (lot D-45a).
+    Context,
 }
 
 /// The notification area: its items, and the popup.
@@ -57,6 +59,12 @@ pub struct Tray {
     breathing: Vec<(String, Duration)>,
     /// The time of the last frame.
     now: Duration,
+    /// The ids of the icons kept in the bar, in their order (lot D-45a).
+    pub pins: Vec<String>,
+    /// Where the icons kept in the bar are drawn in the bar surface.
+    pub pinned_row: Option<Rectangle>,
+    /// An icon pressed, and dragged once it moved.
+    pub drag: Option<super::pins::Drag>,
 }
 
 impl Tray {
@@ -65,9 +73,25 @@ impl Tray {
         self.items.iter().filter(|i| i.shown())
     }
 
-    /// Some item needs attention: the chevron carries a dot.
+    /// The items of the popup: shown, not kept in the bar.
+    pub fn in_popup(&self) -> impl Iterator<Item = &Item> {
+        self.shown().filter(|i| !self.is_pinned(i))
+    }
+
+    /// The items kept in the bar, in their order.
+    pub fn pinned(&self) -> impl Iterator<Item = &Item> {
+        self.pins
+            .iter()
+            .filter_map(|id| self.shown().find(|i| i.properties.id == *id))
+    }
+
+    pub fn is_pinned(&self, item: &Item) -> bool {
+        !item.properties.id.is_empty() && self.pins.contains(&item.properties.id)
+    }
+
+    /// Some item of the popup needs attention: the chevron carries a dot.
     pub fn attention(&self) -> bool {
-        self.shown().any(Item::needs_attention)
+        self.in_popup().any(Item::needs_attention)
     }
 
     pub fn open(&self) -> bool {
@@ -79,7 +103,11 @@ impl Tray {
         let turning = self
             .turn
             .is_some_and(|t| !t.is_done(self.now, SCALE_PRECISION));
-        let breathing = self.popup.is_some() && self.breathing.iter().any(|b| self.breathes(b));
+        let seen = |key: &str| self.popup.is_some() || self.pinned().any(|i| i.key == key);
+        let breathing = self
+            .breathing
+            .iter()
+            .any(|b| self.breathes(b) && seen(&b.0));
         turning || breathing || (self.popup.is_some() && self.unfold.running())
     }
 
@@ -88,7 +116,7 @@ impl Tray {
     }
 
     /// How much the icon of `key` has grown in its breath now.
-    fn growth(&self, key: &str) -> f32 {
+    pub(super) fn growth(&self, key: &str) -> f32 {
         let breath = self.breathing.iter().find(|b| b.0 == key);
         breath
             .filter(|b| self.breathes(b))
@@ -207,7 +235,7 @@ impl Bar {
     /// Where the popup goes, and its input region: under the chevron, its centre under the
     /// chevron's, within the bar.
     fn tray_placement(&mut self, surface: Id) -> (IcedNewPopupSettings, (i32, i32, i32, i32)) {
-        let count = self.tray.shown().count();
+        let count = self.tray.in_popup().count();
         let (width, height) = (look::width(count), look::height(count));
         let margins = self.tray.margins;
         let size = (
@@ -246,7 +274,7 @@ impl Bar {
     /// The left of the popup in the bar surface, as `tray_placement` puts it: for the tests and
     /// the captures.
     pub fn tray_left(&self) -> f32 {
-        let count = self.tray.shown().count();
+        let count = self.tray.in_popup().count();
         let width = look::width(count);
         let side = self.applied.margin_side as f32;
         let bar = self.bar_width();
@@ -260,14 +288,14 @@ impl Bar {
 
     /// The icons shown changed while the popup is open: it opens again at its new size, at
     /// once, its grab kept by the new popup.
-    fn resize_tray(&mut self) -> Task<Message> {
+    pub(super) fn resize_tray(&mut self) -> Task<Message> {
         let (Some(old), Some(surface)) = (self.tray.popup, self.surface) else {
             return Task::none();
         };
         if self.tray.unfold.folding() {
             return Task::none();
         }
-        let count = self.tray.shown().count();
+        let count = self.tray.in_popup().count();
         let margins = self.tray.margins;
         let height = (look::height(count) + margins.top + margins.bottom).ceil() as u32;
         let width = (look::width(count) + margins.left + margins.right).ceil() as u32;
@@ -302,7 +330,12 @@ impl Bar {
         match self.tray.popup.take() {
             Some(id) => {
                 self.tray.turn_to(false, animated::clock());
-                window::close(id)
+                // An icon's menu open from the popup goes first.
+                let menu = match self.global.item.as_ref().map(|m| m.anchor) {
+                    Some(crate::global_menu::Anchor::Popup(..)) => self.drop_app_menus(),
+                    _ => Task::none(),
+                };
+                menu.chain(window::close(id))
             }
             None => Task::none(),
         }
@@ -329,11 +362,71 @@ impl Bar {
 
     /// A click on the icon of `key`. The popup closes after a click that activates.
     pub(super) fn tray_click(&mut self, key: &str, click: Click) -> Task<Message> {
+        // The end of a drag is not a click.
+        if self.tray.drag.as_ref().is_some_and(|d| d.moving) {
+            return Task::none();
+        }
+        let Some(item) = self.tray.items.iter().find(|i| i.key == key) else {
+            return Task::none();
+        };
+        let only_menu = item.properties.item_is_menu && item.properties.menu.is_some();
+        if click == Click::Context || (click == Click::Primary && only_menu) {
+            return self.tray_menu(key);
+        }
         let Some(sent) = self.tray_request(key, click) else {
             return Task::none();
         };
         tracing::debug!(key, ?click, "tray item clicked");
-        self.close_tray().chain(send(sent))
+        let fallback = (click == Click::Primary).then(|| key.to_owned());
+        self.close_tray().chain(send(sent, fallback))
+    }
+
+    /// The menu of the icon of `key`, under it: its D-Bus menu, with the style of ours; an item
+    /// without one is asked to show its own (`ContextMenu`).
+    pub(super) fn tray_menu(&mut self, key: &str) -> Task<Message> {
+        let Some(item) = self.tray.items.iter().find(|i| i.key == key) else {
+            return Task::none();
+        };
+        let (service, path) = (item.service.clone(), item.path.clone());
+        let Some(menu) = item.properties.menu.clone() else {
+            let (x, y) = self.tray_point();
+            return send((service, path, Request::ContextMenu(x, y)), None);
+        };
+        let Some(anchor) = self.tray_anchor(key) else {
+            return Task::none();
+        };
+        tracing::debug!(key, "tray item menu");
+        let address = crate::source::workspaces::AppMenu {
+            service,
+            path: menu,
+        };
+        self.show_item_menu(address, anchor)
+    }
+
+    /// Where the menu of the icon of `key` opens: under its cell in the popup, else under it in
+    /// the bar.
+    pub fn tray_anchor(&self, key: &str) -> Option<crate::global_menu::Anchor> {
+        use crate::global_menu::Anchor;
+        let in_popup = self.tray.in_popup().position(|i| i.key == key);
+        if let (Some(popup), Some(index), true) = (self.tray.popup, in_popup, self.tray.open()) {
+            let inset = look::PADDING + metrics::BORDER_WIDTH;
+            let step = look::CELL + look::GAP;
+            let (column, row) = (
+                (index % look::COLUMNS) as f32,
+                (index / look::COLUMNS) as f32,
+            );
+            let margins = self.tray.margins;
+            let x = margins.left + inset + column * step;
+            let y = margins.top + inset + row * step + look::CELL + look::GAP;
+            return Some(Anchor::Popup(popup, x, y));
+        }
+        let pinned = self.tray.pinned().position(|i| i.key == key);
+        if let (Some(index), Some(row)) = (pinned, self.tray.pinned_row) {
+            return Some(Anchor::Bar(row.x + index as f32 * super::pins::SLOT));
+        }
+        // The popup already folding back (an `Activate` refused after a click in it): under
+        // the chevron.
+        self.tray.chevron.map(|chevron| Anchor::Bar(chevron.x))
     }
 
     /// What a click on the icon of `key` asks of its application, and where.
@@ -343,6 +436,7 @@ impl Bar {
         let request = match click {
             Click::Primary => Request::Activate(x, y),
             Click::Secondary => Request::SecondaryActivate(x, y),
+            Click::Context => Request::ContextMenu(x, y),
         };
         Some((item.service.clone(), item.path.clone(), request))
     }
@@ -352,7 +446,7 @@ impl Bar {
         let item = self.tray.items.iter().find(|i| i.key == key);
         let request = item.zip(Request::scroll(delta));
         request.map_or_else(Task::none, |(item, request)| {
-            send((item.service.clone(), item.path.clone(), request))
+            send((item.service.clone(), item.path.clone(), request), None)
         })
     }
 
@@ -366,7 +460,7 @@ impl Bar {
 
     /// The chevron in the bar, before the indicators; none without an item to show.
     pub(super) fn view_chevron(&self) -> Option<Element<'static, Message>> {
-        self.tray.shown().next()?;
+        self.tray.in_popup().next()?;
         let glyph = look::chevron(self.tray.turned(), self.tray.attention());
         let mut button = panels::bar_button(glyph, self.tray.open(), Some(Message::ToggleTray));
         if self.focused() == Some(super::Target::Tray) {
@@ -377,11 +471,14 @@ impl Bar {
 
     /// The popup: the grid of icons, and the line of the one under the pointer.
     pub fn view_tray(&self) -> Element<'_, Message> {
-        let count = self.tray.shown().count();
+        let count = self.tray.in_popup().count();
         let (width, height) = (look::width(count), look::height(count));
         let panel = color::with_opacity(self.tray.unfold.opacity(), || {
-            let cells: Vec<Element<'_, Message>> =
-                self.tray.shown().map(|item| self.tray_cell(item)).collect();
+            let cells: Vec<Element<'_, Message>> = self
+                .tray
+                .in_popup()
+                .map(|item| self.tray_cell(item))
+                .collect();
             let grid: Element<'_, Message> = if cells.is_empty() {
                 let empty = ui::body(look::text::EMPTY).color(color::palette().text_tertiary);
                 container(empty)
@@ -430,11 +527,24 @@ impl Bar {
                 .into();
         }
         let key = item.key.as_str();
+        // Dragged away, the cell keeps a faint trace of its icon.
+        if self
+            .tray
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.moving && d.key == key)
+        {
+            icon = color::with_opacity(super::pins::DRAGGED, || {
+                animated::reveal(icon).opacity(super::pins::DRAGGED)
+            })
+            .into();
+        }
         let press = Message::TrayClick(key.to_owned(), Click::Primary);
         let cell = look::cell(icon, Some(press));
         let scroll_key = key.to_owned();
         mouse_area(cell)
             .on_middle_press(Message::TrayClick(key.to_owned(), Click::Secondary))
+            .on_right_press(Message::TrayClick(key.to_owned(), Click::Context))
             .on_scroll(move |delta| Message::TrayScroll(scroll_key.clone(), delta))
             .on_enter(Message::TrayHover(Some(key.to_owned())))
             .on_exit(Message::TrayLeave(key.to_owned()))
@@ -445,7 +555,7 @@ impl Bar {
     fn tray_tip(&self) -> Element<'_, Message> {
         let p = color::palette();
         let hovered = self.tray.hovered.as_ref();
-        let item = hovered.and_then(|key| self.tray.shown().find(|i| &i.key == key));
+        let item = hovered.and_then(|key| self.tray.in_popup().find(|i| &i.key == key));
         let line: Element<'_, Message> = match item.map(|i| i.properties.label()) {
             Some((title, text)) => {
                 let mut line = row![
@@ -509,14 +619,18 @@ pub fn icon_view<'a>(icon: Option<&Icon>, side: f32, name: &str) -> Element<'a, 
         .into()
 }
 
-/// Sends `request` to the item at `path` of `service`, on the connection of the menus.
-fn send((service, path, request): (String, String, Request)) -> Task<Message> {
+/// Sends `request` to the item at `path` of `service`, on the connection of the menus. When
+/// `fallback` names an item, a refused `Activate` opens its menu instead, as KDE does.
+pub(super) fn send(
+    (service, path, request): (String, String, Request),
+    fallback: Option<String>,
+) -> Task<Message> {
     Task::perform(
         async move {
             let bus = dbusmenu::bus().await?;
             request.send(&bus, &service, &path).await
         },
-        |sent| Message::TraySent(sent.map_err(|e| e.to_string())),
+        move |sent| Message::TraySent(fallback.clone(), sent.map_err(|e| e.to_string())),
     )
 }
 
