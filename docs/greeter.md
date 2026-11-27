@@ -48,6 +48,11 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 - **Background (lot D-24d):** the surfaces are transparent. The compositor shows the picture of
   the lock from its first frame (`docs/compositor.md`), and this program's own picture, once
   read, fades in over it: the same picture, so nothing moves. It never draws a plain color.
+- **The keyboard stays in the field** (lot D-24d, as on macOS): the password field, or the name
+  field for « Autre… », takes it from the first frame without a click, and gets it back after a
+  wrong password, a change of user, a click on the eye, a session, a machine button or anywhere
+  on the screen. The keys typed during the entrance go into it. Escape empties it. Tab goes from
+  the field to the eye, the arrow and the machine buttons, and back (`sherlock_ui::focus`).
 - **Entrance:** from the first frame drawn, the time, the bubble, the name, the pill, the session
   and the buttons rise and fade in, 70 ms apart; the first key ends it.
 - **Sherlock** reacts as on the lock screen: he waves, closes his eyes while the password is

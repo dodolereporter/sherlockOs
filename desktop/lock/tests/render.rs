@@ -396,6 +396,95 @@ mod tests {
         );
     }
 
+    /// `step` gives the keyboard to the field again.
+    fn focuses(s: &mut Screen, what: &str, step: impl FnOnce(&mut Screen)) {
+        let before = s.lock.focus_requests();
+        step(s);
+        assert!(
+            s.lock.focus_requests() > before,
+            "{what}: the field keeps the keyboard"
+        );
+    }
+
+    /// The field has the keyboard as soon as the form shows: when its surface comes, at its
+    /// first size and at its first frame, without a click.
+    #[test]
+    fn the_field_has_the_keyboard_as_soon_as_the_lock_shows() {
+        let mut s = arriving((1920.0, 1080.0));
+        assert!(
+            s.lock.focus_requests() >= 2,
+            "the surface and its first size"
+        );
+        focuses(&mut s, "the first frame", |s| {
+            let _ = s.lock.update(Message::Frame(Instant::now()));
+        });
+        // The keys typed during the entrance go into the field: it takes them at once.
+        s.lock.set_elapsed(sherlock_ui::lock::CURTAIN);
+        let size = (1920.0, 1080.0);
+        let mut ui = Simulator::with_size(lock::settings(), size, s.lock.view(s.primary));
+        let _ = ui.click(sherlock_ui::lock::screen::PASSWORD);
+        let _ = ui.typewrite("ab");
+        let typed = ui
+            .into_messages()
+            .filter(|m| matches!(m, Message::Typed(_)))
+            .count();
+        assert_eq!(typed, 2, "both keys reach the field during the entrance");
+    }
+
+    /// The field keeps the keyboard: after a wrong password (emptied, shaking), after a click
+    /// on the eye, on a machine button or anywhere on the screen.
+    #[test]
+    fn the_field_keeps_the_keyboard() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        focuses(&mut s, "a wrong password", |s| {
+            let _ = s.lock.update(Message::Typed(Secret::new("faux".into())));
+            let _ = s.lock.update(Message::Submit);
+            checked(s, Err(AuthError::Refused));
+        });
+        assert_eq!(s.lock.password_len(), 0);
+        assert!(matches!(s.lock.phase(), Phase::Refused(..)));
+        focuses(&mut s, "the eye", |s| {
+            let _ = s.lock.update(Message::ShowPassword);
+        });
+        focuses(&mut s, "a machine button", |s| {
+            let _ = s.lock.update(Message::Machine(Machine::Reboot));
+        });
+        focuses(&mut s, "a click on the screen", |s| {
+            let _ = s.lock.update(Message::Pressed(s.primary));
+        });
+        assert!(s.runner.0.lock().unwrap().is_empty(), "one click only arms");
+    }
+
+    /// The form back after its 20 s away: the field has the keyboard, the letter that brought
+    /// it is in it.
+    #[test]
+    fn the_form_back_after_a_while_has_the_keyboard() {
+        let mut s = screen((1920.0, 1080.0));
+        assert!(!s.lock.form_shown());
+        focuses(&mut s, "the form back", |s| key(s, Key::Other, "p"));
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 1);
+    }
+
+    /// Escape empties the field and keeps the form and the keyboard; on an empty field, it
+    /// sends the form away. Tab moves the focus without typing nor sending the form away.
+    #[test]
+    fn escape_empties_the_field_and_tab_moves_the_focus() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        let _ = s.lock.update(Message::Typed(Secret::new("abc".into())));
+        focuses(&mut s, "Escape", |s| key(s, Key::Escape, "\u{1b}"));
+        assert_eq!(s.lock.password_len(), 0);
+        assert!(s.lock.form_shown());
+        key(&mut s, Key::Tab { back: false }, "\t");
+        key(&mut s, Key::Tab { back: true }, "\t");
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 0);
+        key(&mut s, Key::Escape, "\u{1b}");
+        assert!(!s.lock.form_shown());
+    }
+
     /// The form comes with the lock, its elements once the curtain of the compositor is down;
     /// Sherlock waves.
     #[test]

@@ -293,6 +293,87 @@ mod tests {
         assert!(ui.find(sherlock_ui::greeter::OTHER).is_err());
     }
 
+    /// `step` gives the keyboard to the field again.
+    fn focuses(s: &mut Screen, what: &str, step: impl FnOnce(&mut Screen)) {
+        let before = s.greeter.focus_requests();
+        step(s);
+        assert!(
+            s.greeter.focus_requests() > before,
+            "{what}: the field keeps the keyboard"
+        );
+    }
+
+    /// The field has the keyboard as soon as the screen shows, and keeps it: after a wrong
+    /// password, a change of user, a click on the eye, a session, a machine button or anywhere;
+    /// Escape empties it.
+    #[test]
+    fn the_field_has_the_keyboard_and_keeps_it() {
+        let mut s = screen((1920.0, 1080.0));
+        assert!(
+            s.greeter.focus_requests() >= 2,
+            "the surface and its first size"
+        );
+        focuses(&mut s, "the first frame", |s| {
+            let _ = s.greeter.update(Message::Frame(Instant::now()));
+        });
+        focuses(&mut s, "a wrong password", |s| {
+            let _ = s.greeter.update(Message::Typed(Secret::new("faux".into())));
+            let _ = s.greeter.update(Message::Submit);
+            let refused = Ok(Report {
+                outcome: Outcome::Refused,
+                notes: Vec::new(),
+            });
+            let _ = s.greeter.update(Message::LoggedIn(refused));
+        });
+        assert_eq!(s.greeter.password_len(), 0);
+        focuses(&mut s, "a change of user", |s| {
+            let _ = s.greeter.update(Message::Key(Some(Step::Left)));
+        });
+        focuses(&mut s, "a click on the user chosen", |s| {
+            let _ = s.greeter.update(Message::Select(s.greeter.selected()));
+        });
+        focuses(&mut s, "the eye", |s| {
+            let _ = s.greeter.update(Message::ShowPassword);
+        });
+        focuses(&mut s, "a session", |s| {
+            let _ = s.greeter.update(Message::Session(0));
+        });
+        focuses(&mut s, "a machine button", |s| {
+            let _ = s.greeter.update(Message::Machine(Machine::Reboot));
+        });
+        focuses(&mut s, "a click on the screen", |s| {
+            let _ = s.greeter.update(Message::Pressed(s.primary));
+        });
+        let _ = s.greeter.update(Message::Typed(Secret::new("abc".into())));
+        focuses(&mut s, "Escape", |s| {
+            let _ = s.greeter.update(Message::Key(Some(Step::Escape)));
+        });
+        assert_eq!(s.greeter.password_len(), 0, "Escape empties the field");
+        // Tab moves the focus: it types nothing, chooses no one.
+        let selected = s.greeter.selected();
+        let _ = s
+            .greeter
+            .update(Message::Key(Some(Step::Tab { back: false })));
+        assert_eq!(s.greeter.selected(), selected);
+        assert_eq!(s.greeter.password_len(), 0);
+    }
+
+    /// The keys typed during the entrance go into the field: it takes them at once.
+    #[test]
+    fn the_keys_of_the_entrance_reach_the_field() {
+        let mut s = screen((1920.0, 1080.0));
+        s.greeter.set_elapsed(Duration::ZERO);
+        let size = (1920.0, 1080.0);
+        let mut ui = Simulator::with_size(lock::settings(), size, s.greeter.view(s.primary));
+        let _ = ui.click(sherlock_ui::lock::screen::PASSWORD);
+        let _ = ui.typewrite("ab");
+        let typed = ui
+            .into_messages()
+            .filter(|m| matches!(m, Message::Typed(_)))
+            .count();
+        assert_eq!(typed, 2);
+    }
+
     /// Sherlock looks down at the field while keys come in it, then ahead again.
     #[test]
     fn sherlock_looks_at_the_field_while_typing() {

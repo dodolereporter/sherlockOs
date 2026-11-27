@@ -55,7 +55,14 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   fade in, 70 ms apart. Later, the form comes on demand (`src/form.rs`) the same way. A key
   once the form shows ends the animations: typing is never slowed down.
 - **The key that brings the form is not lost:** a letter, a digit or a sign goes into the field;
-  Space and Enter only bring the form (Enter sends nothing to PAM). Escape sends the form away.
+  Space and Enter only bring the form (Enter sends nothing to PAM). Escape empties the field;
+  on an empty field, it sends the form away.
+- **The keyboard stays in the field** (as on macOS): the field takes it as soon as the form
+  shows, without a click (when its surface comes, at its first size and first frame, and when
+  the form comes back), and gets it back after a wrong password, a click on the eye, on a
+  machine button or anywhere on the screen, and after Escape. The keys typed during the entrance
+  go into it. Tab goes from the field to the eye, the arrow and the machine buttons, and back
+  (`sherlock_ui::focus`: Enter or Space presses the button that has the focus, its ring shows).
 - **Leaving:** after 20 s without input (unless PAM is checking), the form leaves in reverse
   order, and the field empties, the eye closed.
 - **Sleep:** confirming « Veille » sends the form away and wipes the field first. The 20 s are
