@@ -29,6 +29,9 @@ use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
 
+/// The still picture of Sherlock, until his model is read or without it.
+const SHERLOCK: &[u8] = include_bytes!("../../../docs/design/images/sherlock-neutre.png");
+
 /// The model of Sherlock, once read (it is not part of `Message`'s `Debug`).
 #[derive(Clone)]
 pub struct Mascot(pub Arc<Model>);
@@ -602,13 +605,27 @@ impl Lock {
             diameter + ui::BUBBLE_GAP + ui::NAME_SIZE + ui::NAME_GAP + 2.0 * ui::RISE,
         );
         let gaze = form::gaze(field, self.elapsed()).then_some(below);
-        let mascot = Sherlock3d::new(self.mascot.as_ref().map(|m| m.0.clone()))
-            .mood(self.mood())
-            .look_at(gaze)
-            .background(fill)
-            .paused(!self.form.shown())
+        // Without the model, the still picture of the boards, its top in the bubble. With it,
+        // the 3D widget, which falls back to the still picture itself in software.
+        let mascot: Element<'_, Message> = match &self.mascot {
+            Some(Mascot(model)) => Sherlock3d::new(Some(model.clone()))
+                .mood(self.mood())
+                .look_at(gaze)
+                .background(fill)
+                .paused(!self.form.shown())
+                .width(side)
+                .height(side)
+                .into(),
+            None => container(
+                image(image::Handle::from_bytes(SHERLOCK))
+                    .height(side * 1.15)
+                    .opacity(self.presence(1)),
+            )
+            .padding(Padding::default().top(side * 0.1))
             .width(side)
-            .height(side);
+            .align_x(Alignment::Center)
+            .into(),
+        };
         // The round cream bubble, clipped: the still picture of software fills it like the 3D.
         let bubble = container(mascot)
             .width(side)
