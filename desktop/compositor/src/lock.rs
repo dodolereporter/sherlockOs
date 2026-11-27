@@ -320,9 +320,11 @@ impl State {
     /// An input while locked: the lock program holding the lock is pinged, which only an event
     /// loop alive answers (lot D-25f).
     pub(crate) fn ping_lock_program(&mut self) {
+        let recent = self.lock.pinged.is_some_and(|at| at.elapsed() < PING_EVERY);
+        // Screens off, the program waits for its frame callbacks, sent slowly (lot D-38).
+        let on = self.power_phase() == crate::power::Phase::On;
         let lock = &mut self.lock;
-        let recent = lock.pinged.is_some_and(|at| at.elapsed() < PING_EVERY);
-        if !lock.locked || lock.owner.is_none() || lock.ping.is_some() || recent {
+        if !on || !lock.locked || lock.owner.is_none() || lock.ping.is_some() || recent {
             return;
         }
         let Some(shell) = lock.shell.as_ref().filter(|s| s.alive()) else {
@@ -561,6 +563,10 @@ impl State {
         }
         if self.lock.synced.is_none_or(|at| at.elapsed() >= LOG_SYNC) {
             self.sync_log();
+        }
+        // The screens off or coming back: the time of a ping pending starts again.
+        if self.power_phase() != crate::power::Phase::On && self.lock.ping.is_some() {
+            self.lock.ping = Some(Instant::now());
         }
         if self
             .lock

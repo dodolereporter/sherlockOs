@@ -42,7 +42,6 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent},
     },
-    desktop::layer_map_for_output,
     output::{Mode, Output, OutputModeSource, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
@@ -617,7 +616,7 @@ impl Backend {
         }
         head.pacing.presented();
         let output = head.output.clone();
-        send_frames(state, &output);
+        state.send_frames(&output);
         self.render(state, crtc);
     }
 
@@ -776,7 +775,7 @@ impl Backend {
             tracing::info!(animation = animating, "measure: {period}");
         }
         if shown {
-            send_frames(state, &output);
+            state.send_frames(&output);
         } else {
             self.estimate(crtc, period);
         }
@@ -795,22 +794,6 @@ fn send_hidden_frames(state: &State) {
             state.send_window_frame(window, output, time);
         }
     }
-}
-
-/// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the lock
-/// surface.
-fn send_frames(state: &State, output: &Output) {
-    let time = state.start_time.elapsed();
-    let throttle = Some(Duration::ZERO);
-    for window in state.space.elements() {
-        if state.window_output(window).as_ref() == Some(output) {
-            state.send_window_frame(window, output, time);
-        }
-    }
-    for layer in layer_map_for_output(output).layers() {
-        layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
-    }
-    state.send_lock_frames(output, time);
 }
 
 #[cfg(test)]

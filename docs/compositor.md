@@ -2370,6 +2370,11 @@ rectangle (`Item::Squashed`); the line and the dot are shapes.
   asked for); the real session turns each screen off once (`DrmCompositor::clear`, DPMS off), and
   the next frame queued turns it on again. Only the card already driven is touched: the NVIDIA
   card is never opened. A locked frame is not needed while dark: the lock is confirmed at once.
+- **Frames while dark.** Nothing is drawn, but every client still gets its frame callbacks,
+  once a second (`power::DARK_FRAMES`): a client that waits for its callback before it presents
+  again (Mesa's Vulkan and EGL do) would otherwise stay blocked, the lock program first. While
+  the screens are off or coming back, the lock program is not pinged, and the time of a ping
+  pending starts again (lot D-25f).
 - **Back.** A key, the pointer, a click, a gesture, the lid opened or the wake-up
   (`PrepareForSleep(false)`) bring the screens back; the key or the click that wakes them goes
   nowhere else (the pointer still moves).

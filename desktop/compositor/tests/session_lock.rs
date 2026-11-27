@@ -33,6 +33,7 @@ mod tests {
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop,
         protocol::{
             wl_buffer::WlBuffer,
+            wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
             wl_keyboard::{self, WlKeyboard},
             wl_output::WlOutput,
@@ -84,6 +85,8 @@ mod tests {
         lock_sizes: Vec<(u32, u32)>,
         locked: bool,
         finished: bool,
+        /// Frame callbacks done.
+        frames: usize,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Seen {
@@ -218,6 +221,21 @@ mod tests {
                 surface.ack_configure(serial);
                 seen.lock_size = Some((width, height));
                 seen.lock_sizes.push((width, height));
+            }
+        }
+    }
+
+    impl Dispatch<WlCallback, ()> for Seen {
+        fn event(
+            seen: &mut Self,
+            _: &WlCallback,
+            event: wl_callback::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_callback::Event::Done { .. } = event {
+                seen.frames += 1;
             }
         }
     }
@@ -1435,5 +1453,41 @@ mod tests {
             !h.peers[locker].seen.keys.contains(&evdev(KEY_F2)),
             "the switch goes to no client"
         );
+    }
+
+    #[test]
+    fn with_the_screens_off_the_lock_program_still_gets_frames_and_is_not_taken_for_hung() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.set_lock_ping_timeout(Duration::from_millis(300));
+        h.state.screens_off(Then::Stay);
+        after_the_animation(&mut h);
+        assert!(h.state.screens_dark());
+
+        // Dark, nothing is drawn, but the frame callback it waits for still comes, slowly.
+        let qh = h.peers[locker].qh();
+        let _callback = locking.surface.frame(&qh, ());
+        locking.surface.commit();
+        h.run_until("a frame callback while dark", |h| {
+            h.peers[locker].seen.frames >= 1
+        });
+        // It presents again.
+        h.peers[locker].show(&locking.surface, 800, 600);
+        // A key while dark wakes the screens: no ping counts while they are off.
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        after_the_animation(&mut h);
+        assert_eq!(h.state.power_phase(), Phase::On);
+        // Back on, it answers its pings, and stays.
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(600));
+        assert!(h.lock_surface_drawn(), "its image shows");
+        assert!(h.state.lock_program_connected());
+        assert_eq!(h.state.lock_attempts(), 0, "never taken for hung");
+        assert!(h.state.is_locked());
     }
 }

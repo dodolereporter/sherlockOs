@@ -633,6 +633,23 @@ impl State {
         }
     }
 
+    /// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the
+    /// lock surface. After each frame of a screen, and slowly while the screens are dark.
+    pub fn send_frames(&self, output: &Output) {
+        let time = self.start_time.elapsed();
+        for window in self.space.elements() {
+            if self.window_output(window).as_ref() == Some(output) {
+                self.send_window_frame(window, output, time);
+            }
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        self.send_lock_frames(output, time);
+    }
+
     /// Something that may show on a screen changed: the screens draw a frame, those of the
     /// real session at their next vertical blank. Called for every client request, input event,
     /// screen change and wallpaper loaded, and by the methods that change the desktop.

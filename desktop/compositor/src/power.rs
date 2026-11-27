@@ -26,7 +26,7 @@ use smithay::{
     delegate_idle_inhibit,
     reexports::{
         calloop::{
-            LoopHandle,
+            LoopHandle, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
         wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
@@ -42,6 +42,8 @@ use crate::{
     render::Item,
 };
 
+/// How often the clients get a frame callback while the screens are dark.
+pub const DARK_FRAMES: Duration = Duration::from_secs(1);
 /// How often the setting is read again.
 const RELOAD_EVERY: Duration = Duration::from_secs(2);
 
@@ -121,6 +123,8 @@ pub(crate) struct Power {
     inhibitors: Vec<WlSurface>,
     /// logind blocks `idle` (an inhibitor of another program).
     logind_idle: bool,
+    /// The timer of the frame callbacks while dark.
+    dark_frames: Option<RegistrationToken>,
     /// The protocol's global, kept alive.
     _manager: IdleInhibitManagerState,
 }
@@ -135,6 +139,7 @@ impl Power {
             forced: None,
             inhibitors: Vec::new(),
             logind_idle: false,
+            dark_frames: None,
             _manager: IdleInhibitManagerState::new::<State>(dh),
         }
     }
@@ -251,6 +256,30 @@ impl State {
         }
     }
 
+    /// While dark, nothing is drawn, but the clients still get their frame callbacks, every
+    /// `DARK_FRAMES`: one waiting for its callback before it presents again (Mesa's Vulkan and
+    /// EGL do) would stay blocked, the lock program first, which then answers nothing.
+    fn send_dark_frames(&mut self) {
+        if self.power.dark_frames.is_some() {
+            return;
+        }
+        let timer = Timer::from_duration(DARK_FRAMES);
+        let inserted = self.loop_handle.insert_source(timer, |_, _, state| {
+            if !state.screens_dark() {
+                state.power.dark_frames = None;
+                return TimeoutAction::Drop;
+            }
+            for output in state.outputs() {
+                state.send_frames(&output);
+            }
+            TimeoutAction::ToDuration(DARK_FRAMES)
+        });
+        match inserted {
+            Ok(token) => self.power.dark_frames = Some(token),
+            Err(err) => tracing::warn!("no frame callbacks while dark: {}", err.error),
+        }
+    }
+
     /// Cleanup of each loop iteration: the animation ends.
     pub(crate) fn refresh_power(&mut self) {
         let elapsed = |since: Duration| self.now().saturating_sub(since) >= ui::DURATION;
@@ -260,6 +289,7 @@ impl State {
                 self.power.phase = Phase::Dark { then };
                 self.queue_redraw();
                 self.release_sleep();
+                self.send_dark_frames();
             }
             Phase::Coming { since } if elapsed(since) => {
                 self.power.phase = Phase::On;
