@@ -227,10 +227,15 @@ mod tests {
         let saved = s.memory.0.lock().unwrap().clone().unwrap();
         assert_eq!(saved.last_user.as_deref(), Some("invite"));
         assert_eq!(saved.session("invite"), Some("sherlockos"));
-        assert!(
-            s.greetd.0.lock().unwrap().is_empty(),
-            "the fake was not the one asked"
-        );
+        // The screen asked greetd on a thread of its own, for that user and session.
+        let asked = || s.greetd.0.lock().unwrap().clone();
+        for _ in 0..200 {
+            if !asked().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(asked(), [("invite".to_owned(), "sherlockos".to_owned())]);
     }
 
     #[test]
