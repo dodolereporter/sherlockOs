@@ -18,9 +18,11 @@ application ──D-Bus──▶ xdg-desktop-portal ──D-Bus──▶ sherloc
 | --- | --- |
 | `screencast.rs` | `org.freedesktop.impl.portal.ScreenCast` version 5 and its sessions (`org.freedesktop.impl.portal.Session`); `org.sherlockos.ScreenShare1` for the bar |
 | `picker.rs` | The request written to the picker and its answer, bounded and checked |
+| `chooser.rs` | The picker's window (`sherlock-portal --pick`) |
 | `capture.rs` | The capture client on the compositor's shell socket: screens, windows, frames |
 | `pipewire.rs` | A PipeWire video source, `libpipewire-0.3.so.0` loaded at run time |
 | `pod.rs` | The SPA pods of the format and of the buffers, written by hand |
+| `session/` | `sherlockos.portal` and the D-Bus service file |
 
 ## The calls
 
@@ -57,14 +59,59 @@ application ──D-Bus──▶ xdg-desktop-portal ──D-Bus──▶ sherloc
   4 KiB and must name sources offered; the request's fields are cut at 512 characters, without
   tabs nor line ends.
 
-## The picker and the bar (lot D-28d4)
+## The picker
 
 `sherlock-portal --pick` reads the request on its standard input and writes the numbers of the
-sources chosen on its standard output, nothing to cancel (`picker.rs`). Its window comes with lot
-D-28d4, as do the bar's indicator, which follows `org.sherlockos.ScreenShare1` (signal
-`Changed(as)`, methods `Sharing` and `StopAll`, at `/org/sherlockos/ScreenShare`), and the files
-that make `xdg-desktop-portal` use this backend. Until then the backend is not registered, and
-`--pick` cancels every request.
+sources chosen on its standard output, nothing to cancel. Its window covers the screen as a
+layer-shell overlay with the keyboard: a veil, and in the middle a glass panel.
+
+- The title says who asks: « Que veux-tu partager avec Discord ? » (the last part of the
+  `app_id`; « cette application » without one, as for an X11 application).
+- « Écran » and « Fenêtre », a segmented control when both may be shared (Tab goes from one to
+  the other); the screens first.
+- A grid of tiles, each with its thumbnail (taken at start, side by side, 1.5 s at most; a tile
+  whose picture came late shows without it), the screen's description or the window's title
+  ending with « … » when long, and the screen's name or the window's application below. The
+  chosen tile has the ring of the chosen wallpaper in Control Room; hover and press veil it.
+  The grid takes as many columns as fit (`sherlock_ui::screen_share::columns`) and scrolls past
+  86 % of the screen's height.
+- « Annuler » and « Partager », disabled until something is chosen. A single screen is chosen
+  already. Enter shares, Escape or a click beside the panel cancels, the arrows move the choice.
+- It grows from 0.92 and fades in on the panels' spring, and shrinks and fades out the same way
+  before it answers.
+
+## The bar's indicator
+
+While an application shares, the bar shows « ● Arrêter le partage » before the status pill; one
+click stops every share. The portal announces the applications sharing on the session bus
+(`org.sherlockos.ScreenShare1` at `/org/sherlockos/ScreenShare`, signal `Changed(as)`, method
+`StopAll`, method `Sharing`); the bar listens to that signal and to the portal leaving the
+bus, and calls `StopAll` without starting the portal. It grows in and fades in, and out.
+
+## Installation
+
+`just install-session` builds `sherlock-portal` and prints where its files go:
+
+- the program in `/usr/local/libexec/sherlockos/`;
+- `sherlockos.portal` in `/usr/share/xdg-desktop-portal/portals/`, where `xdg-desktop-portal`
+  reads its backends;
+- the D-Bus service file in `/usr/local/share/dbus-1/services/`, so the bus starts it;
+- `sherlockos-portals.conf` gives it `org.freedesktop.impl.portal.ScreenCast`, in the SherlockOS
+  session only (`XDG_CURRENT_DESKTOP=SherlockOS`).
+
+PipeWire must run (`pipewire`, `wireplumber`, Debian's default). The session already sets
+`XDG_SESSION_TYPE=wayland` and passes `WAYLAND_DISPLAY` to the bus's services.
+
+### What each application needs
+
+- **Firefox** (Wayland): nothing.
+- **Chrome and Chromium** (Wayland, or X11 with `XDG_SESSION_TYPE=wayland`): nothing since
+  Chrome 110, where `WebRTCPipeWireCapturer` is on by default.
+- **Discord, Vesktop and other Electron applications**: under XWayland, Chromium also takes the
+  portal when `XDG_SESSION_TYPE=wayland`, which the session sets. If an older Electron shows its
+  own list of X11 windows instead, start it with
+  `--enable-features=WebRTCPipeWireCapturer`, or on Wayland with `--ozone-platform-hint=auto`
+  (Vesktop: its setting « Native Wayland »). Push to talk under XWayland is another lot (J-16).
 
 ## Tests
 
@@ -72,5 +119,7 @@ that make `xdg-desktop-portal` use this backend. Until then the backend is not r
 - `picker.rs`: a request reads back without tabs nor line ends; the answer chooses among what
   is offered, one unless several are allowed.
 - `screencast.rs`: the options keep what can be shared; a stream says its kind and size.
+- `chooser.rs`: screens first and windows after Tab; one choice or several, the arrows; sharing
+  needs a choice; labels; thumbnails shrunk into RGBA.
 - Not tested in CI: PipeWire itself (no daemon there) and the bus with `xdg-desktop-portal`;
   see the pull requests for the trial on the machine.

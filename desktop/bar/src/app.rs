@@ -18,7 +18,7 @@ use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::{self, BatteryMark, Radio, WifiMark};
 use sherlock_ui::surface::{self, Elevation};
-use sherlock_ui::{metrics, panels, strings, typography};
+use sherlock_ui::{metrics, panels, screen_share, strings, typography};
 
 mod global;
 
@@ -103,6 +103,10 @@ pub struct Bar {
     pub link: Option<Link>,
     /// The Bluetooth radio; `None` without an adapter: no indicator.
     pub radio: Option<Radio>,
+    /// The applications sharing the screen through the portal (lot D-28d): the indicator
+    /// shows while there is one, and fades in and out (`share_unfold`).
+    pub sharing: Vec<String>,
+    share_unfold: Unfold,
     /// The menus of the active application (lot D-36).
     pub global: GlobalMenu,
     /// The name of each application by its `app_id`, from its desktop entry: `None` while it
@@ -149,6 +153,10 @@ pub enum Message {
     Link(Option<Link>),
     /// The Bluetooth radio as BlueZ reports it.
     Radio(Option<Radio>),
+    /// The applications sharing the screen, from the portal.
+    Sharing(Vec<String>),
+    /// « Arrêter le partage ».
+    StopSharing,
     ToggleMenu,
     MenuKey(menu::Key),
     Hover(usize),
@@ -240,6 +248,7 @@ impl Bar {
             || self.shape.running()
             || (self.menu.is_some() && self.menu_unfold.running())
             || self.global.running()
+            || self.share_unfold.running()
             || (self.panel.is_some() && (self.unfold.running() || self.quick.running() || swapping))
     }
 
@@ -283,6 +292,7 @@ impl Bar {
             Subscription::run(|| watch(Pactl::default(), "sound")).map(Message::Sound),
             Subscription::run(live::link).map(Message::Link),
             Subscription::run(live::bluetooth).map(Message::Radio),
+            Subscription::run(crate::screen_share::watch).map(Message::Sharing),
             Subscription::run(|| watch(Auto::default(), "workspaces")).map(Message::Desktop),
             self.shell_events
                 .as_ref()
@@ -305,6 +315,23 @@ impl Bar {
             Message::Sound(sound) => self.sound = Some(sound),
             Message::Link(link) => self.link = link,
             Message::Radio(radio) => self.radio = radio,
+            Message::Sharing(apps) => {
+                let now = animated::clock();
+                match (self.sharing.is_empty(), apps.is_empty()) {
+                    (true, false) => self.share_unfold = Unfold::opening(now),
+                    (false, true) => self.share_unfold.fold(now, false),
+                    _ => {}
+                }
+                self.sharing = apps;
+            }
+            Message::StopSharing => {
+                return Task::perform(crate::screen_share::stop_all(), |done| {
+                    if let Err(error) = done {
+                        tracing::warn!(%error, "cannot stop the screen share");
+                    }
+                    Message::Pointer
+                });
+            }
             Message::Desktop(desktop) => {
                 self.desktop = Some(desktop);
                 return self.reshape(Instant::now()).chain(self.follow_app_menu());
@@ -473,6 +500,7 @@ impl Bar {
                 let at = animated::at(now);
                 self.unfold.tick(at);
                 self.menu_unfold.tick(at);
+                self.share_unfold.tick(at);
                 self.quick.tick(at);
                 if let Some((_, motion)) = &mut self.swap {
                     motion.tick(at);
@@ -1006,6 +1034,11 @@ impl Bar {
     ) -> Element<'static, Message> {
         let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
         let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
+        // Shown while something is shared, and while it fades out after.
+        let fading = self.share_unfold.folding() && !self.share_unfold.folded();
+        if !self.sharing.is_empty() || fading {
+            buttons = buttons.push(self.view_sharing());
+        }
         let status: Vec<_> = self
             .indicators()
             .into_iter()
@@ -1035,6 +1068,25 @@ impl Bar {
             buttons = buttons.push(ring(panels::bar_button(line, open, toggle), Target::Clock));
         }
         buttons.into()
+    }
+
+    /// « Arrêter le partage », after a salmon dot, while something is shared: a click stops
+    /// every share. It grows in and fades in, and out.
+    fn view_sharing(&self) -> Element<'static, Message> {
+        let p = color::palette();
+        let dot = ui::body(screen_share::text::DOT).color(p.salmon);
+        let label = ui::body(screen_share::text::STOP).color(p.text_primary);
+        let line = row![dot, label]
+            .spacing(metrics::GAP_ICON)
+            .align_y(Alignment::Center);
+        let button = panels::bar_button(line, false, Some(Message::StopSharing));
+        let opacity = self.share_unfold.opacity();
+        let scale = screen_share::INDICATOR_SCALE
+            + (1.0 - screen_share::INDICATOR_SCALE) * self.share_unfold.settled();
+        animated::reveal(button)
+            .opacity(opacity)
+            .scale(scale, (0.5, 0.5))
+            .into()
     }
 
     /// Bluetooth, network, sound and battery, each with its indicator, drawn from their live
