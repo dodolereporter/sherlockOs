@@ -100,7 +100,7 @@ type Started = Arc<Mutex<Vec<Command>>>;
 fn recorded(catalog: Catalog) -> (View, Started) {
     let started: Started = Arc::default();
     let record = Arc::clone(&started);
-    let spawn: launcher::app::Spawn = Arc::new(move |command: &Command| {
+    let spawn: launcher::app::Spawn = Arc::new(move |command: &Command, _: Option<&str>| {
         if let Ok(mut record) = record.lock() {
             record.push(command.clone());
         }

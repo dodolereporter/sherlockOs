@@ -140,6 +140,8 @@ pub struct Dock {
     pub leaving: Vec<Leaving>,
     /// Applications started from the dock, bouncing until their first window.
     pub launches: Vec<Launch>,
+    /// Launches waiting for the activation token of their click (lot Q-52).
+    asks: Vec<iced_exwlshell::reexport::ActivationTokenSink>,
     /// Applications whose window asks for attention, bouncing a few hops (lot Q-52), and the
     /// windows that asked at the last list: a window that keeps asking bounces once.
     pub calls: Vec<(Target, Bounce)>,
@@ -197,6 +199,7 @@ impl Dock {
             tracks: Vec::new(),
             leaving: Vec::new(),
             launches: Vec::new(),
+            asks: Vec::new(),
             calls: Vec::new(),
             calling: Vec::new(),
             dropping: None,
@@ -635,6 +638,21 @@ impl Dock {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.react(message);
+        // The launches of this message ask for the token of the click first (lot Q-52).
+        let asks = std::mem::take(&mut self.asks);
+        match self.surface {
+            Some(id) if !asks.is_empty() => {
+                let asks = asks
+                    .into_iter()
+                    .map(|sink| Task::done(Message::RequestActivationToken { id, sink }));
+                Task::batch(asks).chain(task)
+            }
+            _ => task,
+        }
+    }
+
+    fn react(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Surface(id) => {
                 self.surface = Some(id);
@@ -1463,12 +1481,17 @@ impl Dock {
             tracing::info!(app = entry.id, "already starting");
             return;
         }
-        match launch::launch(entry, what) {
-            Ok(pid) => tracing::info!(app = entry.id, pid, ?what, "started"),
-            Err(error) => {
-                tracing::warn!(app = entry.id, %error, "cannot start");
-                return;
-            }
+        // Started once the compositor gave the activation token of the click (lot Q-52): an
+        // application already open that gets the launch brings its window forward with it.
+        let app = entry.clone();
+        let start =
+            move |token: Option<String>| match launch::launch_with(&app, what, token.as_deref()) {
+                Ok(pid) => tracing::info!(app = app.id, pid, ?what, "started"),
+                Err(error) => tracing::warn!(app = app.id, %error, "cannot start"),
+            };
+        match self.surface {
+            Some(_) => self.asks.push(launch::after_token(start)),
+            None => start(None),
         }
         let before = self.windows.as_ref().map(|w| {
             let owned = w.owned(|a| item.owns(a));

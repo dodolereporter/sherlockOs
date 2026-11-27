@@ -795,17 +795,31 @@ impl View {
         else {
             return Task::none();
         };
-        match (self.spawn)(&tile.command) {
-            Ok(pid) => {
-                tracing::info!(id = tile.id(), pid, "started");
-                self.launched = Some(place);
-                self.close()
-            }
-            Err(error) => {
-                tracing::error!(%error, "cannot start the application");
+        let command = tile.command.clone();
+        self.launched = Some(place);
+        self.start(command)
+    }
+
+    /// Starts `command` once the compositor gave the activation token of the click (lot Q-52):
+    /// an application already open that gets the launch brings its window forward with it.
+    /// The view fades out meanwhile; a start that fails is only logged.
+    fn start(&mut self, command: Command) -> Task<Message> {
+        let spawn = Arc::clone(&self.spawn);
+        let start = move |token: Option<String>| match spawn(&command, token.as_deref()) {
+            Ok(pid) => tracing::info!(program = ?command.program, pid, "started"),
+            Err(error) => tracing::error!(%error, "cannot start the application"),
+        };
+        let ask = match self.surface {
+            Some(id) => Task::done(Message::RequestActivationToken {
+                id,
+                sink: launcher::launch::after_token(start),
+            }),
+            None => {
+                start(None);
                 Task::none()
             }
-        }
+        };
+        ask.chain(self.close())
     }
 
     /// Opens the menu of tile `place` where the pointer is.
@@ -878,16 +892,7 @@ impl View {
         let Some(command) = command else {
             return Task::none();
         };
-        match (self.spawn)(&command) {
-            Ok(pid) => {
-                tracing::info!(pid, "shown in Evidence");
-                self.close()
-            }
-            Err(error) => {
-                tracing::error!(%error, "cannot start Evidence");
-                Task::none()
-            }
-        }
+        self.start(command)
     }
 
     /// Fades the view out; at the last frame, the surface goes, or the program ends.

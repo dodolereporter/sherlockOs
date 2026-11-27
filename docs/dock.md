@@ -410,6 +410,12 @@ author's choice, as on Windows and Plasma:
 | Is in front with a single window shown | Minimizes it |
 | Middle button, or Ctrl+click | Starts it again for a new window (see below), whatever its windows |
 
+A start waits for the `xdg-activation-v1` token of the click, given to the application in
+`XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID` (lot Q-52): an application with a single
+instance, already open, brings its window forward with it. Without a token it starts all the
+same. The icon bounces from the click; a start that fails is logged, and the bounce stops at
+its timeout.
+
 **Several windows.** As on macOS, an application has one icon however many windows it has, and
 whatever their kind: a Wayland window carries an `app_id`, an X11 one a class, and both go to
 the icon whose desktop entry owns them (see Open windows). The most recent window is the one
