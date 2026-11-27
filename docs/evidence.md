@@ -79,6 +79,25 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   most 20 000 entries within 500 ms, offers 200 folders at most, and leaves out names that are
   not UTF-8 or hold a control character. A stale read, overtaken by a newer one, is dropped.
   A typed path longer than 4096 bytes, or with a control character, is refused.
+- **Images.** The preview reads an image's size from its header before decoding it: beyond
+  32 million pixels or 16 384 on a side, only its information shows (a 420 KB PNG can hold
+  12000 × 12000 pixels, 430 MB decoded). The decoder may hold 192 MB at most. A decode that is
+  no longer the last one asked for, or that ran out of time, stops at its next read, so that
+  images run through with the arrows never pile up. Application icons: 1 MB per file, 1024
+  pixels on a side.
+- **Disguised files.** The preview reads the first bytes of the selected file. A program (ELF,
+  Windows, `#!`) named like a document, or an image, PDF or ZIP named as another of these
+  kinds, gets a warning in salmon above the preview: « Attention : malgré son nom en .pdf, ce
+  fichier est un programme. »
+- **No program through xdg-open.** A file opened without an application chosen for its type
+  goes to `xdg-open`, which on some desktops runs launchers. An executable file, a `.desktop`
+  launcher, or a file that starts like a binary or a script, is never handed to it: Evidence
+  says it does not run programs. A file that cannot be read in time counts as one.
+- **Copies drop setuid and setgid**, as `cp` without `-p` does; the sticky bit of a folder
+  stays.
+- **Small files stay small.** Trash records and `user-dirs.dirs` are read up to 64 KB, a named
+  pipe in their place is never waited on.
+- **Renames refuse control characters** (a line feed, an escape, a tab), as they refuse « / ».
 - **Names shown safely.** In the listing, the preview and the breadcrumb, a control character
   of a name shows as its picture (␊ for a line feed, ␛ for an escape) and a direction mark
   (U+202E and its kin, which can make a name read « exe.txt » for an `.exe`) as �.
