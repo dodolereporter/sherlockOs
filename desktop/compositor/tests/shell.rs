@@ -1667,7 +1667,7 @@ mod tests {
         let mut h = Harness::start();
         let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
         let (id, _, version) = name.unwrap().clone();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4, "version 4: App Expose");
         let _manager: SherlockShellManagerV1 =
             h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
         let done = h.shell.client.done;
