@@ -6,6 +6,10 @@
 //! Pinned=discord;steam
 //! ```
 //!
+//! An `Id` is the application's: a `;` in it is written `\;`, as in a desktop entry, so that
+//! it never splits the list (lot D-45c). A file written before reads the same: its ids had no
+//! escape, and the next change writes it in this form.
+//!
 //! A change reads the file again just before it writes it, so that it starts from what is there
 //! (another bar, the user's editor), and keeps its other lines. It is read with a bound and
 //! written by `mime_apps::write_atomically`, like every settings file of the desktop: a reader
@@ -71,7 +75,7 @@ pub fn change(path: &Path, change: &Change) -> io::Result<Vec<String>> {
     let mut file = read(path)?;
     let mut pinned = file.list(GROUP, PINNED);
     change.apply(&mut pinned);
-    file.set(GROUP, PINNED, &pinned.join(";"));
+    file.set_list(GROUP, PINNED, &pinned);
     mime_apps::write_atomically(path, &file.to_text())?;
     Ok(pinned)
 }
