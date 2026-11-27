@@ -4,6 +4,7 @@ description = "Application launcher of the desktop, a layer-shell overlay opened
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
