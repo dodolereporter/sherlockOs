@@ -33,7 +33,7 @@ Surface):
 | Neighbours | Pushed by the flex layout | The bar widens on both sides, the gap of 8 stays |
 | Label | Cream pill 108 above the bar, the icon closest to the pointer, `opacity 120ms` | Same, centered on the icon, faded in 120 ms |
 | Dot | 5, cream, 9 below the icon | Same; green for the active application (see Differences) |
-| Sherlock | In the middle | In the middle, the author's Sherlock tile (D-03) |
+| Sherlock | In the middle | In the middle at first, the author's Sherlock tile (D-03); moved or taken out like a pinned application since D-21h |
 
 ## Architecture
 
@@ -86,9 +86,9 @@ desktop entries and icon themes. The menu reuses `menu`,
 The layer-shell surface is anchored to the bottom only, so the compositor centers it, on the
 `Top` layer. Since D-18c2 the surface reaches the screen edge (margin 0) and the gap of 8 below
 the bar is inside it (`Geometry::gap`): a dock brought back over a maximized window keeps the
-pointer up to the edge (see Hiding). It declares an exclusive zone of 84, the gap and the bar's
-height, the 76 of the bar and the margin of 8 it reserved before: maximized windows stop just
-above the bar. The keyboard comes on demand (`OnDemand`), on a click
+pointer up to the edge (see Hiding). In the `never` mode it declares an exclusive zone of 84,
+the gap and the bar's height, the 76 of the bar and the margin of 8 it reserved before:
+maximized windows stop just above the bar. In the other modes, none (lot D-21g). The keyboard comes on demand (`OnDemand`), on a click
 into the dock, for its keyboard navigation.
 
 The surface is taller and wider than the bar: the magnified icons grow above the bar (88 at
@@ -145,9 +145,17 @@ wl_surface#28.set_input_region(wl_region#41)
 
 | Mode | The dock |
 | --- | --- |
-| `smart` (default) | Shown with its exclusive zone, except while a maximized, fullscreen or snapped window is on its screen |
+| `smart` (default) | Shown, except while a maximized, fullscreen or snapped window is on its screen; never an exclusive zone |
 | `always` | Hidden, without exclusive zone |
 | `never` | Always shown, with its exclusive zone |
+
+**A dock that hides never reserves room** (lot D-21g). As on macOS, the work area depends on
+the mode alone: only `never` keeps its exclusive zone. In `smart` and `always` the zone stays -1
+in every state (shown, covered, sliding, brought back by the pointer, hidden again), and the
+dock goes over the windows. Before, `smart` took its zone back whenever no window covered it.
+The author saw a maximized Konsole shrink when the dock appeared and grow back when it hid: the
+work area followed the dock's state. A maximized window was also resized twice on the way in:
+first above the dock, then over its room once the dock gave it up.
 
 Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
 screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
@@ -155,7 +163,7 @@ screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 
 iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
-- **A window is maximized or snapped.** The dock gives up its exclusive zone at once: -1, so
+- **A window is maximized or snapped.** The dock has no exclusive zone to give up: -1, so
   that the compositor places it against the screen edge itself, never against what another surface
   reserves (a dock at the top would otherwise hide under the top bar's zone, its band below
   the bar). The compositor gives the maximized window the whole screen below the bar, the
@@ -174,9 +182,8 @@ nothing; a screen not known yet counts as uncovered.
   pointer came back, a menu is open or an icon is held. While a menu is open or an icon held,
   nothing counts and no frame is asked for; the delay starts when the menu closes or the icon
   is let go.
-- **No maximized nor snapped window any more.** The dock slides back, and takes its exclusive
-  zone again once in place: the compositor reserves the zone plus the margin, negative while the dock is
-  still sliding in, so the zone waits for the margin to be 8 again.
+- **No maximized nor snapped window any more.** The dock slides back, still without an
+  exclusive zone (lot D-21g).
 
 Frames are asked for while the dock slides and while it waits to hide. On the left and right
 edges the same happens sideways. A new mode in the configuration file applies at once.
@@ -272,7 +279,7 @@ is optional:
 
 ```ini
 [Dock]
-Pinned=evidence;org.kde.konsole;org.kde.kate;app.zen_browser.zen;
+Pinned=evidence;org.kde.konsole;sherlock;org.kde.kate;app.zen_browser.zen;
 IconTheme=breeze
 IconSize=52
 Magnification=true
@@ -290,6 +297,7 @@ Position=bottom
 | `MagnificationFactor` | From 1.0 to 2.0 (`dock::MAGNIFICATION_MIN`, `MAX`) | 1.7 (`metrics::DOCK_MAGNIFICATION`) |
 | `AutoHide` | `never`, `always`, `smart` (see Hiding) | `smart` |
 | `Position` | `bottom`, `top`, `left`, `right` | `bottom` |
+| `ShowSherlock` | `true`, `false`: Sherlock in the dock | `true` |
 
 Words are read without regard to case. A value that cannot be read or is out of its bounds is
 ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
@@ -318,10 +326,18 @@ kept, even when the target does not exist yet. `to_text` starts from the text re
 the keys whose value changed since (D-26a): comments, unknown keys and a value the file got
 wrong stay as they were.
 
-`Pinned` lists desktop file ids (`.desktop` accepted). Sherlock is not in it: it is always in
-the middle (as many applications on its left as on its right, one more on the left for an odd
-count). An id that is not installed is skipped and logged. An empty `Pinned=` is a choice:
-Sherlock alone.
+`Pinned` lists desktop file ids (`.desktop` accepted), and Sherlock's place as the token
+`sherlock` (`dock_config::SHERLOCK`, lot D-21h). Without the token, a file written before
+Sherlock could move, Sherlock is in the middle (as many applications on its left as on its
+right, one more on the left for an odd count), and the file is not written for it: the token is
+written, where Sherlock is shown, the first time the pinned list changes (a drag, « Garder dans
+le Dock », « Retirer du Dock »), so that Sherlock stays where it was rather than going back to
+the middle. `ShowSherlock=false` takes it out of the dock, token or not. An id that is not
+installed is skipped and logged. An empty `Pinned=` is a choice: Sherlock alone.
+
+Before writing its pinned list, the dock reads the file again (`pins::write`): a change another
+program made since the dock last read it, a setting of Control Room or a comment, is kept. The
+dock's list wins over a list changed meanwhile: it is the order on screen.
 
 Without `Pinned`, the dock fills five roles with what is installed and shown in menus: files,
 terminal, editor, browser, games. For each, our own application (Evidence, desktop file id
@@ -417,8 +433,7 @@ slate tile, drawn by `sherlock_ui::dock::applications_icon` in the style of the 
 icons. A click starts the applications view (`docs/apps.md`), `$SHERLOCKOS_BIN/sherlockos-apps`
 or `sherlockos-apps` in the `PATH`; started again while open, the view closes, so the button
 toggles it. It is not in `Pinned`, cannot be dragged, and the dragged applications never take
-its place (`drag::orders` keeps it first). Its menu, like Sherlock's, has every entry disabled.
-Sherlock stays in the middle of the pinned applications.
+its place (`drag::orders` keeps it first). Its menu has every entry disabled.
 
 ![The « Applications » button, the pointer over it](../desktop/dock/screenshots/dock-applications.png)
 
@@ -470,10 +485,10 @@ the dock, which stays put on the screen when the surface changes size.
 ![An icon dragged between two others](../desktop/dock/screenshots/dock-drag.png)
 
 **Drag and drop.** The left button now acts when it comes up: pressed and released on the same
-icon without moving 4 px, it is a click. Past 4 px, a pinned application follows the pointer
-(Sherlock and the open applications that are not pinned do not move). Along the dock it takes
-the place nearest the pointer among the pinned applications, Sherlock staying in their middle:
-the dock tries each place with the current sizes and keeps the one that puts the icon closest
+icon without moving 4 px, it is a click. Past 4 px, a pinned application or Sherlock follows
+the pointer (the open applications that are not pinned and the « Applications » button do not
+move). Along the dock it takes the place nearest the pointer among the pinned icons, Sherlock
+one of them since D-21h: the dock tries each place with the current sizes and keeps the one that puts the icon closest
 to the pointer; the others make room with `SHIFT_SPRING`. Let go, it flies to its place and the
 new order is written to `dock.conf` by `dock-config` (`move_pinned`, then the atomic
 `DockConfig::save`), only if the order shown changed: a pinned application that is not
@@ -485,7 +500,8 @@ keeps the pointer until the button comes up.
 **Dragged out.** When the pointer is more than half the icon past the bar, away from the edge,
 the icon is out: its room closes, it is drawn at half opacity. Back over the dock, its room
 opens again. Let go out of the dock, a pinned application is unpinned and the file written; it
-shrinks and fades where it was let go. A pinned application that is open moves after the
+shrinks and fades where it was let go. Sherlock does the same, and `ShowSherlock=false` is
+written. A pinned application that is open moves after the
 separator instead, as with « Retirer du dock ». The icon is drawn inside the dock surface:
 higher than it, it stays at its top edge (a drag icon of its own, `wl_data_device`, is not
 offered by `iced_exwlshell`).
@@ -600,11 +616,26 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Each window, in the order they came: its title, « … » when too long, the application's name when it has none; the active one checked. A click brings it forward alone | The source can act on its windows |
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
-| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, except Sherlock |
+| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
 | Separator, then « Quitter » | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
-is disabled. « Quitter » asks each window to close (`close`, the toolkit's own close): an
+but « Retirer du Dock » is disabled.
+
+**The dock's own menu** (D-21h). A right click on the bar outside the icons, on the separator
+or between two icons, opens the dock's menu, as the Dock options of macOS, from the pointer:
+header « Dock », and « Afficher Sherlock dans le Dock », checked while Sherlock is there. It
+takes Sherlock out, or puts it back in the middle of the pinned applications, its place
+written. Sherlock is in neither the applications view nor the launcher (only « Demander à
+Sherlock », a search result), and neither can drag an icon to the dock yet: this menu is the way
+back.
+
+| Dark | Light |
+| --- | --- |
+| ![The dock's own menu, dark](../desktop/dock/screenshots/dock-own-menu-dark.png) | ![The dock's own menu, light](../desktop/dock/screenshots/dock-own-menu-light.png) |
+
+`the_docks_own_menu_renders_and_toggles_sherlock` (`tests/render.rs`) renders it in both themes
+(`dock-own-menu-{dark,light}`), 290 wide (`dock::OWN_MENU_WIDTH`) so that its entry is not cut. « Quitter » asks each window to close (`close`, the toolkit's own close): an
 application with unsaved work asks first, as on macOS. The compositor offers no confirmation of
 its own, and the dock adds none.
 
@@ -664,8 +695,8 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
 (XTest) go to `:21` only, after checking the display name.
 
 1. **Anchoring**: the dock floats 8 above the bottom edge, centered, Sherlock in the middle.
-2. **Exclusive zone**: click KWrite in the dock. Its window opens maximized and stops just above
-   the bar (y = 816 on 900), without covering it.
+2. **Exclusive zone** (`AutoHide=never`): click KWrite in the dock. Its window opens maximized
+   and stops just above the bar (y = 816 on 900), without covering it.
    Then click in the black band just above the dock (outside the bar): the click reaches the
    window (the text cursor moves there), not the dock.
 3. **Magnification**: move the pointer slowly along the dock. The icon under the pointer grows
@@ -733,6 +764,11 @@ X focus): the keyboard steps were checked in the nested KWin.
   picks no icon; crossing it keeps the magnification, leaving the band lets it go.
 - **Menu identity**: the pinned order changes while a menu is open; « Retirer du dock »
   removes the application of the menu, not the one now at its place.
+- **Sherlock** (`tests/sherlock.rs`, D-21h): dragged to the left end, the others moving aside,
+  its place written; an old file without the token keeps it in the middle and is not written by
+  a click, a drag back, a menu or a new reading; taken out from its menu and by a drag out of
+  the dock, put back from the dock's menu; a file changed by another program between the dock's
+  reading and its writing keeps that change.
 - **Writing the file**: comments kept, a value with a line break escaped, unique temporary
   files with saves from four threads at once, a symbolic link kept and its target written.
 - **Watching**: the file saved, replaced by a rename, deleted, then its folder deleted and made
@@ -787,10 +823,14 @@ X focus): the keyboard steps were checked in the nested KWin.
   that is not over yet published only at `done`, a covered screen and back, the requests
   (minimize, close, activate) on the right windows, a rectangle sent once while it stays, given
   to a window that comes, moved, then removed; and a compositor without the protocol.
-- **Hiding** (`hide.rs`, `tests/hide.rs`): on the four edges, a maximized window takes the zone
-  at once (84 reserved, then 0), the dock slides until only the band of 2 is on the screen, the
-  input region is that band on the side away from the edge, and the window restored gives the
-  zone back once the dock is in place; a window on another screen changes nothing; the edge
+- **Hiding** (`hide.rs`, `tests/hide.rs`): on the four edges, nothing reserved in `smart`, a
+  maximized window makes the dock slide until only the band of 2 is on the screen, the input
+  region is that band on the side away from the edge, and the window restored brings it back,
+  still reserving nothing; a window on another screen changes nothing; in `smart` and `always`
+  the zone stays -1 at every frame of covering, hiding, revealing, hiding again and uncovering
+  (`a_dock_that_hides_never_reserves_room`, lot D-21g), 84 in `never`. Without a screen
+  (`tests/headless.rs` of the compositor), a maximized window gets no new configure while a dock
+  without zone is revealed and hidden again; the edge
   brings the dock back over the window without zone, it hides again after the delay and not
   before, a menu holds it; `always` hidden from the start, `never` never; the icon rectangles
   on the screen, Sherlock owning no window, unchanged while the pointer magnifies or the dock

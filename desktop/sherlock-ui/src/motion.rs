@@ -254,6 +254,13 @@ pub const SPIN: Duration = Duration::from_millis(900);
 /// The positions of a turn of the loading indicator: one every 10°.
 pub const SPIN_STEPS: u32 = 36;
 
+/// Rows of a list moving to their new place, the panel holding them growing or shrinking, the
+/// selection sliding from one row to the next (lot P-02d): brisk, without overshoot, so that a
+/// row never passes its place nor the panel its height (ratio 0.97), settled in about 250 ms.
+pub const LIST_SPRING: Spring = Spring::new(520.0, 44.0);
+/// A row appearing in a list: it fades in while it slides down to its place.
+pub const LIST_APPEAR: Duration = Duration::from_millis(160);
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
@@ -304,6 +311,13 @@ pub const MENU_FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.0
 pub const MINIMIZE: Duration = Duration::from_millis(300);
 /// Scale of a window at the end of the minimize fallback, at the bottom of its screen.
 pub const MINIMIZE_SCALE: f64 = 0.2;
+
+/// A fullscreen window covers the bar and the dock (lot D-21e). The pointer rests this long
+/// against an edge before the surfaces along it come back over the window, as on macOS: a
+/// pointer passing by, or aiming at the top of the window, does not bring them out.
+pub const EDGE_REVEAL_DELAY: Duration = Duration::from_millis(150);
+/// Their slide in, and out once the pointer has left them, on `Ease::OutCubic`.
+pub const EDGE_REVEAL: Duration = Duration::from_millis(250);
 
 /// Fade of the whole desktop from one theme to the other (`color::ThemeFade`). A choice of
 /// D-05b: the 0.25 s of the cross-fades between two animations of Sherlock
