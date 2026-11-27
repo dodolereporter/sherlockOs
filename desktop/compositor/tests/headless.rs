@@ -15,14 +15,26 @@ mod tests {
     use std::io::Write as _;
 
     use compositor::State;
+    use compositor::blur::Mode;
     use sherlock_ui::color::{Color, Palette};
+    use smithay::backend::{
+        allocator::Fourcc,
+        egl::{EGLContext, EGLDevice, EGLDisplay},
+        renderer::{
+            Bind as _, ExportMem as _, Offscreen as _, Texture as _, TextureMapping as _,
+            damage::OutputDamageTracker,
+            gles::{GlesRenderer, GlesTexture},
+        },
+    };
     use smithay::reexports::wayland_server::Resource as _;
+    use smithay::utils::Transform;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
         utils::{Logical, Point, Rectangle},
     };
+    use wayland_client::protocol::wl_region::WlRegion;
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, delegate_noop,
         protocol::{
@@ -37,6 +49,10 @@ mod tests {
             wl_shm_pool::WlShmPool,
             wl_surface::WlSurface,
         },
+    };
+    use wayland_protocols::ext::background_effect::v1::client::{
+        ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+        ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
     };
     use wayland_protocols::wp::fractional_scale::v1::client::{
         wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
@@ -2870,5 +2886,268 @@ mod tests {
         assert_eq!(at(&light, 400, 140), [bar.r, bar.g, bar.b]);
         assert_ne!(at(&dark, 40, 300), at(&light, 40, 300));
         color::set_active(Theme::Dark);
+    }
+
+    delegate_noop!(Client: ignore ExtBackgroundEffectManagerV1);
+    delegate_noop!(Client: ExtBackgroundEffectSurfaceV1);
+    delegate_noop!(Client: WlRegion);
+
+    /// The scene drawn as the real session draws it, with Mesa's software renderer, into the
+    /// same texture from frame to frame, through a damage tracker that lives as long: what is
+    /// drawn again is only what changed (lot D-37).
+    struct Drawing {
+        renderer: GlesRenderer,
+        scene: compositor::render::Scene,
+        ids: compositor::damage::Ids,
+        textures: compositor::wallpaper::Textures,
+        target: GlesTexture,
+        tracker: OutputDamageTracker,
+        age: usize,
+        /// Time added to the compositor's: a second more at each frame.
+        clock: Duration,
+    }
+
+    impl Drawing {
+        /// On Mesa's software device, blur on; none without Mesa's EGL, except on the CI.
+        fn new(size: (i32, i32)) -> Option<Self> {
+            let Some(device) = EGLDevice::enumerate().unwrap().find(EGLDevice::is_software) else {
+                assert!(std::env::var_os("CI").is_none(), "the CI has Mesa's EGL");
+                return None;
+            };
+            // SAFETY: the display lives as long as the renderer, in this test only.
+            let display = unsafe { EGLDisplay::new(device) }.unwrap();
+            let context = EGLContext::new(&display).unwrap();
+            // SAFETY: the context was just made and is used by this renderer alone.
+            let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+            let scene = compositor::render::Scene::new(&mut renderer).unwrap();
+            // The software renderer gets the veil in a session: here it blurs.
+            scene.blur.set_mode(Mode::Blur);
+            let target = renderer
+                .create_buffer(Fourcc::Abgr8888, size.into())
+                .unwrap();
+            Some(Self {
+                renderer,
+                scene,
+                ids: Default::default(),
+                textures: Default::default(),
+                target,
+                tracker: OutputDamageTracker::new(size, 1.0, Transform::Normal),
+                age: 0,
+                clock: Duration::ZERO,
+            })
+        }
+
+        /// A frame a second after the last one; whether anything was drawn, and the pixels,
+        /// top row first. The time it took, the GPU's work included.
+        fn frame(&mut self, h: &mut Harness) -> (bool, Vec<u8>, Duration) {
+            self.clock += Duration::from_secs(1);
+            let now = h.state.now() + self.clock;
+            let views = h.state.views();
+            let size = self.target.size();
+            let start = std::time::Instant::now();
+            let (scene, ids, textures) = (&self.scene, &mut self.ids, &mut self.textures);
+            let (screens, _) = scene.screens(
+                &mut self.renderer,
+                ids,
+                &mut h.state,
+                textures,
+                &views,
+                None,
+                now,
+            );
+            let elements = screens.into_iter().next().unwrap();
+            let mut target = self.renderer.bind(&mut self.target).unwrap();
+            let clear = sherlock_ui::color::palette().desktop.premultiplied();
+            let result = self
+                .tracker
+                .render_output(&mut self.renderer, &mut target, self.age, &elements, clear)
+                .unwrap();
+            let drawn = result.damage.is_some_and(|d| !d.is_empty());
+            result.sync.wait().unwrap();
+            let took = start.elapsed();
+            self.age = 1;
+            let mapping = self
+                .renderer
+                .copy_framebuffer(
+                    &target,
+                    Rectangle::from_size((size.w, size.h).into()),
+                    Fourcc::Abgr8888,
+                )
+                .unwrap();
+            let pixels = self.renderer.map_texture(&mapping).unwrap().to_vec();
+            let row = size.w as usize * 4;
+            let pixels = match mapping.flipped() {
+                true => pixels,
+                false => pixels.chunks(row).rev().flatten().copied().collect(),
+            };
+            (drawn, pixels, took)
+        }
+    }
+
+    impl Drawing {
+        /// The last of a few frames, once the window has opened.
+        fn settled(&mut self, h: &mut Harness) -> (bool, Vec<u8>, Duration) {
+            (0..3).map(|_| self.frame(h)).last().unwrap()
+        }
+    }
+
+    const WHITE: [u8; 3] = [0xEE, 0xF2, 0xF7];
+    const DARK: [u8; 3] = [0x0B, 0x12, 0x20];
+
+    /// Fills the window of `shown`, 400 × 300, with stripes two pixels wide, starting with white,
+    /// or with dark if `shifted`: the sharpest text there is.
+    fn stripes(h: &mut Harness, shown: &Shown, shifted: bool) -> File {
+        let qh = h.queue.handle();
+        let mut file = shm_file(400 * 300 * 4);
+        let pixels: Vec<u8> = (0..300 * 400)
+            .flat_map(|i| {
+                let [r, g, b] = if ((i % 400) / 2 % 2 == 0) != shifted {
+                    WHITE
+                } else {
+                    DARK
+                };
+                [b, g, r, 255]
+            })
+            .collect();
+        file.write_all(&pixels).unwrap();
+        let pool = shown.shm.create_pool(file.as_fd(), 400 * 300 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
+        shown.surface.attach(Some(&buffer), 0, 0);
+        shown.surface.damage(0, 0, 400, 300);
+        shown.surface.commit();
+        settle(h);
+        file
+    }
+
+    /// A glass surface without a tint, 300 × 76 over the window (from (250, 364)), that asks
+    /// for the blur over its shape rounded by 22, as sherlock-ui's glass does.
+    fn glass(h: &mut Harness) -> (Anchored, ExtBackgroundEffectSurfaceV1) {
+        let spec = Spec {
+            layer: Layer::Top,
+            anchor: Anchor::Bottom,
+            size: (300, 76),
+            zone: 0,
+            margin: (0, 0, 160, 0),
+            keyboard: KeyboardInteractivity::None,
+        };
+        let glass = anchor(h, spec);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        settle(h);
+        let compositor: WlCompositor = h.bind(&registry);
+        let manager: ExtBackgroundEffectManagerV1 = h.bind(&registry);
+        let effect = manager.get_background_effect(&glass.surface, &qh, ());
+        let region = compositor.create_region(&qh, ());
+        for [x, y, w, ht] in sherlock_ui::blur::rounded_region(0, 0, 300, 76, 22.0) {
+            region.add(x, y, w, ht);
+        }
+        effect.set_blur_region(Some(&region));
+        region.destroy();
+        glass.surface.commit();
+        settle(h);
+        (glass, effect)
+    }
+
+    fn rgb(pixels: &[u8], x: usize, y: usize) -> [u8; 3] {
+        let i = (y * 800 + x) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    }
+
+    /// How much neighbours differ along the row `y`, from `x0` to `x1`: about 110 on the
+    /// stripes, near 0 once blurred.
+    fn sharpness(pixels: &[u8], y: usize, (x0, x1): (usize, usize)) -> f64 {
+        let step = |x: usize| {
+            let (a, b) = (rgb(pixels, x, y), rgb(pixels, x + 1, y));
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| f64::from(a.abs_diff(b)))
+                .sum::<f64>()
+                / 3.0
+        };
+        (x0..x1).map(step).sum::<f64>() / (x1 - x0) as f64
+    }
+
+    #[test]
+    fn the_text_behind_glass_is_blurred_and_nothing_else() {
+        let Some(mut drawing) = Drawing::new((800, 600)) else {
+            return;
+        };
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let _file = stripes(&mut h, &shown, false);
+        let (_glass, _effect) = glass(&mut h);
+        let (_, pixels, _) = drawing.settled(&mut h);
+        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("blur-stripes.png");
+        image::save_buffer(&path, &pixels, 800, 600, image::ColorType::Rgba8).unwrap();
+        // Above the glass, the stripes stay sharp; behind it they are blurred.
+        let (sharp, blurred) = (
+            sharpness(&pixels, 340, (280, 520)),
+            sharpness(&pixels, 402, (280, 520)),
+        );
+        assert!(sharp > 90.0, "{sharp}");
+        assert!(blurred < 15.0, "{blurred}");
+        // The rounded corners: past the curve the stripes show as they are, inside it a grey.
+        let corner = rgb(&pixels, 251, 365);
+        assert!(corner == WHITE || corner == DARK, "{corner:?}");
+        let inside = rgb(&pixels, 400, 402);
+        assert!(inside.iter().all(|c| (60..200).contains(c)), "{inside:?}");
+
+        // At rest, nothing is drawn, nor computed.
+        assert!(!drawing.frame(&mut h).0, "a frame at rest");
+        // The text behind changes: drawn again, the blur with it, then at rest again.
+        let _file = stripes(&mut h, &shown, true);
+        let (drawn, again, _) = drawing.frame(&mut h);
+        assert!(drawn);
+        assert!(sharpness(&again, 402, (280, 520)) < 15.0);
+        assert!(!drawing.frame(&mut h).0, "a frame at rest");
+
+        // Without blur, a veil of the desktop color at its opacity over the stripes.
+        drawing.scene.blur.set_mode(Mode::Veil);
+        let _file = stripes(&mut h, &shown, false);
+        let (_, veiled, _) = drawing.frame(&mut h);
+        let veil = sherlock_ui::color::palette().desktop;
+        let keep = 1.0 - sherlock_ui::blur::VEIL_OPACITY;
+        let veil = [veil.r, veil.g, veil.b];
+        let want = veil
+            .iter()
+            .zip(WHITE)
+            .map(|(v, w)| (f32::from(*v) * (1.0 - keep) + f32::from(w) * keep).round() as u8);
+        let got = rgb(&veiled, 400, 402);
+        for (got, want) in got.iter().zip(want) {
+            assert!(got.abs_diff(want) <= 2, "{got} {want}");
+        }
+        h.state.shutdown();
+    }
+
+    /// The cost of a frame where the blur is computed again, on the CI's software renderer: the
+    /// window behind the glass changes at every frame. Printed with `--nocapture`.
+    #[test]
+    fn a_frame_with_blur_stays_cheap_on_the_software_renderer() {
+        let Some(mut drawing) = Drawing::new((800, 600)) else {
+            return;
+        };
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let _first = stripes(&mut h, &shown, false);
+        let (_glass, _effect) = glass(&mut h);
+        drawing.settled(&mut h);
+        let time = |drawing: &mut Drawing, h: &mut Harness| {
+            let mut total = Duration::ZERO;
+            for i in 0..20 {
+                let _file = stripes(h, &shown, i % 2 == 0);
+                total += drawing.frame(h).2;
+            }
+            total / 20
+        };
+        let blur = time(&mut drawing, &mut h);
+        drawing.scene.blur.set_mode(Mode::Veil);
+        let veil = time(&mut drawing, &mut h);
+        eprintln!("frame with the blur computed again: {blur:?}, with the veil: {veil:?}");
+        // Measured on the author's machine: see docs/compositor.md. A large margin for the CI.
+        assert!(
+            blur < veil + Duration::from_millis(25),
+            "{blur:?} against {veil:?}"
+        );
+        h.state.shutdown();
     }
 }
