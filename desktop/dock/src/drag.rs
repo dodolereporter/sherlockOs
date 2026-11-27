@@ -1,7 +1,7 @@
-//! A press on an icon: a click when the pointer stays, a drag of a pinned application when it
-//! goes past `dock::DRAG_THRESHOLD`. Dragged along the dock, the application takes the place
-//! nearest the pointer among the pinned ones, Sherlock staying in the middle; dragged out of
-//! the dock and let go, it is unpinned.
+//! A press on an icon: a click when the pointer stays, a drag of a pinned application or of
+//! Sherlock when it goes past `dock::DRAG_THRESHOLD`. Dragged along the dock, the icon takes
+//! the place nearest the pointer among the pinned ones; dragged out of the dock and let go, it
+//! is unpinned.
 
 use iced::{Event, Point, event, mouse, window};
 use sherlock_ui::dock;
@@ -63,19 +63,15 @@ pub fn gesture(event: Event, _: event::Status, _: window::Id) -> Option<Gesture>
     }
 }
 
-/// The orders the first `pinned` icons can take with the application at `from` moved to each
-/// place among the applications, Sherlock (at `sherlock`) put back in their middle as the dock
-/// does, the `fixed` first icons (the « Applications » button) staying first. Each order lists
-/// the current places of the icons.
-pub fn orders(fixed: usize, pinned: usize, sherlock: usize, from: usize) -> Vec<Vec<usize>> {
-    let others: Vec<usize> = (fixed..pinned)
-        .filter(|&i| i != sherlock && i != from)
-        .collect();
+/// The orders the first `pinned` icons can take with the icon at `from` moved to each place
+/// among the pinned ones, Sherlock included, the `fixed` first icons (the « Applications »
+/// button) staying first. Each order lists the current places of the icons.
+pub fn orders(fixed: usize, pinned: usize, from: usize) -> Vec<Vec<usize>> {
+    let others: Vec<usize> = (fixed..pinned).filter(|&i| i != from).collect();
     (0..=others.len())
         .map(|place| {
             let mut order = others.clone();
             order.insert(place, from);
-            order.insert(order.len().div_ceil(2), sherlock);
             (0..fixed).chain(order).collect()
         })
         .collect()
@@ -86,29 +82,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_dragged_application_takes_every_place_and_sherlock_stays_in_the_middle() {
-        // Files, Terminal, Sherlock, Editor, Browser; the terminal is dragged.
-        let five = orders(0, 5, 2, 1);
+    fn the_dragged_icon_takes_every_place() {
+        // Files, Terminal, Sherlock, Editor; the terminal is dragged, past Sherlock too.
         assert_eq!(
-            five,
+            orders(0, 4, 1),
             [
-                vec![1, 0, 2, 3, 4],
-                vec![0, 1, 2, 3, 4],
-                vec![0, 3, 2, 1, 4],
-                vec![0, 3, 2, 4, 1],
+                vec![1, 0, 2, 3],
+                vec![0, 1, 2, 3],
+                vec![0, 2, 1, 3],
+                vec![0, 2, 3, 1],
             ]
         );
-        // Three applications: Sherlock after the second one, as the dock builds it.
-        assert_eq!(orders(0, 4, 2, 0)[2], vec![1, 3, 2, 0]);
-        // The « Applications » button stays first.
+        // Sherlock moves like the others; the « Applications » button stays first.
         assert_eq!(
-            orders(1, 6, 3, 2),
-            [
-                vec![0, 2, 1, 3, 4, 5],
-                vec![0, 1, 2, 3, 4, 5],
-                vec![0, 1, 4, 3, 2, 5],
-                vec![0, 1, 4, 3, 5, 2],
-            ]
+            orders(1, 4, 2),
+            [vec![0, 2, 1, 3], vec![0, 1, 2, 3], vec![0, 1, 3, 2]]
         );
     }
 

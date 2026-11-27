@@ -53,6 +53,45 @@ fn the_dock_renders_in_the_light_theme() {
     color::set_active(Theme::Dark);
 }
 
+/// The dock's own menu, from a right click between two icons, in both themes:
+/// `dock-own-menu-dark`, `dock-own-menu-light`.
+#[test]
+fn the_docks_own_menu_renders_and_toggles_sherlock() {
+    for (which, name) in [
+        (Theme::Dark, "dock-own-menu-dark"),
+        (Theme::Light, "dock-own-menu-light"),
+    ] {
+        let _theme = in_theme(which);
+        let mut config = DockConfig::default();
+        config.magnification = false;
+        let mut dock = with_config(config);
+        let _ = dock.update(Message::Surface(Id::unique()));
+        let layout = dock.layout(Duration::ZERO);
+        let (files, terminal) = (layout.icons[0], layout.icons[1]);
+        let between = Point::new(
+            (files.x + files.width + terminal.x) / 2.0,
+            layout.bar.center_y(),
+        );
+        let _ = dock.update(Message::Pointer(Pointer::Moved(between)));
+        let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+        assert!(dock.menu_open(), "a right click between two icons");
+        unfolded(&mut dock);
+        let (width, height) = dock::menu::surface_size(&dock::menu::dock_entries(true));
+        let size = (width as f32, height as f32);
+        let mut ui = Simulator::with_size(dock::settings(), size, dock.view_menu());
+        assert!(ui.find("Dock").is_ok(), "its header");
+        ui.click("Afficher Sherlock dans le Dock")
+            .expect("entry found");
+        assert!(
+            ui.into_messages()
+                .any(|m| matches!(m, Message::MenuPick(dock::menu::Entry::ShowSherlock)))
+        );
+        let ui = Simulator::with_size(dock::settings(), size, on_desktop(dock.view_menu()));
+        assert!(capture(ui, name).expect("screenshot written") > 2_000);
+    }
+    color::set_active(Theme::Dark);
+}
+
 #[test]
 fn a_new_theme_fades_the_dock() {
     let _theme = in_theme(Theme::Dark);
@@ -247,7 +286,7 @@ fn the_menu_of_an_icon_renders_its_entries() {
 }
 
 #[test]
-fn unpinning_keeps_sherlock_in_the_middle() {
+fn unpinning_keeps_sherlock_in_its_place() {
     let mut dock = sample();
     let _ = dock.unpin(0);
     let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
@@ -255,18 +294,25 @@ fn unpinning_keeps_sherlock_in_the_middle() {
         names,
         [
             "Terminal d'exemple",
-            "Éditeur",
             "Sherlock",
+            "Éditeur",
             "Example Browser"
         ]
     );
+    // Its place is written, rather than the middle of the three that are left.
     assert_eq!(
         dock.pinned,
-        ["org.example.Terminal", "example-editor", "example-browser"]
+        [
+            "org.example.Terminal",
+            "sherlock",
+            "example-editor",
+            "example-browser"
+        ]
     );
-    // Sherlock cannot be unpinned.
-    let _ = dock.unpin(2);
-    assert_eq!(dock.items.len(), 4);
+    // Sherlock can be unpinned too.
+    let _ = dock.unpin(1);
+    assert_eq!(dock.items.len(), 3);
+    assert!(!dock.sherlock);
 }
 
 #[test]
@@ -279,8 +325,8 @@ fn an_open_application_can_be_kept_and_unpinned_again() {
         names,
         [
             "Fichiers",
-            "Éditeur",
             "Sherlock",
+            "Éditeur",
             "Example Browser",
             "Terminal d'exemple"
         ]
@@ -296,7 +342,7 @@ fn an_open_application_can_be_kept_and_unpinned_again() {
         dock.pinned.last().map(String::as_str),
         Some("org.example.Terminal")
     );
-    assert_eq!(dock.items[2].name, "Sherlock");
+    assert_eq!(dock.items[1].name, "Sherlock");
 }
 
 #[test]
@@ -442,7 +488,12 @@ fn the_menu_follows_its_application_when_the_icons_move() {
     // The terminal went, not the application now at its old place.
     assert_eq!(
         dock.pinned,
-        ["org.example.Files", "example-editor", "example-browser"]
+        [
+            "org.example.Files",
+            "sherlock",
+            "example-editor",
+            "example-browser"
+        ]
     );
 }
 
