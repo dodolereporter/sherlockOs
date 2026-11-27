@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use iced::futures::stream::{self, BoxStream};
 use iced::futures::{Future, StreamExt};
-use iced::widget::{Column, column, container, row, scrollable, space, text};
+use iced::widget::{Column, column, container, row, space, text};
 use iced::{Alignment, Element, Length, Padding, Task};
 use launcher::source::Power as Command;
 use launcher::system::{NoSession, Session};
@@ -20,6 +20,7 @@ use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::motion::Fade;
 use sherlock_ui::panels::{self, Glyph, text as words};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, typography};
 
 use crate::source::battery::{Battery, Charge};
@@ -1364,7 +1365,7 @@ impl Quick {
         let body: Element<'_, Message> = match wifi {
             Some(wifi) if wifi.enabled && !wifi.networks.is_empty() => {
                 let rows = wifi.networks.iter().map(|n| self.network_row(n));
-                scrollable(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
+                scroll(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
                     .height(Length::Fill)
                     .into()
             }

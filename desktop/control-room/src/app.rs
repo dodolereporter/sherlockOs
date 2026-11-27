@@ -112,6 +112,8 @@ pub enum Change {
     Typing(bool),
     ShowClicks(bool),
     LockAfter(Delay),
+    ClipboardHistory(bool),
+    ClipboardKeep(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -791,6 +793,7 @@ pub(crate) fn file_of(change: Change) -> File {
         | Change::Position(_) => File::Dock,
         Change::ShowClicks(_) => File::Pointer,
         Change::LockAfter(_) => File::Lock,
+        Change::ClipboardHistory(_) | Change::ClipboardKeep(_) => File::Clipboard,
         _ => File::Touchpad,
     }
 }
@@ -832,6 +835,8 @@ fn apply(s: &mut Settings, change: Change) {
         Change::Typing(on) => s.touchpad.disable_while_typing = on,
         Change::ShowClicks(on) => s.pointer.show_clicks = on,
         Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
+        Change::ClipboardHistory(on) => s.clipboard.history = on,
+        Change::ClipboardKeep(on) => s.clipboard.keep_on_disk = on,
     }
 }
 
