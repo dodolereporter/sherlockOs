@@ -1638,8 +1638,8 @@ mode = cover
   pixel, centered.
 - The file is checked every 2 seconds (one `stat`, modification time and length): when it
   changes, it is read again and the wallpaper changes, without restarting.
-- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number, and the
-  default setting applies. A missing image, a wallpaper that is not installed, a folder without
+- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number and left
+  out; the other lines still count (Q-40). A missing image, a wallpaper that is not installed, a folder without
   variants or an image that does not decode is logged, and the background of the board shows:
   color and discs. Never a crash.
 
@@ -2241,7 +2241,8 @@ optional; without the file, the defaults below apply.
 Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
 when they are plugged in, and again within 2 seconds of a change of the file (modification time
 and length looked at every 2 seconds, as `wallpaper.conf`). A wrong line, an unknown key or a
-speed out of range gives the defaults, with a warning naming the line in the log. What a
+speed out of range is left out, with a warning naming the line in the log, and the other lines
+still count (Q-40): one typo never turns the whole file back to the defaults. What a
 touchpad does not support is skipped (`debug` level): a touchpad without a physical button has
 no button areas. `State::set_touchpad` applies a setting directly, for the tests and for
 Control Room later.
@@ -2598,7 +2599,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **Triggers (lot D-25a3, `src/triggers.rs`).** The session also locks:
   - after a delay without input (keyboard, pointer, touchpad), set in
     `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
-    within a second when it changes; `desktop_config::lock`, which Control Room will write);
+    within a second when it changes; `desktop_config::lock`, which Control Room writes); a wrong
+    line is logged and left out, the others still count, so « Jamais » stays never (Q-40);
     no application can hold it off yet (no `idle-inhibit` protocol);
   - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
     the launcher and the bar);
