@@ -1140,6 +1140,8 @@ dependencies = [
  "sherlock-ui",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
+ "wayland-client",
  "zbus",
 ]
 

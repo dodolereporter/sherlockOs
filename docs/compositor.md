@@ -845,11 +845,49 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
-- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
-  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
-  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
-  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
-  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
+## Drag and drop (lot D-29c)
+
+Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds
+(`src/dnd.rs`):
+
+- **The icon** the client gives (`start_drag`), drawn under the pointer in front of everything
+  but the cursor, moved by its `wl_surface.offset`, at the screen's scale like the other
+  surfaces. It gets its frame callbacks.
+- **Escape cancels**: the grab first leaves the surface under the pointer (ended there, it
+  would drop), then ends; the source is told `cancelled`. The key never reaches a client.
+- **The way back**: a drop refused or cancelled, the icon glides back to where the drag started
+  (`motion::DRAG_RETURN`, 300 ms, fading to `DRAG_RETURN_ALPHA`), as long as its client keeps
+  the icon surface. A client that wants that animation destroys its icon after it.
+- **The cursor**: the arrow during a drag, with a plus over an X11 window that takes a copy,
+  the refusal over one that takes nothing.
+
+### From Wayland to X11 (XDND)
+
+smithay 0.7 has no XDND, and its grab would cancel any drop on an X11 window (XWayland has no
+data device). The compositor speaks XDND itself (`src/xdnd.rs`), as an X11 client of XWayland
+of its own, connected when XWayland is ready, whose socket is a source of the event loop:
+
+- Over an X11 window, the grab is given no surface. If the window has `XdndAware` (version 3 to
+  5, `XdndProxy` honored), the compositor owns `XdndSelection` with the source's types
+  (`XdndTypeList` past three), sends `XdndEnter`, then `XdndPosition` at each move, one at a
+  time (it waits for each `XdndStatus`), and `XdndLeave` when the pointer leaves it.
+- **Positions**: the X11 root coordinates are the logical coordinates of the space, which
+  XWayland uses at every scale: the position sent is the X11 window's own place plus the
+  pointer's offset from its surface (tested at scale 2 in `tests/dnd.rs`).
+- **The action**: copy, or move with Shift, among those the source allows.
+- **The drop**: released over a window that accepted, the release is held back from the grab;
+  `XdndDrop` goes to the window, the source is told `dnd_drop_performed`. The window reads the
+  data (`ConvertSelection`): the compositor asks the Wayland source through a pipe, reads it in
+  a thread and answers, by INCR past 1 MiB. At `XdndFinished`, the source is told `dnd_finished`
+  (or `cancelled` if the window refused it), and the grab ends once the source is gone (500 ms
+  at most): smithay's grab, which never saw the drop, would also tell it `cancelled`.
+- **Security**: only the X11 client under the pointer may read the drag (a window of its
+  connection, recognized by the client bits of its identifier); any other read is refused. A
+  type is read at most up to 64 MiB, and each piece is awaited 5 s at most; a window that
+  never finishes is given up after 5 s, and the drop cancelled.
+- `text/plain;charset=utf-8` and `text/plain` are also given for `UTF8_STRING`, `TEXT` and
+  `STRING`; the other types keep their name as atom (`text/uri-list`,
+  `x-special/gnome-copied-files`, `image/png`).
 
 ## Clipboard history
 
