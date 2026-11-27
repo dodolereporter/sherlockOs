@@ -2377,7 +2377,8 @@ rectangle (`Item::Squashed`); the line and the dot are shapes.
   pending starts again (lot D-25f).
 - **Back.** A key, the pointer, a click, a gesture, the lid opened or the wake-up
   (`PrepareForSleep(false)`) bring the screens back; the key or the click that wakes them goes
-  nowhere else (the pointer still moves).
+  nowhere else (the pointer still moves). Locked, the key goes on to the lock screen: the first
+  key brings its form, as on macOS.
 - **Held on.** While a surface holds an idle inhibitor (`zwp_idle_inhibit_manager_v1`, which
   Firefox and mpv take during a video), or while logind blocks `idle` (`BlockInhibited`, read
   every 5 s), neither the inactivity lock nor the screens off for inactivity happen; the

@@ -1490,4 +1490,22 @@ mod tests {
         assert_eq!(h.state.lock_attempts(), 0, "never taken for hung");
         assert!(h.state.is_locked());
     }
+
+    #[test]
+    fn locked_with_the_screens_off_the_first_key_wakes_them_and_reaches_the_lock() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.screens_off(Then::Stay);
+        after_the_animation(&mut h);
+        h.settle();
+        h.peers[locker].seen.keys.clear();
+        h.key(KEY_A);
+        assert!(matches!(h.state.power_phase(), Phase::Coming { .. }));
+        h.run_until("the key on the lock", |h| {
+            h.peers[locker].seen.keys.contains(&evdev(KEY_A))
+        });
+    }
 }

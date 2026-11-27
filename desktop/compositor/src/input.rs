@@ -148,7 +148,8 @@ enum Shortcut {
     RetryLock,
     /// Shift + Escape: the session locks and the screens go off (lot D-38).
     ScreenOff,
-    /// A key while the screens are off or going off: they come back; the key goes nowhere.
+    /// A key while the screens are off or going off: they come back; unlocked, the key goes
+    /// nowhere.
     Wake,
 }
 
@@ -775,10 +776,15 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
-            // The screens off: the key brings them back, and nothing else (lot D-38).
+            // The screens off: the key brings them back, and nothing else (lot D-38). Locked, it
+            // goes on to the lock too: the first key brings its form, as on macOS.
             if state.input_wakes() {
-                state.intercepted_keys.push(key);
-                return FilterResult::Intercept(Some(Shortcut::Wake));
+                if state.is_locked() {
+                    state.screens_on();
+                } else {
+                    state.intercepted_keys.push(key);
+                    return FilterResult::Intercept(Some(Shortcut::Wake));
+                }
             }
             if state.is_locked() {
                 let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
