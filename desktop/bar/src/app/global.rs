@@ -167,7 +167,8 @@ impl Bar {
         let closed = self
             .drop_app_menus()
             .chain(self.drop_menu())
-            .chain(self.drop_panel());
+            .chain(self.drop_panel())
+            .chain(self.drop_tray());
         let Some(menu) = self.global.address.clone() else {
             return closed;
         };
