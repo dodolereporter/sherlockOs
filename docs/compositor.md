@@ -49,6 +49,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/osd.rs` | On-screen display of the media keys: the pill, its springs, its texture (lot D-35) |
 | `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
 | `src/lock.rs` | Session lock (lot D-25a, ADR 0023): `ext-session-lock-v1` with its checks, what a locked screen shows, the lock program started again |
+| `src/arrival.rs` | The bar and the dock arriving once the session opens (lot D-24) |
 | `src/greeter.rs` | The compositor of the login screen (`--greeter`, lot D-24, ADR 0026): one program fullscreen, no shortcut of the desktop |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
@@ -2350,6 +2351,21 @@ Tests (`tests/greeter.rs`, headless, a test client as the greeter, on a screen o
 so when it asks to leave fullscreen; Super + Tab, Space, L and Right, F4 and Super alone all
 reach it, Mission Control does not open, nothing locks and the window is not snapped;
 `lock_session` does nothing; no shell socket is opened beside the Wayland socket.
+
+## Arrival of the desktop (lot D-24)
+
+Once the session opens, the bar slides down from above the screen and the dock rises from below
+it, on the spring of a window that opens, each from its first content, the dock 60 ms after the
+bar (`src/arrival.rs`, tokens in `sherlock_ui::greeter`). The movement is drawn by the
+compositor (`push_layers`), which knows the surfaces of the shell by their layer-shell namespace
+(`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
+bar started again later shows at once, and never with `--greeter`. A key or a click puts
+everything in place at once. The windows that open then fade in with their own opening (lot
+D-34). Not done yet: the wallpaper going from blurred at 1.05 to sharp at 1 (the compositor has
+no blur yet, lot D-37), and the windows of the last session reopened one by one.
+
+Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
+dock waits for its turn, and the travel of each.
 
 ## Measuring
 

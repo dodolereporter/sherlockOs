@@ -4,6 +4,7 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod arrival;
 pub mod capture;
 pub mod card;
 pub mod clicks;
@@ -185,6 +186,8 @@ pub struct State {
     nested: bool,
     /// The compositor of the login screen (`--greeter`, `greeter.rs`).
     greeter: bool,
+    /// The bar and the dock arriving once the session opens (`arrival.rs`).
+    arrival: arrival::Arrival,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
     /// Frame statistics, with `--measure`.
@@ -351,6 +354,7 @@ impl State {
             intercepted_keys: Vec::new(),
             nested: false,
             greeter: false,
+            arrival: arrival::Arrival::default(),
             switch_vt: None,
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),

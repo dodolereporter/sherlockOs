@@ -740,6 +740,7 @@ impl State {
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        self.end_arrival();
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -1003,6 +1004,7 @@ impl State {
 
     /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        self.end_arrival();
         self.queue_redraw();
         self.note_input();
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())

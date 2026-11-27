@@ -54,7 +54,10 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 - **Logged in:** the user and their session are remembered (`memory`), the session is started
   through greetd, Sherlock is happy for 700 ms, then the elements leave in reverse order, the
   bubble shrinks, the background zooms in to 1.05 and fades, and the program ends; the
-  compositor stops with it and greetd starts the session.
+  compositor stops with it and greetd starts the session. In the session, the compositor plays
+  the arrival of the desktop: the bar slides down from the top, then the dock rises from the
+  bottom, on a spring, and the windows open with their own animation (see "Arrival of the
+  desktop" in `docs/compositor.md`).
 - **The last user** is selected at start, with the session they chose last time (SherlockOS by
   default).
 
@@ -73,6 +76,48 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 - `src/memory.rs`: `/var/cache/sherlockos-greeter/state` (or `SHERLOCKOS_GREETER_STATE`), owned
   by `_greetd`: `last-user=` and one `session.<user>=` line per user (32 at most). Read with a
   bound, written whole then renamed; a name with a line break or `=` is never written.
+
+## Installing it
+
+`just install-greeter` builds the compositor and the screen in release, then prints the
+commands (`desktop/greeter/install.sh`); it runs none of them. The session itself comes from
+`just install-session`, whose commands go first. In order:
+
+1. `sudo apt install greetd`: Debian's package (0.10.3 in trixie) creates the `_greetd` user,
+   and enables nothing while SDDM holds `display-manager.service`;
+2. the compositor and `sherlockos-greeter` in `/usr/local/libexec/sherlockos/`, the pictures of
+   the lock in `/usr/local/share/sherlockos/lock/`, and the model of Sherlock (from `just
+   mascot`, if it was downloaded) in `/usr/local/share/sherlockos/mascot/`: places `_greetd`
+   can read, found through its default `XDG_DATA_DIRS`;
+3. `/var/cache/sherlockos-greeter`, owned by `_greetd`, mode 700, for the memory;
+4. `/etc/greetd/config.toml` (the old one kept as `config.toml.bak-sherlockos`): VT 7, the
+   command `compositor --greeter -- sherlockos-greeter`, the user `_greetd`;
+5. `systemctl disable sddm.service`, `systemctl enable greetd.service`, then a reboot.
+
+**Back to SDDM**, printed with the rest, from a text console (Ctrl + Alt + F3) if the screen
+does not show: `systemctl disable greetd.service`, `systemctl enable sddm.service`, reboot.
+
+`tests/install.rs` runs the script on a fake repository whose path holds a space, under
+`env -i`: the commands to switch and to go back are printed, the path quoted, the model
+installed only when it was downloaded; without the build, nothing is printed.
+
+## Switching user without closing the session (study, not done)
+
+The lock screen should offer « Changer d'utilisateur »: open a second session while the first
+keeps running. greetd does not do it by itself:
+
+- one greetd serves one console, and runs one session at a time: it starts its greeter again
+  only once the session ended (`greetd(1)`); a second `create_session` while a session runs is
+  refused (« a session is already being configured », « session already active »);
+- greetd can run several times, one instance per console (`greetd --vt 8 --config …`), each
+  with its own socket (`/run/greetd-<pid>.sock`) and its own greeter.
+
+So « Changer d'utilisateur » could start a second greetd on a free console (a templated unit,
+`greetd@tty8.service`, started through a polkit rule for the active session), switch to it, and
+let the other user log in there; logind keeps both sessions, and Ctrl + Alt + Fn, or our own
+switcher, goes back. What it costs: a unit and a polkit rule of ours, a choice of consoles, and
+a way back to the first session from the second one's screen (logind's `ActivateSession`). It
+needs the author's go-ahead (an ADR), and a test on the machine (rule 9).
 
 ## greetd's IPC (`src/greetd.rs`)
 

@@ -53,6 +53,13 @@ pub const SUCCESS_HOLD: Duration = Duration::from_millis(700);
 /// starts its arrival from it.
 pub const LEAVE_SCALE: f32 = 1.05;
 
+/// The arrival of the desktop once the session opens (the compositor, `arrival.rs`): the bar
+/// slides down, the dock rises `ARRIVAL_STAGGER` later, on `ARRIVAL_SPRING`; only within
+/// `ARRIVAL_WINDOW` after the compositor started.
+pub const ARRIVAL_SPRING: Spring = motion::OPEN_SPRING;
+pub const ARRIVAL_STAGGER: Duration = Duration::from_millis(60);
+pub const ARRIVAL_WINDOW: Duration = Duration::from_secs(15);
+
 /// The texts of the screen.
 pub const OTHER: &str = "Autre…";
 pub const OTHER_HINT: &str = "Autre utilisateur";

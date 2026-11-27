@@ -504,7 +504,12 @@ pub fn items(
     animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
     crate::capture::push_area(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
-    push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
+    animating |= push_layers(
+        &mut items,
+        (state, now),
+        (output, view),
+        &[Layer::Overlay, Layer::Top],
+    );
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
     animating |= genie::push_effects(&mut items, state, (output, view), now);
     if let Some(preview) = preview {
@@ -550,10 +555,10 @@ pub fn items(
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
     }
-    push_layers(
+    animating |= push_layers(
         &mut items,
-        output,
-        view,
+        (state, now),
+        (output, view),
         &[Layer::Bottom, Layer::Background],
     );
     // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
@@ -578,24 +583,35 @@ pub fn items(
     (items, animating)
 }
 
-/// Anchored surfaces of `layers`, the front one first, each with its menus in front.
-fn push_layers(items: &mut Vec<Item>, output: &Output, view: &View, layers: &[Layer]) {
+/// Anchored surfaces of `layers`, the front one first, each with its menus in front. The bar and
+/// the dock slide into place while the session opens (`arrival.rs`): `true` while they do.
+fn push_layers(
+    items: &mut Vec<Item>,
+    (state, now): (&State, Duration),
+    (output, view): (&Output, &View),
+    layers: &[Layer],
+) -> bool {
     let map = layer_map_for_output(output);
+    let mut arriving = false;
     for layer in layers {
         for surface in map.layers_on(*layer).rev() {
             let Some(geometry) = map.layer_geometry(surface) else {
                 continue;
             };
-            let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
-            let at = Placement {
-                view,
-                loc,
-                alpha: 1.0,
-            };
+            let mut loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
+            let mut alpha = 1.0;
+            if let Some((part, progress)) = state.arrival_progress(surface.namespace(), now) {
+                let screen = Rectangle::new((0, 0).into(), view.area.size);
+                loc.y += crate::arrival::offset(part, geometry, screen, progress);
+                alpha = progress.clamp(0.0, 1.0) as f32;
+                arriving = true;
+            }
+            let at = Placement { view, loc, alpha };
             push_surface(items, surface.wl_surface(), at, true);
             push_backdrop(items, view.rect(geometry.to_f64()));
         }
     }
+    arriving
 }
 
 /// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn behind
