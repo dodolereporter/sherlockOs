@@ -3,13 +3,14 @@
 //! The only place where colors, sizes and interface texts are written. The tokens (`color`,
 //! `cursor`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `app_icon`, `logo`,
 //! `window`, `decorations`, `mission_control`, `click`, `osd`, `evidence`, `lock`,
-//! `control_room`) depend on nothing, and neither does `gpu`, the choice of the renderer. The
+//! `control_room`, `blur`) depend on nothing, and neither does `gpu`, the choice of the renderer. The
 //! theme and the iced components sit behind the `iced` feature, on by default; `panels`,
 //! `launcher` and `apps` hold both, their components behind that feature. The gallery lives in `examples/gallery`. See
 //! `docs/sherlock-ui.md`.
 
 pub mod app_icon;
 pub mod apps;
+pub mod blur;
 pub mod click;
 pub mod color;
 pub mod control_room;
