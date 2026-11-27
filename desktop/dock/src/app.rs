@@ -29,7 +29,6 @@ use crate::items::{self, Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
-use crate::pins;
 use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
 /// The menu of an icon, or the dock's own, while it is open.
