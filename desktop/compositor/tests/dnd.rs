@@ -30,11 +30,13 @@ mod tests {
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
+        event_created_child,
         protocol::{
             wl_buffer::WlBuffer,
             wl_compositor::WlCompositor,
-            wl_data_device::WlDataDevice,
+            wl_data_device::{self, WlDataDevice},
             wl_data_device_manager::{DndAction, WlDataDeviceManager},
+            wl_data_offer::WlDataOffer,
             wl_data_source::{self, WlDataSource},
             wl_pointer::{self, WlPointer},
             wl_registry,
@@ -193,7 +195,24 @@ mod tests {
     delegate_noop!(Seen: ignore WlBuffer);
     delegate_noop!(Seen: ignore XdgToplevel);
     delegate_noop!(Seen: WlDataDeviceManager);
-    delegate_noop!(Seen: ignore WlDataDevice);
+    // The drag passes over the client's own window first: it is offered the drag there.
+    impl Dispatch<WlDataDevice, ()> for Seen {
+        fn event(
+            _: &mut Self,
+            _: &WlDataDevice,
+            _: wl_data_device::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+        }
+
+        event_created_child!(Seen, WlDataDevice, [
+            wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, ()),
+        ]);
+    }
+
+    delegate_noop!(Seen: ignore WlDataOffer);
 
     struct Harness {
         event_loop: EventLoop<'static, State>,
@@ -370,7 +389,11 @@ mod tests {
             let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
             let root = conn.setup().roots[screen].root;
             let window = conn.generate_id().unwrap();
-            let aux = CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+            // Painted: a window without content takes no pointer.
+            let white = conn.setup().roots[screen].white_pixel;
+            let aux = CreateWindowAux::new()
+                .background_pixel(white)
+                .event_mask(EventMask::PROPERTY_CHANGE);
             conn.create_window(
                 0,
                 window,
@@ -503,6 +526,11 @@ mod tests {
 
     #[test]
     fn a_file_dragged_from_wayland_drops_on_x11_and_escape_cancels() {
+        // `RUST_LOG=compositor=debug` shows the compositor's side.
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .try_init();
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         // 800 × 600 logical: positions in X11 are logical too, at every scale.
