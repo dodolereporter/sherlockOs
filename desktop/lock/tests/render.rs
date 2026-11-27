@@ -119,7 +119,7 @@ mod tests {
     }
 
     fn key(s: &mut Screen, key: Key, text: &str) {
-        let text = Some(text.to_owned());
+        let text = Some(Secret::new(text.to_owned()));
         let _ = s
             .lock
             .update(Message::Input(s.primary, Input::Key { key, text }));
@@ -318,7 +318,8 @@ mod tests {
         key(&mut s, Key::Other, "p");
         let _ = s.lock.update(Message::ShowPassword);
         let quiet = sherlock_ui::lock::screen::FORM_TIMEOUT + Duration::from_secs(3);
-        let _ = s.lock.update(Message::Tick(Instant::now() + quiet));
+        let boot = Duration::from_secs(100);
+        let _ = s.lock.update(Message::Tick(Instant::now() + quiet, boot));
         assert!(!s.lock.form_shown());
         assert_eq!(s.lock.password_len(), 0);
         // Escape sends it away too.
@@ -345,5 +346,55 @@ mod tests {
         assert_eq!(s.lock.mood(), Mood::Think);
         checked(&mut s, Ok(()));
         assert_eq!(s.lock.mood(), Mood::Success);
+    }
+
+    #[test]
+    fn nothing_typed_survives_the_sleep() {
+        // « Veille » confirmed with the field filled and the password shown.
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        let _ = s.lock.update(Message::Typed(Secret::new("presque".into())));
+        let _ = s.lock.update(Message::ShowPassword);
+        let _ = s.lock.update(Message::Machine(Machine::Sleep));
+        std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
+        let _ = s.lock.update(Message::Machine(Machine::Sleep));
+        assert_eq!(*s.runner.0.lock().unwrap(), [Machine::Sleep]);
+        assert!(!s.lock.form_shown(), "the form leaves");
+        assert_eq!(s.lock.password_len(), 0, "the field is empty at wake-up");
+        assert_eq!(s.lock.mood(), Mood::Sleep);
+        // Shown again, the eye is closed.
+        show_form(&mut s);
+        let _ = s.lock.update(Message::Typed(Secret::new("x".into())));
+        assert_eq!(s.lock.mood(), Mood::EyesClosed, "not Peek: the eye closed");
+
+        // The lid closed: the monotonic clock stops, the time since boot jumps.
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        let now = Instant::now() + Duration::from_secs(4);
+        let boot = Duration::from_secs(1000);
+        let _ = s.lock.update(Message::Tick(now, boot));
+        let _ = s.lock.update(Message::Typed(Secret::new("presque".into())));
+        let _ = s.lock.update(Message::Tick(
+            now + Duration::from_secs(1),
+            boot + Duration::from_secs(1),
+        ));
+        assert!(s.lock.form_shown(), "a regular tick changes nothing");
+        assert_eq!(s.lock.password_len(), 7);
+        let woken = boot + Duration::from_secs(3600);
+        let _ = s
+            .lock
+            .update(Message::Tick(now + Duration::from_secs(2), woken));
+        assert!(!s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 0, "the field is empty at wake-up");
+    }
+
+    #[test]
+    fn the_first_key_never_shows_in_a_message() {
+        let input = Input::Key {
+            key: Key::Other,
+            text: Some(Secret::new("q".into())),
+        };
+        let shown = format!("{:?}", Message::Input(iced::window::Id::unique(), input));
+        assert!(shown.contains("***") && !shown.contains('q'), "{shown}");
     }
 }

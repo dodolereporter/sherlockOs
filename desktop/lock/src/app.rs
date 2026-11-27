@@ -66,7 +66,9 @@ pub enum Message {
     Machine(Machine),
     Clock(Clock),
     /// Every second while the form shows: it may leave.
-    Tick(Instant),
+    /// with the time since boot, suspension included (`CLOCK_BOOTTIME`): a jump in it is a
+    /// sleep the monotonic clock did not see.
+    Tick(Instant, Duration),
     Frame(Instant),
     /// The model of Sherlock, read on a thread at start; `None` without it (the still picture).
     Mascot(Option<Mascot>),
@@ -147,6 +149,8 @@ pub struct Lock {
     /// « Veille » was confirmed: Sherlock sleeps until the next input.
     asleep: bool,
     mascot: Option<Mascot>,
+    /// The time since boot at the last tick.
+    last_boot: Option<Duration>,
     /// The dark and light pictures behind the screen.
     background: Option<(image::Handle, image::Handle)>,
     /// The size, in pixels, the background was asked for.
@@ -182,6 +186,7 @@ impl Lock {
             typed: false,
             asleep: false,
             mascot: None,
+            last_boot: None,
             background: None,
             asked: None,
             scale: 1.0,
@@ -297,7 +302,7 @@ impl Lock {
             Subscription::none()
         };
         let ticks = if self.form.shown() {
-            Subscription::run(ticks).map(Message::Tick)
+            Subscription::run(ticks).map(|(now, boot)| Message::Tick(now, boot))
         } else {
             Subscription::none()
         };
@@ -367,7 +372,12 @@ impl Lock {
                 let now = Instant::now();
                 if self.armed.click(machine, now) {
                     tracing::info!(verb = machine.verb(), "machine command");
-                    self.asleep = machine == Machine::Sleep;
+                    if machine == Machine::Sleep {
+                        // Nothing typed waits for whoever opens the lid.
+                        self.form.hide(self.elapsed());
+                        self.clear();
+                        self.asleep = true;
+                    }
                     self.runner.run(machine);
                 }
             }
@@ -375,8 +385,20 @@ impl Lock {
                 self.clock = clock;
                 self.armed.expire(Instant::now());
             }
-            Message::Tick(now) => {
+            Message::Tick(now, boot) => {
                 self.now = now;
+                // A jump of the time since boot between two ticks: the machine slept (the lid,
+                // or « Veille »). The form leaves and the field empties.
+                let slept = self
+                    .last_boot
+                    .is_some_and(|last| boot.saturating_sub(last) > form::WAKE_GAP);
+                self.last_boot = Some(boot);
+                if slept {
+                    tracing::info!("woken up: the form leaves, the field empties");
+                    self.form.hide(self.elapsed());
+                    self.clear();
+                    return Task::none();
+                }
                 let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
                 if self.form.tick(self.elapsed(), busy) {
                     self.clear();
@@ -424,10 +446,14 @@ impl Lock {
             Outcome::Shown { typed } => {
                 self.entered = false;
                 self.typed = false;
+                // The ticks start again with the form: no jump to compare with yet.
+                self.last_boot = None;
                 if let Some(typed) = typed {
                     // The key that brought the form starts the password.
-                    let mut text = std::mem::take(&mut self.password).as_str().to_owned();
-                    text.push_str(&typed);
+                    let old = std::mem::take(&mut self.password);
+                    let mut text = String::with_capacity(old.as_str().len() + typed.as_str().len());
+                    text.push_str(old.as_str());
+                    text.push_str(typed.as_str());
                     self.password = Secret::new(text);
                     self.typed = true;
                 }
@@ -876,7 +902,7 @@ fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Optio
                 keyboard::Key::Named(keyboard::key::Named::Escape) => form::Key::Escape,
                 _ => form::Key::Other,
             };
-            let text = text.map(|t| t.to_string());
+            let text = text.map(|t| Secret::new(t.to_string()));
             Some(Message::Input(id, Input::Key { key, text }))
         }
         _ => None,
@@ -895,13 +921,33 @@ fn appearance(path: &std::path::Path) -> mpsc::UnboundedReceiver<color::Theme> {
     receiver
 }
 
-/// A tick every second, from a thread of its own, while the subscription lives.
-fn ticks() -> mpsc::UnboundedReceiver<Instant> {
+/// The time since boot, suspension included (`CLOCK_BOOTTIME`); zero if it cannot be read.
+fn since_boot() -> Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `clock_gettime` writes into `time`, a valid timespec owned here.
+    let status = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) };
+    if status != 0 {
+        return Duration::ZERO;
+    }
+    let secs = u64::try_from(time.tv_sec).unwrap_or(0);
+    let nanos = u32::try_from(time.tv_nsec).unwrap_or(0);
+    Duration::new(secs, nanos)
+}
+
+/// A tick every second, with the time since boot, from a thread of its own, while the
+/// subscription lives.
+fn ticks() -> mpsc::UnboundedReceiver<(Instant, Duration)> {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
         .name("ticks".into())
         .spawn(move || {
-            while sender.unbounded_send(Instant::now()).is_ok() {
+            while sender
+                .unbounded_send((Instant::now(), since_boot()))
+                .is_ok()
+            {
                 std::thread::sleep(Duration::from_secs(1));
             }
         });

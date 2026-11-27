@@ -7,6 +7,11 @@
 //! 3. else the wallpaper of the desktop in the active theme, blurred and darkened (computed once,
 //!    on a copy reduced to `BACKGROUND_WIDTH`).
 //!
+//! The path comes from the user: a picture is read only if it is a regular file (links followed)
+//! of `MAX_FILE` bytes at most, read with that bound, and decoded with bounded sides and memory
+//! (`MAX_SIDE`, `MAX_ALLOC`). Anything else is refused, and the next source, or the plain
+//! background, shows: never a lock screen that runs out of memory.
+//!
 //! Every picture is decoded once, on a thread of its own, then reduced to the size of the
 //! largest screen (cover: centered, neither stretched nor banded), never kept at 4K for a small
 //! screen. Until it is ready, or if nothing can be read, the plain background of the system
@@ -25,6 +30,46 @@ use sherlock_ui::wallpapers::ThemeVariant;
 pub const FOLDER: &str = "lock";
 pub const DARK: &str = "lock-dark.jpg";
 pub const LIGHT: &str = "lock-light.jpg";
+
+/// The largest picture file read.
+pub const MAX_FILE: u64 = 64 * 1024 * 1024;
+/// The largest side of a picture, and the memory its decoding may take.
+pub const MAX_SIDE: u32 = 16_384;
+pub const MAX_ALLOC: u64 = 256 * 1024 * 1024;
+
+/// Why a picture is not shown.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0} is not a regular file of {MAX_FILE} bytes at most")]
+    Refused(PathBuf),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Image(#[from] image::ImageError),
+}
+
+/// Decodes `path` within the bounds above.
+pub fn decode(path: &Path) -> Result<DynamicImage, Error> {
+    use std::io::Read as _;
+    let meta = std::fs::metadata(path)?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return Err(Error::Refused(path.to_owned()));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_FILE + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(Error::Refused(path.to_owned()));
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
+    limits.max_alloc = Some(MAX_ALLOC);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    Ok(reader.decode()?)
+}
 
 /// A picture ready to show, in RGBA.
 #[derive(Clone, PartialEq, Eq)]
@@ -127,8 +172,8 @@ fn rgba(picture: DynamicImage) -> Picture {
 }
 
 /// `path` reduced to cover a screen of `screen` pixels.
-pub fn fitted(path: &Path, screen: (u32, u32)) -> Result<Picture, image::ImageError> {
-    let picture = image::open(path)?;
+pub fn fitted(path: &Path, screen: (u32, u32)) -> Result<Picture, Error> {
+    let picture = decode(path)?;
     let (w, h) = cover(picture.dimensions(), screen);
     if (w, h) == picture.dimensions() {
         return Ok(rgba(picture));
@@ -137,12 +182,15 @@ pub fn fitted(path: &Path, screen: (u32, u32)) -> Result<Picture, image::ImageEr
 }
 
 /// `path` reduced, blurred and darkened.
-pub fn blurred(path: &Path) -> Result<Picture, image::ImageError> {
-    let picture = image::open(path)?;
+pub fn blurred(path: &Path) -> Result<Picture, Error> {
+    let picture = decode(path)?;
     let (w, h) = picture.dimensions();
     let width = BACKGROUND_WIDTH.min(w.max(1));
     let height = ((u64::from(h) * u64::from(width)) / u64::from(w.max(1))).max(1) as u32;
-    let small = imageops::resize(&picture.to_rgba8(), width, height, imageops::Triangle);
+    // Reduced first: the only full-size copy is the decoded picture.
+    let small = picture
+        .resize_exact(width, height, imageops::Triangle)
+        .to_rgba8();
     let mut soft = imageops::blur(&small, BLUR_SIGMA);
     for pixel in soft.pixels_mut() {
         for channel in &mut pixel.0[..3] {
@@ -157,7 +205,7 @@ pub fn blurred(path: &Path) -> Result<Picture, image::ImageError> {
 }
 
 /// The pictures of `source` for a screen of `screen` pixels.
-pub fn pictures(source: &Source, screen: (u32, u32)) -> Result<Pictures, image::ImageError> {
+pub fn pictures(source: &Source, screen: (u32, u32)) -> Result<Pictures, Error> {
     Ok(match source {
         Source::Single(path) => {
             let picture = fitted(path, screen)?;
@@ -208,6 +256,67 @@ mod tests {
         let picture = fitted(&assets().join(FOLDER).join(DARK), (1366, 768)).unwrap();
         assert_eq!((picture.width, picture.height), (1366, 769));
         assert_eq!(picture.rgba.len(), 1366 * 769 * 4);
+    }
+
+    /// A PNG of `width` × `height` pixels by its header only: the data that follows is short.
+    fn lying_png(width: u32, height: u32) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let mut header = b"IHDR".to_vec();
+        header.extend(width.to_be_bytes());
+        header.extend(height.to_be_bytes());
+        header.extend([8, 6, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(13u32.to_be_bytes());
+        png.extend(&header);
+        png.extend(crc(&header).to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn a_trapped_picture_is_refused_and_the_next_source_shows() {
+        let dir = std::env::temp_dir().join(format!("lock-trap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A link to /dev/zero: not a regular file, refused before reading.
+        let zero = dir.join("zero.jpg");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        assert!(matches!(
+            fitted(&zero, (1920, 1080)),
+            Err(Error::Refused(_))
+        ));
+        // Too large: refused from its size (a sparse file).
+        let large = dir.join("large.jpg");
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(MAX_FILE + 1)
+            .unwrap();
+        assert!(matches!(
+            fitted(&large, (1920, 1080)),
+            Err(Error::Refused(_))
+        ));
+        // Huge sides announced by the header: refused by the limits, nothing allocated.
+        let huge = dir.join("huge.png");
+        std::fs::write(&huge, lying_png(100_000, 100_000)).unwrap();
+        assert!(matches!(fitted(&huge, (1920, 1080)), Err(Error::Image(_))));
+        assert!(matches!(blurred(&huge), Err(Error::Image(_))));
+        // Each one leaves the screen on its plain background, without a panic.
+        for path in [zero, large, huge] {
+            assert!(pictures(&Source::Single(path), (1920, 1080)).is_err());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

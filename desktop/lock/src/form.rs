@@ -12,16 +12,22 @@ use std::time::Duration;
 
 use sherlock_3d::Mood;
 use sherlock_ui::lock::screen::{FORM_TIMEOUT, SORRY};
+use system_services::secret::Secret;
 
 use crate::app::Phase;
+
+/// A jump of the time since boot between two ticks of a second beyond which the machine
+/// slept: the form leaves and the field empties at wake-up.
+pub const WAKE_GAP: Duration = Duration::from_secs(5);
 
 /// An input that may bring the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     /// The pointer moved, or a button was pressed.
     Pointer,
-    /// A key, with the text it types, if any.
-    Key { key: Key, text: Option<String> },
+    /// A key, with the text it types, if any: maybe the first character of the password, so a
+    /// `Secret` (`Debug` prints `***`, wiped when dropped).
+    Key { key: Key, text: Option<Secret> },
 }
 
 /// The keys the form treats apart.
@@ -39,7 +45,7 @@ pub enum Outcome {
     /// Nothing changes but the time of the last input.
     Nothing,
     /// The form comes; `typed` goes into the field.
-    Shown { typed: Option<String> },
+    Shown { typed: Option<Secret> },
     /// The form leaves (Escape).
     Hidden,
 }
@@ -92,7 +98,7 @@ impl Form {
                 // Space and Enter only bring the form; a letter, a digit or a sign starts the
                 // password. Control characters (Tab, Backspace…) type nothing.
                 let typed = text.filter(|t| {
-                    key == Key::Other && !t.is_empty() && !t.chars().any(char::is_control)
+                    key == Key::Other && !t.is_empty() && !t.as_str().chars().any(char::is_control)
                 });
                 Outcome::Shown { typed }
             }
@@ -107,6 +113,13 @@ impl Form {
             return true;
         }
         false
+    }
+
+    /// Sends the form away at `now` (the machine goes to sleep, or wakes up).
+    pub fn hide(&mut self, now: Duration) {
+        if self.shown {
+            self.set(false, now);
+        }
     }
 
     fn set(&mut self, shown: bool, now: Duration) {
@@ -163,7 +176,7 @@ mod tests {
     fn key(key: Key, text: &str) -> Input {
         Input::Key {
             key,
-            text: Some(text.to_owned()),
+            text: Some(Secret::new(text.to_owned())),
         }
     }
 
@@ -175,7 +188,7 @@ mod tests {
     fn a_letter_brings_the_form_and_goes_into_the_field() {
         let mut form = Form::default();
         assert!(!form.shown());
-        let typed = Some("a".to_owned());
+        let typed = Some(Secret::new("a".to_owned()));
         assert_eq!(
             form.input(at(10), key(Key::Other, "a")),
             Outcome::Shown { typed }
