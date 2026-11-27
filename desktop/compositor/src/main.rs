@@ -73,6 +73,14 @@ fn main() -> Result<(), Error> {
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.
+    // The real session only: in a window or headless, the compositor of a test or of a
+    // developer stays open to a debugger.
+    if !options.nested
+        && !options.headless
+        && let Err(err) = compositor::keep_memory_private()
+    {
+        tracing::warn!("the memory of the compositor could not be made private: {err}");
+    }
     let session = if options.headless {
         compositor::headless::init(&event_loop, &mut state, &options.scales)?;
         None

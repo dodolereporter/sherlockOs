@@ -15,7 +15,8 @@
 # leaves out the applications of the autostart folders (docs/autostart.md). The log of the session goes to
 # $XDG_STATE_HOME/sherlockos/session.log (~/.local/state/sherlockos/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
-# session with it.
+# session with it, but not while locked; if the compositor stops while locked, the logind
+# session ends (lot D-25j).
 set -eu
 
 bin="${SHERLOCKOS_BIN:-$(dirname "$(readlink -f "$0")")}"
@@ -274,5 +275,22 @@ xwayland=--xwayland
 if [ "${SHERLOCKOS_XWAYLAND:-1}" = 0 ]; then
 	xwayland=""
 fi
+# The compositor creates this file when the session locks and removes it when it unlocks (lot
+# D-25j). If the compositor stops or crashes while it is there, the session ends with logind
+# instead of giving back the console it was started from: that console is already logged in,
+# and would be the way around the lock.
+mark="${XDG_RUNTIME_DIR:-$state}/sherlockos-locked"
+export SHERLOCKOS_LOCK_MARK="$mark"
+rm -f "$mark"
 # shellcheck disable=SC2086 # $xwayland is empty or one word.
 "$bin/compositor" $xwayland sh -c "$shell" "$bin" 2>&1 | keep_log
+if [ -e "$mark" ]; then
+	rm -f "$mark"
+	note "the compositor stopped while locked: the session ends"
+	if ! loginctl terminate-session "${XDG_SESSION_ID:-}" 2>>"$log"; then
+		# No logind session to end: the parent that started the session goes, unless it is init.
+		note "no logind session to end: its parent ($PPID) is killed"
+		[ "$PPID" -gt 1 ] && kill -KILL "$PPID"
+	fi
+	exit 1
+fi

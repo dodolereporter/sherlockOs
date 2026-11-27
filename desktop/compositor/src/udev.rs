@@ -758,11 +758,13 @@ impl Backend {
         }
         state.forget_intercepted_keys();
         state.cancel_gestures();
+        state.set_lock_console_away(true);
         self.device.pause();
     }
 
     fn activate(&mut self, state: &mut State) {
         tracing::info!("session active again: libinput resumed");
+        state.set_lock_console_away(false);
         if self.libinput.resume().is_err() {
             tracing::warn!("libinput did not resume");
         }

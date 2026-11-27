@@ -228,6 +228,8 @@ pub mod screen {
     pub const WRONG: &str = "Mot de passe incorrect";
     pub const TOO_MANY: &str = "Trop d'essais. Patiente un peu avant de réessayer.";
     pub const UNAVAILABLE: &str = "Vérification impossible. Réessaie.";
+    /// The previous check of the password still runs (lot D-25m).
+    pub const BUSY: &str = "Vérification encore en cours. Réessaie dans un instant.";
     pub const CAPS_LOCK: &str = "Verr. Maj activé";
     pub const SLEEP: &str = "Veille";
     pub const REBOOT: &str = "Redémarrer";

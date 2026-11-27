@@ -45,11 +45,11 @@ the policy to the compositor, and has two gaps for a strict use:
    cancelled at the lock. Touchpad gestures are dropped. The compositor's shortcuts are off,
    except:
    - Ctrl + Alt + F1 to F12, the console switch: the session stays locked on its console;
-   - Ctrl + Alt + Backspace, which stops the compositor: the emergency exit, kept by the
-     author's decision of 2026-11-26; it closes the session, it never unlocks it;
    - the volume and brightness keys (not the players);
    - Enter on the rescue screen (below).
    Power off and sleep through the power button belong to logind, not to the compositor.
+   Ctrl + Alt + Backspace, which stops the compositor, does nothing while locked (amendment
+   of lot D-25j, below): it goes to the lock surface as a Backspace.
 4. **Only the lock that holds the session ends it.** The requests of `ext_session_lock_v1` go
    through our own dispatch before smithay's: `unlock_and_destroy` is refused with
    `invalid_unlock` (a protocol error, which disconnects the client) unless it comes from the
@@ -77,20 +77,31 @@ the policy to the compositor, and has two gaps for a strict use:
    Enter to try the programs again. The counter starts again at each unlock.
 7. **The password** is checked by PAM only, in the lock program, for the user of the session
    only (lot D-25a2). The compositor never sees it.
+   The program's text field never holds the password while hidden (lot D-25m): it holds one
+   mask per character, and the edits are applied to the password, kept in a `Secret` wiped on
+   drop; only the characters typed, one by one, pass through iced, in wiped strings. One PAM
+   check at a time: a check that hangs holds back the next tries until its thread ends.
 
 ## Consequences
 
 - A crash of the lock screen never shows the desktop: at worst the user sees the rescue
-  screen, and gets out of it with Enter, another console, or Ctrl + Alt + Backspace, which ends
-  the session.
+  screen, and gets out of it with Enter, or another console.
+- If the compositor stops or crashes while locked, the logind session ends (amendment of lot
+  D-25j, below): nobody gets back the console it was started from.
 - `swaylock` started by hand, or any other lock screen, cannot lock the session: only Super + L
   and the triggers of the compositor do, with our program. A program of the session cannot
   show a fake lock screen through the protocol.
 - The lock program exits cleanly only after PAM accepted the password: the toolkit
   (`exwlshellev`) sends `unlock_and_destroy` on every clean exit, so an error must never end it
   cleanly (it aborts, and the compositor keeps the session locked).
-- Within the session, a process of the user can still trace the lock program
-  (`kernel.yama.ptrace_scope` at 0 on Debian): the distribution will set it to 1.
+- Within the session, a process of the user could trace the lock program and the compositor,
+  and read the password in their memory (`kernel.yama.ptrace_scope` at 0 on Debian). Lot D-25k:
+  both make themselves non-dumpable at start (`PR_SET_DUMPABLE` at 0, through rustix; the
+  compositor in the real session only), which also closes `/proc/<pid>/mem` to the user and
+  stops core dumps, the lock screen setting `RLIMIT_CORE` to 0 too, since it aborts on a panic;
+  and `distro/sysctl.d/60-sherlockos-ptrace.conf` sets `ptrace_scope` to 1, which
+  `just install-session` prints the command to install. The login screen (D-24) is to get the
+  same call once its lot is merged.
 - The protocol is applied by smithay plus our checks: a new version of smithay that changes
   `session_lock` must be read again against this ADR.
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the
@@ -126,6 +137,26 @@ The texture lives in the compositor's memory only, freed once the curtain is dow
 The tests: `tests/session_lock.rs` (the desktop frozen before the lock, the curtain only while
 it comes down, no `locked` before it is down, a slow lock program leaves it down, the desktop
 drawn again only once unlocked) and `tests/curtain.rs` (the board, drawn in software).
+
+## Amendment of lot D-25j (2026-11-27, proposed: the author approves it in pull request)
+
+The security audit of 27/11 (point 1) found that Ctrl + Alt + Backspace while locked, kept by
+the decision of 2026-11-26, does not only close the session: started from a text console (the
+documented way before greetd), the compositor gives back that console, already logged in, and
+the lock is bypassed; a crash of the compositor does the same. Under greetd, anyone at the
+machine could also close the session and lose the user's work.
+
+- While locked, Ctrl + Alt + Backspace is not a shortcut: it goes to the lock surface as a
+  Backspace. The console switch stays, and so does the rescue screen's Enter. Unlocked, it still
+  stops the compositor, the way out when nothing answers.
+- The compositor creates a file when the session locks and removes it at the unlock: the one
+  `SHERLOCKOS_LOCK_MARK` names, `$XDG_RUNTIME_DIR/sherlockos-locked` in `sherlockos-session`.
+  If the compositor ends, however it ends, while that file is there, `sherlockos-session` ends
+  the logind session (`loginctl terminate-session`), or without one kills the process that
+  started it, instead of giving back its console.
+- A process of the user could remove that file, or the compositor: it already runs as the user,
+  in the session; this protects the session from someone at the keyboard, not from the user's
+  own programs (see the point on `ptrace` above).
 
 ## What would change our mind
 

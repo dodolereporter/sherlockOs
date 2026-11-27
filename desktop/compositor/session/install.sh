@@ -55,6 +55,9 @@ sudo install -D -m 644 $q/assets/lock/lock-dark.jpg $data/lock/lock-dark.jpg
 sudo install -D -m 644 $q/assets/lock/lock-light.jpg $data/lock/lock-light.jpg
 # The PAM service of the lock screen (lot D-25a):
 sudo install -m 644 $q/desktop/lock/pam/sherlockos-lock /etc/pam.d/sherlockos-lock
+# No program of the user may trace the lock screen or the compositor (lot D-25k):
+sudo install -m 644 $q/distro/sysctl.d/60-sherlockos-ptrace.conf /etc/sysctl.d/
+sudo sysctl -p /etc/sysctl.d/60-sherlockos-ptrace.conf
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
 sudo install -D -m 644 $q/desktop/compositor/session/sherlockos-portals.conf $data/xdg-desktop-portal/sherlockos-portals.conf
 # The cursor themes, their aliases kept as links:
@@ -63,7 +66,7 @@ sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done)$icons/
 
 # To remove it:
-#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock
+#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock /etc/sysctl.d/60-sherlockos-ptrace.conf
 #   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 

@@ -133,8 +133,8 @@ enum Shortcut {
     CloseOverview,
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
     SwitchVt(i32),
-    /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
-    /// nothing else answers.
+    /// Ctrl + Alt + Backspace, in a real session and unlocked: stops the compositor, the way
+    /// out when nothing else answers. Never while locked (lot D-25j).
     Quit,
     /// A media key, in a real session, with its xkb code (lot D-35).
     Media(MediaKey, Keycode),
@@ -209,13 +209,14 @@ impl Shortcut {
     }
 
     /// The only keys the compositor takes while the session is locked: the console switch,
-    /// Ctrl + Alt + Backspace, the volume and brightness keys, the gesture key with Shift and
-    /// Escape (the screens off), and Enter on the rescue screen.
-    /// Every other key goes to the lock surface, or nowhere.
+    /// the volume and brightness keys, the gesture key with Shift and Escape (the screens off),
+    /// and Enter on the rescue screen. Every other key goes to the lock surface, or nowhere:
+    /// Ctrl + Alt + Backspace too, which would close the session of anyone at the machine, and
+    /// give back the console it was started from (lot D-25j).
     fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
         let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
         Self::screen_off(state.nested, m, sym)
-            .or(Self::in_greeter(state, m, key, sym))
+            .or(Self::in_greeter(state, m, key, sym).filter(|s| !matches!(s, Self::Quit)))
             .or(retry.then_some(Self::RetryLock))
     }
 
@@ -894,6 +895,10 @@ impl State {
                 if let Some(switch) = self.switch_vt.as_mut() {
                     switch(vt);
                 }
+                return;
+            }
+            Shortcut::Quit if self.is_locked() => {
+                tracing::warn!("Ctrl + Alt + Backspace while locked: refused");
                 return;
             }
             Shortcut::Quit => {

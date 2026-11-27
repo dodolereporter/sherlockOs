@@ -75,6 +75,9 @@ mod tests {
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
     const KEY_ESC: u32 = 1 + 8;
+    const KEY_LEFTCTRL: u32 = 29 + 8;
+    const KEY_LEFTALT: u32 = 56 + 8;
+    const KEY_BACKSPACE: u32 = 14 + 8;
     const BTN_LEFT: u32 = 0x110;
 
     /// What a client has received.
@@ -431,6 +434,15 @@ mod tests {
         /// Client `i` asks for the lock and a surface on the screen, and shows it once
         /// configured. `None` if the compositor refused the lock.
         fn lock(&mut self, i: usize) -> Option<Locking> {
+            let locking = self.take_lock(i)?;
+            self.peers[i].show(&locking.surface, 800, 600);
+            self.run_until("the lock surface shown", |h| h.lock_surface_drawn());
+            Some(locking)
+        }
+
+        /// Client `i` asks for the lock and a surface on the screen, and waits for its
+        /// configure without showing anything: a lock program still starting.
+        fn take_lock(&mut self, i: usize) -> Option<Locking> {
             let peer = &self.peers[i];
             let (qh, seat) = (peer.qh(), peer.bind::<WlSeat>());
             let _keyboard = seat.get_keyboard(&qh, ());
@@ -450,8 +462,6 @@ mod tests {
                 return None;
             }
             assert_eq!(self.peers[i].seen.lock_size, Some((800, 600)));
-            self.peers[i].show(&surface, 800, 600);
-            self.run_until("the lock surface shown", |h| h.lock_surface_drawn());
             Some(Locking { lock, surface })
         }
 
@@ -1271,6 +1281,13 @@ mod tests {
             peer.queue.blocking_dispatch(&mut peer.seen).unwrap();
         }
         let (w, h) = peer.seen.lock_size.unwrap();
+        // A program slow to start: its first image comes late (lot D-25h).
+        if let Some(delay) = std::env::var("LOCK_CHILD_DELAY_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+        {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
         peer.show(&surface, w as i32, h as i32);
         while !peer.seen.locked {
             peer.queue.blocking_dispatch(&mut peer.seen).unwrap();
@@ -1804,5 +1821,186 @@ mod tests {
             .status();
         std::fs::remove_dir_all(&dir).unwrap();
         assert!(text.contains("form shown"), "one Space, no form:\n{text}");
+    }
+
+    /// Runs the loop for `duration` with client `i` hung: it reads and answers nothing.
+    fn hang(h: &mut Harness, i: usize, duration: Duration) {
+        h.peers[i].frozen = true;
+        wait(h, duration);
+        h.peers[i].frozen = false;
+    }
+
+    /// The incident of 14:17 (lot D-25h): under load, a key came before the lock program's
+    /// first image, the program took 3 s to start, then its scene stalled for 2 s. Slow is not
+    /// dead: it stays, with the default times.
+    #[test]
+    fn a_lock_program_slow_to_start_whose_scene_stalls_is_not_replaced() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let locking = h.take_lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+
+        // A key and a tap before its first image, then 3 s answering nothing, pings included.
+        h.key(KEY_A);
+        h.click(400.0, 300.0);
+        hang(&mut h, locker, Duration::from_secs(3));
+        assert!(!h.state.lock_program_presented());
+        h.peers[locker].show(&locking.surface, 800, 600);
+        h.run_until("the first image", |h| h.state.lock_program_presented());
+        assert_eq!(h.state.lock_attempts(), 0);
+
+        // A key, then its scene stalls for 2 s, answering nothing, before the next image.
+        h.key(KEY_A);
+        hang(&mut h, locker, Duration::from_secs(2));
+        h.peers[locker].show(&locking.surface, 800, 600);
+        wait(&mut h, Duration::from_millis(500));
+        assert_eq!(h.state.lock_attempts(), 0, "nothing started again");
+        assert!(h.state.lock_program_connected());
+        assert!(h.state.lock_confirmed() && h.lock_surface_drawn());
+        assert!(h.peers[locker].seen.keys.contains(&evdev(KEY_A)));
+        assert_eq!(h.window_items(), 0);
+    }
+
+    #[test]
+    fn a_stall_of_the_compositor_does_not_count_against_the_lock_program() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.set_lock_image_timeout(Duration::from_millis(500));
+        h.key(KEY_A);
+        // Nothing runs for 2 s, the compositor included; then the image comes.
+        std::thread::sleep(Duration::from_secs(2));
+        h.peers[locker].show(&locking.surface, 800, 600);
+        wait(&mut h, Duration::from_millis(300));
+        assert_eq!(h.state.lock_attempts(), 0);
+        assert!(h.state.lock_confirmed());
+    }
+
+    #[test]
+    fn a_lock_program_frozen_before_or_after_its_first_image_is_replaced() {
+        // Frozen before its first image: replaced once that image is late, whatever the keys.
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        h.state
+            .set_lock_first_image_timeout(Duration::from_millis(500));
+        let locker = h.connect_program();
+        let _locking = h.take_lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.peers[locker].frozen = true;
+        h.key(KEY_A);
+        h.run_until("the frozen program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked(), "the session stays locked");
+        assert!(!h.lock_surface_drawn());
+        assert_eq!(h.window_items(), 0, "nothing of the session shows");
+
+        // Frozen after its first image: replaced once a ping goes unanswered.
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        h.state.set_lock_ping_timeout(Duration::from_millis(300));
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.peers[locker].frozen = true;
+        h.key(KEY_A);
+        h.run_until("the frozen program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked());
+        assert!(!h.lock_surface_drawn());
+    }
+
+    /// The rescue mode, slow to start and showing nothing after the keys, stays: it is judged
+    /// only on its first image and on its life (lot D-25h).
+    #[test]
+    fn the_rescue_mode_slow_and_blind_to_keys_stays() {
+        let dir = std::env::temp_dir().join(format!("lock-slow-rescue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mark = dir.join("locked");
+        let exe = std::env::current_exe().unwrap();
+        let child = format!("LOCK_CHILD={}", mark.display());
+        let rescue = [
+            "env",
+            child.as_str(),
+            "LOCK_CHILD_DELAY_MS=2000",
+            exe.to_str().unwrap(),
+            "--exact",
+            "tests::lock_program_child",
+            "--ignored",
+            "--test-threads=1",
+        ];
+        let mut h = Harness::start(&["true"], &rescue);
+        h.state.set_lock_image_timeout(Duration::from_millis(300));
+        h.chord(KEY_SUPER, KEY_L);
+        h.show_frame();
+        h.run_until("the rescue mode holds the lock", |h| {
+            h.state.lock_confirmed() && h.state.lock_stage() == compositor::lock::Stage::Rescue
+        });
+        // Keys before its first image.
+        h.key(KEY_A);
+        h.key(KEY_A);
+        h.run_until("its first image", |h| h.state.lock_program_presented());
+        let attempts = h.state.lock_attempts();
+        assert_eq!(
+            attempts, 4,
+            "three tries of the lock program, then the rescue"
+        );
+        // Keys it never shows.
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(1100));
+        assert_eq!(h.state.lock_attempts(), attempts, "the rescue stays");
+        assert!(h.state.lock_confirmed() && h.lock_surface_drawn());
+        let pid = std::fs::read_to_string(&mark).unwrap_or_default();
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", pid.trim()])
+            .status();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Ctrl + Alt + Backspace never stops the compositor while locked: it goes to the lock as
+    /// a Backspace; the file that says the session is locked lives from the lock to the unlock
+    /// (lot D-25j).
+    #[test]
+    fn ctrl_alt_backspace_does_nothing_while_locked_and_the_lock_is_marked() {
+        let dir = std::env::temp_dir().join(format!("lock-mark-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mark = dir.join("sherlockos-locked");
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        h.state.set_lock_mark(Some(mark.clone()));
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        assert!(mark.exists(), "marked at the lock");
+
+        for key in [KEY_LEFTCTRL, KEY_LEFTALT] {
+            h.state
+                .keyboard_key(Keycode::new(key), KeyState::Pressed, 10);
+        }
+        h.key(KEY_BACKSPACE);
+        for key in [KEY_LEFTALT, KEY_LEFTCTRL] {
+            h.state
+                .keyboard_key(Keycode::new(key), KeyState::Released, 11);
+        }
+        h.run_until("the Backspace on the lock", |h| {
+            h.peers[locker].seen.keys.contains(&evdev(KEY_BACKSPACE))
+        });
+        assert!(h.state.is_locked());
+
+        locking.lock.unlock_and_destroy();
+        h.run_until("unlocked", |h| !h.state.is_locked());
+        assert!(!mark.exists(), "unmarked at the unlock");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
