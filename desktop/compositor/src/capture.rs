@@ -315,6 +315,15 @@ impl State {
         self.capture.capturer = Some(capturer);
     }
 
+    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b). `None`
+    /// without a renderer.
+    pub(crate) fn draw_capture(&mut self, target: &Target) -> Option<Image> {
+        let mut capturer = self.capture.capturer.take()?;
+        let image = capturer(self, target);
+        self.capture.capturer = Some(capturer);
+        image
+    }
+
     pub(crate) fn takes_screenshots(&self) -> bool {
         self.capture.jobs.is_some()
     }
