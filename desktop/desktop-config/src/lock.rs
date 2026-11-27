@@ -12,7 +12,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -139,6 +139,7 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn what_control_room_writes_reads_back() {

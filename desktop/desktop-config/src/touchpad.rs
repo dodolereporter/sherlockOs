@@ -26,7 +26,7 @@
 
 use std::{
     ffi::OsString,
-    fmt, fs, io,
+    fmt, io,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -251,6 +251,7 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn an_empty_file_is_the_default() {

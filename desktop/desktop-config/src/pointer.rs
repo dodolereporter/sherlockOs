@@ -8,7 +8,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
