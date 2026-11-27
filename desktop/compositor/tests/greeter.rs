@@ -12,7 +12,8 @@ mod tests {
         time::Duration,
     };
 
-    use compositor::State;
+    use compositor::{State, damage::Part, render::Item};
+    use sherlock_ui::lock::{CURTAIN_BLACK, CURTAIN_REVEAL};
     use smithay::{backend::input::KeyState, input::keyboard::Keycode, reexports::calloop};
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop,
@@ -373,6 +374,116 @@ mod tests {
         h.settle();
         assert!(!h.state.screens_dark() && !h.state.is_locked());
         assert!(h.seen.keys.is_empty(), "{:?}", h.seen.keys);
+    }
+
+    /// Small pictures of the lock, dark and light, for the curtain.
+    fn pictures() -> desktop_config::lock_background::Pictures {
+        let picture = |v: u8| desktop_config::lock_background::Picture {
+            width: 4,
+            height: 4,
+            rgba: vec![v; 64],
+        };
+        desktop_config::lock_background::Pictures {
+            dark: picture(20),
+            light: picture(200),
+        }
+    }
+
+    fn items(state: &State, now: Duration) -> Vec<Item> {
+        let (output, view) = state.views().remove(0);
+        // `true`: the wallpaper is loaded, and must not show anyway.
+        compositor::render::items(state, (&output, &view), None, true, now).0
+    }
+
+    fn curtain(items: &[Item]) -> Vec<f32> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Curtain { alpha, .. } => Some(*alpha),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn black(items: &[Item]) -> Option<f32> {
+        items.iter().find_map(|item| match item {
+            Item::Shape { key, alpha, .. } if key.part == Part::CurtainBlack => Some(*alpha),
+            _ => None,
+        })
+    }
+
+    /// The login screen shows the picture of the lock from its first frame, behind the
+    /// greeter, never the wallpaper of the desktop (lot D-24e).
+    #[test]
+    fn the_first_frame_of_the_login_screen_is_the_curtain() {
+        let mut h = Harness::start();
+        h.state.set_curtain_pictures(pictures());
+        let now = h.state.now();
+        h.state.curtain_frame(now);
+        let first = items(&h.state, now);
+        assert_eq!(curtain(&first), [1.0], "the curtain, whole");
+        assert!(!first.iter().any(|i| matches!(i, Item::Wallpaper)));
+        assert!(!first.iter().any(|i| matches!(i, Item::Shape { .. })));
+        h.show_greeter();
+        let shown = items(&h.state, h.state.now());
+        assert!(
+            matches!(shown.last(), Some(Item::Curtain { .. })),
+            "behind it"
+        );
+        assert!(matches!(shown.first(), Some(Item::Window { .. })));
+    }
+
+    /// The greeter has left: the curtain fades to black, then the compositor stops.
+    #[test]
+    fn once_the_greeter_left_the_login_screen_fades_to_black() {
+        let mut h = Harness::start();
+        h.state.set_curtain_pictures(pictures());
+        h.state.curtain_frame(h.state.now());
+        h.state.greeter_left();
+        let since = h.state.now();
+        let start = black(&items(&h.state, since)).unwrap();
+        let mid = black(&items(&h.state, since + CURTAIN_BLACK / 2)).unwrap();
+        let end = black(&items(&h.state, since + CURTAIN_BLACK)).unwrap();
+        assert!(start < 0.1 && mid > start && mid < 1.0, "{start} {mid}");
+        assert_eq!(end, 1.0);
+        assert_eq!(
+            curtain(&items(&h.state, since + CURTAIN_BLACK)),
+            [1.0],
+            "the curtain under the black"
+        );
+    }
+
+    /// The session's compositor: from black to the picture of the lock, then the picture fades
+    /// out over the desktop (lot D-24e).
+    #[test]
+    fn the_session_opens_from_black_through_the_curtain() {
+        let event_loop = calloop::EventLoop::<State>::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((1366, 768).into(), 1.0);
+        state.set_curtain_pictures(pictures());
+        let first = state.now();
+        state.curtain_frame(first);
+        let at = |t: Duration| items(&state, first + t);
+        let start = at(Duration::ZERO);
+        assert_eq!(black(&start), Some(1.0), "black first");
+        assert_eq!(curtain(&start), [0.0]);
+        let picture = at(CURTAIN_BLACK);
+        assert_eq!(black(&picture), None);
+        assert_eq!(curtain(&picture), [1.0], "then the picture, whole");
+        assert!(
+            picture.iter().any(|i| matches!(i, Item::Wallpaper)),
+            "the desktop under it"
+        );
+        let half = curtain(&at(CURTAIN_BLACK + CURTAIN_REVEAL / 2))[0];
+        assert!(half > 0.0 && half < 0.5, "{half}");
+        let gone = at(CURTAIN_BLACK + CURTAIN_REVEAL);
+        assert!(curtain(&gone).iter().all(|a| *a == 0.0));
+        state.refresh();
+        // Not before the end of the reveal, in real time: the motion settles once it is over.
+        std::thread::sleep(CURTAIN_BLACK + CURTAIN_REVEAL);
+        state.refresh();
+        assert_eq!(state.curtain_motion(), compositor::curtain::Motion::Up);
+        assert!(curtain(&items(&state, state.now())).is_empty());
     }
 
     #[test]

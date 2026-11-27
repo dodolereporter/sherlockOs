@@ -26,7 +26,10 @@ use std::{
 };
 
 use compositor::{Error, State, mesa, options::Options, stats::FrameStats, udev};
-use smithay::reexports::calloop::{EventLoop, LoopSignal};
+use smithay::reexports::calloop::{
+    EventLoop, LoopSignal,
+    channel::{self, Event, Sender},
+};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Error> {
@@ -86,12 +89,29 @@ fn main() -> Result<(), Error> {
     let signal = options
         .stops_with_command()
         .then(|| state.loop_signal.clone());
+    // The login screen fades its curtain to black once its greeter has left, then stops
+    // (lot D-24e).
+    let left = if options.greeter {
+        let (sender, ended) = channel::channel::<()>();
+        event_loop
+            .handle()
+            .insert_source(ended, |event, _, state| {
+                if let Event::Msg(()) = event {
+                    state.greeter_left();
+                }
+            })
+            .map_err(|err| Error::Session(format!("greeter: {}", err.error)))?;
+        Some(sender)
+    } else {
+        None
+    };
     // XWayland starts with the compositor, and the command once it is ready: it may be an X11
     // application. Without Xwayland on the machine, only Wayland applications show up.
     let launch = {
-        let (command, socket, signal) = (options.command.clone(), socket.clone(), signal.clone());
+        let (command, socket) = (options.command.clone(), socket.clone());
+        let (signal, left) = (signal.clone(), left.clone());
         move |_: &mut State, display: Option<u32>| {
-            if let Err(err) = spawn(&command, &socket, display, signal) {
+            if let Err(err) = spawn(&command, &socket, display, signal, left) {
                 tracing::warn!("{err}");
             }
         }
@@ -103,7 +123,7 @@ fn main() -> Result<(), Error> {
     };
     if let Err(err) = xwayland {
         tracing::warn!("no X11 applications: {err}");
-        spawn(&options.command, &socket, None, signal)?;
+        spawn(&options.command, &socket, None, signal, left)?;
     }
 
     // Each iteration ends with the cleanup, and is measured from the end of the previous one:
@@ -127,12 +147,14 @@ fn main() -> Result<(), Error> {
 /// Launches the command, if there is one, with the compositor's Wayland socket and its X11
 /// display. Both go through the child's environment only: ours keeps the host session's. Without
 /// an X11 display, the child does not inherit the host's, where its X11 windows would open
-/// outside the compositor.
+/// outside the compositor. Once it ends, `left` hears it (the login screen), or `signal` stops
+/// the loop.
 fn spawn(
     command: &[OsString],
     socket: &OsStr,
     display: Option<u32>,
     signal: Option<LoopSignal>,
+    left: Option<Sender<()>>,
 ) -> Result<(), Error> {
     let Some((program, arguments)) = command.split_first() else {
         return Ok(());
@@ -150,7 +172,8 @@ fn spawn(
             Ok(status) => tracing::info!(%status, "the launched command has ended"),
             Err(err) => tracing::warn!("waiting for the launched command: {err}"),
         }
-        if let Some(signal) = signal {
+        let heard = left.is_some_and(|left| left.send(()).is_ok());
+        if let (false, Some(signal)) = (heard, signal) {
             signal.stop();
         }
     });

@@ -536,6 +536,20 @@ pub fn screen_at(
     output: &Output,
     now: Duration,
 ) -> Option<Image> {
+    let texture = screen_texture(scene, renderer, textures, state, output, now)?;
+    read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, into a texture: a screenshot, or the frame
+/// frozen under the curtain when the session locks (lot D-24e).
+pub fn screen_texture(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<GlesTexture> {
     let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
     let size: Size<i32, Physical> = view.frame.size;
     let view = View {
@@ -548,10 +562,9 @@ pub fn screen_at(
     let (screens, _) = scene.screens(renderer, &mut ids, state, textures, &views, None, now);
     let elements = screens.into_iter().next()?;
     let desktop = color::palette().desktop.premultiplied();
-    let texture = window_anim::draw(renderer, size, &elements, desktop)
-        .inspect_err(|err| tracing::warn!("screenshot: drawing the screen: {err}"))
-        .ok()?;
-    read(renderer, texture)
+    window_anim::draw(renderer, size, &elements, desktop)
+        .inspect_err(|err| tracing::warn!("drawing the screen: {err}"))
+        .ok()
 }
 
 #[cfg(test)]

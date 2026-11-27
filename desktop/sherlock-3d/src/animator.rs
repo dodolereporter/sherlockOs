@@ -9,7 +9,9 @@
 //!   open. Each eye plays it at its own time: one eye closes alone, the other stops half way
 //!   (`Mood::Peek`). An eye shut by the clip is hidden: the clip shrinks it to 2 % of its size,
 //!   which still shows as a dot next to the arc of the closed eye.
-//! - The eyes (`eye_L`, `eye_R`, which no clip drives) turn toward a point given by code.
+//! - The eyes (`eye_L`, `eye_R`, which no clip drives) turn toward a point given by code, and
+//!   the head follows them part of the way (lot D-24d): with his eyes closed, Sherlock still
+//!   bends his head toward the password field.
 
 use std::sync::Arc;
 
@@ -31,6 +33,9 @@ pub const PEEK_TILT: f32 = 0.14;
 /// own player does): further, the eyes slide down onto the mouth when they look at the
 /// password field below.
 pub const GAZE_LIMIT: f32 = 0.12;
+/// How far the head turns toward what the eyes look at, in radians (about 11 degrees): enough
+/// to read as looking down at the field, little enough that the cap stays in the bubble.
+pub const HEAD_GAZE_LIMIT: f32 = 0.2;
 /// Shortest and longest wait between two blinks, in seconds.
 const BLINK_WAIT: (f32, f32) = (2.5, 6.0);
 /// Rate of the exponential smoothing of the gaze and of the head roll, per second.
@@ -150,6 +155,8 @@ pub struct Animator {
     gaze_target: Option<Vec3>,
     /// Rotation of each eye toward its target, in the space of its rest pose.
     gaze: [Quat; 2],
+    /// Rotation of the head toward the target, in its own space.
+    head_gaze: Quat,
 }
 
 impl Animator {
@@ -184,6 +191,7 @@ impl Animator {
             tilt: 0.0,
             gaze_target: None,
             gaze: [Quat::IDENTITY; 2],
+            head_gaze: Quat::IDENTITY,
         };
         animator.queue = animator.clips(Mood::Idle.plan());
         animator.next_action();
@@ -316,6 +324,8 @@ impl Animator {
         for (gaze, wanted) in self.gaze.iter_mut().zip(wanted) {
             *gaze = gaze.slerp(wanted, smoothing).normalize();
         }
+        let head = self.head_wanted();
+        self.head_gaze = self.head_gaze.slerp(head, smoothing).normalize();
     }
 
     /// The pose of this frame.
@@ -341,7 +351,8 @@ impl Animator {
             }
         }
         let head = &mut pose.transforms[face.head];
-        head.rotation = (head.rotation * Quat::from_rotation_z(self.tilt)).normalize();
+        head.rotation =
+            (head.rotation * self.head_gaze * Quat::from_rotation_z(self.tilt)).normalize();
         // A shut eye no longer looks anywhere: its arc stays where the eye rests. Turned toward
         // the field below, it would slide down onto the mouth.
         let end = closing.duration;
@@ -437,6 +448,37 @@ impl Animator {
             let (axis, angle) = full.to_axis_angle();
             Quat::from_axis_angle(axis, angle.min(GAZE_LIMIT))
         })
+    }
+
+    /// The rotation that turns the face toward the target, limited to `HEAD_GAZE_LIMIT`: from
+    /// where the head faces (the model faces +Z) to the target, in the space of the head bone.
+    fn head_wanted(&self) -> Quat {
+        let (Some(face), Some(target)) = (self.face, self.gaze_target) else {
+            return Quat::IDENTITY;
+        };
+        let global = self.body().globals(&self.model)[face.head];
+        let (_, rotation, position) = global.to_scale_rotation_translation();
+        let inverse = rotation.inverse();
+        let ahead = inverse * Vec3::Z;
+        let toward = inverse * (target - position);
+        if toward.length_squared() < 1e-6 || ahead.length_squared() < 1e-6 {
+            return Quat::IDENTITY;
+        }
+        let full = Quat::from_rotation_arc(ahead.normalize(), toward.normalize());
+        let (axis, angle) = full.to_axis_angle();
+        Quat::from_axis_angle(axis, angle.min(HEAD_GAZE_LIMIT))
+    }
+
+    /// The direction the face looks at in this frame, in the space of the model: +Z of the
+    /// model turned by the head (for the tests).
+    pub fn facing(&self) -> Option<Vec3> {
+        let face = self.face?;
+        let global = self.pose().globals(&self.model)[face.head];
+        let (_, rotation, _) = global.to_scale_rotation_translation();
+        let rest = self.body().globals(&self.model)[face.head];
+        let (_, rest, _) = rest.to_scale_rotation_translation();
+        // What the head adds to the body's own motion, applied to the face's direction.
+        Some((rotation * rest.inverse() * Vec3::Z).normalize())
     }
 
     /// A wait between two blinks, from a small deterministic generator.

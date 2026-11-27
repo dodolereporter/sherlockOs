@@ -7,9 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
-# The variant generator (`wallpaper-variants`), run when the image is built: it alone needs
-# an image codec. The compositor and Control Room only read the settings.
+# The variant generator (`wallpaper-variants`), run when the image is built, needs
+# an image codec. Control Room only reads the settings.
 variants = ["dep:image"]
+# The picture behind the lock and login screens (`lock_background`): the lock screen, the login
+# screen and the compositor, which draws it as their curtain (lot D-24e), read it alike.
+lock-background = ["dep:image"]
 
 [dependencies]
 # PNG and JPEG only, version already used by evidence (and pulled by iced 0.14).

@@ -113,8 +113,10 @@ pub fn run(rescue: bool) -> Result<(), Error> {
     };
     iced_exwlshell::daemon(boot, namespace, Lock::update, Lock::view)
         .theme(|_: &Lock, _| Some(theme::theme()))
+        // Transparent: the compositor shows the picture of the lock behind (lot D-24d) until
+        // this program's own fades in over it; the rescue mode fills its screen itself.
         .style(|_, _| iced::theme::Style {
-            background_color: color::palette().system_screen.into(),
+            background_color: iced::Color::TRANSPARENT,
             text_color: color::palette().text_primary.into(),
         })
         .subscription(Lock::subscription)

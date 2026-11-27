@@ -49,6 +49,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# Lays the screenshots of an animation side by side on a board, for the review: the version and
+# features the lock screen already builds.
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

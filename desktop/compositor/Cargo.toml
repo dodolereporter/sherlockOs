@@ -31,8 +31,9 @@ xcursor = "=0.3.11"
 # Colors and sizes of the snap preview and of the grab band. Only the tokens: without the
 # `iced` feature, the compositor does not build the shell toolkit.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
-# Wallpaper setting, shared with Control Room (workspace crate).
-desktop-config = { path = "../desktop-config" }
+# Wallpaper setting, shared with Control Room, and the picture of the lock, its curtain (lot
+# D-24e), shared with the lock and login screens (workspace crate).
+desktop-config = { path = "../desktop-config", features = ["lock-background"] }
 # Names of the house cursor themes and of their shapes, without the generator (lot D-07).
 cursor-theme = { path = "../cursor-theme" }
 # Wallpaper decoders, PNG (the variants) and JPEG (an image chosen by the user) only. Same

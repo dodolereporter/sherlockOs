@@ -302,6 +302,13 @@ pub struct Texture {
     size: (u32, u32),
 }
 
+impl Texture {
+    /// A picture uploaded elsewhere (the curtain, `curtain.rs`), drawn like a wallpaper.
+    pub(crate) fn new(buffer: TextureBuffer<GlesTexture>, size: (u32, u32)) -> Self {
+        Self { buffer, size }
+    }
+}
+
 /// The wallpaper textures, one per variant in use, shared by the screens that show it.
 #[derive(Default)]
 pub struct Textures {

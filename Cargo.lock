@@ -1539,6 +1539,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "image",
  "lock",
  "serde_json",
  "sherlock-3d",

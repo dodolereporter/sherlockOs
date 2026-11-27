@@ -1,8 +1,10 @@
-//! The lock screen: one lock surface per screen. At rest, every screen shows the background,
-//! the date and the time. A key, a click or the pointer bring the form, on the screen of the
-//! pointer (the one whose lock surface the compositor gives the keyboard to): Sherlock in 3D in
-//! his bubble, the user's name, the password pill and the machine buttons (`form`). Every size
-//! follows the height of its screen (`sherlock_ui::lock::screen`).
+//! The lock screen: one lock surface per screen. Every screen shows the background, the date and
+//! the time; the screen of the pointer (the one whose lock surface the compositor gives the
+//! keyboard to) also shows the form: Sherlock in 3D in his bubble, the user's name, the password
+//! pill and the machine buttons (`form`). They come with the lock, one after the other, once the
+//! compositor's curtain is down (lot D-24d), and leave after a while without input; a key, a
+//! click or the pointer bring them back. Every size follows the height of its screen
+//! (`sherlock_ui::lock::screen`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,14 +13,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use iced::futures::channel::mpsc;
 use iced::widget::{Space, button, column, container, image, row, stack, text, text_input};
 use iced::{
-    Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
-    Padding, Point, Size, Subscription, Task, keyboard, mouse, window,
+    Alignment, Background, Border, Color as IcedColor, Element, Event, Font, Length, Padding, Size,
+    Subscription, Task, keyboard, mouse, window,
 };
 use iced_exwlshell::to_exwlshell_message;
-use sherlock_3d::{Model, Sherlock3d};
+use sherlock_3d::Model;
 use sherlock_ui::color::{self, Color};
 use sherlock_ui::component;
 use sherlock_ui::icon::Icon;
+use sherlock_ui::lock::CURTAIN;
 use sherlock_ui::lock::screen::{self as ui, Colors};
 use sherlock_ui::motion::Animation;
 use sherlock_ui::{strings, typography};
@@ -28,7 +31,10 @@ use crate::background::{Picture, Pictures};
 use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
-use crate::view::{color_of, drop_in, fade, rise, spinner};
+use crate::view::{self, Avatar, color_of, fade, rise, spinner};
+
+/// The elements of the screen, from the time (0) to the machine buttons.
+const LAST: u32 = 4;
 
 /// The still picture of Sherlock, until his model is read or without it (the login screen
 /// shows it too).
@@ -155,10 +161,14 @@ pub struct Lock {
     last_boot: Option<Duration>,
     /// The rescue mode (`rescue`).
     rescue: bool,
-    /// When the curtain started to come down: once the picture is ready (lot D-25e).
-    curtain: Option<Duration>,
-    /// The dark and light pictures behind the screen.
+    /// The dark and light pictures behind the screen, and when they were read.
     background: Option<(image::Handle, image::Handle)>,
+    /// `None` when read before the first frame: shown at once.
+    background_at: Option<Duration>,
+    /// When the last key came in the field: Sherlock looks at it.
+    last_key: Option<Duration>,
+    /// The first frame was drawn: the entrance starts from it at the latest.
+    drawn: bool,
     /// The size, in pixels, the background was asked for.
     asked: Option<(u32, u32)>,
     /// The largest scale of the screens.
@@ -194,14 +204,24 @@ impl Lock {
             mascot: None,
             last_boot: None,
             rescue: false,
-            curtain: None,
             background: None,
+            background_at: None,
+            last_key: None,
+            drawn: false,
             asked: None,
             scale: 1.0,
             theme: color::ThemeFade::default(),
             authenticator,
             runner,
         }
+        .with_form()
+    }
+
+    /// The form comes with the lock (lot D-24d): its elements rise one after the other once the
+    /// curtain of the compositor is down.
+    fn with_form(mut self) -> Self {
+        self.form.show(CURTAIN);
+        self
     }
 
     /// The rescue mode (`--rescue`, lot D-25c): what the compositor starts once the lock screen
@@ -211,19 +231,19 @@ impl Lock {
     pub fn rescue(mut self) -> Self {
         self.rescue = true;
         self.entered = true;
-        self.curtain = Some(Duration::ZERO);
+        self.form = Form::default();
         self.form.show(Duration::ZERO);
         self
-    }
-
-    /// The curtain has started to come down.
-    pub fn curtain_started(&self) -> bool {
-        self.curtain.is_some()
     }
 
     /// The form shows.
     pub fn form_shown(&self) -> bool {
         self.form.shown()
+    }
+
+    /// Sherlock looks down at the field now.
+    pub fn looks_at_field(&self) -> bool {
+        form::gaze(self.field(), self.elapsed())
     }
 
     /// What Sherlock shows now.
@@ -238,6 +258,7 @@ impl Lock {
             peek: self.reveal,
             typed: self.typed,
             asleep: self.asleep,
+            last_key: self.last_key,
         }
     }
 
@@ -272,6 +293,11 @@ impl Lock {
         self.now = now;
     }
 
+    /// The clock of the animations at `elapsed` from the start of the screen (the tests).
+    pub fn set_elapsed(&mut self, elapsed: Duration) {
+        self.now = self.start + elapsed;
+    }
+
     pub fn set_clock(&mut self, clock: Clock) {
         self.clock = clock;
     }
@@ -282,11 +308,14 @@ impl Lock {
 
     fn animating(&self) -> bool {
         let t = self.elapsed();
-        // Waiting for the picture, then the curtain and the time.
-        let entrance = !self.entered
-            && self
-                .curtain
-                .is_none_or(|at| t < at + Duration::from_millis(1200));
+        let entrance = !self.entered && t < CURTAIN + Duration::from_millis(1200);
+        // The gaze comes back from the field once the keys stop; the pictures fade in.
+        let gaze = self
+            .last_key
+            .is_some_and(|at| t < at + ui::TYPING_GAZE + Duration::from_millis(100));
+        let picture = self
+            .background_at
+            .is_some_and(|at| t < at + ui::PICTURE_FADE);
         let form = self
             .form
             .changed()
@@ -297,7 +326,7 @@ impl Lock {
             Phase::Refused(at, _) => t < at + ui::SHAKE + Duration::from_millis(400),
             Phase::Leaving(_) => true,
         };
-        entrance || form || phase || self.theme.running()
+        entrance || form || phase || gaze || picture || self.theme.running()
     }
 
     /// Reads the background once the screens are known, or again for a larger screen: at the
@@ -379,6 +408,7 @@ impl Lock {
             Message::Typed(typed) => {
                 if self.form.shown() && matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
                     self.typed |= !typed.is_empty();
+                    self.last_key = Some(self.elapsed());
                     self.password = typed;
                     self.phase = Phase::Typing;
                     self.armed.disarm();
@@ -448,19 +478,14 @@ impl Lock {
                          rgba,
                      }| image::Handle::from_rgba(width, height, rgba);
                 self.background = Some((handle(dark), handle(light)));
-                // The picture is ready: the curtain comes down now, never before it.
-                self.curtain.get_or_insert(self.elapsed());
+                self.background_at = self.drawn.then(|| self.elapsed());
             }
             Message::Frame(now) => {
+                self.first_frame(now);
                 self.now = now;
                 self.theme.tick(now);
-                // No picture in time (none to read, or a slow disk): the curtain comes down on
-                // the plain background.
-                if self.curtain.is_none() && self.elapsed() >= ui::CURTAIN_WAIT {
-                    self.curtain = Some(self.elapsed());
-                }
                 if let Phase::Leaving(at) = self.phase
-                    && self.elapsed() >= at + ui::EXIT
+                    && self.elapsed() >= at + ui::exit_length(LAST)
                 {
                     // The lock ends, then the program. THE ONLY CLEAN EXIT, AND IT UNLOCKS: the
                     // toolkit (exwlshellev) sends `unlock_and_destroy` on every clean exit while
@@ -474,6 +499,19 @@ impl Lock {
             _ => {}
         }
         Task::none()
+    }
+
+    /// The first frame, at `now`: a lock screen slower than the curtain starts its entrance
+    /// from it, so that it is seen whole.
+    fn first_frame(&mut self, now: Instant) {
+        if std::mem::replace(&mut self.drawn, true) || self.rescue {
+            return;
+        }
+        if now.saturating_duration_since(self.start) > CURTAIN
+            && let Some(start) = now.checked_sub(CURTAIN)
+        {
+            self.start = start;
+        }
     }
 
     /// A key, a click or the pointer on the surface `id`.
@@ -511,6 +549,7 @@ impl Lock {
                     text.push_str(typed.as_str());
                     self.password = Secret::new(text);
                     self.typed = true;
+                    self.last_key = Some(self.elapsed());
                 }
                 return Task::batch([task, iced::widget::operation::focus(field())]);
             }
@@ -545,35 +584,33 @@ impl Lock {
     }
 
     /// Progress of element `index` (0 for the time, then the bubble, the name, the pill and the
-    /// machine buttons), from 0 to 1, times the exit. The time enters with the screen; the
-    /// others come with the form, 70 ms apart, and leave with it in reverse order. A key ends
-    /// the entrance. Unclamped: the spring overshoots a little.
+    /// machine buttons, `LAST`), from 0 to 1, times the exit. The time enters once the curtain
+    /// is down; the others come with the form, 70 ms apart, and leave with it in reverse order,
+    /// as they do once unlocked. A key ends the entrance. Unclamped: the spring overshoots a
+    /// little.
     fn progress(&self, index: u32) -> f32 {
         let t = self.elapsed();
         let entrance = match (index, self.form.changed()) {
-            (0, _) if self.entered && self.curtain.is_some() => 1.0,
-            (0, _) => match self.curtain {
-                Some(at) => Animation::new(ui::SPRING, 0.0, 1.0, at + ui::CURTAIN_LAG).value(t),
-                None => 0.0,
-            },
+            (0, _) if self.entered => 1.0,
+            (0, _) => Animation::new(ui::SPRING, 0.0, 1.0, CURTAIN).value(t),
             (_, None) => 0.0,
             (_, Some(_)) if self.form.shown() && self.entered => 1.0,
             (_, Some(at)) if self.form.shown() => {
                 Animation::new(ui::SPRING, 0.0, 1.0, at + ui::STAGGER * (index - 1)).value(t)
             }
-            (_, Some(at)) => {
-                Animation::new(ui::SPRING, 1.0, 0.0, at + ui::STAGGER * (4 - index.min(4))).value(t)
-            }
+            (_, Some(at)) => Animation::new(
+                ui::SPRING,
+                1.0,
+                0.0,
+                at + ui::STAGGER * LAST.saturating_sub(index),
+            )
+            .value(t),
         };
         let exit = match self.phase {
-            Phase::Leaving(at) => {
-                let behind = ui::STAGGER * (4 - index.min(4));
-                let t = t.saturating_sub(at + behind / 4).as_secs_f64();
-                1.0 - (t / ui::EXIT.as_secs_f64()).clamp(0.0, 1.0)
-            }
+            Phase::Leaving(at) => ui::exit(index, LAST, t.saturating_sub(at)),
             _ => 1.0,
         };
-        (entrance * exit) as f32
+        entrance as f32 * exit
     }
 
     /// `progress`, between 0 and 1: an opacity.
@@ -593,7 +630,7 @@ impl Lock {
             .unwrap_or(Size::new(1920.0, 1080.0));
         let height = size.height;
         let primary = self.primary.is_none_or(|p| p == id);
-        let time = drop_in(
+        let time = rise(
             column![
                 text(
                     ui::date(self.clock.weekday, self.clock.day, self.clock.month)
@@ -622,13 +659,7 @@ impl Lock {
                 .push(rise(self.bubble(height, &colors), self.presence(1)))
                 .push(Space::new().height(ui::BUBBLE_GAP))
                 .push(rise(
-                    text(self.user.as_str())
-                        .size(ui::NAME_SIZE)
-                        .font(Font {
-                            weight: iced::font::Weight::Semibold,
-                            ..typography::UI
-                        })
-                        .color(fade(colors.text, self.presence(2))),
+                    view::name(self.user.as_str(), fade(colors.text, self.presence(2))),
                     self.presence(2),
                 ))
                 .push(Space::new().height(ui::NAME_GAP))
@@ -639,56 +670,11 @@ impl Lock {
                 .push(rise(self.machines(&colors), self.presence(4)))
                 .push(Space::new().height(ui::bottom(height)));
         }
-        let fill = colors.background;
-        let plain = container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(fill.into())),
-                ..container::Style::default()
-            });
-        let mut layers = stack![plain];
-        // The curtain: the picture comes down from the top. Its bottom part shows first, in a
-        // box that grows from the top edge (the picture keeps the size of the screen, aligned
-        // on the bottom of the box): it slides down, over the plain background the compositor
-        // already shows (lot D-25e).
-        let down = match self.curtain {
-            Some(_) if self.entered => 1.0,
-            Some(at) => Animation::new(ui::SPRING, 0.0, 1.0, at)
-                .value(self.elapsed())
-                .clamp(0.0, 1.0) as f32,
-            None => 0.0,
-        };
-        // The picture of the dark theme, and that of the light one over it, as opaque as the
-        // light palette is mixed in: the fade of the theme fades them too.
-        if let Some((dark, light)) = &self.background
-            && down > 0.0
-        {
-            let light_share = f32::from(color::mix_step()) / f32::from(color::MIX_STEPS);
-            let cover = |handle: &image::Handle, opacity: f32| {
-                let picture = image(handle.clone())
-                    .width(Length::Fill)
-                    .height(height)
-                    .content_fit(ContentFit::Cover)
-                    .opacity(opacity);
-                column![
-                    container(picture)
-                        .width(Length::Fill)
-                        .height(height * down)
-                        .align_y(Alignment::End)
-                        .clip(true),
-                    Space::new().height(Length::Fill),
-                ]
-            };
-            if light_share < 1.0 {
-                layers = layers.push(cover(dark, 1.0));
-            }
-            if light_share > 0.0 {
-                layers = layers.push(cover(light, light_share));
-            }
-        }
-        layers
-            .push(page)
+        // The pictures, faded in over the compositor's own; never a plain background.
+        let opacity = self.background_at.map_or(1.0, |at| {
+            view::picture_opacity(self.elapsed().saturating_sub(at))
+        });
+        stack![view::backdrop(self.background.as_ref(), opacity), page]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
@@ -724,56 +710,19 @@ impl Lock {
             .into()
     }
 
-    /// Sherlock in his bubble: in 3D on the GPU, the still picture in software or without the
-    /// model. The bubble grows from `BUBBLE_FROM` of its size on a spring, in a box of
-    /// constant size.
+    /// Sherlock in his bubble (`view::bubble`, shared with the login screen); he looks down at
+    /// the field while keys come in it.
     fn bubble(&self, height: f32, colors: &Colors) -> Element<'_, Message> {
         let diameter = ui::bubble(height);
-        let grow = ui::BUBBLE_FROM + (1.0 - ui::BUBBLE_FROM) * self.progress(1).max(0.0);
-        let side = (diameter * grow).max(1.0);
-        let fill = fade(colors.bubble, self.presence(1));
-        let edge = fade(colors.bubble_border, self.presence(1));
-        let field = self.field();
-        // The field, under the bubble, the name and their gaps.
-        let below = Point::new(
-            diameter / 2.0,
-            diameter + ui::BUBBLE_GAP + ui::NAME_SIZE + ui::NAME_GAP + 2.0 * ui::RISE,
-        );
-        let gaze = form::gaze(field, self.elapsed()).then_some(below);
-        // Without the model, the still picture of the boards, its top in the bubble. With it,
-        // the 3D widget, which falls back to the still picture itself in software.
-        let mascot: Element<'_, Message> = match &self.mascot {
-            Some(Mascot(model)) => Sherlock3d::new(Some(model.clone()))
-                .mood(self.mood())
-                .look_at(gaze)
-                .background(fill)
-                .paused(!self.form.shown())
-                .width(side)
-                .height(side)
-                .into(),
-            None => container(
-                image(image::Handle::from_bytes(SHERLOCK))
-                    .height(side * 1.15)
-                    .opacity(self.presence(1)),
-            )
-            .padding(Padding::default().top(side * 0.1))
-            .width(side)
-            .align_x(Alignment::Center)
-            .into(),
+        let avatar = Avatar {
+            mascot: self.mascot.as_ref(),
+            mood: self.mood(),
+            gaze: self
+                .looks_at_field()
+                .then(|| view::field_point(diameter, 0.0)),
+            paused: !self.form.shown(),
         };
-        // The round bubble of the theme (night blue glass, or pale blue-grey: lot D-25d),
-        // clipped: the still picture of software fills it like the 3D. It follows the fade of
-        // the theme with the palette.
-        let bubble = container(mascot)
-            .width(side)
-            .height(side)
-            .clip(true)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(fill)),
-                border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
-                ..container::Style::default()
-            });
-        container(bubble).center(diameter).into()
+        view::bubble(avatar, diameter, self.progress(1), colors)
     }
 
     /// The pill: the field, the eye and the arrow; a circle with the spinner while PAM checks.

@@ -1,7 +1,8 @@
 //! The login screen: one overlay surface per screen. Every screen shows the background, the date
 //! and the time; the screen of the pointer (the first one at start) also shows the form, from
-//! the top: Sherlock in 3D in his bubble, the row of users, the name, the password pill, the
-//! choice of the session and the machine buttons. The look and the motions are those of the
+//! the top: Sherlock in 3D in his bubble, the only avatar, the name of the user and, when there
+//! are several, a discreet row of pills to choose another one (lot D-24d), the password pill,
+//! the choice of the session and the machine buttons. The look and the motions are those of the
 //! lock screen (`lock`), whose pieces it reuses; its own sizes and texts are in
 //! `sherlock_ui::greeter`.
 
@@ -12,17 +13,17 @@ use std::time::{Duration, Instant};
 use iced::futures::channel::oneshot;
 use iced::widget::{Space, button, column, container, image, pin, row, stack, text, text_input};
 use iced::{
-    Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
-    Padding, Point, Size, Subscription, Task, keyboard, mouse, window,
+    Alignment, Background, Border, Color as IcedColor, Element, Event, Length, Padding, Point,
+    Size, Subscription, Task, keyboard, mouse, window,
 };
 use iced_exwlshell::to_exwlshell_message;
 use lock::app::{Clock, Mascot, Phase, Refusal};
 use lock::background::{Picture, Pictures};
 use lock::machine::{Armed, Machine, Runner};
-use lock::view::{color_of, fade, rise, spinner};
-use sherlock_3d::Sherlock3d;
+use lock::view::{self, Avatar, color_of, fade, rise, spinner};
 use sherlock_ui::color;
 use sherlock_ui::component;
+use sherlock_ui::ellipsis::ellipsis;
 use sherlock_ui::greeter as ui;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::screen::{self as screen, Colors};
@@ -34,6 +35,9 @@ use crate::login::{Outcome, Report};
 use crate::memory::Memory;
 use crate::sessions::{SHERLOCKOS, Session};
 use crate::users::User;
+
+/// The elements of the screen, from the time (0) to the machine buttons.
+const LAST: u32 = 5;
 
 /// What logs a user in: greetd (`crate::Greetd`), or a fake in the tests.
 pub trait Login: Send + Sync + 'static {
@@ -64,7 +68,7 @@ pub enum Message {
     Here(window::Id),
     /// A key: it ends the entrance; the arrows choose the user while nothing is typed.
     Key(Option<Step>),
-    /// A user of the row; the one past the last is « Autre… ».
+    /// A user of the pills; the one past the last is « Autre… ».
     Select(usize),
     OtherName(String),
     Typed(Secret),
@@ -94,8 +98,8 @@ pub struct Greeter {
     users: Vec<User>,
     /// The index of the selected user; `users.len()` is « Autre… ».
     selected: usize,
-    /// When the selection last changed, and the place of the row before.
-    switched: Option<(Duration, f32)>,
+    /// When the selection last changed.
+    switched: Option<Duration>,
     other_name: String,
     sessions: Vec<Session>,
     session: Option<usize>,
@@ -119,7 +123,14 @@ pub struct Greeter {
     /// A key ended the entrance.
     entered: bool,
     mascot: Option<Mascot>,
+    /// The dark and light pictures behind the screen, and when they were read.
     background: Option<(image::Handle, image::Handle)>,
+    /// `None` when read before the first frame: shown at once.
+    background_at: Option<Duration>,
+    /// When the last key came in a field: Sherlock looks at it.
+    last_key: Option<Duration>,
+    /// The first frame was drawn: the entrance starts from it.
+    drawn: bool,
     asked: Option<(u32, u32)>,
     scale: f32,
     theme: color::ThemeFade,
@@ -169,6 +180,9 @@ impl Greeter {
             entered: false,
             mascot: None,
             background: None,
+            background_at: None,
+            last_key: None,
+            drawn: false,
             asked: None,
             scale: 1.0,
             theme: color::ThemeFade::default(),
@@ -215,6 +229,11 @@ impl Greeter {
         self.now = now;
     }
 
+    /// The clock of the animations at `elapsed` from the start of the screen (the tests).
+    pub fn set_elapsed(&mut self, elapsed: Duration) {
+        self.now = self.start + elapsed;
+    }
+
     pub fn set_clock(&mut self, clock: Clock) {
         self.clock = clock;
     }
@@ -236,6 +255,11 @@ impl Greeter {
         self.now.saturating_duration_since(self.start)
     }
 
+    /// Sherlock looks down at the field now.
+    pub fn looks_at_field(&self) -> bool {
+        lock::form::gaze(self.field(), self.elapsed())
+    }
+
     /// What Sherlock shows now: the moods of the lock screen.
     pub fn mood(&self) -> sherlock_3d::Mood {
         lock::form::mood(self.field(), self.elapsed())
@@ -248,21 +272,39 @@ impl Greeter {
             peek: self.reveal,
             typed: self.typed,
             asleep: false,
+            last_key: self.last_key,
+        }
+    }
+
+    /// The last of the choices the arrows go through: the users and « Autre… » when there are
+    /// several users; with a single one, only them.
+    fn last_choice(&self) -> usize {
+        if self.users.len() > 1 {
+            self.users.len()
+        } else {
+            0
         }
     }
 
     fn animating(&self) -> bool {
         let t = self.elapsed();
-        let recent =
-            |at: Option<Duration>| at.is_some_and(|at| t < at + Duration::from_millis(1200));
+        let recent = |at: Option<Duration>, length: Duration| {
+            at.is_some_and(|at| t < at + length + Duration::from_millis(100))
+        };
         let phase = match self.phase {
             Phase::Typing => false,
             Phase::Checking(_) | Phase::Leaving(_) => true,
             Phase::Refused(at, _) => t < at + screen::SHAKE + Duration::from_millis(400),
         };
+        let picture = self.background_at;
         (!self.entered && t < Duration::from_millis(1400))
-            || recent(self.switched.map(|s| s.0 + ui::LOOK_AT_USER))
-            || recent(self.session_switched.map(|s| s.0))
+            || recent(self.switched, ui::LOOK_AT_USER)
+            || recent(
+                self.session_switched.map(|s| s.0),
+                Duration::from_millis(1100),
+            )
+            || recent(self.last_key, screen::TYPING_GAZE)
+            || recent(picture, screen::PICTURE_FADE)
             || phase
             || self.theme.running()
     }
@@ -319,9 +361,8 @@ impl Greeter {
         if index == self.selected || busy {
             return Task::none();
         }
-        let from = self.row_offset();
         self.selected = index;
-        self.switched = Some((self.elapsed(), from));
+        self.switched = Some(self.elapsed());
         self.session = self.remembered_session().or(self.session);
         self.password = Secret::default();
         (self.reveal, self.typed, self.note) = (false, false, None);
@@ -356,7 +397,7 @@ impl Greeter {
                 self.entered = true;
                 // The arrows go through the users while nothing is typed.
                 if self.password.is_empty() && !(self.other() && !self.other_name.is_empty()) {
-                    let last = self.users.len();
+                    let last = self.last_choice();
                     match step {
                         Some(Step::Left) => return self.select(self.selected.saturating_sub(1)),
                         Some(Step::Right) => return self.select((self.selected + 1).min(last)),
@@ -369,11 +410,13 @@ impl Greeter {
                 if matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
                     self.other_name = name;
                     self.phase = Phase::Typing;
+                    self.last_key = Some(self.elapsed());
                 }
             }
             Message::Typed(typed) => {
                 if matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
                     self.typed |= !typed.is_empty();
+                    self.last_key = Some(self.elapsed());
                     self.password = typed;
                     self.phase = Phase::Typing;
                     self.armed.disarm();
@@ -408,13 +451,18 @@ impl Greeter {
                          rgba,
                      }| image::Handle::from_rgba(width, height, rgba);
                 self.background = Some((handle(dark), handle(light)));
+                self.background_at = self.drawn.then(|| self.elapsed());
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Frame(now) => {
+                // The entrance starts from the first frame: it is seen whole.
+                if !std::mem::replace(&mut self.drawn, true) && !self.entered {
+                    self.start = now;
+                }
                 self.now = now;
                 self.theme.tick(now);
                 if let Phase::Leaving(at) = self.phase
-                    && self.elapsed() >= at + ui::SUCCESS_HOLD + screen::EXIT * 2
+                    && self.elapsed() >= at + ui::SUCCESS_HOLD + screen::exit_length(LAST)
                 {
                     // The session starts once this program has left (greetd-ipc(7)).
                     return iced::exit();
@@ -498,9 +546,10 @@ impl Greeter {
         self.focus()
     }
 
-    /// Progress of element `index` (0 the time, 1 the bubble, 2 the users, 3 the pill, 4 the
-    /// sessions, 5 the machine buttons), from 0 to 1, times the exit: they rise in turn, then
-    /// leave in reverse order once Sherlock was happy for `SUCCESS_HOLD`.
+    /// Progress of element `index` (0 the time, 1 the bubble, 2 the name and the pills, 3 the
+    /// pill, 4 the sessions, 5 the machine buttons), from 0 to 1, times the exit: they rise in
+    /// turn, then leave in reverse order once Sherlock was happy for `SUCCESS_HOLD`, the bubble
+    /// shrinking. The background stays: the session starts from the same picture.
     fn progress(&self, index: u32) -> f32 {
         let t = self.elapsed();
         let entrance = if self.entered {
@@ -509,45 +558,24 @@ impl Greeter {
             Animation::new(screen::SPRING, 0.0, 1.0, screen::STAGGER * index).value(t)
         };
         let exit = match self.phase {
-            Phase::Leaving(at) if index > 0 => {
-                let behind = screen::STAGGER * (5 - index.min(5));
-                let t = t.saturating_sub(at + ui::SUCCESS_HOLD + behind / 4);
-                1.0 - (t.as_secs_f64() / screen::EXIT.as_secs_f64()).clamp(0.0, 1.0)
-            }
             Phase::Leaving(at) => {
-                let t = t.saturating_sub(at + ui::SUCCESS_HOLD + screen::EXIT);
-                1.0 - (t.as_secs_f64() / screen::EXIT.as_secs_f64()).clamp(0.0, 1.0)
+                screen::exit(index, LAST, t.saturating_sub(at + ui::SUCCESS_HOLD))
             }
             _ => 1.0,
         };
-        (entrance * exit) as f32
+        entrance as f32 * exit
     }
 
     fn presence(&self, index: u32) -> f32 {
         self.progress(index).clamp(0.0, 1.0)
     }
 
-    /// How far the screen has left, from 0 to 1.
-    fn leaving(&self) -> f32 {
-        match self.phase {
-            Phase::Leaving(at) => {
-                let t = self.elapsed().saturating_sub(at + ui::SUCCESS_HOLD);
-                (t.as_secs_f32() / (screen::EXIT * 2).as_secs_f32()).clamp(0.0, 1.0)
-            }
-            _ => 0.0,
-        }
-    }
-
-    /// Where the row stands, in pitches: the selected user in the middle. Animated on a
-    /// spring from where it stood.
-    fn row_offset(&self) -> f32 {
-        let target = self.selected as f32;
-        match self.switched {
-            Some((at, from)) => {
-                Animation::new(ui::SLIDE_SPRING, f64::from(from), f64::from(target), at)
-                    .value(self.elapsed()) as f32
-            }
-            None => target,
+    /// The height of the pills and their gap under the name, when they show.
+    fn chips_height(&self) -> f32 {
+        if self.users.len() > 1 {
+            ui::CHIPS_GAP + ui::CHIP_HEIGHT
+        } else {
+            0.0
         }
     }
 
@@ -600,10 +628,8 @@ impl Greeter {
         if self.primary.is_none_or(|p| p == id) {
             page = page
                 .push(rise(self.bubble(size, &colors), self.presence(1)))
-                .push(Space::new().height(ui::ROW_GAP))
-                .push(rise(self.users_row(size, &colors), self.presence(2)))
-                .push(Space::new().height(ui::ROW_GAP))
-                .push(rise(self.name(&colors), self.presence(2)))
+                .push(Space::new().height(screen::BUBBLE_GAP))
+                .push(rise(self.identity(&colors), self.presence(2)))
                 .push(Space::new().height(screen::NAME_GAP))
                 .push(rise(self.pill(&colors), self.presence(3)))
                 .push(Space::new().height(screen::HINT_GAP))
@@ -614,161 +640,109 @@ impl Greeter {
                 .push(rise(self.machines(&colors), self.presence(5)))
                 .push(Space::new().height(screen::bottom(height)));
         }
-        let fill = colors.background;
-        let plain = container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(fill.into())),
-                ..container::Style::default()
-            });
-        let mut layers = stack![plain];
-        if let Some((dark, light)) = &self.background {
-            // The light picture over the dark one, as the palette mixes them; both zoom in and
-            // fade while the screen leaves.
-            let light_share = f32::from(color::mix_step()) / f32::from(color::MIX_STEPS);
-            let leaving = self.leaving();
-            let scale = 1.0 + (ui::LEAVE_SCALE - 1.0) * leaving;
-            let cover = |handle: &image::Handle, opacity: f32| {
-                image(handle.clone())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(ContentFit::Cover)
-                    .scale(scale)
-                    .opacity(opacity * (1.0 - leaving))
-            };
-            if light_share < 1.0 {
-                layers = layers.push(cover(dark, 1.0));
-            }
-            if light_share > 0.0 {
-                layers = layers.push(cover(light, light_share));
-            }
-        }
-        layers
-            .push(page)
+        // The pictures, faded in over the compositor's own; never a plain background.
+        let opacity = self.background_at.map_or(1.0, |at| {
+            view::picture_opacity(self.elapsed().saturating_sub(at))
+        });
+        stack![view::backdrop(self.background.as_ref(), opacity), page]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
     }
 
-    /// Sherlock in his bubble, as on the lock screen. He looks at the user just chosen, then
-    /// ahead again.
+    /// Sherlock in his bubble, the same avatar as on the lock screen (`lock::view::bubble`). He
+    /// looks at the pills when a user was just chosen, at the field while keys come in it.
     fn bubble(&self, size: Size, colors: &Colors) -> Element<'_, Message> {
         let diameter = screen::bubble(size.height);
-        let grow = screen::BUBBLE_FROM + (1.0 - screen::BUBBLE_FROM) * self.progress(1).max(0.0);
-        // He shrinks away once happy.
-        let side = (diameter * grow * (1.0 - 0.4 * self.leaving())).max(1.0);
-        let fill = fade(colors.bubble, self.presence(1));
-        let edge = fade(colors.bubble_border, self.presence(1));
         let t = self.elapsed();
-        let looking = self
-            .switched
-            .is_some_and(|(at, _)| t < at + ui::LOOK_AT_USER);
-        // The selected user, under the bubble; or the field, as on the lock screen.
-        let below = Point::new(
+        let chips = Point::new(
             diameter / 2.0,
-            diameter + ui::ROW_GAP + ui::selected_bubble(size.height) / 2.0,
+            diameter
+                + screen::BUBBLE_GAP
+                + screen::NAME_SIZE
+                + ui::CHIPS_GAP
+                + ui::CHIP_HEIGHT / 2.0
+                + screen::RISE,
         );
-        let gaze = (looking || lock::form::gaze(self.field(), t)).then_some(below);
-        let mascot: Element<'_, Message> = match &self.mascot {
-            Some(Mascot(model)) => Sherlock3d::new(Some(model.clone()))
-                .mood(self.mood())
-                .look_at(gaze)
-                .background(fill)
-                .width(side)
-                .height(side)
-                .into(),
-            None => container(
-                image(image::Handle::from_bytes(lock::app::SHERLOCK))
-                    .height(side * 1.15)
-                    .opacity(self.presence(1)),
-            )
-            .padding(Padding::default().top(side * 0.1))
-            .width(side)
-            .align_x(Alignment::Center)
-            .into(),
+        let gaze = match self.switched {
+            Some(at) if t < at + ui::LOOK_AT_USER => Some(chips),
+            _ => self
+                .looks_at_field()
+                .then(|| view::field_point(diameter, self.chips_height())),
         };
-        // The bubble of the theme, with its edge, exactly as on the lock screen (lot D-25d).
-        let bubble = container(mascot)
-            .width(side)
-            .height(side)
-            .clip(true)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(fill)),
-                border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
-                ..container::Style::default()
-            });
-        container(bubble).center(diameter).into()
+        let avatar = Avatar {
+            mascot: self.mascot.as_ref(),
+            mood: self.mood(),
+            gaze,
+            paused: false,
+        };
+        view::bubble(avatar, diameter, self.progress(1), colors)
     }
 
-    /// The row of users, the selected one larger in the middle, « Autre… » last. It slides to
-    /// the user chosen.
-    fn users_row(&self, size: Size, colors: &Colors) -> Element<'_, Message> {
-        let (small, large) = (
-            ui::user_bubble(size.height),
-            ui::selected_bubble(size.height),
-        );
-        let ring = large + 2.0 * (ui::RING + ui::RING_GAP);
-        let pitch = ring + ui::USER_GAP;
+    /// The name, then the pills to choose another user when there are several.
+    fn identity(&self, colors: &Colors) -> Element<'_, Message> {
+        let name = self.name(colors);
+        if self.users.len() < 2 {
+            return name;
+        }
+        column![name, Space::new().height(ui::CHIPS_GAP), self.chips(colors)]
+            .align_x(Alignment::Center)
+            .into()
+    }
+
+    /// One small pill per user, by the name shown (« … » when too long), « Autre… » last; the
+    /// selected one is of glass, the others show their glass on hover.
+    fn chips(&self, colors: &Colors) -> Element<'_, Message> {
         let presence = self.presence(2);
-        let mut bubbles = row![].spacing(ui::USER_GAP).align_y(Alignment::Center);
-        for index in 0..=self.users.len() {
+        let labels = self
+            .users
+            .iter()
+            .map(|user| user.shown().to_owned())
+            .chain([ui::OTHER.to_owned()]);
+        let chips = labels.enumerate().map(|(index, label)| {
             let selected = index == self.selected;
-            let side = if selected { large } else { small };
-            let label: Element<'_, Message> = match self.users.get(index) {
-                // The regular weight: iced draws the variable font at its default instance only.
-                Some(user) => text(user.initial())
-                    .size(side * ui::INITIAL_SHARE)
-                    .color(fade(colors.text, presence))
-                    .into(),
-                None => component::icon(
-                    Icon::Person,
-                    side * ui::INITIAL_SHARE,
-                    color_of(fade(colors.text, presence)),
-                )
-                .into(),
-            };
-            let opacity = if selected {
-                presence
-            } else {
-                presence * ui::UNSELECTED_OPACITY
-            };
+            let tint = fade(
+                if selected {
+                    colors.text
+                } else {
+                    colors.secondary
+                },
+                presence,
+            );
             let (fill, edge, hover) = (
-                fade(colors.button, opacity),
-                fade(colors.field_border, opacity),
+                fade(colors.field, presence),
+                fade(colors.field_border, presence),
                 fade(colors.button_hover, presence),
             );
-            let face = button(container(label).center(side))
-                .on_press(Message::Select(index))
-                .padding(0)
-                .style(move |_, status| button::Style {
-                    background: Some(Background::Color(match status {
-                        button::Status::Hovered | button::Status::Pressed if !selected => hover,
-                        _ => fill,
-                    })),
-                    border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
-                    ..button::Style::default()
-                });
-            // The ring of the selected user, in the color of the text, readable in both themes.
-            let ring_color = fade(colors.text, if selected { presence } else { 0.0 });
-            let ringed = container(face)
-                .center(ring)
-                .style(move |_| container::Style {
-                    border: Border::default()
-                        .rounded(ring / 2.0)
-                        .width(ui::RING)
-                        .color(ring_color),
-                    ..container::Style::default()
-                });
-            bubbles = bubbles.push(ringed);
-        }
-        // Every user takes the room of the ring: the selected one in the middle of the screen,
-        // the row moves by whole pitches, on a spring.
-        let x = size.width / 2.0 - ring / 2.0 - self.row_offset() * pitch;
-        container(pin(bubbles).x(x))
-            .width(Length::Fill)
-            .height(ring)
-            .clip(true)
+            let label = ellipsis(label)
+                .size(ui::CHIP_TEXT_SIZE)
+                .color(color_of(tint));
+            button(
+                container(label)
+                    .max_width(ui::CHIP_MAX_WIDTH - 2.0 * ui::CHIP_PADDING)
+                    .center_y(ui::CHIP_HEIGHT),
+            )
+            .on_press(Message::Select(index))
+            .padding(Padding::from([0.0, ui::CHIP_PADDING]))
+            .style(move |_, status| button::Style {
+                background: match (selected, status) {
+                    (true, _) => Some(Background::Color(fill)),
+                    (_, button::Status::Hovered | button::Status::Pressed) => {
+                        Some(Background::Color(hover))
+                    }
+                    _ => None,
+                },
+                border: Border::default()
+                    .rounded(ui::CHIP_HEIGHT / 2.0)
+                    .width(if selected { 1.0 } else { 0.0 })
+                    .color(edge),
+                ..button::Style::default()
+            })
+            .into()
+        });
+        row(chips)
+            .spacing(ui::CHIP_GAP)
+            .align_y(Alignment::Center)
             .into()
     }
 
@@ -796,14 +770,12 @@ impl Greeter {
             .get(self.selected)
             .map(User::shown)
             .unwrap_or_default();
-        text(shown)
-            .size(screen::NAME_SIZE)
-            .font(Font {
-                weight: iced::font::Weight::Semibold,
-                ..typography::UI
-            })
-            .color(fade(colors.text, presence))
-            .into()
+        // The name of a user just chosen fades in.
+        let swap = match self.switched {
+            Some(at) => Animation::new(ui::SWAP_SPRING, 0.0, 1.0, at).value(self.elapsed()) as f32,
+            None => 1.0,
+        };
+        view::name(shown, fade(colors.text, presence * swap.clamp(0.0, 1.0)))
     }
 
     /// The password pill, as on the lock screen: a circle with the spinner while greetd checks.
@@ -990,7 +962,7 @@ impl Greeter {
                         presence,
                     )
                 });
-                part = part.push(row(list).spacing(ui::USER_GAP));
+                part = part.push(row(list).spacing(ui::OTHERS_ROW_GAP));
             }
         }
         part.into()

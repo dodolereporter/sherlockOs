@@ -1,8 +1,10 @@
 //! Session lock (lot D-25a, ADR 0023): `ext-session-lock-v1`, applied strictly.
 //!
-//! Once the session is locked, only the lock surfaces are drawn and get input. A screen without
-//! one shows the plain background of the system screens; no window, anchored surface, menu or
-//! thumbnail is drawn, in a frame or in a screenshot. Only the console switch, Ctrl + Alt +
+//! Once the session is locked, only the lock surfaces are drawn and get input. The last frame of
+//! each screen, frozen, stays while the curtain, the picture of the lock, comes down over it
+//! (`curtain.rs`, lot D-24e, ADR 0023 amended); then a screen without a lock surface shows the
+//! curtain; no window, anchored surface, menu or thumbnail is drawn, in a frame or in a
+//! screenshot. Only the console switch, Ctrl + Alt +
 //! Backspace, and the volume and brightness keys act. The lock ends only on `unlock_and_destroy`
 //! from the lock that holds it, once `locked` was sent: smithay would end it on the request of
 //! any lock object, so the requests of `ext_session_lock_v1` are checked here first.
@@ -421,9 +423,15 @@ impl State {
         }
     }
 
-    /// The screen `output` has shown a frame built while locked.
+    /// A frame built now counts as locked: the session is locked and the curtain is down, so
+    /// that nothing of the desktop, not even its frozen frame, is in it (lot D-24e).
+    pub fn lock_frame_complete(&self) -> bool {
+        self.lock.locked && self.curtain_lowering(self.now()).is_none()
+    }
+
+    /// The screen `output` has shown a frame built while locked, the curtain down.
     pub fn lock_frame_shown(&mut self, output: &Output) {
-        if self.lock.locked && !self.lock.shown.contains(output) {
+        if self.lock_frame_complete() && !self.lock.shown.contains(output) {
             self.lock.shown.push(output.clone());
         }
         self.confirm_lock();
@@ -441,6 +449,9 @@ impl State {
 
     fn enter_lock(&mut self) {
         tracing::info!("session locked");
+        // The last frame of each screen, frozen while the desktop is still drawn, and the
+        // curtain coming down over it.
+        self.lower_curtain();
         self.sync_log();
         (self.lock.input_logged, self.lock.waiting_image) = (false, None);
         let lock = &mut self.lock;
@@ -492,6 +503,8 @@ impl State {
         if let Some(token) = lock.watch.take() {
             self.loop_handle.remove(token);
         }
+        // The curtain goes up off the desktop, drawn again from now on.
+        self.raise_curtain();
         self.note_input();
         let top = self.top_window();
         self.focus(top);
@@ -909,12 +922,17 @@ impl Dispatch<ExtSessionLockV1, SessionLockState> for State {
     }
 }
 
-/// What a screen shows while locked, from front to back: the on-screen display of the media
-/// keys, the lock surface of the screen, the plain background, and the rescue screen when no
-/// lock program could start.
-pub fn items(state: &State, (output, view): (&Output, &View)) -> (Vec<Item>, bool) {
+/// What a screen shows while locked at `now`, from front to back: the on-screen display of the
+/// media keys, then, while the curtain comes down, the curtain and the frozen frame of the
+/// screen under it; once it is down, the lock surface of the screen, or the rescue screen when
+/// no lock program could start, in front of the curtain.
+pub fn items(state: &State, (output, view): (&Output, &View), now: Duration) -> (Vec<Item>, bool) {
     let mut items = Vec::new();
     let animating = crate::osd::push_item(&mut items, state, (output, view));
+    if let Some(down) = state.curtain_lowering(now) {
+        crate::curtain::push_lowering(&mut items, state, (output, view), down);
+        return (items, true);
+    }
     let colors = ui::Colors::of(color::palette());
     let surface = state
         .lock
@@ -954,6 +972,7 @@ pub fn items(state: &State, (output, view): (&Output, &View)) -> (Vec<Item>, boo
             });
         }
     }
+    crate::curtain::push(&mut items, state, view, 1.0, 1.0);
     let fill = colors.background.premultiplied();
     items.push(Item::Shape {
         key: Key::of(None, Part::LockBackground),
