@@ -119,7 +119,8 @@ the dock, the gap of 8 included (`Geometry::to_edge`): see "Fitts's law" below.
 spaces between the icons, are the dock: launching an application no longer means going down to
 the edge and coming back up. On the bar and between it and the edge, along the bar, the edge
 itself included, a press acts on the icon of its column: a click, a right click (its menu), a
-middle click, a drag (`Layout::icon_for`). Between two icons, the closer one wins. The pointer
+middle click, a drag (`Layout::icon_for`). Between two icons, the closer one wins, except for a
+right click on the bar itself, which opens the dock's own menu (D-21h, below). The pointer
 there is over the dock: the magnification and the label follow the column. On the left and
 right edges, the same towards the screen side. A hidden dock keeps its band of
 `dock::HIDE_STRIP`, which brings it back after `REVEAL_DELAY`; once it is out, the band at the

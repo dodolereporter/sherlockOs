@@ -1150,7 +1150,16 @@ impl Dock {
             Pointer::Pressed(button) => {
                 // Like `:focus-visible`: the mouse removes the keyboard ring.
                 self.focus = None;
-                let target = self.pointer.and_then(|p| self.layout(now).icon_for(p));
+                let layout = self.layout(now);
+                let target = self.pointer.and_then(|p| {
+                    // A right click on the bar between two icons or on the separator opens the
+                    // dock's own menu (lot D-21h); elsewhere a space goes to the nearest icon
+                    // (lot D-21f).
+                    let own = button == mouse::Button::Right
+                        && layout.bar.contains(p)
+                        && layout.icon_at(p).is_none();
+                    if own { None } else { layout.icon_for(p) }
+                });
                 match (button, target, self.pointer) {
                     (mouse::Button::Left, Some(index), Some(point)) => {
                         let target = self.items[index].target();
