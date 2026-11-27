@@ -94,7 +94,7 @@ struct Place;
 impl Place {
     fn take() -> Option<Self> {
         PASTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < MAX_PASTES).then_some(n + 1)
             })
             .ok()
