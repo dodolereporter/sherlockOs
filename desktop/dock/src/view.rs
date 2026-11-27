@@ -262,8 +262,10 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
             .opacity(opacity)
             .into(),
         Glyph::Letter(letter) => {
+            // At least a pixel: an icon that appears from nothing has no side yet, and text of
+            // size 0 makes the text engine panic.
             let letter = text(letter.to_string())
-                .size(side * dock::LETTER_RATIO)
+                .size((side * dock::LETTER_RATIO).max(1.0))
                 .font(typography::TITLE)
                 .color(faded(dock::FALLBACK_LETTER));
             tile(letter, faded(dock::FALLBACK_TILE), side)
