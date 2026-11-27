@@ -692,7 +692,7 @@ mod tests {
         let surface = bar.surface.unwrap();
         let _ = bar.update(Message::Output(
             surface,
-            String::from("eDP-1"),
+            Some(String::from("eDP-1")),
             Some((1280.0, 400.0)),
         ));
         let height = bar.tray_height(items.len());
@@ -708,14 +708,14 @@ mod tests {
         // A screen too small for anything: still a row and the tooltip line.
         let _ = bar.update(Message::Output(
             surface,
-            String::from("eDP-1"),
+            Some(String::from("eDP-1")),
             Some((320.0, 60.0)),
         ));
         assert_eq!(bar.tray_height(items.len()), look::height(1));
         // Few icons on a short screen: as tall as their rows.
         let _ = bar.update(Message::Output(
             surface,
-            String::from("eDP-1"),
+            Some(String::from("eDP-1")),
             Some((1280.0, 400.0)),
         ));
         assert_eq!(bar.tray_height(3), look::height(3));
