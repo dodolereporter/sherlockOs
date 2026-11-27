@@ -15,6 +15,65 @@ user = "_greetd"
 The compositor's side is "Login screen" in `docs/compositor.md`: one program fullscreen, no
 shortcut of the desktop, the volume and brightness keys kept, and it stops with the greeter.
 
+## What it shows (`src/app.rs`)
+
+macOS-like, as the author asked, with the look of the lock screen (`docs/lock.md`): no board
+draws it, the board of the login screen inspires it. The sizes and texts that are its own are in
+`sherlock_ui::greeter`; the rest comes from `sherlock_ui::lock::screen`, and the background,
+Sherlock's moods, the machine buttons and the pieces of the view from the `lock` crate.
+
+- **Every screen** has an overlay surface of its own (layer-shell, one per screen, the keyboard
+  taken): the picture of the lock, the date and the large time.
+- **The screen of the pointer** (the first one at start) also shows, from the top:
+  - Sherlock in 3D in his cream bubble (his still picture in software or without the model);
+  - **the row of users**: a glass bubble with the initial of each human user, the selected one
+    larger with a cream ring, in the middle of the screen; « Autre… » (a person) last. The
+    others are dimmed. A click or the left and right arrows (while nothing is typed) choose
+    another one: the row slides on a spring and Sherlock looks at the new user for 1.2 s;
+  - the name of the selected user, or a pill to type one for « Autre… »;
+  - the password pill with the eye and the arrow, and the line under it;
+  - **the session**: a discreet segmented control, « Bureau » (SherlockOS) and « Mode jeu »,
+    grayed until the game mode exists; under it « Autres sessions » opens the list of the
+    others (Plasma), and once one is chosen the line says « Session : Plasma (Wayland) »;
+  - the machine buttons, « Veille », « Redémarrer », « Éteindre », each confirmed by a second
+    click (`lock::machine`), run by `systemctl`: logind decides whether greetd's user may.
+- **Sizes follow the screen** (`lock::screen::fit`): tried on 1366 × 768 and 1920 × 1080.
+
+## Behavior
+
+- **Entrance:** the time, the bubble, the row, the pill, the session and the buttons rise and
+  fade in, 70 ms apart; the first key ends it.
+- **Sherlock** reacts as on the lock screen: he waves, closes his eyes while the password is
+  typed, peeks with one eye when it is shown, thinks while greetd checks, is sorry on a
+  refusal, happy once logged in.
+- **Enter:** the field empties at once, the pill shrinks into a circle with the spinner while
+  greetd and PAM check, on a thread of their own (`login::log_in`).
+- **Refused:** the pill comes back and shakes three times, « Mot de passe incorrect », the user
+  stays selected. greetd unreachable or failing: « Connexion impossible. Réessaie. », or PAM's
+  own message when it gave one.
+- **Logged in:** the user and their session are remembered (`memory`), the session is started
+  through greetd, Sherlock is happy for 700 ms, then the elements leave in reverse order, the
+  bubble shrinks, the background zooms in to 1.05 and fades, and the program ends; the
+  compositor stops with it and greetd starts the session.
+- **The last user** is selected at start, with the session they chose last time (SherlockOS by
+  default).
+
+## Users, sessions, memory
+
+- `src/users.rs`: the human users of `/etc/passwd` (ids from `UID_MIN` to `UID_MAX` of
+  `/etc/login.defs`, 1000 to 60000 by default; a shell listed in `/etc/shells`, not `nologin`
+  nor `false`), real names from the comment field. When AccountsService answers on the system
+  bus, its system accounts are left out and its real names taken. Files read with a bound of
+  4 MiB.
+- `src/sessions.rs`: the entries of `wayland-sessions` in the data folders (`/usr/local/share`,
+  then `/usr/share`): hidden ones, those without `Exec` or whose `TryExec` is missing left out,
+  the first of an id kept, SherlockOS first. `Exec` is split as the desktop entry specification
+  quotes it; greetd gets it with `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP` and
+  `XDG_CURRENT_DESKTOP` from `DesktopNames`.
+- `src/memory.rs`: `/var/cache/sherlockos-greeter/state` (or `SHERLOCKOS_GREETER_STATE`), owned
+  by `_greetd`: `last-user=` and one `session.<user>=` line per user (32 at most). Read with a
+  bound, written whole then renamed; a name with a line break or `=` is never written.
+
 ## greetd's IPC (`src/greetd.rs`)
 
 greetd gives its greeter the path of a socket in `GREETD_SOCK` (`greetd-ipc(7)`). Each message is
@@ -62,6 +121,19 @@ with its question, the password sent once; a greeter that leaves mid-login cance
 without greetd, the connection fails. `src/greetd.rs` checks the JSON of each request, a password
 with quotes, backslashes, control characters and non-ASCII letters escaped into a frame of its
 exact size, and the replies read or refused.
+
+`src/users.rs`, `src/sessions.rs` and `src/memory.rs` test the list of users from a fake
+`passwd` (range, shells, `login.defs`, AccountsService's names and system accounts), the
+sessions from fake folders and the splitting of `Exec`, and the memory read back, its
+forbidden names and the file replaced whole.
+
+`tests/render.rs` drives the screen with a fake greetd and a fake memory: the last user is
+selected with their session, the arrows go through the users and stay in the field once
+something is typed; the right password goes through Checking to Leaving, Sherlock happy, the
+user and session remembered; a wrong one shakes and keeps the user; greetd unreachable says so;
+« Autre… » asks for a name. It writes the screenshots to `target/tmp/greeter/`: at rest, a user
+being chosen and chosen, typing, the error, and « Autre… » with the other sessions, in the dark
+and the light theme, at 1920 × 1080 and 1366 × 768.
 
 ```sh
 cargo test -p greeter

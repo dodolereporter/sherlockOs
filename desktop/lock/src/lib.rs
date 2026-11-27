@@ -9,6 +9,7 @@ pub mod background;
 pub mod form;
 pub mod machine;
 pub mod pam;
+pub mod view;
 
 use std::sync::{Arc, Mutex};
 
@@ -20,12 +21,13 @@ use sherlock_ui::{color, theme, typography};
 use crate::app::{Lock, Mascot, Message};
 
 /// Runs `work` on a thread of its own once the runtime runs the task (never in the tests, which
-/// only call `update`), and hands its result to the program as a message.
-pub(crate) fn in_background<T: Send + 'static>(
+/// only call `update`), and hands its result to the program as a message. The login screen
+/// reads its background with it too.
+pub fn in_background<T: Send + 'static, M: Send + 'static>(
     name: &'static str,
     work: impl FnOnce() -> Option<T> + Send + 'static,
-    message: impl Fn(Option<T>) -> Option<Message> + Send + 'static,
-) -> iced::Task<Message> {
+    message: impl Fn(Option<T>) -> Option<M> + Send + 'static,
+) -> iced::Task<M> {
     let answer = async move {
         let (sender, receiver) = iced::futures::channel::oneshot::channel();
         let spawned = std::thread::Builder::new()

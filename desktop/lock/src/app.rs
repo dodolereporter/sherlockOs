@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iced::futures::channel::{mpsc, oneshot};
-use iced::widget::{Space, button, column, container, image, row, stack, svg, text, text_input};
+use iced::widget::{Space, button, column, container, image, row, stack, text, text_input};
 use iced::{
     Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
     Padding, Point, Size, Subscription, Task, keyboard, mouse, window,
@@ -21,16 +21,18 @@ use sherlock_ui::component;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::screen::{self as ui, Colors};
 use sherlock_ui::motion::Animation;
-use sherlock_ui::{metrics, motion, strings, typography};
+use sherlock_ui::{strings, typography};
 use system_services::secret::Secret;
 
 use crate::background::{Picture, Pictures};
 use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
+use crate::view::{color_of, fade, rise, spinner};
 
-/// The still picture of Sherlock, until his model is read or without it.
-const SHERLOCK: &[u8] = include_bytes!("../../../docs/design/images/sherlock-neutre.png");
+/// The still picture of Sherlock, until his model is read or without it (the login screen
+/// shows it too).
+pub const SHERLOCK: &[u8] = include_bytes!("../../../docs/design/images/sherlock-neutre.png");
 
 /// The model of Sherlock, once read (it is not part of `Message`'s `Debug`).
 #[derive(Clone)]
@@ -891,55 +893,6 @@ impl Lock {
     }
 }
 
-/// An element that rises into place as `presence` goes from 0 to 1, in a box of constant
-/// height so that nothing around it moves.
-fn rise<'a>(element: impl Into<Element<'a, Message>>, presence: f32) -> Element<'a, Message> {
-    let offset = ui::RISE * (1.0 - presence.clamp(0.0, 1.0));
-    container(element)
-        .padding(Padding::default().top(offset).bottom(ui::RISE - offset))
-        .into()
-}
-
-/// The spinner, `elapsed` after it started: the arc turned by one of `SPIN_STEPS` steps, drawn
-/// into the SVG itself (one document per step, which iced keeps), since the rotation of the
-/// SVG widget draws nothing with tiny-skia.
-fn spinner<'a>(elapsed: Duration, tint: Color) -> Element<'a, Message> {
-    let steps = motion::SPIN_STEPS;
-    let turn = elapsed.as_secs_f32() / ui::SPIN.as_secs_f32();
-    let step = (turn.fract() * steps as f32) as u32 % steps;
-    let angle = step as f32 * 360.0 / steps as f32;
-    let center = metrics::ICON_GRID / 2.0;
-    let document = Icon::Spinner.svg().replace(
-        "<path ",
-        &format!("<path transform=\"rotate({angle} {center} {center})\" "),
-    );
-    svg(svg::Handle::from_memory(document.into_bytes()))
-        .width(ui::FIELD_ICON)
-        .height(ui::FIELD_ICON)
-        .style(move |_, _| svg::Style {
-            color: Some(tint.into()),
-        })
-        // The renderers ignore the alpha of an SVG's color: the opacity carries it (UI-04).
-        .opacity(color::icon_opacity(tint))
-        .into()
-}
-
-/// A color of the palette, its opacity times `presence`.
-fn fade(color: Color, presence: f32) -> IcedColor {
-    let mut color: IcedColor = color.into();
-    color.a *= presence;
-    color
-}
-
-fn color_of(color: IcedColor) -> Color {
-    Color {
-        r: (color.r * 255.0).round() as u8,
-        g: (color.g * 255.0).round() as u8,
-        b: (color.b * 255.0).round() as u8,
-        a: color.a,
-    }
-}
-
 fn colors_selection() -> Color {
     color::palette().selected_row
 }
@@ -1018,7 +971,7 @@ fn ticks() -> mpsc::UnboundedReceiver<(Instant, Duration)> {
 }
 
 /// The time, read again every few seconds on a thread of its own: sent when the minute changes.
-fn clock() -> mpsc::UnboundedReceiver<Clock> {
+pub fn clock() -> mpsc::UnboundedReceiver<Clock> {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
         .name("clock".into())
