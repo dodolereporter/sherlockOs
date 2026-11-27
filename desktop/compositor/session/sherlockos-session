@@ -71,6 +71,15 @@ export PATH="$PATH:$bin"
 # above, so that it is added once.
 data="${SHERLOCKOS_DATA:-$(dirname "$(dirname "$bin")")/share/sherlockos}"
 export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# The applications installed with Flatpak, for the user and for the system: the login screen
+# starts the session without the login shell that adds them (/etc/profile.d/flatpak.sh), so the
+# launcher, the dock and the portals would not see them (Q-23).
+for flatpak in "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/exports/share" /var/lib/flatpak/exports/share; do
+	case ":$XDG_DATA_DIRS:" in
+	*":$flatpak:"*) ;;
+	*) [ -d "$flatpak" ] && XDG_DATA_DIRS="$XDG_DATA_DIRS:$flatpak" ;;
+	esac
+done
 # The wallpapers that `just wallpapers` writes beside the programs' folder (target/wallpapers
 # when the session runs from the repository with SHERLOCKOS_BIN=target/release) come before the
 # installed ones, in <data folder>/sherlockos/wallpapers.

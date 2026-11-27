@@ -60,6 +60,10 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 # reader does not take. The version iced already pulls for its SVG widget, on the tiny-skia the
 # compositor uses, without its text and image features: nothing new is built.
 resvg = { version = "=0.45.1", default-features = false }
+# X11 client of XWayland: the compositor reads the non-text selections of X11 applications
+# itself (lot D-29, `x11_paste.rs`), and the XWayland tests use it as their X11 client. The
+# version smithay already pulls for its X11 window manager: nothing new is built.
+x11rb = "=0.13.2"
 # PR_SET_DUMPABLE (lot D-25k, ADR 0023): no other process of the user may trace this one or
 # read its memory, and no core dump is written. A safe call instead of libc's prctl; the version
 # the workspace already builds (through wayland and calloop).
@@ -86,9 +90,6 @@ wayland-protocols-misc = { version = "=0.3.12", features = ["client"] }
 # Client side of layer-shell, for the anchored surface of the integration test: the version
 # that smithay already pulls for the server side.
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
-# X11 client of the XWayland integration test: the version that smithay already pulls for
-# its X11 window manager.
-x11rb = "=0.13.2"
 # Client side of the shell protocol, for its integration test.
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
 # Client side of KDE's appmenu protocol, for the global menu test.
