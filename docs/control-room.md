@@ -2,7 +2,8 @@
 
 Control Room is the settings application of the desktop (lot D-26a). Each setting is written to
 the file that its program already reads and follows live: nothing has to be restarted, and every
-setting survives a restart. The look follows the « Réglages » board
+setting survives a restart. It opens from « Réglages » in the bar's Sherlock menu, or with
+Super + comma (lot Q-31). The look follows the « Réglages » board
 (`docs/design/planches/Reglages.dc.html`): a sidebar of 240 with the search on top, the page on
 the right in cards. Its sizes, motions and French texts are in `sherlock_ui::control_room`.
 
