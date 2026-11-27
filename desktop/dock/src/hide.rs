@@ -2,14 +2,17 @@
 //!
 //! - `never`: always shown, with its exclusive zone.
 //! - `always`: hidden, with no exclusive zone.
-//! - `smart`, the default: like `never`, except while a maximized, fullscreen or snapped (half,
-//!   quarter) window is on the dock's screen. That window takes the whole height below the bar:
-//!   the dock gives up its exclusive zone and slides out.
+//! - `smart`, the default: shown, except while a maximized, fullscreen or snapped (half,
+//!   quarter) window is on the dock's screen, then it slides out. No exclusive zone either.
+//!
+//! As on macOS, a dock that hides by itself never reserves room (lot D-21g): the work area
+//! depends on the mode alone, never on the dock sliding, being brought back or a window
+//! covering it, so a maximized window is never resized by the dock.
 //!
 //! A hidden dock keeps a band of `dock::HIDE_STRIP` pixels on the screen, along its edge, that
-//! takes the pointer: touching it brings the dock back over the windows, still without an
-//! exclusive zone. It hides again `dock::HIDE_DELAY` after the pointer left it. Pure state: the
-//! dock turns it into margins, an exclusive zone and an input region.
+//! takes the pointer: touching it brings the dock back over the windows. It hides again
+//! `dock::HIDE_DELAY` after the pointer left it. Pure state: the dock turns it into margins, an
+//! exclusive zone and an input region.
 
 use std::time::Duration;
 
@@ -64,12 +67,12 @@ impl Hide {
         self.hides() && !self.revealed
     }
 
-    /// The dock reserves its room on the screen: only when its mode does not hide it, once it
-    /// is back in place. A dock brought back by the pointer goes over the windows, and so does
-    /// a dock sliding back: the compositor reserves the zone plus the margin, which is negative
-    /// until the dock is in place.
+    /// The dock reserves its room on the screen: only in the `never` mode, once in place (it
+    /// slides when the mode changes). A dock that may hide by itself never does (lot D-21g):
+    /// shown, brought back or sliding, it goes over the windows, and the work area does not
+    /// change under a maximized window.
     pub fn exclusive(&self) -> bool {
-        !self.hides() && !self.sliding()
+        self.mode == AutoHide::Never && !self.sliding()
     }
 
     fn sliding(&self) -> bool {
@@ -190,19 +193,19 @@ mod tests {
     #[test]
     fn smart_hides_while_a_window_covers_the_screen() {
         let mut hide = Hide::new(AutoHide::Smart);
-        assert!(!hide.hidden() && hide.exclusive() && !hide.running(false));
+        assert!(!hide.hidden() && !hide.exclusive() && !hide.running(false));
         assert_eq!(hide.progress(), 0.0);
-        // A window is maximized: no exclusive zone at once, and the dock slides out.
+        // A window is maximized: the dock slides out.
         hide.set_covered(true, false, ms(0));
         assert!(hide.hidden() && !hide.exclusive() && hide.running(false));
         let t = settle(&mut hide, ms(0));
         assert_eq!(hide.progress(), 1.0);
-        // The window is restored: the dock comes back, and takes its room again once there.
+        // The window is restored: the dock comes back, never taking room (lot D-21g).
         hide.set_covered(false, false, t);
         assert!(!hide.hidden() && !hide.exclusive());
         settle(&mut hide, t);
         assert_eq!(hide.progress(), 0.0);
-        assert!(hide.exclusive());
+        assert!(!hide.exclusive());
     }
 
     #[test]
