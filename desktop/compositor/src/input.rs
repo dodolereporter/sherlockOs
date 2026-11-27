@@ -1154,8 +1154,8 @@ impl State {
                 Some(
                     Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
                 ) => Some(window.clone()),
-                Some(Hit::Layer(layer, ..)) => {
-                    self.click_layer(layer);
+                Some(Hit::Layer(layer, surface, _)) => {
+                    self.click_layer(layer, surface);
                     pointer.button(self, &event);
                     pointer.frame(self);
                     return;
