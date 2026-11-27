@@ -357,8 +357,11 @@ menus are Kate 25.04's, as it exports them.
   Escape closes the submenu, then the menu. Tab reaches the menus of the bar after the Sherlock
   button, and Enter opens one with its first entry highlighted.
 - **Motion.** The menu of the bar unfolds from its top left corner and folds back like the
-  Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the new
-  one replaces the old at once, as on a Mac.
+  Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the
+  menu shown stays until the application has filled the next one (`AboutToShow`, then
+  `GetLayout` of that menu), which then replaces it at once at its own size, as on a Mac
+  (D-36d: the next menu used to open empty and tiny). Qt answers `GetLayout` of a menu with the
+  menu's own properties empty: only its entries are taken, and its button keeps its label.
 
 ### Which applications (D-36c)
 
@@ -405,9 +408,16 @@ that is neither the old one nor the new one.
 
 It has the entries of the Menus board: a header with the user name and « Session ouverte »,
 then « À propos de cet ordinateur », « Réglages », « Mises à jour », « Passer en mode jeu »,
-« Verrouiller », « Fermer la session », « Éteindre ». None of these actions exists yet: each
-entry stays enabled, so it can be walked through, and activating it logs it and closes the
-menu. Nothing is simulated.
+« Verrouiller », « Fermer la session », « Éteindre ». Since D-36d they act:
+
+| Entry | What it does |
+| --- | --- |
+| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
+| « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
+| « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
+| « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |
+
+Every other entry closes the menu once it has run.
 
 Keyboard:
 
@@ -769,8 +779,8 @@ error; `RUST_LOG=bar=debug` shows more.
    (`pactl set-sink-mute @DEFAULT_SINK@ toggle`) or unplug the charger: the bar should follow
    right away.
 4. **Menu**: click the Sherlock button. The menu opens below it, the button gets a light
-   veil. Down, Up, Enter, Escape. An activated entry is logged:
-   `Sherlock menu entry not available yet action=Lock`. A click elsewhere closes the menu.
+   veil. Down, Up, Enter, Escape. « Réglages » opens Control Room; « Éteindre » asks for a
+   second click. A click elsewhere closes the menu.
 5. **Keyboard in the bar**: click into the bar (on its background, between the buttons), then
    Tab. The first Tab rings the Sherlock button; each Tab moves the ring to the next workspace,
    then back to Sherlock. Enter activates exactly the ringed button: the menu opens on
@@ -843,6 +853,13 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   overshoot, the spring there and back, turned back halfway without a jump.
 - **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the
   board.
+- **Sherlock menu entries** (D-36d, `app.rs`, programs and session commands recorded, never
+  run): « Réglages » and « À propos » start `control-room`; « Verrouiller » runs `Lock` at once;
+  « Fermer la session » and « Éteindre » arm on the first click, ignore a double click, run once
+  on a later click, and Escape disarms; « Mises à jour » and « Passer en mode jeu » do nothing,
+  say « Bientôt » and take no highlight. From « Fichier » to « Édition » under the pointer
+  (`tests/global_menu.rs`), « Fichier » stays while « Édition » is read, which then shows at its
+  size with its entries, both buttons keeping their labels.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
   activates, Tab after Tab; Escape clears the ring.
 - **Global menu** (`tests/dbusmenu.rs`, `tests/global_menu.rs`, D-36b): a fake application on
@@ -980,7 +997,7 @@ shows against one.
 ## What this batch does not do
 
 - The application name from its `.desktop` file came with D-36.
-- The Sherlock menu actions: lock (login screen), game mode, settings, updates.
+- The Sherlock menu's game mode and updates, and a page « À propos » in Control Room.
 - The game mode and the choice of the graphics card: their tiles wait for their batches.
 - Bluetooth: the first adapter only; no file transfer, no audio profile choice.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape

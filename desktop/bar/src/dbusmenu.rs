@@ -89,13 +89,15 @@ impl Item {
         self.children.iter().find_map(|c| c.find(id))
     }
 
-    /// Replaces the entry of the same id as `item` in the tree.
-    pub fn replace(&mut self, item: Item) -> bool {
+    /// Puts the children of `item` under the entry of the same id in the tree, which keeps its
+    /// own properties: Qt answers `GetLayout` of a menu with the menu's properties empty, and
+    /// taking them would leave its button in the bar without a label (D-36d).
+    pub fn graft(&mut self, item: Item) -> bool {
         if self.id == item.id {
-            *self = item;
+            self.children = item.children;
             return true;
         }
-        self.children.iter_mut().any(|c| c.replace(item.clone()))
+        self.children.iter_mut().any(|c| c.graft(item.clone()))
     }
 
     /// The visible children: what a menu shows.

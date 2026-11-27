@@ -316,6 +316,12 @@ impl State {
         let data = window_data(window);
         let mut arrangement = Arrangement::of(window);
         change(&mut arrangement, &data.zone);
+        tracing::debug!(
+            fullscreen = arrangement.fullscreen,
+            maximized = arrangement.maximized,
+            x11 = window.x11_surface().is_some(),
+            "window rearranged"
+        );
         arrangement.apply(window);
         let target = match (
             arrangement.fullscreen,
@@ -614,6 +620,8 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        // Each shape a client names, accepted by smithay (lot UI-07): `RUST_LOG=compositor=trace`.
+        tracing::trace!(?image, "cursor image");
         self.cursor_status = image;
     }
 }
