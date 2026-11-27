@@ -15,6 +15,8 @@ pub mod focus;
 pub mod genie;
 pub mod gestures;
 mod handlers;
+// The hook of the selections, for the clipboard history (lot D-42).
+pub use handlers::{SECRET_HINT, SelectionOrigin, is_secret};
 pub mod headless;
 mod input;
 pub mod keyboard;
@@ -40,6 +42,7 @@ pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
+mod x11_paste;
 mod xwayland;
 
 use std::{
@@ -541,17 +544,21 @@ impl State {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
-        if self.is_locked() {
-            let target = self.lock_focus();
-            keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
-            return;
-        }
-        let target = target.filter(|_| !self.overview.is_open());
-        let target = self
-            .exclusive_layer()
-            .map(KeyboardFocus::Wayland)
-            .or(target);
+        let target = if self.is_locked() {
+            self.lock_focus()
+        } else {
+            let target = target.filter(|_| !self.overview.is_open());
+            self.exclusive_layer()
+                .map(KeyboardFocus::Wayland)
+                .or(target)
+        };
+        let unset = target.is_none();
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+        if unset {
+            // smithay calls `focus_changed` for a new focus only: the client that had the
+            // keyboard would otherwise keep being offered the selections (lot D-29).
+            self.unset_selection_focus();
+        }
     }
 
     /// Surface that has the keyboard.
