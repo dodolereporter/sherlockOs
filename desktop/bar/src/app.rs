@@ -356,12 +356,17 @@ impl Bar {
             }
             Message::TraySent(_, Ok(())) => {}
             Message::TrayPinnedRow(bounds) => self.tray.pinned_row = Some(bounds),
-            Message::TrayPointer(id, event) => return self.tray_pointer(id, event),
+            Message::TrayPointer(id, event) => {
+                let task = self.tray_pointer(id, event);
+                self.follow_chevron();
+                return task;
+            }
             Message::PinsNotSaved(error) => {
                 tracing::warn!(%error, "the icons kept in the bar are not saved");
             }
             Message::Pins(pins) => {
                 self.tray.pins = pins;
+                self.follow_chevron();
                 return self.resize_tray();
             }
             // Escape closes the popup of the notification area, once its menu is closed.
@@ -659,7 +664,7 @@ impl Bar {
         std::iter::once(Target::Sherlock)
             .chain(app_menus.into_iter().map(Target::AppMenu))
             .chain((0..workspaces).map(Target::Workspace))
-            .chain(self.tray.in_popup().next().map(|_| Target::Tray))
+            .chain(self.tray.has_icons().then_some(Target::Tray))
             .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
