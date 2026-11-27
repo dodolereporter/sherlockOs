@@ -123,6 +123,12 @@ impl App {
             let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
             layers.push(self.context_menu(menu, items, sub, false));
         }
+        if let Some(suggestions) = self.path_suggestions() {
+            layers.push(suggestions);
+        }
+        if let Some(sheet) = self.go_to_sheet() {
+            layers.push(sheet);
+        }
         if self.confirm_empty {
             layers.push(self.dialog());
         }
