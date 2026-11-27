@@ -71,6 +71,8 @@ pub enum Message {
     Key(Key),
     /// The modifiers held: Ctrl with a click asks for a new window.
     Modifiers(keyboard::Modifiers),
+    /// A scroll over the dock: a swipe down over an icon opens App Expose.
+    Scroll(mouse::ScrollDelta),
     Focus(Direction),
     MenuHover(usize),
     MenuPick(Entry),
@@ -161,6 +163,9 @@ pub struct Dock {
     pub(crate) menu: Option<OpenMenu>,
     /// The modifiers held, as the keyboard last told the dock.
     modifiers: keyboard::Modifiers,
+    /// The swipe down in progress: its icon, how far down it went (`NEG_INFINITY` once it
+    /// opened App Expose), when its last scroll came.
+    swipe: Option<(Target, f32, Duration)>,
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
@@ -207,6 +212,7 @@ impl Dock {
             focus: None,
             menu: None,
             modifiers: keyboard::Modifiers::empty(),
+            swipe: None,
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
@@ -665,6 +671,10 @@ impl Dock {
             Message::Config(config) => return self.configure(*config),
             Message::Key(key) => return self.key(key),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Scroll(delta) => {
+                let now = self.clock();
+                self.scroll(delta, now);
+            }
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
                     Direction::Next => Key::Next,
@@ -1290,6 +1300,56 @@ impl Dock {
             unpin: pinned && item.and_then(Item::pin_id).is_some(),
             act: item.is_some_and(|i| i.entry().is_some() || matches!(i.kind, Kind::Window(_)))
                 && self.controllable(),
+            expose: self.windows.as_ref().is_some_and(|w| w.expose)
+                && self.windows_of(index).iter().any(|w| !w.minimized),
+        }
+    }
+
+    /// App Expose on the windows of icon `index` that are not minimized.
+    pub fn expose(&mut self, index: usize) {
+        let ids: Vec<u64> = self
+            .windows_of(index)
+            .iter()
+            .filter(|w| !w.minimized)
+            .map(|w| w.id)
+            .collect();
+        if !ids.is_empty() && self.windows.as_ref().is_some_and(|w| w.expose) {
+            self.sources.control.show_windows(&ids);
+        }
+    }
+
+    /// A scroll over the dock at `now`. Down over an icon with windows, past
+    /// `dock::EXPOSE_SWIPE`, opens App Expose once; the swipe starts again after a pause of
+    /// `dock::EXPOSE_SWIPE_GAP` or over another icon. Down is the fingers going down on a
+    /// touchpad with natural scrolling (the default of the desktop settings), or a mouse wheel
+    /// turned towards the user.
+    fn scroll(&mut self, delta: mouse::ScrollDelta, now: Duration) {
+        let down = match delta {
+            mouse::ScrollDelta::Pixels { y, .. } => y,
+            mouse::ScrollDelta::Lines { y, .. } => -y * dock::EXPOSE_SWIPE,
+        };
+        let Some(index) = self.pointer.and_then(|p| self.layout(now).icon_at(p)) else {
+            self.swipe = None;
+            return;
+        };
+        let target = self.items[index].target();
+        let gone = match &self.swipe {
+            Some((t, _, last)) => {
+                *t != target || now.saturating_sub(*last) > dock::EXPOSE_SWIPE_GAP
+            }
+            None => true,
+        };
+        let far = if gone {
+            0.0
+        } else {
+            self.swipe.as_ref().map_or(0.0, |s| s.1)
+        };
+        let far = (far + down).max(0.0);
+        if far >= dock::EXPOSE_SWIPE {
+            self.expose(index);
+            self.swipe = Some((target, f32::NEG_INFINITY, now));
+        } else {
+            self.swipe = Some((target, far, now));
         }
     }
 
@@ -1628,6 +1688,10 @@ impl Dock {
                 self.activate(index, What::Action(action));
                 Task::none()
             }
+            Entry::ShowAll => {
+                self.expose(index);
+                Task::none()
+            }
             Entry::Keep => self.keep(index),
             Entry::Unpin => self.unpin(index),
             Entry::Quit => {
@@ -1697,8 +1761,10 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration, read again just before (`pins::write`),
-    /// and rebuilds the dock.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The file is read
+    /// again first and only its list changes (`pins::write`): the dock never writes what it has
+    /// in memory, so a file it could not read at startup is not replaced by one with the pinned
+    /// list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;

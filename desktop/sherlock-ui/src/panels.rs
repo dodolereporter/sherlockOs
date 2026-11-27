@@ -286,6 +286,23 @@ impl Colors {
     }
 }
 
+/// The shake of a refused password, as on the lock screen (same length and swings): its
+/// horizontal offset `elapsed` after the refusal, three swings of `FIELD_SHAKE` that die out,
+/// then 0.
+pub fn shake(elapsed: std::time::Duration) -> f32 {
+    use crate::lock::screen::{SHAKE, SHAKES};
+    let p = elapsed.as_secs_f32() / SHAKE.as_secs_f32();
+    if p < 1.0 {
+        FIELD_SHAKE * (p * SHAKES * std::f32::consts::TAU).sin() * (1.0 - p)
+    } else {
+        0.0
+    }
+}
+
+/// The widest swing of a shaking password field of a panel: less than the inset of a menu
+/// entry, which it borrows on each side.
+pub const FIELD_SHAKE: f32 = 8.0;
+
 /// Panel texts, in French.
 pub mod text {
     /// Notification centre.
@@ -356,6 +373,22 @@ pub mod text {
     pub const WIFI_OFF_LINE: &str = "Le Wi-Fi est coupé.";
     pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
     pub const ENTERPRISE: &str = "Ce réseau se rejoint depuis les Réglages.";
+    // A join that ends badly, a forgotten network, a hidden one (D-20e).
+    pub const WRONG_PASSWORD: &str = "Mot de passe incorrect";
+    pub const JOIN_FAILED: &str = "Connexion impossible";
+    pub const JOIN_TIMED_OUT: &str = "Le réseau ne répond pas";
+    pub const FORGET_NETWORK: &str = "Oublier ce réseau";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY: &str = "Sécurité";
+    /// The protections a hidden network is joined with: none, WPA2 and WPA3 personal.
+    pub const SECURITY_CHOICES: [&str; 3] = ["Aucune", "WPA2", "WPA3"];
+    pub const SHOW_PASSWORD: &str = "Afficher le mot de passe";
+    pub const HIDE_PASSWORD: &str = "Masquer le mot de passe";
+
+    pub fn forget_network_question(name: &str) -> String {
+        format!("Oublier {name} ? Il faudra retaper son mot de passe.")
+    }
     pub const MUTE: &str = "Couper le son";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
@@ -862,6 +895,89 @@ mod styles {
             .spacing(metrics::GAP_INLINE)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);
+        let mut entry = Control::new(
+            content,
+            theme::menu_item,
+            on_press,
+            metrics::MENU_ITEM_RADIUS,
+        );
+        entry.button = entry
+            .button
+            .width(Length::Fill)
+            .height(metrics::MENU_ITEM_HEIGHT)
+            .padding([0.0, metrics::MENU_ITEM_PADDING]);
+        let mut line = iced::widget::Row::new()
+            .push(entry)
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(iced::Alignment::Center);
+        if let Some(more) = more {
+            line = line.push(more);
+        }
+        line.into()
+    }
+
+    /// The Wi-Fi arcs of a signal at `level` (0 to 3), built once per level.
+    fn wifi_handle(level: u8) -> iced::widget::svg::Handle {
+        static HANDLES: std::sync::OnceLock<Vec<iced::widget::svg::Handle>> =
+            std::sync::OnceLock::new();
+        let all = HANDLES.get_or_init(|| {
+            (0..=3)
+                .map(|l| {
+                    let svg = crate::icon::wifi_svg(l, crate::icon::WifiMark::None);
+                    iced::widget::svg::Handle::from_memory(svg.into_bytes())
+                })
+                .collect()
+        });
+        all.get(usize::from(level.min(3)))
+            .cloned()
+            .unwrap_or_else(|| {
+                let svg = crate::icon::wifi_svg(level, crate::icon::WifiMark::None);
+                iced::widget::svg::Handle::from_memory(svg.into_bytes())
+            })
+    }
+
+    /// A Wi-Fi network of the list (D-20e), as a menu entry: the arcs of its signal (`level`,
+    /// 0 to 3) and its name, then `line` (« Connexion… »), a padlock when it is `secured` and a
+    /// check when it is in use; then `more` (« Oublier ce réseau »). `on_press` joins it.
+    pub fn network_row<'a, Message: Clone + 'a>(
+        level: u8,
+        secured: bool,
+        active: bool,
+        name: &'a str,
+        line: Option<&'a str>,
+        on_press: Option<Message>,
+        more: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let p = crate::color::palette();
+        let tint = p.text_secondary;
+        let arcs = iced::widget::svg(wifi_handle(level))
+            .width(GLYPH)
+            .height(GLYPH)
+            .opacity(crate::color::icon_opacity(tint))
+            .style(move |_, _| iced::widget::svg::Style {
+                color: Some(tint.into()),
+            });
+        let mut content = iced::widget::row![arcs, ellipsis(name).width(Length::Fill)]
+            .spacing(metrics::GAP_ICON)
+            .align_y(iced::Alignment::Center)
+            .height(Length::Fill);
+        if let Some(line) = line {
+            content = content.push(
+                ellipsis(line)
+                    .size(typography::SMALL_SIZE)
+                    .color(p.text_tertiary),
+            );
+        }
+        if secured {
+            content = content.push(glyph_sized(Glyph::Padlock, p.text_tertiary, TILE_GLYPH));
+        }
+        if active {
+            content = content.push(crate::component::icon(
+                crate::icon::Icon::Check,
+                metrics::ICON_SIZE_SMALL,
+                p.accent_text,
+            ));
+        }
         let mut entry = Control::new(
             content,
             theme::menu_item,

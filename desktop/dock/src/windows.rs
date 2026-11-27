@@ -74,6 +74,9 @@ pub struct Windows {
     pub controllable: bool,
     /// Names of the screens a maximized, fullscreen or snapped window is on (shell protocol only).
     pub covered: BTreeSet<String>,
+    /// The source can open App Expose on some windows (`show_windows`, version 4 of the shell
+    /// protocol).
+    pub expose: bool,
 }
 
 impl Windows {
@@ -307,6 +310,9 @@ pub trait Control: Send + Sync {
     /// Sends `request` to `window` alone.
     fn send_to(&self, request: Request, window: &Window);
 
+    /// Opens App Expose on the windows of `ids`. Only the shell protocol can.
+    fn show_windows(&self, _ids: &[u64]) {}
+
     /// Tells the compositor where the icon of each window is (`set_rectangle`), for the
     /// minimize animation: the windows of the first place that owns them. Replaces the
     /// previous places, and applies to the windows that come later.
@@ -329,6 +335,12 @@ impl Control for Auto {
         match crate::shell::control() {
             Some(shell) => shell.send_to(request, window),
             None => WlrControl.send_to(request, window),
+        }
+    }
+
+    fn show_windows(&self, ids: &[u64]) {
+        if let Some(shell) = crate::shell::control() {
+            shell.show_windows(ids);
         }
     }
 
@@ -388,6 +400,8 @@ pub struct Recorder {
     requests: Arc<Mutex<Vec<Request>>>,
     /// The requests sent to one window, with its id.
     targeted: Arc<Mutex<Vec<(Request, u64)>>>,
+    /// Each App Expose asked, with its windows.
+    exposed: Arc<Mutex<Vec<Vec<u64>>>>,
     /// Each `place`: the screen and rectangle of each icon, with the first `app_id` of the
     /// probe list it owns.
     places: Arc<Mutex<Vec<Vec<Placed>>>>,
@@ -425,6 +439,13 @@ impl Recorder {
             .clone()
     }
 
+    pub fn exposed(&self) -> Vec<Vec<u64>> {
+        self.exposed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn places(&self) -> Vec<Vec<Placed>> {
         self.places
             .lock()
@@ -446,6 +467,13 @@ impl Control for Recorder {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((request, window.id));
+    }
+
+    fn show_windows(&self, ids: &[u64]) {
+        self.exposed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(ids.to_vec());
     }
 
     fn place(&self, places: Vec<Place>) {
@@ -608,6 +636,7 @@ impl Toplevels {
                 .collect(),
             controllable: true,
             covered: BTreeSet::new(),
+            expose: false,
         }
     }
 }
