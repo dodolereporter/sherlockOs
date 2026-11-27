@@ -7,12 +7,12 @@
 //! ```
 //!
 //! A change reads the file again just before it writes it, so that it starts from what is there
-//! (another bar, the user's editor), and keeps its other lines. The text goes to a temporary file
-//! renamed over the old one: a reader never sees half a file.
+//! (another bar, the user's editor), and keeps its other lines. It is read with a bound and
+//! written by `mime_apps::write_atomically`, like every settings file of the desktop: a reader
+//! never sees half a file.
 
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use dock_config::KeyFile;
 
@@ -25,7 +25,7 @@ pub fn path() -> Option<PathBuf> {
 }
 
 fn read(path: &Path) -> io::Result<KeyFile> {
-    match std::fs::read_to_string(path) {
+    match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
         Ok(text) => Ok(KeyFile::parse(&text)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(KeyFile::default()),
         Err(error) => Err(error),
@@ -72,25 +72,9 @@ pub fn change(path: &Path, change: &Change) -> io::Result<Vec<String>> {
     let mut pinned = file.list(GROUP, PINNED);
     change.apply(&mut pinned);
     file.set(GROUP, PINNED, &pinned.join(";"));
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let count = SAVES.fetch_add(1, Ordering::Relaxed);
-    let temporary = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
-    let written = (|| {
-        let mut out = std::fs::File::create(&temporary)?;
-        out.write_all(file.to_text().as_bytes())?;
-        out.sync_all()?;
-        std::fs::rename(&temporary, path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written.map(|()| pinned)
+    mime_apps::write_atomically(path, &file.to_text())?;
+    Ok(pinned)
 }
-
-/// Saves made by this process, for unique temporary names.
-static SAVES: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
 mod tests {
