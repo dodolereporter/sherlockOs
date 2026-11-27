@@ -311,6 +311,8 @@ pub enum Message {
     ToggleWifi,
     ShowNetworks(bool),
     Join(Network),
+    /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
+    OpenNetworkSettings,
     /// The network chosen has no saved connection: its password is asked for.
     AskPassword,
     Password(Secret),
@@ -615,6 +617,8 @@ impl Quick {
             }
             Message::Join(chosen) => return self.join(chosen),
             Message::AskPassword => {}
+            // Started by the bar, which has the programs (`app.rs`).
+            Message::OpenNetworkSettings => {}
             Message::Password(typed) => self.password = typed,
             Message::SubmitPassword => {
                 if let Some(chosen) = self.joining.clone()
@@ -1389,7 +1393,10 @@ impl Quick {
         }
         let inset = Padding::from([metrics::GAP_TIGHT * 2.0, metrics::MENU_ITEM_PADDING]);
         if network.security == Security::Other {
-            let line = ui::description(words::ENTERPRISE);
+            let open =
+                ui::secondary_button(words::OPEN_SETTINGS, Some(Message::OpenNetworkSettings));
+            let line =
+                column![ui::description(words::ENTERPRISE), open].spacing(metrics::GAP_TIGHT);
             return column![item, container(line).padding(inset)].into();
         }
         let field = ui::text_field(words::PASSWORD, self.password.as_str(), Some(typed))

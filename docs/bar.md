@@ -666,7 +666,8 @@ protected one, a check on the one in use. An open or saved network is joined at 
 protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
 NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
 (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
-depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+depuis les Réglages. », with « Ouvrir les Réglages », which runs `control-room --page network`
+(the window already open shows that page) and closes the panel (lot D-26n). The tile reads « Connexion… » until NetworkManager reports the network.
 
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
 the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):

@@ -347,6 +347,7 @@ pub mod text {
     pub const WIFI_OFF_LINE: &str = "Le Wi-Fi est coupé.";
     pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
     pub const ENTERPRISE: &str = "Ce réseau se rejoint depuis les Réglages.";
+    pub const OPEN_SETTINGS: &str = "Ouvrir les Réglages";
     pub const MUTE: &str = "Couper le son";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
