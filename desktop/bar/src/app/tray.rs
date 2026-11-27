@@ -2,12 +2,15 @@
 //! popup it opens under itself, a grid of the icons applications put there. A click activates
 //! an item, the middle button runs its secondary action, the wheel scrolls it; the line under
 //! the grid says what the icon under the pointer is. An icon that needs attention breathes a
-//! few times, and the chevron carries a dot meanwhile.
+//! few times, and the chevron carries a dot meanwhile. Taller than the screen allows, the
+//! popup stops above its bottom and its grid scrolls (lot D-45c).
 
 use std::time::Duration;
 
 use iced::mouse::ScrollDelta;
-use iced::widget::{Column, Row, Stack, column, container, image, mouse_area, opaque, row};
+use iced::widget::{
+    Column, Row, Stack, column, container, image, mouse_area, opaque, row, scrollable,
+};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Rectangle, Task, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
@@ -208,7 +211,7 @@ impl Bar {
     /// chevron's, within the bar.
     fn tray_placement(&mut self, surface: Id) -> (IcedNewPopupSettings, (i32, i32, i32, i32)) {
         let count = self.tray.shown().count();
-        let (width, height) = (look::width(count), look::height(count));
+        let (width, height) = (look::width(count), self.tray_height(count));
         let margins = self.tray.margins;
         let size = (
             (width + margins.left + margins.right).ceil() as u32,
@@ -243,6 +246,15 @@ impl Bar {
         (settings, region)
     }
 
+    /// Height of the popup for `count` icons: as tall as its rows, within the screen, and at
+    /// least a row and the tooltip line. Beyond, the grid scrolls.
+    pub fn tray_height(&self, count: usize) -> f32 {
+        let screen = self.screen_height().unwrap_or(metrics::REFERENCE_SCREEN.1);
+        let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + look::BELOW_BAR;
+        let room = screen - top - super::global::SCREEN_ROOM;
+        look::height(count).min(room).max(look::height(1))
+    }
+
     /// The left of the popup in the bar surface, as `tray_placement` puts it: for the tests and
     /// the captures.
     pub fn tray_left(&self) -> f32 {
@@ -269,7 +281,7 @@ impl Bar {
         }
         let count = self.tray.shown().count();
         let margins = self.tray.margins;
-        let height = (look::height(count) + margins.top + margins.bottom).ceil() as u32;
+        let height = (self.tray_height(count) + margins.top + margins.bottom).ceil() as u32;
         let width = (look::width(count) + margins.left + margins.right).ceil() as u32;
         if (width, height) == self.tray.size {
             return Task::none();
@@ -378,7 +390,7 @@ impl Bar {
     /// The popup: the grid of icons, and the line of the one under the pointer.
     pub fn view_tray(&self) -> Element<'_, Message> {
         let count = self.tray.shown().count();
-        let (width, height) = (look::width(count), look::height(count));
+        let (width, height) = (look::width(count), self.tray_height(count));
         let panel = color::with_opacity(self.tray.unfold.opacity(), || {
             let cells: Vec<Element<'_, Message>> =
                 self.tray.shown().map(|item| self.tray_cell(item)).collect();
@@ -396,7 +408,8 @@ impl Bar {
                     let line: Vec<_> = cells.by_ref().take(look::COLUMNS).collect();
                     rows = rows.push(Row::with_children(line).spacing(look::GAP));
                 }
-                rows.into()
+                // Within the screen, the rows that do not fit scroll above the tooltip line.
+                scrollable(rows).height(Length::Fill).into()
             };
             let glass = container(column![grid, self.tray_tip()])
                 .width(width)
@@ -664,6 +677,48 @@ mod tests {
         assert_eq!(bar.tray.popup, popup);
         let _ = bar.update(Message::Tray(Event::Gone(item(6, Status::Active).key)));
         assert_eq!(bar.tray.size, size);
+    }
+
+    #[test]
+    fn on_a_short_screen_the_popup_stops_above_its_bottom_and_its_grid_scrolls() {
+        let items: Vec<Item> = (1..=crate::tray::MAX_ITEMS)
+            .map(|n| item(n, Status::Active))
+            .collect();
+        let mut bar = with_items(&items);
+        let whole = look::height(items.len());
+        // Unknown screen: the reference one, tall enough for every row.
+        assert_eq!(bar.tray_height(items.len()), whole);
+        // A screen 400 high (800 at scale 2): the popup ends 24 above its bottom.
+        let surface = bar.surface.unwrap();
+        let _ = bar.update(Message::Output(
+            surface,
+            String::from("eDP-1"),
+            Some((1280.0, 400.0)),
+        ));
+        let height = bar.tray_height(items.len());
+        let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + look::BELOW_BAR;
+        assert!(
+            height < whole && (top + height + 24.0 - 400.0).abs() < 0.5,
+            "{height}"
+        );
+        let _ = bar.update(Message::ToggleTray);
+        let margins = bar.tray.margins;
+        let expected = (height + margins.top + margins.bottom).ceil() as u32;
+        assert_eq!(bar.tray.size.1, expected);
+        // A screen too small for anything: still a row and the tooltip line.
+        let _ = bar.update(Message::Output(
+            surface,
+            String::from("eDP-1"),
+            Some((320.0, 60.0)),
+        ));
+        assert_eq!(bar.tray_height(items.len()), look::height(1));
+        // Few icons on a short screen: as tall as their rows.
+        let _ = bar.update(Message::Output(
+            surface,
+            String::from("eDP-1"),
+            Some((1280.0, 400.0)),
+        ));
+        assert_eq!(bar.tray_height(3), look::height(3));
     }
 
     #[test]
