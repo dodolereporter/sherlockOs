@@ -286,8 +286,14 @@ size and margins, and computes the work area.
 Not settled by lot D-12, which runs nested only. What its review established, to carry into
 the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
 
-- **The `zwlr_layer_shell_v1` global is open to every Wayland client**, Flatpak ones included:
-  nothing filters it.
+- **The `zwlr_layer_shell_v1` global is only offered on the shell socket** (lot D-46, ADR 0021).
+  Until then it was open to every Wayland client, Flatpak ones included, which could cover
+  every screen with an overlay surface and take the keyboard: an imitation of the lock screen
+  or of the polkit dialog would receive the password. The test
+  `an_ordinary_client_neither_sees_nor_binds_the_layer_shell` (`tests/shell.rs`) checks it. A
+  third-party program that needs layer-shell (a panel, a launcher) goes through an ADR first.
+  The points below still apply to the shell's own programs, and to a native process of the
+  user that connects to the shell socket on purpose (out of reach of the filter, ADR 0021).
 - **Keyboard theft.** An overlay surface with an `exclusive` keyboard keeps it as long as it
   exists, even a 1 × 1 surface, and even after a click on a window (the test
   `a_surface_with_an_exclusive_keyboard_keeps_it` checks the protocol's behavior). Any client
@@ -300,7 +306,8 @@ the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
   - a layer above the overlay one, for the consent window (ADR 0011) and the lock screen,
     drawn by the compositor itself and hit before `layer_hit`;
   - a forced keyboard focus that comes before `exclusive_layer()`;
-  - a filter on the layer-shell global, kept for the shell programs that the session starts;
+  - a filter on the layer-shell global, kept for the shell programs that the session starts:
+    done by lot D-46;
   - `ext-session-lock` for D-25, rather than an overlay surface: done by lot D-25a (see
     "Session lock").
 
@@ -350,8 +357,9 @@ Next to its Wayland socket, the compositor opens a second one, the same name fol
 `-shell` (`$XDG_RUNTIME_DIR/wayland-1-shell` for `wayland-1`; next to the given path with
 `listen_at`, the suffix before an extension: `wayland-shell.sock` for `wayland.sock`, so that
 the two locks, named by replacing the extension, never collide). Clients accepted there are marked as shell clients (`ClientState::shell`). Both
-sockets offer every global; the globals of `sherlock_shell_v1` and `ext-workspace-v1` are only
-visible to shell clients (`GlobalDispatch::can_view`), and a client of the ordinary socket that
+sockets offer every global; the globals of `sherlock_shell_v1`, `ext-workspace-v1` and, since lot
+D-46, `zwlr_layer_shell_v1` are only visible to shell clients (`GlobalDispatch::can_view`, and
+`WlrLayerShellState::new_with_filter` for layer-shell), and a client of the ordinary socket that
 binds them by name gets `wl_display.error` `invalid_object` from wayland-server, which
 libwayland-client reports as `EINVAL`. XWayland, whose connection smithay creates, is never a
 shell client. `State::shutdown` removes the shell socket and its lock with the other one. If
@@ -359,7 +367,15 @@ the shell socket cannot be opened, the log says so and the session goes on witho
 
 A shell program finds the socket with `shell_protocol::socket_from_env()`, from
 `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`, and talks to these protocols on that second
-connection; its surfaces stay on the ordinary socket, and so do the applications it launches.
+connection. Its anchored surfaces go there too, on the connection that
+`shell_protocol::connect()` opens and hands to `iced_exwlshell` (`ExWlSettings::with_connection`):
+the bar, the dock, the notifications, the launcher and the applications view. `WAYLAND_DISPLAY`
+is left as the session gives it, so the applications these programs launch are on the
+ordinary socket and see no layer-shell. Without a shell socket next to `WAYLAND_DISPLAY`
+(another compositor, during development), `connect()` falls back to the ordinary socket.
+
+The login screen's compositor (`--greeter`) has no shell socket: there,
+`State::share_layer_shell` shows layer-shell to every client, the greeter being the only one.
 
 Checked on the reference laptop with Flatpak 1.16.6: Zen's sandbox, which has `filesystems=host`,
 sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).

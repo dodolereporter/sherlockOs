@@ -4,7 +4,8 @@
 //! `server` feature.
 //!
 //! The compositor only offers the protocol on its shell socket: the session's Wayland socket
-//! followed by [`SOCKET_SUFFIX`], in the same directory.
+//! followed by [`SOCKET_SUFFIX`], in the same directory. The anchored surfaces of
+//! `zwlr_layer_shell_v1` too: the shell programs open them on a connection from [`connect`].
 
 use std::path::{Path, PathBuf};
 
@@ -34,6 +35,27 @@ pub fn socket_from_env() -> Option<PathBuf> {
         PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join(display)
     };
     Some(socket_path(&socket))
+}
+
+/// Connection of a shell program for its surfaces: to the shell socket of the session, where
+/// the compositor shows `zwlr_layer_shell_v1` (lot D-46). The programs it starts keep the
+/// session's `WAYLAND_DISPLAY`, and with it the ordinary socket.
+///
+/// A connection handed over in `WAYLAND_SOCKET` is taken as it is. Without a shell socket next
+/// to the session's (another compositor, during development), the session's socket is used.
+#[cfg(feature = "client")]
+pub fn connect() -> Result<wayland_client::Connection, wayland_client::ConnectError> {
+    if std::env::var_os("WAYLAND_SOCKET").is_some() {
+        return wayland_client::Connection::connect_to_env();
+    }
+    match socket_from_env().filter(|path| path.exists()) {
+        Some(path) => {
+            let stream = std::os::unix::net::UnixStream::connect(path)
+                .map_err(|_| wayland_client::ConnectError::NoCompositor)?;
+            wayland_client::Connection::from_socket(stream)
+        }
+        None => wayland_client::Connection::connect_to_env(),
+    }
 }
 
 // The macros read the XML at build time, which cargo does not track: including it here makes a

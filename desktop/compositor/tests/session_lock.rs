@@ -223,6 +223,13 @@ mod tests {
     delegate_noop!(Seen: ZwlrLayerShellV1);
     delegate_noop!(Seen: ExtSessionLockManagerV1);
 
+    /// How a client reaches the compositor.
+    enum Socket {
+        Ordinary,
+        Shell,
+        LockProgram,
+    }
+
     /// A client connected to the compositor.
     struct Peer {
         conn: Connection,
@@ -315,20 +322,26 @@ mod tests {
 
         /// A new ordinary client, with the globals listed. Returns its index.
         fn connect(&mut self) -> usize {
-            self.connect_as(false)
+            self.connect_as(Socket::Ordinary)
+        }
+
+        /// A new client of the shell socket, which offers layer-shell (lot D-46).
+        fn connect_shell(&mut self) -> usize {
+            self.connect_as(Socket::Shell)
         }
 
         /// A new client on a connection the compositor takes as the lock program's, as it does
         /// for the program it starts.
         fn connect_program(&mut self) -> usize {
-            self.connect_as(true)
+            self.connect_as(Socket::LockProgram)
         }
 
-        fn connect_as(&mut self, program: bool) -> usize {
+        fn connect_as(&mut self, socket: Socket) -> usize {
             let (server_side, client_side) = UnixStream::pair().unwrap();
-            match program {
-                true => self.state.insert_lock_program(server_side),
-                false => self.state.insert_client(server_side),
+            match socket {
+                Socket::LockProgram => self.state.insert_lock_program(server_side),
+                Socket::Shell => self.state.insert_shell_client(server_side),
+                Socket::Ordinary => self.state.insert_client(server_side),
             }
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
@@ -533,9 +546,11 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_client_cannot_show_anything_over_the_lock() {
+    fn no_client_can_show_anything_over_the_lock() {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
-        let app = h.connect();
+        // A client of the shell socket, the only one that may anchor surfaces (lot D-46): even
+        // its overlay stays hidden.
+        let app = h.connect_shell();
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
         h.show_frame();
