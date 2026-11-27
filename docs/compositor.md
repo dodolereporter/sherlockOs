@@ -1774,7 +1774,9 @@ it.
 
 `just install-session` builds the compositor, the bar, the dock, the launcher, the notification
 daemon and Evidence in release, then **prints** the commands that install the session, without
-running them:
+running them. It installs the release build of `CARGO_TARGET_DIR` (relative to the repository),
+or of `target/`, and refuses a program older than one of its sources or built from another
+checkout (`desktop/compositor/session/built.sh`, lot D-24f, as `just install-greeter`):
 
 - the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/sherlockos/`;
 - the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where

@@ -5,13 +5,22 @@
 //! system accounts are left out and its real names are taken.
 //!
 //! Every file is read with a bound (`MAX_FILE`): a database that size is not a password
-//! database.
+//! database. The screen shows the list of the files first; AccountsService is asked afterwards,
+//! on a thread of its own (`accounts`), each call within `ACCOUNTS_TIMEOUT`, for
+//! `MAX_ACCOUNTS` accounts at most: a slow or stuck service never holds the first frame.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The largest file read here.
 pub const MAX_FILE: u64 = 4 * 1024 * 1024;
+
+/// Longest wait for each answer of AccountsService.
+pub const ACCOUNTS_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Most accounts read from AccountsService.
+pub const MAX_ACCOUNTS: usize = 64;
 
 /// The ids of human users, when `/etc/login.defs` does not say.
 pub const UID_MIN: u32 = 1000;
@@ -146,9 +155,22 @@ pub fn merge(users: Vec<User>, accounts: &[Account]) -> Vec<User> {
 }
 
 /// The accounts of AccountsService, if it runs: its cached users, those that logged in once.
-fn accounts() -> Result<Vec<Account>, zbus::Error> {
+/// Blocks up to `ACCOUNTS_TIMEOUT` for each call: run it on a thread of its own.
+pub fn accounts() -> Option<Vec<Account>> {
+    match ask_accounts() {
+        Ok(accounts) => Some(accounts),
+        Err(err) => {
+            tracing::debug!("AccountsService: {err}");
+            None
+        }
+    }
+}
+
+fn ask_accounts() -> Result<Vec<Account>, zbus::Error> {
     const SERVICE: &str = "org.freedesktop.Accounts";
-    let bus = zbus::blocking::Connection::system()?;
+    let bus = zbus::blocking::connection::Builder::system()?
+        .method_timeout(ACCOUNTS_TIMEOUT)
+        .build()?;
     let manager = zbus::blocking::Proxy::new(
         &bus,
         SERVICE,
@@ -157,7 +179,7 @@ fn accounts() -> Result<Vec<Account>, zbus::Error> {
     )?;
     let paths: Vec<zbus::zvariant::OwnedObjectPath> = manager.call("ListCachedUsers", &())?;
     let mut accounts = Vec::new();
-    for path in paths {
+    for path in paths.into_iter().take(MAX_ACCOUNTS) {
         let user = zbus::blocking::Proxy::new(
             &bus,
             SERVICE,
@@ -179,8 +201,6 @@ pub struct Sources {
     pub passwd: PathBuf,
     pub login_defs: PathBuf,
     pub shells: PathBuf,
-    /// Ask AccountsService too.
-    pub accounts_service: bool,
 }
 
 impl Default for Sources {
@@ -189,12 +209,11 @@ impl Default for Sources {
             passwd: "/etc/passwd".into(),
             login_defs: "/etc/login.defs".into(),
             shells: "/etc/shells".into(),
-            accounts_service: true,
         }
     }
 }
 
-/// The human users of the machine.
+/// The human users of the machine, from the files only (AccountsService: `accounts`).
 pub fn list(sources: &Sources) -> Vec<User> {
     let Some(passwd) = read_bounded(&sources.passwd) else {
         tracing::warn!(path = %sources.passwd.display(), "no password database");
@@ -202,17 +221,7 @@ pub fn list(sources: &Sources) -> Vec<User> {
     };
     let range = uid_range(read_bounded(&sources.login_defs).as_deref());
     let shells = login_shells(read_bounded(&sources.shells).as_deref());
-    let users = from_passwd(&passwd, range, shells.as_deref());
-    if !sources.accounts_service {
-        return users;
-    }
-    match accounts() {
-        Ok(accounts) => merge(users, &accounts),
-        Err(err) => {
-            tracing::debug!("AccountsService: {err}");
-            users
-        }
-    }
+    from_passwd(&passwd, range, shells.as_deref())
 }
 
 #[cfg(test)]
@@ -308,7 +317,6 @@ alex:x:1000:1000:Twice:/home/alex:/usr/bin/zsh
             passwd: dir.join("passwd"),
             login_defs: dir.join("login.defs"),
             shells: dir.join("shells"),
-            accounts_service: false,
         };
         std::fs::write(&sources.passwd, PASSWD).unwrap();
         std::fs::write(&sources.shells, SHELLS).unwrap();

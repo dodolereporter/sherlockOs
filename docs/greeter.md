@@ -79,14 +79,19 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 
 - `src/users.rs`: the human users of `/etc/passwd` (ids from `UID_MIN` to `UID_MAX` of
   `/etc/login.defs`, 1000 to 60000 by default; a shell listed in `/etc/shells`, not `nologin`
-  nor `false`), real names from the comment field. When AccountsService answers on the system
-  bus, its system accounts are left out and its real names taken. Files read with a bound of
-  4 MiB.
+  nor `false`), real names from the comment field. Files read with a bound of 4 MiB. The
+  screen shows that list first; AccountsService is asked afterwards on a thread of its own
+  (lot D-24f), each call within 2 s, 64 accounts at most: when it answers, its system accounts
+  are left out and its real names taken, the selection staying on the same user. A slow or
+  stuck AccountsService never holds the first frame.
 - `src/sessions.rs`: the entries of `wayland-sessions` in the data folders (`/usr/local/share`,
   then `/usr/share`): hidden ones, those without `Exec` or whose `TryExec` is missing left out,
   the first of an id kept, SherlockOS first. `Exec` is split as the desktop entry specification
   quotes it; greetd gets it with `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP` and
-  `XDG_CURRENT_DESKTOP` from `DesktopNames`.
+  `XDG_CURRENT_DESKTOP` from `DesktopNames`. greetd runs the command through
+  `/bin/sh -c "exec " + cmd.join(" ")` (`greetd/src/session/worker.rs`): each word is sent
+  quoted for `sh` (`greetd::shell_word`, lot D-24f), so that a path with a space, a quote or
+  `$ ; & *` reaches the session whole and is never read by the shell.
 - `src/memory.rs`: `/var/cache/sherlockos-greeter/state` (or `SHERLOCKOS_GREETER_STATE`), owned
   by `_greetd`: `last-user=` and one `session.<user>=` line per user (32 at most). Read with a
   bound, written whole then renamed; a name with a line break or `=` is never written.
@@ -94,7 +99,12 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 ## Installing it
 
 `just install-greeter` builds the compositor and the screen in release, then prints the
-commands (`desktop/greeter/install.sh`); it runs none of them. The session itself comes from
+commands (`desktop/greeter/install.sh`); it runs none of them. The programs come from the
+release folder of `CARGO_TARGET_DIR` (relative to the repository), or of `target/`. Each must
+be up to date (`desktop/compositor/session/built.sh`, shared with `just install-session`): no
+source that cargo lists in its dep-info file (`<program>.d`) newer than it, and built from this
+repository, not from another checkout sharing the target folder. Otherwise the script prints
+nothing and says which program to build again (lot D-24f). The session itself comes from
 `just install-session`, whose commands go first. In order:
 
 1. `sudo apt install greetd`: Debian's package (0.10.3 in trixie) creates the `_greetd` user,
@@ -113,7 +123,9 @@ does not show: `systemctl disable greetd.service`, `systemctl enable sddm.servic
 
 `tests/install.rs` runs the script on a fake repository whose path holds a space, under
 `env -i`: the commands to switch and to go back are printed, the path quoted, the model
-installed only when it was downloaded; without the build, nothing is printed.
+installed only when it was downloaded; without the build, nothing is printed. The build of
+`CARGO_TARGET_DIR` is the one installed; a program older than one of its sources, or built from
+another checkout, is refused.
 
 ## Switching user without closing the session (study, not done)
 
@@ -177,9 +189,13 @@ through; an information message is kept and acknowledged without a response; an 
 refused like a wrong password, or reported when greetd refuses it at once, the password never
 sent; a session that cannot start is reported and cancelled; a second secret prompt is given up
 with its question, the password sent once; a greeter that leaves mid-login cancels its session;
-without greetd, the connection fails. `src/greetd.rs` checks the JSON of each request, a password
+without greetd, the connection fails; a command whose path holds a space is sent quoted for
+`sh`; a greetd that takes the password and never answers is given up after the delay (60 s,
+`REPLY_TIMEOUT`; 200 ms in the test), the session cancelled and the connection closed, the next
+attempt opening a new one. `src/greetd.rs` checks the JSON of each request, a password
 with quotes, backslashes, control characters and non-ASCII letters escaped into a frame of its
-exact size, and the replies read or refused.
+exact size, the replies read or refused, and the words of a command given to a real `sh -c
+"exec …"` coming out whole (spaces, quotes, `$`, `;`, `*`, backquotes, an empty word).
 
 `src/users.rs`, `src/sessions.rs` and `src/memory.rs` test the list of users from a fake
 `passwd` (range, shells, `login.defs`, AccountsService's names and system accounts), the
@@ -191,7 +207,8 @@ selected with their session, the arrows go through the users and stay in the fie
 something is typed; the right password goes through Checking to Leaving, Sherlock happy, the
 user and session remembered; a wrong one shakes and keeps the user; greetd unreachable says so;
 « Autre… » asks for a name; a single user is only a name; Sherlock looks at the field while
-keys come. It writes the screenshots to `target/tmp/greeter/`: two in the CI (at rest,
+keys come; AccountsService answering after the first frame keeps the selection on the same
+user. It writes the screenshots to `target/tmp/greeter/`: two in the CI (at rest,
 dark, 1920 × 1080; the error, light, 1366 × 768), and with `-- --ignored` all of them: at rest,
 a user being chosen and chosen, typing, the error, and « Autre… » with the other sessions, in
 the dark and the light theme, at 1920 × 1080 and 1366 × 768. The boards of the entrance and of

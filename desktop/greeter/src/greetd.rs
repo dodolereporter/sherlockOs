@@ -6,11 +6,18 @@
 //! growing buffer leaves a copy of the password behind. Nothing here logs a request.
 //!
 //! The replies are read with a bound (`MAX_REPLY`): greetd runs as root, but a reply that size
-//! would be a broken socket, not a message.
+//! would be a broken socket, not a message. And with a delay (`REPLY_TIMEOUT`): a greetd that
+//! does not answer leaves the screen on its spinner for that long at most, then the session
+//! being created is cancelled and the connection closed; the next attempt opens a new one.
+//!
+//! greetd runs the session's command with `/bin/sh -c "exec " + cmd.join(" ")`
+//! (`greetd/src/session/worker.rs`): `start_session` quotes each word for `sh` (`shell_word`),
+//! so that a word is never split again nor read by the shell.
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{Shutdown, UnixStream};
 use std::path::Path;
+use std::time::Duration;
 
 use system_services::secret::Secret;
 use zeroize::Zeroizing;
@@ -20,6 +27,13 @@ pub const MAX_REPLY: u32 = 64 * 1024;
 
 /// The variable that greetd gives its greeter, with the path of its socket.
 pub const SOCKET_VAR: &str = "GREETD_SOCK";
+
+/// Longest wait for a reply of greetd, or for it to take a request. Beyond PAM's own delays (2
+/// to 3 s after a wrong password, `pam_faildelay`), and those of a slow module.
+pub const REPLY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Wait for greetd to take the cancellation, once it did not answer in time.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,6 +45,8 @@ pub enum Error {
     TooLong(u32),
     #[error("greetd's reply is not understood: {0}")]
     Malformed(String),
+    #[error("greetd did not answer within {} s", .0.as_secs())]
+    Timeout(Duration),
 }
 
 /// What kind of prompt PAM sends through greetd.
@@ -65,6 +81,8 @@ pub struct Greetd {
     stream: UnixStream,
     /// A session was created and neither started nor cancelled.
     open: bool,
+    /// Longest wait for each reply.
+    timeout: Duration,
 }
 
 impl Greetd {
@@ -79,9 +97,22 @@ impl Greetd {
     }
 
     pub fn from_stream(stream: UnixStream) -> Self {
+        Self::with_timeout(stream, REPLY_TIMEOUT)
+    }
+
+    /// The connection on `stream`, waiting `timeout` at most for each reply.
+    pub fn with_timeout(stream: UnixStream, timeout: Duration) -> Self {
+        // Fails only for a zero delay.
+        if let Err(err) = stream
+            .set_read_timeout(Some(timeout))
+            .and_then(|()| stream.set_write_timeout(Some(timeout)))
+        {
+            tracing::warn!("greetd: no delay on the socket: {err}");
+        }
         Self {
             stream,
             open: false,
+            timeout,
         }
     }
 
@@ -106,7 +137,8 @@ impl Greetd {
     /// has left.
     pub fn start_session(&mut self, command: &[String], env: &[String]) -> Result<Reply, Error> {
         let mut out = Request::new("start_session");
-        out.list("cmd", command);
+        let words: Vec<String> = command.iter().map(|word| shell_word(word)).collect();
+        out.list("cmd", &words);
         out.list("env", env);
         let reply = self.exchange(out)?;
         if reply == Reply::Success {
@@ -122,8 +154,31 @@ impl Greetd {
     }
 
     fn exchange(&mut self, request: Request) -> Result<Reply, Error> {
-        self.send(request)?;
-        self.receive()
+        let result = self.send(request).and_then(|()| self.receive());
+        match result {
+            Err(Error::Io(err))
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                self.give_up();
+                Err(Error::Timeout(self.timeout))
+            }
+            other => other,
+        }
+    }
+
+    /// greetd did not answer in time: the session being created is cancelled, without waiting
+    /// for the reply, and the connection is closed. A late reply would come out of step.
+    fn give_up(&mut self) {
+        if std::mem::take(&mut self.open) {
+            let _ = self.stream.set_write_timeout(Some(CANCEL_TIMEOUT));
+            if let Ok(frame) = Request::new("cancel_session").frame() {
+                let _ = self.stream.write_all(&frame);
+            }
+        }
+        let _ = self.stream.shutdown(Shutdown::Both);
     }
 
     fn send(&mut self, request: Request) -> Result<(), Error> {
@@ -221,6 +276,16 @@ impl Request {
         debug_assert_eq!(frame.len(), frame.capacity());
         Ok(frame)
     }
+}
+
+/// `word` as one word for `sh`: as it is when no character of it means anything to the shell,
+/// else between single quotes, a quote in it written `'\''`.
+pub fn shell_word(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        return word.to_owned();
+    }
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// The length of `value` once escaped and quoted by `push_string`.
@@ -329,6 +394,34 @@ mod tests {
                 serde_json::json!({"type": "post_auth_message_response", "response": password})
             );
         }
+    }
+
+    #[test]
+    fn each_word_reaches_the_session_whole_through_sh() {
+        assert_eq!(shell_word("/usr/local/libexec/sherlockos/sherlockos-session"), "/usr/local/libexec/sherlockos/sherlockos-session");
+        assert_eq!(shell_word("/opt/mon bureau/start"), "'/opt/mon bureau/start'");
+        assert_eq!(shell_word("it's"), r"'it'\''s'");
+        assert_eq!(shell_word(""), "''");
+        // What greetd runs: `sh -c "exec " + cmd.join(" ")`, here with printf as the session.
+        let words = [
+            "printf",
+            "[%s]",
+            "/opt/mon bureau/start",
+            "$HOME;*'\"&|`id`\\",
+            "~",
+            "",
+            "a\nb",
+        ];
+        let quoted: Vec<String> = words.iter().map(|w| shell_word(w)).collect();
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("exec {}", quoted.join(" ")))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        let expected: String = words[2..].iter().map(|w| format!("[{w}]")).collect();
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
     }
 
     #[test]

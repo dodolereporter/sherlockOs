@@ -13,12 +13,11 @@ memory=/var/cache/sherlockos-greeter
 user=_greetd
 programs="compositor sherlockos-greeter"
 
-for program in $programs; do
-	if [ ! -x "$repo/target/release/$program" ]; then
-		echo "missing $repo/target/release/$program: cargo build --release --bin $program" >&2
-		exit 1
-	fi
-done
+# The release build of CARGO_TARGET_DIR, where `just install-greeter` has just built it; every
+# program up to date with the sources of this repository, or nothing is printed.
+. "$(dirname "$0")/../compositor/session/built.sh"
+release=$(release_dir "$repo")
+check_built "$repo" "$release" $programs
 if [ ! -f "$mascot" ]; then
 	echo "note: no model of Sherlock at $mascot (just mascot): the screen shows his still picture" >&2
 	mascot=""
@@ -41,7 +40,7 @@ sudo apt install greetd
 
 # 2. The programs, and what the screen reads, where $user can read them:
 sudo install -d $dest $data/lock $data/mascot
-sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
+sudo install -m 755 $(for p in $programs; do printf '%s/%s ' "$(quote "$release")" "$p"; done)$dest/
 sudo install -m 644 $q/assets/lock/lock-dark.jpg $q/assets/lock/lock-light.jpg $data/lock/
 EOF
 if [ -n "$mascot" ]; then

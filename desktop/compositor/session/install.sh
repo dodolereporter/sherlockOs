@@ -21,20 +21,22 @@ for theme in $themes; do
 	fi
 done
 
-for program in $programs; do
-	if [ ! -x "$repo/target/release/$program" ]; then
-		echo "missing $repo/target/release/$program: cargo build --release --bin $program" >&2
-		exit 1
-	fi
-done
+# The release build of CARGO_TARGET_DIR, where `just install-session` has just built it; every
+# program up to date with the sources of this repository, or nothing is printed.
+. "$(dirname "$0")/built.sh"
+release=$(release_dir "$repo")
+check_built "$repo" "$release" $programs
 
-# The repository path is quoted in the commands: it may hold spaces.
-q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
+# The paths are quoted in the commands: they may hold spaces.
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+q=$(quote "$repo")
 cat <<EOF
 # Run as root to install the SherlockOS session (shown by the login screen as "SherlockOS"):
 
 sudo install -d $dest $applications $data/icons
-sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
+sudo install -m 755 $(for p in $programs; do printf '%s/%s ' "$(quote "$release")" "$p"; done)$dest/
 sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/

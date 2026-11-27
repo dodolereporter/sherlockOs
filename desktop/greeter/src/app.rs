@@ -35,7 +35,7 @@ use system_services::secret::Secret;
 use crate::login::{Outcome, Report};
 use crate::memory::Memory;
 use crate::sessions::{SHERLOCKOS, Session};
-use crate::users::User;
+use crate::users::{Account, User};
 
 /// The elements of the screen, from the time (0) to the machine buttons.
 const LAST: u32 = 5;
@@ -88,6 +88,8 @@ pub enum Message {
     Mascot(Option<Mascot>),
     Background(Pictures),
     Theme(color::Theme),
+    /// What AccountsService says, once it answered.
+    Accounts(Vec<Account>),
 }
 
 /// A key the screen treats apart: the arrows choose the user, Tab moves the focus between the
@@ -372,6 +374,28 @@ impl Greeter {
         self.focus_requests
     }
 
+    /// The real names of AccountsService, and its system accounts left out. The selection
+    /// stays on the same user, or on « Autre… ». While a login is under way, the list does not
+    /// lose the user being logged in.
+    pub fn take_accounts(&mut self, accounts: &[Account]) {
+        let name = self.users.get(self.selected).map(|u| u.name.clone());
+        let users = crate::users::merge(self.users.clone(), accounts);
+        let place = name
+            .as_ref()
+            .map(|name| users.iter().position(|u| &u.name == name));
+        let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
+        if busy && place == Some(None) {
+            return;
+        }
+        self.selected = match place {
+            Some(Some(index)) => index,
+            // The selected user was a system account.
+            Some(None) => 0,
+            None => users.len(),
+        };
+        self.users = users;
+    }
+
     fn select(&mut self, index: usize) -> Task<Message> {
         let index = index.min(self.users.len());
         let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
@@ -512,6 +536,7 @@ impl Greeter {
                 self.background_at = self.drawn.then(|| self.elapsed());
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::Accounts(accounts) => self.take_accounts(&accounts),
             Message::Frame(now) => {
                 // The entrance starts from the first frame: it is seen whole.
                 if !std::mem::replace(&mut self.drawn, true) {

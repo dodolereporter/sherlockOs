@@ -9,6 +9,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread::JoinHandle;
+    use std::time::{Duration, Instant};
 
     use greeter::greetd::{Greetd, Prompt, Reply};
     use greeter::login::{Launch, Note, Outcome, log_in};
@@ -149,6 +150,55 @@ mod tests {
         assert_eq!(
             requests[2]["env"],
             json!(["XDG_SESSION_DESKTOP=SherlockOS"])
+        );
+    }
+
+    #[test]
+    fn a_command_with_a_space_is_quoted_for_the_shell_of_greetd() {
+        let fake = Fake::start(pam);
+        let mut greetd = fake.connect();
+        let launch = Launch {
+            command: vec!["/opt/mon bureau/start".into(), "--x".into()],
+            env: Vec::new(),
+        };
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch).unwrap();
+        assert_eq!(report.outcome, Outcome::Started);
+        drop(greetd);
+        let requests = fake.requests();
+        assert_eq!(requests[2]["cmd"], json!(["'/opt/mon bureau/start'", "--x"]));
+    }
+
+    #[test]
+    fn a_silent_greetd_is_given_up_after_the_delay() {
+        let (ours, mut theirs) = UnixStream::pair().unwrap();
+        let mut greetd = Greetd::with_timeout(ours, Duration::from_millis(200));
+        let since = Instant::now();
+        // greetd takes the request, sends a prompt, then never answers the password.
+        let server = std::thread::spawn(move || {
+            let first = read(&mut theirs).unwrap();
+            write(&mut theirs, &secret_prompt());
+            let mut seen = vec![first];
+            while let Some(request) = read(&mut theirs) {
+                seen.push(request);
+            }
+            seen
+        });
+        let result = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch());
+        assert!(
+            matches!(result, Err(greeter::greetd::Error::Timeout(_))),
+            "{result:?}"
+        );
+        assert!(since.elapsed() < Duration::from_secs(5));
+        // The session was cancelled, then the connection closed: the server reads its end.
+        drop(greetd);
+        let requests = server.join().unwrap();
+        assert_eq!(
+            types(&requests),
+            [
+                "create_session",
+                "post_auth_message_response",
+                "cancel_session"
+            ]
         );
     }
 

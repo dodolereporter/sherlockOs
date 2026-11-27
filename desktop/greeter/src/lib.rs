@@ -60,9 +60,13 @@ impl Remember for MemoryFile {
     }
 }
 
-/// The model of Sherlock, read on a thread of its own (the still picture until it is ready).
+/// The model of Sherlock, read on a thread of its own (the still picture until it is ready),
+/// and the accounts of AccountsService, asked on another one once the screen shows.
 fn start() -> iced::Task<Message> {
-    lock::in_background(
+    let accounts = lock::in_background("accounts", users::accounts, |accounts| {
+        accounts.map(Message::Accounts)
+    });
+    let mascot = lock::in_background(
         "mascot",
         || {
             let path = sherlock_3d::locate::find()?;
@@ -71,7 +75,8 @@ fn start() -> iced::Task<Message> {
                 .ok()
         },
         |model| Some(Message::Mascot(model.map(|m| Mascot(Arc::new(m))))),
-    )
+    );
+    iced::Task::batch([mascot, accounts])
 }
 
 /// Every screen gets a surface over everything, which takes the keyboard.
@@ -90,6 +95,7 @@ pub fn layer_settings() -> LayerShellSettings {
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     color::set_active(color::Theme::Dark);
     iced_exwlshell::disable_clipboard();
+    // The files only: AccountsService completes the names once the screen shows (`start`).
     let users = users::list(&users::Sources::default());
     let sessions = sessions::list(&sessions::folders());
     let path = memory::path();

@@ -15,7 +15,7 @@ mod tests {
     use greeter::login::{Outcome, Report};
     use greeter::memory::Memory;
     use greeter::sessions::Session;
-    use greeter::users::User;
+    use greeter::users::{Account, User};
     use iced::{Size, window};
     use iced_test::simulator::Simulator;
     use lock::app::{Clock, Phase, Refusal};
@@ -236,6 +236,28 @@ mod tests {
         let _ = s.greeter.update(Message::Key(Some(Step::Left)));
         assert_eq!(s.greeter.selected(), 1);
         assert_eq!(s.greeter.password_len(), 3);
+    }
+
+    #[test]
+    fn accounts_service_answers_after_the_first_frame() {
+        let mut s = screen((1920.0, 1080.0));
+        assert_eq!(s.greeter.selected(), 1);
+        let account = |name: &str, real_name: &str, system| Account {
+            name: name.into(),
+            real_name: real_name.into(),
+            system,
+        };
+        // `alex` is a system account for AccountsService: the selection stays on `invite`.
+        let _ = s.greeter.update(Message::Accounts(vec![
+            account("alex", "", true),
+            account("invite", "Invitée", false),
+        ]));
+        assert_eq!(s.greeter.selected(), 0);
+        // Two users left, then « Autre… ».
+        for _ in 0..5 {
+            let _ = s.greeter.update(Message::Key(Some(Step::Right)));
+        }
+        assert_eq!(s.greeter.selected(), 2);
     }
 
     #[test]
