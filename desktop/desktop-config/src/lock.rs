@@ -12,7 +12,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -112,7 +112,7 @@ impl Config {
     /// the whole file back to the defaults (a lock set to never would lock after 5 minutes).
     /// Only a file that cannot be read at all is an error.
     pub fn read_lenient(path: &Path) -> Result<(Self, Vec<Error>), Error> {
-        match fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Ok(Self::parse_lenient(&text)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
             Err(source) => Err(Error::Read {
@@ -139,6 +139,7 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn what_control_room_writes_reads_back() {
