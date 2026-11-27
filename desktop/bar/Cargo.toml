@@ -29,7 +29,8 @@ mime-apps = { path = "../mime-apps" }
 notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 # Sound and brightness, shared with the media keys of the compositor (workspace crate).
 system-services = { path = "../system-services" }
 # The compositor's workspaces and windows (ADR 0021): sherlock_shell_v1 and ext-workspace-v1,

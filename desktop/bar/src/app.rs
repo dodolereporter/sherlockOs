@@ -993,6 +993,8 @@ impl Bar {
                 shape.solid,
                 shape.radius,
             ));
+        // The blur behind its glass (lot D-37).
+        let bar = sherlock_ui::glass::glass(bar, shape.radius);
         // Flat: no shadow, but drawing it tells the menu which renderer draws the bar.
         surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }

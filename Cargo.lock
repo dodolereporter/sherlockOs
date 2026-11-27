@@ -3445,6 +3445,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "iced",
+ "iced_exwlshell",
  "iced_renderer",
  "iced_runtime",
  "iced_test",

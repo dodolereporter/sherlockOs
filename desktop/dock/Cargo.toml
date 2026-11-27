@@ -25,7 +25,8 @@ icon-theme = { path = "../icon-theme" }
 appearance-config = { path = "../appearance-config" }
 # inotify, to reload the configuration without polling: the version the bar already pins.
 libc = "=0.2.191"
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 # Client side of our compositor's private protocol (ADR 0021), for the windows of an application
 # that starts (workspace crate).
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
