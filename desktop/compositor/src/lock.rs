@@ -2,8 +2,8 @@
 //!
 //! Once the session is locked, only the lock surfaces are drawn and get input. A screen without
 //! one shows the plain background of the system screens; no window, anchored surface, menu or
-//! thumbnail is drawn, in a frame or in a screenshot. Only the console switch, Ctrl + Alt +
-//! Backspace, and the volume and brightness keys act. The lock ends only on `unlock_and_destroy`
+//! thumbnail is drawn, in a frame or in a screenshot. Only the console switch and the volume and
+//! brightness keys act; not Ctrl + Alt + Backspace (lot D-25j). The lock ends only on `unlock_and_destroy`
 //! from the lock that holds it, once `locked` was sent: smithay would end it on the request of
 //! any lock object, so the requests of `ext_session_lock_v1` are checked here first.
 //!
@@ -92,6 +92,11 @@ use crate::{
     output::View,
     render::Item,
 };
+
+/// The variable naming the file that says the session is locked (lot D-25j): created at the
+/// lock, removed at the unlock. If the compositor stops or crashes while it is there,
+/// `sherlockos-session` ends the session instead of giving back the console it came from.
+pub const MARK_VAR: &str = "SHERLOCKOS_LOCK_MARK";
 
 /// Name of the lock program, beside the session's programs or in the `PATH`.
 pub const PROGRAM: &str = "sherlockos-lock";
@@ -293,6 +298,8 @@ pub(crate) struct SessionLock {
     slowest: Duration,
     /// The first input while locked was logged.
     input_logged: bool,
+    /// The file that says the session is locked (`MARK_VAR`).
+    mark: Option<PathBuf>,
 }
 
 impl SessionLock {
@@ -329,6 +336,9 @@ impl SessionLock {
             presented: false,
             slowest: Duration::ZERO,
             input_logged: false,
+            mark: std::env::var_os(MARK_VAR)
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -437,6 +447,29 @@ impl State {
         }
     }
 
+    /// Replaces the file that says the session is locked (the tests).
+    pub fn set_lock_mark(&mut self, mark: Option<PathBuf>) {
+        self.lock.mark = mark;
+    }
+
+    /// Creates or removes the file that says the session is locked (lot D-25j). On the
+    /// session's runtime folder, a memory file system: nothing that blocks.
+    fn mark_locked(&self, locked: bool) {
+        let Some(mark) = &self.lock.mark else {
+            return;
+        };
+        let done = match locked {
+            true => std::fs::write(mark, b""),
+            false => std::fs::remove_file(mark).or_else(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(err),
+            }),
+        };
+        if let Err(err) = done {
+            tracing::warn!(?mark, locked, "lock mark: {err}");
+        }
+    }
+
     /// The connection of the lock program is open.
     pub fn lock_program_connected(&self) -> bool {
         self.lock.program.is_some()
@@ -537,6 +570,7 @@ impl State {
 
     fn enter_lock(&mut self) {
         tracing::info!("session locked");
+        self.mark_locked(true);
         self.sync_log();
         (self.lock.input_logged, self.lock.waiting_image) = (false, None);
         let lock = &mut self.lock;
@@ -571,6 +605,7 @@ impl State {
 
     fn end_lock(&mut self) {
         tracing::info!("session unlocked");
+        self.mark_locked(false);
         self.sync_log();
         (self.lock.ping, self.lock.pinged) = (None, None);
         let lock = &mut self.lock;

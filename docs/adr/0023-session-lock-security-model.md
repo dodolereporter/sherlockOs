@@ -44,11 +44,11 @@ the policy to the compositor, and has two gaps for a strict use:
    cancelled at the lock. Touchpad gestures are dropped. The compositor's shortcuts are off,
    except:
    - Ctrl + Alt + F1 to F12, the console switch: the session stays locked on its console;
-   - Ctrl + Alt + Backspace, which stops the compositor: the emergency exit, kept by the
-     author's decision of 2026-11-26; it closes the session, it never unlocks it;
    - the volume and brightness keys (not the players);
    - Enter on the rescue screen (below).
    Power off and sleep through the power button belong to logind, not to the compositor.
+   Ctrl + Alt + Backspace, which stops the compositor, does nothing while locked (amendment
+   of lot D-25j, below): it goes to the lock surface as a Backspace.
 4. **Only the lock that holds the session ends it.** The requests of `ext_session_lock_v1` go
    through our own dispatch before smithay's: `unlock_and_destroy` is refused with
    `invalid_unlock` (a protocol error, which disconnects the client) unless it comes from the
@@ -80,8 +80,9 @@ the policy to the compositor, and has two gaps for a strict use:
 ## Consequences
 
 - A crash of the lock screen never shows the desktop: at worst the user sees the rescue
-  screen, and gets out of it with Enter, another console, or Ctrl + Alt + Backspace, which ends
-  the session.
+  screen, and gets out of it with Enter, or another console.
+- If the compositor stops or crashes while locked, the logind session ends (amendment of lot
+  D-25j, below): nobody gets back the console it was started from.
 - `swaylock` started by hand, or any other lock screen, cannot lock the session: only Super + L
   and the triggers of the compositor do, with our program. A program of the session cannot
   show a fake lock screen through the protocol.
@@ -94,6 +95,26 @@ the policy to the compositor, and has two gaps for a strict use:
   `session_lock` must be read again against this ADR.
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the
   lock screen, plugging a screen in, switching console, going to sleep.
+
+## Amendment of lot D-25j (2026-11-27, proposed: the author approves it in pull request)
+
+The security audit of 27/11 (point 1) found that Ctrl + Alt + Backspace while locked, kept by
+the decision of 2026-11-26, does not only close the session: started from a text console (the
+documented way before greetd), the compositor gives back that console, already logged in, and
+the lock is bypassed; a crash of the compositor does the same. Under greetd, anyone at the
+machine could also close the session and lose the user's work.
+
+- While locked, Ctrl + Alt + Backspace is not a shortcut: it goes to the lock surface as a
+  Backspace. The console switch stays, and so does the rescue screen's Enter. Unlocked, it still
+  stops the compositor, the way out when nothing answers.
+- The compositor creates a file when the session locks and removes it at the unlock: the one
+  `SHERLOCKOS_LOCK_MARK` names, `$XDG_RUNTIME_DIR/sherlockos-locked` in `sherlockos-session`.
+  If the compositor ends, however it ends, while that file is there, `sherlockos-session` ends
+  the logind session (`loginctl terminate-session`), or without one kills the process that
+  started it, instead of giving back its console.
+- A process of the user could remove that file, or the compositor: it already runs as the user,
+  in the session; this protects the session from someone at the keyboard, not from the user's
+  own programs (see the point on `ptrace` above).
 
 ## What would change our mind
 
