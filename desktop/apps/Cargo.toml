@@ -41,10 +41,6 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
     "fmt",
 ] }
 
-# Draws each icon once at its size on the screen (lot P-02): the version iced already pulls for
-# its SVG widget, which the compositor and cursor-theme pin too.
-resvg = { version = "=0.45.1", default-features = false }
-
 [dev-dependencies]
 iced_test = "=0.14.0"
 # The `pages` example counts the SVG pictures iced_wgpu rasterizes, which it logs through `log`:

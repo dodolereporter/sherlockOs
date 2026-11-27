@@ -190,21 +190,9 @@ fn letter(name: &str) -> Glyph {
     Glyph::Letter(name.chars().next().map_or('?', |c| c.to_ascii_uppercase()))
 }
 
-/// An SVG file as it is; any other image inside an SVG.
+/// An icon file, SVG or PNG: `sherlock_ui::raster` reads it, with its bounds, and draws it.
 fn icon_handle(path: &Path) -> svg::Handle {
-    if path.extension().is_some_and(|e| e == "svg") {
-        return svg::Handle::from_path(path);
-    }
-    let href = path
-        .to_string_lossy()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
-    let document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    );
-    svg::Handle::from_memory(document.into_bytes())
+    svg::Handle::from_path(path)
 }
 
 #[cfg(test)]
