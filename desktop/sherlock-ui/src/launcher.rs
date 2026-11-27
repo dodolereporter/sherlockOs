@@ -50,6 +50,12 @@ pub const MAX_SECTIONS: usize = 5;
 pub const CONFIRM_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
 /// Width of the menu of an application (« Garder dans le Dock »), drawn inside its row.
 pub const MENU_WIDTH: f32 = 200.0;
+/// Scale the panel opens from and closes to, around the middle of its top edge, as Spotlight.
+pub const OPEN_SCALE: f32 = 0.96;
+/// Spring of the opening and the closing: the panel's opacity and scale (lot P-02).
+pub const OPEN_SPRING: crate::motion::Spring = crate::motion::OPEN_SPRING;
+/// How close to its end the opening or the closing counts as done.
+pub const OPEN_PRECISION: f64 = 0.01;
 
 /// Height of the panel holding `sections` section labels and `rows` result rows: its border
 /// and padding, the search row and the line under it, the labels, the rows.

@@ -20,6 +20,8 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "crisp",
     "thread-pool",
     "wayland",
+    # The icons drawn once as pixels (lot P-02), without iced's picture decoders.
+    "image-without-codecs",
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 # The pinned list as the dock shows it, and its file (workspace crates).
@@ -39,8 +41,15 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
     "fmt",
 ] }
 
+# Draws each icon once at its size on the screen (lot P-02): the version iced already pulls for
+# its SVG widget, which the compositor and cursor-theme pin too.
+resvg = { version = "=0.45.1", default-features = false }
+
 [dev-dependencies]
 iced_test = "=0.14.0"
+# The `pages` example counts the SVG pictures iced_wgpu rasterizes, which it logs through `log`:
+# the version iced already pulls.
+log = "=0.4.35"
 
 [lints]
 workspace = true

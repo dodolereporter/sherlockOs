@@ -1,7 +1,7 @@
 #!/bin/sh
 # Starts a SherlockOS session, from the login screen (sherlockos.desktop) or from a text console:
-# the compositor on the screens of the machine, then the bar, the dock and the notification
-# daemon inside it.
+# the compositor on the screens of the machine, then the bar, the dock, the notification
+# daemon, the launcher and the applications view inside it.
 #
 # The programs are looked for next to this script (`just install-session` puts them in
 # /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN. That folder goes at the end of PATH: the
@@ -224,6 +224,11 @@ keep() {
 keep "$0/bar" &
 keep "$0/dock" &
 keep "$0/notifications" &
+# The launcher stays in memory, hidden (lot P-02): Super + Space starts `launcher`, which only asks
+# it to show or hide, so that it appears at once.
+keep "$0/launcher" --resident &
+# The applications view too (F4, the button of the dock): `sherlockos-apps` shows or hides it.
+keep "$0/sherlockos-apps" --resident &
 # The polkit agent, started again like the shell programs, and kwalletd6 without
 # gnome-keyring-daemon (lot D-35b).
 [ -n "${SHERLOCKOS_POLKIT_AGENT:-}" ] && keep "$SHERLOCKOS_POLKIT_AGENT" &
