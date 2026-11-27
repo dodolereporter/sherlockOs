@@ -140,6 +140,9 @@ pub struct Lock {
     /// When the screen came: the clock of the animations.
     start: Instant,
     now: Instant,
+    /// The time of the world, `Instant::now` but in the tests: at rest, neither frames nor
+    /// ticks come, so `now` is stale when an input brings the form (`input`).
+    wall: fn() -> Instant,
     /// A key ended the entrance of what shows.
     entered: bool,
     /// The form, shown on demand.
@@ -183,6 +186,7 @@ impl Lock {
             armed: Armed::default(),
             start: now,
             now,
+            wall: Instant::now,
             entered: false,
             form: Form::default(),
             typed: false,
@@ -259,6 +263,11 @@ impl Lock {
     /// The clock of the animations, set by the tests.
     pub fn set_now(&mut self, now: Instant) {
         self.now = now;
+    }
+
+    /// What gives the time of the world, set by the tests.
+    pub fn set_wall(&mut self, wall: fn() -> Instant) {
+        self.wall = wall;
     }
 
     pub fn set_clock(&mut self, clock: Clock) {
@@ -456,6 +465,10 @@ impl Lock {
 
     /// A key, a click or the pointer on the surface `id`.
     fn input(&mut self, id: window::Id, input: Input) -> Task<Message> {
+        // At rest, the clock of the animations stopped with the last frame: an input counts
+        // from the time of the world, or the form would come in the past, skip its entrance and
+        // leave at the next tick, as if `FORM_TIMEOUT` had passed (Q-44).
+        self.now = self.now.max((self.wall)());
         self.asleep = false;
         let key = matches!(input, Input::Key { .. });
         // The rescue screen always shows its field: the keys go there, the pointer picks it.
@@ -549,8 +562,8 @@ impl Lock {
         (entrance * exit) as f32
     }
 
-    /// `progress`, between 0 and 1: an opacity.
-    fn presence(&self, index: u32) -> f32 {
+    /// `progress`, between 0 and 1: an opacity (the tests read it).
+    pub fn presence(&self, index: u32) -> f32 {
         self.progress(index).clamp(0.0, 1.0)
     }
 

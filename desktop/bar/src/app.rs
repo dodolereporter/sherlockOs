@@ -974,12 +974,14 @@ impl Bar {
             return self.view_app_menu(level);
         }
         if self.tray.popup == Some(id) {
-            return self.view_tray();
+            let held = self.tray_dragged_from(pins::Place::Popup);
+            return sherlock_ui::pointer::held(self.view_tray(), held).into();
         }
         if self.menu == Some(id) {
             self.view_menu()
         } else {
-            self.view_bar()
+            let held = self.tray_dragged_from(pins::Place::Bar);
+            sherlock_ui::pointer::held(self.view_bar(), held).into()
         }
     }
 
