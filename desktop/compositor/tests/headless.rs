@@ -2656,6 +2656,69 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The xkb code of the key that types a comma in the layout of the harness, the machine's:
+    /// its own key in US (59), the key right of N in AZERTY (58).
+    fn comma_key() -> u32 {
+        use smithay::input::keyboard::xkb;
+        let layout = compositor::keyboard::Layout::system();
+        let names = layout.xkb();
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            names.rules,
+            names.model,
+            names.layout,
+            names.variant,
+            names.options.clone(),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the keymap of the machine");
+        (8..256)
+            .find(|&code| {
+                keymap
+                    .key_get_syms_by_level(xkb::Keycode::new(code), 0, 0)
+                    .contains(&xkb::Keysym::comma)
+            })
+            .expect("a key that types a comma")
+    }
+
+    /// The gesture key and comma start Control Room, as « Réglages » in the bar's Sherlock menu
+    /// does; comma alone goes to the client (lot Q-31).
+    #[test]
+    fn the_gesture_key_and_comma_start_control_room() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut h = Harness::start();
+        let dir = std::env::temp_dir().join(format!("settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("started");
+        let program = dir.join("control-room");
+        let script = format!("#!/bin/sh\necho started >> '{}'\n", marker.display());
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        h.state.set_settings_program(program);
+        let started = |n: usize| {
+            for _ in 0..500 {
+                let lines = std::fs::read_to_string(&marker).map_or(0, |t| t.lines().count());
+                if lines >= n {
+                    return lines;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            0
+        };
+        let comma = comma_key();
+        h.shortcut(comma);
+        assert_eq!(started(1), 1, "Control Room is started");
+        assert!(!h.state.overview_open(), "the gesture key was not alone");
+        h.state
+            .keyboard_key(Keycode::new(comma), KeyState::Pressed, 9);
+        h.state
+            .keyboard_key(Keycode::new(comma), KeyState::Released, 10);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(started(1), 1, "comma alone starts nothing");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn the_title_bar_moves_and_maximizes_the_window_and_its_buttons_act() {
         let mut h = Harness::start();
