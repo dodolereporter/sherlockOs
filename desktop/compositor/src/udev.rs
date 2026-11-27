@@ -242,9 +242,12 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
-    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
-    state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
-    state.watch_logind(&event_loop.handle(), None)?;
+    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3):
+    // not on the login screen, which has no session to lock (`greeter.rs`).
+    if !state.is_greeter() {
+        state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
+        state.watch_logind(&event_loop.handle(), None)?;
+    }
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();
@@ -284,8 +287,11 @@ pub fn init(
         } = &mut *backend;
         crate::window_anim::snapshot(scene, renderer, state, window)
     }));
-    // Screenshots (lot D-35c), drawn the same way, between two frames.
-    state.enable_screenshots(crate::capture::Settings::default());
+    // Screenshots (lot D-35c), drawn the same way, between two frames. Not of the login
+    // screen (`greeter.rs`).
+    if !state.is_greeter() {
+        state.enable_screenshots(crate::capture::Settings::default());
+    }
     let weak = Rc::downgrade(&backend);
     state.set_capturer(Box::new(move |state, target| {
         let backend = weak.upgrade()?;

@@ -1518,6 +1518,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "greeter"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -14,6 +14,7 @@ pub mod dmabuf;
 pub mod focus;
 pub mod genie;
 pub mod gestures;
+mod greeter;
 mod handlers;
 pub mod headless;
 mod input;
@@ -101,7 +102,7 @@ pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
          [--workspaces N] [--snap-gap PX] [--minimize-effect genie|scale|none] \
-         [--window-animations on|off] [command [arguments…]]"
+         [--window-animations on|off] [--greeter] [--] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -182,6 +183,8 @@ pub struct State {
     intercepted_keys: Vec<Keycode>,
     /// The compositor runs in a window of another session (`--nested`).
     nested: bool,
+    /// The compositor of the login screen (`--greeter`, `greeter.rs`).
+    greeter: bool,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
     /// Frame statistics, with `--measure`.
@@ -347,6 +350,7 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
+            greeter: false,
             switch_vt: None,
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
@@ -391,7 +395,8 @@ impl State {
         tracing::info!(socket = ?name, "Wayland socket open");
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(name.clone());
-        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        // The login screen has no shell (`greeter.rs`).
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|_| !self.greeter) {
             self.listen_shell_next_to(&PathBuf::from(dir).join(&name), event_loop);
         }
         Ok(name)
@@ -407,7 +412,9 @@ impl State {
         let socket = ListeningSocket::bind_absolute(path.clone())?;
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(path.clone().into_os_string());
-        self.listen_shell_next_to(&path, event_loop);
+        if !self.greeter {
+            self.listen_shell_next_to(&path, event_loop);
+        }
         Ok(())
     }
 

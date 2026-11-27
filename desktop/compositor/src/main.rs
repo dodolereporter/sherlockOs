@@ -16,7 +16,9 @@
 //! sets the margin around snapped windows, from 0 to 64 (8 by default). `--minimize-effect`
 //! chooses what minimizing a window shows: `genie` (by default), `scale` or `none`.
 //! `--window-animations on|off` turns the opening and closing of the windows on (by default)
-//! or off.
+//! or off. `--greeter` makes it the compositor of the login screen, which greetd starts as
+//! `compositor --greeter -- sherlockos-greeter` (lot D-24, ADR 0026): one program shown
+//! fullscreen, no shortcut of the desktop, and the compositor stops with it.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -63,6 +65,9 @@ fn main() -> Result<(), Error> {
     if let Some(on) = options.window_animations {
         state.set_window_animations(on);
     }
+    if options.greeter {
+        state.enter_greeter_mode();
+    }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.
     let session = if options.headless {
@@ -76,8 +81,11 @@ fn main() -> Result<(), Error> {
     };
     tracing::info!(socket = ?socket, "compositor ready");
 
-    // When measuring, the session stops with the command, which is the measured scene.
-    let signal = options.measure.then(|| state.loop_signal.clone());
+    // When measuring, the session stops with the command, which is the measured scene; the
+    // login screen stops with its greeter.
+    let signal = options
+        .stops_with_command()
+        .then(|| state.loop_signal.clone());
     // XWayland starts with the compositor, and the command once it is ready: it may be an X11
     // application. Without Xwayland on the machine, only Wayland applications show up.
     let launch = {

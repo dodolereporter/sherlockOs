@@ -1,0 +1,21 @@
+[package]
+name = "greeter"
+description = "Login screen of SherlockOS, a greeter of greetd (ADR 0026)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Reads greetd's replies (greetd-ipc(7)); the requests are written by hand, so that the
+# password goes into a buffer wiped once sent. The version Evidence and sherlockd pin.
+serde_json = "=1.0.154"
+# The `Secret` type of the password, shared with the lock screen (workspace crate).
+system-services = { path = "../system-services" }
+# Wipes the copies of the password made for greetd: the version system-services pins.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+
+[lints]
+workspace = true

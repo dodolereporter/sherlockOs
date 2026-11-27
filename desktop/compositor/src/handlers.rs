@@ -124,6 +124,7 @@ impl State {
                 let room = room(&window, area);
                 toplevel.with_pending_state(|s| s.bounds = Some(room));
             }
+            self.greeter_window(&window);
             toplevel.send_configure();
             return;
         }
@@ -575,7 +576,8 @@ impl XdgShellHandler for State {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.surface_window(&surface) {
+        // The login screen stays fullscreen (`greeter.rs`).
+        if let Some(window) = self.surface_window(&surface).filter(|_| !self.greeter) {
             surface.with_pending_state(|s| s.fullscreen_output = None);
             self.rearrange(&window, |a, _| a.fullscreen = false);
         }

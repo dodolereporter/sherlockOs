@@ -205,12 +205,17 @@ impl Shortcut {
     /// Ctrl + Alt + Backspace, the volume and brightness keys, and Enter on the rescue screen.
     /// Every other key goes to the lock surface, or nowhere.
     fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
+        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
+        Self::in_greeter(state, m, key, sym).or(retry.then_some(Self::RetryLock))
+    }
+
+    /// The only keys the compositor takes on the login screen (`greeter.rs`): the console
+    /// switch, Ctrl + Alt + Backspace, the volume and brightness keys. The players' keys go to
+    /// the greeter, like every other key.
+    fn in_greeter(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
         let media =
             MediaKey::of(sym).filter(|media| media.acts_while_locked() && state.takes_media_keys());
-        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
-        Self::for_session(state.nested, m, sym)
-            .or(media.map(|media| Self::Media(media, key)))
-            .or(retry.then_some(Self::RetryLock))
+        Self::for_session(state.nested, m, sym).or(media.map(|media| Self::Media(media, key)))
     }
 }
 
@@ -748,7 +753,7 @@ impl State {
             let alone = !mods.ctrl && !mods.shift && !other;
             let gesture_key = crate::mission_control::is_gesture_key(state.nested, sym);
             let pressed = key_state == KeyState::Pressed;
-            if !state.is_locked() {
+            if !state.is_locked() && !state.greeter {
                 state.overview.key(gesture_key, pressed, alone);
             }
             if key_state == KeyState::Released {
@@ -764,6 +769,13 @@ impl State {
             state.intercepted_keys.retain(|k| *k != key);
             if state.is_locked() {
                 let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
+                    return FilterResult::Forward;
+                };
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
+            if state.greeter {
+                let Some(shortcut) = Shortcut::in_greeter(state, mods, key, sym) else {
                     return FilterResult::Forward;
                 };
                 state.intercepted_keys.push(key);

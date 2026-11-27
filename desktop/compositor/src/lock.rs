@@ -265,6 +265,10 @@ impl State {
 
     /// Locks the session now, and starts the lock program if no lock is held (Super + L).
     pub fn lock_session(&mut self) {
+        // The login screen has no session to lock (`greeter.rs`).
+        if self.greeter {
+            return;
+        }
         if !self.lock.locked {
             self.enter_lock();
         }
