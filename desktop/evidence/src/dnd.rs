@@ -336,7 +336,7 @@ impl Worker {
             }
             Command::Clip(mode, paths) => {
                 let (Some(manager), Some(device), Some(serial)) =
-                    (&self.manager, &self.device, self.keyed.or(self.pressed))
+                    (&self.manager, &self.device, self.keyed)
                 else {
                     return;
                 };
@@ -617,13 +617,17 @@ impl Dispatch<WlPointer, ()> for Worker {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // Only a button still held may start a drag: the press's serial, until its release.
         if let wl_pointer::Event::Button {
             serial,
-            state: WEnum::Value(wl_pointer::ButtonState::Pressed),
+            state: WEnum::Value(state),
             ..
         } = event
         {
-            worker.pressed = Some(serial);
+            worker.pressed = match state {
+                wl_pointer::ButtonState::Pressed => Some(serial),
+                _ => None,
+            };
         }
     }
 }
