@@ -82,9 +82,10 @@ impl Bar {
         self.global.address = menu.clone();
         self.global.root = None;
         self.global.opening = None;
+        // The name and the menus are read side by side: neither waits for the other.
         match menu {
-            Some(menu) => tasks.chain(closed).chain(read_menu(menu, 0)),
-            None => tasks.chain(closed),
+            Some(menu) => Task::batch([tasks, closed, read_menu(menu, 0)]),
+            None => Task::batch([tasks, closed]),
         }
     }
 
