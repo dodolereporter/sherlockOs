@@ -680,6 +680,7 @@ impl Dispatch<WlDataDevice, ()> for Worker {
                     return;
                 };
                 let at = (x as f32, y as f32);
+                tracing::debug!(?at, types = ?worker.types_of(&offer), "drag entered the window");
                 worker.over = Some(Over {
                     offer,
                     serial,

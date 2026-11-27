@@ -193,6 +193,9 @@ impl App {
                 let allowed = !home && self.drop_dir(target).is_some();
                 let changed = self.dnd.over.as_ref().map(|o| (o.target, o.allowed));
                 if changed != Some((target, allowed)) {
+                    tracing::debug!(x, y, ?target, allowed, "files dragged over the window");
+                }
+                if changed != Some((target, allowed)) {
                     let since = match self.dnd.over.as_ref() {
                         Some(o) if o.target == target => o.since,
                         _ => Instant::now(),
