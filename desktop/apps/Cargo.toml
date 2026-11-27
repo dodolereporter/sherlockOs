@@ -27,6 +27,8 @@ iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["m
 # The pinned list as the dock shows it, and its file (workspace crates).
 dock = { path = "../dock" }
 dock-config = { path = "../dock-config" }
+# The wallpaper setting, to blur the wallpaper behind the view (workspace crate).
+desktop-config = { path = "../desktop-config" }
 # Application icons (workspace crate).
 icon-theme = { path = "../icon-theme" }
 # The launcher's reading of the applications, its search, its start without a shell and its
@@ -44,6 +46,12 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # Draws each icon once at its size on the screen (lot P-02): the version iced already pulls for
 # its SVG widget, which the compositor and cursor-theme pin too.
 resvg = { version = "=0.45.1", default-features = false }
+
+# The wallpaper behind the view, decoded, blurred and kept in the cache (lot P-02c): the version
+# and features the lock screen and the compositor already pin.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# The errors of the backdrop: the version the launcher already pins.
+thiserror = "=2.0.21"
 
 [dev-dependencies]
 iced_test = "=0.14.0"
