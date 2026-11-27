@@ -40,12 +40,18 @@ fn terminal() -> Option<Vec<OsString>> {
 }
 
 /// A `hicolor` theme holding the desktop's own application icons (`sherlock-ui/icons`).
+/// Written once per test process: tests running side by side used to copy the files again while
+/// another one read them, and found an icon missing now and then.
 fn icons() -> icon_theme::Lookup {
-    let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
-    if let Err(error) = write_icons(&data) {
-        panic!("cannot copy the icons: {error}");
-    }
-    icon_theme::Lookup::new(&[data], None, None)
+    static WRITTEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let data = WRITTEN.get_or_init(|| {
+        let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
+        if let Err(error) = write_icons(&data) {
+            panic!("cannot copy the icons: {error}");
+        }
+        data
+    });
+    icon_theme::Lookup::new(std::slice::from_ref(data), None, None)
 }
 
 fn write_icons(data: &std::path::Path) -> std::io::Result<()> {
