@@ -159,7 +159,7 @@ impl State {
 }
 
 /// The window and its title bar when the compositor draws one, in the space.
-fn whole_geometry(state: &State, window: &Window) -> Option<Rectangle<i32, Logical>> {
+pub(crate) fn whole_geometry(state: &State, window: &Window) -> Option<Rectangle<i32, Logical>> {
     let mut geometry = state.space.element_geometry(window)?;
     if state.decoration_bar(window).is_some() {
         let inset = ui_decorations::INSET.round() as i32;

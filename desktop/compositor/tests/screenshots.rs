@@ -37,6 +37,7 @@ mod tests {
     const PRINT: u32 = 99 + 8;
     const SHIFT: u32 = 42 + 8;
     const ESCAPE: u32 = 1 + 8;
+    const ENTER: u32 = 28 + 8;
     const BTN_LEFT: u32 = 0x110;
 
     /// A renderer on Mesa's software device, if there is one.
@@ -256,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_print_screen_takes_the_area_drawn_with_the_mouse() {
+    fn shift_print_screen_takes_the_area_drawn_with_the_mouse_on_enter() {
         let Some(renderer) = renderer_or_skip() else {
             return;
         };
@@ -278,14 +279,103 @@ mod tests {
         h.state.pointer_motion((100.0, 100.0).into(), 2);
         h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
         h.state.pointer_motion((300.0, 250.0).into(), 4);
-        let picked = h.state.picked_area().unwrap();
-        assert_eq!((picked.size.w, picked.size.h), (200.0, 150.0));
         h.state.pointer_button(BTN_LEFT, ButtonState::Released, 5);
+        let picked = h.state.screenshot_area().unwrap();
+        assert_eq!((picked.size.w, picked.size.h), (200.0, 150.0));
+        // The area stays, to adjust, until Enter takes it (lot D-35e).
+        assert!(h.state.picking_area());
+        h.key(ENTER, KeyState::Pressed);
+        h.key(ENTER, KeyState::Released);
         assert!(!h.state.picking_area());
         h.run_until("the notification", |h| !h.sent.lock().unwrap().is_empty());
         let shots = h.shots();
         assert_eq!(shots.len(), 1, "{shots:?}");
         let image = image::open(&shots[0]).unwrap().to_rgba8();
         assert_eq!(image.dimensions(), (200, 150));
+    }
+
+    /// The tool drawn for real over the desktop of a screen of `size` pixels at `scale`, an
+    /// area drawn from a third to two thirds of the screen, and the options menu open when
+    /// `menu`: the image of the screen, as the renderer shows it, before the tool opens and
+    /// with it.
+    fn board(
+        size: (i32, i32),
+        scale: f64,
+        menu: bool,
+    ) -> Option<(image::RgbaImage, image::RgbaImage)> {
+        use compositor::capture::Target;
+        use sherlock_ui::screenshot_tool::Control;
+        let mut renderer = software_renderer()?;
+        let event_loop: EventLoop<'static, State> = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        let output = state.add_output(size.into(), scale);
+        let dir = std::env::temp_dir().join(format!("screenshots-board-{}", std::process::id()));
+        state.enable_screenshots(Settings {
+            pictures: Some(dir),
+            session_bus: None,
+        });
+        let scene = Scene::new(&mut renderer).unwrap();
+        let mut textures = wallpaper::Textures::default();
+        let target = Target::Screen(output);
+        let mut draw = |state: &mut State| {
+            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target)?;
+            image::RgbaImage::from_raw(shot.width, shot.height, shot.rgba)
+        };
+        let before = draw(&mut state)?;
+        let (w, h) = (f64::from(size.0) / scale, f64::from(size.1) / scale);
+        state.pointer_motion((w / 3.0, h / 3.0).into(), 1);
+        state.open_screenshot_tool();
+        state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        state.pointer_motion((w * 2.0 / 3.0, h * 2.0 / 3.0).into(), 3);
+        state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        if menu {
+            let button = state.screenshot_control(Control::Options).unwrap();
+            let center = button.loc + button.size.downscale(2.0).to_point();
+            state.pointer_motion(center, 5);
+            state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+            state.pointer_button(BTN_LEFT, ButtonState::Released, 7);
+        }
+        // Past the time of the entry.
+        std::thread::sleep(Duration::from_millis(400));
+        Some((before, draw(&mut state)?))
+    }
+
+    #[test]
+    fn the_tool_draws_at_every_size() {
+        if renderer_or_skip().is_none() {
+            return;
+        }
+        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        for (size, scale, menu) in [
+            ((1920, 1080), 1.0, false),
+            ((1920, 1080), 1.0, true),
+            ((1366, 768), 1.0, true),
+            ((2560, 1600), 2.0, false),
+            ((1920, 1200), 1.5, true),
+        ] {
+            let (before, image) = board(size, scale, menu).unwrap();
+            assert_eq!(image.dimensions(), (size.0 as u32, size.1 as u32));
+            let name = format!(
+                "screenshot-tool-{}x{}@{scale}{}.png",
+                size.0,
+                size.1,
+                if menu { "-menu" } else { "" }
+            );
+            let path = out.join(name);
+            image.save(&path).unwrap();
+            eprintln!("{}", path.display());
+            // Dimmed around the area, as it was inside it.
+            let (w, h) = (size.0 as u32, size.1 as u32);
+            let lum = |p: &image::Rgba<u8>| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]);
+            let (x, y) = (w / 10, h / 10);
+            let (dim, clear) = (image.get_pixel(x, y), before.get_pixel(x, y));
+            assert!(lum(dim) * 3 < lum(clear) * 2, "{dim:?} against {clear:?}");
+            let (x, y) = (w / 2, h / 2);
+            let (inside, clear) = (image.get_pixel(x, y), before.get_pixel(x, y));
+            assert!(
+                lum(inside).abs_diff(lum(clear)) <= 6,
+                "{inside:?} against {clear:?}"
+            );
+        }
     }
 }

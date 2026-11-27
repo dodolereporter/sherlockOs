@@ -7,6 +7,7 @@
 pub mod app;
 pub mod apps;
 mod pages;
+pub mod scroll;
 pub mod search;
 pub mod settings;
 pub mod sound;
