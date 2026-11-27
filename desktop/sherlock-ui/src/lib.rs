@@ -47,6 +47,8 @@ pub mod focus;
 #[cfg(feature = "iced")]
 pub mod pointer;
 #[cfg(feature = "iced")]
+pub mod raster;
+#[cfg(feature = "iced")]
 pub mod surface;
 #[cfg(feature = "iced")]
 pub mod theme;

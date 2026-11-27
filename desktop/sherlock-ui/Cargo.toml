@@ -10,7 +10,7 @@ publish.workspace = true
 # The shell programs want the components, so iced is on by default. The compositor, which
 # only reads the tokens, goes without it with `default-features = false`.
 default = ["iced"]
-iced = ["dep:iced", "dep:iced_renderer", "dep:wgpu"]
+iced = ["dep:iced", "dep:iced_renderer", "dep:wgpu", "dep:resvg"]
 
 [dependencies]
 # Shell toolkit (ADR 0014). Two renderers (ADR 0018): wgpu on the AMD chip, chosen by
@@ -26,6 +26,7 @@ iced = { version = "=0.14.0", optional = true, default-features = false, feature
     "tiny-skia",
     "wgpu-bare",
     "svg",
+    "image-without-codecs",
     "web-colors",
     "crisp",
     "thread-pool",
@@ -42,6 +43,12 @@ wgpu = { version = "=27.0.1", optional = true, default-features = false, feature
     "wgsl",
     "vulkan",
 ] }
+# The application icons rasterized here rather than by iced's wgpu renderer, which blends
+# resvg's premultiplied pixels as straight alpha and samples them nearest (`raster`, UI-05).
+# The version iced already pulls, with the features it enables: nothing new is compiled. iced's
+# `image-without-codecs` feature above, which draws them from their pixels without decoding any
+# format, is the one Evidence, the lock screen and the notifications already enable.
+resvg = { version = "=0.45.1", optional = true, default-features = false }
 
 [dev-dependencies]
 # Headless rendering of the gallery, for the snapshot test and the mouse test.
@@ -51,9 +58,6 @@ iced_test = "=0.14.0"
 iced_runtime = "=0.14.0"
 # The gallery follows the theme of the appearance file, like the shell programs.
 appearance-config = { path = "../appearance-config" }
-# Renders the application icons in their test (`tests/app_icons.rs`): the SVG renderer iced
-# already pulls, in the same version, so nothing new is compiled.
-resvg = { version = "=0.45.1", default-features = false }
 
 [[example]]
 name = "gallery"
@@ -65,6 +69,10 @@ required-features = ["iced"]
 
 [[test]]
 name = "interaction"
+required-features = ["iced"]
+
+[[test]]
+name = "raster"
 required-features = ["iced"]
 
 # `apply` changes the process environment: one thread, so no libtest harness.

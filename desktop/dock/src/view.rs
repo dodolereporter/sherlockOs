@@ -1,7 +1,7 @@
 //! The two views of the dock: the dock itself and the menu of an icon.
 
 use dock_config::Position as Edge;
-use iced::widget::{container, mouse_area, pin, row, space, stack, svg, text};
+use iced::widget::{container, mouse_area, pin, row, space, stack, text};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Rectangle, mouse};
 use sherlock_ui::component::{self as ui, Trailing};
@@ -218,9 +218,8 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
         ..c
     };
     match glyph {
-        Glyph::File(handle) => svg(handle.clone())
-            .width(side)
-            .height(side)
+        // Smooth edges on the GPU, at rest and magnified, rasterized once per step (UI-05).
+        Glyph::File(handle) => sherlock_ui::raster::icon(handle, side)
             .opacity(opacity)
             .into(),
         Glyph::Letter(letter) => {
