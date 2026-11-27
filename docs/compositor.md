@@ -1241,6 +1241,31 @@ and `xterm`; each grows and fades in. Close them (Super + Q, or their close butt
 shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
 `--window-animations off`, nothing is animated.
 
+### Raise (lot D-19d)
+
+A window that comes to the front from behind another one, whatever brings it there (the dock,
+the window switcher, a click, Mission Control, its application), no longer jumps there. As it is
+raised (`State::focus`, through `State::start_raise` in `src/window_anim.rs`):
+
+- if a window above it on its workspace covers part of it (the whole windows, title bars
+  included), it grows from `motion::RAISE_SCALE` (0.97) to 1 around its center on
+  `motion::RAISE_SPRING` (ratio 1.0: no visible bounce, settled in about 200 ms), and its shadow
+  grows and softens from `motion::RAISE_SHADOW` (0.6) of its offset and blur to its own
+  (`Visual::shadow`);
+- the windows it now covers step back to `motion::RECEDE_SCALE` (0.995) around their center
+  and come back, over `motion::RECEDE` (200 ms), along half a sinusoid (`motion::recede`);
+- nothing when it was fully visible, for a fullscreen window, with `--window-animations off`,
+  or while its genie runs: a window restored from the dock comes back by the genie only.
+
+The window is in front and has the keyboard at once; the pointer reaches it at its real place.
+Raised again before the end, or raised while it steps back, a window goes on from the scale it
+is drawn at, without a jump (`WindowMotion::raise`). One frame per blank while it runs, none at
+rest. No board draws it: the values are choices of the lot, to review on the machine.
+
+**Manual test.** Two overlapping windows: click the one behind, or pick it in the dock or in
+Mission Control; it grows into place and the other steps back. A window already fully visible comes
+to the front without animation.
+
 ### What rendering does not do yet
 
 - **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
@@ -2566,8 +2591,8 @@ just verify
 | --- | --- |
 | `src/layout.rs` | Centering, moving, resizing by each edge, opposite corner fixed during the whole gesture, client minimum and maximum sizes. Grab band: each side, each corner, wider at the corners, nothing inside, narrow window. Snapping: top, left and right edges, four corners, geometry of each zone with and without the gap, return to the previous size under the pointer |
 | `sherlock-ui/src/color.rs` | Colors premultiplied by their opacity |
-| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
-| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
+| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump. Raise spring settled in about 200 ms without overshoot |
+| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out. Raise: scale and shadow growing to rest, step back there and back, turned around without a jump |
 | `src/render.rs` | An opaque window hides what is below but its rounded corners; a translucent one hides nothing. Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/genie.rs` | Genie at 0 (the window), 0.5 (the bottom gone in first, the top narrower and lower, rows in order) and 1 (all of it behind the glass); at every frame nothing past the glass, and the window as wide as the icon where it enters it; each point moving toward the icon without a jump; a window behind the glass at rest not cut at once; the same genie turned for a dock at the top, left and right; scale effect without an icon; turned around halfway without a jump; the setting's names |
 | `tests/genie.rs` | The genie drawn for real at 0.5 and under a translucent dock, see below |
@@ -2594,6 +2619,12 @@ just verify
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
 The tests in `tests/headless.rs`:
+
+- **A window raised from behind grows, the other steps back** (lot D-19d): in front with the
+  keyboard at once, its scale and shadow growing to 1, the other window at its furthest step
+  back halfway, then rest. Fully visible, or with animations off: nothing plays. Turned around
+  halfway: no jump, both at rest at the end. `board_of_the_raise` (ignored, Mesa's EGL) saves
+  six steps in `target/tmp/raise-board.png`.
 
 - **Configure.** A client creates a titled window and receives its configure. It is maximized,
   goes fullscreen, comes back, then closes.
