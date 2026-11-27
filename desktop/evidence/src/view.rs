@@ -801,10 +801,8 @@ impl App {
         let size = metrics::ICON_SIZE;
         Some(match self.icons.get(id) {
             Some(AppIcon::Raster(handle)) => image(handle.clone()).width(size).height(size).into(),
-            Some(AppIcon::Vector(handle)) => iced::widget::svg(handle.clone())
-                .width(size)
-                .height(size)
-                .into(),
+            // Smooth edges on the GPU (UI-05).
+            Some(AppIcon::Vector(handle)) => sherlock_ui::raster::icon(handle, size).into(),
             None => space().width(size).height(size).into(),
         })
     }
