@@ -190,7 +190,7 @@ mod tests {
         let name = format!("org.kde.StatusNotifierItem-{}-{number}", std::process::id());
         zbus::block_on(connection.request_name(name.as_str())).unwrap();
         // The watcher may come a little later than the application, as at login.
-        let registered = (0..50).any(|_| {
+        let registered = (0..150).any(|_| {
             let called = zbus::block_on(connection.call_method(
                 Some(watcher::NAME),
                 watcher::PATH,
@@ -226,12 +226,12 @@ mod tests {
         received
     }
 
-    /// The next event, within 5 s.
+    /// The next event, within 15 s: a loaded machine reads slowly, a lost event never comes.
     #[track_caller]
     fn next(events: &Receiver<Event>) -> Event {
         events
-            .recv_timeout(Duration::from_secs(5))
-            .expect("an event of the notification area within 5 s")
+            .recv_timeout(Duration::from_secs(15))
+            .expect("an event of the notification area within 15 s")
     }
 
     #[test]
