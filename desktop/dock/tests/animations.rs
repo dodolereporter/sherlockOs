@@ -510,6 +510,26 @@ fn the_animations_render_without_a_screen() {
     color::set_active(Theme::Dark);
 }
 
+/// An application without an icon, its initial drawn instead, arriving: at its first frame
+/// its side is 0. Text of size 0 made the text engine panic (`cosmic-text`, `buffer.rs`: « line
+/// height cannot be 0 »), which killed the dock at the start of a session without screen,
+/// where no theme gives the applications their icons (lot Q-32).
+#[test]
+fn an_initial_arriving_from_nothing_is_drawn() {
+    let _theme = in_dark();
+    let data = quick_app("quick-arrives");
+    let mut dock = dock(&[data], &FOUR, flat(), None);
+    settle(&mut dock);
+    let mut config = flat();
+    let mut pinned: Vec<String> = FOUR.map(String::from).to_vec();
+    pinned.push(String::from("org.example.Quick"));
+    config.pinned = Some(pinned);
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert!(dock.animating(), "it arrives");
+    assert!(capture(&dock, "dock-initial-arrives").expect("screenshot written") > 2_000);
+    color::set_active(Theme::Dark);
+}
+
 #[test]
 fn the_first_list_of_windows_is_in_place_at_once() {
     let mut dock = dock(&[], &FOUR, DockConfig::default(), None);

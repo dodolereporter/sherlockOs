@@ -50,6 +50,12 @@ pub fn fit<'a>(content: &'a str, max: f32, mut measure: impl FnMut(&str) -> f32)
     }
 }
 
+/// A text size the text engine takes: cosmic-text panics on a line height of 0, so on a size
+/// of 0 (lot Q-32). Not a number gives a pixel too.
+pub fn at_least_a_pixel(size: f32) -> f32 {
+    size.max(1.0)
+}
+
 /// Width of `content` on one line, in `font` at `size`, shaped by the renderer as `Ellipsis`
 /// shapes it: what a row of labels needs, to decide what fits before laying it out (the global
 /// menu of the bar, lot D-36).
@@ -57,7 +63,7 @@ pub fn width(content: &str, font: Font, size: f32) -> f32 {
     let line = core_text::Text {
         content,
         bounds: Size::new(f32::INFINITY, f32::INFINITY),
-        size: Pixels(size),
+        size: Pixels(at_least_a_pixel(size)),
         line_height: LineHeight::default(),
         font,
         align_x: text::Alignment::Default,
@@ -126,7 +132,7 @@ impl<'a> Ellipsis<'a> {
     }
 
     pub fn size(mut self, size: f32) -> Self {
-        self.size = size;
+        self.size = at_least_a_pixel(size);
         self
     }
 
@@ -293,6 +299,17 @@ mod tests {
     /// Seven pixels per character, « … » included.
     fn width(s: &str) -> f32 {
         7.0 * s.chars().count() as f32
+    }
+
+    #[test]
+    fn a_text_of_size_zero_is_measured_at_a_pixel() {
+        assert_eq!(at_least_a_pixel(0.0), 1.0);
+        assert_eq!(at_least_a_pixel(-3.0), 1.0);
+        assert_eq!(at_least_a_pixel(f32::NAN), 1.0);
+        assert_eq!(at_least_a_pixel(13.0), 13.0);
+        // Measured by the text engine: no panic, a width of next to nothing.
+        assert!(super::width("Maison", typography::UI, 0.0) < 10.0);
+        assert_eq!(ellipsis("Maison").size(0.0).size, 1.0);
     }
 
     #[test]

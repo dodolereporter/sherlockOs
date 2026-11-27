@@ -112,7 +112,7 @@ impl Layout {
     }
 
     pub fn letter_size(&self) -> f32 {
-        (self.icon * LETTER_RATIO).round()
+        crate::ellipsis::at_least_a_pixel((self.icon * LETTER_RATIO).round())
     }
 }
 
