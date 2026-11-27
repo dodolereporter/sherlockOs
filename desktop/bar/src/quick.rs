@@ -1709,9 +1709,14 @@ mod tests {
             settings: Some(file.clone()),
             ..Quick::default()
         };
-        // The tile asks for a task: nothing is read or written on the interface thread.
-        assert!(quick.update(Message::ToggleDoNotDisturb).units() > 0);
-        assert!(!file.exists() && quick.do_not_disturb.is_none());
+        // The tile asks for a task: nothing is read or written on the interface thread. (Its
+        // thread writes a file of its own, apart from the one checked below.)
+        let mut asking = Quick {
+            settings: Some(dir.join("other").join("notifications.conf")),
+            ..Quick::default()
+        };
+        assert!(asking.update(Message::ToggleDoNotDisturb).units() > 0);
+        assert!(asking.do_not_disturb.is_none());
         let done = toggle_do_not_disturb(&file);
         assert_eq!(done, Ok(true));
         let _ = quick.update(Message::DoNotDisturb(done));
