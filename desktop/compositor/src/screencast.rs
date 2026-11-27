@@ -264,15 +264,15 @@ fn fill(pool: &mut [u8], data: &BufferData, image: Option<&Image>) {
     let width = data.width as usize * 4;
     for row in 0..data.height as usize {
         let start = data.offset as usize + row * data.stride as usize;
-        let target = pool[start..start + width].chunks_exact_mut(4);
+        let (target, _) = pool[start..start + width].as_chunks_mut::<4>();
         match image {
             Some(image) => {
-                let source = image.rgba[row * width..(row + 1) * width].chunks_exact(4);
-                for (pixel, rgba) in target.zip(source) {
-                    pixel.copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
+                let (source, _) = image.rgba[row * width..(row + 1) * width].as_chunks::<4>();
+                for (pixel, [r, g, b, a]) in target.iter_mut().zip(source) {
+                    *pixel = [*b, *g, *r, *a];
                 }
             }
-            None => target.for_each(|pixel| pixel.copy_from_slice(&[0, 0, 0, 255])),
+            None => target.fill([0, 0, 0, 255]),
         }
     }
 }
