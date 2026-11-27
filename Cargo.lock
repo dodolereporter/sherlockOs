@@ -607,6 +607,7 @@ dependencies = [
  "cursor-theme",
  "desktop-config",
  "image",
+ "mime-apps",
  "resvg",
  "shell-protocol",
  "sherlock-ui",

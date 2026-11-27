@@ -43,6 +43,11 @@ shell-protocol = { path = "../shell-protocol", features = ["server"] }
 # KDE's `org_kde_kwin_appmenu_manager`, server side, for the global menu (lot D-36): the version
 # already in the lock, through iced_exwlshell.
 wayland-protocols-plasma = { version = "=0.3.12", features = ["server"] }
+# `wlr-output-management`, server side (ADR 0025, lot D-26b): the version smithay already pulls
+# for layer-shell.
+wayland-protocols-wlr = { version = "=0.3.12", features = ["server"] }
+# The screens' setting written whole or not at all, as Control Room writes its files.
+mime-apps = { path = "../mime-apps" }
 # Server-side decorations (lot D-08): ab_glyph lays out and rasterizes the window titles in
 # Inter, tiny-skia draws the bar, the pill and the stroked icons. Both are the versions and
 # features that smithay's winit backend already pulls (through sctk-adwaita): nothing new is
@@ -85,7 +90,7 @@ wayland-protocols = { version = "=0.32.13", features = ["client", "staging", "un
 wayland-protocols-misc = { version = "=0.3.12", features = ["client"] }
 # Client side of layer-shell, for the anchored surface of the integration test: the version
 # that smithay already pulls for the server side.
-wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client", "server"] }
 # Client side of the shell protocol, for its integration test.
 shell-protocol = { path = "../shell-protocol", features = ["client"] }
 # Client side of KDE's appmenu protocol, for the global menu test.
