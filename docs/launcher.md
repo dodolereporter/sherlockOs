@@ -293,8 +293,8 @@ them (`sherlockos-session`). The service:
   two overlays never fight for the keyboard.
 
 The compositor's shortcut, **Super + Space** (Alt + Space in nested mode, where the host keeps
-Super), still starts `launcher`. Before anything that costs (renderer choice, logs), that program
-connects to the socket, sends `toggle`, waits for `ok` (1 s at most) and stops. Without a service
+Super), still starts `launcher`. Right after choosing its renderer (ADR 0018: a few files of
+`/sys`, under a millisecond) and before anything that costs, that program connects to the socket, sends `toggle`, waits for `ok` (1 s at most) and stops. Without a service
 listening, it runs on its own, as below.
 
 iced_exwlshell 0.21 reports no keyboard focus to the program: the launcher cannot see it leave.

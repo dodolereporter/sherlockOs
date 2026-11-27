@@ -13,6 +13,11 @@ use tracing_subscriber::EnvFilter;
 const RESIDENT: &str = "--resident";
 
 fn main() -> ExitCode {
+    // Before anything else: the renderer is chosen through the environment (ADR 0018). It only
+    // reads a few files of /sys, well under a millisecond.
+    let renderer = sherlock_ui::gpu::Choice::detect();
+    // SAFETY: first statements of `main`, no other thread exists yet.
+    unsafe { renderer.apply() };
     startup::begin();
     let resident = std::env::args_os().nth(1).is_some_and(|a| a == RESIDENT);
     let dir = instance::runtime_dir();
@@ -23,10 +28,6 @@ fn main() -> ExitCode {
     {
         return ExitCode::SUCCESS;
     }
-    // The renderer is chosen through the environment, before any thread exists (ADR 0018).
-    let renderer = sherlock_ui::gpu::Choice::detect();
-    // SAFETY: no other thread exists yet: the request above used none.
-    unsafe { renderer.apply() };
     // Log level from RUST_LOG (for example `RUST_LOG=launcher=debug`), info otherwise.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()

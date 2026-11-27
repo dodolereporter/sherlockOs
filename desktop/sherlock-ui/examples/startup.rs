@@ -11,10 +11,11 @@ use std::time::Instant;
 use iced::futures::executor::block_on;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let started = Instant::now();
     let choice = sherlock_ui::gpu::Choice::detect();
-    // SAFETY: first statement of `main` that touches the environment; no other thread exists.
+    // SAFETY: first statements of `main`, no other thread exists yet.
     unsafe { choice.apply() };
+    // The renderer choice itself is timed by the launcher's log (0.2 to 0.3 ms).
+    let started = Instant::now();
     let mut out = std::io::stdout();
     let mut last = started;
     let mut step = |out: &mut std::io::Stdout, name: &str| -> std::io::Result<()> {
@@ -24,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(out, "{name:<32} {took:>8.1} ms")
     };
     writeln!(out, "renderer: {choice:?}")?;
-    step(&mut out, "renderer chosen")?;
     if !matches!(choice, sherlock_ui::gpu::Choice::Vulkan { .. }) {
         writeln!(out, "no GPU path on this machine")?;
         return Ok(());
