@@ -635,7 +635,7 @@ fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, p
         scale: view.scale,
         alpha,
     });
-    let region = blur::region(surface);
+    let region = crate::background_effect::region(surface);
     if !region.is_empty() {
         let rects = region
             .into_iter()
