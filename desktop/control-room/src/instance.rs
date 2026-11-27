@@ -140,7 +140,7 @@ mod tests {
         let mut receiver = ASKED.get().unwrap().lock().unwrap().take().unwrap();
         let mut page = None;
         for _ in 0..200 {
-            if let Ok(Some(asked)) = receiver.try_next() {
+            if let Ok(asked) = receiver.try_recv() {
                 page = Some(asked);
                 break;
             }

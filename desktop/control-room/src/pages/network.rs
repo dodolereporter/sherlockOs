@@ -3,7 +3,7 @@
 //! network by its name, and forgetting the network in use. Every call goes to NetworkManager,
 //! off the interface thread (`crate::network`); polkit asks where its policy wants it.
 
-use iced::widget::{Column, column, container, row, space};
+use iced::widget::{Column, container, row, space};
 use iced::{Alignment, Element, Length, Task};
 use sherlock_ui::component as ui;
 use sherlock_ui::control_room::texts as t;
