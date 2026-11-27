@@ -1,6 +1,6 @@
 //! The file servers of the local network (lot E-07), found without any tool installed: a
 //! multicast DNS question for `_smb._tcp.local` (Samba, macOS, NAS boxes, through Avahi or
-//! Bonjour), and a WS-Discovery probe (Windows shares). Both run on a thread of their own, for
+//! mDNSResponder), and a WS-Discovery probe (Windows shares). Both run on a thread of their own, for
 //! `DISCOVERY_TIME` at most, read at most `MAX_PACKETS` answers of `MAX_PACKET` bytes, and keep
 //! at most `MAX_SERVERS`. No iced here.
 

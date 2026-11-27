@@ -180,7 +180,7 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
-  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or Bonjour) and a
+  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
   WS-Discovery probe (Windows computers, Samba with wsdd). Each listening lasts 2.5 s, on a
   thread of its own, again every 2 minutes; at most 256 answers of 9000 bytes are read and 64
   servers kept; a compression loop or a cut packet names nothing; names are shown safely. A
