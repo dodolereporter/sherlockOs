@@ -306,3 +306,70 @@ async fn history_bounded() {
     assert!(claude.history().len() < 6 * 4);
     assert!(claude.prompt("suite").len() <= MAX_HISTORY_BYTES + 1024);
 }
+
+/// Whether the process `pid` is gone: no entry, or a zombie its new parent has not reaped yet.
+fn gone(pid: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim()));
+        let dead = stat.map_or(true, |s| {
+            s.rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+        });
+        if dead || Instant::now() > deadline {
+            return dead;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_answer_comes_at_once_and_claude_never_outlives_sherlockd() {
+    // A fake Claude Code that answers, then stays (`exec sleep`: the same pid, written to `$1`).
+    let pid_file = std::env::temp_dir().join(format!("sherlockd-stays-{}", std::process::id()));
+    let script = format!(
+        "[ \"$2\" = auth ] && exit 0; echo $$ > \"$1\"; cat > /dev/null; printf '%s' '{}'; exec sleep 600",
+        ECHO.replace('\'', "'\\''")
+    );
+    let pid_path = pid_file.to_string_lossy().into_owned();
+    let mut claude = fake("sh", &["-c", &script, "fake", &pid_path]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let start = Instant::now();
+    let answer = runtime.block_on(claude.ask("Bonjour")).unwrap();
+    assert!(answer.contains("Bonjour"));
+    // Not the 20 s Claude Code is given to end on its own.
+    assert!(
+        start.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        start.elapsed()
+    );
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    std::fs::remove_file(&pid_file).unwrap();
+    // sherlockd ends: the task that waited for Claude Code is dropped, its group killed.
+    drop(runtime);
+    assert!(gone(&pid), "{pid}");
+}
+
+#[tokio::test]
+async fn a_timeout_kills_the_whole_group() {
+    // A fake Claude Code that starts a child of its own (the proxy, in the real thing), writes
+    // its pid to `$1`, then never answers.
+    let pid_file = std::env::temp_dir().join(format!("sherlockd-group-{}", std::process::id()));
+    let script = "[ \"$2\" = auth ] && exit 0; sleep 600 & echo $! > \"$1\"; exec sleep 600";
+    let pid_path = pid_file.to_string_lossy().into_owned();
+    let mut config = ClaudeCodeConfig::new("/unused", "Tu es Sherlock.");
+    config.program = "sh".into();
+    config.program_args = ["-c", script, "fake", pid_path.as_str()]
+        .map(String::from)
+        .into();
+    config.workdir = None;
+    config.timeout = Duration::from_secs(5);
+    let error = ClaudeCode::new(config).ask("Bonjour").await.unwrap_err();
+    assert!(matches!(error, ClaudeCodeError::Timeout(_)), "{error}");
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    std::fs::remove_file(&pid_file).unwrap();
+    assert!(gone(&pid), "{pid}");
+}

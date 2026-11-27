@@ -21,6 +21,7 @@ use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
 mod global;
+mod pins;
 mod tray;
 
 pub use self::tray::{Click, Tray};
@@ -226,8 +227,17 @@ pub enum Message {
     /// The pointer enters the icon of this key, or leaves it.
     TrayHover(Option<String>),
     TrayLeave(String),
-    /// The application got the click or the wheel, or why not.
-    TraySent(Result<(), String>),
+    /// The application got the click or the wheel, or why not; the item whose menu a refused
+    /// `Activate` opens.
+    TraySent(Option<String>, Result<(), String>),
+    /// Where the icons kept in the bar are drawn (lot D-45a).
+    TrayPinnedRow(iced::Rectangle),
+    /// A button or a move of the pointer over a surface of the bar.
+    TrayPointer(Id, iced::mouse::Event),
+    /// The icons kept in the bar, as the settings file has them now.
+    Pins(Vec<String>),
+    /// The settings file could not take the icons kept in the bar: why.
+    PinsNotSaved(String),
 }
 
 impl Bar {
@@ -241,7 +251,7 @@ impl Bar {
             quick: Quick::new(std::sync::Arc::new(session)),
             ..Self::default()
         };
-        (bar, Task::none())
+        (bar, pins::load())
     }
 
     pub fn menu_open(&self) -> bool {
@@ -321,6 +331,7 @@ impl Bar {
             window::close_events().map(Message::Closed),
             keyboard::listen().filter_map(on_key),
             iced::event::listen_with(on_pointer),
+            iced::event::listen_with(pins::on_pointer),
             iced::event::listen_with(on_resize),
         ])
     }
@@ -337,12 +348,32 @@ impl Bar {
                 self.tray.hovered = None;
             }
             Message::TrayLeave(_) => {}
-            Message::TraySent(Err(error)) => {
+            Message::TraySent(Some(key), Err(error)) if error.contains("UnknownMethod") => {
+                return self.tray_menu(&key);
+            }
+            Message::TraySent(_, Err(error)) => {
                 tracing::warn!(%error, "the application did not get the click on its icon");
             }
-            Message::TraySent(Ok(())) => {}
-            // Escape closes the popup of the notification area.
-            Message::MenuKey(menu::Key::Close) if self.tray_open() => return self.close_tray(),
+            Message::TraySent(_, Ok(())) => {}
+            Message::TrayPinnedRow(bounds) => self.tray.pinned_row = Some(bounds),
+            Message::TrayPointer(id, event) => return self.tray_pointer(id, event),
+            Message::PinsNotSaved(error) => {
+                tracing::warn!(%error, "the icons kept in the bar are not saved");
+            }
+            Message::Pins(pins) => {
+                self.tray.pins = pins;
+                return self.resize_tray();
+            }
+            // Escape closes the popup of the notification area, once its menu is closed.
+            Message::MenuKey(menu::Key::Close) if self.tray_open() && !self.app_menu_open() => {
+                return self.close_tray();
+            }
+            // An entry of an icon's menu that runs closes the popup too.
+            Message::PickEntry(level, index)
+                if self.global.item.is_some() && self.picked(level, index).is_some() =>
+            {
+                return self.pick_entry(level, index).chain(self.close_tray());
+            }
             Message::Surface(id) => self.surface = Some(id),
             Message::Clock(time) => self.clock = Some(time),
             Message::Battery(battery) => self.battery = Some(battery),
@@ -628,7 +659,7 @@ impl Bar {
         std::iter::once(Target::Sherlock)
             .chain(app_menus.into_iter().map(Target::AppMenu))
             .chain((0..workspaces).map(Target::Workspace))
-            .chain(self.tray.shown().next().map(|_| Target::Tray))
+            .chain(self.tray.in_popup().next().map(|_| Target::Tray))
             .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
@@ -1109,6 +1140,9 @@ impl Bar {
     ) -> Element<'static, Message> {
         let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
         let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
+        if let Some(pinned) = self.view_pinned() {
+            buttons = buttons.push(pinned);
+        }
         if let Some(chevron) = self.view_chevron() {
             buttons = buttons.push(chevron);
         }
@@ -1159,7 +1193,11 @@ impl Bar {
         if let Some(network) = &self.network {
             items.push((
                 Indicator::Network,
-                glyph(network_frames(network, self.link)),
+                ui::live_icon_sized(
+                    network_frames(network, self.link),
+                    metrics::STATUS_ICON_WIDE,
+                    tint,
+                ),
             ));
         }
         if let Some(sound) = &self.sound {

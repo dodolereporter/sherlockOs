@@ -16,6 +16,8 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use super::{Problem, Result, set};
 
 pub const SERVICE: &str = "org.bluez";
+/// Where BlueZ's adapters and devices live.
+pub const PATH: &str = "/org/bluez";
 pub const ADAPTER: &str = "org.bluez.Adapter1";
 pub const DEVICE: &str = "org.bluez.Device1";
 const BATTERY: &str = "org.bluez.Battery1";
@@ -114,7 +116,8 @@ fn device(path: &str, interfaces: &Interfaces) -> Option<Device> {
         .map(|p| p.min(100));
     Some(Device {
         path: path.to_owned(),
-        name,
+        // Chosen by whoever owns the device, near: cleaned before it is shown.
+        name: system_services::names::shown(&name),
         kind: Kind::of(icon.as_deref().unwrap_or_default()),
         paired,
         connected: flag(properties, "Connected"),
