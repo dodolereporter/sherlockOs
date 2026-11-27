@@ -159,6 +159,8 @@ fn paint(
     area: Rectangle,
     angle: f32,
 ) {
+    // Under a fading panel, it fades with it (`color::icon_opacity`).
+    let opacity = opacity * crate::color::icon_opacity(tint);
     if opacity > 0.0 {
         let svg = Svg {
             handle,

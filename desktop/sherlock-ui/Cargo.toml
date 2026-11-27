@@ -75,6 +75,10 @@ required-features = ["iced"]
 name = "raster"
 required-features = ["iced"]
 
+[[test]]
+name = "fade"
+required-features = ["iced"]
+
 # `apply` changes the process environment: one thread, so no libtest harness.
 [[test]]
 name = "gpu_apply"

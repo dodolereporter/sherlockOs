@@ -342,8 +342,14 @@ impl Animator {
         }
         let head = &mut pose.transforms[face.head];
         head.rotation = (head.rotation * Quat::from_rotation_z(self.tilt)).normalize();
-        for (eye, gaze) in face.eyes.iter().zip(self.gaze) {
+        // A shut eye no longer looks anywhere: its arc stays where the eye rests. Turned toward
+        // the field below, it would slide down onto the mouth.
+        let end = closing.duration;
+        let span = (end - face.ajar_time).max(1e-3);
+        for ((eye, gaze), eyelid) in face.eyes.iter().zip(self.gaze).zip(self.eyelids) {
+            let shut = eyelid.weight * ((eyelid.time - face.ajar_time) / span).clamp(0.0, 1.0);
             let eye = &mut pose.transforms[*eye];
+            let gaze = Quat::IDENTITY.slerp(gaze, 1.0 - shut);
             eye.rotation = (eye.rotation * gaze).normalize();
         }
         pose

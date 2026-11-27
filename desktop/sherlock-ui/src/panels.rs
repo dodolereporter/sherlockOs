@@ -50,7 +50,7 @@ pub const QUICK_WIDTH: f32 = 336.0;
 /// Height of the control centre panels: the board's quick settings (a grid of two rows of 56
 /// and 8, the volume and brightness rows, the two segmented groups, the user row, 14 between
 /// each), plus the line under the volume that names the output, plus the row of the keyboard
-/// backlight (D-35d), left empty above the user row on a machine without one.
+/// backlight (D-35d). On a machine without one, the panel is `KEYBOARD_ROW` shorter (UI-04).
 pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + (2.0 * 56.0 + 8.0)
     + 5.0 * metrics::GAP_SECTION
@@ -640,6 +640,7 @@ mod styles {
         iced::widget::svg(handle(glyph))
             .width(size)
             .height(size)
+            .opacity(crate::color::icon_opacity(tint))
             .style(move |_, _| iced::widget::svg::Style {
                 color: Some(tint.into()),
             })
