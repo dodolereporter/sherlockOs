@@ -2270,6 +2270,45 @@ Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock s
    background or the lock, never the desktop.
 4. Ctrl + Alt + Backspace while locked: the session ends, SDDM or the console comes back.
 
+## Screen off (lot D-38)
+
+The screens go off like an old television (`src/power.rs`, tokens in `sherlock_ui::screen_off`):
+the picture is squashed from the top and the bottom into a bright line in the middle (55 % of
+the time, with a light growing over it), the line shrinks to a dot (to 85 %), and the dot fades
+out, in 350 ms, on black. The line and the dot are the cream of Sherlock, with a soft halo.
+Backwards when the screens come back, over what they show (the lock screen when locked). The
+picture is the screen's own items drawn into a texture, then stretched into the squashed
+rectangle (`Item::Squashed`); the line and the dot are shapes.
+
+- **When.**
+  - Before the sleep: on `PrepareForSleep(true)`, the session locks, the screens go off, and the
+    `delay` inhibitor of logind is released once they are dark, or after 1.5 s in all.
+  - When the lid closes: the session locks and the screens go off; the lid opened brings them
+    back.
+  - After `screen-off-minutes` without input (`~/.config/sherlockos/power.conf`, 10 by default,
+    0 for never; `desktop_config::power`, read again when it changes): without sleeping.
+  - **Super + Shift + Escape**: the session locks and the screens go off at once (the gesture
+    key is Alt in nested mode). Chosen over Shift + the lock key, which a laptop may not have; it
+    works while locked too.
+- **Dark.** Nothing is drawn (`render::items` gives black, and nothing animates, so no frame is
+  asked for); the real session turns each screen off once (`DrmCompositor::clear`, DPMS off), and
+  the next frame queued turns it on again. Only the card already driven is touched: the NVIDIA
+  card is never opened. A locked frame is not needed while dark: the lock is confirmed at once.
+- **Back.** A key, the pointer, a click, a gesture, the lid opened or the wake-up
+  (`PrepareForSleep(false)`) bring the screens back; the key or the click that wakes them goes
+  nowhere else (the pointer still moves).
+- **Held on.** While a surface holds an idle inhibitor (`zwp_idle_inhibit_manager_v1`, which
+  Firefox and mpv take during a video), or while logind blocks `idle` (`BlockInhibited`, read
+  every 5 s), neither the inactivity lock nor the screens off for inactivity happen; the
+  inactivity counts again from the end of the inhibition.
+
+Tests: `tests/session_lock.rs` (the frames of the animation, from the whole picture to the
+line, its halo and black; nothing animates once dark; the waking key is not typed; Super + Shift
++ Escape; an idle inhibitor holds off the lock and the screens off, then its end lets them come;
+before the sleep, the lock, then the animation, then the inhibitor released once dark) and
+`tests/screen_off.rs` (the board of eight frames, drawn by Mesa's software renderer, in
+`target/tmp/screen-off-board.png`; the last frame is black).
+
 ## Measuring
 
 ### The event loop (lot P-01)
