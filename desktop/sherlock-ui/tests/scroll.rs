@@ -3,6 +3,7 @@
 //! laptop size and at 1920 × 1080.
 
 use std::borrow::Cow;
+use std::error::Error;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -152,15 +153,18 @@ fn window() -> Element<'static, Msg> {
         .into()
 }
 
-fn capture(ui: &mut Simulator<'static, Msg>, name: &str) {
-    let snapshot = ui.snapshot(&theme::window_theme()).expect("snapshot");
+/// Writes a snapshot of `ui` into `target/tmp/scroll/<name>-tiny-skia.png` and returns that
+/// path.
+fn capture(ui: &mut Simulator<'static, Msg>, name: &str) -> Result<PathBuf, Box<dyn Error>> {
+    let snapshot = ui.snapshot(&theme::window_theme())?;
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scroll");
-    std::fs::create_dir_all(&dir).expect("capture folder");
-    let path = dir.join(format!("{name}.png"));
+    std::fs::create_dir_all(&dir)?;
     let written = dir.join(format!("{name}-tiny-skia.png"));
     let _ = std::fs::remove_file(&written);
-    assert!(snapshot.matches_image(&path).expect("writing the snapshot"));
-    println!("snapshot: {}", written.display());
+    if !snapshot.matches_image(dir.join(format!("{name}.png")))? {
+        return Err(format!("{name}: not written").into());
+    }
+    Ok(written)
 }
 
 /// Captures into `target/tmp/scroll/<theme>-<size>-<state>-tiny-skia.png`, at scale 2: at
@@ -170,22 +174,31 @@ fn capture(ui: &mut Simulator<'static, Msg>, name: &str) {
 fn the_scroller_renders_at_rest_while_scrolling_and_hovered() {
     for (which, name) in [(color::Theme::Dark, "dark"), (color::Theme::Light, "light")] {
         color::set_active(which);
-        for size in [(1280.0, 800.0), (1920.0, 1080.0)] {
+        // The small one, a list alone, is the one the documentation keeps.
+        for size in [(360.0, 280.0), (1280.0, 800.0), (1920.0, 1080.0)] {
             let tag = format!("{name}-{}x{}", size.0, size.1);
-            let mut ui = ui(size, window());
-            capture(&mut ui, &format!("{tag}-rest"));
+            let view = if size.0 < 400.0 {
+                container(list(40)).style(theme::window).into()
+            } else {
+                window()
+            };
+            let mut ui = ui(size, view);
+            let written = capture(&mut ui, &format!("{tag}-rest")).expect("capture");
+            println!("snapshot: {}", written.display());
 
             let middle = Point::new(size.0 / 2.0, size.1 / 2.0);
             ui.point_at(middle);
             let _ = ui.simulate([moved(middle), wheel(-6.0)]);
             std::thread::sleep(scroll::SHOW + Duration::from_millis(50));
-            capture(&mut ui, &format!("{tag}-scrolling"));
+            let written = capture(&mut ui, &format!("{tag}-scrolling")).expect("capture");
+            println!("snapshot: {}", written.display());
 
             let edge = Point::new(size.0 - scroll::ZONE / 2.0, size.1 * 0.8);
             ui.point_at(edge);
             let _ = ui.simulate([moved(edge)]);
             std::thread::sleep(scroll::EXPAND + Duration::from_millis(50));
-            capture(&mut ui, &format!("{tag}-hovered"));
+            let written = capture(&mut ui, &format!("{tag}-hovered")).expect("capture");
+            println!("snapshot: {}", written.display());
         }
     }
     color::set_active(color::Theme::Dark);
