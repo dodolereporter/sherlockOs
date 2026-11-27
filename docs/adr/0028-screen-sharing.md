@@ -53,6 +53,10 @@ Either way the compositor needs a capture protocol: the frames come from it.
    (`zbus`), client of the shell socket, that implements `ScreenCast` (and later
    `Screenshot`), shows the picker (iced, the shell's glass) and pushes the frames into
    PipeWire (`pipewire-rs`). `sherlockos-portals.conf` gives it `ScreenCast`.
+   (Amended in lot D-28d: PipeWire is loaded at run time with `dlopen`, through the few calls
+   a video source needs, rather than built against with `pipewire-rs`: no
+   `libpipewire-0.3-dev` nor `libclang-dev` on the machine or in the CI image, and the portal
+   still starts on a machine without PipeWire.)
 4. **The compositor holds the policy**, whoever the client is: it knows every capture session,
    so it tells the bar that something is shared (the dot and « Arrêter le partage » go
    through `sherlock_shell_v1`), it stops a session on request (`stopped`), and while the
@@ -64,8 +68,9 @@ Either way the compositor needs a capture protocol: the frames come from it.
   even for a capture client that is not our portal.
 - Being standard, the protocol lets a later `xdg-desktop-portal-wlr` 0.8 or OBS's capture plug
   in through the shell socket, should we want them.
-- `pipewire-rs` builds against the PipeWire headers: `libpipewire-0.3-dev` and `libclang-dev`
-  (for `bindgen`) join the build dependencies, on the machine and in the CI image.
+- PipeWire is only needed at run time (`libpipewire-0.3.so.0`, there wherever PipeWire runs):
+  the layouts of the few structures used are written in `desktop/portal/src/pipewire.rs`,
+  stable since PipeWire 0.3.
 - The capture draws the source again offscreen and reads it back for each frame, in the
   compositor's thread. That costs a render and a copy per frame. Dmabuf buffers, filled by the
   GPU without the copy, are the next step for 1080p at 60 frames per second.
