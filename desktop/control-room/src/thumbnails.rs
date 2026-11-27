@@ -24,11 +24,20 @@ pub fn installed(dirs: &[PathBuf]) -> Vec<&'static wallpapers::Wallpaper> {
         .collect()
 }
 
-/// The thumbnail of each installed wallpaper. One that cannot be read is left out, and goes to
-/// the log: the picker shows its name on a plain tile.
-pub fn load(dirs: &[PathBuf]) -> Vec<Thumbnail> {
-    installed(dirs)
-        .into_iter()
+/// What the picker shows: the installed wallpapers, found once, and their thumbnails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Loaded {
+    pub installed: Vec<&'static wallpapers::Wallpaper>,
+    pub thumbnails: Vec<Thumbnail>,
+}
+
+/// The installed wallpapers and the thumbnail of each: off the interface thread, which never
+/// looks at the folders itself. One that cannot be read is left out, and goes to the log: the
+/// picker shows its name on a plain tile.
+pub fn load(dirs: &[PathBuf]) -> Loaded {
+    let installed = installed(dirs);
+    let thumbnails = installed
+        .iter()
         .filter_map(|w| {
             let folder = wallpaper::find(w.id, dirs)?;
             match read(w.id, &folder) {
@@ -39,7 +48,11 @@ pub fn load(dirs: &[PathBuf]) -> Vec<Thumbnail> {
                 }
             }
         })
-        .collect()
+        .collect();
+    Loaded {
+        installed,
+        thumbnails,
+    }
 }
 
 fn read(id: &'static str, folder: &Path) -> Result<Thumbnail, image::ImageError> {

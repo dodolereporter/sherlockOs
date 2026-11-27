@@ -46,7 +46,11 @@ a NUL byte) is never written: its settings are shown disabled, with the sentence
 too.
 
 A switch, a segmented control or a menu writes at once; a slider writes `SAVE_DELAY` (150 ms)
-after its last step, and closing the window writes what waits.
+after its last step, and closing the window writes what waits, then closes. Reading, writing
+and flushing the files to the disk never happen on the interface thread: a batch of changes
+goes to a task (`Writes::run`), one batch at a time, in the order of the changes; the changes
+made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
+the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
 
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
