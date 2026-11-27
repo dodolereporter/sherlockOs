@@ -27,7 +27,16 @@ pub enum Error {
     },
     #[error("the model is incomplete: {0}")]
     Incomplete(&'static str),
+    #[error("{path} is not a regular file of {MAX_FILE} bytes at most")]
+    Refused { path: String },
 }
+
+/// The largest model file read: the real one is 1.4 MiB. A larger file, or one that is not a
+/// regular file (`/dev/zero`, a FIFO), is refused before anything is read.
+pub const MAX_FILE: u64 = 32 * 1024 * 1024;
+/// The largest side of a texture, and the memory one may take while decoded.
+pub const MAX_TEXTURE_SIDE: u32 = 8192;
+pub const MAX_TEXTURE_ALLOC: u64 = 256 * 1024 * 1024;
 
 /// Translation, rotation and scale of a node, relative to its parent.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,12 +141,9 @@ pub struct Model {
 }
 
 impl Model {
-    /// Reads a `.glb` file.
+    /// Reads a `.glb` file: a regular file of `MAX_FILE` bytes at most (links followed).
     pub fn open(path: &Path) -> Result<Self, Error> {
-        let bytes = std::fs::read(path).map_err(|source| Error::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
+        let bytes = read_bounded(path)?;
         let model = Self::from_glb(&bytes)?;
         tracing::debug!(
             path = %path.display(),
@@ -281,8 +287,8 @@ impl Model {
                         return Err(Error::Incomplete("a texture in another file"));
                     }
                 };
-                let decoded = image::load_from_memory(bytes)
-                    .map_err(|source| Error::Texture { index, source })?;
+                let decoded =
+                    decode_bounded(bytes).map_err(|source| Error::Texture { index, source })?;
                 Ok(Texture {
                     levels: mipmaps(decoded.to_rgba8()),
                 })
@@ -351,6 +357,43 @@ fn material(material: gltf::Material<'_>) -> Material {
 }
 
 /// The mipmap chain down to 1 × 1, each level a box-filtered half of the one above.
+/// The bytes of `path`, a regular file of `MAX_FILE` bytes at most, read with a bound even if
+/// it grows meanwhile.
+fn read_bounded(path: &Path) -> Result<Vec<u8>, Error> {
+    use std::io::Read as _;
+    let error = |source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    };
+    let refused = || Error::Refused {
+        path: path.display().to_string(),
+    };
+    let meta = std::fs::metadata(path).map_err(error)?;
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return Err(refused());
+    }
+    let file = std::fs::File::open(path).map_err(error)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_FILE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(error)?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(refused());
+    }
+    Ok(bytes)
+}
+
+/// A texture decoded with bounded sides and memory.
+fn decode_bounded(bytes: &[u8]) -> image::ImageResult<image::DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_TEXTURE_SIDE);
+    limits.max_image_height = Some(MAX_TEXTURE_SIDE);
+    limits.max_alloc = Some(MAX_TEXTURE_ALLOC);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    reader.decode()
+}
+
 fn mipmaps(image: image::RgbaImage) -> Vec<image::RgbaImage> {
     let mut levels = vec![image];
     while let Some(last) = levels.last() {
@@ -413,5 +456,31 @@ where
         name: animation.name().unwrap_or_default().to_owned(),
         duration,
         channels,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_regular_file_of_bounded_size_is_read() {
+        // Not a regular file: refused without reading a byte.
+        let dir = std::env::temp_dir().join(format!("sherlock-3d-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = dir.join("zero.glb");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
+        assert!(matches!(Model::open(&link), Err(Error::Refused { .. })));
+        // Too large: refused from its size (a sparse file, nothing written).
+        let large = dir.join("large.glb");
+        let file = std::fs::File::create(&large).unwrap();
+        file.set_len(MAX_FILE + 1).unwrap();
+        assert!(matches!(Model::open(&large), Err(Error::Refused { .. })));
+        // A small file that is no model: an error of glTF, not a refusal.
+        let junk = dir.join("junk.glb");
+        std::fs::write(&junk, b"not a model").unwrap();
+        assert!(matches!(Model::open(&junk), Err(Error::Gltf(_))));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
