@@ -116,6 +116,12 @@ pub mod screen {
     /// One turn of the spinner.
     pub const SPIN: Duration = motion::SPIN;
 
+    /// The curtain (lot D-25e): the picture slides down from the top on `SPRING`, once it is
+    /// decoded (`CURTAIN_WAIT` at most without it), then the date and the time drop in,
+    /// `CURTAIN_LAG` later.
+    pub const CURTAIN_WAIT: Duration = Duration::from_millis(1500);
+    pub const CURTAIN_LAG: Duration = Duration::from_millis(140);
+
     /// The form (bubble, name, pill, machine buttons) shows only on demand, as on macOS: a key,
     /// a click or the pointer bring it, and it leaves again after `FORM_TIMEOUT` without input.
     pub const FORM_TIMEOUT: Duration = Duration::from_secs(20);
@@ -141,6 +147,7 @@ pub mod screen {
         pub field_border: Color,
         pub placeholder: Color,
         pub bubble: Color,
+        pub bubble_border: Color,
         pub button: Color,
         pub button_hover: Color,
         pub armed: Color,
@@ -156,7 +163,8 @@ pub mod screen {
                 field: palette.glass,
                 field_border: palette.border,
                 placeholder: palette.text_tertiary,
-                bubble: palette.cream,
+                bubble: palette.mascot_bubble,
+                bubble_border: palette.mascot_bubble_border,
                 button: palette.glass,
                 button_hover: palette.hover,
                 armed: palette.amber_soft,
@@ -249,5 +257,41 @@ mod tests {
                 + screen::bottom(height);
             assert!(used < height * 0.8, "{height}: {used}");
         }
+    }
+
+    /// Relative luminance of a color laid over `under` (WCAG).
+    fn luminance(color: Color, under: Color) -> f64 {
+        let channel = |c: u8, u: u8| {
+            let a = f64::from(color.a);
+            let v = (f64::from(c) * a + f64::from(u) * (1.0 - a)) / 255.0;
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r, under.r)
+            + 0.7152 * channel(color.g, under.g)
+            + 0.0722 * channel(color.b, under.b)
+    }
+
+    fn contrast(a: f64, b: f64) -> f64 {
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn sherlock_stands_out_of_his_bubble_in_both_themes() {
+        for (palette, least) in [(Palette::DARK, 3.0), (Palette::LIGHT, 1.5)] {
+            let colors = screen::Colors::of(&palette);
+            let bubble = luminance(colors.bubble, palette.system_screen);
+            let sherlock = luminance(palette.cream, palette.cream);
+            let ratio = contrast(bubble, sherlock);
+            assert!(ratio >= least, "{ratio}");
+        }
+        // Not the cream of the boards any more: on it, his beige did not show.
+        assert_ne!(
+            screen::Colors::of(&Palette::LIGHT).bubble,
+            Palette::LIGHT.cream
+        );
     }
 }
