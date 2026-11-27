@@ -80,6 +80,14 @@ layer-shell overlay with the keyboard: a veil, and in the middle a glass panel.
 - It grows from 0.92 and fades in on the panels' spring, and shrinks and fades out the same way
   before it answers.
 
+Seen in the nested compositor (software rendering, so the glass is opaque), Discord asking:
+screens and windows on a screen of 1280 × 800, then windows only on a screen of 640 × 800 at
+scale 1.5, with Evidence's window as thumbnail.
+
+![The picker, screens](../desktop/portal/screenshots/picker-screens.png)
+
+![The picker, windows](../desktop/portal/screenshots/picker-windows.png)
+
 ## The bar's indicator
 
 While an application shares, the bar shows « ● Arrêter le partage » before the status pill; one
