@@ -14,6 +14,21 @@ Use `--release`: in a debug build, iced and tiny-skia are not optimised and the 
 renderer is several times slower (see Performance). Evidence logs the renderer it chose at start
 (ADR 0018); `ICED_BACKEND=tiny-skia` forces software rendering.
 
+## Runtime (ADR 0029, lot E-02a)
+
+On Wayland (`WAYLAND_DISPLAY` set), Evidence runs on `iced_exwlshell`, like the shell programs.
+Its window is an `xdg_toplevel` made with `NewBaseWindow` (app id `evidence`, client-side
+decorations, title « Evidence »), and its daemon starts in `StartMode::Background`, without any
+layer surface. This is what lets its menus become real `xdg_popup`s (E-02b, E-02c); for now they
+are still drawn inside the window. Under X11, it keeps iced's own runtime on winit. The title
+bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
+closing the window, from its button or from the compositor, ends the program.
+
+Differences with winit, found while moving (the ADR's spike): `iced_exwlshell` 0.21.4 sets no
+smallest size on the window (`xdg_toplevel.set_min_size`), so `MIN_WINDOW` holds only under
+X11, and it has no resize from the edges of a client-side decorated window
+(`xdg_toplevel.resize`); winit had none either for a window without decorations.
+
 ## Architecture
 
 | Module | Role | iced |

@@ -1115,6 +1115,7 @@ dependencies = [
  "appearance-config",
  "futures",
  "iced",
+ "iced_exwlshell",
  "iced_runtime",
  "iced_test",
  "image",
@@ -1124,6 +1125,7 @@ dependencies = [
  "sherlock-ui",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
  "zbus",
 ]
 

@@ -16,6 +16,12 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "image-without-codecs",
     "thread-pool",
 ] }
+# Wayland runtime (ADR 0029): an `xdg_toplevel` window, and soon its menus as `xdg_popup`s.
+# Same version and features as the bar, the dock and the launcher; already in the lock.
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# Reads the compositor's globals before choosing the runtime: `iced_exwlshell` needs
+# `xdg_wm_base` 2 at least, which an old compositor (WSLg's) lacks. Same version as the bar.
+wayland-client = "=0.31.15"
 # Image preview decoders, PNG and JPEG only. Version pulled by iced 0.14.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 # Local time (localtime_r) for the dates of the listing and the trash. Already pulled by iced
