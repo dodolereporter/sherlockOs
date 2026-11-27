@@ -3323,8 +3323,9 @@ mod tests {
         }
     }
 
-    /// One row of the blur board: a maximized Konsole full of text, the real bar with its
-    /// control centre open and the real dock, in `theme`; drawn without the blur, then with it.
+    /// One row of the blur board: a Konsole full of text over nearly the whole screen, the real
+    /// bar with its calendar open and the real dock, in `theme`; drawn without the blur, then
+    /// with it.
     fn blur_board_row(theme: &str, size: (i32, i32)) -> (Vec<u8>, Vec<u8>) {
         use compositor::{theme as follow, wallpaper};
         use smithay::desktop::layer_map_for_output;
@@ -3373,10 +3374,14 @@ mod tests {
         h.state
             .listen_at(dir.join("wayland-blur"), &h.event_loop)
             .unwrap();
-        let spawn = |program: &str, args: &[&str]| {
+        // The shell finds lavapipe in its data folder only; Konsole its own data in the system's.
+        let spawn = |program: &str, args: &[&str], data_dirs: &std::path::Path| {
             Command::new(program)
                 .args(args)
                 .env_clear()
+                .env("XDG_DATA_DIRS", data_dirs)
+                // No system bus: none of the machine's network, Bluetooth or power is read.
+                .env("DBUS_SYSTEM_BUS_ADDRESS", format!("unix:path={}", dir.join("system-bus").display()))
                 .env("XDG_RUNTIME_DIR", &dir)
                 .env("WAYLAND_DISPLAY", "wayland-blur")
                 .env("XDG_CONFIG_HOME", &config)
@@ -3390,17 +3395,20 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        let source = root.join("desktop/compositor/src/render.rs");
-        let text = format!("cat {}; exec sleep 600", source.display());
+        // Text over the whole width, written again once the window is maximized.
+        let text = "while true; do clear; ls -C -w \"$(tput cols)\" /usr/bin \\
+            | head -n \"$(($(tput lines) - 1))\"; sleep 2; done";
+        let system = std::path::Path::new("/usr/local/share:/usr/share");
         // The programs of this build, next to the test's temporary folder.
         let built = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("../debug");
         let mut children = vec![
             spawn(
                 "konsole",
-                &["--separate", "--hide-menubar", "-e", "sh", "-c", &text],
+                &["--separate", "--hide-menubar", "-e", "sh", "-c", text],
+                system,
             ),
-            spawn(built.join("bar").to_str().unwrap(), &[]),
-            spawn(built.join("dock").to_str().unwrap(), &[]),
+            spawn(built.join("bar").to_str().unwrap(), &[], &data),
+            spawn(built.join("dock").to_str().unwrap(), &[], &data),
         ];
         let run = |h: &mut Harness, drawing: &mut Drawing, ms: u64| {
             let end = std::time::Instant::now() + Duration::from_millis(ms);
@@ -3432,11 +3440,19 @@ mod tests {
             run(&mut h, &mut drawing, 200);
         }
         run(&mut h, &mut drawing, 2000);
-        // Maximized, under the bar and behind the dock.
-        h.shortcut(KEY_UP);
+        // Nearly the whole screen, under the panel and behind the dock: a maximized
+        // window would stop above the dock.
+        let window = h.state.space.elements().next().unwrap().clone();
+        let toplevel = window.toplevel().unwrap();
+        toplevel.with_pending_state(|state| state.size = Some((size.0 - 40, size.1 - 50).into()));
+        toplevel.send_configure();
+        run(&mut h, &mut drawing, 2000);
+        h.state.space.map_element(window, (20, 40), true);
         run(&mut h, &mut drawing, 4000);
-        // The control centre: a click on the indicators, at the right of the bar.
-        let at = (f64::from(size.0) - 170.0, 28.0);
+        // The calendar, a panel of the bar on the same glass as the control centre: a click on the
+        // clock. The control centre would show the machine's network and Bluetooth, and without
+        // the system bus it has no indicators to open it.
+        let at = (f64::from(size.0) - 45.0, 28.0);
         h.click(at.0, at.1, 10);
         run(&mut h, &mut drawing, 3000);
         drawing.scene.blur.set_mode(Mode::Off);
@@ -3451,12 +3467,12 @@ mod tests {
         (before, after)
     }
 
-    /// The board of lot D-37: the right half of the screen, Konsole's text behind the dock and
-    /// the control centre, without then with the blur (columns), dark then light (rows):
+    /// The board of lot D-37: the right half of the screen, Konsole's text behind the dock and a
+    /// panel of the bar, without then with the blur (columns), dark then light (rows):
     /// `screenshots/blur-board.png`.
     #[test]
     #[ignore = "needs Mesa's EGL, lavapipe, Konsole and `cargo build -p bar -p dock`"]
-    fn blur_board_with_konsole_the_dock_and_the_control_centre() {
+    fn blur_board_with_konsole_the_dock_and_a_panel() {
         let size = (1440, 900);
         let (x0, width) = (560u32, 880u32);
         let mut board = image::RgbaImage::new(2 * width, 2 * size.1 as u32);
