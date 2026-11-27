@@ -81,8 +81,9 @@ impl Query {
     }
 }
 
-/// A source of results.
-pub trait Source {
+/// A source of results. `Send`: a resident launcher rebuilds its sources off the interface's
+/// thread.
+pub trait Source: Send {
     /// Title of its section, in French, from sherlock-ui.
     fn section(&self) -> &'static str;
     /// Its results for `query`, best first, `limit` at most. An empty query has no results.
