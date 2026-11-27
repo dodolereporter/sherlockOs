@@ -74,6 +74,16 @@ pub const SPRING: Spring = Spring::new(1740.0, 52.6);
 /// Fade of the label (`opacity 120ms` on the board).
 pub const LABEL_FADE_MS: u64 = 120;
 
+// Motion of lot D-21c, after macOS: the dot of an application that opens or closes its last
+// window fades, and the menu of an icon unfolds from the icon like the menus of the bar.
+
+/// The dot under an icon appearing or going: the fade of an icon arriving.
+pub const DOT_FADE: Duration = ICON_FADE;
+/// The menu of an icon opening and closing: the spring, fade and scale of the bar's panels.
+pub const MENU_SPRING: Spring = crate::panels::OPEN_SPRING;
+pub const MENU_FADE: Duration = crate::panels::OPEN_FADE;
+pub const MENU_SCALE: f32 = crate::panels::OPEN_SCALE;
+
 // Motion of batch D-21b. The board shows none of it: these follow macOS, with the springs and
 // the fade of `motion`.
 
@@ -237,10 +247,15 @@ mod styles {
 
     /// Dot below an open application. The board draws no active application: the active one
     /// takes the green of the active state.
-    pub fn dot(active: bool) -> impl Fn(&Theme) -> container::Style {
+    /// Dot of an open application, green when it is in front, at `opacity` while it fades.
+    pub fn dot(active: bool, opacity: f32) -> impl Fn(&Theme) -> container::Style {
         move |theme| {
             let p = palette(theme);
             let tint = if active { p.accent } else { p.logo_dot };
+            let tint = Color {
+                a: tint.a * opacity.clamp(0.0, 1.0),
+                ..tint
+            };
             fill(tint, border::rounded(DOT / 2.0))
         }
     }

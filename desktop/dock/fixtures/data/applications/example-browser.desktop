@@ -9,4 +9,5 @@ Actions=new-private-window;
 
 [Desktop Action new-private-window]
 Name=New Private Window
+Name[fr]=Nouvelle fenêtre de navigation privée
 Exec=example-browser --private-window %u

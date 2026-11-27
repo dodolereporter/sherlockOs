@@ -13,4 +13,5 @@ Exec=example-terminal --new-window
 
 [Desktop Action NewTab]
 Name=New Tab
+Name[fr]=Nouvel onglet
 Exec=example-terminal --new-tab

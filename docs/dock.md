@@ -45,8 +45,8 @@ Surface):
 | `items.rs` | The icons: pinned applications, Sherlock, open applications after the separator |
 | `layout.rs` | Pure geometry: the board's curve, icon places for each edge, hit testing, surface size |
 | `watch.rs` | Reloading the configuration when its file changes (inotify) |
-| `menu.rs` | Entries of an icon's menu, size of its surface, keyboard keys |
-| `entry.rs` | Key files and desktop entries: name, icon, `Exec`, « new window » action, window class |
+| `menu.rs` | Entries of an icon's menu (its windows, its actions), size of its surface, keyboard keys, its unfolding (D-21c) |
+| `entry.rs` | Key files and desktop entries: name, icon, `Exec`, actions and the « new window » one, window class |
 | `icons.rs` | Icon lookup through `icon-theme`: the themes, `hicolor`, then `pixmaps` |
 | `config.rs` | Default pinned applications |
 | `launch.rs` | Starting an application without a shell |
@@ -359,14 +359,37 @@ the left on the right edge.
 
 ### Launching
 
-A click on an icon depends on its windows (`windows::click`, the author's choice, as on
-Windows and Plasma):
+A click on an icon depends on its windows (`windows::click`). Lot D-21c follows the macOS dock
+for an application with several windows; minimizing the application in front stays the
+author's choice, as on Windows and Plasma:
 
 | The application | A click |
 | --- | --- |
 | Has no window, or its windows cannot be acted on (unknown, placeholder) | Starts it |
-| Is open, but not in front | Brings its windows forward (`activate`) |
-| Is in front (one of its windows is active) | Minimizes its windows (`set_minimized`) |
+| Is open, but not in front | Brings its windows that are not minimized forward, the least recent first: the most recent ends on top with the keyboard. When they are all minimized, only the most recent one comes back |
+| Is in front (one of its windows is active) | Minimizes its windows |
+| Middle button, or Ctrl+click | Starts it again for a new window (see below), whatever its windows |
+
+**Several windows.** As on macOS, an application has one icon however many windows it has, and
+whatever their kind: a Wayland window carries an `app_id`, an X11 one a class, and both go to
+the icon whose desktop entry owns them (see Open windows). The most recent window is the one
+that got the keyboard last: each source stamps a window when it becomes active
+(`windows::Stamps`); a window not seen active since the dock started counts as older, and among
+those the one that came last is the most recent.
+
+Cycling through the windows on a second click was set aside: the macOS dock does not do it (it
+is ⌘` on the keyboard), and the order would not show. To pick one window among several, the
+menu lists them (see Menu of an icon), and lot D-21c2 adds « Afficher toutes les fenêtres ».
+
+**A new window.** The middle button, a Ctrl+click and « Nouvelle fenêtre » start the
+application again: its « new window » action when the desktop entry declares one, otherwise its
+`Exec` without argument. The icon bounces until a window comes, as for a launch. The
+application decides what a second start does: most open a new window (Konsole, Kate, Firefox,
+Zen), a few with a single instance only bring their window forward. The dock does not force
+anything; it stops the bounce when one of the application's windows gets the keyboard after the
+start, so that such an application does not bounce for 10 s. Ctrl is read from the modifiers
+the keyboard sends the dock (the compositor gives it the keyboard on a click, before the button
+comes up).
 
 Acting on windows goes through the `windows::Control` trait: `WlrControl` sends `activate`
 (with the seat), `set_minimized` or `close` through `zwlr_foreign_toplevel_manager_v1` on a
@@ -470,13 +493,14 @@ offered by `iced_exwlshell`).
 ![An icon at the top of its bounce](../desktop/dock/screenshots/dock-bounce.png)
 
 **Bounce.** An application started from the dock (a click, Enter, « Ouvrir », « Nouvelle
-fenêtre ») bounces: hops of 600 ms, each a parabola half the icon high, as on macOS. It is not
+fenêtre », the middle button, Ctrl+click, an action of its menu) bounces: hops of 600 ms, each a parabola half the icon high, as on macOS. It is not
 started again while it bounces. It stops at the end of the hop in progress, so that it lands,
 when one of these says its first window came:
 
 1. our compositor, through `sherlock_shell_v1` on its shell socket (`shell.rs`,
    `shell_protocol::socket_from_env`, ADR 0021): a window that the application owns (same
-   rule as the dots) more than when it started. The source publishes the windows at each
+   rule as the dots) more than when it started, or one of its windows that got the keyboard
+   since (an application with a single instance). The source publishes the windows at each
    `done` only: a window closing and another opening in one batch never reads as one less;
 2. the dock's window source (`zwlr_foreign_toplevel_manager_v1` on wlroots compositors),
    with the same rule;
@@ -528,12 +552,17 @@ thread of its source, and sends its requests on that same connection from the in
 (`shell::ShellControl`): nothing waits for the compositor. The state is read at each `done` of
 the manager only, so a window closing and another opening in one batch never reads as one less.
 
-- **Dots**: one under each application with a window, green for the application whose window
-  has the `activated` state. The compositor keeps that state while an anchored surface (the
+- **Dots**: one under each application with a window, however many it has, green for the
+  application whose window has the `activated` state. A dot per window (up to 3) was set
+  aside: recent macOS shows one, the count is in the menu, and three dots would crowd the 9
+  pixels under the icon. The dot fades in with the first window and out with the last
+  (`dock::DOT_FADE`, the 150 ms of an icon arriving), green until it is gone. The compositor keeps that state while an anchored surface (the
   dock itself, after a click) has the keyboard: the active application stays active, and the
   click below is reliable.
-- **Click** on an open application not in front: `activate` on each of its windows, the last
-  one gets the keyboard. On the one in front: `minimize` on each. Without a window: started.
+- **Click** on an open application not in front: `activate` on each of its windows shown, the
+  most recent last (see Launching). On the one in front: `minimize` on each. Without a window:
+  started. A window of the menu: `activate` on it alone. Each window is named by the `id` the
+  protocol gives it; the source also reads its `title` and its `minimized` state.
 - **« Quitter »**: `close` on each window of the application, which may ask first.
 - **`set_rectangle`**: for each window, the rectangle of its application's icon at rest, shown,
   on the dock's screen (`layout::on_screen`: the surface centered along its edge, 8 from it, as
@@ -563,17 +592,36 @@ id, or `app_id`), not by the place of its icon: when windows open or close, or t
 configuration changes, while it is open, its entries still act on the same application, and do
 nothing if it left the dock.
 
+Since lot D-21c the entries follow the dock menu of macOS:
+
 | Entry | Enabled when |
 | --- | --- |
-| Header: the application name, its window count when known (« 1 fenêtre ») | |
-| Ouvrir | The application has an `Exec` |
-| « Nouvelle fenêtre » | Only there when the desktop entry declares the action |
-| « Garder dans le dock » | Instead of « Retirer du dock », for an open application that is not pinned |
-| Retirer du dock | Pinned, except Sherlock |
-| Quitter | The windows are known, the source can close them, and the application has one |
+| Header: the application name, its window count when known (« 3 fenêtres ») | |
+| Each window, in the order they came: its title, « … » when too long, the application's name when it has none; the active one checked. A click brings it forward alone | The source can act on its windows |
+| Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
+| The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
+| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, except Sherlock |
+| Separator, then « Quitter » | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
-is disabled.
+is disabled. « Quitter » asks each window to close (`close`, the toolkit's own close): an
+application with unsaved work asks first, as on macOS. The compositor offers no confirmation of
+its own, and the dock adds none.
+
+**Unfolding.** The menu unfolds from its icon: it fades in and grows from `dock::MENU_SCALE`
+(0.96) around its side facing the dock, with the spring and the fade of the bar's panels
+(`dock::MENU_SPRING`, `dock::MENU_FADE`). Closed from the dock (an entry, Escape), it folds back
+the same way, takes no other entry meanwhile, and its popup goes once it has faded out. Closed
+by the compositor (a click elsewhere), it goes at once: its surface is already gone.
+
+| Theme | 1920 × 1080 | 1366 × 768 |
+| --- | --- | --- |
+| Dark | ![Three windows, dark, 1920 × 1080](../desktop/dock/screenshots/dock-windows-dark-1920.png) | ![Three windows, dark, 1366 × 768](../desktop/dock/screenshots/dock-windows-dark-1366.png) |
+| Light | ![Three windows, light, 1920 × 1080](../desktop/dock/screenshots/dock-windows-light-1920.png) | ![Three windows, light, 1366 × 768](../desktop/dock/screenshots/dock-windows-light-1366.png) |
+
+`tests/several.rs` composes these from the dock and its menu, at the bottom of a screen of
+1920 × 1080 and of 1366 × 768, in both themes (`dock-windows-{dark,light}-{1920,1366}`): the
+browser of the fixtures with two Wayland windows and an X11 one, the second in front.
 
 Keyboard:
 
@@ -628,8 +676,9 @@ DISPLAY=:21 WAYLAND_DISPLAY=wayland-dock QT_QPA_PLATFORM=wayland \
 5. **Launching**: a click on an application starts it (`started app=… pid=…` in the log).
 6. **Dots**: with `DOCK_OPEN=org.kde.konsole` and `DOCK_ACTIVE=org.kde.konsole`, Konsole has a
    green dot; another `app_id` in `DOCK_OPEN` gets a cream one.
-7. **Menu**: right click Konsole. « Ouvrir », « Nouvelle fenêtre », « Retirer du dock »,
-   « Quitter » (disabled, the placeholder cannot close windows). Down, Up, Enter, Escape. On
+7. **Menu**: right click Konsole. Its window (« Konsole », checked, disabled: the placeholder
+   cannot act on windows), « Nouvelle fenêtre », its other actions, « Retirer du Dock »,
+   « Quitter » (disabled too). On Dolphin, not open: « Ouvrir » first. Down, Up, Enter, Escape. On
    Sherlock, every entry is disabled.
 8. **Unpin**: « Retirer du dock » on Dolphin: the icon goes, Sherlock stays in the middle, and
    `/tmp/dock-test/dock/dock.conf` loses it.
@@ -710,6 +759,15 @@ X focus): the keyboard steps were checked in the nested KWin.
 - **Click**: an open application behind is brought forward, the one in front minimized, one
   without window started, and nothing is asked of windows a source cannot act on
   (`windows.rs`, `tests/render.rs` with the `Recorder`).
+- **Several windows** (`tests/several.rs`, lot D-21c): Wayland and X11 windows of one
+  application make one icon, pinned or after the separator; a click with none, one and several
+  windows (the most recent last, a minimized one left down); the middle button and Ctrl+click
+  start the application again, through its « new window » action or its `Exec`, and bounce
+  until a window comes or one of its windows gets the keyboard; the menu lists the windows
+  (titles, the active one checked, an untitled one named after the application), then the
+  actions; a window of the menu comes forward alone, « Quitter » closes them all; the menu
+  unfolds and folds back; the dot fades in with the first window and out with the last; the
+  captures above.
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.

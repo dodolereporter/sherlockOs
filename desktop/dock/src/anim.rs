@@ -27,6 +27,10 @@ pub struct Track {
     /// Offset from its place, along the dock and away from its edge.
     pub along: Animation,
     pub depth: Animation,
+    /// Opacity of the dot under the icon: 1 while its application has a window.
+    pub dot: Fade,
+    /// The dot is green, the application in front. Kept while the dot fades out.
+    pub dot_active: bool,
 }
 
 impl Track {
@@ -41,6 +45,22 @@ impl Track {
             opacity: Fade::new(1.0, 1.0, Duration::ZERO, Duration::ZERO),
             along: still(0.0),
             depth: still(0.0),
+            dot: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
+            dot_active: false,
+        }
+    }
+
+    /// The dot shows (`open`) or goes from `now`, faded with `dock::DOT_FADE`; at once without
+    /// `animate`. Its color follows `active` at once while it shows.
+    pub fn show_dot(&mut self, now: Duration, open: bool, active: bool, animate: bool) {
+        if open {
+            self.dot_active = active;
+        }
+        let target = if open { 1.0 } else { 0.0 };
+        if !animate {
+            self.dot = Fade::new(target, target, now, Duration::ZERO);
+        } else if self.dot.target() != target {
+            self.dot.retarget(now, target, dock::DOT_FADE);
         }
     }
 
@@ -112,6 +132,7 @@ impl Track {
             && self.opacity.is_done(now)
             && self.along.is_done(now, GEOMETRY_PRECISION)
             && self.depth.is_done(now, GEOMETRY_PRECISION)
+            && self.dot.is_done(now)
     }
 
     /// Whether an icon led out of the dock is gone.
@@ -199,30 +220,40 @@ pub struct Launch {
     /// The number of windows of the application when it started: one more is its window.
     /// `None` while the source of windows said nothing yet.
     pub before: Option<usize>,
+    /// The most recent `recency` of its windows when it started: an application with a single
+    /// instance answers by bringing a window it already had forward, which then gets a higher
+    /// one.
+    pub recent: Option<u64>,
 }
 
 impl Launch {
-    /// Started at `now`, while the source counts `before` windows of the application.
-    pub fn new(target: Target, now: Duration, before: Option<usize>) -> Self {
+    /// Started at `now`, while the source counts `before` windows of the application, the
+    /// most recent of which has the recency `recent`.
+    pub fn new(target: Target, now: Duration, before: Option<(usize, u64)>) -> Self {
         Self {
             target,
             bounce: Bounce::new(now),
-            before,
+            before: before.map(|(count, _)| count),
+            recent: before.map(|(_, recent)| recent),
         }
     }
 
-    /// The source now counts `count` windows of the application. Stops the bounce at `now`
-    /// when one more than at the start came; returns whether it did.
-    pub fn windows(&mut self, count: usize, now: Duration) -> bool {
-        let slot = &mut self.before;
-        match *slot {
-            Some(before) if count > before => {
+    /// The source now counts `count` windows of the application, the most recent with the
+    /// recency `recent`. Stops the bounce at `now` when one more than at the start came, or
+    /// when one of its windows got the keyboard since; returns whether it did.
+    pub fn windows(&mut self, count: usize, recent: u64, now: Duration) -> bool {
+        let raised = self.recent.is_some_and(|r| recent > r);
+        match self.before {
+            Some(before) if count > before || raised => {
                 self.bounce.stop(now);
                 return true;
             }
             // A window closed meanwhile: the next one to come is still new.
-            Some(before) => *slot = Some(before.min(count)),
-            None => *slot = Some(count),
+            Some(before) => self.before = Some(before.min(count)),
+            None => {
+                self.before = Some(count);
+                self.recent = Some(recent);
+            }
         }
         false
     }
@@ -337,10 +368,41 @@ mod tests {
     fn a_launch_ends_with_one_more_window() {
         // The source said nothing yet: its first count is the start.
         let mut launch = Launch::new(Target::App(String::from("a")), ms(0), None);
-        assert!(!launch.windows(1, ms(10)), "the first count is the start");
-        assert!(!launch.windows(1, ms(20)));
-        assert!(!launch.windows(0, ms(30)), "one closed");
-        assert!(launch.windows(1, ms(40)), "the new one");
+        assert!(
+            !launch.windows(1, 3, ms(10)),
+            "the first count is the start"
+        );
+        assert!(!launch.windows(1, 3, ms(20)));
+        assert!(!launch.windows(0, 3, ms(30)), "one closed");
+        assert!(launch.windows(1, 3, ms(40)), "the new one");
         assert!(launch.bounce.stopping());
+    }
+
+    #[test]
+    fn a_single_instance_ends_the_bounce_by_raising_its_window() {
+        // Started again with two windows, the most recent of recency 4: no new window comes,
+        // the application brings one of its windows forward instead.
+        let mut launch = Launch::new(Target::App(String::from("a")), ms(0), Some((2, 4)));
+        assert!(!launch.windows(2, 4, ms(10)));
+        assert!(launch.windows(2, 5, ms(20)), "a window got the keyboard");
+    }
+
+    #[test]
+    fn the_dot_fades_in_and_out() {
+        let mut track = Track::settled(52.0);
+        track.show_dot(ms(0), true, true, true);
+        assert_eq!(track.dot.value(ms(0)), 0.0);
+        assert!(track.dot_active);
+        assert_eq!(track.dot.value(dock::DOT_FADE), 1.0);
+        assert!(!track.is_done(ms(10)) && track.is_done(dock::DOT_FADE));
+        // The last window closes: it fades out, green until gone.
+        track.show_dot(ms(500), false, false, true);
+        assert!(track.dot_active);
+        assert!(track.dot.value(ms(520)) > 0.0);
+        assert_eq!(track.dot.value(ms(500) + dock::DOT_FADE), 0.0);
+        // At startup, in place at once.
+        let mut still = Track::settled(52.0);
+        still.show_dot(ms(0), true, false, false);
+        assert_eq!(still.dot.value(ms(0)), 1.0);
     }
 }
