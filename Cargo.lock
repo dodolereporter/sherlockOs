@@ -3432,6 +3432,7 @@ dependencies = [
  "gltf",
  "iced",
  "iced_renderer",
+ "iced_test",
  "image",
  "sherlock-ui",
  "thiserror 2.0.21",
