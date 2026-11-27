@@ -755,6 +755,34 @@ of the tile, enlarged four times:
 ![Edges before and after, dark](sherlock-ui/icon-edges.png)
 ![Edges before and after, light](sherlock-ui/icon-edges-light.png)
 
+### Icon files from outside, read with bounds, drawn off the interface thread (S-DOCK-2)
+
+Any application installs an icon, and `Icon=` may name any file. `raster` reads them with
+bounds:
+
+- an SVG file of 1 MiB at most (`MAX_SVG_BYTES`), a PNG file of 4 MiB at most
+  (`MAX_PICTURE_BYTES`), each a regular file once its links are followed (a link to `/dev/zero`
+  is refused);
+- a PNG of 4,096 pixels a side at most (`MAX_PICTURE_SIDE`, read in its header before decoding);
+- no compressed SVG (`.svgz`): usvg would inflate it whole, whatever its size;
+- no `<image>` that names a file, absolute or relative: usvg's own resolver would read any file
+  the program can. Only a PNG written in the document (`data:`) is drawn, with the same bound.
+  A PNG icon file is drawn through a small document whose one image is that file's bytes, read
+  above.
+
+`rasterize_file(path, side)` does this for a file; `rasterize(document, side)` applies the same
+options to a document in memory (Evidence's). A handle made with `svg::Handle::from_path` goes
+through `rasterize_file`.
+
+A program that calls `raster::draw_in_background()` before it starts (the dock and the launcher)
+never rasterizes a file on its interface thread: the first time an icon file is asked at a size,
+`raster::icon` draws it transparent and hands it to one worker thread, which keeps the result in
+the same cache; `raster::drawn()` is a subscription that sends a message each time, so that the
+program draws again and the icon appears. A file is asked once per size while it is pending.
+Documents in memory (the program's own icons) are still drawn at once. Programs that do not call
+it, and the tests, draw at once as before. The applications view draws its grid off the thread
+already (`apps/src/icons.rs`), now with `rasterize_file`.
+
 ## Additions of D-26a (Control Room)
 
 - **`control_room`**: sizes, motions and French texts of Control Room (`docs/control-room.md`).
