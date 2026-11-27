@@ -972,9 +972,9 @@ mod tests {
         // Where it enters the glass, the window is as wide as the icon: it goes into it.
         let late = genie(0.7);
         let row = (0..=1000)
+            .rev()
             .map(|j| f64::from(j) / 1000.0)
-            .filter_map(|v| Some((late.point((0.0, v))?, late.point((1.0, v))?)))
-            .last()
+            .find_map(|v| Some((late.point((0.0, v))?, late.point((1.0, v))?)))
             .unwrap();
         let ((left, y), (right, _)) = row;
         assert!(y > edge - 3.0, "{y}");

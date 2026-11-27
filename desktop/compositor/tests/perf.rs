@@ -926,7 +926,10 @@ mod tests {
         let damage: Vec<_> = frames.iter().flat_map(|f| f.damage.clone()).collect();
         let swept = bounds(&damage).unwrap();
         let glass = compositor::genie::GLASS_MARGIN as i32;
-        let entry = Rectangle::new((icon.loc.x, icon.loc.y - glass - 2).into(), (icon.size.w, 2).into());
+        let entry = Rectangle::new(
+            (icon.loc.x, icon.loc.y - glass - 2).into(),
+            (icon.size.w, 2).into(),
+        );
         assert!(
             swept.contains_rect(rect) && swept.contains_rect(entry),
             "{swept:?}"
