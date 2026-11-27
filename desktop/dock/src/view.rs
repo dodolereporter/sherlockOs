@@ -105,7 +105,6 @@ impl Dock {
             .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
-            .interaction(self.interaction())
             .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
             .into()
     }

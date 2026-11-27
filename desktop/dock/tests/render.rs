@@ -525,13 +525,3 @@ fn the_applications_button_comes_first() {
     let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
     assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
 }
-
-/// Lot UI-07: the hand that points over an icon, the arrow beside the icons.
-#[test]
-fn the_pointer_is_a_hand_over_an_icon() {
-    let mut dock = sample();
-    let _ = dock.update(Message::Pointer(Pointer::Moved(icon_center(&dock, 1))));
-    assert_eq!(dock.interaction(), mouse::Interaction::Pointer);
-    let _ = dock.update(Message::Pointer(Pointer::Moved(Point::new(1.0, 1.0))));
-    assert_eq!(dock.interaction(), mouse::Interaction::None);
-}

@@ -2887,7 +2887,7 @@ mod tests {
     /// made for the request, the serial of the pointer's entry, the device destroyed at once),
     /// and the compositor shows it: the hand that points over a button, the open hand over a
     /// slider, the closed hand while the slider is held. A shape named with another serial is
-    /// refused, as the protocol says.
+    /// refused, as the protocol says. Over the dock, the arrow.
     #[test]
     fn the_compositor_shows_the_cursor_a_client_names() {
         let mut h = Harness::start();
@@ -2930,5 +2930,29 @@ mod tests {
         // A stale serial changes nothing.
         name(&mut h, CursorShape::Text, serial.wrapping_sub(1));
         assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+
+        // The dock keeps the arrow, as on macOS: over an icon, pressed and dragged. Its icons
+        // name no shape (`mouse_area` without `interaction`), which iced_exwlshell sends as
+        // the default one at the pointer's entry.
+        let _dock = anchor(&mut h, DOCK);
+        h.client.enter_serial = None;
+        h.state.pointer_motion((400.0, 560.0).into(), 5);
+        h.run_until("the entry on the dock", |c, _| c.enter_serial.is_some());
+        let serial = h.client.enter_serial.unwrap();
+        name(&mut h, CursorShape::Default, serial);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "over an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+        h.state.pointer_motion((440.0, 556.0).into(), 7);
+        h.run_until("the drag", |_, _| true);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "dragging an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 8);
     }
 }

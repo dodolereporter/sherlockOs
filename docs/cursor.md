@@ -174,9 +174,10 @@ read after each move:
 - **The theme has the drawings.** `/usr/local/share/icons/sherlockos/cursors/pointer` and the
   `target/cursors` the trial session builds are the hand, distinct from the arrow.
 - **What was wrong.**
-  - The icons of the dock named no shape (`mouse_area` without `interaction`): the arrow over
-    them. They now show the hand that points, and the closed hand while an icon is dragged
-    (`Dock::interaction`).
+  - The icons of the dock name no shape (`mouse_area` without `interaction`): the arrow over
+    them. That is wanted: as on macOS, the dock keeps the arrow over its icons, pressed and
+    dragged. A first version of UI-07 gave them the hand that points and the closed hand; the
+    author found it odd, and it was taken back before the merge.
   - `grab` and `grabbing` were the same drawing: over a slider the hand was closed already,
     and holding it changed nothing. `grab` is now the open hand.
 - **Not reproduced without a screen.** The drawing of the real session (`udev.rs`, the house
@@ -187,7 +188,8 @@ read after each move:
 `tests/headless.rs`, `the_compositor_shows_the_cursor_a_client_names`: a client names its cursor
 as iced_exwlshell does (a device made for the request, the entry's serial, destroyed at once):
 the hand that points over a button, which stays while the pointer moves, the open hand over a
-slider, the closed hand while it is held; a stale serial changes nothing.
+slider, the closed hand while it is held; a stale serial changes nothing. Over an icon of a
+dock, which names the default shape as the real one does, the arrow, pressed and dragged too.
 
 ## Show the clicks
 
