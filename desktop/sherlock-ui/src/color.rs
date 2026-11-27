@@ -565,6 +565,11 @@ pub struct Palette {
     /// Code keywords and folders.
     pub blue_light: Color,
     pub cream: Color,
+    /// The bubble of Sherlock (lock screen, login screen, lot D-25d), and its edge: a night
+    /// blue glass in the dark theme, like the panels, a pale blue-grey in the light one, so that
+    /// his light beige stands out on both.
+    pub mascot_bubble: Color,
+    pub mascot_bubble_border: Color,
     /// The amber as a fill, then when it colours a text.
     pub amber: Color,
     pub amber_text: Color,
@@ -657,6 +662,8 @@ impl Palette {
         blue_bright: BLUE_BRIGHT,
         blue_light: BLUE_LIGHT,
         cream: CREAM,
+        mascot_bubble: GLASS,
+        mascot_bubble_border: Color::rgba(255, 255, 255, 0.14),
         amber: AMBER,
         amber_text: AMBER,
         salmon: SALMON,
@@ -745,6 +752,8 @@ impl Palette {
         blue_bright: BLUE_BRIGHT,
         blue_light: Color::rgb(0x1F, 0x64, 0xA0),
         cream: CREAM,
+        mascot_bubble: Color::rgb(0xB2, 0xC4, 0xD8),
+        mascot_bubble_border: navy(0.12),
         amber: AMBER,
         amber_text: Color::rgb(0x93, 0x61, 0x14),
         salmon: SALMON,
@@ -844,6 +853,8 @@ impl Palette {
             blue_bright,
             blue_light,
             cream,
+            mascot_bubble,
+            mascot_bubble_border,
             amber,
             amber_text,
             salmon,
