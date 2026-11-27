@@ -32,7 +32,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
 | `src/cursor.rs` | Cursor of the real session: the house theme or the user's, size and scale, the turn of the waiting cursors, the fade of a new shape, shake to find (lot D-07, see `docs/cursor.md`) |
-| `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
+| `src/keyboard.rs` | Keyboard layout and repeat: `keyboard.conf`, `XKB_DEFAULT_*`, the system setting, or French AZERTY |
 | `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
 | `src/lib.rs` | `State`: Wayland display, protocols, seat, `Space` of the windows. Socket, screen, focus |
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
@@ -90,10 +90,10 @@ Behavior:
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
 - Windows that ask for it get their title bar from the compositor (lot D-08, see
   "Server-side decorations"); the others draw their own.
-- The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
-  `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
-  `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
-  `/etc/default/keyboard` (Debian).
+- The keyboard is French AZERTY, unless the keyboard setting names a layout (see "Keyboard"),
+  `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the `XKB_DEFAULT_*` variables), or the
+  system sets a layout: `XKBLAYOUT`, `XKBVARIANT`, `XKBOPTIONS` and `XKBMODEL` in
+  `/etc/vconsole.conf` (written by `localectl`) or else in `/etc/default/keyboard` (Debian).
 
 Moving and resizing:
 
@@ -2214,6 +2214,29 @@ times a second on the reference laptop's screen. Now:
   window that opens therefore redraws the whole screen, an animated dock its own rectangle.
 - **Frame callbacks.** Clients get theirs when their frame goes to the screen, or at the
   estimated blank when nothing was shown; hidden windows once a second, by a timer of their own.
+
+## Keyboard
+
+Lot D-26c: the layout and the repeat of held keys, set in Control Room's Keyboard page.
+`$XDG_CONFIG_HOME/sherlockos/keyboard.conf`, read by `desktop_config::keyboard`, in the same
+`key = value` form as `touchpad.conf`. Every key is optional.
+
+| Key | Default | Values | Effect |
+| --- | --- | --- | --- |
+| `layout` | none | an xkb layout (`fr`, `us`, `us,fr`…); empty: none | The layout; without one, the environment or the system's, as above |
+| `variant` | empty | an xkb variant (`bepo`, `intl`…) | The variant of that layout |
+| `repeat-delay` | `200` | `150` to `1000` | Milliseconds before a held key repeats |
+| `repeat-rate` | `25` | `2` to `50` | Repeats per second |
+
+A layout or variant name holds only letters, digits, `_`, `-` and the `,` of a list, 64
+characters at most: nothing xkbcommon could take as a path. The model and the options stay the
+system's. The file is read at startup, in nested mode and in the real session, and again within
+2 seconds of a change (modification time and length, as `touchpad.conf`). It is read leniently:
+a wrong line goes to the log and the others count; a file over 64 KiB is left aside. A new
+layout is compiled by xkb (`KeyboardHandle::set_xkb_config`) only when it changes; a layout xkb
+refuses keeps the one in use, with a warning, so the keyboard never stops answering. The repeat
+goes to the clients (`change_repeat_info`), and the media keys repeat at the same pace
+(`State::key_repeat`). `State::set_keyboard` applies a setting directly, for the tests.
 
 ## Touchpad
 
