@@ -20,7 +20,7 @@ use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::motion::Fade;
 
-use crate::anim::{Launch, Leaving, Track};
+use crate::anim::{Launch, Leaving, Poof, Track};
 use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::hide::{self, Hide};
@@ -143,6 +143,8 @@ pub struct Dock {
     pub launches: Vec<Launch>,
     /// The icon let go out of the dock, which vanishes where it is.
     dropping: Option<Target>,
+    /// The puffs of smoke of the applications unpinned by a drag out of the dock.
+    pub poofs: Vec<Poof>,
     /// The left button held on an icon: a click, or a drag.
     pub(crate) press: Option<Press>,
     /// Opacity of the label, and the icon it names.
@@ -195,6 +197,7 @@ impl Dock {
             leaving: Vec::new(),
             launches: Vec::new(),
             dropping: None,
+            poofs: Vec::new(),
             press: None,
             // Hidden, and already still: no frame for it at startup.
             label: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
@@ -317,12 +320,27 @@ impl Dock {
     /// dock is hidden, each icon is laid flat along the edge (lot D-19e): a window minimized
     /// then goes into the edge, where the dock hides, not to an empty place above it.
     fn place_icons(&mut self) {
+        let sizes = self.geometry.targets(None, self.items.len());
+        let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
+        self.place_icons_as(&rest);
+    }
+
+    /// Tells the compositor where the icons are drawn now, magnified under the pointer, before
+    /// a window is minimized into one of them (lot D-21d): the genie lands on the icon as it
+    /// is seen, not a few pixels beside it where it rests. Sent once, as the request goes; the
+    /// icons at rest are sent again when the pointer leaves the dock.
+    fn place_drawn_icons(&mut self) {
+        let drawn = self.layout(self.now);
+        self.place_icons_as(&drawn);
+    }
+
+    /// Tells the control where the icons of `layout` are on their screen, when that changed.
+    fn place_icons_as(&mut self, layout: &Layout) {
         let Some((name, size)) = self.screen().and_then(|s| Some((s.name.clone()?, s.size?)))
         else {
             return;
         };
-        let sizes = self.geometry.targets(None, self.items.len());
-        let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
+        let rest = layout;
         let distance = 0;
         let hidden = self.hide.hidden();
         let placed: Vec<_> = self
@@ -508,6 +526,7 @@ impl Dock {
             || !self.label.is_done(self.now)
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
+            || !self.poofs.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
             || self.hide.running(self.busy())
     }
@@ -876,6 +895,7 @@ impl Dock {
             launch.bounce.time_out(now);
         }
         self.launches.retain(|l| !l.bounce.is_done(now));
+        self.poofs.retain(|p| !p.is_done(now));
         let count = self.leaving.len();
         self.leaving.retain(|l| !l.track.is_gone(now));
         if self.leaving.len() == count {
@@ -917,10 +937,12 @@ impl Dock {
                 press.pointer = point;
                 if !press.dragging && press.past_threshold() {
                     let target = press.target.clone();
+                    // A pinned application, or an open one that a drop among the pinned ones
+                    // pins (lot D-21d).
                     let draggable = self
                         .index_of(&target)
                         .and_then(|i| self.items.get(i))
-                        .is_some_and(|i| i.pinned && i.pin_id().is_some());
+                        .is_some_and(|i| i.entry().is_some() || (i.pinned && i.pin_id().is_some()));
                     if let Some(press) = self.press.as_mut() {
                         press.dragging = draggable;
                     }
@@ -953,9 +975,16 @@ impl Dock {
         if out {
             return Task::none();
         }
+        if let Some(crossed) = self.cross(index, &layout, press.pointer) {
+            return crossed;
+        }
         // Among the orders the pinned icons can take, the one that puts the icon nearest the
         // pointer.
         let pinned = self.separator.unwrap_or(self.items.len());
+        if index >= pinned {
+            // An open application on its side of the separator: it only follows the pointer.
+            return Task::none();
+        }
         let sides: Vec<f32> = self
             .tracks
             .iter()
@@ -1006,6 +1035,46 @@ impl Dock {
         Task::none()
     }
 
+    /// The held icon of `index` crossed the separator (lot D-21d): an open application dragged
+    /// among the pinned ones is pinned there, at the end of them, the next moves putting it in
+    /// its place; a pinned application that is open, dragged after the separator, is unpinned.
+    /// The others make room as the icons are built again. `None` when it did not cross.
+    fn cross(&mut self, index: usize, layout: &Layout, pointer: Point) -> Option<Task<Message>> {
+        let item = self.items.get(index)?;
+        let id = item.entry()?.id.clone();
+        let along = layout.along(pointer);
+        let side = self.geometry.icon;
+        // Where the two sides meet: the separator, or past the last other icon without one.
+        let border = match layout.separator {
+            Some(separator) => layout.along(separator.center()),
+            None => {
+                (0..self.items.len())
+                    .filter(|&i| i != index)
+                    .filter_map(|i| layout.middle(i))
+                    .fold(f32::NEG_INFINITY, f32::max)
+                    + side / 2.0
+            }
+        };
+        let margin = side * dock::CROSS_MARGIN;
+        let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        let pins = !item.pinned && along < border - margin;
+        let unpins = item.pinned && open && along > border + margin;
+        if pins || unpins {
+            // Sherlock keeps the place it is shown at (lot D-21h), whatever the list becomes.
+            self.list_sherlock();
+        }
+        if pins {
+            tracing::info!(app = id, "pinned by a drag");
+            self.pinned.push(id);
+        } else if unpins {
+            tracing::info!(app = id, "unpinned by a drag");
+            self.pinned.retain(|p| *p != id);
+        } else {
+            return None;
+        }
+        Some(self.refresh(self.geometry))
+    }
+
     /// The button came up: a click when the icon was not dragged; otherwise the icon flies to
     /// its place and the new order is written, or, out of the dock, it is unpinned.
     fn release(&mut self, now: Duration) -> Task<Message> {
@@ -1036,6 +1105,16 @@ impl Dock {
         let (from, to) = (held.offset(*drawn), free.offset(*place));
         let by = (from.0 - to.0, from.1 - to.1);
         let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        // A pinned application let go out of the dock goes up in smoke, as on macOS; an open
+        // one comes back after the separator, out of the smoke.
+        if press.out && self.items[index].pinned {
+            let center = drawn.center();
+            self.poofs.push(Poof {
+                at: (center.x, center.y),
+                side: self.geometry.icon,
+                start: now,
+            });
+        }
         if press.out && !open {
             // It stays where it was let go, and vanishes there.
             let current = self.tracks[index].slot(now).shift;
@@ -1099,6 +1178,11 @@ impl Dock {
                 }
                 let hide = self.apply_hide();
                 if self.hover(point, now) {
+                    if !self.hovering {
+                        // The icons are back at rest: so are their rectangles, if the drawn
+                        // ones were sent for a minimize.
+                        self.place_icons();
+                    }
                     return Task::batch([hide, self.input_region()]);
                 }
                 return hide;
@@ -1332,7 +1416,10 @@ impl Dock {
                     }
                 }
             }
-            Click::Minimize => self.request(index, Request::Minimize),
+            Click::Minimize => {
+                self.place_drawn_icons();
+                self.request(index, Request::Minimize);
+            }
         }
     }
 
