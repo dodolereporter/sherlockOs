@@ -1279,6 +1279,18 @@ impl Dock {
             }
             return;
         }
+        if self
+            .items
+            .get(index)
+            .is_some_and(|i| i.kind == Kind::Sherlock)
+        {
+            // Sherlock has no window yet (A-19): the launcher, where it is asked (lot D-21m).
+            match launch::open_launcher() {
+                Ok(pid) => tracing::info!(pid, "launcher, for Sherlock"),
+                Err(error) => tracing::warn!(%error, "cannot open the launcher"),
+            }
+            return;
+        }
         let windows = self.windows_of(index);
         let owned: Vec<&Window> = windows.iter().collect();
         match windows::click(&owned, self.controllable()) {
