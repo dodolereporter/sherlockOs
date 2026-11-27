@@ -76,6 +76,9 @@ struct Drag {
     /// The icon's top left corner from the pointer (`wl_surface.offset`).
     offset: Point<i32, Logical>,
     start: Point<f64, Logical>,
+    /// Where the pointer is: smithay calls `dropped` with the pointer locked, which must not
+    /// be asked then.
+    at: Point<f64, Logical>,
     /// The X11 side was told about this drag (`Xdnd::start`).
     x11_started: bool,
     /// Over an X11 window that speaks XDND, and what it said last.
@@ -115,6 +118,7 @@ impl ClientDndGrabHandler for State {
             icon,
             offset: Point::default(),
             start,
+            at: start,
             x11_started: false,
             x11_over: false,
             x11_status: None,
@@ -124,7 +128,7 @@ impl ClientDndGrabHandler for State {
         self.queue_redraw();
     }
 
-    fn dropped(&mut self, _target: Option<WlSurface>, validated: bool, seat: Seat<Self>) {
+    fn dropped(&mut self, _target: Option<WlSurface>, validated: bool, _seat: Seat<Self>) {
         let Some(drag) = self.dnd.drag.take() else {
             return;
         };
@@ -139,10 +143,10 @@ impl ClientDndGrabHandler for State {
         // Refused or cancelled: the icon goes back to where it was taken, while its client
         // keeps it.
         if !taken
-            && let (Some(icon), Some(pointer)) = (drag.icon, seat.get_pointer())
+            && let Some(icon) = drag.icon
             && icon.alive()
         {
-            let from = pointer.current_location() + drag.offset.to_f64();
+            let from = drag.at + drag.offset.to_f64();
             let to = drag.start + drag.offset.to_f64();
             let fade = motion::Fade::new(0.0, 1.0, self.now(), motion::DRAG_RETURN);
             self.dnd.back = Some(Back {
@@ -253,6 +257,7 @@ impl State {
         let Some(drag) = self.dnd.drag.as_mut() else {
             return false;
         };
+        drag.at = location;
         if drag.held.is_some() {
             return true;
         }

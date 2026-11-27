@@ -268,8 +268,10 @@ impl Xdnd {
                 return Ok(false);
             };
             let Some((to, version)) = self.aware(window)? else {
+                tracing::debug!(window, "X11 window without XDND");
                 return Ok(false);
             };
+            tracing::debug!(window, version, "XDND enter");
             let types: Vec<u32> = self.types.iter().map(|t| t.1).collect();
             let more = u32::from(types.len() > 3);
             let mut data = [self.window, (version << 24) | more, NONE, NONE, NONE];

@@ -554,6 +554,11 @@ mod tests {
 
     #[test]
     fn a_file_dragged_from_wayland_drops_on_x11_and_escape_cancels() {
+        // `RUST_LOG=compositor=debug` shows the compositor's side.
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_test_writer()
+            .try_init();
         let event_loop = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         // 800 × 600 logical: positions in X11 are logical too, at every scale.
