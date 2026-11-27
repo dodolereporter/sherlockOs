@@ -12,6 +12,7 @@ pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
 pub mod focus;
+pub mod fullscreen;
 pub mod genie;
 pub mod gestures;
 mod handlers;
@@ -171,6 +172,10 @@ pub struct State {
     popup_grab: Option<layer::PopupGrab>,
     /// Screen capture sessions, for screen sharing (lot D-28b).
     screencast: screencast::Screencast,
+
+    /// The edges of fullscreen screens where the pointer brings the bar or the dock back
+    /// (lot D-21e).
+    reveals: fullscreen::Reveals,
     /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
     /// them again.
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
@@ -348,6 +353,8 @@ impl State {
             popups: PopupManager::default(),
             popup_grab: None,
             screencast: screencast::Screencast::new(&dh),
+
+            reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
@@ -678,6 +685,8 @@ impl State {
         self.end_popup_closings();
         self.end_clicks();
         self.refresh_screencast();
+
+        self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
