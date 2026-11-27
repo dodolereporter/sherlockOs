@@ -40,6 +40,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/clipboard_history/` | Clipboard history of Super + V: what is read of each copy, off the loop, and the history (lot D-42) |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
@@ -849,6 +850,50 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
   bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
   applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
+
+## Clipboard history
+
+Lot D-42, `src/clipboard_history/`. What is copied, in Wayland and X11 applications, is kept for
+the Super + V panel of the shell (ADR 0030 for pasting).
+
+- **What is read.** Every new CLIPBOARD selection passes through `State::selection_set`. Once
+  it is in place, the compositor reads the one type worth keeping, the way a client pastes it:
+  `text/uri-list` first (files when every address is `file://`), then `image/png` or
+  `image/jpeg`, then `text/plain;charset=utf-8` or `text/plain`. A Wayland client's selection is
+  asked from it (`request_data_device_client_selection`); an X11 one goes through the bridge of
+  lot D-29; the compositor's own (a screenshot) is written by the loop. The primary selection is
+  never kept.
+- **Off the loop.** A thread per read (`MAX_READS` at most, 4) reads the pipe, non-blocking, with
+  a deadline of 3 s, and stops past the limit of its type: 1 MiB of text, 256 KiB of addresses,
+  16 MiB of picture. Too large is not kept at all, never cut. A picture is decoded with limits
+  (16384 px a side, 256 MiB of pixels) for its thumbnail, 160 px on its longest side, in PNG.
+  What was read comes back to the loop by a channel; a read that ends after a newer one is
+  dropped.
+- **The history** (`model.rs`): newest first, 50 items at most and 128 MiB of content, the
+  oldest unpinned going first. The same content copied again goes back to the top with its id
+  and its pin. « Tout effacer » keeps the pinned items. Each item has its kind (text, link,
+  files, picture), a preview of 4 lines and 300 characters at most, its thumbnail, the app_id or
+  X11 class of the window that had the keyboard, and its time.
+- **Never kept:** anything while the session is locked (checked when the copy is seen and when
+  its read ends), a secret: a selection that offers `x-kde-passwordManagerHint` (KeePassXC, KDE)
+  or the nspasteboard types `org.nspasteboard.ConcealedType` and `TransientType`, or a copy from
+  a password manager known by its app_id or class (KeePassXC, Bitwarden, 1Password, Enpass,
+  Secrets, Proton Pass, LastPass): from X11, smithay drops the hint, whose name has no `/`.
+- **Put back** (`State::put_back`): the item becomes the compositor's own selection, in every
+  type it was read as (a text as `text/plain;charset=utf-8` and `text/plain`, files as
+  `text/uri-list`, `x-special/gnome-copied-files` and their paths as text), offered to X11 too,
+  and moves to the top without being read again. Refused while locked.
+- **The setting**, `clipboard.conf` (`desktop_config::clipboard`), read again within a second
+  of a change: `history = on|off` (on by default; off forgets everything at once) and
+  `keep-on-disk = on|off` (off by default: memory only).
+- **On disk** (`disk.rs`), with `keep-on-disk = on` only: the whole history, pinned items
+  included, in `$XDG_STATE_HOME/sherlockos/clipboard-history` (mode 0600), written by a thread
+  of its own after each change (the last state only), through a file renamed over it; read back
+  in a thread when the setting is on, with the history's limits. Turned off, the file goes.
+- **For the shell** (`shell/clipboard.rs`): `sherlock_clipboard_history_v1`, only on the shell
+  socket (ADR 0021), lists the items (their thumbnail in a memfd), and takes `paste`,
+  `set_pinned`, `remove` and `clear` from the Super + V panel. Super + V (Alt + V nested) starts
+  `sherlockos-clipboard` as Super + Space starts the launcher; pasting follows ADR 0030.
 
 ## GPU buffers (linux-dmabuf)
 

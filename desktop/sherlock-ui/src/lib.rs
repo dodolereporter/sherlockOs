@@ -12,6 +12,7 @@
 pub mod app_icon;
 pub mod apps;
 pub mod click;
+pub mod clipboard;
 pub mod color;
 pub mod control_room;
 pub mod cursor;

@@ -658,9 +658,18 @@ pub enum SelectionOrigin {
 /// a `/` alone.
 pub const SECRET_HINT: &str = "x-kde-passwordManagerHint";
 
-/// The selection offers the secret hint.
+/// The types macOS password managers add to what must not be kept (nspasteboard.org), which
+/// some Linux ones follow too.
+const CONCEALED_TYPES: [&str; 2] = [
+    "org.nspasteboard.ConcealedType",
+    "org.nspasteboard.TransientType",
+];
+
+/// The selection offers the secret hint, or a concealed type.
 pub fn is_secret(mime_types: &[String]) -> bool {
-    mime_types.iter().any(|m| m == SECRET_HINT)
+    mime_types
+        .iter()
+        .any(|m| m == SECRET_HINT || CONCEALED_TYPES.contains(&m.as_str()))
 }
 
 impl State {
@@ -675,6 +684,7 @@ impl State {
     ) {
         let secret = is_secret(mime_types);
         tracing::debug!(?target, ?origin, ?mime_types, secret, "new selection");
+        self.clipboard_saw(target, &origin, mime_types);
     }
 
     /// No client is offered the selections any more.
@@ -701,15 +711,16 @@ impl State {
 /// The clipboard of a Wayland client is relayed to XWayland, and the other way round: when an
 /// X11 client sets it, the compositor sets it on the Wayland side on its behalf (see
 /// `xwayland.rs`).
-/// The compositor sets a selection of its own too: a screenshot, as `image/png` (lot D-35c).
-/// Its user data holds the bytes; `None` is a selection set for XWayland.
+/// The compositor sets a selection of its own too: a screenshot, as `image/png` (lot D-35c), or
+/// an item of the clipboard history (lot D-42). Its user data holds the bytes of each type;
+/// `None` is a selection set for XWayland.
 ///
 /// While the session is locked, the selections may still change (the lock program has the
 /// keyboard, a screenshot taken before may land), and XWayland still learns of it, but nothing
 /// is read: no Wayland client is offered one (`focus_changed`), no X11 client may read
 /// (`allow_selection_access`), and an offer received before the lock is refused here.
 impl SelectionHandler for State {
-    type SelectionUserData = Option<std::sync::Arc<[u8]>>;
+    type SelectionUserData = Option<crate::clipboard_history::Held>;
 
     fn new_selection(
         &mut self,
@@ -741,8 +752,10 @@ impl SelectionHandler for State {
             tracing::debug!(?target, "selection not read: the session is locked");
             return;
         }
-        if let Some(bytes) = user_data {
-            self.paste_png(fd, bytes.clone());
+        if let Some(held) = user_data {
+            if let Some(bytes) = held.bytes(&mime_type) {
+                self.paste_png(fd, bytes);
+            }
             return;
         }
         // Set for XWayland: smithay reads the text, the compositor the other types.
@@ -794,6 +807,7 @@ mod tests {
     fn a_password_copied_is_recognized() {
         let types = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
         assert!(is_secret(&types(&["text/plain", SECRET_HINT])));
+        assert!(is_secret(&types(&["org.nspasteboard.ConcealedType"])));
         assert!(!is_secret(&types(&[
             "text/plain;charset=utf-8",
             "image/png"
