@@ -18,6 +18,9 @@ use sherlock_ui::{color, metrics, typography};
 use crate::app::{App, Location, Message, PATH, PathEdit, SUGGESTIONS};
 use crate::pathbar;
 
+/// The labels of the breadcrumb and their widths, the folders they open, and how many fold.
+type TrailParts = (Vec<(String, f32)>, Vec<(String, Location)>, usize);
+
 /// Width of a label of the breadcrumb, shaped as it is drawn.
 fn label_width(label: &str, current: bool) -> f32 {
     let font = if current {
@@ -101,7 +104,7 @@ impl App {
     /// fold behind « … » until the others fit the bar.
     /// The segments as drawn: their labels and widths, the folders they open, and how many
     /// fold behind « … » after the first.
-    fn trail_parts(&self) -> (Vec<(String, f32)>, Vec<(String, Location)>, usize) {
+    fn trail_parts(&self) -> TrailParts {
         let crumbs = self.breadcrumb();
         let count = crumbs.len();
         let (_, padding) = metrics::CRUMB_PADDING;
