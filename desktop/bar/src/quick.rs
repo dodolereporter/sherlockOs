@@ -872,6 +872,11 @@ impl Quick {
                 }
             }
         }
+        self.run_now(command);
+    }
+
+    /// Runs `command` at once: what was confirmed elsewhere, as in the Sherlock menu (D-36d).
+    pub fn run_now(&mut self, command: Command) {
         self.armed = None;
         match self.commands.0.run(command) {
             Ok(()) => {
