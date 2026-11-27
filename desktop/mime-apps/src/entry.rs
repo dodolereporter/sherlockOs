@@ -216,7 +216,7 @@ pub const MAX_ENTRY_SIZE: u64 = 256 * 1024;
 /// The text of the desktop entry at `path`: only a regular file once its links are followed,
 /// of `MAX_ENTRY_SIZE` at most, in UTF-8. A link to `/dev/zero`, a pipe or a huge file in an
 /// `applications` folder would otherwise take all the memory of whoever lists them.
-fn read_entry(path: &Path) -> Option<String> {
+pub fn read_entry(path: &Path) -> Option<String> {
     use std::io::Read;
     if !std::fs::metadata(path).ok()?.is_file() {
         return None;
