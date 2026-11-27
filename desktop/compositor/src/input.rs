@@ -127,6 +127,8 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// Super + V: the clipboard history (lot D-42).
+    ClipboardHistory,
     /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
     Applications,
     /// Escape while Mission Control is open: closes it.
@@ -140,8 +142,12 @@ enum Shortcut {
     Media(MediaKey, Keycode),
     /// Print Screen, with Shift or Alt, in a real session (lot D-35c).
     Screenshot(capture::Kind),
-    /// Escape while the area of a screenshot is chosen.
-    CancelArea,
+    /// Super + Shift + S (Alt + Shift + S nested): the screenshot tool (lot D-35e).
+    ScreenshotTool,
+    /// A key while the screenshot tool is open: every key stays with it.
+    ToolKey(Keysym),
+    /// Escape during a drag and drop (lot D-29c).
+    CancelDrag,
     /// L: locks the session (lot D-25a).
     Lock,
     /// Enter on the rescue screen of the lock: the lock programs are tried again.
@@ -196,6 +202,7 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
             _ => None,
         }
@@ -612,10 +619,13 @@ impl State {
     /// draws its cursor itself, the arrow.
     pub fn cursor_icon(&self) -> Option<CursorIcon> {
         if self.picking_area() {
-            return Some(CursorIcon::Crosshair);
+            return self.tool_cursor();
         }
         if self.overview_open() {
             return Some(CursorIcon::Default);
+        }
+        if let Some(icon) = self.drag_cursor() {
+            return Some(icon);
         }
         if let Some(gesture) = &self.gesture {
             // A window taken by its title bar is held in the closed hand; moved with the
@@ -755,6 +765,10 @@ impl State {
                 state.overview.key(gesture_key, pressed, alone);
             }
             if key_state == KeyState::Released {
+                // Space let go while the area moved: it is drawn again (lot D-35e).
+                if state.screenshot_tool_open() && sym == Keysym::space {
+                    state.tool_key(sym, false);
+                }
                 let len = state.intercepted_keys.len();
                 state.intercepted_keys.retain(|k| *k != key);
                 return if state.intercepted_keys.len() < len {
@@ -772,20 +786,33 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
             }
-            if state.picking_area() && sym == Keysym::Escape {
+            if state.screenshot_tool_open() {
                 state.intercepted_keys.push(key);
-                return FilterResult::Intercept(Some(Shortcut::CancelArea));
+                return FilterResult::Intercept(Some(Shortcut::ToolKey(sym)));
+            }
+            if state.dragging() && sym == Keysym::Escape {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(Shortcut::CancelDrag));
             }
             if state.overview_open() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
             let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
-            let screenshot = capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots());
+            // Nested, Print Screen stays with the host session.
+            let screenshot =
+                capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots() && !state.nested);
+            let tool = (matches!(sym, Keysym::s | Keysym::S)
+                && mods.shift
+                && !mods.ctrl
+                && gesture_modifier_held(state.nested, mods)
+                && state.takes_screenshots())
+            .then_some(Shortcut::ScreenshotTool);
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
                 .or(media.map(|media| Shortcut::Media(media, key)))
                 .or(screenshot.map(Shortcut::Screenshot))
+                .or(tool)
                 .or_else(|| Shortcut::for_applications(mods, sym));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
@@ -847,6 +874,10 @@ impl State {
                 self.start_applications();
                 return;
             }
+            Shortcut::ClipboardHistory => {
+                self.start_clipboard_panel();
+                return;
+            }
             Shortcut::Media(media, code) => {
                 self.press_media_key(code, media);
                 return;
@@ -855,8 +886,17 @@ impl State {
                 self.screenshot(kind);
                 return;
             }
-            Shortcut::CancelArea => {
-                self.cancel_area();
+            Shortcut::ScreenshotTool => {
+                self.open_screenshot_tool();
+                return;
+            }
+            Shortcut::ToolKey(sym) => {
+                self.tool_key(sym, true);
+                return;
+            }
+            Shortcut::CancelDrag => {
+                let time = u32::try_from(self.now().as_millis()).unwrap_or(u32::MAX);
+                self.cancel_drag(time);
                 return;
             }
             Shortcut::Lock => {
@@ -970,7 +1010,7 @@ impl State {
             None
         } else if self.picking_area() {
             // The area of a screenshot: no client has the pointer (lot D-35c).
-            self.area_motion(location);
+            self.tool_motion(location);
             None
         } else if self.overview_open() {
             // Mission Control: no client has the pointer (lot D-33).
@@ -982,8 +1022,12 @@ impl State {
                 Some(Hit::Decoration(window, control)) => Some((window.clone(), *control)),
                 _ => None,
             });
+            // A drag over an X11 window: the compositor speaks XDND to it (lot D-29c).
+            let hidden = self.dragging() && self.drag_motion(hit.as_ref(), location);
             match hit {
-                Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin)) => {
+                Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin))
+                    if !hidden =>
+                {
                     Some((surface, origin))
                 }
                 _ => None,
@@ -1019,6 +1063,14 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        // The release that drops on an X11 window waits for it to take the data (lot D-29c).
+        let last = match state {
+            ButtonState::Released => pointer.grab_start_data().map(|d| d.button) == Some(button),
+            ButtonState::Pressed => false,
+        };
+        if self.dragging() && self.drag_button(button, state, last) {
+            return;
+        }
         if self.is_locked() {
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
@@ -1038,7 +1090,7 @@ impl State {
             pointer.button(self, &event);
             pointer.frame(self);
             let pressed = state == ButtonState::Pressed;
-            self.area_button(button == BTN_LEFT, pressed, location);
+            self.tool_button(button == BTN_LEFT, pressed, location);
             return;
         }
         if self.overview_open() {

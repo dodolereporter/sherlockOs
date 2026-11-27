@@ -3,7 +3,9 @@
 //! launcher is started on demand: started again while open, it closes the open one, so the
 //! same shortcut opens and closes it (`docs/launcher.md`). The program is
 //! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
-//! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41).
+//! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41); the
+//! four finger pinch starts it with `--show` or `--hide` (lot D-41c). Super + V starts the
+//! clipboard history panel, `sherlockos-clipboard` (lot D-42).
 
 use std::{
     ffi::OsString,
@@ -18,6 +20,13 @@ pub const PROGRAM: &str = "launcher";
 
 /// The applications view (lot D-41), found the same way, started by F4.
 pub const APPLICATIONS: &str = "sherlockos-apps";
+
+/// The options of `APPLICATIONS` that only show, or only hide, the view (lot D-41c).
+pub const SHOW: &str = "--show";
+pub const HIDE: &str = "--hide";
+
+/// The clipboard history panel (lot D-42), found the same way, started by Super + V.
+pub const CLIPBOARD: &str = "sherlockos-clipboard";
 
 /// The folder of the session's programs, as `sherlockos-session` exports it.
 pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
@@ -48,17 +57,48 @@ impl State {
             .launcher_program
             .clone()
             .unwrap_or_else(|| program(|key| std::env::var_os(key)));
-        self.start_shell_program(program);
+        self.start_shell_program(program, None);
     }
 
     /// Opens the applications view, or closes it if it is open, the same way (lot D-41).
     pub(crate) fn start_applications(&mut self) {
-        self.start_shell_program(program_named(APPLICATIONS, |key| std::env::var_os(key)));
+        self.start_applications_with(None);
     }
 
-    /// Starts `program` with the compositor's Wayland socket and X11 display.
-    fn start_shell_program(&mut self, program: PathBuf) {
+    /// Shows the applications view, left as it is when it is open: fingers pinching in.
+    pub(crate) fn show_applications(&mut self) {
+        self.start_applications_with(Some(SHOW));
+    }
+
+    /// Hides the applications view if it is open: fingers spreading out.
+    pub(crate) fn hide_applications(&mut self) {
+        self.start_applications_with(Some(HIDE));
+    }
+
+    fn start_applications_with(&mut self, option: Option<&str>) {
+        let program = self
+            .applications_program
+            .clone()
+            .unwrap_or_else(|| program_named(APPLICATIONS, |key| std::env::var_os(key)));
+        self.start_shell_program(program, option);
+    }
+
+    /// Replaces the program of the applications view (the tests).
+    pub fn set_applications_program(&mut self, program: PathBuf) {
+        self.applications_program = Some(program);
+    }
+
+    /// Opens the clipboard history panel, or closes it if it is open, the same way (lot D-42).
+    pub(crate) fn start_clipboard_panel(&mut self) {
+        let program = program_named(CLIPBOARD, |key| std::env::var_os(key));
+        self.start_shell_program(program, None);
+    }
+
+    /// Starts `program`, with `option` if any, with the compositor's Wayland socket and X11
+    /// display.
+    fn start_shell_program(&mut self, program: PathBuf, option: Option<&str>) {
         let mut command = Command::new(&program);
+        command.args(option);
         if let Some(socket) = &self.socket_name {
             command.env("WAYLAND_DISPLAY", socket);
         }

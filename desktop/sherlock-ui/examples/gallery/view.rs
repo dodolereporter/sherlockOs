@@ -7,13 +7,14 @@
 //! file live, and two chips switch it.
 
 use iced::futures::{Stream, StreamExt};
-use iced::widget::{Column, button, column, container, row, scrollable, space, svg};
+use iced::widget::{Column, button, column, container, row, space, svg};
 use iced::{Alignment, Element, Length, Subscription, Task, keyboard};
 
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::logo::Logo;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, theme, typography};
 
 /// Layout specific to the gallery. These sizes do not come from the design: they arrange the
@@ -142,7 +143,7 @@ impl Gallery {
         ]
         .spacing(metrics::GAP_SECTION)
         .padding([metrics::PAGE_PADDING.0, metrics::PAGE_PADDING.1]);
-        container(scrollable(page))
+        container(scroll(page))
             .style(theme::desktop)
             .width(Length::Fill)
             .height(Length::Fill)

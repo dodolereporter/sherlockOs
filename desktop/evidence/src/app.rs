@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
+mod drag;
+
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
@@ -28,6 +30,9 @@ use crate::selection::{Click, Lasso, Selection, edge_scroll};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
+
+mod path;
+pub use path::PathEdit;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -57,6 +62,7 @@ pub const LIST: &str = "list";
 pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
+pub const PATH: &str = "path";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
@@ -164,6 +170,9 @@ pub enum Command {
     SortBy(Column),
     /// The list view, from the « Vue » submenu: the only view so far.
     ViewList,
+    /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
+    EditPath,
+    GoToFolder,
 }
 
 /// The submenus of the right-click menu.
@@ -325,6 +334,21 @@ pub enum Message {
     EjectDevice(String),
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
+    /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
+    DndReady(Option<crate::dnd::Handles>),
+    /// Drag and drop and the clipboard of files, from the Wayland side.
+    Dnd(crate::dnd::Event),
+    /// The path field: typed, Enter, a suggestion clicked, closed.
+    PathInput(String),
+    PathSubmit,
+    PathPick(usize),
+    PathCancel,
+    /// Subfolders read for the completion, with the number of the read.
+    PathFolders(u64, Option<crate::pathbar::Folders>),
+    /// What the typed path leads to: a folder, something else, nothing.
+    PathResolved(PathBuf, crate::pathbar::Found),
+    /// Escape, taken by a focused field: it still closes the path field.
+    Escaped,
 }
 
 /// What was asked of a device.
@@ -417,6 +441,18 @@ pub struct App {
     pub(crate) icons: Arc<HashMap<String, AppIcon>>,
     /// The theme of the appearance file, shown with a fade.
     pub(crate) theme: ThemeFade,
+    /// Drag and drop and the clipboard of files with the other applications (lot E-03).
+    pub(crate) dnd: drag::Dnd,
+    /// The path field, open or fading out, and how far it has come in.
+    pub(crate) path_edit: Option<PathEdit>,
+    pub(crate) path_leaving: Option<PathEdit>,
+    path_fade: Option<Fade>,
+    /// The completion list: what it last showed, kept while it fades out, and its fade.
+    pub(crate) suggestions_shown: Vec<String>,
+    pub(crate) suggest_fade: Option<Fade>,
+    /// The folder the completion last read, and the number of the last read asked.
+    folders: Option<crate::pathbar::Folders>,
+    folders_generation: u64,
 }
 
 impl App {
@@ -474,6 +510,14 @@ impl App {
             chooser: None,
             icons: Arc::default(),
             theme: ThemeFade::default(),
+            dnd: drag::Dnd::default(),
+            path_edit: None,
+            path_leaving: None,
+            path_fade: None,
+            suggestions_shown: Vec::new(),
+            suggest_fade: None,
+            folders: None,
+            folders_generation: 0,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -497,8 +541,17 @@ impl App {
                 Some(Message::Modifiers(modifiers))
             }
             Event::Keyboard(key) if status == event::Status::Ignored => Some(Message::Key(key)),
+            Event::Keyboard(keyboard::Event::KeyPressed {
+                key: Key::Named(Named::Escape),
+                ..
+            }) => Some(Message::Escaped),
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 Some(Message::Released)
+            }
+            // The side buttons of a mouse, as in every file manager.
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => Some(Message::Back),
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Forward)) => {
+                Some(Message::Forward)
             }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
@@ -566,6 +619,14 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || self.dnd_waiting()
+            || fade(&self.path_fade)
+            || fade(&self.suggest_fade)
+            || self
+                .path_edit
+                .as_ref()
+                .and_then(|e| e.shake)
+                .is_some_and(|at| now < at + more::PATH_SHAKE)
     }
 
     /// Sets every animation to its end. For captures.
@@ -573,6 +634,12 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.path_fade = None;
+        self.path_leaving = None;
+        self.suggest_fade = None;
+        if let Some(edit) = &mut self.path_edit {
+            edit.shake = None;
+        }
         self.menu_motion = MenuMotion::default();
         self.closing = None;
         if let Some(target) = self.highlight.as_ref().map(Animation::target) {
@@ -590,6 +657,20 @@ impl App {
                 .map(|s| self.submenu_items(s))
                 .unwrap_or_default(),
         });
+        // A click or a move elsewhere gives the breadcrumb back, as in Nautilus.
+        let elsewhere = matches!(
+            message,
+            Message::Click(_)
+                | Message::Blank
+                | Message::RightClick(_)
+                | Message::Back
+                | Message::Forward
+                | Message::Up
+                | Message::Go(_)
+        );
+        if elsewhere && self.path_edit.as_ref().is_some_and(|e| !e.sheet) {
+            self.close_path_edit();
+        }
         let task = self.handle(message);
         self.sync_menubar();
         let now = self.now();
@@ -713,7 +794,11 @@ impl App {
                 self.renaming = None;
                 let base = self.lasso_base();
                 let how = Click::new(self.modifiers.command(), self.modifiers.shift());
-                self.selection.click(index, how);
+                // A press on the selection may become a drag out of the window (lot E-03).
+                let on_name = !self.beside_name(index);
+                if self.dnd_press(index, how == Click::Only, on_name) {
+                    self.selection.click(index, how);
+                }
                 // Beside the name, a press may start a lasso too, as in Dolphin: a long
                 // listing has no background left to start one from.
                 if self.beside_name(index) {
@@ -772,17 +857,29 @@ impl App {
                 self.lasso = Some(Lasso::new(at, base));
             }
             Message::Released => {
+                self.dnd_release();
                 self.lasso = None;
                 self.lasso_frame = None;
             }
             Message::Key(event) => return self.key(event),
-            Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
+                self.dnd_modifiers();
+            }
             Message::Cursor(position) => {
                 self.pointer = position;
+                self.dnd_moved();
                 self.drag_lasso();
             }
             Message::Resized(size) => self.size = size,
-            Message::Opened => crate::startup::first(&OPENED, "window opened"),
+            Message::Opened => {
+                crate::startup::first(&OPENED, "window opened");
+                return window::latest().and_then(|id| {
+                    window::run(id, |window| crate::dnd::handles(window)).map(Message::DndReady)
+                });
+            }
+            Message::DndReady(handles) => return self.dnd_ready(handles),
+            Message::Dnd(event) => return self.dnd_event(event),
             Message::Scrolled(offset, height) => {
                 self.scroll = (offset, height);
                 self.drag_lasso();
@@ -823,7 +920,8 @@ impl App {
             }
             Message::Frame(now) => {
                 self.theme.tick(now);
-                return self.frame(now);
+                let spring = self.dnd_spring();
+                return Task::batch([spring, self.frame(now)]);
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Devices(volumes) => {
@@ -873,6 +971,15 @@ impl App {
                 self.open_menu(self.pointer);
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
+            Message::PathInput(text) => return self.path_input(text),
+            Message::PathSubmit => return self.path_submit(),
+            Message::PathPick(index) => return self.path_pick(index),
+            Message::PathCancel => self.close_path_edit(),
+            Message::PathFolders(generation, folders) => {
+                return self.path_folders(generation, folders);
+            }
+            Message::PathResolved(path, found) => return self.path_resolved(path, found),
+            Message::Escaped => self.close_path_edit(),
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
@@ -926,6 +1033,13 @@ impl App {
         }
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
+        }
+        if self.path_fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.path_fade = None;
+            self.path_leaving = None;
+        }
+        if self.suggest_fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.suggest_fade = None;
         }
         let Some(probe) = &mut self.probe else {
             return scroll;
@@ -1737,6 +1851,9 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(&key);
         }
+        if self.path_edit.is_some() {
+            return self.path_key(&key, modifiers);
+        }
         if self.renaming.is_some() && key == Key::Named(Named::Escape) {
             // The field already gave the keyboard back on the first Escape: this one cancels.
             self.renaming = None;
@@ -1795,8 +1912,12 @@ impl App {
                 ("a", _) => self.run(Command::SelectAll),
                 ("f", _) => operation::focus(SEARCH),
                 ("r", _) => self.run(Command::Refresh),
+                ("l", _) => self.run(Command::EditPath),
+                ("g", true) => self.run(Command::GoToFolder),
                 _ => Task::none(),
             },
+            // Typing a path starts the field, as in Nautilus.
+            Key::Character(c @ ("/" | "~")) => self.start_path_edit(false, Some(c.to_owned())),
             _ => Task::none(),
         }
     }
@@ -1837,11 +1958,15 @@ impl App {
                 return iced::clipboard::write(paths.join("\n"));
             }
             Command::Copy if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Copy, &selected);
                 self.clipboard = Some((Clip::Copy, selected));
             }
             Command::Cut if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Cut, &selected);
                 self.clipboard = Some((Clip::Cut, selected));
             }
+            // The session's clipboard first: it may hold files of another application.
+            Command::Paste if self.dnd_paste() => {}
             Command::Paste => return self.paste(),
             Command::NewFolder => return self.new_folder(),
             Command::ToggleHidden => {
@@ -1876,6 +2001,8 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::EditPath => return self.start_path_edit(false, None),
+            Command::GoToFolder => return self.start_path_edit(true, None),
             Command::TogglePreview => self.show_preview = !self.show_preview,
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
