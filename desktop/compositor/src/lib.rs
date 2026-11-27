@@ -34,6 +34,7 @@ pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
+pub mod screencast;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -168,6 +169,8 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// Screen capture sessions, for screen sharing (lot D-28b).
+    screencast: screencast::Screencast,
     /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
     /// them again.
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
@@ -344,6 +347,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            screencast: screencast::Screencast::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
@@ -362,7 +366,10 @@ impl State {
             launcher_program: None,
             xwayland: None,
             listener: None,
-            shell: shell::Shell::new(&dh),
+            shell: {
+                screencast::create_globals(&dh);
+                shell::Shell::new(&dh)
+            },
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -673,6 +680,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_screencast();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
