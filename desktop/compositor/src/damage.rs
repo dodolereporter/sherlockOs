@@ -49,9 +49,10 @@ pub enum Part {
     ThumbnailLabel(usize),
     /// The on-screen display of the media keys (lot D-35).
     Osd,
-    /// The area of a screenshot being chosen, and the dim over its screen (lot D-35c).
-    CaptureArea,
-    CaptureDim,
+    /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
+    /// buttons) and its texts, by their order.
+    CaptureShape(usize),
+    CaptureLabel(usize),
     /// The ring of a click shown (lot C-01), by its number.
     Click(u64),
     /// The background of a locked screen, and the pills of the rescue screen, by their index

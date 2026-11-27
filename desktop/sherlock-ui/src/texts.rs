@@ -139,6 +139,14 @@ pub mod evidence {
     // Toolbar.
     pub const BACK: &str = "Précédent";
     pub const FORWARD: &str = "Suivant";
+    /// The path bar in text mode, and the « Aller au dossier » sheet (lot E-04).
+    pub const PATH_PLACEHOLDER: &str = "Chemin, par exemple ~/Documents";
+    pub const GO_TO_FOLDER: &str = "Aller au dossier";
+    pub const GO_TO_FOLDER_MENU: &str = "Aller au dossier…";
+    pub const EDIT_PATH: &str = "Saisir un chemin";
+    pub const GO: &str = "Aller";
+    pub const PATH_NOT_FOUND: &str = "Rien ne se trouve à cet endroit.";
+    pub const PATH_DENIED: &str = "Tu n'as pas accès à cet endroit.";
     pub fn search_placeholder(folder: &str) -> String {
         format!("Rechercher dans {folder}")
     }

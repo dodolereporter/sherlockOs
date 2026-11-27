@@ -78,7 +78,24 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
-    let mut textures = Textures::default();
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
+    // Shared with the screenshot tool (lot D-35e), which draws between two frames: nested,
+    // Super + Shift + S is Alt + Shift + S, and Print Screen stays with the host session.
+    let textures = Rc::new(RefCell::new(Textures::default()));
+    state.enable_screenshots(crate::capture::Settings::default());
+    let (weak_backend, weak_scene) = (Rc::downgrade(&backend), Rc::downgrade(&scene));
+    let weak_textures = Rc::downgrade(&textures);
+    state.set_capturer(Box::new(move |state, target| {
+        let (backend, scene) = (weak_backend.upgrade()?, weak_scene.upgrade()?);
+        let textures = weak_textures.upgrade()?;
+        let mut backend = backend.try_borrow_mut().ok()?;
+        let mut textures = textures.try_borrow_mut().ok()?;
+        crate::capture::image(&scene, backend.renderer(), &mut textures, state, target)
+    }));
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.
     let mut ids = Ids::default();
@@ -98,7 +115,8 @@ pub fn init(
                 WinitEvent::Redraw => {
                     // A client may change its cursor without the pointer moving.
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
-                    let frame = (&*scene, &mut ids, &mut textures, &mut preview);
+                    let mut textures = textures.borrow_mut();
+                    let frame = (&*scene, &mut ids, &mut *textures, &mut preview);
                     let locked = state.is_locked();
                     match render(&mut backend, frame, state) {
                         // The host window shows every screen at once (lot D-25a).
@@ -174,6 +192,7 @@ fn send_frames(state: &State) {
             layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
         }
         state.send_lock_frames(output, time);
+        state.send_drag_frames(output, time);
     }
 }
 

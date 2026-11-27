@@ -30,6 +30,7 @@ mod tests {
     use smithay::utils::Transform;
     use smithay::{
         backend::input::{ButtonState, KeyState},
+        desktop::Window,
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
         utils::{Logical, Physical, Point, Rectangle},
@@ -2768,6 +2769,121 @@ mod tests {
         compositor::render::items(&h.state, (&output, &view), None, false, at).1
     }
 
+    /// Two windows shown at the same place, at rest: the one below, then the one above.
+    fn two_windows_at_rest(h: &mut Harness) -> (Shown, Shown, Window, Window) {
+        // Both appear at once: only the raise animates below.
+        h.state.set_window_animations(false);
+        let below = h.show_window();
+        let above = h.show_window();
+        let centered = |s: &State| {
+            let at = |w| s.space.element_location(w) == Some((350, 260).into());
+            s.space.elements().filter(|w| at(w)).count() == 2
+        };
+        h.run_until("both windows", |_, s| centered(s));
+        assert!(!animating(h, h.state.now()));
+        h.state.set_window_animations(true);
+        let windows: Vec<Window> = h.state.space.elements().cloned().collect();
+        let (low, high) = (windows[0].clone(), windows[1].clone());
+        (below, above, low, high)
+    }
+
+    /// Scale and shadow share of `window` drawn at `at`.
+    fn lift(h: &Harness, window: &Window, at: Duration) -> (f64, f64) {
+        let visual = h.state.window_visual(window, at).unwrap();
+        (visual.scale, visual.shadow)
+    }
+
+    fn has_keyboard(h: &Harness, window: &Window) -> bool {
+        use compositor::focus::KeyboardFocus;
+        let focus = h.state.seat.get_keyboard().unwrap().current_focus();
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        focus == Some(KeyboardFocus::Wayland(surface))
+    }
+
+    /// Raise (lot D-19d). The window below, covered by the other one, is activated: it comes to
+    /// the front at once, with the keyboard, and grows from `RAISE_SCALE` to 1, its shadow with
+    /// it, while the other one steps back and comes back; then nothing is drawn at rest.
+    #[test]
+    fn a_window_raised_from_behind_grows_and_the_other_steps_back() {
+        use sherlock_ui::motion;
+        let mut h = Harness::start();
+        let (_below, _above, low, high) = two_windows_at_rest(&mut h);
+        let start = h.state.now();
+        h.state.activate(&low);
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        // In front, with the keyboard, at once.
+        assert_eq!(h.state.space.elements().last(), Some(&low));
+        assert!(has_keyboard(&h, &low));
+        let (scale, shadow) = lift(&h, &low, at(0));
+        assert!(scale < 0.975 && shadow < 0.7, "{scale} {shadow}");
+        assert!(animating(&h, at(0)));
+        // Halfway: the raised one grows, the other one is at its furthest step back.
+        let (scale, shadow) = lift(&h, &low, at(100));
+        assert!(scale > 0.975 && scale < 1.0 && shadow > 0.7 && shadow < 1.0);
+        let (back, _) = lift(&h, &high, at(100));
+        assert!((back - motion::RECEDE_SCALE).abs() < 1e-3, "{back}");
+        // Then both at rest, and no frame.
+        assert_eq!(lift(&h, &low, at(400)), (1.0, 1.0));
+        assert_eq!(lift(&h, &high, at(400)), (1.0, 1.0));
+        assert!(!animating(&h, at(400)));
+    }
+
+    /// No raise animation for a window that nothing covers, nor with window animations off.
+    #[test]
+    fn a_window_fully_visible_or_animations_off_comes_to_the_front_without_animation() {
+        let mut h = Harness::start();
+        let (_below, _above, low, high) = two_windows_at_rest(&mut h);
+        // Side by side: the one below is fully visible.
+        h.state.space.map_element(high.clone(), (0, 0), false);
+        let now = h.state.now();
+        h.state.activate(&low);
+        assert_eq!(h.state.space.elements().last(), Some(&low));
+        assert_eq!(lift(&h, &low, now), (1.0, 1.0));
+        assert_eq!(lift(&h, &high, now), (1.0, 1.0));
+        assert!(!animating(&h, now));
+        // Covered again, but animations off.
+        h.state.space.map_element(high.clone(), (350, 260), true);
+        h.state.set_window_animations(false);
+        h.state.activate(&low);
+        assert_eq!(h.state.space.elements().last(), Some(&low));
+        assert!(!animating(&h, h.state.now()));
+    }
+
+    /// Raised, then the other window raised back before the end: each one goes on from where
+    /// it is drawn, without a jump, and both end at rest.
+    #[test]
+    fn a_raise_interrupted_halfway_goes_on_without_a_jump() {
+        let mut h = Harness::start();
+        let (_below, _above, low, high) = two_windows_at_rest(&mut h);
+        let start = h.state.now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        h.state.activate(&low);
+        let (low_before, high_before) = (lift(&h, &low, at(60)).0, lift(&h, &high, at(60)).0);
+        // `activate` reads the compositor's clock: the turn happens a little after 60 ms.
+        while h.state.now() < at(60) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let turn = h.state.now();
+        h.state.activate(&high);
+        assert_eq!(h.state.space.elements().last(), Some(&high));
+        assert!(has_keyboard(&h, &high));
+        let (low_after, high_after) = (lift(&h, &low, turn).0, lift(&h, &high, turn).0);
+        // Within what a few milliseconds of motion give: no jump to `RAISE_SCALE`.
+        assert!(
+            (low_after - low_before).abs() < 0.01,
+            "{low_before} {low_after}"
+        );
+        assert!(
+            (high_after - high_before).abs() < 0.01,
+            "{high_before} {high_after}"
+        );
+        assert!(animating(&h, turn));
+        let end = turn + Duration::from_millis(400);
+        assert_eq!(lift(&h, &low, end), (1.0, 1.0));
+        assert_eq!(lift(&h, &high, end), (1.0, 1.0));
+        assert!(!animating(&h, end));
+    }
+
     /// Opening and closing (lot D-34). A window closes while another one is under it: its last
     /// image shrinks and fades for 150 ms, out of reach, then it is forgotten.
     #[test]
@@ -3017,6 +3133,71 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         h.state.refresh();
         assert_eq!(h.state.closing_windows(), (0, 0), "its texture is freed");
+    }
+
+    /// Board of the raise (lot D-19d), dark: two decorated windows that overlap, the one below
+    /// activated, drawn with Mesa's software renderer at six steps, 0 to 250 ms. In Cargo's
+    /// temporary folder of the integration tests: `target/tmp/raise-board.png`, three by two.
+    #[test]
+    #[ignore = "needs Mesa's EGL; writes the board: run it with --ignored"]
+    fn board_of_the_raise() {
+        use compositor::{damage::Ids, render::Scene, wallpaper};
+        use sherlock_ui::color::{Palette, Theme};
+        use smithay::backend::{
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::gles::GlesRenderer,
+        };
+
+        let mut device = EGLDevice::enumerate().unwrap();
+        let device = device
+            .find(EGLDevice::is_software)
+            .expect("no software EGL device");
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let scene = Scene::new(&mut renderer).unwrap();
+        let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+        sherlock_ui::color::set_active(Theme::Dark);
+        let mut h = Harness::start();
+        // Both appear at once, then are placed across each other.
+        h.state.set_window_animations(false);
+        let (_low, _) = h.show_decorated_in(Palette::DARK.window);
+        let (_high, _) = h.show_decorated_in(Palette::DARK.card);
+        h.run_until("both windows", |_, s| s.space.elements().count() == 2);
+        let windows: Vec<Window> = h.state.space.elements().cloned().collect();
+        let (low, high) = (windows[0].clone(), windows[1].clone());
+        h.state.space.map_element(low.clone(), (110, 120), false);
+        h.state.space.map_element(high.clone(), (290, 230), true);
+        let size = (800, 600);
+        let pass = (&scene, &mut ids, &mut textures);
+        software_frame(&mut renderer, pass, &mut h, size);
+        h.state.set_window_animations(true);
+        let start = h.state.now();
+        h.state.activate(&low);
+        let frames: Vec<Vec<u8>> = [0, 40, 80, 120, 170, 250]
+            .iter()
+            .map(|ms| {
+                let at = start + Duration::from_millis(*ms);
+                let pass = (&scene, &mut ids, &mut textures);
+                software_frame_at(&mut renderer, pass, &mut h, size, at)
+            })
+            .collect();
+        // The first image is smaller than the last around the raised window: at its title bar's
+        // top, near its left end, the desktop shows first, the bar at the end.
+        let at = |f: &[u8], x: usize, y: usize| f[(y * 800 + x) * 4..][..3].to_vec();
+        assert_ne!(at(&frames[0], 130, 81), at(&frames[5], 130, 81));
+        let (w, ht) = (800u32, 600u32);
+        let mut board = image::RgbaImage::new(w * 3, ht * 2);
+        for (i, frame) in frames.iter().enumerate() {
+            let tile = image::RgbaImage::from_raw(w, ht, frame.clone()).unwrap();
+            let (x, y) = ((i as u32 % 3) * w, (i as u32 / 3) * ht);
+            image::imageops::replace(&mut board, &tile, i64::from(x), i64::from(y));
+        }
+        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("raise-board.png");
+        board.save(&path).unwrap();
+        eprintln!("raise board: {}", path.display());
     }
 
     /// Captures of a decorated window, dark then light: at rest, then with the pointer on each

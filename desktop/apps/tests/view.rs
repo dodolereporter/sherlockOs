@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use apps::app::{Entry, Key, Message, View};
+use apps::backdrop::Picture;
 use apps::catalog::Catalog;
 use iced::mouse::ScrollDelta;
 use iced::widget::container;
@@ -379,12 +380,41 @@ const SCREENS: [(f32, f32); 3] = [
     (2560.0 / 1.5, 1600.0 / 1.5),
 ];
 
-/// The opened view of the fixtures on a screen of `width` by `height`.
+/// The wallpaper of the active theme, from the collection.
+fn wallpaper() -> PathBuf {
+    let name = match color::active() {
+        Theme::Dark => "first-clue.jpg",
+        Theme::Light => "first-clue-light.jpg",
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/wallpapers")
+        .join(name)
+}
+
+/// The wallpaper of the active theme blurred for a screen of `width` by `height`, computed once.
+fn backdrop(width: f32, height: f32) -> Picture {
+    type Blurred = Vec<((PathBuf, u32, u32), Picture)>;
+    static DONE: Mutex<Blurred> = Mutex::new(Vec::new());
+    let key = (wallpaper(), width as u32, height as u32);
+    let mut done = DONE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, picture)) = done.iter().find(|(k, _)| *k == key) {
+        return picture.clone();
+    }
+    let picture = match apps::backdrop::blur(&key.0, (key.1, key.2)) {
+        Ok(picture) => picture,
+        Err(error) => panic!("cannot blur the wallpaper: {error}"),
+    };
+    done.push((key, picture.clone()));
+    picture
+}
+
+/// The opened view of the fixtures on a screen of `width` by `height`, over the blurred
+/// wallpaper of the active theme.
 fn opened(width: f32, height: f32) -> View {
     let (mut view, _) = recorded(catalog());
     let _ = view.update(Message::Surface(iced::window::Id::unique()));
     let _ = view.update(Message::Resized(Size::new(width, height)));
-    view.opened()
+    view.with_backdrop(backdrop(width, height)).opened()
 }
 
 #[test]
@@ -568,4 +598,129 @@ fn the_icons_are_drawn_once_at_their_size_on_the_screen() {
     // Drawn already: nothing more to draw.
     let again = apps::icons::draw(&catalog, side, &drawn);
     assert!(again.icons.is_empty());
+}
+
+/// A full page of applications with the desktop's own icons, for the board.
+fn full_page() -> Catalog {
+    const NAMES: [&str; 35] = [
+        "Archives",
+        "Bluetooth",
+        "Calendrier",
+        "Capture d'écran",
+        "Cartes",
+        "Contacts",
+        "Courrier",
+        "Dessin",
+        "Dictionnaire",
+        "Disques",
+        "Éditeur de texte",
+        "Enregistreur",
+        "Horloge",
+        "Imprimantes",
+        "Lecteur vidéo",
+        "Messagerie",
+        "Météo",
+        "Moniteur système",
+        "Musique",
+        "Navigateur",
+        "Notes",
+        "Paramètres réseau",
+        "Photos",
+        "Polices",
+        "Présentation",
+        "Scanner",
+        "Tableur",
+        "Terminal",
+        "Traitement de texte",
+        "Une application au nom vraiment très long",
+        "Visioconférence",
+        "Visionneuse",
+        "Jeux de société",
+        "Lecteur de livres",
+        "Sauvegardes",
+    ];
+    const ICONS: [&str; 7] = [
+        "control-room",
+        "evidence",
+        "games",
+        "inquiry",
+        "installer",
+        "lab",
+        "sherlock",
+    ];
+    let entries: Vec<DesktopEntry> = NAMES
+        .iter()
+        .enumerate()
+        .filter_map(|(i, name)| {
+            let icon = ICONS[i % ICONS.len()];
+            let text = format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nExec=app{i}\nIcon={icon}\n"
+            );
+            let path = PathBuf::from(format!("/apps/app{i}.desktop"));
+            mime_apps::entry::parse(&format!("app{i}.desktop"), &path, &text, &[])
+        })
+        .collect();
+    let apps = Apps::new(entries, None)
+        .with_icons(icons())
+        .with_icon_size(look::ICON_LOOKUP, look::ICON_SCALE);
+    Catalog::new(apps)
+}
+
+/// The board of the opening (lot P-02c): for each theme and screen, a row of six frames of the
+/// opening and the view open, over the sharp wallpaper, in
+/// `target/tmp/apps-opening-board.png`.
+#[test]
+#[ignore = "slow: cargo test -p apps --test view -- --ignored board"]
+fn the_opening_board() {
+    use image::{GenericImage as _, RgbaImage, imageops};
+    const TIMES: [u64; 6] = [0, 25, 50, 80, 120, 180];
+    const SIDE: (u32, u32) = (480, 270);
+    const GAP: u32 = 12;
+    let screens = [(1920.0, 1080.0), (1366.0, 768.0)];
+    let columns = TIMES.len() as u32 + 1;
+    let rows = 2 * screens.len() as u32;
+    let mut board = RgbaImage::from_pixel(
+        columns * (SIDE.0 + GAP) + GAP,
+        rows * (SIDE.1 + GAP) + GAP,
+        image::Rgba([40, 44, 52, 255]),
+    );
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let mut line = 0;
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let sharp = image::open(wallpaper()).unwrap().to_rgba8();
+        let sharp =
+            iced::widget::image::Handle::from_rgba(sharp.width(), sharp.height(), sharp.into_raw());
+        for (width, height) in screens {
+            let (mut view, _) = recorded(full_page());
+            view = view.with_backdrop(backdrop(width, height));
+            let _ = view.update(Message::Surface(iced::window::Id::unique()));
+            let _ = view.update(Message::Resized(Size::new(width, height)));
+            let base = Instant::now();
+            let moments = TIMES.iter().map(|ms| Duration::from_millis(*ms));
+            for (column, at) in moments.chain([Duration::from_secs(3)]).enumerate() {
+                let _ = view.update(Message::Frame(base + at));
+                let behind = iced::widget::image(sharp.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(iced::ContentFit::Cover);
+                let screen = iced::widget::stack![behind, view.view_screen()];
+                let mut ui = Simulator::with_size(launcher::settings(), (width, height), screen);
+                let snapshot = ui.snapshot(&theme::theme()).unwrap();
+                let frame = format!("apps-opening-{name}-{}-{column}", width as u32);
+                let path = tmp.join(format!("{frame}.png"));
+                let written = tmp.join(format!("{frame}-tiny-skia.png"));
+                // Written only when absent: a former capture would be compared instead.
+                let _ = std::fs::remove_file(&written);
+                let _ = snapshot.matches_image(&path);
+                let shot = image::open(&written).unwrap().to_rgba8();
+                let small = imageops::resize(&shot, SIDE.0, SIDE.1, imageops::FilterType::Triangle);
+                let x = GAP + column as u32 * (SIDE.0 + GAP);
+                let y = GAP + line * (SIDE.1 + GAP);
+                board.copy_from(&small, x, y).unwrap();
+            }
+            line += 1;
+        }
+    }
+    board.save(tmp.join("apps-opening-board.png")).unwrap();
 }

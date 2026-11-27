@@ -4,6 +4,7 @@ description = "Daemon of Sherlock, the user session agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
@@ -26,6 +27,8 @@ tokio = { version = "=1.54.1", default-features = false, features = [
     "time",
 ] }
 tracing = "=0.1.44"
+# prctl(PR_SET_PDEATHSIG) and kill of a process group: the version the desktop already pins.
+libc = "=0.2.191"
 # Prints logs on standard error, level set by RUST_LOG.
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",

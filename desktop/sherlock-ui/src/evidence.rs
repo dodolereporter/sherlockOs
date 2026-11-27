@@ -60,6 +60,27 @@ pub const CHOOSER_CHROME: f32 = typography::CARD_TITLE_SIZE * 1.3
 pub const CHOOSER_MARGIN: f32 = 24.0;
 pub const CHOOSER_MIN_ROWS: f32 = 4.0;
 
+/// The path bar (lot E-04). A segment of the breadcrumb is never wider than this: a longer
+/// name keeps its start and its end around « … ».
+pub const CRUMB_MAX_WIDTH: f32 = 180.0;
+/// The breadcrumb and the text field cross-fade in this time, each way.
+pub const PATH_SWITCH: std::time::Duration = std::time::Duration::from_millis(160);
+/// A path that leads nowhere: the field shakes three times, as macOS says no.
+pub const PATH_SHAKE: std::time::Duration = std::time::Duration::from_millis(450);
+pub const PATH_SHAKES: f32 = 3.0;
+pub const PATH_SHAKE_AMPLITUDE: f32 = 8.0;
+/// The completion list: rows shown at most before it scrolls, and how far it slides in.
+pub const COMPLETION_ROWS: f32 = 8.0;
+pub const COMPLETION_SLIDE: f32 = 6.0;
+/// The completion reads at most this many entries of a folder, and gives up after this time:
+/// a huge or slow folder (a network share) never holds the field.
+pub const COMPLETION_MAX_ENTRIES: usize = 20_000;
+pub const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+/// Folders offered at most in the list.
+pub const COMPLETION_MAX_SHOWN: usize = 200;
+/// Width of the « Aller au dossier » sheet.
+pub const GO_TO_WIDTH: f32 = 460.0;
+
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";
 pub const PROPERTIES: &str = "Propriétés";
