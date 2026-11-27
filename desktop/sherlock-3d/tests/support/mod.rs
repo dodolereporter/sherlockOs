@@ -23,6 +23,21 @@ pub fn say(line: &str) {
     let _ = writeln!(std::io::stdout().lock(), "{line}");
 }
 
+/// Answers a test runner that lists the tests, as libtest does: `cargo nextest` asks each test
+/// binary for its list (`--list --format terse`) before running it (lot Q-18b). A binary
+/// without libtest's harness is one test named `name`, never ignored. `true` when it was asked
+/// for the list: the binary then stops there, without picking a driver nor rendering.
+pub fn listed(name: &str) -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.iter().any(|a| a == "--list") {
+        return false;
+    }
+    if !args.iter().any(|a| a == "--ignored") {
+        say(&format!("{name}: test"));
+    }
+    true
+}
+
 /// Skips (or fails, see `required`) with `why`.
 pub fn skip(why: &str) {
     assert!(!required(), "SHERLOCK_3D_REQUIRE=1: {why}");

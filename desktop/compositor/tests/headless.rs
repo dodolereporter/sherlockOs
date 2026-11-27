@@ -403,9 +403,14 @@ mod tests {
 
         /// One screen of 800 × 600 pixels at `scale`.
         fn start_scaled(scale: f64) -> Self {
+            Self::start_sized((800, 600), scale)
+        }
+
+        /// One screen of `size` pixels at `scale`.
+        fn start_sized(size: (i32, i32), scale: f64) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output((800, 600).into(), scale);
+            state.add_output(size.into(), scale);
             let (server_side, client_side) = UnixStream::pair().unwrap();
             state.insert_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
@@ -502,7 +507,7 @@ mod tests {
 
         /// A client creates a window of 400 × 300 and asks the compositor for its decoration
         /// through xdg-decoration before showing it. The whole window, its bar of 42 included,
-        /// is centered: at (200, 129), the content at (200, 171).
+        /// is centered: at (200, 129) on a screen of 800 × 600, the content at (200, 171).
         fn show_decorated(&mut self) -> (Shown, ZxdgToplevelDecorationV1) {
             self.show_decorated_in(Palette::DARK.window)
         }
@@ -538,9 +543,9 @@ mod tests {
             let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
             surface.attach(Some(&buffer), 0, 0);
             surface.commit();
-            self.run_until("the placement", |_, s| {
-                location(s) == Some((200, 171).into())
-            });
+            let screen = self.state.views()[0].1.area.size;
+            let placed = ((screen.w - 400) / 2, (screen.h - 342) / 2 + 42);
+            self.run_until("the placement", |_, s| location(s) == Some(placed.into()));
             let shown = Shown {
                 seat,
                 toplevel,
@@ -1180,6 +1185,54 @@ mod tests {
         h.run_until(
             "the panel opened again, closed by a click elsewhere",
             |c, _| c.popups_done.contains(&id),
+        );
+    }
+
+    /// Lot Q-51: a click in a panel of the bar gives the keyboard to the panel, a popup, so that
+    /// its fields (the Wi-Fi password) get the keys; a click on the bar gives it back to the bar.
+    #[test]
+    fn a_click_in_a_panel_gives_it_the_keyboard() {
+        let mut h = Harness::start();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(500, 36, 2, 2);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        popup.grab(&with.seat, 0);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, 200, 150);
+        surface.commit();
+        settle(&mut h);
+        // The panel hangs 150 high under the bar, around x = 500: its middle.
+        h.click(510.0, 46.0 + 75.0, 10);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(surface.id().protocol_id()),
+            "the panel has the keyboard"
+        );
+        h.click(100.0, 20.0, 30);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(bar.surface.id().protocol_id()),
+            "back to the bar"
         );
     }
 
@@ -3467,6 +3520,292 @@ mod tests {
         assert_eq!(at(&light, 400, 140), [bar.r, bar.g, bar.b]);
         assert_ne!(at(&dark, 40, 300), at(&light, 40, 300));
         color::set_active(Theme::Dark);
+    }
+
+    /// The genie of a decorated window into its icon of the real dock (`target/debug/dock`),
+    /// drawn with Mesa's software renderer at eight steps of the way: `genie-board.png` in
+    /// Cargo's temporary folder of the integration tests (`target/tmp`), dark then light, the
+    /// dock at the bottom of 1920 × 1080; then `genie-left.png` and `genie-right.png` at
+    /// 1280 × 800, `genie-small.png` at the bottom of 800 × 600, and `genie-hover.png` with the
+    /// pointer on the icon, magnified. The dock draws with wgpu
+    /// on Mesa's software Vulkan driver (lavapipe), so that its glass is translucent as on the
+    /// machine. Each image is checked: nothing of the window shows on the dock's side of the
+    /// edge of its glass.
+    #[test]
+    #[ignore = "needs Mesa's EGL and lavapipe, and `cargo build -p dock`; writes the board"]
+    fn genie_board_with_the_real_dock() {
+        let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+        let mut rows = Vec::new();
+        for theme in ["dark", "light"] {
+            let frames = genie_frames((1920, 1080), "bottom", theme, false);
+            rows.push(board(&frames, (1920, 1080), 4, 0.5));
+        }
+        let rows: Vec<_> = rows.into_iter().flatten().collect();
+        save_board(&rows, &tmp.join("genie-board.png"));
+        for (position, size) in [("left", (1280, 800)), ("right", (1280, 800))] {
+            let frames = genie_frames(size, position, "dark", false);
+            save_board(
+                &board(&frames, size, 4, 0.5),
+                &tmp.join(format!("genie-{position}.png")),
+            );
+        }
+        let frames = genie_frames((800, 600), "bottom", "light", false);
+        save_board(
+            &board(&frames, (800, 600), 4, 1.0),
+            &tmp.join("genie-small.png"),
+        );
+        let frames = genie_frames((1920, 1080), "bottom", "dark", true);
+        save_board(
+            &board(&frames, (1920, 1080), 4, 0.5),
+            &tmp.join("genie-hover.png"),
+        );
+    }
+
+    use std::path::PathBuf;
+
+    /// An image and its size.
+    type Image = (Vec<u8>, (u32, u32));
+
+    /// `frames` of a screen of `size`, scaled by `zoom` and laid out `columns` per row.
+    fn board(frames: &[Vec<u8>], size: (i32, i32), columns: usize, zoom: f64) -> Vec<Image> {
+        let (w, h) = (size.0 as u32, size.1 as u32);
+        let small = |f: &Vec<u8>| {
+            let image = image::RgbaImage::from_raw(w, h, f.clone()).unwrap();
+            let (sw, sh) = ((f64::from(w) * zoom) as u32, (f64::from(h) * zoom) as u32);
+            image::imageops::resize(&image, sw, sh, image::imageops::FilterType::Triangle)
+        };
+        frames
+            .chunks(columns)
+            .map(|row| {
+                let tiles: Vec<_> = row.iter().map(small).collect();
+                let (tw, th) = tiles[0].dimensions();
+                let mut out = image::RgbaImage::new(tw * columns as u32, th);
+                for (i, tile) in tiles.iter().enumerate() {
+                    image::imageops::replace(&mut out, tile, i64::from(tw) * i as i64, 0);
+                }
+                (out.into_raw(), (tw * columns as u32, th))
+            })
+            .collect()
+    }
+
+    /// `rows` one under the other, saved at `path`.
+    fn save_board(rows: &[Image], path: &std::path::Path) {
+        let width = rows.iter().map(|r| r.1.0).max().unwrap();
+        let height: u32 = rows.iter().map(|r| r.1.1).sum();
+        let mut out = image::RgbaImage::new(width, height);
+        let mut y = 0;
+        for (pixels, (w, h)) in rows {
+            let row = image::RgbaImage::from_raw(*w, *h, pixels.clone()).unwrap();
+            image::imageops::replace(&mut out, &row, 0, i64::from(y));
+            y += h;
+        }
+        out.save(path).unwrap();
+        eprintln!("genie board: {}", path.display());
+    }
+
+    /// Eight steps of the genie of a decorated window into its icon of the real dock, at
+    /// `position` on a screen of `size`, in `theme`; with the pointer on the icon (`hover`) or
+    /// away from the dock.
+    fn genie_frames(size: (i32, i32), position: &str, theme: &str, hover: bool) -> Vec<Vec<u8>> {
+        use compositor::{damage::Ids, render::Scene, theme as follow, wallpaper};
+        use sherlock_ui::color;
+        use smithay::backend::{
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::gles::GlesRenderer,
+        };
+        use smithay::desktop::layer_map_for_output;
+        use std::process::Command;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("..");
+        let dock = target.join("debug/dock");
+        assert!(dock.is_file(), "build the dock first: cargo build -p dock");
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("genie-{position}-{theme}-{}-{hover}", size.0));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("config/appearance")).unwrap();
+        std::fs::create_dir_all(dir.join("config/dock")).unwrap();
+        let appearance = dir.join("config/appearance/appearance.conf");
+        std::fs::write(&appearance, format!("[Appearance]\nTheme={theme}\n")).unwrap();
+        // A few of our applications pinned, the window's own after them; always shown.
+        std::fs::write(
+            dir.join("config/dock/dock.conf"),
+            format!(
+                "[Dock]\nPinned=evidence;inquiry;lab;games;control-room;\nAutoHide=never\n\
+                 Position={position}\n"
+            ),
+        )
+        .unwrap();
+        let data = dir.join("data");
+        std::fs::create_dir_all(data.join("applications")).unwrap();
+        let icons = root.join("desktop/sherlock-ui/icons/hicolor/scalable/apps");
+        for (id, name) in [
+            ("evidence", "Evidence"),
+            ("inquiry", "Inquiry"),
+            ("lab", "Labo"),
+            ("games", "Jeux"),
+            ("control-room", "Control Room"),
+        ] {
+            let icon = icons.join(format!("{id}.svg"));
+            std::fs::write(
+                data.join(format!("applications/{id}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={name}\nExec=true\nIcon={}\n",
+                    icon.display()
+                ),
+            )
+            .unwrap();
+        }
+        // Lavapipe under the name the dock looks for on a machine with an AMD chip (it keeps
+        // the Vulkan loader to that driver), and by `VK_DRIVER_FILES` elsewhere.
+        let vulkan = data.join("vulkan/icd.d");
+        std::fs::create_dir_all(&vulkan).unwrap();
+        let lavapipe = vulkan.join("radeon_icd.json");
+        std::fs::copy("/usr/share/vulkan/icd.d/lvp_icd.json", &lavapipe)
+            .expect("lavapipe (mesa-vulkan-drivers) is needed for the dock's glass");
+        let wallpaper_id = if theme == "dark" {
+            "first-clue"
+        } else {
+            "first-clue-light"
+        };
+        let original = root.join(format!("assets/wallpapers/{wallpaper_id}.jpg"));
+        let picture = image::open(&original).unwrap().resize_to_fill(
+            size.0 as u32,
+            size.1 as u32,
+            image::imageops::FilterType::Triangle,
+        );
+        let folder = data.join("wallpapers").join(wallpaper_id);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = format!("{}x{}.png", picture.width(), picture.height());
+        picture.to_rgb8().save(folder.join(file)).unwrap();
+
+        let mut device = EGLDevice::enumerate().unwrap();
+        let device = device
+            .find(EGLDevice::is_software)
+            .expect("no software EGL device");
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let scene = Scene::new(&mut renderer).unwrap();
+        let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+
+        let mut h = Harness::start_sized(size, 1.0);
+        let handle = h.event_loop.handle();
+        follow::follow_at(&handle, &mut h.state, appearance.clone());
+        h.state.wallpaper =
+            wallpaper::Wallpaper::start(&handle, None, vec![data.join("wallpapers")]).unwrap();
+        h.state
+            .listen_at(dir.join("wayland-genie"), &h.event_loop)
+            .unwrap();
+        let (shown, _decoration) = h.show_decorated_in(color::palette().window);
+        shown.toplevel.set_app_id("org.example.Notes".into());
+        shown.toplevel.set_title("Notes".into());
+        let _content = draw_lines(&mut h, &shown);
+        let mut child = Command::new(&dock)
+            .env_clear()
+            .env("XDG_RUNTIME_DIR", &dir)
+            .env("WAYLAND_DISPLAY", "wayland-genie")
+            .env("XDG_CONFIG_HOME", dir.join("config"))
+            .env("XDG_DATA_HOME", dir.join("data-home"))
+            .env("XDG_DATA_DIRS", &data)
+            .env("HOME", &dir)
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(
+                "RUST_LOG",
+                std::env::var("DOCK_LOG").unwrap_or("warn".into()),
+            )
+            .env("ICED_BACKEND", "wgpu")
+            .env("VK_DRIVER_FILES", &lavapipe)
+            .spawn()
+            .unwrap();
+        let (w, ht) = size;
+        let mut run = |h: &mut Harness, ms: u64| {
+            let end = std::time::Instant::now() + Duration::from_millis(ms);
+            while std::time::Instant::now() < end {
+                h.conn.flush().unwrap();
+                h.event_loop
+                    .dispatch(Some(Duration::from_millis(16)), &mut h.state)
+                    .unwrap();
+                h.state.refresh();
+                if let Some(guard) = h.queue.prepare_read() {
+                    let _ = guard.read();
+                }
+                h.queue.dispatch_pending(&mut h.client).unwrap();
+                let pass = (&scene, &mut ids, &mut textures);
+                software_frame(&mut renderer, pass, h, size);
+                let output = h.state.space.outputs().next().unwrap().clone();
+                let time = h.state.now();
+                for layer in layer_map_for_output(&output).layers() {
+                    layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| {
+                        Some(output.clone())
+                    });
+                }
+            }
+        };
+        let window = h.state.space.elements().next().unwrap().clone();
+        // The pointer away from the dock: its icons at rest.
+        h.state
+            .pointer_motion((f64::from(w) / 2.0, f64::from(ht) / 3.0).into(), 1);
+        let started = std::time::Instant::now();
+        while h.state.icon_rectangle(&window).is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(90),
+                "no icon rectangle"
+            );
+            run(&mut h, 200);
+        }
+        run(&mut h, 2000);
+        let icon = h.state.icon_rectangle(&window).unwrap().1;
+        eprintln!("{position} {theme} {size:?}: icon rectangle {icon:?}");
+        if hover {
+            let center = icon.to_f64().loc + icon.to_f64().size.downscale(2.0);
+            h.state.pointer_motion((center.x, center.y).into(), 2);
+            run(&mut h, 1500);
+        }
+        h.state.minimize(&window);
+        let start = h.state.now();
+        let frames: Vec<Vec<u8>> = [0.0, 0.15, 0.3, 0.45, 0.6, 0.72, 0.84, 0.95]
+            .iter()
+            .map(|share| {
+                let at = start + sherlock_ui::motion::MINIMIZE.mul_f64(*share);
+                let pass = (&scene, &mut ids, &mut textures);
+                software_frame_at(&mut renderer, pass, &mut h, size, at)
+            })
+            .collect();
+        let _ = child.kill();
+        let _ = child.wait();
+        h.state.shutdown();
+        color::set_active(color::Theme::Dark);
+        frames
+    }
+
+    /// The window's content: lines of text, drawn as bars, so that its deformation reads.
+    fn draw_lines(h: &mut Harness, shown: &Shown) -> File {
+        let window = sherlock_ui::color::palette().window;
+        let line = sherlock_ui::color::palette().text_secondary;
+        let (w, ht) = (400usize, 300usize);
+        let mut file = shm_file((w * ht * 4) as u64);
+        let pixels: Vec<u8> = (0..ht)
+            .flat_map(|y| {
+                (0..w).flat_map(move |x| {
+                    let length = 120 + (y * 37 % 200);
+                    let on = y % 22 >= 14 && y >= 16 && x >= 24 && x < 24 + length && y < 280;
+                    let c = if on { line } else { window };
+                    [c.b, c.g, c.r, 255]
+                })
+            })
+            .collect();
+        file.write_all(&pixels).unwrap();
+        let qh = h.queue.handle();
+        let size = (w * ht * 4) as i32;
+        let pool = shown.shm.create_pool(file.as_fd(), size, &qh, ());
+        let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
+        shown.surface.attach(Some(&buffer), 0, 0);
+        shown.surface.damage(0, 0, 400, 300);
+        shown.surface.commit();
+        file
     }
 
     /// Lot UI-07: a client names its cursor the way iced_exwlshell does (a cursor shape device

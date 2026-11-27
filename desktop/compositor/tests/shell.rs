@@ -74,6 +74,7 @@ mod tests {
     const KEY_1: u32 = 10;
     const KEY_2: u32 = 11;
     const KEY_3: u32 = 12;
+    const KEY_ESC: u32 = 9;
 
     /// A window as the shell client knows it, applied at `done`.
     #[derive(Debug, Default, Clone)]
@@ -1204,6 +1205,67 @@ mod tests {
         assert!(h.shell.conn.protocol_error().is_none());
     }
 
+    /// App Expose (lot D-21c2): the shell opens Mission Control on some windows only.
+    #[test]
+    fn the_shell_opens_mission_control_on_the_windows_of_one_application() {
+        let mut h = Harness::start();
+        let manager = h.bind_manager();
+        for title in ["One", "Two", "Three"] {
+            h.open_window(title);
+        }
+        h.run_until("three windows", |h| h.shell.client.toplevels.len() == 3);
+        let id = |h: &Harness, title: &str| {
+            let toplevels = &h.shell.client.toplevels;
+            toplevels
+                .iter()
+                .find(|t| t.1.title == title)
+                .unwrap()
+                .1
+                .id
+                .unwrap()
+        };
+        let ids = |list: &[u32]| -> Vec<u8> { list.iter().flat_map(|v| v.to_ne_bytes()).collect() };
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let titles = |h: &Harness| -> Vec<String> {
+            let tiles = h.state.overview_tiles(&output, None);
+            let mut titles: Vec<String> = tiles
+                .iter()
+                .filter_map(|t| State::title(&t.window))
+                .collect();
+            titles.sort();
+            titles
+        };
+
+        // Unknown windows only: nothing opens.
+        manager.show_windows(ids(&[9_999]));
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert!(!h.state.overview_open());
+
+        // Two of the three, an unknown id among them: only those, without the strip.
+        let (one, three) = (id(&h, "One"), id(&h, "Three"));
+        manager.show_windows(ids(&[one, 9_999, three]));
+        h.run_until("app expose open", |h| h.state.overview_open());
+        assert_eq!(titles(&h), ["One", "Three"]);
+        assert!(h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), Some(&[one, 9_999, three][..]));
+
+        // Open, it shows other windows instead.
+        let two = id(&h, "Two");
+        manager.show_windows(ids(&[two]));
+        h.run_until("the other windows", |h| titles(h) == ["Two"]);
+
+        // Escape closes it; Mission Control opened afterwards shows everything, strip included.
+        h.keys(&[], KEY_ESC);
+        assert!(!h.state.overview_open());
+        h.state.open_overview();
+        assert_eq!(titles(&h), ["One", "Three", "Two"]);
+        assert!(!h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), None);
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
     #[test]
     fn a_minimized_window_follows_the_work_area() {
         let mut h = Harness::start();
@@ -1401,6 +1463,50 @@ mod tests {
         );
     }
 
+    /// Lot D-21d: the band a hidden dock keeps at the bottom of the screen takes the pointer
+    /// over a fullscreen window, which has the pointer until then: anchored surfaces of the
+    /// top layer come before every window, fullscreen ones included. A button held in the
+    /// window keeps the pointer there (the implicit grab of a drag), as for any surface.
+    #[test]
+    fn a_hidden_dock_takes_the_pointer_at_the_edge_over_a_fullscreen_window() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Film");
+        let window = h.titled("Film");
+        toplevel.set_fullscreen(None);
+        surface.commit();
+        h.run_until("fullscreen", |_| pending(&window) == Some((800, 600)));
+        h.app.draw(&surface, 800, 600);
+        h.run_until("drawn fullscreen", |h| {
+            h.state.space.element_geometry(&window).map(|g| g.size) == Some((800, 600).into())
+        });
+        // The dock hides as the real one does: no zone, all but 2 of its 76 below the edge.
+        let (dock_surface, dock) = h.dock();
+        dock.set_exclusive_zone(-1);
+        dock.set_margin(0, 0, 2 - 76, 0);
+        dock_surface.commit();
+        for _ in 0..10 {
+            h.turn();
+        }
+        let pointer = h.state.seat.get_pointer().unwrap();
+        let film = window.wl_surface().map(|s| s.into_owned());
+        // Only the window and the dock are there: a focus that is not the window is the dock.
+        let on_dock = |focus: Option<_>| focus.is_some() && focus != film;
+        // Above the band: the fullscreen window.
+        h.state.pointer_motion((400.0, 590.0).into(), 1);
+        assert_eq!(pointer.current_focus(), film);
+        // The last row of the screen, where the pointer stops: the dock.
+        h.state.pointer_motion((400.0, 599.0).into(), 2);
+        assert!(on_dock(pointer.current_focus()), "the band of the dock");
+        // A button held in the window: it keeps the pointer down to the edge.
+        h.state.pointer_motion((400.0, 590.0).into(), 3);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+        h.state.pointer_motion((400.0, 599.0).into(), 5);
+        assert_eq!(pointer.current_focus(), film);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+        h.state.pointer_motion((401.0, 599.0).into(), 7);
+        assert!(on_dock(pointer.current_focus()), "released, the dock again");
+    }
+
     /// Lot D-18d: a snapped window covers its screen for the dock (version 2), which then gives
     /// up its zone: the window takes the whole height, still 8 from the edges. A client of
     /// version 1 (the bar) is not told.
@@ -1565,7 +1671,7 @@ mod tests {
         let mut h = Harness::start();
         let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
         let (id, _, version) = name.unwrap().clone();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4, "version 4: App Expose");
         let _manager: SherlockShellManagerV1 =
             h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
         let done = h.shell.client.done;

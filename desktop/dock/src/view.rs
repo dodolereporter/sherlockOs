@@ -93,6 +93,19 @@ impl Dock {
             }
         }
         layers.extend(on_top);
+        // The smoke of an application let go out of the dock, over everything.
+        for poof in &self.poofs {
+            let Some((puffs, opacity)) = poof.puffs(now) else {
+                continue;
+            };
+            for ((x, y), radius) in puffs {
+                let puff = container(space())
+                    .width(2.0 * radius)
+                    .height(2.0 * radius)
+                    .style(dock::poof(radius, opacity));
+                layers.push(place(puff, x - radius, y - radius));
+            }
+        }
         if let Some(label) = self.view_label(&layout) {
             layers.push(label);
         }
@@ -106,6 +119,7 @@ impl Dock {
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
             .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
+            .on_scroll(Message::Scroll)
             .into()
     }
 

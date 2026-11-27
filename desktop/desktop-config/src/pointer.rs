@@ -8,7 +8,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -63,11 +63,19 @@ impl Config {
         (config, problems)
     }
 
-    /// Reads the settings file. A missing file is the default setting.
+    /// Reads the settings file as `read_lenient` does, without the list of its wrong lines.
     pub fn read(path: &Path) -> Result<Self, Error> {
-        match fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+        Self::read_lenient(path).map(|(config, _)| config)
+    }
+
+    /// Reads the settings file. A missing file is the default setting. A line that cannot be
+    /// taken is left out and listed, and the other lines still count: one typo never turns
+    /// the whole file back to the defaults (a lock set to never would lock after 5 minutes).
+    /// Only a file that cannot be read at all is an error.
+    pub fn read_lenient(path: &Path) -> Result<(Self, Vec<Error>), Error> {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
+            Ok(text) => Ok(Self::parse_lenient(&text)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
             Err(source) => Err(Error::Read {
                 path: path.into(),
                 source,
