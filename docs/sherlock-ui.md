@@ -768,6 +768,17 @@ of the tile, enlarged four times:
 - **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
   and `Sidebar`, drawn on the same grid and stroke.
 
+## Elastic scrolling (UI-08)
+
+`elastic::elastic(content)` scrolls content taller than its room with the wheel or the touchpad,
+as `scrollable` does, but past an end it stretches on the rubber band of iOS
+(`(1 - 1 / (excess × RUBBER / room + 1)) × room`, `RUBBER` = 0.55, the Launchpad's) and springs
+back on `motion::SNAP_SPRING`; scrolling the other way while stretched first takes the stretch
+back. A wheel line is 40. The offset lives in the widget's state; frames are asked for only
+while a stretch comes back. Content with nothing to scroll lets the wheel through to what holds
+it, so an elastic list inside an elastic panel scrolls itself first. The panels of the bar use
+it (`docs/bar.md`, « Within the screen »); the scroll bar of macOS is still to come.
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like
