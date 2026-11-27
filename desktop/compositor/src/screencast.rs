@@ -6,8 +6,9 @@
 //! opens a session on it and learns the buffer it needs (size, shared memory formats), then asks
 //! for frames one at a time: the compositor draws the screen offscreen, as it shows (the cursor
 //! aside), with the `Capturer` of the screenshots (lot D-35c), copies it into the client's
-//! buffer and says it is ready. A frame waits until something changed since the session's
-//! previous one. While the session is locked the screen is never drawn: every frame is black.
+//! buffer and says it is ready. A frame waits until the screen showed a new picture since the
+//! session's previous one (`screen_changed`, from the backend). While the session is locked the
+//! screen is never drawn: every frame is black.
 
 use std::sync::Mutex;
 
@@ -54,10 +55,11 @@ const FORMATS: [Format; 2] = [Format::Xrgb8888, Format::Argb8888];
 /// What a capture source shows. `None`: a screen gone or unknown, which can only stop.
 struct SourceData(Option<Output>);
 
-/// The sessions open, each with its source.
+/// The sessions open, each with its source, and how many new pictures each screen showed.
 #[derive(Default)]
 pub struct Screencast {
     sessions: Vec<Session>,
+    changes: Vec<(Output, u64)>,
 }
 
 struct Session {
@@ -66,7 +68,7 @@ struct Session {
     size: Size<i32, Physical>,
     /// The frame asked for, once its capture is sent.
     frame: Option<ExtImageCopyCaptureFrameV1>,
-    /// The redraw epoch of the last frame given: the next one waits for a change.
+    /// The changes of the screen at the last frame given: the next one waits for another.
     given: Option<u64>,
 }
 
@@ -91,6 +93,24 @@ impl State {
         self.screencast.sessions.len()
     }
 
+    /// The screen `output` showed a new picture: the frames waiting for it are due. The real
+    /// session calls it for each frame with damage it queues; the frames of a screen that
+    /// shows nothing new wait.
+    pub fn screen_changed(&mut self, output: &Output) {
+        let changes = &mut self.screencast.changes;
+        match changes.iter_mut().find(|(o, _)| o == output) {
+            Some((_, count)) => *count = count.wrapping_add(1),
+            None => changes.push((output.clone(), 1)),
+        }
+    }
+
+    fn changes(&self, output: Option<&Output>) -> u64 {
+        let changes = self.screencast.changes.iter();
+        output
+            .and_then(|output| changes.clone().find(|(o, _)| o == output))
+            .map_or(0, |(_, count)| *count)
+    }
+
     /// Size of what a session on `output` captures: the screen's frame, in pixels.
     fn capture_size(&self, output: &Output) -> Option<Size<i32, Physical>> {
         let views = self.views();
@@ -98,25 +118,28 @@ impl State {
         Some(view.frame.size)
     }
 
-    /// Gives the frames asked for, once at each turn of the loop: those whose screen changed
-    /// since the session's previous frame.
+    /// Gives the frames asked for, once at each turn of the loop: those whose screen showed a
+    /// new picture since the session's previous frame.
     pub(crate) fn refresh_screencast(&mut self) {
+        let screens: Vec<Output> = self.space.outputs().cloned().collect();
+        self.screencast.changes.retain(|(o, _)| screens.contains(o));
         let sessions = &mut self.screencast.sessions;
         sessions.retain(|s| s.resource.is_alive());
         for session in sessions.iter_mut() {
             session.frame = session.frame.take().filter(|f| f.is_alive());
         }
-        let epoch = self.redraw_epoch();
         let locked = self.is_locked();
-        let due: Vec<usize> = (0..self.screencast.sessions.len())
-            .filter(|&i| {
+        let due: Vec<(usize, u64)> = (0..self.screencast.sessions.len())
+            .filter_map(|i| {
                 let session = &self.screencast.sessions[i];
-                session.frame.as_ref().is_some_and(asked) && session.given != Some(epoch)
+                let changes = self.changes(session.output.as_ref());
+                let new = session.given != Some(changes);
+                (session.frame.as_ref().is_some_and(asked) && new).then_some((i, changes))
             })
             .collect();
         // One drawing per screen, whatever the number of sessions on it.
         let mut drawn: Vec<(Output, Option<Image>)> = Vec::new();
-        for i in due {
+        for (i, changes) in due {
             let (output, size) = {
                 let session = &self.screencast.sessions[i];
                 (session.output.clone(), session.size)
@@ -157,7 +180,7 @@ impl State {
                 }
             };
             match give(&frame, image, size) {
-                Ok(()) => session.given = Some(epoch),
+                Ok(()) => session.given = Some(changes),
                 Err(reason) => frame.failed(reason),
             }
         }

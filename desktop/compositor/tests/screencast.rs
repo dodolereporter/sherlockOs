@@ -413,14 +413,15 @@ mod tests {
         assert_eq!(pixel(&file, place, 805, 10), [1, 2, 3, 4]);
         frame.destroy();
 
-        // Nothing changed: the next frame waits.
+        // The screen shows nothing new: the next frame waits.
         let frame = h.capture(&session, &buffer);
         for _ in 0..10 {
             h.turn();
         }
         assert_eq!((h.shell.client.ready, h.draws.get()), (1, 1));
-        // The pointer moves: the screen is drawn again.
-        h.state.pointer_motion((10.0, 10.0).into(), 1);
+        // A new picture on the screen, as the backend reports it: drawn again.
+        let output = h.state.space.outputs().next().unwrap().clone();
+        h.state.screen_changed(&output);
         h.run_until("the next frame", |h| h.shell.client.ready == 2);
         assert_eq!(h.draws.get(), 2);
         frame.destroy();
@@ -497,6 +498,8 @@ mod tests {
             let _ = &display;
             compositor::capture::image(&scene, &mut renderer, &mut textures, state, target)
         }));
+        // The window appears at once: its opening would start at this first drawing.
+        h.state.set_window_animations(false);
         // A window of 100 × 80, all red (Argb8888 is little-endian: blue, green, red, alpha).
         let qh = h.app.queue.handle();
         let compositor: WlCompositor = h.app.bind();

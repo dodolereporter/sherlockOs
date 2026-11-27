@@ -2160,8 +2160,11 @@ stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
   changes size, stops its sessions (`stopped`, and the frame fails with `stopped`). Dmabuf
   buffers come later.
 - **Frames.** One at a time per session. Once its capture is asked for, the frame waits for the
-  screen to change since the session's previous frame (the redraw counter moved: a window
-  drew, the pointer moved, an animation ran), then the compositor draws the screen offscreen as
+  screen to show a new picture since the session's previous frame: the real session reports
+  each frame with damage it queues (`screen_changed`), so a frame comes at most once per
+  vertical blank, and never while the screen shows nothing new. The redraw counter could not
+  serve: every client request moves it, the capture's own included. Then the compositor draws
+  the screen offscreen as
   it shows, without the cursor, with the screenshots' `Capturer` (lot D-35c), once per screen
   for all its sessions. It copies the drawing row by row into the client's buffer, which may
   have padded rows and start anywhere in its pool, then sends `transform` (normal), the damage
@@ -2178,7 +2181,8 @@ stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
 - **Tests** (`tests/screencast.rs`, with a capturer of the test that draws a pattern): only the
   shell client sees the globals; the session asks for 800 × 600 in `xrgb8888`; a frame into a
   buffer with padded rows from 64 bytes into its pool is the pattern, the padding untouched;
-  the next frame waits while nothing changes and comes once the pointer moves; while locked the
+  the next frame waits while the screen shows nothing new and comes once a new picture is
+  reported; while locked the
   frame is black and the screen never drawn (the test's lock programs leave at once: the
   compositor's own lock screen); a buffer of another size fails the frame, and a buffer that
   fits then gets one. With Mesa's software renderer
