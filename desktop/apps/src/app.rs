@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, key::Named};
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::{
-    Space, button, column, container, mouse_area, operation, pin, row, stack, text,
+    Space, button, column, container, image, mouse_area, operation, pin, row, stack, text,
 };
 use iced::window::{self, Id};
-use iced::{Alignment, Element, Event, Length, Padding, Point, Size, Subscription, Task, event};
+use iced::{
+    Alignment, ContentFit, Element, Event, Length, Padding, Point, Size, Subscription, Task, event,
+};
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
 use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
@@ -26,6 +28,7 @@ use sherlock_ui::icon::Icon;
 use sherlock_ui::motion::Animation;
 use sherlock_ui::{color, metrics, typography};
 
+use crate::backdrop::{self, Outcome, Picture};
 use crate::catalog::{Catalog, Tile};
 use crate::icons::{self, Rasters};
 use crate::pager::{Pager, page_count};
@@ -79,11 +82,26 @@ pub enum Message {
     /// The screen a surface of the view landed on: its logical size and scale, so that the
     /// icons are drawn before the first opening.
     Output(Option<(Size, f32)>),
+    /// The blurred wallpaper, loaded on the pool (lot P-02c).
+    Backdrop(Arc<Outcome>),
 }
 
 /// What reads the applications again at each opening of a resident view, off the interface's
 /// thread.
 pub type Reload = Arc<dyn Fn() -> Catalog + Send + Sync>;
+
+/// What loads the blurred wallpaper for a screen in pixels and a theme, given the key of the
+/// one shown, off the interface's thread (`backdrop::load`).
+pub type Backdrop = Arc<dyn Fn((u32, u32), color::Theme, Option<u64>) -> Outcome + Send + Sync>;
+
+/// The blurred wallpaper of this session, kept in its cache.
+pub fn session_backdrop() -> Backdrop {
+    Arc::new(|screen, theme, current| {
+        let var = |key: &str| std::env::var_os(key);
+        let cache = backdrop::cache_dir(var);
+        backdrop::load(var, theme, screen, cache.as_deref(), current)
+    })
+}
 
 /// Desktop file id of Evidence, which « Afficher dans Evidence » starts.
 const EVIDENCE: &str = "evidence";
@@ -172,6 +190,14 @@ pub struct View {
     view_time: std::cell::Cell<Duration>,
     /// What the frames being counted show.
     moving: &'static str,
+    /// The blurred wallpaper shown behind, and its key; `None`: the plain veil.
+    backdrop: Option<(u64, image::Handle)>,
+    /// What loads it, whether it is loading, and whether to load it again after.
+    backdrop_loader: Option<Backdrop>,
+    backdrop_loading: bool,
+    backdrop_again: bool,
+    /// The surface is new: its wallpaper is to be blurred once its size is known.
+    backdrop_due: bool,
 }
 
 impl View {
@@ -212,6 +238,11 @@ impl View {
             frames: startup::Frames::default(),
             view_time: std::cell::Cell::new(Duration::ZERO),
             moving: "open",
+            backdrop: None,
+            backdrop_loader: None,
+            backdrop_loading: false,
+            backdrop_again: false,
+            backdrop_due: false,
         }
         .with_catalog(catalog)
     }
@@ -262,6 +293,51 @@ impl View {
         let (id, task) = Message::layershell_open(launcher::warm_surface(crate::NAMESPACE));
         self.warming = Some((id, 0));
         task
+    }
+
+    /// Loads the blurred wallpaper with `loader` (`session_backdrop`); without one, the plain
+    /// veil.
+    pub fn with_backdrop_loader(mut self, loader: Backdrop) -> Self {
+        self.backdrop_loader = Some(loader);
+        self
+    }
+
+    /// Shows `picture` behind, as if loaded (the captures).
+    pub fn with_backdrop(mut self, picture: Picture) -> Self {
+        self.set_backdrop(0, picture);
+        self
+    }
+
+    /// Whether a blurred wallpaper is shown behind.
+    pub fn has_backdrop(&self) -> bool {
+        self.backdrop.is_some()
+    }
+
+    fn set_backdrop(&mut self, key: u64, picture: Picture) {
+        let handle = image::Handle::from_rgba(picture.width, picture.height, picture.rgba);
+        self.backdrop = Some((key, handle));
+    }
+
+    /// Loads the blurred wallpaper on the pool, if it may have changed: another screen, another
+    /// theme, or an opening (the wallpaper may have changed meanwhile).
+    fn load_backdrop(&mut self) -> Task<Message> {
+        let Some(loader) = self.backdrop_loader.clone() else {
+            return Task::none();
+        };
+        if self.backdrop_loading {
+            self.backdrop_again = true;
+            return Task::none();
+        }
+        self.backdrop_loading = true;
+        let screen = (
+            (self.size.width * self.scale).round() as u32,
+            (self.size.height * self.scale).round() as u32,
+        );
+        let (theme, current) = (color::active(), self.backdrop.as_ref().map(|(k, _)| *k));
+        Task::perform(
+            async move { Arc::new(loader(screen, theme, current)) },
+            Message::Backdrop,
+        )
     }
 
     /// The view already open, for the captures: no opening to wait for.
@@ -355,15 +431,35 @@ impl View {
                 // iced_exwlshell reports no size for a new surface: asked for, with its scale.
                 let scale = window::scale_factor(id).map(Message::Scale);
                 let size = window::size(id).map(Message::Resized);
+                // The wallpaper is blurred once the size is known.
+                self.backdrop_due = true;
                 return Task::batch([operation::focus(QUERY), size, scale]);
             }
             Message::Service(Request::Toggle) if self.shown() => return self.close(),
             Message::Service(Request::Toggle) => return self.show(),
             Message::Service(Request::Hide) if self.shown() => return self.close(),
+            Message::Service(Request::Show) if !self.shown() => return self.show(),
             Message::Service(_) => {}
             Message::Scale(scale) if scale > 0.0 => {
+                let changed = scale != self.scale;
                 self.scale = scale;
-                return self.draw_icons();
+                let backdrop = if changed {
+                    self.load_backdrop()
+                } else {
+                    Task::none()
+                };
+                return Task::batch([self.draw_icons(), backdrop]);
+            }
+            Message::Backdrop(outcome) => {
+                self.backdrop_loading = false;
+                match Arc::unwrap_or_clone(outcome) {
+                    Outcome::New(key, picture) => self.set_backdrop(key, picture),
+                    Outcome::Nothing => self.backdrop = None,
+                    Outcome::Unchanged => {}
+                }
+                if std::mem::take(&mut self.backdrop_again) {
+                    return self.load_backdrop();
+                }
             }
             Message::Rasters(rasters) => {
                 self.drawing = false;
@@ -376,25 +472,45 @@ impl View {
                 self.paginate();
                 return self.draw_icons();
             }
-            Message::Theme(theme) => color::set_active(theme),
+            Message::Theme(theme) => {
+                let changed = theme != color::active();
+                color::set_active(theme);
+                // The wallpaper of the other theme, blurred.
+                if changed {
+                    return self.load_backdrop();
+                }
+            }
             // Hidden: the screen it will open on, its icons drawn meanwhile.
             Message::Output(Some((size, scale))) if self.hidden() => {
                 tracing::debug!(?size, scale, "screen");
+                let changed = size != self.size || scale != self.scale;
                 if size != self.size {
                     self.size = size;
                     self.paginate();
                 }
                 self.scale = scale;
-                return self.draw_icons();
+                let backdrop = if changed {
+                    self.load_backdrop()
+                } else {
+                    Task::none()
+                };
+                return Task::batch([self.draw_icons(), backdrop]);
             }
             // The surface that readies the renderer is one pixel: not the screen.
-            Message::Resized(size)
-                if size != self.size && size.width > 1.0 && size.height > 1.0 =>
-            {
+            Message::Resized(size) if size.width > 1.0 && size.height > 1.0 => {
+                let due = std::mem::take(&mut self.backdrop_due);
+                if size == self.size && !due {
+                    return Task::none();
+                }
                 tracing::debug!(?size, "surface size");
-                self.size = size;
-                self.paginate();
-                return self.draw_icons();
+                let icons = if size == self.size {
+                    Task::none()
+                } else {
+                    self.size = size;
+                    self.paginate();
+                    self.draw_icons()
+                };
+                return Task::batch([icons, self.load_backdrop()]);
             }
             Message::Query(query) => {
                 self.menu = None;
@@ -546,7 +662,7 @@ impl View {
         self.moving = "open";
         self.paginate();
         self.presence.retarget(now, 1.0);
-        let mut tasks = vec![hide_other(service::LAUNCHER)];
+        let mut tasks = vec![hide_other(service::LAUNCHER), self.load_backdrop()];
         // Read again once the view is open, so that the reading never delays the opening.
         self.reload_due = !std::mem::replace(&mut self.fresh, false);
         match self.surface {
@@ -796,18 +912,24 @@ impl View {
         view
     }
 
-    /// The whole screen: the veil, the field, the pages, their dots.
+    /// The whole screen: the blurred wallpaper (or the veil), the field, the pages, their dots.
     pub fn view_screen(&self) -> Element<'_, Message> {
         let shown = self.presence() as f32;
         let opacity = shown.clamp(0.0, 1.0);
-        let scale = look::OPEN_SCALE - (look::OPEN_SCALE - 1.0) * shown;
+        // The icons arrive from `OPEN_SCALE` and leave towards it; an application started stays
+        // in place, its tile going to the dock.
+        let scale = if self.launched.is_some() {
+            1.0
+        } else {
+            look::OPEN_SCALE - (look::OPEN_SCALE - 1.0) * shown
+        };
         let field = self.view_field();
         let layout = self.layout();
         let pages = reveal(self.view_pages(&layout, opacity)).scale(scale, (0.5, 0.5));
         let content = column![
             Space::new().height(layout.search_top),
             container(field).center_x(Length::Fill),
-            Space::new().height(layout.grid_top - layout.search_top - metrics::FIELD_HEIGHT),
+            Space::new().height(layout.grid_top - layout.search_top - look::SEARCH_HEIGHT),
             container(pages)
                 .width(Length::Fill)
                 .height(layout.rows as f32 * layout.cell.1),
@@ -817,12 +939,22 @@ impl View {
         ]
         .width(Length::Fill)
         .height(Length::Fill);
-        let veil = container(Space::new())
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(look::veil);
+        let backdrop: Element<'_, Message> = match &self.backdrop {
+            // An image takes its own opacity: `reveal` fades quads and texts.
+            Some((_, picture)) => image(picture.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .content_fit(ContentFit::Cover)
+                .opacity(opacity)
+                .into(),
+            None => container(Space::new())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(look::veil)
+                .into(),
+        };
         let mut layers = vec![
-            veil.into(),
+            backdrop,
             mouse_area(content).on_press(Message::Dismiss).into(),
         ];
         if let Some(menu) = &self.menu {
@@ -831,11 +963,11 @@ impl View {
         reveal(stack(layers)).opacity(opacity).into()
     }
 
-    /// The search field, the magnifier inside it, as `component::search_field` lays them out.
+    /// The search pill, the magnifier inside it.
     fn view_field(&self) -> Element<'_, Message> {
+        let height = look::SEARCH_HEIGHT;
         let inset = metrics::FIELD_PADDING + metrics::ICON_SIZE_SMALL + metrics::SEARCH_ICON_GAP;
-        let vertical =
-            (metrics::FIELD_HEIGHT - typography::UI_SIZE * typography::LINE_HEIGHT) / 2.0;
+        let vertical = (height - typography::UI_SIZE * typography::LINE_HEIGHT) / 2.0;
         let field = ui::text_field(texts::PLACEHOLDER, &self.query, Some(Message::Query))
             .id(QUERY)
             .width(look::SEARCH_WIDTH)
@@ -852,8 +984,8 @@ impl View {
                 left: metrics::FIELD_PADDING,
                 ..Padding::ZERO
             })
-            .height(metrics::FIELD_HEIGHT)
-            .center_y(metrics::FIELD_HEIGHT);
+            .height(height)
+            .center_y(height);
         stack![field, magnifier].into()
     }
 
@@ -896,17 +1028,19 @@ impl View {
         let lines = (0..layout.rows).map(|line| {
             let cells = (0..columns).map(|column| {
                 let place = start + line * columns + column;
-                match self.shown.get(place) {
+                let cell = match self.shown.get(place) {
                     Some(index) => self.view_tile(place, *index, layout, opacity),
-                    None => Space::new().width(width).height(height).into(),
-                }
+                    None => Space::new().into(),
+                };
+                container(cell).center_x(width).center_y(height).into()
             });
             row(cells).into()
         });
         container(column(lines)).center_x(Length::Fill).into()
     }
 
-    /// An application: its icon, or its initial, and its name cut with « … ».
+    /// An application: its icon, or its initial, and its name cut with « … », white over a
+    /// soft shadow.
     fn view_tile(
         &self,
         place: usize,
@@ -939,26 +1073,35 @@ impl View {
                 .into()
             }
         };
-        let name =
-            container(ui::ellipsis(tile.name()).style(look::label)).center_x(layout.label_width());
-        let body = column![icon, name]
-            .spacing(look::LABEL_GAP)
+        let name = |style: fn(&iced::Theme) -> text::Style| {
+            container(ui::ellipsis(tile.name()).style(style)).center_x(layout.label_width())
+        };
+        let shadow = reveal(name(look::label_shadow)).offset(0.0, look::LABEL_SHADOW_OFFSET);
+        let body = column![icon, stack![shadow, name(look::label)]]
+            .spacing(look::LABEL_GAP * layout.factor)
             .align_x(Alignment::Center);
         let chosen =
             self.selected == Some(place) || self.menu.as_ref().is_some_and(|m| m.place == place);
         let cell = button(container(body).center(Length::Fill))
             .on_press(Message::Launch(place))
-            .width(layout.cell.0)
-            .height(layout.cell.1)
+            .width(layout.button.0)
+            .height(layout.button.1)
             .padding(look::CELL_PADDING)
             .style(look::cell(chosen));
         let cell = mouse_area(cell).on_right_press(Message::Menu(place));
-        if self.launched == Some(place) {
-            let grow = 1.0 + (look::LAUNCH_SCALE - 1.0) * (1.0 - self.presence() as f32);
-            reveal(cell).scale(grow, (0.5, 0.5)).into()
-        } else {
-            cell.into()
+        if self.launched != Some(place) {
+            return cell.into();
         }
+        // Started: it goes to the middle of the dock, shrinking to the dock's icon, as the view
+        // fades out.
+        let gone = (1.0 - self.presence() as f32).clamp(0.0, 1.0);
+        let (from_x, from_y) = layout.center(place, self.size.width);
+        let (to_x, to_y) = look::dock_target(self.size.width, self.size.height);
+        let side = 1.0 + (look::LAUNCH_SIDE / layout.icon - 1.0) * gone;
+        reveal(cell)
+            .offset((to_x - from_x) * gone, (to_y - from_y) * gone)
+            .scale(side, (0.5, 0.5))
+            .into()
     }
 
     /// The menu of a tile at the pointer, kept on the screen; a click beside closes it.

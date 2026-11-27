@@ -126,7 +126,12 @@ let mascot = Sherlock3d::new(model.clone()) // Option<Arc<Model>>
   mascot.
 - In software (tiny-skia), or without the model file, it shows the still picture of the design
   boards (`docs/design/images/sherlock-neutre.png`), cropped to its top square and rounded, and
-  asks for no frame. It knows the renderer when drawing, as `sherlock_ui::surface` does.
+  asks for no frame. It knows the renderer when drawing, as `sherlock_ui::surface` does. The
+  widget cuts the picture itself, once (lot Q-33): tiny-skia ignores an image's `crop` and
+  `border_radius`, and drew the whole picture past the widget. The top square, cut to a disc for
+  `Cut::Circle` (its alpha, antialiased) and fitted whole and centered as the 3D disc; covered
+  for `Cut::None`; drawn in a layer of the widget's bounds, so nothing shows outside it. No
+  `clip` is needed around it (`tests/still.rs`).
 - The gaze point is projected on a plane in front of the face (`Camera::unproject`).
 
 `examples/viewer` goes through the moods, one every three seconds. It opens a window: never run

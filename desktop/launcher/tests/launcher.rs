@@ -158,6 +158,48 @@ fn kitty_starts_with_three_keys() {
     assert_eq!(programs(&started), ["kitty"]);
 }
 
+/// Typing « fir » in one interface kept from frame to frame, as the running launcher does: the
+/// first letter brings the results, the field keeps the keyboard for the next ones (lot Q-45).
+#[test]
+fn the_field_keeps_the_keyboard_when_the_results_come() {
+    use iced_test::core::renderer::Headless as _;
+    use iced_test::core::{Font, Size, clipboard, mouse};
+    use iced_test::runtime::user_interface::{Cache, UserInterface};
+
+    let (mut launcher, _) = recorded();
+    let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+        Font::with_name("Fira Sans"),
+        iced::Pixels(16.0),
+        None,
+    ))
+    .expect("a headless renderer");
+    let field = Point::new(look::WIDTH / 2.0, look::PADDING + look::SEARCH_HEIGHT / 2.0);
+    let cursor = mouse::Cursor::Available(field);
+    let mut cache = Cache::default();
+    for (n, letter) in ["f", "i", "r"].into_iter().enumerate() {
+        let size = Size::new(look::WIDTH, launcher.height());
+        let mut ui = UserInterface::build(launcher.view_panel(), size, cache, &mut renderer);
+        let mut events: Vec<Event> = Vec::new();
+        if n == 0 {
+            events.extend(iced_test::simulator::click());
+        }
+        events.extend(iced_test::simulator::typewrite(letter));
+        let mut messages = Vec::new();
+        let _ = ui.update(
+            &events,
+            cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        cache = ui.into_cache();
+        for message in messages {
+            let _ = launcher.update(message);
+        }
+    }
+    assert_eq!(launcher.query, "fir");
+}
+
 #[test]
 fn every_application_starts_with_two_letters_and_enter() {
     let apps = apps();
@@ -222,6 +264,7 @@ fn arrows_choose_and_escape_closes() {
 fn a_click_starts_its_result_and_the_working_directory_is_kept() {
     let (mut launcher, started) = recorded();
     let _ = launcher.update(Message::Query("calc".into()));
+    settled(&mut launcher);
     let mut ui = Simulator::with_size(
         launcher::settings(),
         (look::WIDTH, launcher.height()),
@@ -324,6 +367,11 @@ fn on_desktop(element: Element<'_, Message>) -> Element<'_, Message> {
         .into()
 }
 
+/// Lets the rows, the panel and the selection reach their place (lot P-02d).
+fn settled(launcher: &mut Launcher) {
+    let _ = launcher.update(Message::Frame(Instant::now() + Duration::from_secs(5)));
+}
+
 /// Writes the screenshot to `target/tmp/<name>-tiny-skia.png`, returns its size in bytes.
 fn capture(launcher: &Launcher, name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let size = (look::WIDTH, launcher.height());
@@ -346,6 +394,7 @@ fn the_panel_renders_its_results() {
     assert_eq!(launcher.height(), look::panel_height(0, 0));
     assert!(capture(&launcher, "launcher-empty").expect("screenshot written") > 2_000);
     let _ = launcher.update(Message::Query("te".into()));
+    settled(&mut launcher);
     let rows = launcher.hits().count();
     assert!(rows > 1);
     assert_eq!(launcher.height(), look::panel_height(1, rows));
@@ -360,6 +409,7 @@ fn the_panel_renders_its_results() {
     drop(ui);
     assert!(capture(&launcher, "launcher-results").expect("screenshot written") > 2_000);
     let _ = launcher.update(Message::Query("zzz".into()));
+    settled(&mut launcher);
     assert_eq!(launcher.height(), look::panel_height(0, 1));
     let mut ui = Simulator::with_size(
         launcher::settings(),
@@ -395,6 +445,7 @@ fn a_right_click_keeps_an_application_in_the_dock() {
     let (launcher, _) = recorded();
     let mut launcher = launcher.with_dock_file(path.clone());
     let _ = launcher.update(Message::Query("kit".into()));
+    settled(&mut launcher);
     let _ = launcher.update(Message::Menu(0));
     assert_eq!(launcher.menu, Some((0, false)));
     let mut ui = Simulator::with_size(
@@ -419,4 +470,110 @@ fn a_right_click_keeps_an_application_in_the_dock() {
     let _ = launcher.update(Message::Pin);
     assert_eq!(std::fs::read_to_string(&path).expect("dock file"), text);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_results_slide_into_place_and_the_panel_follows() {
+    let (mut launcher, _) = recorded();
+    let _ = launcher.update(Message::Surface(Id::unique()));
+    let base = Instant::now();
+    let at = |ms: u64| Message::Frame(base + Duration::from_millis(ms));
+    let _ = launcher.update(at(2_000));
+    assert!(!launcher.animating(), "open: nothing moves");
+    // The first letter: the rows fade in, the panel grows to them.
+    let _ = launcher.update(Message::Query("e".into()));
+    assert!(launcher.animating());
+    let target = launcher.height();
+    assert_eq!(launcher.drawn_height(), look::panel_height(0, 0));
+    let _ = launcher.update(at(2_060));
+    let growing = launcher.drawn_height();
+    assert!(
+        growing > look::panel_height(0, 0) && growing < target,
+        "{growing}"
+    );
+    let _ = launcher.update(at(4_000));
+    assert!(!launcher.animating(), "at rest: no frame");
+    assert!((launcher.drawn_height() - target).abs() < 1.0);
+    // The selection slides to the next row.
+    let _ = launcher.update(key(keyboard::key::Named::ArrowDown).expect("a launcher key"));
+    assert!(launcher.animating());
+    let _ = launcher.update(at(6_000));
+    assert!(!launcher.animating());
+    // Fewer results: the panel shrinks gently, never at once.
+    let _ = launcher.update(Message::Query("kit".into()));
+    assert!(launcher.height() < target);
+    assert!(launcher.drawn_height() > launcher.height());
+    assert!(launcher.animating());
+    let _ = launcher.update(at(8_000));
+    assert!(!launcher.animating());
+    assert!((launcher.drawn_height() - launcher.height()).abs() < 1.0);
+    // A new opening starts at rest, on an empty search.
+    let _ = launcher.update(key(keyboard::key::Named::Escape).expect("a launcher key"));
+    let _ = launcher.update(at(10_000));
+}
+
+/// The board of the launcher (lot P-02d): for each theme, a row for the opening, then for each
+/// of « e », « ed » typed and an arrow down, frames 0, 40, 80 and 240 ms after, in
+/// `target/tmp/launcher-board.png`.
+#[test]
+#[ignore = "slow: cargo test -p launcher --test launcher -- --ignored board"]
+fn the_typing_board() {
+    use image::{GenericImage as _, RgbaImage, imageops};
+    use sherlock_ui::color::{self, Theme};
+    const TIMES: [u64; 4] = [0, 40, 80, 240];
+    const SCREEN: (f32, f32) = (760.0, 600.0);
+    const SIDE: (u32, u32) = (380, 300);
+    const GAP: u32 = 12;
+    let steps: [Option<Message>; 4] = [
+        None,
+        Some(Message::Query("e".into())),
+        Some(Message::Query("ed".into())),
+        key(keyboard::key::Named::ArrowDown),
+    ];
+    let rows = 2 * steps.len() as u32;
+    let mut board = RgbaImage::from_pixel(
+        TIMES.len() as u32 * (SIDE.0 + GAP) + GAP,
+        rows * (SIDE.1 + GAP) + GAP,
+        image::Rgba([40, 44, 52, 255]),
+    );
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let mut line = 0;
+    for (which, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        color::set_active(which);
+        let (mut launcher, _) = recorded();
+        let base = Instant::now();
+        let _ = launcher.update(Message::Surface(Id::unique()));
+        let mut start = Duration::ZERO;
+        for (step, message) in steps.iter().enumerate() {
+            if let Some(message) = message {
+                // Past the time the captures took: the launcher's clock never goes back to an
+                // earlier moment than the real one.
+                start = base.elapsed() + Duration::from_secs(1);
+                let _ = launcher.update(Message::Frame(base + start));
+                let _ = launcher.update(message.clone());
+            }
+            for (column, ms) in TIMES.iter().enumerate() {
+                let _ = launcher.update(Message::Frame(base + start + Duration::from_millis(*ms)));
+                let mut ui = Simulator::with_size(
+                    launcher::settings(),
+                    SCREEN,
+                    on_desktop(launcher.view_screen()),
+                );
+                let snapshot = ui.snapshot(&theme::theme()).expect("snapshot");
+                let frame = format!("launcher-board-{name}-{step}-{column}");
+                let path = tmp.join(format!("{frame}.png"));
+                let written = tmp.join(format!("{frame}-tiny-skia.png"));
+                let _ = std::fs::remove_file(&written);
+                let _ = snapshot.matches_image(&path);
+                let shot = image::open(&written).expect("frame").to_rgba8();
+                let small = imageops::resize(&shot, SIDE.0, SIDE.1, imageops::FilterType::Triangle);
+                let x = GAP + column as u32 * (SIDE.0 + GAP);
+                let y = GAP + line * (SIDE.1 + GAP);
+                board.copy_from(&small, x, y).expect("copied");
+            }
+            line += 1;
+        }
+    }
+    color::set_active(Theme::Dark);
+    board.save(tmp.join("launcher-board.png")).expect("board");
 }

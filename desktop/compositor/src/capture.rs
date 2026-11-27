@@ -1,5 +1,6 @@
-//! Screenshots (lot D-35c). Print Screen takes the screen under the pointer, Shift + Print
-//! Screen an area chosen with the mouse, Alt + Print Screen the window that has the keyboard.
+//! Screenshots (lots D-35c, D-35e). Print Screen takes the screen under the pointer, Alt + Print
+//! Screen the window that has the keyboard; Shift + Print Screen and Super + Shift + S open the
+//! screenshot tool (`screenshot_tool`).
 //! The compositor draws them itself, offscreen, with the scene of the screen or the last image
 //! of a window (`window_anim::snapshot`), through the backend, which has the renderer
 //! (`Capturer`). A worker thread writes the PNG into the screenshots folder of the pictures
@@ -17,7 +18,10 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use sherlock_ui::{color, screenshot as ui};
+use sherlock_ui::{
+    color, screenshot as ui,
+    screenshot_tool::{self as tool_ui, Destination, Folder, Options},
+};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -37,15 +41,16 @@ use smithay::{
         },
         rustix,
     },
-    utils::{Logical, Physical, Point, Rectangle, Size},
+    utils::{Physical, Rectangle, Size},
     wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
     State,
-    damage::{Ids, Key, Part},
+    damage::Ids,
     output::View,
-    render::{Item, Scene},
+    render::Scene,
+    screenshot_tool::{Pending, Tool},
     wallpaper, window_anim,
 };
 
@@ -118,18 +123,22 @@ pub struct Settings {
     pub session_bus: Option<String>,
 }
 
-/// The area being chosen, on the screen where it started.
-struct Area {
-    output: Output,
-    start: Option<Point<f64, Logical>>,
-    current: Point<f64, Logical>,
+/// An image for the worker, and where it goes.
+struct Job {
+    image: Image,
+    destination: Destination,
+    folder: Folder,
 }
 
 #[derive(Default)]
 pub struct Capture {
-    jobs: Option<mpsc::Sender<Image>>,
+    jobs: Option<mpsc::Sender<Job>>,
     capturer: Option<Capturer>,
-    area: Option<Area>,
+    /// The screenshot tool, open or going (lot D-35e), its choices, and the image its timer
+    /// waits for.
+    pub(crate) tool: Option<Tool>,
+    pub(crate) options: Options,
+    pub(crate) pending: Option<Pending>,
     /// Pastes of a screenshot being written.
     pastes: Rc<Cell<usize>>,
 }
@@ -140,22 +149,50 @@ pub const MAX_PASTES: usize = 8;
 
 /// The pictures folder: `XDG_PICTURES_DIR` of `user-dirs.dirs`, or `Images` in the home folder.
 pub fn pictures(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    user_dir(("XDG_PICTURES_DIR", ui::PICTURES), var)
+}
+
+/// The folder a screenshot is saved in: in the pictures folder, or the desktop or documents
+/// folder of `user-dirs.dirs`; under `base` instead when the tests give one.
+pub fn folder_of(
+    folder: Folder,
+    base: Option<&Path>,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    let (key, default) = folder.user_dir();
+    let dir = match (folder, base) {
+        (Folder::Screenshots, Some(base)) => base.to_owned(),
+        (_, Some(base)) => base.join(default),
+        _ => user_dir((key, default), var)?,
+    };
+    Some(match folder {
+        Folder::Screenshots => dir.join(ui::FOLDER),
+        _ => dir,
+    })
+}
+
+/// The folder of `key` in `user-dirs.dirs`, or `default` in the home folder.
+fn user_dir(
+    (key, default): (&str, &str),
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
     let home = PathBuf::from(var("HOME")?);
     let config = var("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), PathBuf::from);
     let dirs = std::fs::read_to_string(config.join("user-dirs.dirs")).unwrap_or_default();
     let set = dirs.lines().find_map(|line| {
         let value = line
             .trim()
-            .strip_prefix("XDG_PICTURES_DIR=")?
+            .strip_prefix(key)?
+            .strip_prefix('=')?
             .trim_matches('"');
         let path = match value.strip_prefix("$HOME") {
             Some(rest) => home.join(rest.trim_start_matches('/')),
             None => PathBuf::from(value),
         };
-        // `$HOME/` alone means no pictures folder: the home folder itself is not one.
+        // `$HOME/` alone means no such folder: the home folder itself is not one.
         (path.is_absolute() && path != home).then_some(path)
     });
-    Some(set.unwrap_or_else(|| home.join(ui::PICTURES)))
+    Some(set.unwrap_or_else(|| home.join(default)))
 }
 
 /// Writes `png` into `folder` under the name of the moment, a copy number added if the name
@@ -196,34 +233,39 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 }
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
-fn work(settings: Settings, jobs: mpsc::Receiver<Image>, saved: channel::Sender<Arc<[u8]>>) {
+fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Arc<[u8]>>) {
     let mut bus: Option<zbus::Connection> = None;
-    while let Ok(image) = jobs.recv() {
-        let Some(folder) = settings
-            .pictures
-            .clone()
-            .or_else(|| pictures(|k| std::env::var_os(k)))
-        else {
-            tracing::warn!("screenshot: no home folder");
-            continue;
-        };
-        let folder = folder.join(ui::FOLDER);
-        let written = encode(&image)
-            .map_err(|e| e.to_string())
-            .and_then(|png| Ok((write_new(&folder, &png).map_err(|e| e.to_string())?, png)));
-        let (path, png) = match written {
-            Ok(done) => done,
+    while let Ok(job) = jobs.recv() {
+        let png = match encode(&job.image) {
+            Ok(png) => png,
             Err(err) => {
-                tracing::warn!(folder = %folder.display(), "screenshot not written: {err}");
+                tracing::warn!("screenshot not encoded: {err}");
                 continue;
             }
         };
-        tracing::info!(path = %path.display(), "screenshot written");
+        let (title, body) = match job.destination {
+            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY)),
+            Destination::SaveAndCopy => {
+                let base = settings.pictures.as_deref();
+                let Some(folder) = folder_of(job.folder, base, |k| std::env::var_os(k)) else {
+                    tracing::warn!("screenshot: no home folder");
+                    continue;
+                };
+                let path = match write_new(&folder, &png) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        tracing::warn!(folder = %folder.display(), "screenshot not written: {err}");
+                        continue;
+                    }
+                };
+                tracing::info!(path = %path.display(), "screenshot written");
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                (ui::SAVED, ui::saved_body(&name.unwrap_or_default()))
+            }
+        };
         if saved.send(Arc::from(png)).is_err() {
             return;
         }
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-        let body = ui::saved_body(&name.unwrap_or_default());
         let sent = zbus::block_on(async {
             if bus.is_none() {
                 let builder = match &settings.session_bus {
@@ -233,7 +275,7 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Image>, saved: channel::Sender<
                 bus = Some(builder.build().await?);
             }
             match &bus {
-                Some(bus) => system_services::notify::send(bus, ui::APP, ui::SAVED, &body)
+                Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
                     .await
                     .map_err(|p| zbus::Error::Failure(p.to_string())),
                 None => Ok(0),
@@ -277,9 +319,9 @@ impl State {
         self.capture.jobs.is_some()
     }
 
-    /// An area is being chosen.
+    /// The screenshot tool is open: it has the pointer and the keyboard.
     pub fn picking_area(&self) -> bool {
-        self.capture.area.is_some()
+        self.screenshot_tool_open()
     }
 
     /// The key `kind` is pressed.
@@ -288,28 +330,30 @@ impl State {
             Kind::Screen => self.pointer_output().map(Target::Screen),
             Kind::Window => self.focused_window().map(Target::Window),
             Kind::Area => {
-                let (Some(output), Some(pointer)) =
-                    (self.pointer_output(), self.seat.get_pointer())
-                else {
-                    return;
-                };
-                self.capture.area = Some(Area {
-                    output,
-                    start: None,
-                    current: pointer.current_location(),
-                });
-                self.queue_redraw();
+                if !self.screenshot_tool_open() {
+                    self.capture.options.mode = tool_ui::Mode::Area;
+                    self.open_screenshot_tool();
+                }
                 return;
             }
         };
         match target {
-            Some(target) => self.take(&target, None),
+            Some(target) => {
+                let options = Options::default();
+                self.take_with(&target, None, &options);
+            }
             None => tracing::info!(?kind, "screenshot: nothing to take"),
         }
     }
 
-    /// Draws `target`, cut to `crop`, and hands it to the worker.
-    fn take(&mut self, target: &Target, crop: Option<Rectangle<i32, Physical>>) {
+    /// Draws `target`, cut to `crop`, and hands it to the worker with the choices of
+    /// `options`.
+    pub(crate) fn take_with(
+        &mut self,
+        target: &Target,
+        crop: Option<Rectangle<i32, Physical>>,
+        options: &Options,
+    ) {
         let Some(mut capturer) = self.capture.capturer.take() else {
             tracing::warn!("screenshot: no renderer");
             return;
@@ -322,58 +366,23 @@ impl State {
         };
         match (image, &self.capture.jobs) {
             (Some(image), Some(jobs)) => {
-                let _ = jobs.send(image);
+                let _ = jobs.send(Job {
+                    image,
+                    destination: options.destination,
+                    folder: options.folder,
+                });
             }
             (None, _) => tracing::warn!("screenshot: nothing drawn"),
             _ => {}
         }
     }
 
-    /// Escape, or the right button: no area.
+    /// The console is left: the tool and its timer go, at once.
     pub(crate) fn cancel_area(&mut self) {
-        if self.capture.area.take().is_some() {
+        let open = self.capture.tool.take().is_some() || self.capture.pending.take().is_some();
+        if open {
             self.queue_redraw();
         }
-    }
-
-    pub(crate) fn area_motion(&mut self, location: Point<f64, Logical>) {
-        if let Some(area) = &mut self.capture.area {
-            area.current = location;
-        }
-    }
-
-    /// A button while an area is chosen: the left one draws it, the right one gives up.
-    pub(crate) fn area_button(&mut self, left: bool, pressed: bool, location: Point<f64, Logical>) {
-        let Some(area) = &mut self.capture.area else {
-            return;
-        };
-        area.current = location;
-        match (left, pressed, area.start) {
-            (false, true, _) => self.cancel_area(),
-            (true, true, _) => area.start = Some(location),
-            (true, false, Some(start)) => {
-                let output = area.output.clone();
-                self.cancel_area();
-                let rect = Rectangle::bounding_box([start, location]);
-                let Some(screen) = self.space.output_geometry(&output) else {
-                    return;
-                };
-                let scale = output.current_scale().fractional_scale();
-                let local = Rectangle::new(rect.loc - screen.loc.to_f64(), rect.size);
-                let pixels = local.to_physical(scale).to_i32_round();
-                if pixels.size.w < 1 || pixels.size.h < 1 {
-                    return;
-                }
-                self.take(&Target::Screen(output), Some(pixels));
-            }
-            _ => {}
-        }
-    }
-
-    /// The area being chosen, in the space, once the drag started.
-    pub fn picked_area(&self) -> Option<Rectangle<f64, Logical>> {
-        let area = self.capture.area.as_ref()?;
-        Some(Rectangle::bounding_box([area.start?, area.current]))
     }
 
     /// A client pastes the screenshot: `png` is written into `fd` by the loop, as the pipe takes
@@ -432,39 +441,6 @@ impl State {
         set_data_device_selection(&self.display_handle, &self.seat, mime.clone(), Some(png));
         self.offer_to_xwayland(SelectionTarget::Clipboard, Some(mime));
     }
-}
-
-/// While an area is chosen, on its screen: the area, then the dim over the screen.
-pub fn push_area(items: &mut Vec<Item>, state: &State, (output, view): (&Output, &View)) {
-    let Some(area) = &state.capture.area else {
-        return;
-    };
-    if &area.output != output {
-        return;
-    }
-    let scale = view.scale as f32;
-    if let Some(rect) = state.picked_area() {
-        let border = ui::area_border().premultiplied();
-        items.push(Item::Shape {
-            key: Key::of(None, Part::CaptureArea),
-            rect: view.rect(rect),
-            fill: ui::area_fill().premultiplied(),
-            border,
-            border_width: ui::AREA_BORDER_WIDTH * scale,
-            radius: 0.0,
-            alpha: 1.0,
-        });
-    }
-    let dim = color::palette().scrim.premultiplied();
-    items.push(Item::Shape {
-        key: Key::of(None, Part::CaptureDim),
-        rect: view.rect(view.area.to_f64()),
-        fill: dim,
-        border: dim,
-        border_width: 0.0,
-        radius: 0.0,
-        alpha: ui::DIM,
-    });
 }
 
 /// Reads `texture` back: straight RGBA, rows from the top.
@@ -616,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn leaving_the_console_gives_up_the_area() {
+    fn leaving_the_console_gives_up_the_tool() {
         let event_loop = smithay::reexports::calloop::EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         state.add_output((800, 600).into(), 1.0);
@@ -627,13 +603,14 @@ mod tests {
         });
         state.screenshot(Kind::Area);
         assert!(state.picking_area());
-        state.area_button(true, true, (10.0, 10.0).into());
-        state.area_motion((50.0, 40.0).into());
-        assert!(state.picked_area().is_some());
+        state.tool_button(true, true, (10.0, 10.0).into());
+        state.tool_motion((50.0, 40.0).into());
+        state.tool_button(true, false, (50.0, 40.0).into());
+        assert!(state.screenshot_area().is_some());
         // What `udev` does when the session is paused (Ctrl + Alt + Fn).
         state.forget_intercepted_keys();
         assert!(!state.picking_area());
-        assert!(state.picked_area().is_none());
+        assert!(state.screenshot_area().is_none());
     }
 
     #[test]
