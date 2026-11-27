@@ -20,7 +20,7 @@ use sherlock_ui::dock::text as dock_texts;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::launcher::{self as look, Glyph, text as texts};
 use sherlock_ui::logo::Logo;
-use sherlock_ui::motion::Animation;
+use sherlock_ui::motion::{Animation, Ease};
 use sherlock_ui::surface::{Elevation, shadowed};
 use sherlock_ui::{color, metrics, typography};
 
@@ -112,6 +112,26 @@ impl Clipboard {
     }
 }
 
+/// An item of the list, a section label or a result, where it is drawn from (lot P-02d).
+#[derive(Debug, Clone)]
+struct Place {
+    /// The section and the title, unique in the list.
+    key: String,
+    /// Its top in the list, moving to its new place.
+    top: Animation,
+    /// When it appeared: it fades in from then.
+    born: Option<Duration>,
+}
+
+/// What an item of the list is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The label of the section of this place.
+    Label(usize),
+    /// The result of this place in the list.
+    Hit(usize),
+}
+
 pub struct Launcher {
     sources: Vec<Box<dyn Source>>,
     spawn: Spawn,
@@ -154,6 +174,11 @@ pub struct Launcher {
     frames: startup::Frames,
     /// The surface is hidden but kept (`park`).
     parked: bool,
+    /// The panel's height as drawn, following the rows; the rows, their places; the selection
+    /// veil, by its top in the list (lot P-02d).
+    drawn: Animation,
+    places: Vec<Place>,
+    highlight: Animation,
 }
 
 impl Launcher {
@@ -183,6 +208,9 @@ impl Launcher {
             warming: None,
             frames: startup::Frames::default(),
             parked: false,
+            drawn: still(look::panel_height(0, 0)),
+            places: Vec::new(),
+            highlight: still(0.0),
         }
     }
 
@@ -216,7 +244,98 @@ impl Launcher {
         self.warming.is_some()
             || (self.surface.is_some()
                 && !self.parked
-                && !self.presence.is_done(self.now, look::OPEN_PRECISION))
+                && (!self.presence.is_done(self.now, look::OPEN_PRECISION)
+                    || self.list_moving(self.now)))
+    }
+
+    /// The rows move, appear, the panel's height or the selection follow them.
+    fn list_moving(&self, now: Duration) -> bool {
+        let moving = |a: &Animation| !a.is_done(now, look::LIST_PRECISION);
+        moving(&self.drawn)
+            || moving(&self.highlight)
+            || self.places.iter().any(|p| {
+                moving(&p.top) || p.born.is_some_and(|b| now.saturating_sub(b) < look::APPEAR)
+            })
+    }
+
+    /// Height of the panel as drawn at the last event.
+    pub fn drawn_height(&self) -> f32 {
+        self.drawn.value(self.now) as f32
+    }
+
+    /// The items of the list in order, with their key and their top in the list.
+    fn items(&self) -> Vec<(String, f32, Kind)> {
+        let mut items = Vec::new();
+        let (mut top, mut index) = (0.0, 0);
+        for (place, section) in self.sections.iter().enumerate() {
+            items.push((section.title.to_owned(), top, Kind::Label(place)));
+            top += look::label_height();
+            let mut seen: Vec<&str> = Vec::new();
+            for hit in &section.hits {
+                // Two results of a section may share a title: told apart by their rank.
+                let twin = seen.iter().filter(|t| **t == hit.title).count();
+                seen.push(&hit.title);
+                let key = format!("{}\u{1f}{}\u{1f}{twin}", section.title, hit.title);
+                items.push((key, top, Kind::Hit(index)));
+                top += look::ROW_HEIGHT;
+                index += 1;
+            }
+        }
+        items
+    }
+
+    /// The results changed: each one still there slides from where it is drawn to its new
+    /// place, a new one fades in, the panel's height and the selection follow.
+    fn place(&mut self, now: Duration) {
+        let items = self.items();
+        let before = std::mem::take(&mut self.places);
+        let had_hits = before.iter().any(|p| p.key.contains('\u{1f}'));
+        for (key, top, _) in &items {
+            let old = before.iter().find(|p| p.key == *key);
+            let place = match old {
+                Some(old) => {
+                    let mut moved = old.clone();
+                    moved.top.retarget(now, f64::from(*top));
+                    moved
+                }
+                None => Place {
+                    key: key.clone(),
+                    top: still(*top),
+                    born: Some(now),
+                },
+            };
+            self.places.push(place);
+        }
+        self.drawn.retarget(now, f64::from(self.height()));
+        let selected = self.selected_top(&items);
+        match selected {
+            Some(top) if had_hits => self.highlight.retarget(now, f64::from(top)),
+            Some(top) => self.highlight = still(top),
+            None => {}
+        }
+    }
+
+    /// The top of the selected result in the list.
+    fn selected_top(&self, items: &[(String, f32, Kind)]) -> Option<f32> {
+        items
+            .iter()
+            .find(|(_, _, kind)| *kind == Kind::Hit(self.selected))
+            .map(|(_, top, _)| *top)
+    }
+
+    /// The selection moved: its veil slides to its row.
+    fn slide_selection(&mut self) {
+        let now = self.clock();
+        if let Some(top) = self.selected_top(&self.items()) {
+            self.highlight.retarget(now, f64::from(top));
+        }
+    }
+
+    /// Everything at its place at once: the panel opens on an empty search.
+    fn settle_list(&mut self) {
+        self.places.clear();
+        self.drawn = still(self.height());
+        self.highlight = still(0.0);
     }
 
     /// The time of the clock, never before the last event's.
@@ -343,18 +462,23 @@ impl Launcher {
                 return self.search(before);
             }
             Message::Refresh => {
-                let task = self.search(self.height());
+                let before = self.height();
                 self.selected = self.selected.min(self.hits().count().saturating_sub(1));
+                let task = self.search(before);
+                self.selected = self.selected.min(self.hits().count().saturating_sub(1));
+                self.slide_selection();
                 return task;
             }
             Message::Key(Key::Down) => {
                 let last = self.hits().count().saturating_sub(1);
                 self.selected = (self.selected + 1).min(last);
                 self.armed = None;
+                self.slide_selection();
             }
             Message::Key(Key::Up) => {
                 self.selected = self.selected.saturating_sub(1);
                 self.armed = None;
+                self.slide_selection();
             }
             Message::Key(Key::Enter) => return self.choose(self.selected),
             Message::Key(Key::Escape) => return self.close(),
@@ -375,6 +499,8 @@ impl Launcher {
         );
         self.armed = None;
         self.copied = None;
+        let now = self.clock();
+        self.place(now);
         if self.height() != before {
             return self.resize();
         }
@@ -415,6 +541,7 @@ impl Launcher {
         self.copied = None;
         self.menu = None;
         self.closing = false;
+        self.settle_list();
         self.presence.retarget(now, 1.0);
         let mut tasks = vec![hide_other(service::APPLICATIONS)];
         // Read again once the panel is open, so that the reading never delays the opening.
@@ -450,8 +577,10 @@ impl Launcher {
         };
         self.sources = sources;
         let before = self.height();
+        self.selected = self.selected.min(self.hits().count().saturating_sub(1));
         let task = self.search(before);
         self.selected = self.selected.min(self.hits().count().saturating_sub(1));
+        self.slide_selection();
         Task::batch([task, Task::perform(walked, |_| Message::Refresh)])
     }
 
@@ -468,8 +597,17 @@ impl Launcher {
             }
             self.warming = Some((id, seen + 1));
         }
+        let now = self.now;
+        for place in &mut self.places {
+            if place
+                .born
+                .is_some_and(|b| now.saturating_sub(b) >= look::APPEAR)
+            {
+                place.born = None;
+            }
+        }
         let done = self.presence.is_done(self.now, look::OPEN_PRECISION);
-        if done {
+        if done && !self.list_moving(now) {
             self.frames
                 .report(if self.closing { "close" } else { "open" });
         }
@@ -559,6 +697,24 @@ impl Launcher {
         };
         match action {
             Action::Start(command) => self.start(&command),
+            Action::Ask {
+                mut command,
+                request,
+            } => {
+                let written = crate::instance::runtime_dir()
+                    .ok_or_else(|| std::io::Error::other("no XDG_RUNTIME_DIR"))
+                    .and_then(|runtime| crate::ask::request_file(&runtime, &request));
+                match written {
+                    Ok(path) => {
+                        command.args.push(path.into_os_string());
+                        self.start(&command)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "cannot hand the request to Sherlock");
+                        Task::none()
+                    }
+                }
+            }
             Action::Copy(value) => self.copy(index, value),
             Action::Session(power) if power.needs_confirmation() => match self.armed {
                 // Confirmed by a new press, not too soon: a double click or a key bounce
@@ -704,22 +860,31 @@ impl Launcher {
             .height(metrics::BORDER_WIDTH)
             .style(look::divider);
         let mut list = column![search, divider];
-        let mut index = 0;
-        for section in &self.sections {
-            let (top, side, bottom) = look::SECTION_PADDING;
-            let label = container(ui::section_label(section.title)).padding(iced::Padding {
-                top,
-                right: side,
-                bottom,
-                left: side,
-            });
-            list = list.push(label);
-            for hit in &section.hits {
-                list = list.push(self.view_hit(hit, index));
-                index += 1;
-            }
+        let items = self.items();
+        for (key, top, kind) in &items {
+            let item = match kind {
+                Kind::Label(place) => {
+                    let Some(section) = self.sections.get(*place) else {
+                        continue;
+                    };
+                    let (top, side, bottom) = look::SECTION_PADDING;
+                    container(ui::section_label(section.title))
+                        .padding(iced::Padding {
+                            top,
+                            right: side,
+                            bottom,
+                            left: side,
+                        })
+                        .into()
+                }
+                Kind::Hit(index) => match self.hits().nth(*index) {
+                    Some(hit) => self.view_hit(hit, *index),
+                    None => continue,
+                },
+            };
+            list = list.push(self.moved(key, *top, item));
         }
-        if index == 0 && !self.query.trim().is_empty() {
+        if items.is_empty() && !self.query.trim().is_empty() {
             let nothing = ui::body(texts::NOTHING).color(p.text_secondary);
             list = list.push(
                 container(nothing)
@@ -728,12 +893,47 @@ impl Launcher {
                     .center_y(look::ROW_HEIGHT),
             );
         }
-        container(list)
+        // The selection, a veil sliding under the rows. The list stays the stack's second layer
+        // with or without results: a tree that changed shape would rebuild the search field and
+        // drop its focus at the first letter (lot Q-45).
+        let veil: Element<'_, Message> = if self.hits().next().is_some() {
+            let above = look::SEARCH_HEIGHT + metrics::BORDER_WIDTH;
+            column![
+                Space::new().height(above + self.highlight.value(self.now) as f32),
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(look::ROW_HEIGHT)
+                    .style(look::selection),
+            ]
+            // The first layer gives the stack its size: the whole panel, not the veil's rows.
+            .height(Length::Fill)
+            .into()
+        } else {
+            Space::new().width(Length::Fill).height(Length::Fill).into()
+        };
+        let content = stack![veil, list];
+        container(content)
             .width(look::WIDTH)
-            .height(self.height())
+            .height(self.drawn_height())
             .padding(look::PADDING + metrics::BORDER_WIDTH)
+            .clip(true)
             .style(look::panel)
             .into()
+    }
+
+    /// An item of the list where it is drawn: on its way to its place `top`, fading in when new.
+    fn moved<'a>(&self, key: &str, top: f32, item: Element<'a, Message>) -> Element<'a, Message> {
+        let (mut shift, mut opacity) = (0.0, 1.0);
+        if let Some(place) = self.places.iter().find(|p| p.key == key) {
+            shift = place.top.value(self.now) as f32 - top;
+            if let Some(born) = place.born {
+                let t = self.now.saturating_sub(born).as_secs_f32() / look::APPEAR.as_secs_f32();
+                let shown = Ease::OutCubic.apply(t.clamp(0.0, 1.0));
+                opacity = shown;
+                shift -= look::APPEAR_OFFSET * (1.0 - shown);
+            }
+        }
+        reveal(item).offset(0.0, shift).opacity(opacity).into()
     }
 
     /// The line under a result: its own, or what its first Enter or copy did.
@@ -797,7 +997,8 @@ impl Launcher {
             .width(Length::Fill)
             .height(look::ROW_HEIGHT)
             .padding([0.0, look::ROW_PADDING]);
-        let row: Element<'a, Message> = row.style(look::row(selected)).into();
+        // The selection is the veil sliding under the rows (`view_panel`).
+        let row: Element<'a, Message> = row.style(look::row(false)).into();
         if hit.app.is_some() {
             mouse_area(row).on_right_press(Message::Menu(index)).into()
         } else {
@@ -931,4 +1132,14 @@ pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
         _ => return None,
     };
     Some(Message::Key(key))
+}
+
+/// An animation at rest on `value`.
+fn still(value: f32) -> Animation {
+    Animation::new(
+        look::LIST_SPRING,
+        f64::from(value),
+        f64::from(value),
+        Duration::ZERO,
+    )
 }
