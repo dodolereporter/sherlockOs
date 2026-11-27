@@ -626,7 +626,13 @@ fn screen_items(
             }
         }
     };
-    animating |= push_layers(&mut items, (state, now), (output, view), &[Layer::Top], top(true));
+    animating |= push_layers(
+        &mut items,
+        (state, now),
+        (output, view),
+        &[Layer::Top],
+        top(true),
+    );
     animating |= state.reveal_sliding(output, now);
     let mut behind = covered;
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
@@ -674,14 +680,24 @@ fn screen_items(
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
         if behind && fullscreen.as_ref() == Some(window) {
-            animating |=
-                push_layers(&mut items, (state, now), (output, view), &[Layer::Top], top(false));
+            animating |= push_layers(
+                &mut items,
+                (state, now),
+                (output, view),
+                &[Layer::Top],
+                top(false),
+            );
             behind = false;
         }
     }
     if behind {
-        animating |=
-            push_layers(&mut items, (state, now), (output, view), &[Layer::Top], top(false));
+        animating |= push_layers(
+            &mut items,
+            (state, now),
+            (output, view),
+            &[Layer::Top],
+            top(false),
+        );
     }
     animating |= push_layers(
         &mut items,
