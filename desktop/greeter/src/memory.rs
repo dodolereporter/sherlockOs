@@ -4,8 +4,8 @@
 //! the folder), or in `SHERLOCKOS_GREETER_STATE`:
 //!
 //! ```text
-//! last-user=dodo
-//! session.dodo=sherlockos
+//! last-user=alex
+//! session.alex=sherlockos
 //! ```
 //!
 //! Read with a bound, written whole to a new file then renamed, so that a cut never leaves half a
@@ -124,30 +124,30 @@ mod tests {
     #[test]
     fn the_last_user_and_each_session_are_remembered() {
         let mut memory = Memory::default();
-        memory.logged_in("dodo", "sherlockos");
+        memory.logged_in("alex", "sherlockos");
         memory.logged_in("invite", "plasma");
         assert_eq!(memory.last_user.as_deref(), Some("invite"));
-        assert_eq!(memory.session("dodo"), Some("sherlockos"));
+        assert_eq!(memory.session("alex"), Some("sherlockos"));
         assert_eq!(memory.session("invite"), Some("plasma"));
-        memory.logged_in("dodo", "plasma");
+        memory.logged_in("alex", "plasma");
         let read = Memory::parse(&memory.text());
         assert_eq!(read, memory);
-        assert_eq!(read.last_user.as_deref(), Some("dodo"));
-        assert_eq!(read.session("dodo"), Some("plasma"));
+        assert_eq!(read.last_user.as_deref(), Some("alex"));
+        assert_eq!(read.session("alex"), Some("plasma"));
     }
 
     #[test]
     fn names_that_would_break_the_file_are_not_written() {
         let mut memory = Memory::default();
-        memory.logged_in("dodo\nlast-user=root", "sherlockos");
+        memory.logged_in("alex\nlast-user=root", "sherlockos");
         memory.logged_in("a=b", "sherlockos");
         memory.logged_in("", "sherlockos");
         assert_eq!(memory, Memory::default());
-        memory.logged_in("dodo", "x\ny");
-        assert_eq!(memory.session("dodo"), None);
-        let read = Memory::parse("junk\nlast-user=\nsession.=x\nsession.dodo=sherlockos\n");
+        memory.logged_in("alex", "x\ny");
+        assert_eq!(memory.session("alex"), None);
+        let read = Memory::parse("junk\nlast-user=\nsession.=x\nsession.alex=sherlockos\n");
         assert_eq!(read.last_user, None);
-        assert_eq!(read.session("dodo"), Some("sherlockos"));
+        assert_eq!(read.session("alex"), Some("sherlockos"));
     }
 
     #[test]
@@ -167,7 +167,7 @@ mod tests {
         let path = dir.join("state");
         assert_eq!(load(&path), Memory::default());
         let mut memory = Memory::default();
-        memory.logged_in("dodo", "sherlockos");
+        memory.logged_in("alex", "sherlockos");
         save(&path, &memory).unwrap();
         assert_eq!(load(&path), memory);
         assert!(!path.with_extension("new").exists());

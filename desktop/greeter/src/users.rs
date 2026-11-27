@@ -223,14 +223,14 @@ mod tests {
 root:x:0:0:root:/root:/bin/bash
 daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 _greetd:x:998:998::/var/lib/greetd:/usr/sbin/nologin
-dodo:x:1000:1000:Dodo Reporter,,,:/home/dodo:/usr/bin/zsh
+alex:x:1000:1000:Alex Martin,,,:/home/alex:/usr/bin/zsh
 invite:x:1001:1001::/home/invite:/bin/bash
 service:x:1002:1002::/srv:/usr/sbin/nologin
 ferme:x:1003:1003::/home/ferme:/bin/false
 nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
 broken line
 +nis::::::
-dodo:x:1000:1000:Twice:/home/dodo:/usr/bin/zsh
+alex:x:1000:1000:Twice:/home/alex:/usr/bin/zsh
 ";
 
     const SHELLS: &str = "# /etc/shells\n/bin/sh\n/bin/bash\n/usr/bin/bash\n/usr/bin/zsh\n";
@@ -243,15 +243,15 @@ dodo:x:1000:1000:Twice:/home/dodo:/usr/bin/zsh
     fn humans_are_the_users_with_a_login_shell_in_the_range() {
         let shells = login_shells(Some(SHELLS));
         let users = from_passwd(PASSWD, uid_range(None), shells.as_deref());
-        assert_eq!(names(&users), ["dodo", "invite"]);
-        assert_eq!(users[0].real_name.as_deref(), Some("Dodo Reporter"));
+        assert_eq!(names(&users), ["alex", "invite"]);
+        assert_eq!(users[0].real_name.as_deref(), Some("Alex Martin"));
         assert_eq!(
             (users[0].shown(), users[1].shown()),
-            ("Dodo Reporter", "invite")
+            ("Alex Martin", "invite")
         );
         assert_eq!(
             (users[0].initial(), users[1].initial()),
-            ("D".into(), "I".into())
+            ("A".into(), "I".into())
         );
     }
 
@@ -262,7 +262,7 @@ dodo:x:1000:1000:Twice:/home/dodo:/usr/bin/zsh
         assert_eq!(names(&users), ["invite"]);
         // Without /etc/shells, any shell but nologin and false.
         let users = from_passwd(PASSWD, uid_range(None), None);
-        assert_eq!(names(&users), ["dodo", "invite"]);
+        assert_eq!(names(&users), ["alex", "invite"]);
     }
 
     #[test]
@@ -284,16 +284,16 @@ dodo:x:1000:1000:Twice:/home/dodo:/usr/bin/zsh
                 system: false,
             },
             Account {
-                name: "dodo".into(),
+                name: "alex".into(),
                 real_name: " ".into(),
                 system: false,
             },
         ];
         let merged = merge(users.clone(), &accounts);
-        assert_eq!(merged[0].shown(), "Dodo Reporter");
+        assert_eq!(merged[0].shown(), "Alex Martin");
         assert_eq!(merged[1].shown(), "Invité");
         let hidden = [Account {
-            name: "dodo".into(),
+            name: "alex".into(),
             real_name: String::new(),
             system: true,
         }];
@@ -312,7 +312,7 @@ dodo:x:1000:1000:Twice:/home/dodo:/usr/bin/zsh
         };
         std::fs::write(&sources.passwd, PASSWD).unwrap();
         std::fs::write(&sources.shells, SHELLS).unwrap();
-        assert_eq!(names(&list(&sources)), ["dodo", "invite"]);
+        assert_eq!(names(&list(&sources)), ["alex", "invite"]);
         // A directory, or a missing file, gives nobody rather than an error.
         let missing = Sources {
             passwd: dir.clone(),
