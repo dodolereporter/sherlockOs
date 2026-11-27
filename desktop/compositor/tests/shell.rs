@@ -701,7 +701,10 @@ mod tests {
     #[test]
     fn an_ordinary_client_neither_sees_nor_binds_the_layer_shell() {
         let mut h = Harness::start();
-        assert!(h.shell.sees(LAYER_SHELL), "the shell does not see layer-shell");
+        assert!(
+            h.shell.sees(LAYER_SHELL),
+            "the shell does not see layer-shell"
+        );
         assert!(!h.app.sees(LAYER_SHELL), "the application sees layer-shell");
 
         let (name, _, _) = h
@@ -738,7 +741,10 @@ mod tests {
         h.run_until("the globals", |h| {
             h.app.sees("wl_shm") && h.shell.sees("wl_shm")
         });
-        assert!(h.app.sees(LAYER_SHELL), "the greeter does not see layer-shell");
+        assert!(
+            h.app.sees(LAYER_SHELL),
+            "the greeter does not see layer-shell"
+        );
         assert!(!h.app.sees(MANAGER), "the shell's own globals stay hidden");
     }
 
