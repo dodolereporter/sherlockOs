@@ -6,6 +6,8 @@
 
 pub mod app;
 pub mod apps;
+pub mod instance;
+pub mod network;
 mod pages;
 pub mod search;
 pub mod settings;

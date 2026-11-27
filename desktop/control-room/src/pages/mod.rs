@@ -3,5 +3,6 @@
 mod appearance;
 mod apps;
 mod lock;
+pub(crate) mod network;
 mod sound;
 mod touchpad;
