@@ -32,6 +32,7 @@ pub mod osd;
 pub mod output;
 pub mod pacing;
 pub mod perf;
+pub mod popup_anim;
 pub mod render;
 mod shell;
 pub mod stats;
@@ -224,6 +225,8 @@ pub struct State {
     overview: mission_control::Overview,
     /// Opening and closing of the windows (lot D-34).
     window_anims: window_anim::WindowAnims,
+    /// The shell's menus and panels closing (lot UI-06).
+    popup_anims: popup_anim::PopupAnims,
     /// The media keys, taken in the real session only (lot D-35).
     media_keys: Option<media_keys::MediaKeys>,
     /// What the media keys changed, on screen (lot D-35).
@@ -371,6 +374,7 @@ impl State {
             themes: theme::Themes::default(),
             overview: mission_control::Overview::default(),
             window_anims: window_anim::WindowAnims::default(),
+            popup_anims: popup_anim::PopupAnims::default(),
             media_keys: None,
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
@@ -664,6 +668,7 @@ impl State {
         self.popups.cleanup();
         self.end_minimize_effects();
         self.end_closings();
+        self.end_popup_closings();
         self.end_clicks();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {

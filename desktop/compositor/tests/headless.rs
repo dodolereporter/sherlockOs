@@ -1182,6 +1182,158 @@ mod tests {
         );
     }
 
+    /// A panel of the bar closed by a click elsewhere fades out from its last image, drawn
+    /// for real with Mesa's software renderer (lot UI-06): the panel's color where it was at
+    /// the click, mixed with what is behind it halfway, gone after `motion::POPUP_CLOSE`.
+    #[test]
+    fn a_panel_closed_by_a_click_elsewhere_fades_out() {
+        use compositor::{damage::Ids, render::Scene, wallpaper};
+        use smithay::backend::{
+            allocator::Fourcc,
+            egl::{EGLContext, EGLDevice, EGLDisplay},
+            renderer::{
+                Bind as _, ExportMem as _, Offscreen as _, TextureMapping as _,
+                damage::OutputDamageTracker,
+                gles::{GlesRenderer, GlesTexture},
+            },
+        };
+        use smithay::utils::Transform;
+        use std::io::Write as _;
+        use std::{cell::RefCell, rc::Rc};
+
+        let software = EGLDevice::enumerate()
+            .ok()
+            .and_then(|mut d| d.find(EGLDevice::is_software));
+        let Some(device) = software else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "the CI has Mesa's EGL (libegl-mesa0): its software device must be found"
+            );
+            eprintln!("no software EGL device (Mesa's llvmpipe): nothing is drawn");
+            return;
+        };
+        // SAFETY: the display lives as long as the renderer, in this test only.
+        let display = unsafe { EGLDisplay::new(device) }.unwrap();
+        let context = EGLContext::new(&display).unwrap();
+        // SAFETY: the context was just made and is used by this renderer alone.
+        let renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+        let gpu = Rc::new(RefCell::new(renderer));
+        let scene = Rc::new(Scene::new(&mut gpu.borrow_mut()).unwrap());
+        let (w, ht) = (800usize, 600usize);
+        let shoot = |state: &mut State, at: Duration| {
+            let mut renderer = gpu.borrow_mut();
+            let (mut ids, mut textures) = (Ids::default(), wallpaper::Textures::default());
+            let views = state.views();
+            let drawn = scene.screens(
+                &mut renderer,
+                &mut ids,
+                state,
+                &mut textures,
+                &views,
+                None,
+                at,
+            );
+            let elements = drawn.0.into_iter().next().unwrap();
+            let size = (w as i32, ht as i32);
+            let mut texture: GlesTexture = renderer
+                .create_buffer(Fourcc::Abgr8888, size.into())
+                .unwrap();
+            let mut target = renderer.bind(&mut texture).unwrap();
+            let mut tracker = OutputDamageTracker::new(size, 1.0, Transform::Normal);
+            tracker
+                .render_output(
+                    &mut *renderer,
+                    &mut target,
+                    0,
+                    &elements,
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap();
+            let region = Rectangle::from_size(size.into());
+            let mapping = renderer
+                .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+                .unwrap();
+            let pixels = renderer.map_texture(&mapping).unwrap().to_vec();
+            match mapping.flipped() {
+                true => pixels,
+                false => pixels.chunks(w * 4).rev().flatten().copied().collect(),
+            }
+        };
+        let at = |pixels: &[u8], x: usize, y: usize| pixels[(y * w + x) * 4..][..3].to_vec();
+
+        let mut h = Harness::start();
+        let (gpu_, scene_) = (Rc::clone(&gpu), Rc::clone(&scene));
+        h.state
+            .set_popup_snapshotter(Box::new(move |state, surface, size, scale| {
+                let mut renderer = gpu_.try_borrow_mut().ok()?;
+                compositor::popup_anim::snapshot(
+                    &scene_,
+                    &mut renderer,
+                    state,
+                    surface,
+                    size,
+                    scale,
+                )
+            }));
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        // What is behind the panel, before it opens.
+        let now = h.state.now();
+        let bare = shoot(&mut h.state, now);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(500, 36, 2, 2);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        popup.grab(&with.seat, 0);
+        surface.commit();
+        settle(&mut h);
+        // An opaque magenta panel (ARGB8888: blue, green, red, alpha in memory).
+        let mut file = shm_file(200 * 150 * 4);
+        file.write_all(&[255, 0, 255, 255].repeat(200 * 150))
+            .unwrap();
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, 200, 150);
+        surface.commit();
+        settle(&mut h);
+        let magenta = vec![255u8, 0, 255];
+        let now = h.state.now();
+        let open = shoot(&mut h.state, now);
+        let (x, y) = (0..w * ht)
+            .map(|i| (i % w, i / w))
+            .find(|(x, y)| at(&open, *x, *y) == magenta)
+            .expect("the panel is drawn");
+        // Its middle, well inside it whatever its exact place.
+        let (x, y) = (x + 100, y + 75);
+        assert_eq!(at(&open, x, y), magenta);
+        h.click(100.0, 500.0, 10);
+        settle(&mut h);
+        assert_eq!(h.state.closing_popups(), 1);
+        let closed = h.state.now();
+        let first = shoot(&mut h.state, closed);
+        let half = shoot(&mut h.state, closed + sherlock_ui::motion::POPUP_CLOSE / 2);
+        let after = shoot(&mut h.state, closed + sherlock_ui::motion::POPUP_CLOSE * 2);
+        // Its last image, nearly opaque at the click (the loop turned since the fade began).
+        let near = |a: &[u8], b: &[u8]| a.iter().zip(b).all(|(a, b)| a.abs_diff(*b) <= 16);
+        let first = at(&first, x, y);
+        assert!(near(&first, &magenta), "{first:?}");
+        let mid = at(&half, x, y);
+        assert!(
+            mid != magenta && mid != at(&bare, x, y),
+            "mixed halfway: {mid:?}"
+        );
+        assert_eq!(at(&after, x, y), at(&bare, x, y), "gone after its fade");
+    }
+
     #[test]
     fn a_bar_anchored_at_the_top_reduces_the_maximize_area() {
         let mut h = Harness::start();

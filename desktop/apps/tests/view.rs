@@ -40,12 +40,18 @@ fn terminal() -> Option<Vec<OsString>> {
 }
 
 /// A `hicolor` theme holding the desktop's own application icons (`sherlock-ui/icons`).
+/// Written once per test process: tests running side by side used to copy the files again while
+/// another one read them, and found an icon missing now and then.
 fn icons() -> icon_theme::Lookup {
-    let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
-    if let Err(error) = write_icons(&data) {
-        panic!("cannot copy the icons: {error}");
-    }
-    icon_theme::Lookup::new(&[data], None, None)
+    static WRITTEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let data = WRITTEN.get_or_init(|| {
+        let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
+        if let Err(error) = write_icons(&data) {
+            panic!("cannot copy the icons: {error}");
+        }
+        data
+    });
+    icon_theme::Lookup::new(std::slice::from_ref(data), None, None)
 }
 
 fn write_icons(data: &std::path::Path) -> std::io::Result<()> {
@@ -289,6 +295,21 @@ fn a_click_starts_a_tile_and_a_click_beside_closes() {
             "{width} × {height}: {messages:?}"
         );
     }
+}
+
+/// Fading out, the view takes no more input: a right click opens no menu (lot UI-06).
+#[test]
+fn a_view_fading_out_opens_no_menu() {
+    let (mut view, started) = recorded(catalog());
+    let _ = view.update(Message::Resized(Size::new(1920.0, 1080.0)));
+    let mut view = view.opened();
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_some(), "a menu opens while the view is shown");
+    let _ = view.update(Message::CloseMenu);
+    let _ = view.update(Message::Dismiss);
+    let _ = view.update(Message::Menu(1));
+    assert!(view.menu.is_none(), "no menu while it fades out");
+    assert!(started.lock().unwrap().is_empty());
 }
 
 #[test]

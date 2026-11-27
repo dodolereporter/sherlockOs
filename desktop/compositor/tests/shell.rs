@@ -46,6 +46,8 @@ mod tests {
         ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
     };
     use wayland_protocols::xdg::shell::client::{
+        xdg_popup::XdgPopup,
+        xdg_positioner::XdgPositioner,
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::{self, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
@@ -401,6 +403,8 @@ mod tests {
     delegate_noop!(Client: WlShmPool);
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
+    delegate_noop!(Client: ignore XdgPopup);
+    delegate_noop!(Client: XdgPositioner);
     delegate_noop!(Client: OrgKdeKwinAppmenuManager);
     delegate_noop!(Client: OrgKdeKwinAppmenu);
 
@@ -1577,5 +1581,75 @@ mod tests {
         let window = &h.shell.client.toplevels[0].1;
         assert_eq!(window.title, "Kate");
         assert_eq!(window.menu, menu("", ""));
+    }
+
+    /// A menu of the dock, 200 × 120, as iced_exwlshell opens one: an `xdg_popup` of the
+    /// anchored surface, with a grab, drawn.
+    fn dock_menu(h: &mut Harness, dock: &ZwlrLayerSurfaceV1) -> (WlSurface, XdgPopup) {
+        let qh = h.shell.queue.handle();
+        let compositor: WlCompositor = h.shell.bind();
+        let wm_base: XdgWmBase = h.shell.bind();
+        let seat: WlSeat = h.shell.bind();
+        let surface = compositor.create_surface(&qh, ());
+        let xdg = wm_base.get_xdg_surface(&surface, &qh, ());
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 120);
+        positioner.set_anchor_rect(300, 0, 10, 10);
+        let popup = xdg.get_popup(None, &positioner, &qh, ());
+        dock.get_popup(&popup);
+        popup.grab(&seat, 1);
+        h.shell.client.configured = false;
+        surface.commit();
+        h.run_until("the menu configure", |h| h.shell.client.configured);
+        h.shell.draw(&surface, 200, 120);
+        for _ in 0..3 {
+            h.turn();
+        }
+        (surface, popup)
+    }
+
+    /// Turns until the shell's menus closing are `count`, within a second.
+    fn closing_menus(h: &mut Harness, count: usize) {
+        let end = std::time::Instant::now() + Duration::from_secs(1);
+        while h.state.closing_popups() != count {
+            assert!(
+                std::time::Instant::now() < end,
+                "{} menus closing",
+                h.state.closing_popups()
+            );
+            h.turn();
+        }
+    }
+
+    #[test]
+    fn a_menu_of_the_shell_closes_with_its_last_image() {
+        let mut h = Harness::start();
+        let (_dock_surface, dock) = h.dock();
+        // A click elsewhere: the compositor closes the menu, which keeps its last image while
+        // it fades out, then goes (lot UI-06).
+        let (_menu, _popup) = dock_menu(&mut h, &dock);
+        assert_eq!(h.state.closing_popups(), 0);
+        h.state.pointer_motion((100.0, 100.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 3);
+        assert_eq!(h.state.closing_popups(), 1, "closing at the click");
+        let started = std::time::Instant::now();
+        closing_menus(&mut h, 0);
+        assert!(started.elapsed() >= sherlock_ui::motion::POPUP_CLOSE / 2);
+        // Dropped by its client to open another one: the same.
+        let (menu, popup) = dock_menu(&mut h, &dock);
+        popup.destroy();
+        menu.destroy();
+        closing_menus(&mut h, 1);
+        closing_menus(&mut h, 0);
+        // Animations off: it goes at once.
+        h.state.set_window_animations(false);
+        let (menu, popup) = dock_menu(&mut h, &dock);
+        popup.destroy();
+        menu.destroy();
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert_eq!(h.state.closing_popups(), 0);
     }
 }
