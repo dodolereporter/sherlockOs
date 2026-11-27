@@ -171,6 +171,14 @@ impl Choice {
         }
     }
 
+    /// Software for the rescue lock screen when `rescue`, this choice otherwise (lot D-25c).
+    pub fn or_rescue(self, rescue: bool) -> Self {
+        match rescue {
+            true => Self::Software(Reason::Rescue),
+            false => self,
+        }
+    }
+
     /// Sets the variables of this choice for the whole process, and remembers the previous
     /// values for the commands it will start (`for_child`).
     ///

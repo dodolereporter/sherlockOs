@@ -146,3 +146,22 @@ On the reference laptop, the PAM service installed:
    Space or Enter bring it back with an empty field.
 6. (D-25b) `background = /path/to/picture.jpg` in `~/.config/sherlockos/lock.conf`: that picture,
    blurred, at the next lock.
+
+## Rescue mode (lot D-25c)
+
+`sherlockos-lock --rescue` is what the compositor starts once the lock screen failed three
+times in a row (before `swaylock`, which no recipe installs): the same program, on a connection
+the compositor opens itself, so the same identity rule (ADR 0023). It draws in software
+(`gpu::Reason::Rescue`), without Sherlock, background, animation nor machine buttons: the line
+« Écran de verrouillage de secours », the user's name, the password pill and its error line, in
+the middle of the plain background of the system screens. PAM is called exactly as in the
+normal mode. The field always shows: Escape and the 20 s without input do not send it away, but
+a wake-up (a jump of `CLOCK_BOOTTIME`) still empties it. If it dies, the compositor starts it
+again, three times, then `swaylock` if installed, then its own screen.
+
+Tests: `tests/render.rs` (the rescue unlocks with a fake PAM, keeps its field; capture
+`rescue-tiny-skia.png`), and the compositor's `tests/session_lock.rs`: the lock program fails
+three times, the rescue mode (a child process of the test, on the connection the compositor
+gave it) takes the lock, an ordinary client can neither lock nor unlock meanwhile, and the
+rescue killed is started again and takes the lock again.
+

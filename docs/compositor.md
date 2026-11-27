@@ -2237,9 +2237,12 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **When the lock program dies.** The session stays locked on the background. The program is
   started again after 500 ms, on a new connection; the dead program's is forgotten. A lock
   given up before `locked` takes its surfaces with it. A program that ends without locking, or
-  does not lock within 10 seconds, is a failure. After 3 failures, `swaylock --color 0a1424`; if it is not
-  there or fails too, the compositor draws its rescue screen: « Verrouillé » and « Appuie sur
-  Entrée pour réessayer », Enter starting the programs again.
+  does not lock within 10 seconds, is a failure. After 3 failures, the same program in its
+  rescue mode, `sherlockos-lock --rescue` (lot D-25c: a plain password field checked by PAM, in
+  software, without Sherlock nor background), started the same way, on a connection the
+  compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
+  then the compositor's own screen, which cannot unlock: « Verrouillé » and « Appuie sur Entrée
+  pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not

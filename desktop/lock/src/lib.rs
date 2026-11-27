@@ -72,6 +72,11 @@ pub fn settings() -> Settings {
     }
 }
 
+/// The program was started with `--rescue` (its rescue mode, `app::Lock::rescue`).
+pub fn rescue_asked() -> bool {
+    std::env::args_os().skip(1).any(|arg| arg == "--rescue")
+}
+
 /// What keeps the lock screen from running.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
