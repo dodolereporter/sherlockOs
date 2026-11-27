@@ -178,6 +178,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Space opens a large preview of the item under the cursor, after the Finder's Quick Look
+  (lot E-12): its name and its content (the text, the picture fitted to the room, or its
+  information) on a glass panel of 80 % of the window, over a dimmed window. It zooms in from
+  0.85 and fades in 200 ms, and zooms out the same way. The arrows go to the item before or
+  after, and the preview follows; Space, Escape or a click outside close it. It opens on one
+  item only. The side panel is shown or hidden from « Aperçu » in the bar's menu.
+
+  ![](evidence/quick-look.png)
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

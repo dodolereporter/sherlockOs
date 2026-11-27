@@ -1800,3 +1800,28 @@ fn path_bar_captures() {
         bench.send(Message::PathCancel);
     }
 }
+
+/// Space opens the large preview of the item, the arrows go to the next one, Space or Escape
+/// close it (lot E-12); the panel of the preview stays where it was.
+#[test]
+fn space_opens_the_large_preview() {
+    let mut bench = Bench::new("quick-look");
+    let shown = bench.app.show_preview;
+    bench.press(Named::Space);
+    assert!(!bench.app.looking, "nothing selected: nothing to look at");
+    bench.select("src");
+    bench.press(Named::Space);
+    assert!(bench.app.looking);
+    assert_eq!(bench.app.show_preview, shown);
+    bench.press(Named::ArrowDown);
+    assert!(bench.app.looking);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.app.settle();
+    capture(&bench.app, "evidence-quick-look");
+    bench.press(Named::Escape);
+    assert!(!bench.app.looking);
+    assert!(bench.app.look_level() > 0.0, "it zooms out");
+    bench.press(Named::Space);
+    bench.press(Named::Space);
+    assert!(!bench.app.looking);
+}
