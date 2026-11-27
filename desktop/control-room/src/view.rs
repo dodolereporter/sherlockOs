@@ -3,8 +3,8 @@
 //! title bar slides it back over the page.
 
 use iced::widget::{
-    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row, scrollable,
-    space, span, stack, svg,
+    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row, space, span,
+    stack, svg,
 };
 use iced::{Alignment, Element, Length, Padding, Size};
 use sherlock_ui::animated::reveal;
@@ -12,6 +12,7 @@ use sherlock_ui::app_icon::AppIcon;
 use sherlock_ui::component as ui;
 use sherlock_ui::control_room::{self as cr, texts as t};
 use sherlock_ui::icon::Icon;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, theme, typography};
 
 use crate::app::{App, Message, SEARCH, WindowAction};
@@ -161,7 +162,7 @@ impl App {
             }
         }
         let (vertical, side) = cr::SIDEBAR_PADDING;
-        container(scrollable(nav).height(Length::Fill))
+        container(scroll(nav).height(Length::Fill))
             .width(cr::SIDEBAR_WIDTH)
             .height(Length::Fill)
             .padding([vertical, side])
@@ -222,7 +223,7 @@ impl App {
         let now = self.now();
         let opacity = self.page_slide.opacity(now);
         let rise = (1.0 - self.page_slide.progress(now)) * cr::PAGE_RISE;
-        let page = scrollable(self.page_content(self.page, width, opacity, rise))
+        let page = scroll(self.page_content(self.page, width, opacity, rise))
             .id(crate::scroll::PAGE)
             .height(Length::Fill);
         let mut layers: Vec<Element<'_, Message>> = Vec::new();
@@ -230,7 +231,7 @@ impl App {
             let gone =
                 (now.saturating_sub(at).as_secs_f32() / cr::PAGE_FADE.as_secs_f32()).min(1.0);
             let content = self.page_content(left, width, 1.0 - gone, -gone * cr::PAGE_RISE);
-            layers.push(scrollable(content).height(Length::Fill).into());
+            layers.push(scroll(content).height(Length::Fill).into());
             // Nothing reaches the page left.
             layers.push(opaque(space().width(Length::Fill).height(Length::Fill)));
         }
@@ -266,6 +267,7 @@ impl App {
                 Page::Appearance => self.appearance(inner),
                 Page::Touchpad => self.touchpad(inner),
                 Page::Lock => self.lock(inner),
+                Page::Clipboard => self.clipboard(inner),
                 Page::DefaultApps => self.default_apps(inner),
             };
             Column::new()

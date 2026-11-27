@@ -2,8 +2,7 @@
 //! sidebar, listing, preview, status bar, right-click menu.
 
 use iced::widget::{
-    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, scrollable, space,
-    stack, text,
+    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, space, stack, text,
 };
 use iced::{Alignment, Element, Length, Padding};
 use std::time::Duration;
@@ -12,6 +11,7 @@ use sherlock_ui::animated::{hoverable, reveal};
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::texts::{self, evidence as t};
 use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
@@ -381,13 +381,20 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scrollable(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
+            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
                 .into()
         };
-        let content = mouse_area(container(content).width(Length::Fill).height(Length::Fill))
+        // Files dragged over the folder shown, to drop there: it lights up (lot E-03).
+        let lit = matches!(self.drop_light(), Some((None, _)));
+        let content = container(content).width(Length::Fill).height(Length::Fill);
+        let content = match lit {
+            true => content.style(sherlock_ui::drag::target(1.0)),
+            false => content,
+        };
+        let content = mouse_area(content)
             .on_press(Message::Blank)
             .on_right_press(Message::RightClick(None));
         let content: Element<'_, Message> = if reveal < 1.0 {
@@ -570,6 +577,13 @@ impl App {
             .padding([0.0, metrics::LIST_ROW_PADDING])
             .align_y(Alignment::Center)
             .style(theme::list_row(false));
+        // The folder a drop would land in lights up (lot E-03).
+        let line = match self.drop_light() {
+            Some((Some(target), light)) if target == i => container(line)
+                .style(sherlock_ui::drag::target(light))
+                .into(),
+            _ => Element::from(line),
+        };
         let line = hoverable(line, color::palette().hover, metrics::LIST_ROW_RADIUS).key(i as u64);
         mouse_area(line)
             .on_press(Message::Click(i))
@@ -811,7 +825,7 @@ impl App {
             });
             // Rows keep their height (and long names their single line, with « … »): a list
             // longer than its room scrolls.
-            scrollable(Column::with_children(rows))
+            scroll(Column::with_children(rows))
                 .height(self.chooser_list_height())
                 .into()
         };
