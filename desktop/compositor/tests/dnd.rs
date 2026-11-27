@@ -417,7 +417,11 @@ mod tests {
             let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
             let root = conn.setup().roots[screen].root;
             let window = conn.generate_id().unwrap();
-            let aux = CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE);
+            // Painted: a window without content takes no pointer.
+            let white = conn.setup().roots[screen].white_pixel;
+            let aux = CreateWindowAux::new()
+                .background_pixel(white)
+                .event_mask(EventMask::PROPERTY_CHANGE);
             conn.create_window(
                 0,
                 window,
@@ -674,7 +678,7 @@ mod tests {
                 0,
                 WindowClass::INPUT_OUTPUT,
                 0,
-                &CreateWindowAux::new(),
+                &CreateWindowAux::new().background_pixel(conn.setup().roots[screen].white_pixel),
             )
             .unwrap();
             let (selection, list, uri) = (
