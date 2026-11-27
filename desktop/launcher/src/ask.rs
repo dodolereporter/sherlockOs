@@ -85,10 +85,10 @@ impl Source for Ask {
 /// Requests written by this process, for names of their own.
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 
-/// Writes `request` into a new file of `<runtime>/sherlockd/requests`, made 0600 from the start
-/// (the folders 0700), and returns its path. The file is created, never opened if it was there.
+/// Writes `request` into a new file of `<runtime>/sherlockd-requests` (apart from the folder
+/// Claude Code works in), made 0600 from the start (the folder 0700), and returns its path. The file is created, never opened if it was there.
 pub fn request_file(runtime: &Path, request: &str) -> io::Result<PathBuf> {
-    let dir = runtime.join("sherlockd").join("requests");
+    let dir = runtime.join("sherlockd-requests");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)

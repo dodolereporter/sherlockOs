@@ -212,7 +212,7 @@ interface for the shell yet, nor an option that takes a request: it knows `--dem
 nothing. `ask::ASK_OPTION` names the option once it exists (`--ask`): the row then runs
 `<terminal> -e sherlockd --ask <file>`, without a shell (tested with the option set). The query
 is never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`, S-11): it
-is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd/requests/`,
+is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd-requests/`,
 0600 from its creation in 0700 folders, which sherlockd reads then removes.
 
 What the interface should provide, for the launcher and the rest of the shell:
