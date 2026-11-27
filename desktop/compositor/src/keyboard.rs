@@ -346,6 +346,21 @@ mod tests {
     }
 
     #[test]
+    fn every_layout_control_room_offers_is_known_to_xkb() {
+        let display = smithay::reexports::wayland_server::Display::<crate::State>::new().unwrap();
+        let mut seats = smithay::input::SeatState::<crate::State>::new();
+        let mut seat = seats.new_wl_seat(&display.handle(), "test");
+        for (layout, variant, name) in sherlock_ui::control_room::KEYBOARD_LAYOUTS {
+            let layout = Layout {
+                layout: layout.into(),
+                variant: variant.into(),
+                ..Layout::default()
+            };
+            assert!(seat.add_keyboard(layout.xkb(), 200, 25).is_ok(), "{name}");
+        }
+    }
+
+    #[test]
     fn a_layout_xkb_does_not_know_is_refused_and_azerty_is_not() {
         // What `State::new` relies on to fall back to AZERTY.
         let display = smithay::reexports::wayland_server::Display::<crate::State>::new().unwrap();
