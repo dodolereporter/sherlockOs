@@ -1,0 +1,23 @@
+Source #51
+	State: SUSPENDED
+	Name: alsa_output.pci-0000_05_00.6.analog-stereo.monitor
+	Description: Monitor of Haut-parleurs intégrés
+	Driver: PipeWire
+	Monitor of Sink: alsa_output.pci-0000_05_00.6.analog-stereo
+	Mute: no
+
+Source #52
+	State: RUNNING
+	Name: alsa_input.pci-0000_05_00.6.analog-stereo
+	Description: Microphone intégré
+	Driver: PipeWire
+	Monitor of Sink: n/a
+	Mute: no
+
+Source #53
+	State: SUSPENDED
+	Name: bluez_input.headset
+	Description: Casque
+	Driver: PipeWire
+	Monitor of Sink: n/a
+	Mute: no

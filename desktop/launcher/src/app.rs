@@ -2,24 +2,31 @@
 
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use iced::futures::channel::oneshot;
 use iced::keyboard::{self, key::Named};
 use iced::widget::{
-    Space, button, column, container, mouse_area, operation, row, svg, text, text_input,
+    Space, button, column, container, mouse_area, operation, row, stack, svg, text, text_input,
 };
-use iced::window::Id;
-use iced::{Alignment, Element, Event, Length, Subscription, Task, event};
+use iced::window::{self, Id};
+use iced::{Alignment, Element, Event, Length, Padding, Subscription, Task, event};
+use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::animated::reveal;
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::dock::text as dock_texts;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::launcher::{self as look, Glyph, text as texts};
 use sherlock_ui::logo::Logo;
+use sherlock_ui::motion::Animation;
+use sherlock_ui::surface::{Elevation, shadowed};
 use sherlock_ui::{color, metrics, typography};
 
+use crate::service::{self, Inbox, Request};
 use crate::source::{self, Action, Command, Hit, Section, Source, Tile};
+use crate::startup;
 use crate::system::{NoSession, Session};
 
 /// Id of the search field, to give it the keyboard.
@@ -48,6 +55,34 @@ pub enum Message {
     Menu(usize),
     /// « Garder dans le Dock » or « Retirer du Dock » in that menu.
     Pin,
+    /// A request of a client of the resident service (lot P-02).
+    Service(Request),
+    /// A click beside the panel: it closes, and the click goes no further.
+    Dismiss,
+    /// A click on the panel, beside its results: nothing.
+    Inside,
+    Frame(Instant),
+    /// The sources rebuilt for a new opening.
+    Reloaded(Reloaded),
+    /// The theme of the appearance file changed.
+    Theme(color::Theme),
+}
+
+/// Sources and what tells when their files are walked, as `crate::sources` gives them.
+pub type Sources = (Vec<Box<dyn Source>>, oneshot::Receiver<usize>);
+
+/// What rebuilds the sources at each opening of a resident launcher, off the interface's
+/// thread: the applications installed or removed meanwhile, the files walked again.
+pub type Reload = Arc<dyn Fn() -> Sources + Send + Sync>;
+
+/// Sources rebuilt, handed once to `update`.
+#[derive(Clone)]
+pub struct Reloaded(Arc<Mutex<Option<Sources>>>);
+
+impl std::fmt::Debug for Reloaded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Reloaded")
+    }
 }
 
 /// What starts a program: `launch::spawn`, or a recorder in tests.
@@ -96,6 +131,27 @@ pub struct Launcher {
     pub menu: Option<(usize, bool)>,
     /// The dock's configuration file, where the menu pins.
     dock_file: Option<std::path::PathBuf>,
+    /// The resident service's requests; `None`: the program ends when the launcher closes.
+    service: Option<Inbox>,
+    reload: Option<Reload>,
+    /// The sources were built for the opening to come: no reload needed.
+    fresh: bool,
+    /// The sources are to be built again once the panel is open.
+    reload_due: bool,
+    /// How far the panel is shown, 0 to 1: its opacity and scale.
+    presence: Animation,
+    origin: Instant,
+    /// Time of the last event, from `origin`: the moment the panel draws.
+    now: Duration,
+    /// The surface covers the screen, the panel at its place: a click beside it closes the
+    /// launcher. Only on the GPU, whose surfaces have alpha (ADR 0018).
+    pub full: bool,
+    /// The small surface drawn once at the start of the service, so that the renderer, its
+    /// pipelines and the fonts are ready before the first opening; the frames seen since.
+    warming: Option<(Id, u8)>,
+    frames: startup::Frames,
+    /// The surface is hidden but kept (`park`).
+    parked: bool,
 }
 
 impl Launcher {
@@ -114,7 +170,64 @@ impl Launcher {
             closing: false,
             menu: None,
             dock_file: dock_config::path(),
+            service: None,
+            reload: None,
+            fresh: true,
+            reload_due: false,
+            presence: Animation::new(look::OPEN_SPRING, 0.0, 1.0, Duration::ZERO),
+            origin: Instant::now(),
+            now: Duration::ZERO,
+            full: false,
+            warming: None,
+            frames: startup::Frames::default(),
+            parked: false,
         }
+    }
+
+    /// A resident launcher (lot P-02): hidden at first, shown and hidden by the requests of
+    /// `inbox`, its sources rebuilt by `reload` at each opening.
+    pub fn resident(mut self, inbox: Inbox, reload: Reload) -> Self {
+        self.service = Some(inbox);
+        self.reload = Some(reload);
+        self.closing = true;
+        self.presence = Animation::new(look::OPEN_SPRING, 0.0, 0.0, Duration::ZERO);
+        self
+    }
+
+    /// Whether the launcher is resident.
+    pub fn is_resident(&self) -> bool {
+        self.service.is_some()
+    }
+
+    /// Whether the panel is shown, or opening: not hidden nor closing.
+    pub fn shown(&self) -> bool {
+        self.surface.is_some() && !self.closing && !self.parked
+    }
+
+    /// How far the panel is shown at the last event.
+    pub fn presence(&self) -> f64 {
+        self.presence.value(self.now)
+    }
+
+    /// Whether something still moves: frames are asked for only that long.
+    pub fn animating(&self) -> bool {
+        self.warming.is_some()
+            || (self.surface.is_some()
+                && !self.parked
+                && !self.presence.is_done(self.now, look::OPEN_PRECISION))
+    }
+
+    /// The time of the clock, never before the last event's.
+    fn clock(&mut self) -> Duration {
+        self.now = self.now.max(self.origin.elapsed());
+        self.now
+    }
+
+    /// Opens the small surface that readies the renderer (see `warming`).
+    pub fn warm_up(&mut self) -> Task<Message> {
+        let (id, task) = Message::layershell_open(crate::warm_surface(crate::NAMESPACE));
+        self.warming = Some((id, 0));
+        task
     }
 
     /// Pins to the dock in the file at `path` instead of the user's (the tests).
@@ -155,10 +268,36 @@ impl Launcher {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(on_event)
+        let frames = if self.animating() {
+            window::frames().map(Message::Frame)
+        } else {
+            Subscription::none()
+        };
+        let service = match &self.service {
+            Some(inbox) => {
+                Subscription::run_with(inbox.clone(), Inbox::stream).map(Message::Service)
+            }
+            None => Subscription::none(),
+        };
+        Subscription::batch([
+            event::listen_with(on_event),
+            frames,
+            service,
+            Subscription::run(crate::appearance).map(Message::Theme),
+        ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // What the user did not do leaves the menu as it is.
+        match message {
+            Message::Frame(at) => return self.frame(at),
+            Message::Reloaded(sources) => return self.reloaded(&sources),
+            Message::Theme(theme) => {
+                color::set_active(theme);
+                return Task::none();
+            }
+            _ => {}
+        }
         // Anything but its own entry closes the menu; Escape closes it alone.
         let menu = self.menu.take();
         match message {
@@ -179,10 +318,20 @@ impl Launcher {
             _ => {}
         }
         match message {
+            Message::Surface(id) if self.warming.is_some_and(|(w, _)| w == id) => {}
             Message::Surface(id) => {
                 self.surface = Some(id);
+                // The opening starts with the surface's first frame.
+                if !self.closing {
+                    let now = self.clock();
+                    self.presence = Animation::new(look::OPEN_SPRING, 0.0, 1.0, now);
+                }
                 return operation::focus(QUERY);
             }
+            Message::Service(Request::Toggle) if self.shown() => return self.close(),
+            Message::Service(Request::Toggle) => return self.show(),
+            Message::Service(Request::Hide) if self.shown() => return self.close(),
+            Message::Dismiss if !self.closing => return self.close(),
             Message::Query(query) => {
                 let before = self.height();
                 self.query = query;
@@ -240,9 +389,159 @@ impl Launcher {
         }
     }
 
+    /// Fades the panel out; then the surface goes, or the program ends when it is not resident.
     fn close(&mut self) -> Task<Message> {
-        self.closing = true;
-        iced::exit()
+        if !self.closing {
+            self.closing = true;
+            let now = self.clock();
+            self.presence.retarget(now, 0.0);
+        }
+        Task::none()
+    }
+
+    /// Shows the panel again, its search empty, as a new launcher would be.
+    fn show(&mut self) -> Task<Message> {
+        let now = self.clock();
+        // The frames of this opening only.
+        self.frames = startup::Frames::default();
+        self.query.clear();
+        self.sections.clear();
+        self.selected = 0;
+        self.armed = None;
+        self.copied = None;
+        self.menu = None;
+        self.closing = false;
+        self.presence.retarget(now, 1.0);
+        let mut tasks = vec![hide_other(service::APPLICATIONS)];
+        // Read again once the panel is open, so that the reading never delays the opening.
+        self.reload_due = !std::mem::replace(&mut self.fresh, false);
+        match self.surface {
+            Some(id) if self.parked => {
+                // The opening starts from nothing, now.
+                self.presence = Animation::new(look::OPEN_SPRING, 0.0, 1.0, now);
+                tasks.push(self.unpark(id));
+            }
+            // Still fading out: it comes back from where it is.
+            Some(_) => tasks.push(operation::focus(QUERY)),
+            None => {
+                // A surface over the whole screen once the renderer is known to have alpha.
+                self.full = sherlock_ui::surface::gpu_drawn() == Some(true);
+                let settings = if self.full {
+                    crate::screen_surface()
+                } else {
+                    crate::panel_surface(self.height())
+                };
+                let (id, task) = Message::layershell_open(settings);
+                self.surface = Some(id);
+                tasks.push(task);
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// Takes the sources rebuilt for this opening.
+    fn reloaded(&mut self, sources: &Reloaded) -> Task<Message> {
+        let Some((sources, walked)) = sources.0.lock().ok().and_then(|mut s| s.take()) else {
+            return Task::none();
+        };
+        self.sources = sources;
+        let before = self.height();
+        let task = self.search(before);
+        self.selected = self.selected.min(self.hits().count().saturating_sub(1));
+        Task::batch([task, Task::perform(walked, |_| Message::Refresh)])
+    }
+
+    /// A frame: the time moves on; the surface goes once the panel faded out.
+    fn frame(&mut self, at: Instant) -> Task<Message> {
+        self.now = self.now.max(at.saturating_duration_since(self.origin));
+        self.frames.tick(at);
+        if let Some((id, seen)) = self.warming {
+            // Drawn once: the renderer is ready, the surface can go.
+            if seen >= 1 {
+                self.warming = None;
+                startup::step("renderer ready", Duration::ZERO);
+                return Task::done(Message::RemoveWindow(id));
+            }
+            self.warming = Some((id, seen + 1));
+        }
+        let done = self.presence.is_done(self.now, look::OPEN_PRECISION);
+        if done {
+            self.frames
+                .report(if self.closing { "close" } else { "open" });
+        }
+        if done
+            && !self.closing
+            && std::mem::take(&mut self.reload_due)
+            && let Some(reload) = self.reload.clone()
+        {
+            return Task::perform(async move { reload() }, |sources| {
+                Message::Reloaded(Reloaded(Arc::new(Mutex::new(Some(sources)))))
+            });
+        }
+        if !(self.closing && done) {
+            return Task::none();
+        }
+        if !self.is_resident() {
+            return iced::exit();
+        }
+        match self.surface {
+            Some(id) if self.full => self.park(id),
+            Some(id) => {
+                self.surface = None;
+                Task::done(Message::RemoveWindow(id))
+            }
+            None => Task::none(),
+        }
+    }
+
+    /// Hides the surface without removing it: one transparent pixel in a corner, under the
+    /// windows, without the keyboard. Its renderer keeps what it drew (the glyphs, the shaped
+    /// texts, the layout): a new surface took 60 ms more to show its first frame. Only for the
+    /// surface over the screen, drawn on the GPU with alpha; the panel's own surface goes.
+    fn park(&mut self, id: Id) -> Task<Message> {
+        self.parked = true;
+        // The field let go: its caret would blink, and draw the surface again, while hidden.
+        let unfocus = iced::advanced::widget::operate(
+            iced::advanced::widget::operation::focusable::unfocus(),
+        );
+        Task::batch([
+            unfocus,
+            Task::done(Message::KeyboardInteractivityChange {
+                id,
+                keyboard_interactivity: KeyboardInteractivity::None,
+            }),
+            Task::done(Message::LayerChange {
+                id,
+                layer: Layer::Background,
+            }),
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: Anchor::Top | Anchor::Left,
+                size: LayerSize::px(1, 1),
+            }),
+        ])
+    }
+
+    /// Brings the parked surface back over the screen, with the keyboard.
+    fn unpark(&mut self, id: Id) -> Task<Message> {
+        self.parked = false;
+        let screen = crate::screen_surface();
+        Task::batch([
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: screen.anchor,
+                size: screen.size,
+            }),
+            Task::done(Message::LayerChange {
+                id,
+                layer: screen.layer,
+            }),
+            Task::done(Message::KeyboardInteractivityChange {
+                id,
+                keyboard_interactivity: screen.keyboard_interactivity,
+            }),
+            operation::focus(QUERY),
+        ])
     }
 
     /// Runs result `index`; the launcher closes once it is done.
@@ -319,9 +618,9 @@ impl Launcher {
         }
     }
 
-    /// Tells the compositor the new height of the surface.
+    /// Tells the compositor the new height of the surface, when it is the panel alone.
     fn resize(&self) -> Task<Message> {
-        let Some(id) = self.surface else {
+        let Some(id) = self.surface.filter(|_| !self.full) else {
             return Task::none();
         };
         let settings = crate::surface(self.height());
@@ -332,8 +631,51 @@ impl Launcher {
         })
     }
 
-    pub fn view(&self, _: Id) -> Element<'_, Message> {
-        self.view_panel()
+    pub fn view(&self, id: Id) -> Element<'_, Message> {
+        if self.warming.is_some_and(|(w, _)| w == id) {
+            return view_warm_up();
+        }
+        let started = Instant::now();
+        let view = if self.full {
+            self.view_screen()
+        } else {
+            self.view_moving()
+        };
+        startup::first(&FIRST_VIEW, "first view");
+        tracing::trace!(took_ms = startup::millis(started.elapsed()), "view");
+        view
+    }
+
+    /// The panel at its opacity and scale of the moment.
+    fn view_moving(&self) -> Element<'_, Message> {
+        let shown = self.presence() as f32;
+        let scale = look::OPEN_SCALE + (1.0 - look::OPEN_SCALE) * shown;
+        reveal(self.view_panel())
+            .opacity(shown.clamp(0.0, 1.0))
+            .scale(scale, (0.5, 0.0))
+            .into()
+    }
+
+    /// The whole screen: the panel at its place, and around it what closes the launcher on a
+    /// click, which goes no further, as Spotlight does.
+    pub fn view_screen(&self) -> Element<'_, Message> {
+        let panel = mouse_area(self.view_moving())
+            .on_press(Message::Inside)
+            .on_right_press(Message::Inside);
+        let placed = container(panel)
+            .padding(Padding {
+                top: look::TOP,
+                ..Padding::ZERO
+            })
+            .center_x(Length::Fill);
+        let beside = mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(Message::Dismiss)
+            .on_right_press(Message::Dismiss)
+            .on_middle_press(Message::Dismiss);
+        stack![beside, placed]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     pub fn view_panel(&self) -> Element<'_, Message> {
@@ -457,15 +799,44 @@ impl Launcher {
     }
 }
 
+/// Set once the first view is built, for the log of the start.
+static FIRST_VIEW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What the surface that readies the renderer draws: text in the interface fonts and an icon,
+/// so that the fonts and the SVG renderer are loaded too, and whether the GPU draws
+/// (`Elevation::Flat` learns it).
+pub fn view_warm_up<'a, M: 'a>() -> Element<'a, M> {
+    let p = color::palette();
+    let content = row![
+        ui::icon(Icon::Search, look::SEARCH_ICON, p.accent_text),
+        text(texts::PLACEHOLDER).size(look::QUERY_SIZE),
+        ui::body(texts::APPLICATIONS).font(typography::UI_MEDIUM),
+        ui::section_label(texts::FILES),
+    ];
+    shadowed(content, 0.0, Elevation::Flat).into()
+}
+
+/// Asks the resident service `name` to hide, if it runs: another overlay of the shell opens.
+pub fn hide_other<M: Send + 'static>(name: &'static str) -> Task<M> {
+    let Some(dir) = crate::instance::runtime_dir() else {
+        return Task::none();
+    };
+    Task::future(async move {
+        // Nobody listening is the usual case: nothing to hide.
+        let _ = service::send(&service::socket(&dir, name), Request::Hide);
+    })
+    .discard()
+}
+
 /// The tile left of a result: an application's icon or initial, a glyph, or Sherlock.
 fn tile<'a>(tile: &Tile, title: &str) -> Element<'a, Message> {
     match tile {
         // In a box of the tile's size, as every other tile: icons centred, titles aligned (UI-03).
-        Tile::App(Some(path)) => container(
-            svg(icon_handle(path))
-                .width(look::APP_ICON)
-                .height(look::APP_ICON),
-        )
+        // Smooth edges on the GPU (UI-05).
+        Tile::App(Some(path)) => container(sherlock_ui::raster::icon(
+            &icon_handle(path),
+            look::APP_ICON,
+        ))
         .center(look::TILE)
         .into(),
         Tile::App(None) => {
@@ -526,16 +897,20 @@ pub fn icon_handle(path: &Path) -> svg::Handle {
     if path.extension().is_some_and(|e| e == "svg") {
         return svg::Handle::from_path(path);
     }
+    svg::Handle::from_memory(picture_document(path).into_bytes())
+}
+
+/// A small SVG document that shows the picture in `path` (a PNG), for the SVG renderer.
+pub fn picture_document(path: &Path) -> String {
     let href = path
         .to_string_lossy()
         .replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;");
-    let document = format!(
+    format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
          viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    );
-    svg::Handle::from_memory(document.into_bytes())
+    )
 }
 
 /// A key name in its cap, on the search row or on the selected result (`in_row`).

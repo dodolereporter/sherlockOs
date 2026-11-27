@@ -189,6 +189,36 @@ impl Pactl {
         self.mute(Device::Output, muted)
     }
 
+    /// The outputs, or the microphones (lot D-26a).
+    pub fn endpoints(&self, device: Device) -> Result<Vec<Endpoint>> {
+        let (kind, _) = device.pactl();
+        Ok(endpoints(&self.run(&["list", &format!("{kind}s")])?))
+    }
+
+    /// The name of the default output or microphone.
+    pub fn default_name(&self, device: Device) -> Result<String> {
+        let (kind, _) = device.pactl();
+        Ok(self
+            .run(&[&format!("get-default-{kind}")])?
+            .trim()
+            .to_owned())
+    }
+
+    /// Makes `name` the default output or microphone: the sound moves to it.
+    pub fn set_default(&self, device: Device, name: &str) -> Result<()> {
+        let (kind, _) = device.pactl();
+        self.run(&[&format!("set-default-{kind}"), name])
+            .map(|_| ())
+    }
+
+    /// Sets the volume of the default output or microphone, 0 to 100 %.
+    pub fn set_volume_of(&self, device: Device, percent: u8) -> Result<()> {
+        let (kind, name) = device.pactl();
+        let value = format!("{}%", percent.min(100));
+        self.run(&[&format!("set-{kind}-volume"), name, &value])
+            .map(|_| ())
+    }
+
     /// Mutes or unmutes the default output or microphone.
     pub fn mute(&self, device: Device, muted: bool) -> Result<()> {
         let (kind, name) = device.pactl();
@@ -196,6 +226,42 @@ impl Pactl {
         self.run(&[&format!("set-{kind}-mute"), name, value])
             .map(|_| ())
     }
+}
+
+/// A sink or a source, as Control Room lists them (lot D-26a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Endpoint {
+    /// Its name, which `set-default-sink` takes.
+    pub name: String,
+    /// What it is called (« Haut-parleurs intégrés »), or its name without a description.
+    pub description: String,
+}
+
+/// The sinks or the sources of the output of `pactl list sinks` or `pactl list sources`, in
+/// their order, without the monitors of the sinks, which are no microphone.
+pub fn endpoints(list: &str) -> Vec<Endpoint> {
+    let mut found: Vec<(Endpoint, bool)> = Vec::new();
+    for line in list.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix("Name:") {
+            let name = name.trim().to_owned();
+            let endpoint = Endpoint {
+                description: name.clone(),
+                name,
+            };
+            found.push((endpoint, false));
+        } else if let Some((endpoint, monitor)) = found.last_mut() {
+            if let Some(text) = line.strip_prefix("Description:") {
+                endpoint.description = text.trim().to_owned();
+            } else if let Some(sink) = line.strip_prefix("Monitor of Sink:") {
+                *monitor = sink.trim() != "n/a";
+            }
+        }
+    }
+    found
+        .into_iter()
+        .filter(|(endpoint, monitor)| !monitor && !endpoint.name.ends_with(".monitor"))
+        .map(|(endpoint, _)| endpoint)
+        .collect()
 }
 
 /// The description of the sink `name` in the output of `pactl list sinks`; the name itself
@@ -315,6 +381,20 @@ impl Mixer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outputs_and_microphones_are_listed_without_the_monitors() {
+        let outputs = endpoints(include_str!("../fixtures/pactl-sinks.txt"));
+        let names: Vec<&str> = outputs.iter().map(|e| e.description.as_str()).collect();
+        assert_eq!(names, ["Haut-parleurs intégrés", "Sortie HDMI"]);
+        assert_eq!(outputs[1].name, "alsa_output.pci-0000_05_00.1.hdmi-stereo");
+        let inputs = endpoints(include_str!("../fixtures/pactl-sources.txt"));
+        let names: Vec<&str> = inputs.iter().map(|e| e.description.as_str()).collect();
+        assert_eq!(names, ["Microphone intégré", "Casque"]);
+        // Without a description, the name.
+        let bare = endpoints("Sink #1\n\tName: plain\n");
+        assert_eq!(bare[0].description, "plain");
+    }
 
     #[test]
     fn sound_on() {

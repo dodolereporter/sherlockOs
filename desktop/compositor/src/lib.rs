@@ -15,6 +15,7 @@ pub mod focus;
 pub mod genie;
 pub mod gestures;
 mod handlers;
+pub mod headless;
 mod input;
 pub mod keyboard;
 pub mod launcher;

@@ -122,7 +122,9 @@ dependencies = [
  "iced_test",
  "icon-theme",
  "launcher",
+ "log",
  "mime-apps",
+ "resvg",
  "sherlock-ui",
  "tracing",
  "tracing-subscriber",
@@ -312,8 +314,10 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "image",
  "launcher",
  "libc",
+ "mime-apps",
  "notifications",
  "notifications-config",
  "shell-protocol",
@@ -615,6 +619,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
+ "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "x11rb",
  "xcursor",
@@ -628,6 +633,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "control-room"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "desktop-config",
+ "dock-config",
+ "iced",
+ "iced_test",
+ "image",
+ "mime-apps",
+ "sherlock-ui",
+ "system-services",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -895,6 +917,7 @@ dependencies = [
 name = "dock-config"
 version = "0.0.0"
 dependencies = [
+ "mime-apps",
  "sherlock-ui",
 ]
 
@@ -4421,6 +4444,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

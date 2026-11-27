@@ -1,6 +1,7 @@
 //! Command line of the compositor.
 //!
-//! `compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… [--workspaces N]
+//! `compositor [--nested [--outputs N] | --headless] [--xwayland] [--measure] [--scale S]…
+//! [--workspaces N]
 //! [--snap-gap PX] [--minimize-effect genie|scale|none] [--window-animations on|off]
 //! [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
@@ -15,6 +16,8 @@ use crate::{Error, genie::Effect};
 pub struct Options {
     /// In a window of the current session, rather than on the screens of the machine.
     pub nested: bool,
+    /// Without any screen: virtual screens, nothing drawn (lot D-36).
+    pub headless: bool,
     /// Frame statistics in the log, and the session stops with the command.
     pub measure: bool,
     /// `--xwayland`: X11 applications in the real session too (see `Options::xwayland`).
@@ -47,9 +50,10 @@ impl Options {
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
         let (mut workspaces, mut snap_gap, mut minimize_effect) = (None, None, None);
-        let mut window_animations = None;
+        let (mut window_animations, mut headless) = (None, false);
         loop {
             match command.first().and_then(|a| a.to_str()) {
+                Some("--headless") if !nested => headless = true,
                 Some("--measure") => measure = true,
                 Some("--xwayland") => xwayland = true,
                 Some("--outputs") if nested => screens = Some(option(&mut command, 1..=4)?),
@@ -63,6 +67,9 @@ impl Options {
             }
             command.remove(0);
         }
+        if headless && scales.is_empty() {
+            scales.push(1.0);
+        }
         // In nested mode, as many scales as screens of the window.
         if nested {
             scales = (0..screens.unwrap_or(1))
@@ -71,6 +78,7 @@ impl Options {
         }
         Ok(Self {
             nested,
+            headless,
             measure,
             xwayland,
             scales,
@@ -94,7 +102,7 @@ impl Options {
     /// would fight that session for them.
     pub fn check_environment(&self, var: impl Fn(&str) -> Option<OsString>) -> Result<(), Error> {
         let set = |key: &str| var(key).is_some_and(|v| !v.is_empty());
-        if self.nested || !(set("DISPLAY") || set("WAYLAND_DISPLAY")) {
+        if self.nested || self.headless || !(set("DISPLAY") || set("WAYLAND_DISPLAY")) {
             return Ok(());
         }
         Err(Error::InSession)

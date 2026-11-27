@@ -339,8 +339,8 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy` | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
-| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `closed` |
+| `sherlock_shell_manager_v1` | `destroy`, `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`, sent even without window nor screen. A roundtrip after the
@@ -360,10 +360,11 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 2 (lot D-18d), which adds `snapped` to the
-  states of a screen. A client that binds version 1 (the bar) never receives it: a screen with
-  only a snapped window is an empty state for it, as before. A toplevel has the version of its
-  manager.
+- **Versions.** The global is offered at version 3. Version 2 (lot D-18d) adds `snapped` to
+  the states of a screen; a client that binds version 1 never receives it: a screen with only a
+  snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
+  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. A toplevel
+  has the version of its manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -469,6 +470,39 @@ that announced that workspace, the last one winning: a client's commit never app
 client's requests. After a change of the model, the compositor sends the workspaces added,
 removed or changed, then `done`.
 
+### Global menu (lot D-36)
+
+The bar shows the menus of the active application (`docs/bar.md`, "Global menu"). The
+application exports them with `com.canonical.dbusmenu` on the session bus; the compositor only
+says where, for each window: the `app_menu` event of `sherlock_shell_toplevel_v1` gives a bus
+name and an object path, both empty without a menu. It learns them two ways (`shell/appmenu.rs`):
+
+- **`org_kde_kwin_appmenu_manager`** (KDE's protocol, version 2, from `wayland-protocols-plasma`),
+  offered to every client: `create` on a surface, then `set_address`. Qt with KDE's platform
+  theme (`QT_QPA_PLATFORMTHEME=kde`) does it for each window. The address goes with the
+  surface; `release` removes it.
+- **The registrations of `com.canonical.AppMenu.Registrar`**, which the bar serves and passes
+  on with `register_app_menu` and `unregister_app_menu`. Qt's generic theme and qt6ct, which the
+  session uses, only call `RegisterWindow`, with the X11 window id, and under Wayland with the
+  id 1 for every window: an id that names nothing. The registration therefore carries the
+  process of the bus connection, which the bar asks the bus daemon for
+  (`GetConnectionUnixProcessID`) and the application cannot choose. The compositor gives the
+  menu to the X11 window of that id, if its `_NET_WM_PID` is that process or unknown; else to
+  the newest Wayland window of a client of that process (`SO_PEERCRED`) that has no menu yet;
+  else it keeps the registration (64 at most) for the next window of that process that shows
+  up. Qt registers its first menu before the window shows, so the main window takes it and a
+  dialog opened after it takes none. A window keeps the menu it took until
+  `unregister_app_menu` names that address, or until it closes. The address set by KDE's
+  protocol comes first.
+
+Seen with Kate 25.04 and Qt 6.8.2 against the compositor without a screen (`--headless`), on a
+private bus, `XDG_CURRENT_DESKTOP=SherlockOS`: with the generic theme, Kate registers
+`/MenuBar/1` with the id 1, withdraws it (`UnregisterWindow(1)`) when its menu bar moves to the
+main window, then registers `/MenuBar/2`, the menu it keeps; with KDE's theme it also sets the
+address of its surface with KDE's protocol. A Flatpak application reaches the bus through
+`xdg-dbus-proxy`, whose process is not the application's: under Wayland, its menu finds no
+window unless it uses KDE's protocol.
+
 ### Follow-ups for D-18c and later
 
 From the review of D-18a. Lot D-18w settled the workspace of a new window, set when it shows up,
@@ -560,6 +594,12 @@ ordinary socket, and a shell program.
   restored, the screen is uncovered.
 - **Frame callbacks.** A shown window gets one at every frame; minimized, none at 17 and 484 ms,
   one after a second.
+- **Global menu** (lot D-36). The address set with `org_kde_kwin_appmenu` reaches the shell in
+  `app_menu`, and empties when released. A registration of this process made before the window
+  shows goes to it; a dialog opened after it gets none; a second registration goes to the
+  dialog, the newest window without a menu. Another process's registration, and another
+  connection's `unregister_app_menu`, change nothing; the menu's own withdraws it. A manager
+  bound at version 2 receives no `app_menu`.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
   a dock with an exclusive zone appears.
 - **Keyboard after a close.** A window closing on a hidden workspace while nothing has the
@@ -1532,6 +1572,19 @@ cargo run -p compositor -- --nested --outputs 2 --scale 1 --scale 2 \
 `QT_QPA_PLATFORM=wayland` forces Konsole to speak Wayland: in an X11 session, Qt would choose
 X11, and Konsole would go through XWayland. `--separate` keeps the command from joining a Konsole
 that is already open.
+
+### Without a screen (`--headless`, lot D-36)
+
+```sh
+cargo run -p compositor -- --headless konsole
+```
+
+No window opens anywhere: the compositor makes one virtual screen of 1440 × 900 per `--scale`
+(one at scale 1 by default), draws nothing, and sends each window and anchored surface its
+frame callbacks every 16 ms. Real applications run against its protocols, to see what they ask
+for (`WAYLAND_DEBUG=1`, `RUST_LOG=compositor=debug`), without showing a window on the author's
+screen. Like the real session, it restricts EGL to Mesa for itself and what it launches, and
+starts XWayland only with `--xwayland`.
 
 ### An X11 application
 

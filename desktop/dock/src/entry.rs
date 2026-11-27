@@ -32,12 +32,17 @@ pub struct DesktopEntry {
     pub try_exec: Option<String>,
     /// The « new window » action, when the application declares one.
     pub new_window: Option<Action>,
+    /// Every action the application declares (`Actions`), in its order, the « new window » one
+    /// included: the menu of its icon lists the others.
+    pub actions: Vec<Action>,
 }
 
 /// An action of a desktop entry (`[Desktop Action …]`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Action {
     pub id: String,
+    /// `Name`, French first; the id when there is none.
+    pub name: String,
     pub exec: String,
 }
 
@@ -50,14 +55,23 @@ impl DesktopEntry {
         if file.get(ENTRY, "Type").as_deref() != Some("Application") {
             return None;
         }
-        let new_window = file
+        let actions: Vec<Action> = file
             .list(ENTRY, "Actions")
             .into_iter()
-            .filter(|action| is_new_window(action))
-            .find_map(|action| {
-                let exec = file.get(&format!("Desktop Action {action}"), "Exec")?;
-                Some(Action { id: action, exec })
-            });
+            .filter_map(|action| {
+                let group = format!("Desktop Action {action}");
+                let exec = file.get(&group, "Exec").filter(|e| !e.is_empty())?;
+                let name = file
+                    .localized(&group, "Name")
+                    .unwrap_or_else(|| action.clone());
+                Some(Action {
+                    id: action,
+                    name,
+                    exec,
+                })
+            })
+            .collect();
+        let new_window = actions.iter().find(|a| is_new_window(&a.id)).cloned();
         Some(Self {
             id: id.to_owned(),
             file: path.to_path_buf(),
@@ -73,7 +87,14 @@ impl DesktopEntry {
             deleted: file.flag(ENTRY, "Hidden"),
             try_exec: file.get(ENTRY, "TryExec").filter(|t| !t.is_empty()),
             new_window,
+            actions,
         })
+    }
+
+    /// The actions the menu of its icon lists: all but the « new window » one, which has its
+    /// own entry.
+    pub fn other_actions(&self) -> impl Iterator<Item = &Action> {
+        self.actions.iter().filter(|a| !is_new_window(&a.id))
     }
 
     /// Whether the entry counts: not deleted, and its `TryExec` program exists.
@@ -285,6 +306,12 @@ mod tests {
         let action = term.new_window.as_ref().expect("new window action");
         assert_eq!(action.id, "NewWindow");
         assert_eq!(action.exec, "example-terminal --new-window");
+        let others: Vec<&str> = term.other_actions().map(|a| a.name.as_str()).collect();
+        assert_eq!(
+            others,
+            ["Nouvel onglet"],
+            "French name, « new window » apart"
+        );
         assert!(!term.no_display);
         assert!(term.owns("terminal") && term.owns("org.example.terminal"));
         assert!(!term.owns("browser"));

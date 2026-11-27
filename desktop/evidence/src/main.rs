@@ -25,6 +25,8 @@ fn main() -> iced::Result {
             sherlock_ui::color::set_active(appearance_config::theme_now(&path));
         }
     });
+    // Its menus go to the bar of the session (lot D-36c).
+    evidence::menubar::enable();
     let (width, height) = metrics::REFERENCE_WINDOW;
     let app = iced::application(
         || App::new(startup::timed("configuration read", Config::from_env)),

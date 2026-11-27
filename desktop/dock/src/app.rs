@@ -28,8 +28,8 @@ use crate::icons::IconLookup;
 use crate::items::{Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
-use crate::menu::{self, Abilities, Entry, Key};
-use crate::windows::{self, Click, Control, Place, Request, Windows};
+use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
+use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
 /// The menu of an icon, while it is open.
 #[derive(Debug, Clone)]
@@ -37,8 +37,10 @@ pub(crate) struct OpenMenu {
     pub(crate) id: Id,
     /// The icon the menu belongs to, by identity.
     pub(crate) target: Target,
-    pub(crate) entries: Vec<(Entry, bool)>,
+    pub(crate) entries: Vec<Line>,
     pub(crate) cursor: Option<usize>,
+    /// Opening, open, or closing before its popup goes.
+    pub(crate) unfold: Unfold,
 }
 
 /// A pointer event on the dock surface, in its coordinates.
@@ -66,6 +68,8 @@ pub enum Message {
     /// The configuration file changed.
     Config(Box<DockConfig>),
     Key(Key),
+    /// The modifiers held: Ctrl with a click asks for a new window.
+    Modifiers(keyboard::Modifiers),
     Focus(Direction),
     MenuHover(usize),
     MenuPick(Entry),
@@ -149,6 +153,8 @@ pub struct Dock {
     /// Icon with the keyboard focus, kept in our state like the bar does.
     pub(crate) focus: Option<usize>,
     pub(crate) menu: Option<OpenMenu>,
+    /// The modifiers held, as the keyboard last told the dock.
+    modifiers: keyboard::Modifiers,
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
@@ -192,6 +198,7 @@ impl Dock {
             windows: None,
             focus: None,
             menu: None,
+            modifiers: keyboard::Modifiers::empty(),
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
@@ -405,6 +412,7 @@ impl Dock {
         }
         self.items = items;
         self.separator = separator;
+        self.show_dots(animate);
         self.surface_size = self.wanted_surface();
         // Each icon that moved starts where it was drawn, relative to the middle of the dock.
         if let Some(before) = before {
@@ -418,6 +426,18 @@ impl Dock {
                 };
                 let (from, to) = (before.offset(*old), after.offset(*new));
                 self.shift(i, (from.0 - to.0, from.1 - to.1), now);
+            }
+        }
+    }
+
+    /// Each icon's dot shows while its application has a window, green in front; it fades in
+    /// and out with `animate`, otherwise it is in place at once.
+    fn show_dots(&mut self, animate: bool) {
+        let now = self.now;
+        for index in 0..self.items.len() {
+            let (count, active) = self.open_windows(index).unwrap_or((0, false));
+            if let Some(track) = self.tracks.get_mut(index) {
+                track.show_dot(now, count > 0, active, animate);
             }
         }
     }
@@ -460,6 +480,10 @@ impl Dock {
     /// Whether something still moves: the subscription to frames lives only that long.
     pub fn animating(&self) -> bool {
         self.theme.running()
+            || self
+                .menu
+                .as_ref()
+                .is_some_and(|m| m.unfold.running(self.now))
             || !self.label.is_done(self.now)
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
@@ -604,6 +628,7 @@ impl Dock {
             Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
             Message::Key(key) => return self.key(key),
+            Message::Modifiers(modifiers) => self.modifiers = modifiers,
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
                     Direction::Next => Key::Next,
@@ -614,7 +639,8 @@ impl Dock {
             Message::Focus(direction) => self.move_focus(direction),
             Message::MenuHover(index) => {
                 if let Some(menu) = &mut self.menu
-                    && menu.entries.get(index).is_some_and(|(_, on)| *on)
+                    && !menu.unfold.closing()
+                    && menu.entries.get(index).is_some_and(|l| l.enabled)
                 {
                     menu.cursor = Some(index);
                 }
@@ -703,7 +729,7 @@ impl Dock {
                 id,
                 zone_size: settings.exclusive_zone,
             }));
-            tasks.push(self.close_menu());
+            tasks.push(self.drop_menu());
             self.hovering = false;
             tasks.push(self.input_region());
         }
@@ -793,6 +819,11 @@ impl Dock {
 
     fn settle(&mut self) -> Task<Message> {
         let now = self.now;
+        let dropped = if self.menu.as_ref().is_some_and(|m| m.unfold.closed(now)) {
+            self.drop_menu()
+        } else {
+            Task::none()
+        };
         for launch in &mut self.launches {
             launch.bounce.time_out(now);
         }
@@ -800,15 +831,16 @@ impl Dock {
         let count = self.leaving.len();
         self.leaving.retain(|l| !l.track.is_gone(now));
         if self.leaving.len() == count {
-            return Task::none();
+            return dropped;
         }
         let size = self.surface_size;
         self.surface_size = self.wanted_surface();
-        self.resize(size, self.geometry)
+        Task::batch([dropped, self.resize(size, self.geometry)])
     }
 
     /// The source of windows has a new list: an application that starts and has one more
-    /// window than when it started stops bouncing.
+    /// window than when it started stops bouncing, and so does one whose window got the
+    /// keyboard since (an application with a single instance raising the window it had).
     fn windows_came(&mut self) {
         let now = self.now;
         let Some(windows) = self.windows.as_ref() else {
@@ -818,8 +850,9 @@ impl Dock {
             let Some(item) = self.items.iter().find(|i| i.target() == launch.target) else {
                 continue;
             };
-            let (count, _) = windows.of(|app_id| item.owns(app_id));
-            if launch.windows(count, now) {
+            let owned = windows.owned(|app_id| item.owns(app_id));
+            let recent = owned.last().map_or(0, |w| w.recency);
+            if launch.windows(owned.len(), recent, now) {
                 tracing::info!(app = item.name, "window came: the bounce stops");
             }
         }
@@ -939,7 +972,13 @@ impl Dock {
             return Task::none();
         };
         if !press.dragging {
-            if held.icon_at(press.pointer) == Some(index) {
+            if held.icon_at(press.pointer) != Some(index) {
+                return Task::none();
+            }
+            // Ctrl+click: a new window, as a click of the middle button.
+            if self.modifiers.control() {
+                self.new_window(index);
+            } else {
                 self.click(index);
             }
             return Task::none();
@@ -1017,6 +1056,7 @@ impl Dock {
                         self.press = Some(Press::new(target, point, self.pinned.clone(), shown));
                     }
                     (mouse::Button::Right, Some(index), _) => return self.open_menu(index),
+                    (mouse::Button::Middle, Some(index), _) => self.new_window(index),
                     _ => {}
                 }
             }
@@ -1070,8 +1110,9 @@ impl Dock {
             match key {
                 Key::Close => return self.close_menu(),
                 Key::Activate => {
-                    let picked = menu.cursor.and_then(|c| menu.entries.get(c)).copied();
-                    if let Some((entry, true)) = picked {
+                    let picked = menu.cursor.and_then(|c| menu.entries.get(c));
+                    if let Some(line) = picked.filter(|l| l.enabled) {
+                        let entry = line.entry;
                         return self.pick(entry);
                     }
                 }
@@ -1119,24 +1160,78 @@ impl Dock {
         let item = self.items.get(index);
         let entry = item.and_then(Item::entry);
         let pinned = item.is_some_and(|i| i.pinned);
-        let controllable = self.controllable();
-        let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
-        let sherlock = item.is_some_and(|i| i.kind == crate::items::Kind::Sherlock);
         Abilities {
             launch: entry.is_some_and(|e| e.exec.is_some()),
-            new_window: entry.is_some_and(|e| e.new_window.is_some()),
             keep: !pinned && entry.is_some(),
             unpin: pinned && entry.is_some(),
-            quit: !sherlock && controllable && open,
+            act: item.is_some_and(|i| i.entry().is_some() || matches!(i.kind, Kind::Window(_)))
+                && self.controllable(),
         }
+    }
+
+    /// Opacity of the dot under icon `index` now: 1 while its application has a window, and
+    /// in between while it fades.
+    pub fn dot(&self, index: usize) -> f32 {
+        self.tracks
+            .get(index)
+            .map_or(0.0, |t| t.dot.value(self.now))
+    }
+
+    /// The windows of icon `index`, the least recent first; none while they are unknown.
+    pub fn windows_of(&self, index: usize) -> Vec<Window> {
+        let (Some(windows), Some(item)) = (self.windows.as_ref(), self.items.get(index)) else {
+            return Vec::new();
+        };
+        windows
+            .owned(|app_id| item.owns(app_id))
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The entries of the menu of icon `index`: its windows in the order they came, as on
+    /// macOS, an untitled one under the application's name, then its actions.
+    pub fn menu_lines(&self, index: usize) -> Vec<Line> {
+        let name = self.items.get(index).map_or("", |i| i.name.as_str());
+        let mut windows = self.windows_of(index);
+        windows.sort_by_key(|w| {
+            let list = self.windows.as_ref().map_or(&[][..], |l| l.list.as_slice());
+            list.iter().position(|o| o.id == w.id)
+        });
+        let listed: Vec<Listed> = windows
+            .iter()
+            .map(|w| Listed {
+                id: w.id,
+                title: if w.title.trim().is_empty() {
+                    name.to_owned()
+                } else {
+                    w.title.clone()
+                },
+                active: w.activated,
+            })
+            .collect();
+        let actions: Vec<(usize, String)> = self
+            .items
+            .get(index)
+            .and_then(Item::entry)
+            .map(|e| {
+                e.actions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| e.other_actions().any(|o| o.id == a.id))
+                    .map(|(i, a)| (i, a.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        menu::entries(self.abilities(index), &listed, &actions)
     }
 
     fn controllable(&self) -> bool {
         self.windows.as_ref().is_some_and(|w| w.controllable)
     }
 
-    /// A click on icon `index`: brings its windows forward, minimizes them when they already
-    /// are, or starts the application.
+    /// A click on icon `index`: brings its windows forward (`windows::click`), minimizes them
+    /// when they already are, or starts the application.
     pub fn click(&mut self, index: usize) {
         if self
             .items
@@ -1150,10 +1245,26 @@ impl Dock {
             }
             return;
         }
-        match windows::click(self.open_windows(index), self.controllable()) {
+        let windows = self.windows_of(index);
+        let owned: Vec<&Window> = windows.iter().collect();
+        match windows::click(&owned, self.controllable()) {
             Click::Launch => self.activate(index, What::App),
-            Click::Activate => self.request(index, Request::Activate),
+            Click::Bring(ids) => {
+                for id in ids {
+                    if let Some(window) = windows.iter().find(|w| w.id == id) {
+                        self.sources.control.send_to(Request::Activate, window);
+                    }
+                }
+            }
             Click::Minimize => self.request(index, Request::Minimize),
+        }
+    }
+
+    /// A click of the middle button or a Ctrl+click on icon `index`: the application starts
+    /// again for a new window, and bounces until it comes (`What::NewWindow`).
+    pub fn new_window(&mut self, index: usize) {
+        if self.items.get(index).and_then(Item::entry).is_some() {
+            self.activate(index, What::NewWindow);
         }
     }
 
@@ -1194,7 +1305,10 @@ impl Dock {
                 return;
             }
         }
-        let before = self.windows.as_ref().map(|w| w.of(|a| item.owns(a)).0);
+        let before = self.windows.as_ref().map(|w| {
+            let owned = w.owned(|a| item.owns(a));
+            (owned.len(), owned.last().map_or(0, |w| w.recency))
+        });
         self.launches.retain(|l| l.target != target);
         if !self.animating() {
             self.frames = 0;
@@ -1204,12 +1318,12 @@ impl Dock {
     }
 
     fn open_menu(&mut self, index: usize) -> Task<Message> {
-        let close = self.close_menu();
+        let close = self.drop_menu();
         let Some(surface) = self.surface else {
             tracing::warn!("dock surface unknown: the menu cannot open");
             return close;
         };
-        let entries = menu::entries(self.abilities(index));
+        let entries = self.menu_lines(index);
         let (width, height) = menu::surface_size(&entries);
         let layout = self.layout(self.now);
         let Some(icon) = layout.icons.get(index) else {
@@ -1265,6 +1379,7 @@ impl Dock {
             target: self.items[index].target(),
             entries,
             cursor: None,
+            unfold: Unfold::opening(self.now),
         });
         Task::batch([close, Task::done(Message::NewPopUp { settings, id })])
     }
@@ -1274,16 +1389,41 @@ impl Dock {
         self.items.iter().position(|item| item.target() == *target)
     }
 
+    /// Closes the menu: it folds back first, and its popup goes once it has faded out
+    /// (`settle`).
     fn close_menu(&mut self) -> Task<Message> {
+        let now = self.clock();
+        if let Some(menu) = &mut self.menu {
+            menu.unfold.close(now);
+            menu.cursor = None;
+            if !self.animating() {
+                self.frames = 0;
+                self.frames_since = now;
+            }
+        }
+        Task::none()
+    }
+
+    /// Closes the popup of the menu at once.
+    fn drop_menu(&mut self) -> Task<Message> {
         match self.menu.take() {
-            Some(menu) => window::close(menu.id),
+            Some(menu) => {
+                let now = self.clock();
+                self.hide.restart(now);
+                window::close(menu.id)
+            }
             None => Task::none(),
         }
     }
 
     fn pick(&mut self, entry: Entry) -> Task<Message> {
         self.clock();
-        let Some(target) = self.menu.as_ref().map(|m| m.target.clone()) else {
+        let Some(target) = self
+            .menu
+            .as_ref()
+            .filter(|m| !m.unfold.closing())
+            .map(|m| m.target.clone())
+        else {
             return Task::none();
         };
         let close = self.close_menu();
@@ -1296,12 +1436,23 @@ impl Dock {
             return close;
         };
         let task = match entry {
+            Entry::Window(id) => {
+                let window = self.windows_of(index).into_iter().find(|w| w.id == id);
+                if let Some(window) = window {
+                    self.sources.control.send_to(Request::Activate, &window);
+                }
+                Task::none()
+            }
             Entry::Open => {
                 self.activate(index, What::App);
                 Task::none()
             }
             Entry::NewWindow => {
                 self.activate(index, What::NewWindow);
+                Task::none()
+            }
+            Entry::Action(action) => {
+                self.activate(index, What::Action(action));
                 Task::none()
             }
             Entry::Keep => self.keep(index),
@@ -1361,6 +1512,9 @@ impl Dock {
 
 /// Tab moves the focus; the other keys go to the menu when it is open, to the dock otherwise.
 fn on_key(event: keyboard::Event) -> Option<Message> {
+    if let keyboard::Event::ModifiersChanged(modifiers) = event {
+        return Some(Message::Modifiers(modifiers));
+    }
     focus::tab(event.clone())
         .map(Message::Focus)
         .or_else(|| menu::key(event).map(Message::Key))

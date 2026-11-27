@@ -126,37 +126,42 @@ impl Config {
     }
 
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values are
-    /// refused, so that a typo does not go unnoticed.
+    /// refused, so that a typo does not go unnoticed: the error of the first one is returned.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let (config, mut problems) = Self::parse_lenient(text);
+        match problems.is_empty() {
+            true => Ok(config),
+            false => Err(problems.remove(0)),
+        }
+    }
+
+    /// Reads what can be read: each line that cannot is left at its default and listed.
+    pub fn parse_lenient(text: &str) -> (Self, Vec<Error>) {
         let mut config = Self::default();
-        for (i, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let error = |reason: String| Error::Line {
-                line: i + 1,
-                reason,
-            };
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| error("expected key = value".into()))?;
-            let value = value.trim();
-            match key.trim() {
-                "path" if value.is_empty() => config.path = None,
-                "path" => config.path = Some(value.into()),
-                "wallpaper" if value.is_empty() => config.wallpaper = None,
-                "wallpaper" => config.wallpaper = Some(value.into()),
-                "follow-theme" => {
-                    config.follow_theme = value
-                        .parse()
-                        .map_err(|_| error(format!("expected true or false, not {value:?}")))?;
-                }
-                "mode" => config.mode = value.parse().map_err(error)?,
-                key => return Err(error(format!("unknown key {key:?}"))),
+        let mut problems = Vec::new();
+        for (line, pair) in crate::conf::pairs(text) {
+            if let Err(reason) = pair.and_then(|(key, value)| config.take(key, value)) {
+                problems.push(Error::Line { line, reason });
             }
         }
-        Ok(config)
+        (config, problems)
+    }
+
+    fn take(&mut self, key: &str, value: &str) -> Result<(), String> {
+        match key {
+            "path" if value.is_empty() => self.path = None,
+            "path" => self.path = Some(value.into()),
+            "wallpaper" if value.is_empty() => self.wallpaper = None,
+            "wallpaper" => self.wallpaper = Some(value.into()),
+            "follow-theme" => {
+                self.follow_theme = value
+                    .parse()
+                    .map_err(|_| format!("expected true or false, not {value:?}"))?;
+            }
+            "mode" => self.mode = value.parse()?,
+            key => return Err(format!("unknown key {key:?}")),
+        }
+        Ok(())
     }
 
     /// Reads the settings file. A missing file is the default setting.
@@ -170,19 +175,23 @@ impl Config {
             }),
         }
     }
-}
 
-impl fmt::Display for Config {
-    /// The file as Control Room writes it: `parse` reads it back.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(wallpaper) = &self.wallpaper {
-            writeln!(f, "wallpaper = {wallpaper}")?;
-        }
-        writeln!(f, "follow-theme = {}", self.follow_theme)?;
-        if let Some(path) = &self.path {
-            writeln!(f, "path = {}", path.display())?;
-        }
-        writeln!(f, "mode = {}", self.mode)
+    /// Each key and its value as written in the file; an absent one is an empty value.
+    fn values(&self) -> [(&'static str, String); 4] {
+        let path = self.path.as_ref().map(|p| p.display().to_string());
+        [
+            ("wallpaper", self.wallpaper.clone().unwrap_or_default()),
+            ("follow-theme", self.follow_theme.to_string()),
+            ("path", path.unwrap_or_default()),
+            ("mode", self.mode.to_string()),
+        ]
+    }
+
+    /// `text`, the file as it is, with the keys whose value changed set again; everything
+    /// else stays (see `touchpad::Config::write_into`). Control Room writes the file so.
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse_lenient(text);
+        crate::conf::update(text, &self.values(), &read.values())
     }
 }
 
@@ -341,17 +350,21 @@ mod tests {
         let config = Config::parse(text).unwrap();
         assert_eq!(config.path.as_deref(), Some(Path::new("/walls/first-clue")));
         assert_eq!(config.mode, Mode::Contain);
-        assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
-        // Empty: the default wallpaper, in cover.
+        assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
+        // Empty: the default wallpaper, in cover; nothing to write.
         assert_eq!(Config::parse("").unwrap(), Config::default());
+        assert_eq!(Config::default().write_into(""), "");
+        // Choosing a wallpaper of the collection empties the path in place, the comment stays.
+        let mut chosen = config.clone();
+        (chosen.wallpaper, chosen.path) = (Some("ring".into()), None);
         assert_eq!(
-            Config::default().to_string(),
-            "follow-theme = true\nmode = cover\n"
+            chosen.write_into(text),
+            "# comment\n\npath = \nmode=contain\nwallpaper = ring\n"
         );
         let config = Config::parse("wallpaper = ring\nfollow-theme = false\n").unwrap();
         assert_eq!(config.wallpaper.as_deref(), Some("ring"));
         assert!(!config.follow_theme);
-        assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
+        assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
     }
 
     #[test]

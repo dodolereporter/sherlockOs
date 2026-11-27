@@ -1,9 +1,10 @@
 //! The two views of the dock: the dock itself and the menu of an icon.
 
 use dock_config::Position as Edge;
-use iced::widget::{container, mouse_area, pin, row, space, stack, svg, text};
+use iced::widget::{container, mouse_area, pin, row, space, stack, text};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Rectangle, mouse};
+use sherlock_ui::animated::reveal;
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::{color, dock, metrics, typography};
 
@@ -78,14 +79,16 @@ impl Dock {
                     .style(dock::ring(icon.width));
                 layers.push(place(ring, icon.x - pad, icon.y - pad));
             }
-            if let Some((count, active)) = self.open_windows(index)
-                && count > 0
+            // One dot for an open application, however many windows it has, as on macOS; it
+            // fades in and out with the application's first and last window.
+            let shown = track.dot.value(now) * opacity;
+            if shown > 0.0
                 && let Some(dot) = layout.dot(index)
             {
                 let mark = container(space())
                     .width(dot.width)
                     .height(dot.height)
-                    .style(dock::dot(active));
+                    .style(dock::dot(track.dot_active, shown));
                 layers.push(place(mark, dot.x, dot.y));
             }
         }
@@ -102,6 +105,7 @@ impl Dock {
             .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
+            .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
             .into()
     }
 
@@ -156,39 +160,58 @@ impl Dock {
         let Some(menu) = &self.menu else {
             return space().into();
         };
-        let index = self.index_of(&menu.target);
-        let name = index
-            .and_then(|i| self.items.get(i))
-            .map_or("", |i| i.name.as_str());
-        let mut header = row![
-            ui::body(name).font(typography::UI_SEMIBOLD),
-            space::horizontal()
-        ]
-        .align_y(Alignment::Center)
-        .height(dock::MENU_HEADER_HEIGHT)
-        .padding([0.0, metrics::MENU_ITEM_PADDING]);
-        if let Some((count, _)) = index.and_then(|i| self.open_windows(i))
-            && count > 0
-        {
-            let count = text(dock::text::windows(count))
-                .size(typography::SMALL_SIZE)
-                .color(color::palette().text_secondary);
-            header = header.push(count);
-        }
-        let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
-        for (index, (entry, enabled)) in menu.entries.iter().copied().enumerate() {
-            if entry.starts_group() {
-                entries.push(ui::menu_separator());
+        let opacity = menu.unfold.opacity(self.now);
+        // Built inside the fade, for the colors its texts take when they are built.
+        let panel = color::with_opacity(opacity, || {
+            let index = self.index_of(&menu.target);
+            let name = index
+                .and_then(|i| self.items.get(i))
+                .map_or("", |i| i.name.as_str());
+            let mut header = row![
+                ui::body(name).font(typography::UI_SEMIBOLD),
+                space::horizontal()
+            ]
+            .align_y(Alignment::Center)
+            .height(dock::MENU_HEADER_HEIGHT)
+            .padding([0.0, metrics::MENU_ITEM_PADDING]);
+            if let Some((count, _)) = index.and_then(|i| self.open_windows(i))
+                && count > 0
+            {
+                let count = text(dock::text::windows(count))
+                    .size(typography::SMALL_SIZE)
+                    .color(color::palette().text_secondary);
+                header = header.push(count);
             }
-            let on_press = enabled.then_some(Message::MenuPick(entry));
-            let mut item = ui::menu_item(entry.label(), Trailing::None, on_press);
-            if menu.cursor == Some(index) {
-                item = ui::open(item);
+            let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
+            for (index, line) in menu.entries.iter().enumerate() {
+                if line.starts_group {
+                    entries.push(ui::menu_separator());
+                }
+                let on_press = line.enabled.then_some(Message::MenuPick(line.entry));
+                let trailing = if line.checked {
+                    Trailing::Checked
+                } else {
+                    Trailing::None
+                };
+                // A long window title ends with « … » (`menu_item`).
+                let mut item = ui::menu_item(&line.label, trailing, on_press);
+                if menu.cursor == Some(index) {
+                    item = ui::open(item);
+                }
+                entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
             }
-            entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
-        }
-        ui::menu(entries, dock::MENU_WIDTH)
-            .height(Length::Fill)
+            ui::menu(entries, dock::MENU_WIDTH).height(Length::Fill)
+        });
+        // It unfolds from its icon: from the side facing the dock.
+        let origin = match self.geometry.position {
+            Edge::Bottom => (0.5, 1.0),
+            Edge::Top => (0.5, 0.0),
+            Edge::Left => (0.0, 0.5),
+            Edge::Right => (1.0, 0.5),
+        };
+        reveal(panel)
+            .opacity(opacity)
+            .scale(menu.unfold.scale(self.now), origin)
             .into()
     }
 }
@@ -218,9 +241,8 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
         ..c
     };
     match glyph {
-        Glyph::File(handle) => svg(handle.clone())
-            .width(side)
-            .height(side)
+        // Smooth edges on the GPU, at rest and magnified, rasterized once per step (UI-05).
+        Glyph::File(handle) => sherlock_ui::raster::icon(handle, side)
             .opacity(opacity)
             .into(),
         Glyph::Letter(letter) => {

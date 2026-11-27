@@ -1,12 +1,12 @@
 //! The lock setting, `<config dir>/lock.conf`: after how long without input the compositor
 //! locks the session (lot D-25a), and the picture behind the lock screen (lot D-25b). The
-//! compositor and the lock screen read it; Control Room will write it.
+//! compositor and the lock screen read it at start and again when it changes; Control Room's
+//! lock page writes the delay (lot D-26a).
 //!
 //! ```text
 //! # Minutes without input before the session locks; 0: never (5 by default).
 //! idle-minutes = 5
-//! # The picture behind the lock screen, an absolute path (by default, the wallpaper of the
-//! # desktop, blurred and darkened).
+//! # The picture behind the lock screen, an absolute path (the theme's picture by default).
 //! background = /home/me/Pictures/lock.jpg
 //! ```
 
@@ -40,7 +40,7 @@ pub enum Error {
 pub struct Config {
     /// Minutes without input before the lock; 0: never.
     pub idle_minutes: u32,
-    /// The picture behind the lock screen; `None`: the desktop's wallpaper.
+    /// The picture behind the lock screen, instead of the theme's (lot D-25b).
     pub background: Option<PathBuf>,
 }
 
@@ -60,43 +60,46 @@ impl Config {
     }
 
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values are
-    /// refused, so that a typo does not go unnoticed.
+    /// refused, so that a typo does not go unnoticed: the error of the first one is returned.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let (config, mut problems) = Self::parse_lenient(text);
+        match problems.is_empty() {
+            true => Ok(config),
+            false => Err(problems.remove(0)),
+        }
+    }
+
+    /// Reads what can be read: each line that cannot is left at its default and listed.
+    pub fn parse_lenient(text: &str) -> (Self, Vec<Error>) {
         let mut config = Self::default();
-        for (i, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let error = |reason: String| Error::Line {
-                line: i + 1,
-                reason,
-            };
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| error("expected key = value".into()))?;
-            let value = value.trim();
-            match key.trim() {
+        let mut problems = Vec::new();
+        for (line, pair) in crate::conf::pairs(text) {
+            let taken = pair.and_then(|(key, value)| match key {
                 "idle-minutes" => {
                     config.idle_minutes = value
                         .parse()
                         .ok()
                         .filter(|m| *m <= MAX_IDLE_MINUTES)
                         .ok_or_else(|| {
-                            error(format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}"))
+                            format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}")
                         })?;
+                    Ok(())
                 }
                 "background" => {
                     let path = PathBuf::from(value);
                     if !path.is_absolute() {
-                        return Err(error(format!("expected an absolute path, not {value:?}")));
+                        return Err(format!("expected an absolute path, not {value:?}"));
                     }
                     config.background = Some(path);
+                    Ok(())
                 }
-                key => return Err(error(format!("unknown key {key:?}"))),
+                key => Err(format!("unknown key {key:?}")),
+            });
+            if let Err(reason) = taken {
+                problems.push(Error::Line { line, reason });
             }
         }
-        Ok(config)
+        (config, problems)
     }
 
     /// Reads the settings file. A missing file is the default setting.
@@ -110,6 +113,14 @@ impl Config {
             }),
         }
     }
+
+    /// `text`, the file as it is, with the delay set again if it changed; everything else
+    /// stays (see `touchpad::Config::write_into`). Control Room writes the file so.
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse_lenient(text);
+        let values = |c: &Self| [("idle-minutes", c.idle_minutes.to_string())];
+        crate::conf::update(text, &values(self), &values(&read))
+    }
 }
 
 /// `<config dir>/lock.conf`.
@@ -120,6 +131,31 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_control_room_writes_reads_back() {
+        // The comment stays, the delay changes in place.
+        let mut config = Config {
+            idle_minutes: 10,
+            ..Config::default()
+        };
+        assert_eq!(
+            config.write_into("# mine\nidle-minutes = 5\n"),
+            "# mine\nidle-minutes = 10\n"
+        );
+        config.idle_minutes = 5;
+        assert_eq!(
+            config.write_into("idle-minutes = 5\n"),
+            "idle-minutes = 5\n"
+        );
+        for idle_minutes in [0, 1, 15, MAX_IDLE_MINUTES] {
+            let config = Config {
+                idle_minutes,
+                ..Config::default()
+            };
+            assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
+        }
+    }
 
     #[test]
     fn the_session_locks_after_five_minutes_by_default() {
@@ -145,19 +181,19 @@ mod tests {
     }
 
     #[test]
-    fn the_background_is_an_absolute_path() {
-        assert_eq!(Config::default().background, None);
-        let set = Config::parse("background = /srv/lock.jpg").unwrap();
-        assert_eq!(set.background, Some(PathBuf::from("/srv/lock.jpg")));
-        assert!(Config::parse("background = lock.jpg").is_err());
-    }
-
-    #[test]
     fn the_file_is_in_the_config_dir() {
         let var = |key: &str| (key == "XDG_CONFIG_HOME").then(|| "/cfg".into());
         assert_eq!(
             config_file(var),
             Some(PathBuf::from("/cfg/sherlockos/lock.conf"))
         );
+    }
+
+    #[test]
+    fn the_background_is_an_absolute_path() {
+        assert_eq!(Config::default().background, None);
+        let set = Config::parse("background = /srv/lock.jpg").unwrap();
+        assert_eq!(set.background, Some(PathBuf::from("/srv/lock.jpg")));
+        assert!(Config::parse("background = lock.jpg").is_err());
     }
 }

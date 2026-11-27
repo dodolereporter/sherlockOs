@@ -22,6 +22,9 @@ iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["m
 appearance-config = { path = "../appearance-config" }
 # The session commands of the quick settings, with the launcher's rules (workspace crate).
 launcher = { path = "../launcher" }
+# The desktop entries, for the name of the active application before its menus (workspace
+# crate, lot D-36).
+mime-apps = { path = "../mime-apps" }
 # Do not disturb, the notification daemon's file (workspace crate).
 notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
@@ -55,6 +58,9 @@ notifications = { path = "../notifications" }
 # A fake compositor for the shell protocols test: the server side that smithay already pulls.
 shell-protocol = { path = "../shell-protocol", features = ["client", "server"] }
 wayland-server = "=0.31.14"
+# Lays the bar and its menus on the desktop for the captures of the global menu: the version
+# and features the compositor pins.
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
 wayland-protocols = { version = "=0.32.13", features = ["client", "server", "staging"] }
 
 [lints]
