@@ -154,6 +154,15 @@ pub enum Item {
         rect: Rectangle<i32, Physical>,
         radius: f32,
     },
+    /// `content`, a screen of `size` drawn at the origin, then squashed into `rect`: the
+    /// screens going off (lot D-38).
+    Squashed {
+        key: Key,
+        content: Vec<Item>,
+        size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+        alpha: f32,
+    },
     /// The last image of a window that closes, stretched into `rect` (lot D-34).
     Snapshot {
         key: Key,
@@ -191,6 +200,10 @@ impl Item {
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             Item::Osd { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            // Its height changes with every frame of the squash.
+            Item::Squashed { rect, alpha, .. } => {
+                params_hash(&[rect.size.h as f32, rect.loc.y as f32, *alpha])
+            }
             _ => 0,
         }
     }
@@ -467,6 +480,37 @@ impl Scene {
                     })
                 })
                 .collect(),
+            Item::Squashed {
+                key,
+                content,
+                size,
+                rect,
+                alpha,
+            } => {
+                let inside = View {
+                    frame: Rectangle::from_size(size),
+                    frame_size: size,
+                    ..*view
+                };
+                let mut own = Ids::default();
+                let elements: Vec<_> = content
+                    .into_iter()
+                    .flat_map(|item| {
+                        self.elements(renderer, &mut own, item, &inside, wallpaper, mode)
+                    })
+                    .collect();
+                let black = sherlock_ui::screen_off::BLACK.premultiplied();
+                match window_anim::draw(renderer, size, &elements, black) {
+                    Ok(texture) => {
+                        let element = window_anim::element(renderer, texture, rect, alpha);
+                        vec![SceneElement::Decoration(ids.stamp(key, params, element))]
+                    }
+                    Err(err) => {
+                        tracing::warn!("screens off: drawing the picture: {err}");
+                        Vec::new()
+                    }
+                }
+            }
             Item::Snapshot {
                 key,
                 texture,
@@ -485,6 +529,44 @@ impl Scene {
 /// borders and shadows follow that scale. `preview` is in the space. `wallpaper`: the screen's
 /// wallpaper is loaded; the discs of the board are drawn otherwise.
 pub fn items(
+    state: &State,
+    (output, view): (&Output, &View),
+    preview: Option<Visual>,
+    wallpaper: bool,
+    now: Duration,
+) -> (Vec<Item>, bool) {
+    // The screens going off, dark or coming back: the old television over what they show
+    // (lot D-38).
+    if let Some(progress) = state.screen_off_progress(now) {
+        let dark = state.screens_dark();
+        return crate::power::items(view, progress, dark, |local| {
+            screen_items(state, (output, local), preview, wallpaper, now)
+        });
+    }
+    let (mut items, mut animating) = screen_items(state, (output, view), preview, wallpaper, now);
+    // The veil before the inactivity, over everything (lot D-38).
+    let (dim, darkening) = state.dim();
+    if dim > 0.0 {
+        let black = sherlock_ui::screen_off::BLACK.premultiplied();
+        items.insert(
+            0,
+            Item::Shape {
+                key: Key::of(None, Part::IdleVeil),
+                rect: view.frame,
+                fill: black,
+                border: black,
+                border_width: 0.0,
+                radius: 0.0,
+                alpha: dim,
+            },
+        );
+        animating |= darkening;
+    }
+    (items, animating)
+}
+
+/// What a screen shows with the screens on.
+fn screen_items(
     state: &State,
     (output, view): (&Output, &View),
     preview: Option<Visual>,

@@ -23,6 +23,7 @@ pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod lock;
+pub mod log_sync;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -32,6 +33,7 @@ pub mod output;
 pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
+pub mod power;
 pub mod render;
 mod screensaver;
 mod shell;
@@ -188,6 +190,8 @@ pub struct State {
     nested: bool,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
+    /// Writes the session's log to disk, while locked (lot D-25f).
+    log_sync: log_sync::LogSync,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -243,6 +247,8 @@ pub struct State {
     triggers: triggers::Triggers,
     /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
     inhibitors: inhibit::Inhibitors,
+    /// The screens off, like an old television (lot D-38).
+    power: power::Power,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -359,6 +365,9 @@ impl State {
             intercepted_keys: Vec::new(),
             nested: false,
             switch_vt: None,
+            log_sync: log_sync::LogSync::new(
+                std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
+            ),
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
@@ -386,6 +395,7 @@ impl State {
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
             inhibitors: inhibit::Inhibitors::new(&dh),
+            power: power::Power::new(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -637,6 +647,23 @@ impl State {
         }
     }
 
+    /// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the
+    /// lock surface. After each frame of a screen, and slowly while the screens are dark.
+    pub fn send_frames(&self, output: &Output) {
+        let time = self.start_time.elapsed();
+        for window in self.space.elements() {
+            if self.window_output(window).as_ref() == Some(output) {
+                self.send_window_frame(window, output, time);
+            }
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        self.send_lock_frames(output, time);
+    }
+
     /// Something that may show on a screen changed: the screens draw a frame, those of the
     /// real session at their next vertical blank. Called for every client request, input event,
     /// screen change and wallpaper loaded, and by the methods that change the desktop.
@@ -682,6 +709,7 @@ impl State {
         }
         self.update_scales();
         self.refresh_lock();
+        self.refresh_power();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {

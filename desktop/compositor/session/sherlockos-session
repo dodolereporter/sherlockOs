@@ -79,6 +79,8 @@ if [ -z "${SHERLOCKOS_WALLPAPERS:-}" ] && [ -d "$(dirname "$bin")/wallpapers" ];
 fi
 state="${XDG_STATE_HOME:-$HOME/.local/state}/sherlockos"
 log="$state/session.log"
+# The compositor has it written to disk while locked (lot D-25f).
+export SHERLOCKOS_LOG="$log"
 mkdir -p "$state"
 if [ -f "$log" ]; then
 	mv -f "$log" "$log.old"

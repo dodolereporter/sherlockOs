@@ -100,6 +100,18 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   delay of pam_faildelay from `login` (3 s on Debian) before PAM answers, and only one check
   runs at a time: that is what slows the tries. The check runs on its own thread, the screen
   keeps drawing.
+- **A PAM that hangs** (lot D-25f). The interface never waits for PAM: the check runs on a
+  thread of its own, and after 20 s (`pam::TIMEOUT`) without an answer it counts as PAM
+  unavailable: the spinner stops, the field comes back with « Vérification impossible. Réessaie. », and
+  the next try starts a new check. A module waiting for a daemon (`pam_winbind`, in Debian's
+  `common-auth` when Samba's winbind is installed) or for the network can no longer leave the
+  lock screen in its spinner for good. The session log says « authentication: checking » at each
+  try.
+- **The log of the input** (lot D-25g), without anything typed: « input on the lock at rest »
+  for a key or the pointer while the form is away, then « form shown ». A test runs the real
+  program, in software, on a headless compositor: one Space brings the form
+  (`LOCK_PROGRAM=target/debug/sherlockos-lock cargo test -p compositor --test session_lock --
+  --ignored the_real_lock_program`).
 - **Only one clean exit.** The toolkit (`exwlshellev`) sends `unlock_and_destroy` on every
   clean exit while the lock is held: the program reaches `iced::exit()` only after PAM accepted
   the password. A panic aborts the process (no unwinding through the toolkit), and an error

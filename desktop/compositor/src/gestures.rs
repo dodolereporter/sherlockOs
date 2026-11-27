@@ -216,6 +216,11 @@ fn route(fingers: u32) -> Route {
 impl State {
     /// Hands a gesture event of the backend to the methods below.
     pub(crate) fn gesture_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+        // The screens off: a gesture brings them back, and does nothing else (lot D-38).
+        if self.input_wakes() {
+            self.screens_on();
+            return;
+        }
         // Locked: no gesture acts, nor reaches a client (lot D-25a).
         if self.is_locked() {
             return;
