@@ -238,9 +238,11 @@ async fn timeout_claude_killed_and_reaped() {
     // Fake logged-in Claude Code that writes its process identifier to the file `$1`, then never
     // answers: `exec` keeps that identifier for `sleep`. `$0` is `fake`. Whatever the timeout, the
     // result is the same, since there is no answer to wait for. It is wide enough for `sh` to
-    // start and write the file under load, which a short one did not guarantee.
+    // start and write the file under load, which a short one did not guarantee. The `sleep` lasts
+    // two minutes, far beyond the timeout: should the kill be missed, the test kills it itself
+    // and nothing is left running long after the run (lot Q-37).
     let pid_file = std::env::temp_dir().join(format!("sherlockd-timeout-{}", std::process::id()));
-    let script = "[ \"$2\" = auth ] && exit 0; echo $$ > \"$1\"; exec sleep 600";
+    let script = "[ \"$2\" = auth ] && exit 0; echo $$ > \"$1\"; exec sleep 120";
     let mut config = ClaudeCodeConfig::new("/unused", "Tu es Sherlock.");
     config.program = "sh".into();
     let pid_path = pid_file.to_string_lossy().into_owned();
@@ -257,7 +259,13 @@ async fn timeout_claude_killed_and_reaped() {
     // end. The bound on the duration only rules out that wait, with a wide margin for the load.
     let pid = std::fs::read_to_string(&pid_file).unwrap();
     std::fs::remove_file(&pid_file).unwrap();
-    assert!(!Path::new(&format!("/proc/{}", pid.trim())).exists());
+    let alive = Path::new(&format!("/proc/{}", pid.trim())).exists();
+    if alive {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", pid.trim()])
+            .status();
+    }
+    assert!(!alive, "the fake Claude Code outlived its timeout");
     assert!(start.elapsed() < Duration::from_secs(60));
 }
 
