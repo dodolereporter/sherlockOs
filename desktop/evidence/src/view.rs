@@ -257,6 +257,39 @@ impl App {
                 nav = nav.push(self.device_item(volume));
             }
         }
+        // The file servers of the network (lot E-07): a click connects, the eject button
+        // disconnects.
+        if !self.servers.is_empty() {
+            nav = nav.push(ui::nav_section(t::NETWORK));
+            for server in &self.servers {
+                let folder = self.mounted.get(&server.host);
+                let active = match (folder, &self.location) {
+                    (Some(folder), Location::Folder(dir)) => dir.starts_with(folder),
+                    _ => false,
+                };
+                let item = ui::nav_item_owned(
+                    Icon::Network,
+                    server.name.clone(),
+                    None,
+                    active,
+                    Some(Message::OpenServer(server.host.clone())),
+                );
+                let line: Element<'_, Message> = match folder {
+                    Some(_) => row![
+                        container(item).width(Length::Fill),
+                        ui::icon_button(
+                            Icon::Eject,
+                            t::EJECT,
+                            Some(Message::EjectServer(server.host.clone())),
+                        )
+                    ]
+                    .align_y(Alignment::Center)
+                    .into(),
+                    None => item.into(),
+                };
+                nav = nav.push(line);
+            }
+        }
         let root = std::path::PathBuf::from("/");
         nav = nav.push(ui::nav_section(t::SYSTEM)).push(ui::nav_item(
             Icon::SystemDisk,

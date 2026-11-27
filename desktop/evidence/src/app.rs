@@ -31,6 +31,7 @@ use crate::trash::Trash;
 use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 
+mod network;
 mod path;
 pub use path::PathEdit;
 use std::collections::HashMap;
@@ -332,6 +333,15 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// The file servers of the network, found now (lot E-07).
+    Servers(Vec<crate::network::Server>),
+    /// A click on a server: connect to it, or open it when it is.
+    OpenServer(String),
+    /// The eject button beside a connected server.
+    EjectServer(String),
+    /// A server connected (its folder), or not; disconnected, or not.
+    ServerMounted(String, Result<PathBuf, crate::smb::Error>),
+    ServerUnmounted(String, Result<(), crate::smb::Error>),
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
     /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
@@ -424,6 +434,9 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The servers of the network, and the folders of those connected, by host.
+    pub(crate) servers: Vec<crate::network::Server>,
+    pub(crate) mounted: HashMap<String, PathBuf>,
     device_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
@@ -501,6 +514,8 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            servers: Vec::new(),
+            mounted: HashMap::new(),
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
@@ -575,7 +590,13 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([events, frames, devices, appearance, menubar])
+        // The network is listened to only with the live sources (not in the tests).
+        let network = if self.config.watch_devices {
+            Subscription::run(crate::network::stream).map(Message::Servers)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([events, frames, devices, network, appearance, menubar])
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -971,6 +992,11 @@ impl App {
                 self.open_menu(self.pointer);
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
+            Message::Servers(servers) => self.servers = servers,
+            Message::OpenServer(host) => return self.open_server(&host),
+            Message::EjectServer(host) => return self.eject_server(&host),
+            Message::ServerMounted(host, result) => return self.server_mounted(host, result),
+            Message::ServerUnmounted(host, result) => self.server_unmounted(&host, result),
             Message::PathInput(text) => return self.path_input(text),
             Message::PathSubmit => return self.path_submit(),
             Message::PathPick(index) => return self.path_pick(index),
