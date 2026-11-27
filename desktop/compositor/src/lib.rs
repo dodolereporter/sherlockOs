@@ -3,6 +3,7 @@
 //! The library holds the state and the logic, the binary picks the backend.
 //! Architecture and tests: `docs/compositor.md`.
 
+mod activation;
 pub mod anim;
 pub mod capture;
 pub mod card;
@@ -52,6 +53,7 @@ pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
+mod x11_activation;
 mod x11_paste;
 mod xdnd;
 mod xwayland;
@@ -261,6 +263,9 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// Applications that bring their window forward, and the windows that ask for attention
+    /// (lot Q-52).
+    activation: activation::Activation,
     /// What was copied, for Super + V (lot D-42).
     clipboard: clipboard_history::ClipboardHistory,
 }
@@ -415,6 +420,9 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            activation: activation::Activation::new(
+                smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh),
+            ),
             clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
@@ -554,6 +562,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // It has what it asked for (lot Q-52).
+                self.attention_done(Some(window));
                 // From behind another window, it comes to the front with an animation (lot D-19d).
                 self.start_raise(window);
                 self.space.raise_element(window, true);
@@ -709,6 +719,7 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.attention_done(None);
         self.end_minimize_effects();
         self.end_closings();
         self.end_popup_closings();

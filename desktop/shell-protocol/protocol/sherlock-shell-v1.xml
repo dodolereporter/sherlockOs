@@ -30,7 +30,7 @@
     app_menu event of a window, and the register_app_menu and unregister_app_menu requests.
   </description>
 
-  <interface name="sherlock_shell_manager_v1" version="3">
+  <interface name="sherlock_shell_manager_v1" version="4">
     <description summary="list of the windows and state of the screens">
       Once bound, the compositor sends a toplevel event for every window that shows content,
       with its properties, then an output event for every screen, then done. After that, it
@@ -120,7 +120,7 @@
     </event>
   </interface>
 
-  <interface name="sherlock_shell_toplevel_v1" version="3">
+  <interface name="sherlock_shell_toplevel_v1" version="4">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
       manager. The id comes first, once. A window on a workspace that is not active keeps its
@@ -207,6 +207,7 @@
       <entry name="snapped" value="3" summary="placed in a half or a quarter of its screen"/>
       <entry name="minimized" value="4" summary="minimized: not shown"/>
       <entry name="activated" value="5" summary="the active window, the last one given the keyboard"/>
+      <entry name="attention" value="6" summary="asked to come forward without the right to take the keyboard: the shell shows it, until it gets the keyboard" since="4"/>
     </enum>
 
     <event name="state">

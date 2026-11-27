@@ -121,6 +121,12 @@ mod tests {
         Iconify,
         /// Ask for no decoration on the managed window (`_MOTIF_WM_HINTS`).
         Undecorate,
+        /// Ask for the managed window to be the active one (`_NET_ACTIVE_WINDOW`), from this
+        /// source: 1 an application, 2 a pager.
+        Activate(u32),
+        /// Ask for the managed window back from its iconic state (`WM_CHANGE_STATE` to
+        /// `NormalState`).
+        Restore,
         Quit,
     }
 
@@ -183,6 +189,7 @@ mod tests {
         let moveresize = atom(&conn, "_NET_WM_MOVERESIZE");
         let change_state = atom(&conn, "WM_CHANGE_STATE");
         let motif = atom(&conn, "_MOTIF_WM_HINTS");
+        let active_window = atom(&conn, "_NET_ACTIVE_WINDOW");
         loop {
             while let Some(event) = conn.poll_for_event().unwrap() {
                 if let Event::SelectionRequest(req) = event {
@@ -239,6 +246,20 @@ mod tests {
                 Ok(Command::Iconify) => {
                     // 3 is IconicState (ICCCM 4.1.4).
                     let event = ClientMessageEvent::new(32, window, change_state, [3, 0, 0, 0, 0]);
+                    let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+                    conn.send_event(false, root, mask, event).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Activate(source)) => {
+                    let data = [source, CURRENT_TIME, 0, 0, 0];
+                    let event = ClientMessageEvent::new(32, window, active_window, data);
+                    let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
+                    conn.send_event(false, root, mask, event).unwrap();
+                    conn.flush().unwrap();
+                }
+                Ok(Command::Restore) => {
+                    // 1 is NormalState (ICCCM 4.1.4).
+                    let event = ClientMessageEvent::new(32, window, change_state, [1, 0, 0, 0, 0]);
                     let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
                     conn.send_event(false, root, mask, event).unwrap();
                     conn.flush().unwrap();
@@ -524,6 +545,23 @@ mod tests {
             s.is_minimized(&window) && surface.is_minimized()
         });
         assert!(!h.state.is_visible(&window));
+        // The application asks for it back, with `WM_CHANGE_STATE` or `_NET_ACTIVE_WINDOW`
+        // (lot Q-52): without a click that let it, no keyboard stolen, it asks for attention.
+        commands.send(Command::Restore).unwrap();
+        h.run_until("attention asked with WM_CHANGE_STATE", |s| {
+            s.needs_attention(&window)
+        });
+        commands.send(Command::Activate(1)).unwrap();
+        h.sync(&commands, &window, 50);
+        assert!(h.state.is_minimized(&window) && h.state.needs_attention(&window));
+        // A pager (source 2) is obeyed: back, with the keyboard, and no longer asking.
+        commands.send(Command::Activate(2)).unwrap();
+        h.run_until("the window activated by a pager", |s| {
+            !s.is_minimized(&window) && s.focused_window().as_ref() == Some(&window)
+        });
+        assert!(!surface.is_minimized() && !h.state.needs_attention(&window));
+        // Minimized again, the dock brings it back.
+        h.state.minimize(&window);
         h.state.activate(&window);
         assert!(!h.state.is_minimized(&window) && !surface.is_minimized());
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));

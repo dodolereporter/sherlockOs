@@ -17,8 +17,8 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 use crate::State;
 
 /// Version of the global. Version 2 adds the `snapped` state of a screen, version 3 the global
-/// menu.
-const VERSION: u32 = 3;
+/// menu, version 4 the `attention` state of a window (lot Q-52).
+const VERSION: u32 = 4;
 
 /// First version with the global menu.
 const APP_MENU_SINCE: u32 = 3;

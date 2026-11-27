@@ -27,6 +27,7 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{
         compositor::with_states,
+        seat::WaylandFocus,
         shell::{wlr_layer::Layer, xdg::SurfaceCachedState},
     },
 };
@@ -756,6 +757,12 @@ impl State {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        if key_state == KeyState::Pressed {
+            let focus = keyboard
+                .current_focus()
+                .and_then(|f| WaylandFocus::wl_surface(&f).map(|s| s.into_owned()));
+            self.note_press(serial, focus.as_ref());
+        }
         let shortcut = keyboard.input(self, key, key_state, serial, time, |state, mods, sym| {
             let sym = sym.modified_sym();
             // The gesture key pressed and released alone toggles Mission Control (lot D-33).
@@ -1064,6 +1071,10 @@ impl State {
             serial,
             time,
         };
+        // A press lets the client it reaches grant an activation token with it (lot Q-52).
+        if state == ButtonState::Pressed {
+            self.note_press(serial, pointer.current_focus().as_ref());
+        }
         self.overview.cancel_tap();
         // The release that drops on an X11 window waits for it to take the data (lot D-29c).
         let last = match state {
