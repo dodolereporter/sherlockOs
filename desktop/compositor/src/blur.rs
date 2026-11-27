@@ -13,6 +13,7 @@ use std::{
     collections::HashMap,
     ffi::CStr,
     rc::Rc,
+    time::Instant,
 };
 
 use sherlock_ui::{blur as tokens, color};
@@ -48,6 +49,21 @@ pub enum Mode {
     Off,
 }
 
+/// Environment variable that chooses what glass gets behind it, whatever the renderer:
+/// `blur`, `veil` or `off`. For trials and boards only.
+pub const ENV: &str = "SHERLOCKOS_BLUR";
+
+impl Mode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "blur" => Some(Self::Blur),
+            "veil" => Some(Self::Veil),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
 /// One pass of the filter: a GL program of our own, and where its uniforms are.
 struct Pass {
     program: ffi::types::GLuint,
@@ -61,6 +77,27 @@ struct Passes {
     up: Pass,
     /// A GL error came up: no more blur in this session.
     failed: Cell<bool>,
+    /// The fence set after the last blur not judged yet, and when (lot D-37b).
+    fence: Cell<Option<(ffi::types::GLsync, Instant)>>,
+    pace: Cell<Pace>,
+    /// Whether the pace is judged: not once the tests chose the mode.
+    judged: Cell<bool>,
+    /// The chip was too slow: the veil for the rest of the session.
+    slow: Cell<bool>,
+}
+
+/// How many blurs in a row the graphics chip finished late (lot D-37b).
+#[derive(Debug, Default, Clone, Copy)]
+struct Pace {
+    late: u32,
+}
+
+impl Pace {
+    /// One more blur judged, `late` or in time: whether the chip is now too slow for the blur.
+    fn judge(&mut self, late: bool) -> bool {
+        self.late = if late { self.late + 1 } else { 0 };
+        self.late >= tokens::LATE_IN_A_ROW
+    }
 }
 
 /// The blur of one surface on one screen, kept from frame to frame.
@@ -129,17 +166,28 @@ impl Painter {
             Mode::Veil
         };
         tracing::info!(?mode, renderer = name, "behind glass");
-        Self {
+        let painter = Self {
             passes: passes.filter(|_| ready).map(Rc::new),
             composite,
             mode: Cell::new(mode),
             caches: RefCell::default(),
             screen: RefCell::default(),
+        };
+        // A trial on the software renderer may ask for the blur all the same (lot D-37b).
+        let asked = std::env::var(ENV).ok().and_then(|v| Mode::parse(&v));
+        if let Some(mode) = asked {
+            tracing::info!(?mode, "behind glass, asked by {ENV}");
+            painter.set_mode(mode);
         }
+        painter
     }
 
     pub fn mode(&self) -> Mode {
-        match self.passes.as_ref().is_some_and(|p| p.failed.get()) {
+        match self
+            .passes
+            .as_ref()
+            .is_some_and(|p| p.failed.get() || p.slow.get())
+        {
             true => Mode::Veil,
             false => self.mode.get(),
         }
@@ -147,6 +195,10 @@ impl Painter {
 
     /// Blur, if the renderer can, or the veil: the tests blur on the software renderer.
     pub fn set_mode(&self, mode: Mode) {
+        if let Some(passes) = &self.passes {
+            passes.judged.set(false);
+            passes.slow.set(false);
+        }
         let possible = self.passes.is_some() || mode != Mode::Blur;
         self.mode.set(if possible { mode } else { Mode::Veil });
     }
@@ -301,6 +353,10 @@ fn compile_passes(gl: &ffi::Gles2) -> Option<Passes> {
         down: down?,
         up: up?,
         failed: Cell::new(false),
+        fence: Cell::new(None),
+        pace: Cell::default(),
+        judged: Cell::new(true),
+        slow: Cell::new(false),
     })
 }
 
@@ -346,6 +402,38 @@ fn compile(gl: &ffi::Gles2, vertex: &str, fragment: &str) -> Option<Pass> {
 }
 
 impl Passes {
+    /// Judges the last blur once it is old enough: if the chip has not finished it yet, its
+    /// frame missed its slot. Then sets a fence after the blur being drawn, if none waits.
+    /// Smithay's GL bindings have no timer queries; a fence is in GLES 3. Inside
+    /// `with_context`, after the passes.
+    fn pace(&self, gl: &ffi::Gles2) {
+        if !self.judged.get() {
+            return;
+        }
+        if let Some((fence, set)) = self.fence.get() {
+            if set.elapsed() < tokens::LATE_AFTER {
+                return;
+            }
+            // SAFETY: the context is current; `fence` was made in it and is deleted once.
+            let status = unsafe {
+                let status = gl.ClientWaitSync(fence, 0, 0);
+                gl.DeleteSync(fence);
+                status
+            };
+            self.fence.set(None);
+            let mut pace = self.pace.get();
+            if pace.judge(status == ffi::TIMEOUT_EXPIRED) && !self.slow.replace(true) {
+                tracing::warn!("blur behind glass: the graphics chip is too slow, the veil now");
+            }
+            self.pace.set(pace);
+        }
+        // SAFETY: the context is current; the fence is deleted when it is judged.
+        let fence = unsafe { gl.FenceSync(ffi::SYNC_GPU_COMMANDS_COMPLETE, 0) };
+        if !fence.is_null() {
+            self.fence.set(Some((fence, Instant::now())));
+        }
+    }
+
     /// Copies `source` of the frame being drawn (in its buffer, `[x, y, w, h]`) into the first
     /// texture at half its size, then halves it down the textures and doubles it back up. The
     /// GL state Smithay's frame relies on is put back. Inside `with_context` only.
@@ -557,7 +645,10 @@ impl RenderElement<GlesRenderer> for BlurElement {
                     .iter()
                     .map(|t| (t.tex_id(), (t.width() as i32, t.height() as i32)))
                     .collect();
-                frame.with_context(|gl| passes.run(gl, area, &levels))?;
+                frame.with_context(|gl| {
+                    passes.run(gl, area, &levels);
+                    passes.pace(gl);
+                })?;
                 cache.stale.set(false);
                 cache.retried.set(false);
             } else {
@@ -603,5 +694,19 @@ mod tests {
             vec![(350, 39), (175, 20), (88, 10)]
         );
         assert_eq!(levels((1, 1).into()).len(), tokens::PASSES + 1);
+    }
+
+    #[test]
+    fn only_late_blurs_in_a_row_make_the_chip_too_slow() {
+        let mut pace = Pace::default();
+        for _ in 1..tokens::LATE_IN_A_ROW {
+            assert!(!pace.judge(true));
+        }
+        // One in time starts the count again.
+        assert!(!pace.judge(false));
+        for _ in 1..tokens::LATE_IN_A_ROW {
+            assert!(!pace.judge(true));
+        }
+        assert!(pace.judge(true));
     }
 }

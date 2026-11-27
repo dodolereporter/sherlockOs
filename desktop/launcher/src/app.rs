@@ -724,12 +724,13 @@ impl Launcher {
                     .center_y(look::ROW_HEIGHT),
             );
         }
-        container(list)
+        let panel = container(list)
             .width(look::WIDTH)
             .height(self.height())
             .padding(look::PADDING + metrics::BORDER_WIDTH)
-            .style(look::panel)
-            .into()
+            .style(look::panel);
+        // The blur behind its glass (lot D-37b).
+        sherlock_ui::glass::glass(panel, look::RADIUS).into()
     }
 
     /// The line under a result: its own, or what its first Enter or copy did.

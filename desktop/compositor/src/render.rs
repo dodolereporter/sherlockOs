@@ -617,6 +617,45 @@ fn push_layers(items: &mut Vec<Item>, output: &Output, view: &View, layers: &[La
     }
 }
 
+/// The rectangles of the frame that cover `rect` rounded by `radius` (lot D-37b).
+pub(crate) fn rounded_rects(
+    rect: Rectangle<i32, Physical>,
+    radius: f32,
+) -> Vec<Rectangle<i32, Physical>> {
+    let Rectangle { loc, size } = rect;
+    sherlock_ui::blur::rounded_region(loc.x, loc.y, size.w, size.h, radius)
+        .into_iter()
+        .map(|[x, y, w, h]| Rectangle::new((x, y).into(), (w, h).into()))
+        .collect()
+}
+
+/// The blur `surface` asks for behind its window drawn in `rect` from `geometry`, cut to the
+/// window's rounded `frame` (lot D-37b): Qt's translucent windows, our glass windows.
+fn window_blur(
+    surface: &WlSurface,
+    (rect, geometry): (Rectangle<i32, Physical>, Rectangle<i32, Logical>),
+    (frame, radius): (Rectangle<i32, Physical>, f32),
+) -> Vec<Rectangle<i32, Physical>> {
+    let region = crate::background_effect::region(surface);
+    if region.is_empty() {
+        return Vec::new();
+    }
+    let shape = rounded_rects(frame, radius);
+    let sx = f64::from(rect.size.w) / f64::from(geometry.size.w);
+    let sy = f64::from(rect.size.h) / f64::from(geometry.size.h);
+    let x = |v: i32| (f64::from(rect.loc.x) + f64::from(v - geometry.loc.x) * sx).round() as i32;
+    let y = |v: i32| (f64::from(rect.loc.y) + f64::from(v - geometry.loc.y) * sy).round() as i32;
+    region
+        .into_iter()
+        .flat_map(|r| {
+            let (left, top) = (x(r.loc.x), y(r.loc.y));
+            let (right, bottom) = (x(r.loc.x + r.size.w), y(r.loc.y + r.size.h));
+            let r = Rectangle::new((left, top).into(), (right - left, bottom - top).into());
+            shape.iter().filter_map(move |s| s.intersection(r))
+        })
+        .collect()
+}
+
 /// A surface tree, untouched (no clip, border or shadow), placed by `at`, with the blur it asks
 /// for just behind it (lot D-37). `popups`: its menus too, in front of it (smithay lists nested
 /// menus with the root surface, so a menu never has menus of its own here).
@@ -750,6 +789,15 @@ pub(crate) fn push_window(
         alpha: visual.opacity,
         radius,
     });
+    let rects = window_blur(surface, (rect, geometry), (frame, radius));
+    if !rects.is_empty() {
+        let key = Key::of(owner.clone(), Part::Blur);
+        items.push(Item::Blur {
+            key,
+            rects,
+            alpha: visual.opacity,
+        });
+    }
     if decorated && shadow {
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),

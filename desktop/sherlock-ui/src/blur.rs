@@ -4,6 +4,8 @@
 //! it under the surface. Where it cannot blur, it lays a veil of the desktop color instead, so
 //! that the glass still reads as denser. See "Blur behind glass" in `docs/compositor.md`.
 
+use std::time::Duration;
+
 /// Halvings of the picture behind, after the first one: the blur grows with each.
 pub const PASSES: usize = 2;
 /// Distance between the samples of each pass, in pixels of the reduced picture.
@@ -13,6 +15,13 @@ pub const SATURATION: f32 = 1.3;
 /// Opacity of the veil of the desktop color laid behind glass when there is no blur: the
 /// software renderer, or a graphics chip that cannot do it.
 pub const VEIL_OPACITY: f32 = 0.7;
+
+/// A blur the graphics chip has not finished this long after it was asked for is late: the
+/// frame it belongs to missed its 60 Hz slot.
+pub const LATE_AFTER: Duration = Duration::from_millis(16);
+/// After this many late blurs in a row, the veil takes the place of the blur for the session:
+/// the chip is too slow for it.
+pub const LATE_IN_A_ROW: u32 = 8;
 
 /// The rectangles, `[x, y, width, height]` in logical pixels, that cover a rectangle of
 /// `width` × `height` at (`x`, `y`) rounded by `radius`: a band per row in the corners, where

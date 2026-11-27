@@ -75,6 +75,9 @@ mod tests {
             self as kde_manager, OrgKdeKwinServerDecorationManager,
         },
     };
+    use wayland_protocols_plasma::blur::client::{
+        org_kde_kwin_blur::OrgKdeKwinBlur, org_kde_kwin_blur_manager::OrgKdeKwinBlurManager,
+    };
     use wayland_protocols_wlr::layer_shell::v1::client::{
         zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
         zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
@@ -3043,6 +3046,8 @@ mod tests {
     delegate_noop!(Client: ignore ExtBackgroundEffectManagerV1);
     delegate_noop!(Client: ExtBackgroundEffectSurfaceV1);
     delegate_noop!(Client: WlRegion);
+    delegate_noop!(Client: ignore OrgKdeKwinBlurManager);
+    delegate_noop!(Client: OrgKdeKwinBlur);
 
     /// The scene drawn as the real session draws it, with Mesa's software renderer, into the
     /// same texture from frame to frame, through a damage tracker that lives as long: what is
@@ -3268,6 +3273,101 @@ mod tests {
         for (got, want) in got.iter().zip(want) {
             assert!(got.abs_diff(want) <= 2, "{got} {want}");
         }
+        h.state.shutdown();
+    }
+
+    /// The blur items behind what the screen shows now, with the item just in front of each.
+    fn blurs(h: &Harness) -> Vec<(compositor::render::Item, compositor::render::Item)> {
+        use compositor::render::Item;
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let view = h.state.views()[0].1;
+        let now = h.state.now();
+        let items = compositor::render::items(&h.state, (&output, &view), None, false, now).0;
+        let mut pairs = Vec::new();
+        let mut front = None;
+        for item in items {
+            match item {
+                Item::Blur { .. } => pairs.push((front.take().unwrap(), item)),
+                _ => front = Some(item),
+            }
+        }
+        pairs
+    }
+
+    /// A Qt window that asks for the blur with KDE's protocol, its whole surface (lot D-37b):
+    /// the blur is behind its window, cut to its rounded corners, until it unsets it.
+    #[test]
+    fn a_window_gets_kde_s_blur_behind_it_cut_to_its_corners() {
+        use compositor::render::Item;
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        settle(&mut h);
+        let manager: OrgKdeKwinBlurManager = h.bind(&registry);
+        let blur = manager.create(&shown.surface, &qh, ());
+        blur.commit();
+        // Applied at the commit of the surface, not before.
+        settle(&mut h);
+        assert!(blurs(&h).is_empty());
+        shown.surface.commit();
+        settle(&mut h);
+        let pairs = blurs(&h);
+        assert_eq!(pairs.len(), 1);
+        let (Item::Window { clip, .. }, Item::Blur { rects, .. }) = &pairs[0] else {
+            panic!("{pairs:?}");
+        };
+        let covered = |x: i32, y: i32| rects.iter().any(|r| r.contains((x, y)));
+        let (x0, y0) = (clip.loc.x, clip.loc.y);
+        let (x1, y1) = (x0 + clip.size.w - 1, y0 + clip.size.h - 1);
+        assert!(rects.iter().all(|r| clip.contains_rect(*r)), "{rects:?}");
+        assert!(covered((x0 + x1) / 2, (y0 + y1) / 2));
+        assert!(covered(x0, (y0 + y1) / 2) && covered(x1, (y0 + y1) / 2));
+        for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+            assert!(!covered(x, y), "corner ({x}, {y})");
+        }
+        // Released, the blur stays; unset, it goes at the next commit.
+        blur.release();
+        settle(&mut h);
+        assert_eq!(blurs(&h).len(), 1);
+        manager.unset(&shown.surface);
+        shown.surface.commit();
+        settle(&mut h);
+        assert!(blurs(&h).is_empty());
+        h.state.shutdown();
+    }
+
+    /// The on-screen display of the media keys is glass too (lot D-37b): the blur is behind its
+    /// pill, at its opacity.
+    #[test]
+    fn the_osd_gets_the_blur_behind_it() {
+        use compositor::render::Item;
+        let mut h = Harness::start();
+        assert!(blurs(&h).is_empty());
+        let level = compositor::osd::Level {
+            kind: sherlock_ui::osd::Kind::Volume,
+            percent: 40,
+            muted: false,
+        };
+        h.state.show_osd(level, None);
+        let pairs = blurs(&h);
+        assert_eq!(pairs.len(), 1);
+        let (
+            Item::Osd { rect, alpha, .. },
+            Item::Blur {
+                rects,
+                alpha: under,
+                ..
+            },
+        ) = &pairs[0]
+        else {
+            panic!("{pairs:?}");
+        };
+        assert_eq!(alpha, under);
+        assert!(rects.iter().all(|r| rect.contains_rect(*r)));
+        let middle = (rect.loc.x + rect.size.w / 2, rect.loc.y + rect.size.h / 2);
+        assert!(rects.iter().any(|r| r.contains(middle)));
+        assert!(!rects.iter().any(|r| r.contains(rect.loc)), "the round end");
         h.state.shutdown();
     }
 

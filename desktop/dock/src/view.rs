@@ -202,7 +202,9 @@ impl Dock {
                 }
                 entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
             }
-            ui::menu(entries, dock::MENU_WIDTH).height(Length::Fill)
+            let menu = ui::menu(entries, dock::MENU_WIDTH).height(Length::Fill);
+            // The blur behind its glass (lot D-37b).
+            sherlock_ui::glass::glass(menu, metrics::MENU_RADIUS)
         });
         // It unfolds from its icon: from the side facing the dock.
         let origin = match self.geometry.position {
