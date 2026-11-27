@@ -905,6 +905,7 @@ fn send_frames(state: &State, output: &Output) {
         layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
     }
     state.send_lock_frames(output, time);
+    state.send_drag_frames(output, time);
 }
 
 #[cfg(test)]

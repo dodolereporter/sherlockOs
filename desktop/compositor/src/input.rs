@@ -146,6 +146,8 @@ enum Shortcut {
     ScreenshotTool,
     /// A key while the screenshot tool is open: every key stays with it.
     ToolKey(Keysym),
+    /// Escape during a drag and drop (lot D-29c).
+    CancelDrag,
     /// L: locks the session (lot D-25a).
     Lock,
     /// Enter on the rescue screen of the lock: the lock programs are tried again.
@@ -622,6 +624,9 @@ impl State {
         if self.overview_open() {
             return Some(CursorIcon::Default);
         }
+        if let Some(icon) = self.drag_cursor() {
+            return Some(icon);
+        }
         if let Some(gesture) = &self.gesture {
             // A window taken by its title bar is held in the closed hand; moved with the
             // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
@@ -785,6 +790,10 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::ToolKey(sym)));
             }
+            if state.dragging() && sym == Keysym::Escape {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(Shortcut::CancelDrag));
+            }
             if state.overview_open() && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
@@ -883,6 +892,11 @@ impl State {
             }
             Shortcut::ToolKey(sym) => {
                 self.tool_key(sym, true);
+                return;
+            }
+            Shortcut::CancelDrag => {
+                let time = u32::try_from(self.now().as_millis()).unwrap_or(u32::MAX);
+                self.cancel_drag(time);
                 return;
             }
             Shortcut::Lock => {
@@ -1008,8 +1022,12 @@ impl State {
                 Some(Hit::Decoration(window, control)) => Some((window.clone(), *control)),
                 _ => None,
             });
+            // A drag over an X11 window: the compositor speaks XDND to it (lot D-29c).
+            let hidden = self.dragging() && self.drag_motion(hit.as_ref(), location);
             match hit {
-                Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin)) => {
+                Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin))
+                    if !hidden =>
+                {
                     Some((surface, origin))
                 }
                 _ => None,
@@ -1045,6 +1063,14 @@ impl State {
             time,
         };
         self.overview.cancel_tap();
+        // The release that drops on an X11 window waits for it to take the data (lot D-29c).
+        let last = match state {
+            ButtonState::Released => pointer.grab_start_data().map(|d| d.button) == Some(button),
+            ButtonState::Pressed => false,
+        };
+        if self.dragging() && self.drag_button(button, state, last) {
+            return;
+        }
         if self.is_locked() {
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
