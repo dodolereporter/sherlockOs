@@ -222,6 +222,7 @@ fn arrows_choose_and_escape_closes() {
 fn a_click_starts_its_result_and_the_working_directory_is_kept() {
     let (mut launcher, started) = recorded();
     let _ = launcher.update(Message::Query("calc".into()));
+    settled(&mut launcher);
     let mut ui = Simulator::with_size(
         launcher::settings(),
         (look::WIDTH, launcher.height()),
