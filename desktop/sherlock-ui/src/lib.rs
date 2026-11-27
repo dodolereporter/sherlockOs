@@ -28,6 +28,7 @@ pub mod motion;
 pub mod notifications;
 pub mod osd;
 pub mod panels;
+pub mod screen_share;
 pub mod screenshot;
 pub mod strings;
 pub mod texts;

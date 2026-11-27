@@ -1,0 +1,56 @@
+[package]
+name = "portal"
+description = "Portal backend of the session: screen sharing through PipeWire, with our picker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlock-portal"
+path = "src/main.rs"
+
+[dependencies]
+# Runs the reaper of ended shares on the main thread, on zbus's reactor: the version zbus
+# already pulls.
+async-io = "=2.6.0"
+# The theme of the appearance file, read once by the picker (workspace crate).
+appearance-config = { path = "../appearance-config" }
+# The picker's window, as the launcher draws it, with the thumbnails as pixels (docs/bar.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+    "image-without-codecs",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+sherlock-ui = { path = "../sherlock-ui" }
+# Runs the blocking parts of a portal call (the picker, PipeWire's start) off the bus's
+# thread: the version zbus already pulls.
+blocking = "=1.7.0"
+# PipeWire, loaded at run time (ADR 0028): nothing to build against. The version already in
+# the lock.
+libloading = "=0.8.9"
+# The frame buffer shared with the compositor: the version already in the lock.
+memmap2 = "=0.9.12"
+# memfd and poll: the version smithay already pulls.
+rustix = { version = "=1.1.6", features = ["event", "fs"] }
+# The path of the compositor's shell socket (workspace crate).
+shell-protocol = { path = "../shell-protocol" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+# Client of the capture protocols, the versions the compositor's tests already use.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true
