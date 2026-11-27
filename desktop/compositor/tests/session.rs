@@ -140,6 +140,17 @@ mod tests {
         assert_eq!(s.out("args").split_whitespace().next(), Some("--xwayland"));
         assert_eq!(s.out("keyring").trim(), "--start --components=secrets");
         let env = s.out("env");
+        // The programs' folder is given, not added to the PATH (lot Q-39).
+        let (bin, path) = (s.dir.join("bin"), s.dir.join("path"));
+        assert!(
+            env.lines()
+                .any(|l| l == format!("SHERLOCKOS_BIN={}", bin.display())),
+            "{env}"
+        );
+        assert!(
+            env.lines().any(|l| l == format!("PATH={}", path.display())),
+            "{env}"
+        );
         assert!(
             env.contains("GNOME_KEYRING_CONTROL=/run/test/keyring"),
             "{env}"
