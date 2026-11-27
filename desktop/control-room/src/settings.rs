@@ -1,6 +1,6 @@
 //! The settings files Control Room reads and writes. They are the files the other programs
 //! already read and follow live: the appearance (every program), the dock, the wallpaper, the
-//! touchpad and the pointer (the compositor). Nothing here depends on iced, so that each file
+//! touchpad, the keyboard and the pointer (the compositor). Nothing here depends on iced, so that each file
 //! is written and read back in a temporary folder by the tests.
 
 use std::ffi::OsString;
@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use appearance_config::AppearanceConfig;
-use desktop_config::{clipboard, lock, pointer, touchpad, wallpaper};
+use desktop_config::{clipboard, keyboard, lock, pointer, touchpad, wallpaper};
 use dock_config::DockConfig;
 
 /// Where each file is, and where the installed wallpapers are.
@@ -18,6 +18,7 @@ pub struct Paths {
     pub dock: PathBuf,
     pub wallpaper: PathBuf,
     pub touchpad: PathBuf,
+    pub keyboard: PathBuf,
     pub pointer: PathBuf,
     /// Folders of installed wallpapers, most important first.
     pub wallpaper_dirs: Vec<PathBuf>,
@@ -43,6 +44,7 @@ impl Paths {
             dock: config_home.join("dock/dock.conf"),
             wallpaper: desktop.join(wallpaper::FILE),
             touchpad: desktop.join(touchpad::FILE),
+            keyboard: desktop.join(keyboard::FILE),
             pointer: desktop.join(pointer::FILE),
             lock: desktop.join(lock::FILE),
             clipboard: desktop.join(clipboard::FILE),
@@ -79,6 +81,7 @@ impl Paths {
             dock: dock_config::path()?,
             wallpaper: wallpaper::config_file(var)?,
             touchpad: touchpad::config_file(var)?,
+            keyboard: keyboard::config_file(var)?,
             pointer: pointer::config_file(var)?,
             wallpaper_dirs: wallpaper::dirs(var),
         })
@@ -92,6 +95,7 @@ pub enum File {
     Dock,
     Wallpaper,
     Touchpad,
+    Keyboard,
     Pointer,
     Lock,
     Clipboard,
@@ -105,6 +109,7 @@ impl Paths {
             File::Dock => &self.dock,
             File::Wallpaper => &self.wallpaper,
             File::Touchpad => &self.touchpad,
+            File::Keyboard => &self.keyboard,
             File::Pointer => &self.pointer,
             File::Lock => &self.lock,
             File::Clipboard => &self.clipboard,
@@ -113,11 +118,12 @@ impl Paths {
 }
 
 impl File {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Appearance,
         Self::Dock,
         Self::Wallpaper,
         Self::Touchpad,
+        Self::Keyboard,
         Self::Pointer,
         Self::Lock,
         Self::Clipboard,
@@ -131,6 +137,7 @@ pub struct Settings {
     pub dock: DockConfig,
     pub wallpaper: wallpaper::Config,
     pub touchpad: touchpad::Config,
+    pub keyboard: keyboard::Config,
     pub pointer: pointer::Config,
     pub lock: lock::Config,
     pub clipboard: clipboard::Config,
@@ -180,6 +187,11 @@ impl Settings {
                 self.touchpad = config;
                 problems.iter().map(ToString::to_string).collect()
             }
+            File::Keyboard => {
+                let (config, problems) = keyboard::Config::parse_lenient(text);
+                self.keyboard = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
             File::Pointer => {
                 let (config, problems) = pointer::Config::parse_lenient(text);
                 self.pointer = config;
@@ -209,6 +221,7 @@ impl Settings {
             File::Dock => self.dock.to_text(),
             File::Wallpaper => self.wallpaper.write_into(text),
             File::Touchpad => self.touchpad.write_into(text),
+            File::Keyboard => self.keyboard.write_into(text),
             File::Pointer => self.pointer.write_into(text),
             File::Lock => self.lock.write_into(text),
             File::Clipboard => self.clipboard.write_into(text),
