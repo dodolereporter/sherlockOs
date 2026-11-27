@@ -43,6 +43,9 @@ pub const STATUS_ICON_GAP: f32 = 6.0;
 /// The icons of the bar's indicators (network, sound, battery). The board draws them at 16;
 /// UI-01 enlarges them, found too small on the reference laptop.
 pub const STATUS_ICON: f32 = 18.0;
+/// The Wi-Fi and battery icons of the top bar: their drawings are wide and low, so at
+/// `STATUS_ICON` they looked smaller than the tall Bluetooth rune beside them (Q-27).
+pub const STATUS_ICON_WIDE: f32 = 22.0;
 /// Gap between the bottom of the bar and a menu it opens (Menus board: 46 then 52).
 pub const TOP_BAR_MENU_GAP: f32 = 6.0;
 /// Sherlock menu header: side of the avatar (the logo in its square), top, side and bottom

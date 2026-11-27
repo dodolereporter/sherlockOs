@@ -1159,7 +1159,11 @@ impl Bar {
         if let Some(network) = &self.network {
             items.push((
                 Indicator::Network,
-                glyph(network_frames(network, self.link)),
+                ui::live_icon_sized(
+                    network_frames(network, self.link),
+                    metrics::STATUS_ICON_WIDE,
+                    tint,
+                ),
             ));
         }
         if let Some(sound) = &self.sound {
