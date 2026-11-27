@@ -9,14 +9,17 @@ pub mod dbusmenu;
 pub mod global_menu;
 pub mod history;
 pub mod live;
+pub mod locate;
 pub mod menu;
 pub mod names;
 pub mod panel;
+pub mod programs;
 pub mod quick;
 pub mod registrar;
 pub mod shape;
 pub mod source;
 pub mod system;
+pub mod tray;
 pub mod unfold;
 pub mod user;
 

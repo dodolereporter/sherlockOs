@@ -357,8 +357,11 @@ menus are Kate 25.04's, as it exports them.
   Escape closes the submenu, then the menu. Tab reaches the menus of the bar after the Sherlock
   button, and Enter opens one with its first entry highlighted.
 - **Motion.** The menu of the bar unfolds from its top left corner and folds back like the
-  Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the new
-  one replaces the old at once, as on a Mac.
+  Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the
+  menu shown stays until the application has filled the next one (`AboutToShow`, then
+  `GetLayout` of that menu), which then replaces it at once at its own size, as on a Mac
+  (D-36d: the next menu used to open empty and tiny). Qt answers `GetLayout` of a menu with the
+  menu's own properties empty: only its entries are taken, and its button keeps its label.
 
 ### Which applications (D-36c)
 
@@ -376,6 +379,108 @@ menus are Kate 25.04's, as it exports them.
 - **X11 applications**: Qt over XWayland calls `RegisterWindow` with its real X11 window id,
   which the compositor matches (tested with a fake registration only: XWayland was not started
   for the check, it wakes the NVIDIA card on the reference laptop).
+
+## Notification area (lot D-45)
+
+The icons applications put in the notification area (Discord, Steam, a VPN, a USB key) wait
+behind a chevron, before the indicators, as the hidden icons of Windows do: a click on the
+chevron opens a glass popup under it, a grid of those icons. No board draws it: the measures
+are in `sherlock_ui::tray`, choices of the lot to review with the design.
+
+![The popup open on a 1920 × 1080 screen, the pointer on « VPN »](../desktop/bar/screenshots/tray-1920.png)
+![The same in the light theme](../desktop/bar/screenshots/tray-1920-light.png)
+![The same on a 1366 × 768 screen](../desktop/bar/screenshots/tray-1366.png)
+![The same in the light theme](../desktop/bar/screenshots/tray-1366-light.png)
+
+The captures come from `cargo test -p bar --test tray`, in software at scale 2, the bar and the
+popup rendered apart and laid where the compositor puts them, as for the global menu. The icons
+are ours (application icons, line icons as symbolic ones, a round pixmap): no other brand's.
+
+| Module | Role |
+| --- | --- |
+| `tray/watcher.rs` | `org.kde.StatusNotifierWatcher`, served by the bar |
+| `tray/host.rs` | The host: reads the items and follows them, a stream of `Event` |
+| `tray/mod.rs` | An item, its properties, its pixmaps, what a click asks of it (`Request`) |
+| `tray/icon.rs` | Where its icon is found |
+| `app/tray.rs` | The chevron, the popup, the clicks, the breath |
+| `locate.rs` | Where the chevron is drawn, for the popup to open under it |
+
+- **Protocol.** `StatusNotifierItem`, the protocol KDE wrote, which libappindicator,
+  libayatana-appindicator, Electron, Qt and KDE speak. The bar serves
+  `org.kde.StatusNotifierWatcher` at `/StatusNotifierWatcher`: `RegisterStatusNotifierItem`,
+  `RegisterStatusNotifierHost`, `RegisteredStatusNotifierItems`, `IsStatusNotifierHostRegistered`
+  (always true: the bar is a host, so applications that ask do not fall back on the X11 tray),
+  `ProtocolVersion`, and the four signals. As the registrar, it answers at once and asks for the
+  name without queueing nor replacing (`DO_NOT_QUEUE`): where Plasma's watcher owns it, the bar
+  registers there as a host (`org.kde.StatusNotifierHost-<pid>`) and gets the same items. The
+  freedesktop name (`org.freedesktop.StatusNotifierWatcher`) is not served: none of these
+  libraries looks for it.
+- **Items.** An item registers by its bus name (its object is then at `/StatusNotifierItem`), or
+  by an object path on its own connection, as libappindicator does. The host reads each with one
+  `GetAll` (`Id`, `Title`, `Status`, `IconName`, `IconThemePath`, `IconPixmap`, the attention and
+  overlay icons, `ToolTip`, `Menu`, `ItemIsMenu`), and again on each signal of its interface
+  (`NewIcon`, `NewAttentionIcon`, `NewOverlayIcon`, `NewTitle`, `NewToolTip`, `NewStatus`), a
+  burst coalesced into one read (`bus::coalesce`). `Passive` hides it. It goes when the watcher
+  says so, or when its application leaves the bus (`NameOwnerChanged`).
+- **Bounded.** As for the global menu: every call has the 1.5 s limit of the menus' connection
+  (`dbusmenu::TIMEOUT`) and runs on the bus's executor or in an iced task, never on the
+  interface thread. An application that hangs keeps its item unread, never the bar frozen.
+  What an application sends is bounded too (`tray::MAX_*`): 40 items at most (the watcher
+  refuses more with `LimitsExceeded`, the host reads no more, and the popup's rows still fit a
+  small screen), an item registered only at a valid bus name and object path, 8 pixmaps per icon
+  of 512 pixels a side at most, and 256 characters of its id, title and tooltip.
+- **Icons.** The name first: in the folder the application gives (`IconThemePath`, where
+  Electron and libappindicator write theirs, or a theme in it when it is an `icons` folder), then
+  in the user's icon theme, what it inherits, `hicolor` and `pixmaps` (the `icon-theme` crate the
+  dock and the launcher share). Else the pixmap: the smallest at least twice the size drawn,
+  ARGB32 in network byte order turned into RGBA. A drawing (SVG, or a PNG inside an SVG as in the
+  dock) goes through `sherlock_ui::raster`, rasterized at twice its size and drawn with the linear
+  sampler: sharp at scales 1 to 2. A symbolic icon (`-symbolic`) takes the color of the text of
+  the theme, light or dark (`raster::tinted`). The overlay sits at the bottom right corner, at 55 %
+  of the icon. An item without an icon shows its initial.
+- **Sizes.** Icons of 22 in cells of 40, 2 apart, 5 columns at most; the line of the tooltip
+  under the grid, 26 high. The popup is as wide as its columns, at least 200, on the menus' glass,
+  radius 12, with the menus' shadow on the GPU, 6 below the bar. Its middle is under the chevron's,
+  and it never goes past where the panels end. Found from the chevron's real place
+  (`locate`), whatever the width of the indicators, the screen and its scale.
+- **Chevron.** A ghost button like the indicators', veiled with its green mark while the popup is
+  open. It points down, and turns half a turn up on the panels' spring as the popup opens, back as
+  it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
+  chevron. Tab reaches it before the indicators; Enter opens the popup.
+- **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
+  `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal.
+- **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
+  text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
+  would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
+- **Attention.** An item in `NeedsAttention` shows its attention icon when it has one, and
+  breathes three times (12 % larger and back, 1.6 s a breath, on a sine, never a blink) when it
+  starts to and each time the popup opens; then it rests. The chevron carries an amber dot as long
+  as an item needs attention. No endless pulse: at rest, no frame is drawn.
+- **Motion.** The popup unfolds from the middle of its top edge and folds back like a panel, on
+  the GPU; clicked again while it folds, it unfolds again in the same popup. Escape, a click
+  elsewhere or a second click on the chevron close it. One popup holds the grab at a time: a
+  panel, the Sherlock menu or an application's menu takes it away at once, and the popup takes
+  them away. When the icons shown need another size, it opens again at the new size.
+
+### The X11 tray (XEmbed)
+
+Checked on the reference laptop:
+
+- **AnyDesk 7.1.4** (its Debian package) only knows the X11 tray: `GtkStatusIcon`
+  (`gtk_status_icon_*`, `_NET_SYSTEM_TRAY_S%d`, `_XEMBED_INFO` in the binary), no
+  libappindicator. Its icon needs XEmbed.
+- **Steam** carries its own `libappindicator.so.1`, which looks for
+  `org.kde.StatusNotifierWatcher`: `StatusNotifierItem`.
+- **Discord** is not installed there. Electron applications speak `StatusNotifierItem`; not
+  checked with Discord itself.
+
+So XEmbed is needed, for AnyDesk at least. The old X11 tray icons go through KDE's
+`xembedsniproxy`, which the session starts when it is installed (lot D-45b, see "Everyday
+services" in `docs/compositor.md`): on Debian 13 it comes with the `plasma-workspace` package (no
+package of its own), and it is on the reference laptop (`/usr/bin/xembedsniproxy`). It owns the
+X11 tray of XWayland and gives each icon to the bar's watcher as a `StatusNotifierItem`, so they
+show in the popup like the others. A proxy of our own, or the same inside the compositor, may
+come later if needed.
 
 ## Attached to the top edge
 
@@ -405,9 +510,16 @@ that is neither the old one nor the new one.
 
 It has the entries of the Menus board: a header with the user name and « Session ouverte »,
 then « À propos de cet ordinateur », « Réglages », « Mises à jour », « Passer en mode jeu »,
-« Verrouiller », « Fermer la session », « Éteindre ». None of these actions exists yet: each
-entry stays enabled, so it can be walked through, and activating it logs it and closes the
-menu. Nothing is simulated.
+« Verrouiller », « Fermer la session », « Éteindre ». Since D-36d they act:
+
+| Entry | What it does |
+| --- | --- |
+| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
+| « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
+| « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
+| « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |
+
+Every other entry closes the menu once it has run.
 
 Keyboard:
 
@@ -769,8 +881,8 @@ error; `RUST_LOG=bar=debug` shows more.
    (`pactl set-sink-mute @DEFAULT_SINK@ toggle`) or unplug the charger: the bar should follow
    right away.
 4. **Menu**: click the Sherlock button. The menu opens below it, the button gets a light
-   veil. Down, Up, Enter, Escape. An activated entry is logged:
-   `Sherlock menu entry not available yet action=Lock`. A click elsewhere closes the menu.
+   veil. Down, Up, Enter, Escape. « Réglages » opens Control Room; « Éteindre » asks for a
+   second click. A click elsewhere closes the menu.
 5. **Keyboard in the bar**: click into the bar (on its background, between the buttons), then
    Tab. The first Tab rings the Sherlock button; each Tab moves the ring to the next workspace,
    then back to Sherlock. Enter activates exactly the ringed button: the menu opens on
@@ -843,6 +955,13 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   overshoot, the spring there and back, turned back halfway without a jump.
 - **Menu**: keyboard walk, activation, Escape, closing by the compositor, surface size from the
   board.
+- **Sherlock menu entries** (D-36d, `app.rs`, programs and session commands recorded, never
+  run): « Réglages » and « À propos » start `control-room`; « Verrouiller » runs `Lock` at once;
+  « Fermer la session » and « Éteindre » arm on the first click, ignore a double click, run once
+  on a later click, and Escape disarms; « Mises à jour » and « Passer en mode jeu » do nothing,
+  say « Bientôt » and take no highlight. From « Fichier » to « Édition » under the pointer
+  (`tests/global_menu.rs`), « Fichier » stays while « Édition » is read, which then shows at its
+  size with its entries, both buttons keeping their labels.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
   activates, Tab after Tab; Escape clears the ring.
 - **Global menu** (`tests/dbusmenu.rs`, `tests/global_menu.rs`, D-36b): a fake application on
@@ -855,6 +974,20 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   captures in both themes at 1920 × 1080 and 1366 × 768, every menu in the bar at 1920 and
   « » » at 1366. In `global_menu.rs`, the placement and « » », the cursor, the width and height
   of a menu; in `names.rs`, the application name from its `app_id`.
+- **Notification area** (`tests/tray.rs`, D-45): a fake application on a private bus (its own
+  `dbus-daemon`, never the user's bus) registers its item by name: it reaches the bar, with its
+  tooltip without markup and its pixels for an icon name found nowhere; the chevron shows, the
+  popup opens, a click on its cell gives `TrayClick`, and what it sends reaches the application as
+  `Activate`, the wheel as `Scroll -120 vertical`; `NewStatus` to `NeedsAttention` is read again and
+  the chevron gets its dot; the application leaving the bus takes its item away, and the chevron
+  with it. With another watcher on the bus, the bar registers there as a host and gets the item.
+  The captures in both themes at 1920 × 1080 and 1366 × 768, the popup under the chevron. In
+  `tray/`: a pixmap from ARGB in network order to RGBA, the pixmap chosen by size, an item by name
+  or by path, the properties and the tooltip, the folder of the application before the theme
+  before the pixels, a symbolic icon. In `app/tray.rs`: no chevron without an icon to show, Tab
+  and Enter, the popup unfolding, folding, Escape, a click elsewhere, a panel taking its place,
+  opening again at a new size, and an icon breathing three times then resting. In `sherlock-ui`:
+  the size of the popup, the breath, and a symbolic icon tinted with its alpha kept.
 - **Registrar** (`tests/registrar.rs`): on a private bus (its own `dbus-daemon`, never the
   user's bus), `RegisterWindow` answered in under 50 ms (the best of five) and passed on with
   the caller's process and bus name, `GetMenuForWindow`; a second registrar leaves the name to
@@ -980,8 +1113,11 @@ shows against one.
 ## What this batch does not do
 
 - The application name from its `.desktop` file came with D-36.
-- The Sherlock menu actions: lock (login screen), game mode, settings, updates.
+- The Sherlock menu's game mode and updates, and a page « À propos » in Control Room.
 - The game mode and the choice of the graphics card: their tiles wait for their batches.
+- The notification area: the menu of an item on a right click and its icons kept in the bar
+  come with D-45a; the X11 tray with D-45b (see « The X11 tray »). When Plasma's watcher, whose
+  host the bar is, restarts, the bar does not register again before it restarts too.
 - Bluetooth: the first adapter only; no file transfer, no audio profile choice.
 - Several outputs: the bar opens on the active output (`StartMode::Active`). Its shape
   already follows that screen alone; a bar on every screen needs the menu to open on the

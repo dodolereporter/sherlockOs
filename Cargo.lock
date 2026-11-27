@@ -115,17 +115,20 @@ dependencies = [
 name = "apps"
 version = "0.0.0"
 dependencies = [
+ "desktop-config",
  "dock",
  "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
  "icon-theme",
+ "image",
  "launcher",
  "log",
  "mime-apps",
  "resvg",
  "sherlock-ui",
+ "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
 ]
@@ -324,6 +327,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "image",
  "launcher",
  "libc",
@@ -2135,6 +2139,7 @@ dependencies = [
  "iced_exwlshell",
  "iced_test",
  "icon-theme",
+ "image",
  "libc",
  "mime-apps",
  "sherlock-ui",
