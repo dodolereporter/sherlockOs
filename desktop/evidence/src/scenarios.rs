@@ -1594,3 +1594,28 @@ fn many_applications_and_long_names_stay_readable() {
     capture(&bench.app, "evidence-chooser-long-light");
     color::set_active(Theme::Dark);
 }
+
+/// Captures of the breadcrumb in a deep folder with a long name, at 1920 × 1080 and in the
+/// smallest window (lot E-04): the long name keeps its start and its end, the segments fold to
+/// fit, the last one always shows.
+#[test]
+fn path_bar_captures() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = Bench::new("path-capture");
+    let deep = "projet/rapports-annuels-de-la-societe-version-definitive/2026/novembre/semaine-48";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    for (size, tag) in [
+        ((1920.0, 1080.0), "1080p"),
+        (sherlock_ui::evidence::MIN_WINDOW, "small"),
+    ] {
+        bench.send(Message::Resized(iced::Size::new(size.0, size.1)));
+        bench.app.settle();
+        capture_at(&bench.app, &format!("evidence-path-crumbs-{tag}"), size);
+    }
+    // The side buttons of the mouse go back and forward, like Alt+← and Alt+→.
+    bench.send(Message::Back);
+    assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
+    bench.send(Message::Forward);
+    assert_eq!(bench.app.location, Location::Folder(bench.path(deep)));
+}

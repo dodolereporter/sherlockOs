@@ -500,6 +500,11 @@ impl App {
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 Some(Message::Released)
             }
+            // The side buttons of a mouse, as in every file manager.
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Back)) => Some(Message::Back),
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Forward)) => {
+                Some(Message::Forward)
+            }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
             _ => None,
