@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn never_survives_a_wrong_line() {
-        // What the compositor reads: "Jamais" chosen in Control Room, then a typo by hand
+        // What the compositor reads: never chosen in Control Room, then a typo by hand
         // and a key of a later version. The delay stays at never, the picture is taken.
         let dir = std::env::temp_dir().join(format!("desktop-config-lock-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
