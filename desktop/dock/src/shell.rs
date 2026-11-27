@@ -18,7 +18,7 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, event_created_child};
 
-use crate::windows::{Control, Owns, Place, Request, Source, SourceError, Window, Windows};
+use crate::windows::{Control, Owns, Place, Request, Source, SourceError, Stamps, Window, Windows};
 
 /// The control of the running shell source, for `windows::Auto`.
 static CONTROL: Mutex<Option<ShellControl>> = Mutex::new(None);
@@ -103,8 +103,12 @@ impl Source for Shell {
             .iter()
             .filter(|t| t.described)
             .map(|t| Window {
+                id: t.id.into(),
                 app_id: t.app_id.clone(),
+                title: t.title.clone(),
                 activated: t.activated,
+                minimized: t.minimized,
+                recency: t.recency,
             })
             .collect();
         let covered = self
@@ -153,6 +157,7 @@ struct Shared {
 
 struct Handle {
     toplevel: SherlockShellToplevelV1,
+    id: u32,
     app_id: String,
     /// The screen and rectangle last sent with `set_rectangle`.
     sent: Option<(String, (i32, i32, i32, i32))>,
@@ -212,6 +217,22 @@ impl Control for ShellControl {
         tracing::info!(?request, count, "windows asked");
     }
 
+    fn send_to(&self, request: Request, window: &Window) {
+        let shared = lock(&self.shared);
+        let Some(handle) = shared.windows.iter().find(|w| u64::from(w.id) == window.id) else {
+            tracing::info!(?request, id = window.id, "the window is gone");
+            return;
+        };
+        match request {
+            Request::Activate => handle.toplevel.activate(),
+            Request::Minimize => handle.toplevel.minimize(),
+            Request::Close => handle.toplevel.close(),
+        }
+        drop(shared);
+        self.flush();
+        tracing::info!(?request, id = window.id, "window asked");
+    }
+
     fn place(&self, places: Vec<Place>) {
         let mut shared = lock(&self.shared);
         shared.places = places;
@@ -226,6 +247,7 @@ impl Control for ShellControl {
 #[derive(Default)]
 struct Toplevels {
     list: Vec<Toplevel>,
+    stamps: Stamps,
     /// Each screen, and whether a maximized or fullscreen window covers it.
     outputs: BTreeMap<String, bool>,
     /// Screens changed in this batch; `None` for a screen gone.
@@ -238,10 +260,16 @@ struct Toplevels {
 #[derive(Debug)]
 struct Toplevel {
     handle: SherlockShellToplevelV1,
+    id: u32,
     app_id: String,
+    title: String,
     activated: bool,
+    minimized: bool,
+    recency: u64,
     pending_app_id: Option<String>,
-    pending_activated: Option<bool>,
+    pending_title: Option<String>,
+    /// Activated, minimized.
+    pending_state: Option<(bool, bool)>,
     /// A `done` came after it appeared.
     described: bool,
 }
@@ -260,6 +288,7 @@ impl Toplevels {
             .filter(|t| t.described)
             .map(|t| Handle {
                 toplevel: t.handle.clone(),
+                id: t.id,
                 app_id: t.app_id.clone(),
                 sent: old
                     .iter_mut()
@@ -303,10 +332,15 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
         match event {
             manager::Event::Toplevel { toplevel } => state.list.push(Toplevel {
                 handle: toplevel,
+                id: 0,
                 app_id: String::new(),
+                title: String::new(),
                 activated: false,
+                minimized: false,
+                recency: 0,
                 pending_app_id: None,
-                pending_activated: None,
+                pending_title: None,
+                pending_state: None,
                 described: false,
             }),
             manager::Event::Output { name, state: flags } => {
@@ -329,8 +363,16 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                     if let Some(app_id) = toplevel.pending_app_id.take() {
                         toplevel.app_id = app_id;
                     }
-                    if let Some(activated) = toplevel.pending_activated.take() {
+                    if let Some(title) = toplevel.pending_title.take() {
+                        toplevel.title = title;
+                    }
+                    if let Some((activated, minimized)) = toplevel.pending_state.take() {
+                        toplevel.recency =
+                            state
+                                .stamps
+                                .follow(toplevel.activated, activated, toplevel.recency);
                         toplevel.activated = activated;
+                        toplevel.minimized = minimized;
                     }
                     toplevel.described = true;
                 }
@@ -366,10 +408,13 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Toplevels {
         };
         let toplevel = &mut state.list[index];
         match event {
+            toplevel::Event::Id { id } => toplevel.id = id,
             toplevel::Event::AppId { app_id } => toplevel.pending_app_id = Some(app_id),
+            toplevel::Event::Title { title } => toplevel.pending_title = Some(title),
             toplevel::Event::State { state: flags } => {
                 let activated = holds(&flags, toplevel::State::Activated as u32);
-                toplevel.pending_activated = Some(activated);
+                let minimized = holds(&flags, toplevel::State::Minimized as u32);
+                toplevel.pending_state = Some((activated, minimized));
             }
             // Gone, but published with the rest of its batch: only `done` makes a consistent
             // state (a window closing and another opening must not read as one window less).

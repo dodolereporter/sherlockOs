@@ -74,11 +74,15 @@ pub enum Icon {
     Power,
     /// An open arc, turned while the password is checked.
     Spinner,
+    Bluetooth,
+    Touchpad,
+    Grid,
+    Sidebar,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 46] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -121,6 +125,10 @@ impl Icon {
         Self::Restart,
         Self::Power,
         Self::Spinner,
+        Self::Bluetooth,
+        Self::Touchpad,
+        Self::Grid,
+        Self::Sidebar,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -210,6 +218,16 @@ impl Icon {
             Self::Restart => "M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4v4h4",
             Self::Power => "M12 3v8M7.2 6.2a7.5 7.5 0 1 0 9.6 0",
             Self::Spinner => "M12 4a8 8 0 1 1-8 8",
+            // The Reglages board's.
+            Self::Bluetooth => "M7 7l10 10-5 4V3l5 4L7 17",
+            // A touchpad with its button line, drawn for Control Room.
+            Self::Touchpad => {
+                "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM4 15h16M12 15v5"
+            }
+            // « Dock et barre » in the Reglages board.
+            Self::Grid => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+            // A window with its sidebar: shows or hides a folded sidebar.
+            Self::Sidebar => "M4 5h16v14H4zM10 5v14",
         }
     }
 

@@ -6,7 +6,8 @@
 
 use std::sync::OnceLock;
 
-use iced::widget::{button, container, text_input};
+use iced::overlay::menu as dropdown_list;
+use iced::widget::{button, container, pick_list, text_input};
 use iced::{Background, Border, Shadow, Theme, border, theme};
 
 use crate::color::{self, Color, Palette};
@@ -162,6 +163,58 @@ fn ghost(
         button::Status::Disabled => (None, p.text_tertiary),
     };
     button_style(fill, text, border::rounded(radius))
+}
+
+/// Dropdown menu (D-26a): drawn as a secondary button, its value in primary text and its arrow
+/// in tertiary; hovered or open, the veils of a secondary button.
+pub fn dropdown(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let p = palette(theme);
+    let fill = match status {
+        pick_list::Status::Active => color::TRANSPARENT,
+        pick_list::Status::Hovered => p.hover,
+        pick_list::Status::Opened { .. } => p.pressed,
+    };
+    pick_list::Style {
+        text_color: p.text_primary.into(),
+        placeholder_color: p.text_secondary.into(),
+        handle_color: p.text_tertiary.into(),
+        background: Background::Color(fill.into()),
+        border: outline(
+            metrics::BORDER_WIDTH,
+            p.secondary_border,
+            metrics::BUTTON_RADIUS,
+        ),
+    }
+}
+
+/// The choices of an open dropdown menu: a menu's glass, the choice under the pointer on the
+/// selection's blue.
+pub fn dropdown_menu(theme: &Theme) -> dropdown_list::Style {
+    let p = palette(theme);
+    dropdown_list::Style {
+        background: Background::Color(p.menu_glass.into()),
+        border: outline(metrics::BORDER_WIDTH, p.menu_border, metrics::MENU_RADIUS),
+        text_color: p.text_primary.into(),
+        selected_text_color: p.text_primary.into(),
+        selected_background: Background::Color(p.selected_row.into()),
+        shadow: Shadow::default(),
+    }
+}
+
+/// The ring around a picture to choose from (D-26a): green around the chosen one, nothing
+/// around the others, so that choosing does not move anything.
+pub fn picture_ring(chosen: bool, radius: f32) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let edge = if chosen {
+            palette(theme).accent
+        } else {
+            color::TRANSPARENT
+        };
+        container::Style {
+            border: outline(crate::control_room::WALLPAPER_RING, edge, radius),
+            ..container::Style::default()
+        }
+    }
 }
 
 /// Icon-only button, without background at rest.
@@ -733,6 +786,26 @@ mod tests {
             ("open menu entry", menu_item_open),
             ("destructive menu entry", menu_item_danger),
         ];
+        // The choices of a dropdown menu, open over a window or a card.
+        let list = dropdown_menu(&theme);
+        let (Background::Color(glass), Background::Color(chosen)) =
+            (list.background, list.selected_background)
+        else {
+            panic!("dropdown menu without background colors");
+        };
+        for under in [p.window, p.card] {
+            let on = ("dropdown menu".to_owned(), Color::from(glass).over(under));
+            check(
+                &mut failures,
+                "dropdown choice",
+                list.text_color.into(),
+                None,
+                &on,
+            );
+            let what = "dropdown choice under the pointer";
+            let text = list.selected_text_color.into();
+            check(&mut failures, what, text, Some(chosen.into()), &on);
+        }
         for on in menus(p) {
             for (name, style) in entries {
                 for status in STATUSES {
@@ -767,6 +840,24 @@ mod tests {
                     let what = format!("field {part} ({status:?})");
                     check(&mut failures, &what, text.into(), Some(field.into()), &on);
                 }
+            }
+            for status in [
+                pick_list::Status::Active,
+                pick_list::Status::Hovered,
+                pick_list::Status::Opened { is_hovered: false },
+            ] {
+                let s = dropdown(&theme, status);
+                let Background::Color(fill) = s.background else {
+                    panic!("dropdown without a background color");
+                };
+                let what = format!("dropdown ({status:?})");
+                check(
+                    &mut failures,
+                    &what,
+                    s.text_color.into(),
+                    Some(fill.into()),
+                    &on,
+                );
             }
             // Texts laid straight on the surface: content, description, label.
             for (name, text) in [

@@ -1,6 +1,5 @@
 //! The pointer setting, `<config dir>/pointer.conf`: what the compositor adds to the pointer.
-//! The compositor reads it again when it changes; Control Room's accessibility page will
-//! write it.
+//! The compositor reads it again when it changes; Control Room's touchpad page writes it.
 //!
 //! ```text
 //! # true: a green ring leaves each click, and the pointer sinks (false by default).
@@ -34,32 +33,34 @@ pub struct Config {
 
 impl Config {
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values are
-    /// refused, so that a typo does not go unnoticed.
+    /// refused, so that a typo does not go unnoticed: the error of the first one is returned.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let (config, mut problems) = Self::parse_lenient(text);
+        match problems.is_empty() {
+            true => Ok(config),
+            false => Err(problems.remove(0)),
+        }
+    }
+
+    /// Reads what can be read: each line that cannot is left at its default and listed.
+    pub fn parse_lenient(text: &str) -> (Self, Vec<Error>) {
         let mut config = Self::default();
-        for (i, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let error = |reason: String| Error::Line {
-                line: i + 1,
-                reason,
-            };
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| error("expected key = value".into()))?;
-            let value = value.trim();
-            match key.trim() {
+        let mut problems = Vec::new();
+        for (line, pair) in crate::conf::pairs(text) {
+            let taken = pair.and_then(|(key, value)| match key {
                 "show-clicks" => {
                     config.show_clicks = value
                         .parse()
-                        .map_err(|_| error(format!("expected true or false, not {value:?}")))?;
+                        .map_err(|_| format!("expected true or false, not {value:?}"))?;
+                    Ok(())
                 }
-                key => return Err(error(format!("unknown key {key:?}"))),
+                key => Err(format!("unknown key {key:?}")),
+            });
+            if let Err(reason) = taken {
+                problems.push(Error::Line { line, reason });
             }
         }
-        Ok(config)
+        (config, problems)
     }
 
     /// Reads the settings file. A missing file is the default setting.
@@ -72,6 +73,14 @@ impl Config {
                 source,
             }),
         }
+    }
+
+    /// `text`, the file as it is, with the keys whose value changed set again; everything
+    /// else stays (see `touchpad::Config::write_into`).
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse_lenient(text);
+        let values = |c: &Self| [("show-clicks", c.show_clicks.to_string())];
+        crate::conf::update(text, &values(self), &values(&read))
     }
 }
 
@@ -101,6 +110,14 @@ mod tests {
         assert!(matches!(err, Error::Line { line: 2, .. }), "{err}");
         let err = Config::parse("clicks = true").unwrap_err();
         assert!(matches!(err, Error::Line { line: 1, .. }), "{err}");
+    }
+
+    #[test]
+    fn what_control_room_writes_reads_back() {
+        for show_clicks in [false, true] {
+            let config = Config { show_clicks };
+            assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
+        }
     }
 
     #[test]

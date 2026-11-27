@@ -124,6 +124,9 @@ pub enum Key {
     Last,
     Activate,
     Close,
+    /// Left and Right: the menus of an application, from one to the next and into a submenu.
+    Left,
+    Right,
 }
 
 /// Menu keys: arrows, Home, End, Enter, Space, Escape. Tab goes through focus.
@@ -141,6 +144,8 @@ pub fn key(event: keyboard::Event) -> Option<Key> {
         Named::End => Key::Last,
         Named::Enter | Named::Space => Key::Activate,
         Named::Escape => Key::Close,
+        Named::ArrowLeft => Key::Left,
+        Named::ArrowRight => Key::Right,
         _ => return None,
     })
 }
@@ -154,7 +159,7 @@ pub fn move_cursor(cursor: Option<usize>, key: Key) -> Option<usize> {
         (Key::Last, _) | (Key::Previous, None) => Some(last),
         (Key::Next, Some(i)) => Some(if i >= last { 0 } else { i + 1 }),
         (Key::Previous, Some(i)) => Some(if i == 0 { last } else { i - 1 }),
-        (Key::Activate | Key::Close, cursor) => cursor,
+        (Key::Activate | Key::Close | Key::Left | Key::Right, cursor) => cursor,
     }
 }
 
