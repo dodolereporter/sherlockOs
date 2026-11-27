@@ -84,14 +84,16 @@ mod tests {
             );
             frames.push(picture);
         }
-        let lit = |p: &image::RgbaImage| p.pixels().filter(|px| px.0[..3] != [0, 0, 0]).count();
-        // The first frame is the whole picture, the last one black; the light shrinks between.
-        assert!(lit(&frames[0]) > (w * h / 2) as usize);
-        assert_eq!(lit(&frames[7]), 0, "the last frame is black");
-        let counts: Vec<usize> = frames.iter().map(lit).collect();
-        assert!(counts.windows(2).all(|c| c[0] >= c[1]), "{counts:?}");
         let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("screen-off-board.png");
         board.save(&path).unwrap();
         println!("board: {}", path.display());
+        let lit = |p: &image::RgbaImage| p.pixels().filter(|px| px.0[..3] != [0, 0, 0]).count();
+        // The first frame is the whole picture, the last one black. From the second one, the
+        // glow lights the whole squashed picture (the desktop has black parts, without its
+        // wallpaper), and the light only shrinks.
+        assert!(lit(&frames[0]) > (w * h / 2) as usize);
+        assert_eq!(lit(&frames[7]), 0, "the last frame is black");
+        let counts: Vec<usize> = frames.iter().map(lit).collect();
+        assert!(counts[1..].windows(2).all(|c| c[0] >= c[1]), "{counts:?}");
     }
 }
