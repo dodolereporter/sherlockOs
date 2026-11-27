@@ -199,16 +199,17 @@ pub fn brightness(
     let path = notified(&light);
     let file = File::open(&path)?;
     let mut events = inotify(&path);
+    let read = |file: &File| {
+        let mut bytes = [0u8; 32];
+        let n = file.read_at(&mut bytes, 0).unwrap_or(0);
+        bytes[..n].to_vec()
+    };
+    // Read once, so that sysfs knows what was seen; here rather than on the thread, which may
+    // start late: a change made meanwhile would be taken for the first value (lot Q-18b).
+    let mut last = read(&file);
     let thread = std::thread::Builder::new()
         .name(String::from("watch-brightness"))
         .spawn(move || {
-            let read = |file: &File| {
-                let mut bytes = [0u8; 32];
-                let n = file.read_at(&mut bytes, 0).unwrap_or(0);
-                bytes[..n].to_vec()
-            };
-            // Read once, so that sysfs knows what was seen.
-            let mut last = read(&file);
             let timeout = i32::try_from(CHECK.as_millis()).unwrap_or(1000);
             loop {
                 let mut fds = [
@@ -323,16 +324,6 @@ mod tests {
         std::fs::create_dir_all(&light).unwrap();
         std::fs::write(light.join("brightness"), "051").unwrap();
         std::fs::write(light.join("actual_brightness"), "051").unwrap();
-        // Written in place, as the kernel does: `fs::write` truncates first, and the empty
-        // file between the two is a change of its own, seen or not depending on the timing.
-        let set = |value: &str| {
-            use std::io::Write as _;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(light.join("actual_brightness"))
-                .unwrap();
-            file.write_all(value.as_bytes()).unwrap();
-        };
         std::fs::write(light.join("max_brightness"), "255").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let wanted = Arc::new(AtomicBool::new(true));
@@ -344,7 +335,16 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        // As the kernel changes it: in one write. `std::fs::write` truncates first, and the
+        // watcher could read the empty file in between, a change of its own (lot Q-18b).
+        let set = |value: &str| {
+            use std::os::unix::fs::FileExt as _;
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(light.join("actual_brightness"))
+                .unwrap();
+            file.write_all_at(value.as_bytes(), 0).unwrap();
+        };
         set("128");
         assert!(reaches(&count, 1));
         // The same value written again is no change.
