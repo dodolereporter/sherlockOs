@@ -1,6 +1,10 @@
 //! Anchored surfaces (`zwlr_layer_shell_v1`): the bar, the dock, the launcher and the
 //! notifications are separate programs anchored to a screen edge (ADR 0005).
 //!
+//! Only the clients of the shell socket see the global (ADR 0021, lot D-46): an application on
+//! the session's socket, a Flatpak one included, cannot put a surface over every window and
+//! take the keyboard with it, so it cannot imitate the lock screen or a password dialog.
+//!
 //! Each screen has its layer map (smithay's `LayerMap`), which places its surfaces from their
 //! anchors and margins and keeps what their exclusive zones leave to windows: the work area.
 //! Background and bottom surfaces are drawn under the windows, top and overlay ones above.

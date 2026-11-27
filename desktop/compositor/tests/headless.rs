@@ -406,8 +406,9 @@ mod tests {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
             state.add_output((800, 600).into(), scale);
+            // On the shell socket: its anchored surfaces need layer-shell (lot D-46).
             let (server_side, client_side) = UnixStream::pair().unwrap();
-            state.insert_client(server_side);
+            state.insert_shell_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
             Self {
@@ -1641,9 +1642,9 @@ mod tests {
         h.show_window();
         h.shortcut(KEY_UP);
         assert_maximized(&mut h, "maximizing", 800, 600);
-        // A second client, the bar, driven by hand.
+        // A second client, the bar, driven by hand, on the shell socket.
         let (server_side, client_side) = UnixStream::pair().unwrap();
-        h.state.insert_client(server_side);
+        h.state.insert_shell_client(server_side);
         let conn = Connection::from_socket(client_side).unwrap();
         let mut queue: EventQueue<Client> = conn.new_event_queue();
         let mut bar_client = Client::default();

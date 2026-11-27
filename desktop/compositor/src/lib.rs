@@ -68,7 +68,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -180,6 +180,9 @@ pub struct State {
     _cursor_shape_state: CursorShapeManagerState,
     xwayland_shell_state: XWaylandShellState,
     layer_shell_state: WlrLayerShellState,
+    /// Every client sees `zwlr_layer_shell_v1`, not only those of the shell socket: set by
+    /// `State::share_layer_shell` (ADR 0021).
+    layer_shell_shared: Arc<AtomicBool>,
     _output_manager_state: OutputManagerState,
     _fractional_scale_state: FractionalScaleManagerState,
     _viewporter_state: ViewporterState,
@@ -364,6 +367,7 @@ impl State {
             )
             .map_err(|err| err.error)?;
 
+        let layer_shell_shared = Arc::new(AtomicBool::new(false));
         Ok(Self {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
@@ -373,8 +377,14 @@ impl State {
             _cursor_shape_state: CursorShapeManagerState::new::<Self>(&dh),
             // Only XWayland sees this protocol: it associates its X11 windows with its surfaces.
             xwayland_shell_state: XWaylandShellState::new::<Self>(&dh),
-            // Anchored surfaces of the shell (ADR 0005).
-            layer_shell_state: WlrLayerShellState::new::<Self>(&dh),
+            // Anchored surfaces of the shell (ADR 0005), for the clients of the shell socket only
+            // (ADR 0021): an application must not cover the screens and take the keyboard with
+            // an imitation of the lock screen or of a password dialog.
+            layer_shell_state: WlrLayerShellState::new_with_filter::<Self, _>(&dh, {
+                let shared = layer_shell_shared.clone();
+                move |client| Self::is_shell_client(client) || shared.load(Ordering::Relaxed)
+            }),
+            layer_shell_shared,
             // Logical place and size of each screen, which toolkits read to size their surfaces.
             _output_manager_state: OutputManagerState::new_with_xdg_output::<Self>(&dh),
             // Fractional scale of each surface's screen, and buffers cropped and scaled by the

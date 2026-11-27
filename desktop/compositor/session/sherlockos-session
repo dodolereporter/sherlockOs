@@ -211,7 +211,9 @@ keep_log() {
 # with XWayland). The bar, the dock and the notification daemon start again when they stop
 # (ADR 0005), as long as the compositor, their parent's parent, is there: after 1, 2, 4, 8 then
 # 16 seconds. A program that stopped 5 times within 60 seconds is given up, with a line in the
-# log.
+# log. The shell programs open their anchored surfaces on the shell socket next to
+# WAYLAND_DISPLAY, the only one that offers layer-shell (lot D-46, ADR 0021); WAYLAND_DISPLAY
+# stays the ordinary socket, which the applications they launch inherit.
 shell='
 compositor=$PPID
 # The services the bus starts (the portals, kwalletd6) learn the display of this session, its

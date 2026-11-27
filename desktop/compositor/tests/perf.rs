@@ -349,8 +349,9 @@ mod tests {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
             state.add_output(SCREEN.into(), 1.0);
+            // On the shell socket: its anchored surfaces need layer-shell (lot D-46).
             let (server_side, client_side) = UnixStream::pair().unwrap();
-            state.insert_client(server_side);
+            state.insert_shell_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
             let mut bench = Self {
