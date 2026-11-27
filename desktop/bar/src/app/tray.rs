@@ -103,16 +103,9 @@ impl Tray {
         self.shown().next().is_some()
     }
 
-    /// Whether the chevron is wanted: with an icon of the notification area, even every one
-    /// kept in the bar, and during the whole drag of one, so that one can always go back into
-    /// the popup (Q-49).
-    pub fn chevron_wanted(&self) -> bool {
-        self.has_icons() || self.drag.as_ref().is_some_and(|d| d.moving && !d.done)
-    }
-
-    /// How present the chevron is now, from 0 (gone) to 1 (shown).
-    fn presence(&self) -> f32 {
-        let wanted = if self.chevron_wanted() { 1.0 } else { 0.0 };
+    /// How present the chevron is now, from 0 (gone) to 1 (shown), `wanted` or not.
+    fn presence(&self, wanted: bool) -> f32 {
+        let wanted = if wanted { 1.0 } else { 0.0 };
         let now = self.presence.map_or(wanted, |p| {
             if p.is_done(self.now, SCALE_PRECISION) {
                 p.target()
@@ -124,8 +117,8 @@ impl Tray {
     }
 
     /// The chevron comes or goes towards what is wanted now; at once without animations.
-    fn follow_presence(&mut self, now: Duration, animates: bool) {
-        let target = if self.chevron_wanted() { 1.0 } else { 0.0 };
+    fn follow_presence(&mut self, wanted: bool, now: Duration, animates: bool) {
+        let target = if wanted { 1.0 } else { 0.0 };
         match &mut self.presence {
             Some(presence) if !animates => *presence = Animation::new(SPRING, target, target, now),
             Some(presence) if presence.target() != target => presence.retarget(now, target),
@@ -246,7 +239,23 @@ impl Bar {
         let now = animated::clock().max(self.tray.now);
         self.tray.now = now;
         let animates = self.animates();
-        self.tray.follow_presence(now, animates);
+        let wanted = self.chevron_wanted();
+        self.tray.follow_presence(wanted, now, animates);
+    }
+
+    /// Whether the chevron is wanted: with an icon of the notification area, even every one
+    /// kept in the bar, and during the whole drag of one, so that one can always go back into
+    /// the popup (Q-49).
+    pub fn chevron_wanted(&self) -> bool {
+        use super::pins::Place;
+        self.tray.has_icons()
+            || self.tray_dragged_from(Place::Popup)
+            || self.tray_dragged_from(Place::Bar)
+    }
+
+    /// How present the chevron is now, from 0 (gone) to 1 (shown).
+    pub fn chevron_presence(&self) -> f32 {
+        self.tray.presence(self.chevron_wanted())
     }
 
     /// Opens the popup under the chevron, or closes it when it is open. Clicked again while it
@@ -528,8 +537,8 @@ impl Bar {
     /// the notification area, in the popup or kept in the bar, and while one is dragged (Q-49).
     /// It grows and fades in, and out once the last icon goes.
     pub(super) fn view_chevron(&self) -> Option<Element<'static, Message>> {
-        let presence = self.tray.presence();
-        let wanted = self.tray.chevron_wanted();
+        let presence = self.chevron_presence();
+        let wanted = self.chevron_wanted();
         if !wanted && presence <= 0.0 {
             return None;
         }
@@ -821,10 +830,10 @@ mod tests {
             Status::Active,
         )))));
         assert!(bar.view_chevron().is_some() && bar.animating());
-        assert!(bar.tray.presence() < 1.0);
+        assert!(bar.chevron_presence() < 1.0);
         let _ = frame_in(&mut bar, second);
         assert!(!bar.animating());
-        assert_eq!(bar.tray.presence(), 1.0);
+        assert_eq!(bar.chevron_presence(), 1.0);
         // Every icon kept in the bar: the chevron stays, reachable, and opens the popup, which
         // says it takes one back.
         let _ = bar.update(Message::Tray(Event::Changed(Box::new(item(
