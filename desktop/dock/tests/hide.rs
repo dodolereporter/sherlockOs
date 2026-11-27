@@ -338,9 +338,9 @@ fn a_dock_brought_back_keeps_the_pointer_up_to_the_edge() {
         let now = dock.now();
         let _ = dock.tick(now + Duration::from_secs(2));
         assert_eq!(margin(&dock, position), 0, "{position:?} still shown");
-        // A dock that does not hide keeps the gap out of its input region.
+        // Since lot D-21f, a dock that does not hide takes the gap too (Fitts's law).
         let shown = self::dock(position, AutoHide::Never, &Recorder::default());
-        assert!(!shown.input_area().contains(gap), "{position:?}");
+        assert!(shown.input_area().contains(gap), "{position:?}");
     }
 }
 

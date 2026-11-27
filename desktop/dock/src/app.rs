@@ -1036,7 +1036,7 @@ impl Dock {
             return Task::none();
         };
         if !press.dragging {
-            if held.icon_at(press.pointer) != Some(index) {
+            if held.icon_for(press.pointer) != Some(index) {
                 return Task::none();
             }
             // Ctrl+click: a new window, as a click of the middle button.
@@ -1127,7 +1127,7 @@ impl Dock {
             Pointer::Pressed(button) => {
                 // Like `:focus-visible`: the mouse removes the keyboard ring.
                 self.focus = None;
-                let target = self.pointer.and_then(|p| self.layout(now).icon_at(p));
+                let target = self.pointer.and_then(|p| self.layout(now).icon_for(p));
                 match (button, target, self.pointer) {
                     (mouse::Button::Left, Some(index), Some(point)) => {
                         let target = self.items[index].target();
@@ -1164,7 +1164,7 @@ impl Dock {
     }
 
     /// Where the surface takes the pointer: the band of a hidden dock, otherwise
-    /// `Geometry::input_region`.
+    /// `Geometry::input_region` stretched to the screen edge.
     pub fn input_area(&self) -> iced::Rectangle {
         if self.hide.hidden() {
             return self.geometry.strip(self.surface_size);
@@ -1175,13 +1175,10 @@ impl Dock {
             self.separator,
             self.hovering,
         );
-        if self.hide.hides() {
-            // Brought back over a window: up to the screen edge, gap included, so that the
-            // pointer between the bar and the edge keeps it.
-            self.geometry.to_edge(region, self.surface_size)
-        } else {
-            region
-        }
+        // Up to the screen edge, gap included (lot D-21f): a click pushed against the edge
+        // reaches the icon of its column, and a dock brought back over a window keeps the
+        // pointer there.
+        self.geometry.to_edge(region, self.surface_size)
     }
 
     fn key(&mut self, key: Key) -> Task<Message> {
