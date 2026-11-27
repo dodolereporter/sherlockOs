@@ -809,3 +809,71 @@ fn the_bluetooth_devices_render_in_both_themes() {
         });
     }
 }
+
+/// Six steps of a closing, from 0 to `motion::POPUP_CLOSE`, side by side on the desktop's color:
+/// the panel's last image shrunk and faded as the compositor draws it when a click elsewhere
+/// closes it (lot UI-06, `compositor/src/popup_anim.rs`).
+fn closing_steps(panel: &image::RgbaImage) -> image::RgbaImage {
+    use sherlock_ui::motion;
+    let (w, h) = panel.dimensions();
+    let gap = 24;
+    let desktop = color::palette().desktop;
+    let mut out = image::RgbaImage::from_pixel(
+        6 * w + 7 * gap,
+        h + 2 * gap,
+        image::Rgba([desktop.r, desktop.g, desktop.b, 255]),
+    );
+    let fade = motion::Fade::eased(
+        1.0,
+        0.0,
+        Duration::ZERO,
+        motion::POPUP_CLOSE,
+        motion::WINDOW_CLOSE_EASE,
+    );
+    for step in 0..6u32 {
+        let at = motion::POPUP_CLOSE * step / 5;
+        let (scale, alpha) = motion::popup_closing(fade.value(at));
+        let (sw, sh) = ((f64::from(w) * scale) as u32, (f64::from(h) * scale) as u32);
+        let mut shrunk =
+            image::imageops::resize(panel, sw.max(1), sh.max(1), image::imageops::Triangle);
+        for pixel in shrunk.pixels_mut() {
+            pixel.0[3] = (f32::from(pixel.0[3]) * alpha).round() as u8;
+        }
+        // Around its center, as the compositor scales it.
+        let x = gap + step * (w + gap) + (w - sw) / 2;
+        let y = gap + (h - sh) / 2;
+        image::imageops::overlay(&mut out, &shrunk, i64::from(x), i64::from(y));
+    }
+    out
+}
+
+/// The control centre and the notification centre closing on a click elsewhere: six steps
+/// each, `control-centre-closing` and `notifications-closing` in `screenshots/`.
+#[test]
+fn the_panels_close_with_their_last_image() {
+    in_theme(Theme::Dark, || {
+        let mut state = sample();
+        state.panel_margins = panel::margins(false);
+        state.month = Some(Month {
+            year: 2026,
+            month: 11,
+        });
+        state.history = board_history();
+        board_quick(&mut state);
+        for (which, name) in [
+            (Panel::Control, "control-centre-closing"),
+            (Panel::Calendar, "notifications-closing"),
+        ] {
+            let size = panel_size(&state, which);
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(which));
+            let (path, _) = capture(ui, &format!("{name}-panel")).unwrap();
+            let panel = image::open(&path).unwrap().to_rgba8();
+            let steps = closing_steps(&panel);
+            let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("screenshots")
+                .join(format!("{name}.png"));
+            steps.save(&out).unwrap();
+            assert!(std::fs::metadata(&out).unwrap().len() > 10_000);
+        }
+    });
+}

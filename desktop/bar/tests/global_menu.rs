@@ -339,6 +339,53 @@ mod tests {
         assert!(state.global.tops().is_empty());
     }
 
+    /// What Qt answers to `GetLayout` of a menu: its children, its own properties empty.
+    fn as_qt_answers(id: i32) -> Item {
+        let menu = kate().find(id).cloned().unwrap();
+        Item {
+            id,
+            children: menu.children,
+            ..Item::default()
+        }
+    }
+
+    /// D-36d: from « Fichier » to « Édition » under the pointer, the popup shrank to nothing
+    /// and lost its text. « Fichier » stays while « Édition » is read, then « Édition » shows
+    /// at its own size, with its entries, and both buttons keep their labels.
+    #[test]
+    fn hovering_the_next_menu_shows_it_whole() {
+        let mut state = bar_with_kate(1920.0, 1080.0);
+        let _ = state.update(Message::OpenAppMenu(1));
+        let _ = state.update(Message::AppMenuRead(address(), 1, Ok(as_qt_answers(1))));
+        assert_eq!(state.global.open_top(), Some(1));
+        let file = state.global.levels[0].size;
+        let _ = state.update(Message::HoverAppMenu(32));
+        // While Kate fills « Édition », « Fichier » is still shown, whole.
+        assert_eq!(state.global.open_top(), Some(1));
+        assert_eq!(state.global.levels[0].size, file);
+        let _ = state.update(Message::AppMenuRead(address(), 32, Ok(as_qt_answers(32))));
+        assert_eq!(state.global.open_top(), Some(32));
+        assert_eq!(state.global.levels.len(), 1);
+        // The size and the entries of « Édition ».
+        let placement = state.placement();
+        let entries = state.global.entries(32, &placement);
+        let labels: Vec<_> = entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Annuler"]);
+        let width = global_menu::width(&entries, &global_menu::measure);
+        let height = global_menu::height(&entries) + metrics::TOP_BAR_MENU_GAP;
+        assert_eq!(state.global.levels[0].width, width);
+        assert_eq!(
+            state.global.levels[0].size,
+            (width.ceil() as u32, height.ceil() as u32)
+        );
+        assert!(width >= metrics::APP_MENU_MIN_WIDTH);
+        // The buttons of the bar keep their labels, so their size.
+        assert_eq!(state.global.label(1), "Fichier");
+        assert_eq!(state.global.label(32), "Édition");
+        let (_, edit) = global_menu::GlobalMenu::button(&placement, 32).unwrap();
+        assert!(edit > 2.0 * sherlock_ui::panels::BAR_BUTTON_PADDING + 20.0);
+    }
+
     #[test]
     fn moving_from_menu_to_menu_with_the_pointer_and_the_keys() {
         let mut state = bar_with_kate(1920.0, 1080.0);
