@@ -31,8 +31,7 @@ use smithay::{
         selection::{
             SelectionHandler, SelectionTarget,
             data_device::{
-                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
-                set_data_device_focus,
+                DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus,
             },
             primary_selection::{
                 PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
@@ -76,6 +75,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.drag_icon_commit(surface);
         if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = compositor::get_parent(&root) {
@@ -779,9 +779,7 @@ impl DataDeviceHandler for State {
     }
 }
 
-// Drag and drop between Wayland clients follows Smithay's default behavior. Between Wayland
-// and X11, smithay 0.7 has no XDND: it is left to lot D-29c (see `docs/compositor.md`).
-impl ClientDndGrabHandler for State {}
+// The drags of Wayland clients: `dnd.rs`. The compositor starts none of its own.
 impl ServerDndGrabHandler for State {}
 
 impl PrimarySelectionHandler for State {
