@@ -28,7 +28,7 @@ use crate::background::{Picture, Pictures};
 use crate::form::{self, Form, Input, Outcome};
 use crate::machine::{Armed, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
-use crate::view::{color_of, fade, rise, spinner};
+use crate::view::{color_of, drop_in, fade, rise, spinner};
 
 /// The still picture of Sherlock, until his model is read or without it (the login screen
 /// shows it too).
@@ -155,6 +155,8 @@ pub struct Lock {
     last_boot: Option<Duration>,
     /// The rescue mode (`rescue`).
     rescue: bool,
+    /// When the curtain started to come down: once the picture is ready (lot D-25e).
+    curtain: Option<Duration>,
     /// The dark and light pictures behind the screen.
     background: Option<(image::Handle, image::Handle)>,
     /// The size, in pixels, the background was asked for.
@@ -192,6 +194,7 @@ impl Lock {
             mascot: None,
             last_boot: None,
             rescue: false,
+            curtain: None,
             background: None,
             asked: None,
             scale: 1.0,
@@ -208,8 +211,14 @@ impl Lock {
     pub fn rescue(mut self) -> Self {
         self.rescue = true;
         self.entered = true;
+        self.curtain = Some(Duration::ZERO);
         self.form.show(Duration::ZERO);
         self
+    }
+
+    /// The curtain has started to come down.
+    pub fn curtain_started(&self) -> bool {
+        self.curtain.is_some()
     }
 
     /// The form shows.
@@ -273,7 +282,11 @@ impl Lock {
 
     fn animating(&self) -> bool {
         let t = self.elapsed();
-        let entrance = !self.entered && t < Duration::from_millis(1200);
+        // Waiting for the picture, then the curtain and the time.
+        let entrance = !self.entered
+            && self
+                .curtain
+                .is_none_or(|at| t < at + Duration::from_millis(1200));
         let form = self
             .form
             .changed()
@@ -435,10 +448,17 @@ impl Lock {
                          rgba,
                      }| image::Handle::from_rgba(width, height, rgba);
                 self.background = Some((handle(dark), handle(light)));
+                // The picture is ready: the curtain comes down now, never before it.
+                self.curtain.get_or_insert(self.elapsed());
             }
             Message::Frame(now) => {
                 self.now = now;
                 self.theme.tick(now);
+                // No picture in time (none to read, or a slow disk): the curtain comes down on
+                // the plain background.
+                if self.curtain.is_none() && self.elapsed() >= ui::CURTAIN_WAIT {
+                    self.curtain = Some(self.elapsed());
+                }
                 if let Phase::Leaving(at) = self.phase
                     && self.elapsed() >= at + ui::EXIT
                 {
@@ -531,8 +551,11 @@ impl Lock {
     fn progress(&self, index: u32) -> f32 {
         let t = self.elapsed();
         let entrance = match (index, self.form.changed()) {
-            (0, _) if self.entered => 1.0,
-            (0, _) => Animation::new(ui::SPRING, 0.0, 1.0, Duration::ZERO).value(t),
+            (0, _) if self.entered && self.curtain.is_some() => 1.0,
+            (0, _) => match self.curtain {
+                Some(at) => Animation::new(ui::SPRING, 0.0, 1.0, at + ui::CURTAIN_LAG).value(t),
+                None => 0.0,
+            },
             (_, None) => 0.0,
             (_, Some(_)) if self.form.shown() && self.entered => 1.0,
             (_, Some(at)) if self.form.shown() => {
@@ -570,7 +593,7 @@ impl Lock {
             .unwrap_or(Size::new(1920.0, 1080.0));
         let height = size.height;
         let primary = self.primary.is_none_or(|p| p == id);
-        let time = rise(
+        let time = drop_in(
             column![
                 text(
                     ui::date(self.clock.weekday, self.clock.day, self.clock.month)
@@ -625,16 +648,37 @@ impl Lock {
                 ..container::Style::default()
             });
         let mut layers = stack![plain];
+        // The curtain: the picture comes down from the top. Its bottom part shows first, in a
+        // box that grows from the top edge (the picture keeps the size of the screen, aligned
+        // on the bottom of the box): it slides down, over the plain background the compositor
+        // already shows (lot D-25e).
+        let down = match self.curtain {
+            Some(_) if self.entered => 1.0,
+            Some(at) => Animation::new(ui::SPRING, 0.0, 1.0, at)
+                .value(self.elapsed())
+                .clamp(0.0, 1.0) as f32,
+            None => 0.0,
+        };
         // The picture of the dark theme, and that of the light one over it, as opaque as the
         // light palette is mixed in: the fade of the theme fades them too.
-        if let Some((dark, light)) = &self.background {
+        if let Some((dark, light)) = &self.background
+            && down > 0.0
+        {
             let light_share = f32::from(color::mix_step()) / f32::from(color::MIX_STEPS);
             let cover = |handle: &image::Handle, opacity: f32| {
-                image(handle.clone())
+                let picture = image(handle.clone())
                     .width(Length::Fill)
-                    .height(Length::Fill)
+                    .height(height)
                     .content_fit(ContentFit::Cover)
-                    .opacity(opacity)
+                    .opacity(opacity);
+                column![
+                    container(picture)
+                        .width(Length::Fill)
+                        .height(height * down)
+                        .align_y(Alignment::End)
+                        .clip(true),
+                    Space::new().height(Length::Fill),
+                ]
             };
             if light_share < 1.0 {
                 layers = layers.push(cover(dark, 1.0));

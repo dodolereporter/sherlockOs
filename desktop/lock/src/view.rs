@@ -10,6 +10,18 @@ use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::screen as ui;
 use sherlock_ui::{metrics, motion};
 
+/// An element that drops into place from above as `presence` goes from 0 to 1, with the
+/// curtain, in a box of constant height so that nothing around it moves.
+pub fn drop_in<'a, Message: 'a>(
+    element: impl Into<Element<'a, Message>>,
+    presence: f32,
+) -> Element<'a, Message> {
+    let offset = ui::RISE * presence.clamp(0.0, 1.0);
+    container(element)
+        .padding(Padding::default().top(offset).bottom(ui::RISE - offset))
+        .into()
+}
+
 /// An element that rises into place as `presence` goes from 0 to 1, in a box of constant
 /// height so that nothing around it moves.
 pub fn rise<'a, Message: 'a>(

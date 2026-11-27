@@ -45,7 +45,14 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
 ## Behavior
 
-- **Entrance:** the time comes with the screen. The form comes on demand (`src/form.rs`): the
+- **Curtain** (lot D-25e): the compositor hides the desktop from the very moment of the lock,
+  with the plain background of the system screens; the lock screen's first frame is that same
+  plain background. Once the picture behind it is decoded (or after 1.5 s without one), it
+  comes down from the top like a curtain (its bottom part shows first, sliding down), then the
+  date and the time drop in, 140 ms later. The desktop is never visible: the curtain comes down
+  over a screen already hidden, and the picture never shows late, since the curtain waits for
+  it. The picture is decoded once the size of the screens is known, at that size.
+- **Entrance:** the time comes with the curtain. The form comes on demand (`src/form.rs`): the
   bubble grows from 60 % of its size on a spring, then the name, the pill and the buttons rise
   and fade in, 70 ms apart. A key once the form shows ends the animations: typing is never
   slowed down.

@@ -438,4 +438,45 @@ mod tests {
         checked(&mut s, Ok(()));
         assert!(matches!(s.lock.phase(), Phase::Leaving(_)));
     }
+
+    /// A lock screen on one screen of `size`, without its picture yet, at `ms` after its start.
+    fn bare(size: (f32, f32)) -> (Lock, window::Id, Instant) {
+        let (pam, runner) = (
+            Arc::new(FakePam::default()),
+            Arc::new(FakeRunner::default()),
+        );
+        let start = Instant::now();
+        let mut lock = Lock::new("dodo".into(), pam, runner);
+        let id = window::Id::unique();
+        let _ = lock.update(Message::Surface(id));
+        let _ = lock.update(Message::Resized(id, Size::new(size.0, size.1)));
+        (lock, id, start)
+    }
+
+    #[test]
+    fn the_curtain_waits_for_the_picture_then_comes_down() {
+        let size = (1920.0, 1080.0);
+        let (mut lock, id, start) = bare(size);
+        let _ = lock.update(Message::Frame(start + Duration::from_millis(500)));
+        assert!(!lock.curtain_started(), "never before the picture");
+        // The picture is ready: the curtain comes down from the top.
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/lock");
+        let fitted = |name| lock::background::fitted(&assets.join(name), (3840, 2160)).unwrap();
+        let pictures = lock::background::Pictures {
+            dark: fitted(lock::background::DARK),
+            light: fitted(lock::background::LIGHT),
+        };
+        let _ = lock.update(Message::Background(pictures));
+        assert!(lock.curtain_started());
+        lock.set_now(start + Duration::from_millis(500 + 110));
+        snapshot(&lock, id, size, "curtain-coming");
+        lock.set_now(start + Duration::from_millis(500 + 1500));
+        snapshot(&lock, id, size, "curtain-down");
+
+        // Without a picture in time, it comes down on the plain background.
+        let (mut lock, _, start) = bare(size);
+        let late = start + sherlock_ui::lock::screen::CURTAIN_WAIT + Duration::from_millis(10);
+        let _ = lock.update(Message::Frame(late));
+        assert!(lock.curtain_started());
+    }
 }
