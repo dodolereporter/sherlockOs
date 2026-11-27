@@ -18,6 +18,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{
             Client, Resource,
+            backend::ClientId,
             protocol::{wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat, wl_surface::WlSurface},
         },
     },
@@ -317,6 +318,12 @@ impl State {
         let data = window_data(window);
         let mut arrangement = Arrangement::of(window);
         change(&mut arrangement, &data.zone);
+        tracing::debug!(
+            fullscreen = arrangement.fullscreen,
+            maximized = arrangement.maximized,
+            x11 = window.x11_surface().is_some(),
+            "window rearranged"
+        );
         arrangement.apply(window);
         let target = match (
             arrangement.fullscreen,
@@ -374,6 +381,8 @@ impl State {
     /// Closes the menu chain that waits for an outside click.
     pub(crate) fn dismiss_popups(&mut self) {
         if let Some(grab) = self.popup_grab.take() {
+            // The shell's menus close with their last image (lot UI-06).
+            self.ghost_popups_of(&grab.root);
             PopupManager::dismiss_popup(&grab.root, &grab.popup).ok();
         }
     }
@@ -490,6 +499,11 @@ impl XdgShellHandler for State {
         }
     }
 
+    /// A menu goes: one of the shell's closes with its last image (lot UI-06).
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        self.ghost_popup(&PopupKind::Xdg(surface));
+    }
+
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface)) {
             tracing::warn!("popup refused: {err}");
@@ -603,18 +617,22 @@ impl SeatHandler for State {
     }
 
     /// Only the client that has the keyboard reads and sets the clipboard and the primary
-    /// selection.
+    /// selection. While the session is locked, no client is offered either: not even the lock
+    /// program, which has the keyboard (lot D-29).
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&KeyboardFocus>) {
         let dh = &self.display_handle;
         let client = focused
             .and_then(WaylandFocus::wl_surface)
-            .and_then(|surface| dh.get_client(surface.id()).ok());
+            .and_then(|surface| dh.get_client(surface.id()).ok())
+            .filter(|_| !self.is_locked());
         tracing::debug!(?focused, "keyboard");
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        // Each shape a client names, accepted by smithay (lot UI-07): `RUST_LOG=compositor=trace`.
+        tracing::trace!(?image, "cursor image");
         self.cursor_status = image;
     }
 }
@@ -635,11 +653,72 @@ impl ShmHandler for State {
 
 impl OutputHandler for State {}
 
+/// Where a new selection comes from.
+#[derive(Debug, Clone)]
+pub enum SelectionOrigin {
+    /// A Wayland client: the one that has the keyboard, the only one smithay lets set it.
+    Wayland(Option<ClientId>),
+    /// An X11 application, through XWayland.
+    X11,
+    /// The compositor itself: a screenshot.
+    Compositor,
+}
+
+/// The type a password manager (KeePassXC, KDE's) adds to a secret it copies: a clipboard
+/// history must not keep it. Wayland clients only: smithay passes on from X11 the types with
+/// a `/` alone.
+pub const SECRET_HINT: &str = "x-kde-passwordManagerHint";
+
+/// The selection offers the secret hint.
+pub fn is_secret(mime_types: &[String]) -> bool {
+    mime_types.iter().any(|m| m == SECRET_HINT)
+}
+
+impl State {
+    /// Every new selection passes here, CLIPBOARD and PRIMARY, from Wayland, X11 or the
+    /// compositor, with its types (none: a Wayland client cleared it). The clipboard history (lot D-42) plugs in
+    /// here. Called before the selection is in place on the Wayland side.
+    pub(crate) fn selection_set(
+        &mut self,
+        target: SelectionTarget,
+        origin: SelectionOrigin,
+        mime_types: &[String],
+    ) {
+        let secret = is_secret(mime_types);
+        tracing::debug!(?target, ?origin, ?mime_types, secret, "new selection");
+    }
+
+    /// No client is offered the selections any more.
+    pub(crate) fn unset_selection_focus(&mut self) {
+        set_data_device_focus(&self.display_handle, &self.seat, None);
+        set_primary_focus(&self.display_handle, &self.seat, None);
+    }
+
+    /// Tells XWayland what the selection `target` now offers (`None`: nothing). The X11
+    /// clients that read it then ask the compositor (`XwmHandler::send_selection`).
+    pub(crate) fn offer_to_xwayland(
+        &mut self,
+        target: SelectionTarget,
+        mimes: Option<Vec<String>>,
+    ) {
+        if let Some(xwm) = self.xwm.as_mut()
+            && let Err(err) = xwm.new_selection(target, mimes)
+        {
+            tracing::warn!(?target, "selection passed to XWayland: {err}");
+        }
+    }
+}
+
 /// The clipboard of a Wayland client is relayed to XWayland, and the other way round: when an
 /// X11 client sets it, the compositor sets it on the Wayland side on its behalf (see
 /// `xwayland.rs`).
 /// The compositor sets a selection of its own too: a screenshot, as `image/png` (lot D-35c).
 /// Its user data holds the bytes; `None` is a selection set for XWayland.
+///
+/// While the session is locked, the selections may still change (the lock program has the
+/// keyboard, a screenshot taken before may land), and XWayland still learns of it, but nothing
+/// is read: no Wayland client is offered one (`focus_changed`), no X11 client may read
+/// (`allow_selection_access`), and an offer received before the lock is refused here.
 impl SelectionHandler for State {
     type SelectionUserData = Option<std::sync::Arc<[u8]>>;
 
@@ -647,13 +726,17 @@ impl SelectionHandler for State {
         &mut self,
         target: SelectionTarget,
         source: Option<smithay::wayland::selection::SelectionSource>,
-        _seat: Seat<Self>,
+        seat: Seat<Self>,
     ) {
-        if let Some(xwm) = self.xwm.as_mut()
-            && let Err(err) = xwm.new_selection(target, source.map(|s| s.mime_types()))
-        {
-            tracing::warn!(?target, "selection passed to XWayland: {err}");
-        }
+        let mime_types = source.map(|s| s.mime_types());
+        let client = seat
+            .get_keyboard()
+            .and_then(|k| k.current_focus())
+            .and_then(|f| f.wl_surface().and_then(|s| s.client()))
+            .map(|c| c.id());
+        let origin = SelectionOrigin::Wayland(client);
+        self.selection_set(target, origin, mime_types.as_deref().unwrap_or_default());
+        self.offer_to_xwayland(target, mime_types);
     }
 
     fn send_selection(
@@ -664,8 +747,20 @@ impl SelectionHandler for State {
         _seat: Seat<Self>,
         user_data: &Self::SelectionUserData,
     ) {
+        if self.is_locked() {
+            // Dropping `fd` ends the transfer: the client reads nothing.
+            tracing::debug!(?target, "selection not read: the session is locked");
+            return;
+        }
         if let Some(bytes) = user_data {
             self.paste_png(fd, bytes.clone());
+            return;
+        }
+        // Set for XWayland: smithay reads the text, the compositor the other types.
+        if let Some(display) = self.x_display
+            && !crate::x11_paste::read_by_smithay(&mime_type)
+        {
+            crate::x11_paste::paste(display, target, mime_type, fd);
             return;
         }
         if let Some(xwm) = self.xwm.as_mut()
@@ -683,7 +778,7 @@ impl DataDeviceHandler for State {
 }
 
 // Drag and drop between Wayland clients follows Smithay's default behavior. Between Wayland
-// and X11, it comes with lot D-29.
+// and X11, smithay 0.7 has no XDND: it is left to lot D-29c (see `docs/compositor.md`).
 impl ClientDndGrabHandler for State {}
 impl ServerDndGrabHandler for State {}
 
@@ -722,3 +817,19 @@ smithay::reexports::wayland_server::delegate_dispatch!(State: [
 delegate_cursor_shape!(State);
 delegate_data_device!(State);
 delegate_primary_selection!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_password_copied_is_recognized() {
+        let types = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        assert!(is_secret(&types(&["text/plain", SECRET_HINT])));
+        assert!(!is_secret(&types(&[
+            "text/plain;charset=utf-8",
+            "image/png"
+        ])));
+        assert!(!is_secret(&[]));
+    }
+}
