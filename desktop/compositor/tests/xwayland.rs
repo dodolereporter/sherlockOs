@@ -529,9 +529,11 @@ mod tests {
         assert_eq!(h.state.focused_window().as_ref(), Some(&window));
 
         // Dragged up with the gesture key, its title bar stops at the top of the screen (lot
-        // C-01).
-        h.run_until("the window content", |s| {
+        // C-01). The press waits for the end of the restore: a window in its minimize effect
+        // takes no click (lot D-19), and on a slow machine the effect was still running.
+        h.run_until("the end of the restore", |s| {
             s.window_visual(&window, Duration::ZERO).is_some()
+                && s.minimize_progress(&window, s.now()).is_none()
         });
         let place = places(&h.state, &window).0;
         h.motion(400.0, f64::from(place.loc.y) + 20.0);

@@ -294,6 +294,16 @@ pub fn init(
         } = &mut *backend;
         crate::window_anim::snapshot(scene, renderer, state, window)
     }));
+    // The last image of a menu of the shell that closes (lot UI-06), the same way.
+    let weak = Rc::downgrade(&backend);
+    state.set_popup_snapshotter(Box::new(move |state, surface, size, scale| {
+        let backend = weak.upgrade()?;
+        let mut backend = backend.try_borrow_mut().ok()?;
+        let Backend {
+            scene, renderer, ..
+        } = &mut *backend;
+        crate::popup_anim::snapshot(scene, renderer, state, surface, size, scale)
+    }));
     // Screenshots (lot D-35c), drawn the same way, between two frames. Not of the login
     // screen (`greeter.rs`).
     if !state.is_greeter() {
