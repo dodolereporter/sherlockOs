@@ -124,6 +124,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | 1920 × 1080 | Smallest window | In a WSLg window |
   | --- | --- | --- |
   | ![](evidence/path-crumbs-1080p.png) | ![](evidence/path-crumbs-small.png) | ![](evidence/path-wslg.png) |
+- The window follows its width (lot E-05, after the Finder and Nautilus). The name of a file
+  always keeps `NAME_MIN_WIDTH` (220): when the room runs short, the Git column folds first,
+  then Type, the preview, Size, Modified, and last the sidebar (`layout::Panes`). The preview
+  folds at half a 1080p screen; Space brings it back at that width, and the columns fold
+  instead. Names, the origin of a trash item and the preview's title end with « … » where the
+  shaped text stops fitting (`sherlock_ui::ellipsis`), not after an estimated count of
+  characters.
+
+  | 720 × 460 | 944 × 1048 (half of 1080p) | 1366 × 768 | 1920 × 1080 |
+  | --- | --- | --- | --- |
+  | ![](evidence/width-720.png) | ![](evidence/width-944.png) | ![](evidence/width-1366.png) | ![](evidence/width-1920.png) |
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
   state (modified, new, ignored). Click a column header to sort, again to reverse. Folders
   stay first. Hidden files with Ctrl+H. A double click opens an item, selected or not: the

@@ -9,6 +9,7 @@ pub mod clock;
 pub mod devices;
 pub mod git;
 pub mod icons;
+pub mod layout;
 pub mod listing;
 pub mod menu;
 pub mod menubar;

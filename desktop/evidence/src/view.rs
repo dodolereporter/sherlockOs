@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use sherlock_ui::animated::{hoverable, reveal};
 use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::ellipsis::ellipsis;
 use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::texts::{self, evidence as t};
@@ -34,15 +35,6 @@ fn vline<'a>() -> Element<'a, Message> {
         .width(metrics::BORDER_WIDTH)
         .height(Length::Fill)
         .style(theme::divider)
-        .into()
-}
-
-/// Secondary text of a cell, with a fixed width.
-fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
-    ui::body(content)
-        .color(color::palette().text_secondary)
-        .wrapping(text::Wrapping::None)
-        .width(width)
         .into()
 }
 
@@ -88,11 +80,13 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         crate::startup::first(&crate::app::FIRST_VIEW, "first view");
         let now = self.now();
-        let mut body = Row::new()
-            .push(self.sidebar())
-            .push(vline())
-            .push(self.list(now));
-        if self.show_preview {
+        let panes = self.panes();
+        let mut body = Row::new();
+        if panes.sidebar {
+            body = body.push(self.sidebar()).push(vline());
+        }
+        body = body.push(self.list(now, panes.columns));
+        if panes.preview {
             body = body.push(vline()).push(self.preview_panel(now));
         }
         let page = column![
@@ -341,7 +335,8 @@ impl App {
             .into()
     }
 
-    fn list(&self, now: Duration) -> Element<'_, Message> {
+    /// The listing, with the columns its width leaves room for (`layout`).
+    fn list(&self, now: Duration, shown: [bool; 4]) -> Element<'_, Message> {
         let in_trash = self.location == Location::Trash;
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let header = |label: &str, column: SortColumn, sortable: bool| {
@@ -353,15 +348,23 @@ impl App {
         } else {
             (t::COLUMN_MODIFIED, t::COLUMN_GIT)
         };
-        let headers = row![
-            container(header(t::COLUMN_NAME, SortColumn::Name, true)).width(Length::Fill),
+        let columns = [
             container(header(date_label, SortColumn::Modified, true)).width(w_date),
             container(header(t::COLUMN_SIZE, SortColumn::Size, true)).width(w_size),
             container(header(t::COLUMN_KIND, SortColumn::Kind, true)).width(w_kind),
             container(header(last_label, SortColumn::Git, !in_trash)).width(w_last),
-        ]
-        .spacing(metrics::LIST_COLUMN_GAP)
-        .align_y(Alignment::Center);
+        ];
+        let headers = Row::new()
+            .push(container(header(t::COLUMN_NAME, SortColumn::Name, true)).width(Length::Fill))
+            .extend(
+                columns
+                    .into_iter()
+                    .zip(shown)
+                    .filter(|(_, on)| *on)
+                    .map(|(c, _)| c.into()),
+            )
+            .spacing(metrics::LIST_COLUMN_GAP)
+            .align_y(Alignment::Center);
         let headers = container(headers)
             .height(metrics::LIST_HEADER_HEIGHT)
             .padding([0.0, metrics::LIST_ROW_PADDING])
@@ -381,7 +384,7 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scrollable(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
+            scrollable(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE, shown))
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
@@ -403,7 +406,7 @@ impl App {
 
     /// Only the visible rows, between two spacers that hold the place of the others: a
     /// listing of 5,000 files lays out only a few dozen widgets.
-    fn rows(&self, now: Duration, slide: f32) -> Element<'_, Message> {
+    fn rows(&self, now: Duration, slide: f32, shown: [bool; 4]) -> Element<'_, Message> {
         let row_height = metrics::LIST_ROW_HEIGHT;
         let total = self.entries.len();
         let (offset, _) = self.scroll;
@@ -418,10 +421,9 @@ impl App {
         let last = last.min(total);
         let before = metrics::LIST_TOP_GAP + first as f32 * row_height + slide;
         let after = (total - last) as f32 * row_height;
-        let name_chars = self.name_chars();
         let rows = Column::new()
             .push(space().height(before))
-            .extend((first..last).map(|i| self.row(i, &self.entries[i], name_chars)))
+            .extend((first..last).map(|i| self.row(i, &self.entries[i], shown)))
             .push(space().height(after))
             .width(Length::Fill);
         // The selection is drawn under the rows, in the first layer of the stack, which sets
@@ -496,26 +498,7 @@ impl App {
         layer.into()
     }
 
-    /// Characters of a name that fit in the name column, estimated from the window width:
-    /// a longer name is cut with an ellipsis rather than clipped, which would cost a mask.
-    fn name_chars(&self) -> usize {
-        let preview = if self.show_preview {
-            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
-        } else {
-            0.0
-        };
-        let fixed: f32 = metrics::LIST_COLUMNS.iter().sum::<f32>()
-            + 4.0 * metrics::LIST_COLUMN_GAP
-            + 2.0 * (metrics::LIST_PADDING + metrics::LIST_ROW_PADDING)
-            + metrics::LIST_ICON
-            + metrics::GAP_ICON
-            + metrics::SIDEBAR_WIDTH
-            + metrics::BORDER_WIDTH
-            + preview;
-        ((self.size.width - fixed) / typography::UI_CHAR_WIDTH).max(4.0) as usize
-    }
-
-    fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
+    fn row<'a>(&'a self, i: usize, entry: &'a Entry, shown: [bool; 4]) -> Element<'a, Message> {
         // The selection is drawn under the rows (`selection_layer`).
         let selected = self.selection.contains(i);
         let tint = match entry.kind {
@@ -529,9 +512,10 @@ impl App {
                     .on_submit(Message::RenameSubmit)
                     .into()
             }
-            _ => ui::body(elide(&crate::pathbar::visible(&entry.name), name_chars).into_owned())
+            // Cut with « … » where the shaped text stops fitting (lot E-05).
+            _ => ellipsis(crate::pathbar::visible(&entry.name))
                 .font(typography::UI_MEDIUM)
-                .wrapping(text::Wrapping::None)
+                .width(Length::Fill)
                 .into(),
         };
         let name = row![ui::icon(entry.icon(), metrics::LIST_ICON, tint), name]
@@ -540,13 +524,10 @@ impl App {
             .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
-            (Some(origin), _) => {
-                let chars = (w_last / typography::UI_CHAR_WIDTH) as usize;
-                cell(
-                    elide(&self.origin_label(origin), chars).into_owned(),
-                    w_last,
-                )
-            }
+            (Some(origin), _) => ellipsis(self.origin_label(origin))
+                .color(color::palette().text_secondary)
+                .width(w_last)
+                .into(),
             (None, Some(status)) => {
                 let (label, tone) = git_badge(status);
                 container(ui::badge(label, tone, selected))
@@ -555,15 +536,23 @@ impl App {
             }
             (None, None) => space().width(w_last).into(),
         };
-        let line = row![
-            name,
+        let cells = [
             cell_ref(&entry.labels.date, w_date),
             cell_ref(&entry.labels.size, w_size),
             cell_ref(&entry.labels.kind, w_kind),
             last,
-        ]
-        .spacing(metrics::LIST_COLUMN_GAP)
-        .align_y(Alignment::Center);
+        ];
+        let line = Row::new()
+            .push(name)
+            .extend(
+                cells
+                    .into_iter()
+                    .zip(shown)
+                    .filter(|(_, on)| *on)
+                    .map(|(c, _)| c),
+            )
+            .spacing(metrics::LIST_COLUMN_GAP)
+            .align_y(Alignment::Center);
         let line = container(line)
             .width(Length::Fill)
             .height(metrics::LIST_ROW_HEIGHT)
@@ -595,19 +584,19 @@ impl App {
                     Some(status) => t::in_git(&entry.labels.size, git_badge(status).0),
                     None => entry.labels.size.clone(),
                 };
-                // Names are cut rather than clipped: a clip costs the renderer a mask.
+                // Names are cut where the shaped text stops fitting, never clipped (lot E-05).
                 let room = metrics::PREVIEW_WIDTH
                     - 2.0 * metrics::PREVIEW_PADDING
                     - metrics::PREVIEW_TILE
                     - metrics::PREVIEW_GAP;
-                let scale = typography::CARD_TITLE_SIZE / typography::UI_SIZE;
-                let chars = (room / (typography::UI_CHAR_WIDTH * scale)) as usize;
                 let title = column![
-                    ui::body(elide(&crate::pathbar::visible(&entry.name), chars).into_owned())
+                    ellipsis(crate::pathbar::visible(&entry.name))
                         .font(typography::UI_SEMIBOLD)
                         .size(typography::CARD_TITLE_SIZE)
-                        .wrapping(text::Wrapping::None),
-                    ui::body(subtitle).color(color::palette().text_secondary),
+                        .width(room),
+                    ellipsis(subtitle)
+                        .color(color::palette().text_secondary)
+                        .width(room),
                 ];
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
