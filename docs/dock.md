@@ -316,7 +316,10 @@ The watcher sends its first reading to the dock too, so that a change between th
 reading at startup and the watcher's start is not missed.
 
 **Writing the pinned list.** The dock never writes the configuration it holds in memory:
-`DockConfig::update` reads the file again, changes the list alone and writes it (Q-40). A file
+`DockConfig::update` reads the file again, changes the list alone and writes it (Q-40). It does
+so on a thread of its own (`save::Saver`, Q-42): reading, writing and flushing take what the disk
+wants, the dock keeps drawing meanwhile, and of several changes waiting only the last is written.
+The icons of a new icon theme are looked up on a thread too, the old ones shown meanwhile. A file
 that cannot be read (not UTF-8, no permission), at startup or now, is never written over: the
 change is logged and the file keeps its other keys and its comments, and a change Control Room
 made since stays.

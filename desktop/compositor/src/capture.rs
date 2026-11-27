@@ -572,6 +572,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_daemon_that_never_answers_holds_no_screenshot_back() {
+        // A bus that takes the connection and never says a word: the notifier waits there,
+        // the screenshots go on, and past a few waiting the confirmations are left out.
+        let dir = std::env::temp_dir().join(format!("capture-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let notifier = notifier(Some(format!("unix:path={}", socket.display()))).unwrap();
+        notifier.try_send(String::from("first")).unwrap();
+        // The notifier took the first one and waits on the silent bus.
+        let _held = listener.accept().unwrap();
+        let start = std::time::Instant::now();
+        let taken = (0..20)
+            .filter(|n| notifier.try_send(format!("shot {n}")).is_ok())
+            .count();
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!((NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken), "{taken}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_keys_choose_what_is_taken() {
         let none = ModifiersState::default();
         let shift = ModifiersState {
