@@ -212,14 +212,27 @@ mod tests {
     }
 
     /// The fake application on `bus`, its menus at `/MenuBar/1`.
+    ///
+    /// The menus are served from the connection's builder, which returns once zbus listens for
+    /// method calls. Added later with `object_server().at()`, they would be served by a task
+    /// that only starts listening a moment afterwards: a call sent meanwhile was lost, and the
+    /// first `GetLayout` timed out (seen in the CI).
     fn application(bus: &Bus, hangs: bool) -> (zbus::Connection, AppMenu, Arc<Mutex<Seen>>) {
-        let app = bus.connect();
         let seen = Arc::new(Mutex::new(Seen::default()));
         let menus = Menus {
             seen: Arc::clone(&seen),
             hangs,
         };
-        zbus::block_on(app.object_server().at("/MenuBar/1", menus)).unwrap();
+        let app = zbus::block_on(async {
+            zbus::connection::Builder::address(bus.address.as_str())
+                .unwrap()
+                .method_timeout(dbusmenu::TIMEOUT)
+                .serve_at("/MenuBar/1", menus)
+                .unwrap()
+                .build()
+                .await
+                .unwrap()
+        });
         let address = AppMenu {
             service: app.unique_name().unwrap().to_string(),
             path: String::from("/MenuBar/1"),

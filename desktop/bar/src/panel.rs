@@ -6,9 +6,9 @@
 use iced::widget::{Column, column, container, mouse_area, opaque, row, space, text};
 use iced::{Alignment, Element, Length, Padding};
 use sherlock_ui::component::{self as ui};
-use sherlock_ui::elastic::elastic;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::panels::{self, text as words};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, strings, typography};
 
@@ -232,7 +232,9 @@ pub fn center(history: &History) -> Element<'_, Message> {
     let body: Element<'_, Message> = match history {
         History::Ready(groups) if !groups.is_empty() => {
             let cards = groups.iter().map(card);
-            elastic(Column::with_children(cards).spacing(panels::CENTER_GAP)).into()
+            scroll(Column::with_children(cards).spacing(panels::CENTER_GAP))
+                .height(Length::Fill)
+                .into()
         }
         History::Unavailable => notice(words::CENTER_UNAVAILABLE),
         History::Loading => space().height(Length::Fill).into(),
