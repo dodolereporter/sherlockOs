@@ -103,13 +103,19 @@ impl DesktopEntry {
     }
 
     /// Whether a window with this `app_id` (Wayland) or class (X11) belongs to the application:
-    /// its desktop file id, the last part of a reverse-DNS id (`org.kde.konsole` for `konsole`),
-    /// or its `StartupWMClass`, ignoring case.
+    /// its desktop file id, or its `StartupWMClass`, ignoring case; or, when one of the two is a
+    /// reverse-DNS name and the other is not, its last part: `konsole` belongs to
+    /// `org.kde.konsole.desktop`, and since lot D-21d `org.kde.konsole` to `konsole.desktop`.
     pub fn owns(&self, app_id: &str) -> bool {
         let same = |name: &str| name.eq_ignore_ascii_case(app_id);
+        let last = |name: &str| name.rsplit('.').next().unwrap_or(name).to_owned();
+        let short = |name: &str| !name.contains('.');
         same(&self.id)
-            || self.id.rsplit('.').next().is_some_and(same)
             || self.wm_class.as_deref().is_some_and(same)
+            || (short(app_id) && self.id.contains('.') && same(&last(&self.id)))
+            || (short(&self.id)
+                && app_id.contains('.')
+                && last(app_id).eq_ignore_ascii_case(&self.id))
     }
 }
 
@@ -315,6 +321,15 @@ mod tests {
         assert!(!term.no_display);
         assert!(term.owns("terminal") && term.owns("org.example.terminal"));
         assert!(!term.owns("browser"));
+        // A short desktop file id owns the windows of a reverse-DNS `app_id` (lot D-21d).
+        let short = DesktopEntry::parse(
+            "konsole",
+            Path::new("konsole.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Konsole\nExec=konsole\n",
+        )
+        .expect("application");
+        assert!(short.owns("org.kde.konsole") && short.owns("Konsole"));
+        assert!(!short.owns("org.kde.kate") && !short.owns("konsole.helper.x"));
 
         let browser = catalog
             .get("example-browser.desktop")

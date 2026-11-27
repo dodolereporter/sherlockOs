@@ -7,8 +7,9 @@
 //!   the dock gives up its exclusive zone and slides out.
 //!
 //! A hidden dock keeps a band of `dock::HIDE_STRIP` pixels on the screen, along its edge, that
-//! takes the pointer: touching it brings the dock back over the windows, still without an
-//! exclusive zone. It hides again `dock::HIDE_DELAY` after the pointer left it. Pure state: the
+//! takes the pointer: resting against it for `dock::REVEAL_DELAY` brings the dock back over
+//! the windows, still without an exclusive zone, as on macOS (a pointer that only passes by the
+//! edge does not). It hides again `dock::HIDE_DELAY` after the pointer left it. Pure state: the
 //! dock turns it into margins, an exclusive zone and an input region.
 
 use std::time::Duration;
@@ -29,6 +30,9 @@ pub struct Hide {
     revealed: bool,
     /// When the pointer left the revealed dock: it hides `HIDE_DELAY` later.
     left_at: Option<Duration>,
+    /// Since when the pointer rests on the band of the hidden dock: it comes back
+    /// `REVEAL_DELAY` later.
+    pushed_at: Option<Duration>,
     /// 0 shown, 1 hidden.
     slide: Animation,
     now: Duration,
@@ -42,6 +46,7 @@ impl Hide {
             covered: false,
             revealed: false,
             left_at: None,
+            pushed_at: None,
             slide: Animation::new(dock::HIDE_SPRING, 0.0, 0.0, Duration::ZERO),
             now: Duration::ZERO,
         };
@@ -92,17 +97,29 @@ impl Hide {
         self.aim(now);
     }
 
-    /// The pointer is on the dock, the band of a hidden dock included: it comes back.
+    /// The pointer is on the dock at `now`. On the band of a hidden dock, it has to stay there
+    /// `REVEAL_DELAY` before the dock comes back (`tick`).
     pub fn pointer_in(&mut self, now: Duration) {
+        self.now = self.now.max(now);
         self.left_at = None;
-        if self.hides() {
-            self.revealed = true;
+        if self.hides() && !self.revealed {
+            let since = *self.pushed_at.get_or_insert(self.now);
+            if self.now >= since + dock::REVEAL_DELAY {
+                self.reveal();
+            }
         }
-        self.aim(now);
+        self.aim(self.now);
     }
 
-    /// The pointer left the dock at `now`: a revealed dock hides `HIDE_DELAY` later.
+    fn reveal(&mut self) {
+        self.pushed_at = None;
+        self.revealed = true;
+    }
+
+    /// The pointer left the dock at `now`: a revealed dock hides `HIDE_DELAY` later, a hidden
+    /// one stays hidden.
     pub fn pointer_out(&mut self, now: Duration) {
+        self.pushed_at = None;
         if self.revealed {
             self.left_at = Some(now);
         }
@@ -111,6 +128,12 @@ impl Hide {
     /// Time passes. `busy`: a menu is open or an icon is held, the dock stays.
     pub fn tick(&mut self, now: Duration, busy: bool) {
         self.now = self.now.max(now);
+        if let Some(since) = self.pushed_at
+            && self.now >= since + dock::REVEAL_DELAY
+        {
+            self.reveal();
+            self.aim(self.now);
+        }
         if let Some(left) = self.left_at
             && !busy
             && self.now >= left + dock::HIDE_DELAY
@@ -133,7 +156,7 @@ impl Hide {
     /// Frames are needed: the dock slides, or waits to hide. `busy` (a menu open, an icon
     /// held): it does not wait, it stays.
     pub fn running(&self, busy: bool) -> bool {
-        (self.left_at.is_some() && !busy) || self.sliding()
+        (self.left_at.is_some() && !busy) || self.pushed_at.is_some() || self.sliding()
     }
 
     /// The menu closed, or the icon was let go, at `now`: a dock the pointer left hides
@@ -154,6 +177,7 @@ impl Hide {
         if !self.hides() {
             self.revealed = false;
             self.left_at = None;
+            self.pushed_at = None;
         }
         let target = self.target();
         if (self.slide.target() - target).abs() > f64::EPSILON {
@@ -211,6 +235,10 @@ mod tests {
         hide.set_covered(true, false, ms(0));
         let t = settle(&mut hide, ms(0));
         hide.pointer_in(t);
+        assert!(hide.hidden(), "not at once: the pointer may only pass by");
+        assert!(hide.running(false), "frames while it waits");
+        let t = t + dock::REVEAL_DELAY;
+        hide.tick(t, false);
         assert!(!hide.hidden(), "shown over the window");
         assert!(!hide.exclusive(), "without taking its room back");
         let t = settle(&mut hide, t);
@@ -236,7 +264,9 @@ mod tests {
         hide.set_covered(true, false, ms(0));
         let t = settle(&mut hide, ms(0));
         hide.pointer_in(t);
-        let t = settle(&mut hide, t);
+        hide.tick(t + dock::REVEAL_DELAY, false);
+        let t = settle(&mut hide, t + dock::REVEAL_DELAY);
+        assert!(!hide.hidden());
         // The pointer goes to the menu: the dock waits for nothing while it is open.
         hide.pointer_out(t);
         assert!(!hide.running(true), "no frame while the menu is open");
@@ -250,6 +280,28 @@ mod tests {
         assert!(!hide.hidden());
         hide.tick(closed + dock::HIDE_DELAY, false);
         assert!(hide.hidden());
+    }
+
+    #[test]
+    fn a_pointer_passing_by_the_edge_does_not_bring_it_back() {
+        let mut hide = Hide::new(AutoHide::Smart);
+        hide.set_covered(true, false, ms(0));
+        let t = settle(&mut hide, ms(0));
+        hide.pointer_in(t);
+        hide.tick(t + dock::REVEAL_DELAY - ms(10), false);
+        hide.pointer_out(t + dock::REVEAL_DELAY - ms(5));
+        hide.tick(t + Duration::from_secs(1), false);
+        assert!(
+            hide.hidden() && !hide.running(false),
+            "it left before the delay"
+        );
+        // It comes back and rests there: the delay starts again, then the dock comes.
+        let t = t + Duration::from_secs(1);
+        hide.pointer_in(t);
+        hide.pointer_in(t + ms(100));
+        assert!(hide.hidden());
+        hide.pointer_in(t + dock::REVEAL_DELAY);
+        assert!(!hide.hidden(), "a motion past the delay brings it too");
     }
 
     #[test]
