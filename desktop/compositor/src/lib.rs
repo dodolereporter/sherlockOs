@@ -33,6 +33,7 @@ pub mod mission_control;
 pub mod options;
 pub mod osd;
 pub mod output;
+pub mod output_management;
 pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
@@ -181,6 +182,8 @@ pub struct State {
     screens: Vec<output::Screen>,
     /// Screens switched off, and the saved setting of each screen (ADR 0025).
     displays: displays::Displays,
+    /// `wlr-output-management`: the clients that read and change the screens (lot D-26b).
+    output_management: output_management::OutputManagement,
     gesture: Option<input::Gesture>,
     /// Touchpad gestures in progress, and the protocol that hands them to clients (lot D-31).
     gestures: gestures::Gestures,
@@ -356,6 +359,10 @@ impl State {
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             displays: displays::Displays::default(),
+            output_management: {
+                output_management::create_global(&dh);
+                output_management::OutputManagement::default()
+            },
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
@@ -692,6 +699,7 @@ impl State {
             self.popup_grab = None;
         }
         self.update_scales();
+        self.refresh_output_management();
         self.refresh_lock();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
