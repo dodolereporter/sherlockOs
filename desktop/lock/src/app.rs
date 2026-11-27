@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use iced::futures::channel::{mpsc, oneshot};
+use iced::futures::channel::mpsc;
 use iced::widget::{Space, button, column, container, image, row, stack, svg, text, text_input};
 use iced::{
     Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
@@ -501,18 +501,14 @@ impl Lock {
         self.phase = Phase::Checking(self.elapsed());
         // The field empties now: the password goes to PAM, and nowhere else.
         let password = std::mem::take(&mut self.password);
-        let (user, authenticator) = (self.user.clone(), self.authenticator.clone());
-        let (sender, receiver) = oneshot::channel();
-        let spawned = std::thread::Builder::new()
-            .name("pam".into())
-            .spawn(move || {
-                let _ = sender.send(authenticator.check(&user, password));
-            });
-        if let Err(err) = spawned {
-            return Task::done(Message::Checked(Err(AuthError::Unavailable(
-                err.to_string(),
-            ))));
-        }
+        tracing::info!("authentication: checking");
+        // On a thread of its own, with a limit: the interface never waits for PAM (D-25f).
+        let receiver = crate::pam::check_in_background(
+            self.authenticator.clone(),
+            self.user.clone(),
+            password,
+            crate::pam::TIMEOUT,
+        );
         Task::perform(receiver, |result| {
             Message::Checked(
                 result.unwrap_or_else(|_| Err(AuthError::Unavailable("no answer".into()))),

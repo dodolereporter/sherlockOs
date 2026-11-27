@@ -2304,6 +2304,19 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
   then the compositor's own screen, which cannot unlock: « Verrouillé » and « Appuie sur Entrée
   pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
+- **When the lock program hangs** (lot D-25f). A key or a click while locked pings the program
+  that holds the lock (`xdg_wm_base.ping`, at most once a second): its event loop answers. Without
+  an answer within 5 s (`PING_TIMEOUT`), it is killed: its lock goes without an unlock, so the
+  session stays locked and the next program starts, as when it dies; after 3 such failures, the
+  rescue mode. The compositor knows the program's shell client from the binding of
+  `xdg_wm_base` on the connection it opened. A program that never binds it (`swaylock`) is not
+  pinged.
+- **The console switch** (Ctrl + Alt + F1 to F12) works while locked, as on the other
+  compositors: the session stays locked, and another console can start things again.
+- **The log on disk.** `sherlockos-session` names its log in `SHERLOCKOS_LOG`; at each lock and
+  unlock, every 5 s while locked (`LOG_SYNC`) and when a hung program is killed, a thread of the
+  compositor has it written to disk (`fsync`, `log_sync.rs`), 300 ms later so that the pipe's
+  reader has appended the last lines: a forced restart no longer loses the end of a lock.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
@@ -2320,7 +2333,9 @@ another session's does not, and `PrepareForSleep` locks, keeps the inhibitor unt
 frame is shown, then a new one is taken at wake-up; on four screens side by side (1366 × 768,
 1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
-scale.
+scale; a lock program that answers its pings stays, one that hangs (a client that reads
+nothing any more) is killed after the time limit and another starts, the session staying locked
+and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 
