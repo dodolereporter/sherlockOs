@@ -28,6 +28,7 @@ Displays come with D-26a3.
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
 | « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
 | « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
+| « Presse-papiers » | Clipboard history on or off, kept on disk or in memory (lot D-42) | `$XDG_CONFIG_HOME/sherlockos/clipboard.conf` (`history`, `keep-on-disk`) | Compositor (D-42) |
 | « Applications par défaut » | Browser, mail, text editor, terminal, files, images, video, music | `$XDG_CONFIG_HOME/mimeapps.list`; the terminal in `xdg-terminals.list` | Every program that opens a file or a link |
 
 A file is only written once a setting changes: until then, the programs keep their own
@@ -60,6 +61,10 @@ The changes reach `pactl` one at a time, in the order they were made, through a 
 keeps only the last volume of each device, as the media keys do.
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
+
+**Clipboard.** `clipboard.conf` is read by the compositor within a second of a change (see
+"Clipboard history" in `docs/compositor.md`). « Historique du presse-papiers » off forgets
+everything at once; « Garder après la déconnexion » is disabled while the history is off.
 
 **Lock.** `lock.conf` is the file of D-25a, read by the compositor live; Control Room writes it
 with `desktop_config::lock`.
