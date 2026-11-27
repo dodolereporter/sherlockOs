@@ -117,13 +117,13 @@ const EDGES: [Position; 4] = [
 fn a_maximized_window_takes_the_room_of_the_dock_on_every_edge() {
     for position in EDGES {
         let mut dock = dock(position, AutoHide::Smart, &Recorder::default());
-        // Shown: the bar of 76 and its gap of 8 are kept clear; the surface is against the
+        // Shown, over the windows (lot D-21g): nothing kept clear; the surface is against the
         // edge, the gap inside it.
-        assert_eq!(reserved(&dock, position), 84, "{position:?}");
+        assert_eq!(reserved(&dock, position), 0, "{position:?}");
         assert_eq!(margin(&dock, position), 0);
         let rest = dock.input_area();
 
-        // A window is maximized on the dock's screen: no zone at once, then the dock slides out.
+        // A window is maximized on the dock's screen: the dock slides out.
         let _ = dock.update(windows(&[SCREEN]));
         assert_eq!(reserved(&dock, position), 0, "{position:?}");
         // -1: placed against the screen edge itself, not below the top bar's zone.
@@ -150,12 +150,11 @@ fn a_maximized_window_takes_the_room_of_the_dock_on_every_edge() {
         };
         assert_eq!(strip, expected, "{position:?}");
 
-        // Restored: back, and its zone once in place; until then it goes over the windows, the
-        // compositor never reserves less than nothing.
+        // Restored: back, still over the windows.
         let _ = dock.update(windows(&[]));
         assert_eq!(reserved(&dock, position), 0);
         settle(&mut dock);
-        assert_eq!(reserved(&dock, position), 84);
+        assert_eq!(reserved(&dock, position), 0);
         assert_eq!(margin(&dock, position), 0);
         assert_eq!(dock.input_area(), rest);
     }
@@ -166,7 +165,41 @@ fn a_window_on_another_screen_changes_nothing() {
     let mut dock = dock(Position::Bottom, AutoHide::Smart, &Recorder::default());
     let _ = dock.update(windows(&["HDMI-1"]));
     assert!(!dock.covered());
-    assert_eq!(reserved(&dock, Position::Bottom), 84);
+    assert!(!dock.animating(), "it stays");
+}
+
+/// Lot D-21g: as on macOS, a dock that hides by itself never reserves room. In the `smart`
+/// and `always` modes, the zone stays -1 through every state: shown, covered, hidden, brought
+/// back by the pointer, hidden again, uncovered, and every frame of the slides in between. So
+/// a maximized window is never resized by the dock. Only `never` keeps its room.
+#[test]
+fn a_dock_that_hides_never_reserves_room() {
+    for mode in [AutoHide::Smart, AutoHide::Always] {
+        let mut dock = dock(Position::Bottom, mode, &Recorder::default());
+        let mut zones = vec![dock.layer_settings().exclusive_zone];
+        let mut step = |dock: &mut Dock, message: Option<Message>| {
+            if let Some(message) = message {
+                let _ = dock.update(message);
+            }
+            // Every frame of the slide, not only its end.
+            let start = dock.now();
+            for ms in (0..2000).step_by(16) {
+                let _ = dock.tick(start + Duration::from_millis(ms));
+                zones.push(dock.layer_settings().exclusive_zone);
+            }
+        };
+        step(&mut dock, Some(windows(&[SCREEN])));
+        step(
+            &mut dock,
+            Some(Message::Pointer(Pointer::Moved(Point::new(300.0, 1.0)))),
+        );
+        step(&mut dock, Some(Message::Pointer(Pointer::Left)));
+        step(&mut dock, Some(windows(&[])));
+        step(&mut dock, None);
+        assert!(zones.iter().all(|z| *z == -1), "{mode:?}: {zones:?}");
+    }
+    let never = dock(Position::Bottom, AutoHide::Never, &Recorder::default());
+    assert_eq!(reserved(&never, Position::Bottom), 84);
 }
 
 #[test]
