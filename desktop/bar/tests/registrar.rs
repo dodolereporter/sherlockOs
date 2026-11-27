@@ -190,10 +190,19 @@ mod tests {
     fn only_the_menus_that_are_gone_are_withdrawn() {
         let bus = Bus::start("registrar-withdraw");
         let (_registrar, changes, _) = bus.registrar();
-        let app = bus.connect();
-        let service = app.unique_name().unwrap().to_string();
         // Qt under Wayland: two windows, the same id 1; the second one's menu stays exported.
-        zbus::block_on(app.object_server().at("/MenuBar/2", Menu)).unwrap();
+        // Served from the builder, which returns once zbus listens for method calls (see
+        // `dbusmenu.rs`): the registrar's question about it cannot be lost.
+        let app = zbus::block_on(async {
+            zbus::connection::Builder::address(bus.address.as_str())
+                .unwrap()
+                .serve_at("/MenuBar/2", Menu)
+                .unwrap()
+                .build()
+                .await
+                .unwrap()
+        });
+        let service = app.unique_name().unwrap().to_string();
         register(&app, 1, "/MenuBar/1").unwrap();
         register(&app, 1, "/MenuBar/2").unwrap();
         let _ = (next(&changes), next(&changes));
