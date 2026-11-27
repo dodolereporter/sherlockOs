@@ -227,6 +227,8 @@ pub struct State {
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of Super + comma, if not Control Room (`launcher.rs`).
+    settings_program: Option<PathBuf>,
     /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
     applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
@@ -405,6 +407,7 @@ impl State {
             x_display: None,
             socket_name: None,
             launcher_program: None,
+            settings_program: None,
             applications_program: None,
             xwayland: None,
             listener: None,

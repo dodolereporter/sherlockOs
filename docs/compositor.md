@@ -164,6 +164,10 @@ Snapping:
 - F4 alone opens the applications view, and closes it when pressed again (lot D-41, see
   `docs/apps.md`): `$SHERLOCKOS_BIN/sherlockos-apps`, or `sherlockos-apps` in the `PATH`. F4 with
   a modifier (Alt + F4) still goes to the client.
+- Super + comma (Alt + comma nested) opens Control Room, as Cmd + , opens the settings on macOS
+  (lot Q-31): `$SHERLOCKOS_BIN/control-room`, or `control-room` in the `PATH`, the program
+  « Réglages » of the bar's Sherlock menu starts too. The menu shows the shortcut beside the
+  entry, and Super+L beside « Verrouiller ».
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
