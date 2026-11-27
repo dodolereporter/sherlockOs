@@ -645,6 +645,40 @@ mod tests {
         assert_eq!(h.state.workspaces().active(), "2");
     }
 
+    /// Four fingers pinching in start the applications view with `--show`, spreading out with
+    /// `--hide`; a pinch that stays small starts nothing, and the client gets none of it
+    /// (lot D-41c).
+    #[test]
+    fn a_four_finger_pinch_shows_and_hides_the_applications() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (mut h, _toplevel) = Harness::start();
+        let dir = std::env::temp_dir().join(format!("apps-pinch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("started");
+        let program = dir.join("sherlockos-apps");
+        let script = format!("#!/bin/sh\necho \"$@\" >> '{}'\n", marker.display());
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        h.state.set_applications_program(program);
+        let lines = |n: usize| {
+            for _ in 0..500 {
+                let text = std::fs::read_to_string(&marker).unwrap_or_default();
+                if text.lines().count() >= n {
+                    return text.lines().map(str::to_owned).collect::<Vec<_>>();
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Vec::new()
+        };
+        pinch(&mut h.state, 4, 0.9);
+        pinch(&mut h.state, 4, 0.6);
+        assert_eq!(lines(1), ["--show"]);
+        pinch(&mut h.state, 4, 1.5);
+        assert_eq!(lines(2), ["--show", "--hide"]);
+        assert_eq!(h.received(), Vec::<String>::new());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn three_fingers_down_minimize_the_active_window_only_if_set() {
         let (mut h, _toplevel) = Harness::start();

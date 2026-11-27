@@ -4,6 +4,7 @@ description = "Icon lookup by name after the XDG Icon Theme specification: chose
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 # Standard library only: `index.theme` and the settings files are small key files.

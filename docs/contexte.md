@@ -346,7 +346,8 @@ Conséquences pour le code, dès maintenant :
 
 | Commande | Ce qu'elle vérifie |
 | --- | --- |
-| `just verify` | Format, clippy, tests |
+| `just verify` | Format, langue (`just check-language`), clippy, tests |
+| `just check-language` | Le français resté dans les commentaires, les noms de fichiers et les identifiants (ADR 0017) |
 | `just builder` | Construit l'image du conteneur de build |
 | `just in-builder <commande>` | Lance une commande dans le conteneur de build |
 | `just test-boot` | Boote l'image dans QEMU et attend la ligne BOOT-OK |
