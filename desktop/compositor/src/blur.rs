@@ -291,7 +291,7 @@ fn renderer_name(gl: &ffi::Gles2) -> String {
 }
 
 fn compile_passes(gl: &ffi::Gles2) -> Option<Passes> {
-    let vertex = include_str!("shaders/blur.vert");
+    let vertex = include_str!("shaders/blur_vertex.glsl");
     let down = compile(gl, vertex, include_str!("shaders/blur_down.frag"));
     let up = compile(gl, vertex, include_str!("shaders/blur_up.frag"));
     if down.is_none() || up.is_none() {
