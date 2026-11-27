@@ -324,6 +324,7 @@ name = "bar"
 version = "0.0.0"
 dependencies = [
  "appearance-config",
+ "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
@@ -621,6 +622,7 @@ dependencies = [
  "cursor-theme",
  "desktop-config",
  "image",
+ "mime-apps",
  "resvg",
  "shell-protocol",
  "sherlock-ui",
@@ -664,6 +666,8 @@ dependencies = [
  "system-services",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
@@ -3447,6 +3451,7 @@ dependencies = [
  "gltf",
  "iced",
  "iced_renderer",
+ "iced_test",
  "image",
  "sherlock-ui",
  "thiserror 2.0.21",
@@ -3472,6 +3477,7 @@ name = "sherlockd"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
