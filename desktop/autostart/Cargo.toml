@@ -1,0 +1,25 @@
+[package]
+name = "autostart"
+description = "Starts the applications of the XDG autostart folders with the session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlockos-autostart"
+path = "src/main.rs"
+
+[dependencies]
+# Desktop entries, their Exec line and the XDG folders (workspace crate).
+mime-apps = { path = "../mime-apps" }
+# `gpu::for_child`, without iced (workspace crate).
+sherlock-ui = { path = "../sherlock-ui", default-features = false }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[lints]
+workspace = true

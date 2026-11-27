@@ -3,6 +3,8 @@
 //! Internet, and the Bluetooth radio. Each is read when the bar starts, then again on the
 //! signals of its service, coalesced: nothing polls.
 
+use std::time::Duration;
+
 use iced::futures::future::{self, BoxFuture};
 use iced::futures::stream::{self, BoxStream};
 use iced::futures::{FutureExt, StreamExt};
@@ -83,19 +85,29 @@ pub fn radio(powered: bool, connected: usize) -> Radio {
     }
 }
 
-fn properties(sender: &'static str) -> zbus::Result<zbus::MatchRule<'static>> {
+/// `PropertiesChanged` of the objects of `sender` under `namespace`. The system connection is
+/// shared and zbus does not filter a well-known sender name on its side: without the path, every
+/// stream would wake for the signals of every service (an RSSI of BlueZ reading NetworkManager
+/// again, and the other way round).
+fn properties(
+    sender: &'static str,
+    namespace: &'static str,
+) -> zbus::Result<zbus::MatchRule<'static>> {
     Ok(zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(sender)?
+        .path_namespace(namespace)?
         .interface("org.freedesktop.DBus.Properties")?
         .member("PropertiesChanged")?
         .build())
 }
 
+/// BlueZ's `ObjectManager` signals, on its root object only (see `properties`).
 fn objects(member: &'static str) -> zbus::Result<zbus::MatchRule<'static>> {
     Ok(zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .sender(bluetooth::SERVICE)?
+        .path("/")?
         .interface("org.freedesktop.DBus.ObjectManager")?
         .member(member)?
         .build())
@@ -106,7 +118,7 @@ fn objects(member: &'static str) -> zbus::Result<zbus::MatchRule<'static>> {
 pub fn link() -> BoxStream<'static, Option<Link>> {
     follow(
         |bus| async move { read_link(&bus).await }.boxed(),
-        || Ok(vec![properties(network::SERVICE)?]),
+        || Ok(vec![properties(network::SERVICE, network::PATH)?]),
     )
 }
 
@@ -117,7 +129,7 @@ pub fn bluetooth() -> BoxStream<'static, Option<Radio>> {
         |bus| async move { read_radio(&bus).await }.boxed(),
         || {
             Ok(vec![
-                properties(bluetooth::SERVICE)?,
+                properties(bluetooth::SERVICE, bluetooth::PATH)?,
                 objects("InterfacesAdded")?,
                 objects("InterfacesRemoved")?,
             ])
@@ -125,8 +137,15 @@ pub fn bluetooth() -> BoxStream<'static, Option<Radio>> {
     )
 }
 
+/// First wait before following a service again once the bus closed; it doubles up to
+/// `RETRY_MAX`.
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(60);
+
 /// Reads with `read` at start and after each batch of the signals `rules` match, on the system
-/// bus, and yields what changed only.
+/// bus, and yields what changed only. When the bus closes (D-Bus restarted), it starts again on
+/// a new connection, after a wait that grows from `RETRY_FIRST` to `RETRY_MAX`: the indicators
+/// never stay unavailable for good.
 fn follow<T>(
     read: fn(Connection) -> BoxFuture<'static, system::Result<T>>,
     rules: fn() -> zbus::Result<Vec<zbus::MatchRule<'static>>>,
@@ -134,9 +153,28 @@ fn follow<T>(
 where
     T: Clone + PartialEq + Send + 'static,
 {
+    follow_after(read, rules, None)
+}
+
+fn follow_after<T>(
+    read: fn(Connection) -> BoxFuture<'static, system::Result<T>>,
+    rules: fn() -> zbus::Result<Vec<zbus::MatchRule<'static>>>,
+    wait: Option<Duration>,
+) -> BoxStream<'static, Option<T>>
+where
+    T: Clone + PartialEq + Send + 'static,
+{
     stream::once(async move {
+        if let Some(wait) = wait {
+            crate::bus::pause(wait).await;
+        }
         let bus = match system::system().await {
             Ok(bus) => bus,
+            Err(problem) if wait.is_some() => {
+                // The bus was there and is not yet back: try again, later.
+                tracing::debug!(%problem, "the system bus is not back yet");
+                return follow_after(read, rules, Some(longer(wait))).boxed();
+            }
             Err(problem) => {
                 tracing::warn!(%problem, "the indicators will not follow the system bus");
                 return stream::empty().boxed();
@@ -154,9 +192,12 @@ where
             }
             Err(error) => tracing::warn!(%error, "cannot follow a service"),
         }
+        if signals.is_empty() {
+            return stream::empty().boxed();
+        }
         let changes =
             crate::bus::coalesce(stream::select_all(signals).boxed(), crate::bus::SIGNAL_GAP);
-        stream::once(future::ready(()))
+        let followed = stream::once(future::ready(()))
             .chain(changes)
             .then(move |()| read(bus.clone()).map(Result::ok))
             .scan(None, |last: &mut Option<Option<T>>, now| {
@@ -164,16 +205,60 @@ where
                 *last = Some(now.clone());
                 future::ready(Some(new.then_some(now)))
             })
-            .filter_map(future::ready)
-            .boxed()
+            .filter_map(future::ready);
+        // The signals end only when the connection closed: unavailable meanwhile, then again.
+        let again = stream::once(future::ready(None)).chain(
+            stream::once(async move { follow_after(read, rules, Some(RETRY_FIRST)) }).flatten(),
+        );
+        followed.chain(again).boxed()
     })
     .flatten()
     .boxed()
 }
 
+/// The next wait after `wait`: twice as long, `RETRY_MAX` at most.
+fn longer(wait: Option<Duration>) -> Duration {
+    wait.map_or(RETRY_FIRST, |w| (w * 2).min(RETRY_MAX))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `PropertiesChanged` signal from `sender` (a unique name) on `path`.
+    fn signal(path: &str) -> zbus::Message {
+        zbus::Message::signal(path, "org.freedesktop.DBus.Properties", "PropertiesChanged")
+            .unwrap()
+            .sender(":1.7")
+            .unwrap()
+            .build(&(
+                "org.bluez.Device1",
+                std::collections::HashMap::<String, zbus::zvariant::Value<'_>>::new(),
+                Vec::<String>::new(),
+            ))
+            .unwrap()
+    }
+
+    #[test]
+    fn the_wait_before_following_again_grows() {
+        assert_eq!(longer(None), RETRY_FIRST);
+        assert_eq!(longer(Some(RETRY_FIRST)), RETRY_FIRST * 2);
+        assert_eq!(longer(Some(RETRY_MAX)), RETRY_MAX);
+    }
+
+    #[test]
+    fn each_stream_wakes_for_its_service_only() {
+        // zbus compares a well-known sender name with nothing on the client side: the path is
+        // what keeps the streams apart on the shared connection.
+        let network = properties(network::SERVICE, network::PATH).unwrap();
+        let bluez = properties(bluetooth::SERVICE, bluetooth::PATH).unwrap();
+        let rssi = signal("/org/bluez/hci0/dev_00_11_22_33_44_55");
+        let point = signal("/org/freedesktop/NetworkManager/AccessPoint/12");
+        assert!(bluez.matches(&rssi).unwrap() && !network.matches(&rssi).unwrap());
+        assert!(network.matches(&point).unwrap() && !bluez.matches(&point).unwrap());
+        let added = objects("InterfacesAdded").unwrap();
+        assert!(!added.matches(&point).unwrap());
+    }
 
     #[test]
     fn the_radio_says_off_on_or_connected() {

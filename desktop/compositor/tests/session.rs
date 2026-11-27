@@ -44,11 +44,11 @@ mod tests {
                 &dir.join("bin/compositor"),
                 &format!(
                     "#!/bin/sh\necho \"$@\" > '{o}/args'\nenv > '{o}/env'\n\
-                     [ \"$1\" = --xwayland ] && shift\n\
+                     [ \"$1\" = --xwayland ] && shift && export DISPLAY=:9\n\
                      WAYLAND_DISPLAY=wayland-test \"$@\" &\nsleep 2\n"
                 ),
             );
-            for program in ["bar", "dock", "notifications"] {
+            for program in ["bar", "dock", "notifications", "sherlockos-autostart"] {
                 write(
                     &dir.join("bin").join(program),
                     &format!("#!/bin/sh\necho > '{o}/{program}'\nsleep 3\n"),
@@ -143,6 +143,7 @@ mod tests {
         assert!(log.contains(&started), "{log}");
         assert!(o.join("agent").exists(), "{log}");
         assert!(o.join("bar").exists(), "{log}");
+        assert!(o.join("sherlockos-autostart").exists(), "{log}");
         // The portals learn the name of the session and where its setting is.
         let activation = s.out("activation");
         assert!(activation.starts_with("--systemd "), "{activation}");
@@ -154,6 +155,42 @@ mod tests {
         assert!(env.contains(&data), "{env}");
     }
 
+    /// The proxy of the old X11 tray (lot D-45b): started with XWayland's display when it is
+    /// installed, left out when it is not, or when `SHERLOCKOS_XEMBED=0`.
+    #[test]
+    fn the_x11_tray_proxy_starts_when_it_is_installed() {
+        let s = Session::new("xembed");
+        let o = s.dir.join("out");
+        s.fake(
+            "xembedsniproxy",
+            &format!(
+                "#!/bin/sh\necho \"$DISPLAY\" > '{}/xembed'\nsleep 3\n",
+                o.display()
+            ),
+        );
+        let log = s.run(&[]);
+        assert!(log.contains("X11 tray icons: "), "{log}");
+        assert_eq!(s.out("xembed").trim(), ":9", "{log}");
+
+        let off = Session::new("xembed-off");
+        off.fake(
+            "xembedsniproxy",
+            &format!(
+                "#!/bin/sh\necho > '{}/xembed'\n",
+                off.dir.join("out").display()
+            ),
+        );
+        let log = off.run(&[("SHERLOCKOS_XEMBED", String::from("0"))]);
+        assert!(!log.contains("X11 tray icons"), "{log}");
+        assert!(!off.dir.join("out/xembed").exists(), "{log}");
+
+        // Not installed: nothing said, the shell starts.
+        let none = Session::new("xembed-none");
+        let log = none.run(&[]);
+        assert!(!log.contains("X11 tray icons"), "{log}");
+        assert!(none.dir.join("out/bar").exists(), "{log}");
+    }
+
     #[test]
     fn without_agent_nor_keyring_the_session_says_so_and_goes_on() {
         let s = Session::new("bare");
@@ -163,6 +200,7 @@ mod tests {
                 String::from("/nowhere/agent absent-agent"),
             ),
             ("SHERLOCKOS_XWAYLAND", String::from("0")),
+            ("SHERLOCKOS_AUTOSTART", String::from("0")),
             // No PAM service for the lock screen (lot D-25a).
             ("SHERLOCKOS_PAM_DIR", String::from("/nowhere/pam.d")),
         ]);
@@ -174,5 +212,6 @@ mod tests {
         assert!(log.contains("keyring: none"), "{log}");
         assert!(!s.out("args").contains("--xwayland"), "{}", s.out("args"));
         assert!(s.dir.join("out/bar").exists(), "{log}");
+        assert!(!s.dir.join("out/sherlockos-autostart").exists(), "{log}");
     }
 }

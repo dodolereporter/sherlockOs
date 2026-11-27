@@ -14,7 +14,7 @@ pub mod power;
 // Sound and brightnesses are shared with the media keys of the compositor (lots D-35, D-35d).
 pub use system_services::{Problem, Result, audio, backlight, keyboard, watch};
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use zbus::Connection;
@@ -73,26 +73,30 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// Longest wait for an action: long enough for polkit to ask the user for a password.
 pub const ACTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-async fn open(cell: &'static OnceLock<Connection>, timeout: Duration) -> Result<Connection> {
-    if let Some(bus) = cell.get() {
-        return Ok(bus.clone());
+/// The connection kept in `cell`, or a new one when there is none or it was closed (the bus
+/// restarted): never « indisponible » for good after a restart of D-Bus.
+async fn open(cell: &'static Mutex<Option<Connection>>, timeout: Duration) -> Result<Connection> {
+    let kept = cell.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    if let Some(bus) = kept.filter(|bus| !bus.is_closed()) {
+        return Ok(bus);
     }
     let bus = zbus::connection::Builder::system()?
         .method_timeout(timeout)
         .build()
         .await?;
-    Ok(cell.get_or_init(|| bus).clone())
+    *cell.lock().unwrap_or_else(PoisonError::into_inner) = Some(bus.clone());
+    Ok(bus)
 }
 
-/// The system bus for reads (`READ_TIMEOUT`), opened on first use and shared. It follows
-/// `DBUS_SYSTEM_BUS_ADDRESS`.
+/// The system bus for reads (`READ_TIMEOUT`), opened on first use and shared, opened again
+/// once closed. It follows `DBUS_SYSTEM_BUS_ADDRESS`.
 pub async fn system() -> Result<Connection> {
-    static BUS: OnceLock<Connection> = OnceLock::new();
+    static BUS: Mutex<Option<Connection>> = Mutex::new(None);
     open(&BUS, READ_TIMEOUT).await
 }
 
 /// The system bus for actions (`ACTION_TIMEOUT`), which may wait for polkit.
 pub async fn system_for_actions() -> Result<Connection> {
-    static BUS: OnceLock<Connection> = OnceLock::new();
+    static BUS: Mutex<Option<Connection>> = Mutex::new(None);
     open(&BUS, ACTION_TIMEOUT).await
 }
