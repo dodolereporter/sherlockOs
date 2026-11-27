@@ -34,7 +34,12 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   picture is decoded once, on a thread, once the size of the screens is known, and reduced to
   cover the largest one in pixels (logical size times its scale): centered, neither stretched
   nor banded, never kept at 4K for a small screen. It follows the theme of the appearance
-  file, with its fade (the light picture fades in over the dark one). The middle of the pictures
+  file, with its fade (the light picture fades in over the dark one). The paths come from the
+  user: a picture is read only from a regular file (links followed) of 64 MiB at most, read with
+  that bound, and decoded with sides of 16 384 pixels and 256 MiB at most, reduced before any
+  other copy; anything else (`/dev/zero`, a FIFO, a huge or lying file) falls to the next
+  source or the plain background. The model of Sherlock follows the same rule in `sherlock-3d`
+  (32 MiB at most, textures bounded too). The middle of the pictures
   is plain enough: no veil is laid behind the time or the field. The plain background of the
   system screens shows until the picture is ready.
 
@@ -48,6 +53,11 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   Space and Enter only bring the form (Enter sends nothing to PAM). Escape sends the form away.
 - **Leaving:** after 20 s without input (unless PAM is checking), the form leaves in reverse
   order, and the field empties, the eye closed.
+- **Sleep:** confirming « Veille » sends the form away and wipes the field first. The 20 s are
+  counted on the monotonic clock, which stops during a suspension: so a jump of more than 5 s
+  of the time since boot (`CLOCK_BOOTTIME`) between two ticks of a second (the lid closed, a
+  sleep started elsewhere) sends the form away and wipes the field too. Nothing typed waits for
+  whoever opens the lid.
 - **Sherlock** follows the field: he waves (`Wave`) when the form comes, closes his eyes
   (`EyesClosed`) while something is typed, opens one eye (`Peek`) when the eye shows the
   password, opens them and looks at the field when it is empty again, thinks (`Think`) while
@@ -79,6 +89,7 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   bar): `Debug` prints `***`, and it is overwritten with zeros (`zeroize`, volatile writes)
   when dropped. The conversation function gives PAM a `malloc` copy, which PAM frees; our copy
   is overwritten as soon as it is handed over. It is never logged.
+- The first key, which brings the form, travels as a `Secret` too (`form::Input`).
 - **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
   text in its own state, and `on_input` hands a new `String` at each key before it becomes a
   `Secret`; iced frees them without overwriting them. They live in the memory of this process
