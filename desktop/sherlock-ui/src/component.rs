@@ -1061,7 +1061,8 @@ fn choice<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
-    let line = row![mark, body(label)]
+    // A long name (a sound output's) is cut with « … » on its one line.
+    let line = row![mark, ellipsis(label)]
         .spacing(metrics::CHOICE_GAP)
         .align_y(Alignment::Center)
         .height(Length::Fill);

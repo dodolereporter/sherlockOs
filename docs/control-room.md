@@ -89,7 +89,17 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 
 ## Motion and sizes
 
-- A new page comes up from 12 px below while it fades in, on the spring of an opening.
+- A new page comes up from 12 px below while it fades in, on the spring of an opening; the page
+  left fades out under it over the same fade, rising a little, and takes no click.
+- The results of the search come in one after the other, 30 ms apart, each fading in and coming
+  up 6 px. A name too long for the sidebar is cut with « … » (its highlight is then left out).
+- A setting opened from the search is scrolled to on the spring of an opening, a section's gap
+  below the top of the page, unless it shows already (`scroll::find`: an operation finds the
+  row by its id and the page's scrollable in the window laid out). Then it is lit.
+- A choice of a list of radio buttons (a long sound output) is cut with « … ».
+- A default application that could not be written says « Ce fichier de réglages ne peut pas
+  être modifié. » under its menu, until it is written.
+- The dropdown menus are iced's `pick_list`: they open and close without motion (not done).
 - Switches, segmented controls, sliders and menus are those of sherlock-ui, with their own
   motion. The window's entrance and exit are the compositor's.
 - Below 720 px of width, the sidebar folds away. The button on the left of the title bar slides
