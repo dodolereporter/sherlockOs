@@ -80,6 +80,8 @@ pub enum Message {
     Closed(Id),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
+    /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
+    IconDrawn,
 }
 
 /// A screen, as the dock needs it.
@@ -574,6 +576,7 @@ impl Dock {
             keyboard::listen().filter_map(on_key),
             config,
             frames,
+            sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
     }
 
@@ -662,6 +665,7 @@ impl Dock {
                 return self.tick(instant.saturating_duration_since(self.origin));
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::IconDrawn => {}
             Message::Windows(windows) => {
                 self.clock();
                 // The first list is the dock at startup: in place at once.
