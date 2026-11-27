@@ -693,6 +693,24 @@ impl Launcher {
         };
         match action {
             Action::Start(command) => self.start(&command),
+            Action::Ask {
+                mut command,
+                request,
+            } => {
+                let written = crate::instance::runtime_dir()
+                    .ok_or_else(|| std::io::Error::other("no XDG_RUNTIME_DIR"))
+                    .and_then(|runtime| crate::ask::request_file(&runtime, &request));
+                match written {
+                    Ok(path) => {
+                        command.args.push(path.into_os_string());
+                        self.start(&command)
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "cannot hand the request to Sherlock");
+                        Task::none()
+                    }
+                }
+            }
             Action::Copy(value) => self.copy(index, value),
             Action::Session(power) if power.needs_confirmation() => match self.armed {
                 // Confirmed by a new press, not too soon: a double click or a key bounce

@@ -208,7 +208,11 @@ but the dock is under the view: there is nothing to drop on. « Garder dans le D
 | The keyboard | F4 alone, caught by the compositor (`docs/compositor.md`) |
 | A terminal | `sherlockos-apps` |
 
-The four finger pinch is another batch.
+Four fingers pinching in on the touchpad open the view, spreading out close it, as Launchpad
+(lot D-41c): the compositor starts `sherlockos-apps --show` or `--hide`, which hand `show` or
+`hide` to the service (`show` leaves an open view as it is; `--hide` starts nothing when no
+service runs). The pinch acts once, as soon as the fingers pass 0.75 or 1.33 of their spread; the
+view does not follow the fingers yet.
 
 ### Resident service
 
@@ -337,5 +341,5 @@ close it.
 ## What this batch does not do
 
 - Folders of applications, a later batch.
-- The four finger pinch: another batch.
+- The four finger pinch opens and closes the view, but the view does not follow the fingers.
 - Dragging an icon to the dock (see Menu of an application).
