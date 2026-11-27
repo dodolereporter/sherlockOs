@@ -9,6 +9,7 @@ pub mod app;
 pub mod apps;
 pub mod arrangement;
 pub mod displays;
+pub mod follow;
 mod pages;
 pub mod scroll;
 pub mod search;
