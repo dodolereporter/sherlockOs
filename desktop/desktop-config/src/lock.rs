@@ -102,11 +102,19 @@ impl Config {
         (config, problems)
     }
 
-    /// Reads the settings file. A missing file is the default setting.
+    /// Reads the settings file as `read_lenient` does, without the list of its wrong lines.
     pub fn read(path: &Path) -> Result<Self, Error> {
+        Self::read_lenient(path).map(|(config, _)| config)
+    }
+
+    /// Reads the settings file. A missing file is the default setting. A line that cannot be
+    /// taken is left out and listed, and the other lines still count: one typo never turns
+    /// the whole file back to the defaults (a lock set to never would lock after 5 minutes).
+    /// Only a file that cannot be read at all is an error.
+    pub fn read_lenient(path: &Path) -> Result<(Self, Vec<Error>), Error> {
         match fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+            Ok(text) => Ok(Self::parse_lenient(&text)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
             Err(source) => Err(Error::Read {
                 path: path.into(),
                 source,
@@ -178,6 +186,36 @@ mod tests {
         ] {
             assert!(Config::parse(wrong).is_err(), "{wrong}");
         }
+    }
+
+    #[test]
+    fn never_survives_a_wrong_line() {
+        // What the compositor reads: "Jamais" chosen in Control Room, then a typo by hand
+        // and a key of a later version. The delay stays at never, the picture is taken.
+        let dir = std::env::temp_dir().join(format!("desktop-config-lock-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE);
+        fs::write(
+            &path,
+            "idle-minutes = 0\nidel-minutes = 3\nbackground = /pictures/lock.jpg\nfuture = 1\n",
+        )
+        .unwrap();
+        let (config, problems) = Config::read_lenient(&path).unwrap();
+        assert_eq!(config.idle(), None);
+        assert_eq!(config.background, Some(PathBuf::from("/pictures/lock.jpg")));
+        assert_eq!(problems.len(), 2);
+        assert!(matches!(problems[0], Error::Line { line: 2, .. }));
+        assert_eq!(Config::read(&path).unwrap().idle(), None);
+        // A wrong value of the delay itself leaves it at its default, the rest still counts.
+        fs::write(
+            &path,
+            "idle-minutes = soon\nbackground = /pictures/lock.jpg\n",
+        )
+        .unwrap();
+        let (config, problems) = Config::read_lenient(&path).unwrap();
+        assert_eq!(config.idle_minutes, DEFAULT_IDLE_MINUTES);
+        assert!(config.background.is_some() && problems.len() == 1);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

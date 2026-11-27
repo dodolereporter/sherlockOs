@@ -1499,13 +1499,16 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration and rebuilds the dock.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The file is read
+    /// again first and only its list changes: the dock never writes what it has in memory, so
+    /// a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
-        if let Some(path) = &self.sources.config_path
-            && let Err(error) = self.sources.config.save(path)
-        {
-            tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
+        if let Some(path) = &self.sources.config_path {
+            let pinned = self.pinned.clone();
+            if let Err(error) = DockConfig::update(path, |config| config.pinned = Some(pinned)) {
+                tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
+            }
         }
         self.refresh(self.geometry)
     }
