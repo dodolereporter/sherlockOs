@@ -60,7 +60,10 @@ mod tests {
 
     #[test]
     fn a_square_rectangle_is_one_block() {
-        assert_eq!(rounded_region(10, 20, 100, 50, 0.0), vec![[10, 20, 100, 50]]);
+        assert_eq!(
+            rounded_region(10, 20, 100, 50, 0.0),
+            vec![[10, 20, 100, 50]]
+        );
         assert!(rounded_region(0, 0, 0, 50, 8.0).is_empty());
     }
 

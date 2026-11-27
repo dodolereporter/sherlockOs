@@ -58,6 +58,8 @@ pub enum Part {
     /// (lot D-25a).
     LockBackground,
     LockLabel(usize),
+    /// The blur behind a glass surface (lot D-37).
+    Blur,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by
