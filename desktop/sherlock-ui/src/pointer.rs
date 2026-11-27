@@ -8,6 +8,7 @@
 //! | Slider, dragged | `Grabbing`, the closed hand (iced's slider) |
 //! | Text field | `Text` (iced's text input) |
 //! | Anything disabled | `NotAllowed` |
+//! | Anything dragged (an icon of the bar's notification area) | `Grabbing`, wherever the pointer is |
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Operation, Tree};
@@ -28,15 +29,31 @@ pub fn control(inner: mouse::Interaction, over: bool, enabled: bool) -> mouse::I
 }
 
 /// Content that does nothing: the forbidden sign over it. A disabled slider, a disabled text
-/// field.
+/// field. Or content that holds something dragged: the closed hand, over it or not.
 pub struct Disabled<'a, Message> {
     content: Element<'a, Message>,
+    /// `None`: disabled. `Some(held)`: the closed hand while held, else the content's shape.
+    held: Option<bool>,
 }
 
 /// Shows the forbidden sign over `content`.
 pub fn disabled<'a, Message>(content: impl Into<Element<'a, Message>>) -> Disabled<'a, Message> {
     Disabled {
         content: content.into(),
+        held: None,
+    }
+}
+
+/// Shows the closed hand while `held`, wherever the pointer is: during a drag the pointer stays
+/// with the surface it was pressed in, even past its edges (lot D-45c). Not held, `content`
+/// decides.
+pub fn held<'a, Message>(
+    content: impl Into<Element<'a, Message>>,
+    held: bool,
+) -> Disabled<'a, Message> {
+    Disabled {
+        content: content.into(),
+        held: Some(held),
     }
 }
 
@@ -107,6 +124,9 @@ impl<Message> Widget<Message, Theme, Renderer> for Disabled<'_, Message> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        if self.held == Some(true) {
+            return mouse::Interaction::Grabbing;
+        }
         let inner = self.content.as_widget().mouse_interaction(
             &tree.children[0],
             layout,
@@ -114,7 +134,10 @@ impl<Message> Widget<Message, Theme, Renderer> for Disabled<'_, Message> {
             viewport,
             renderer,
         );
-        control(inner, cursor.is_over(layout.bounds()), false)
+        match self.held {
+            Some(_) => inner,
+            None => control(inner, cursor.is_over(layout.bounds()), false),
+        }
     }
 
     fn draw(

@@ -7,6 +7,11 @@
 //! (`dbusmenu::TIMEOUT`) and runs on the bus's own executor, never on the interface thread: an
 //! application that hangs keeps its item unread, never the bar frozen. A burst of signals from
 //! one item gives one read (`bus::coalesce`).
+//!
+//! An application can leave while its item is read: its departure, heard first, finds nothing
+//! to forget yet, and the read that ends after it must not bring its icon back as a ghost. Each
+//! read is noted while it runs (`Ledger`); a departure marks the reads of that item, and a
+//! marked read is dropped (lot D-45c).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -32,8 +37,80 @@ pub enum Event {
     Gone(String),
 }
 
-/// The items known, by key: the unique bus name of the application that owns each.
-type Known = Arc<Mutex<HashMap<String, String>>>;
+/// The items known and the reads under way, shared by the tasks of the host.
+type Known = Arc<Mutex<Ledger>>;
+
+/// The items known, by key, with the unique bus name of the application that owns each; and
+/// the reads under way, each with its key and whether its item left meanwhile.
+#[derive(Debug, Default)]
+pub struct Ledger {
+    owners: HashMap<String, String>,
+    reading: HashMap<u64, (String, bool)>,
+    next: u64,
+}
+
+impl Ledger {
+    /// Notes a read of `key` that starts: what `finish` takes.
+    pub fn begin(&mut self, key: &str) -> u64 {
+        let id = self.next;
+        self.next = self.next.wrapping_add(1);
+        self.reading.insert(id, (key.to_owned(), false));
+        id
+    }
+
+    /// The read `id` ended with the item owned by `owner`, or without it: whether the item is
+    /// to be shown, `false` when it left meanwhile.
+    pub fn finish(&mut self, id: u64, owner: Option<String>) -> bool {
+        let Some((key, left)) = self.reading.remove(&id) else {
+            return false;
+        };
+        match owner {
+            Some(owner) if !left => {
+                self.owners.insert(key, owner);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forgets the items `gone` picks, by key and owner, and marks the reads it picks by key
+    /// (their owner is not known yet). Returns the keys of the items forgotten.
+    pub fn forget(&mut self, gone: impl Fn(&str, Option<&str>) -> bool) -> Vec<String> {
+        for (key, left) in self.reading.values_mut() {
+            if gone(key, None) {
+                *left = true;
+            }
+        }
+        let keys: Vec<String> = self
+            .owners
+            .iter()
+            .filter(|(key, owner)| gone(key, Some(owner)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &keys {
+            self.owners.remove(key);
+        }
+        keys
+    }
+
+    pub fn len(&self) -> usize {
+        self.owners.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.owners.is_empty()
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.owners.contains_key(key)
+    }
+}
+
+/// Whether the item of `key`, owned by `owner` when known, belongs to the bus name `name` that
+/// left: by its owner, or by the service its key names.
+fn owned_by(name: &str, key: &str, owner: Option<&str>) -> bool {
+    owner == Some(name) || address(key, "").0 == name
+}
 
 /// The notification area, on the session bus of the menus.
 pub fn watch() -> BoxStream<'static, Event> {
@@ -130,7 +207,7 @@ async fn start(bus: Connection) -> zbus::Result<BoxStream<'static, Event>> {
     let gone = {
         let context = context.clone();
         unregistered.for_each(move |key| {
-            context.forget(|k, _| *k == key);
+            context.forget(|k, _| k == key);
             async {}
         })
     };
@@ -141,7 +218,7 @@ async fn start(bus: Connection) -> zbus::Result<BoxStream<'static, Event>> {
                 && args.new_owner().is_none()
             {
                 let name = args.name().to_string();
-                context.forget(|key, owner| *owner == name || key.starts_with(&format!("{name}/")));
+                context.forget(|key, owner| owned_by(&name, key, owner));
             }
             async {}
         })
@@ -163,7 +240,7 @@ struct Context {
 }
 
 impl Context {
-    fn known(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+    fn known(&self) -> std::sync::MutexGuard<'_, Ledger> {
         self.known.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -171,6 +248,7 @@ impl Context {
     fn key_of(&self, sender: &str, path: &str) -> Option<String> {
         let known = self.known();
         let found = known
+            .owners
             .iter()
             .find(|(key, owner)| *owner == sender && address(key, "").1 == path);
         found.map(|(key, _)| key.clone())
@@ -180,11 +258,12 @@ impl Context {
     async fn read(&self, key: String) {
         {
             let known = self.known();
-            if known.len() >= MAX_ITEMS && !known.contains_key(&key) {
+            if known.len() >= MAX_ITEMS && !known.contains(&key) {
                 tracing::debug!(key, "too many tray items: one more left out");
                 return;
             }
         }
+        let id = self.known().begin(&key);
         let (service, path) = address(&key, "");
         match self.properties(&service, &path).await {
             Ok((owner, properties)) => {
@@ -199,10 +278,16 @@ impl Context {
                     path,
                     properties,
                 };
-                self.known().insert(key, owner);
-                let _ = self.sink.unbounded_send(Event::Changed(Box::new(item)));
+                if self.known().finish(id, Some(owner)) {
+                    let _ = self.sink.unbounded_send(Event::Changed(Box::new(item)));
+                } else {
+                    tracing::debug!(key, "a tray item left while it was read");
+                }
             }
-            Err(error) => tracing::warn!(%error, key, "a tray item does not answer"),
+            Err(error) => {
+                self.known().finish(id, None);
+                tracing::warn!(%error, key, "a tray item does not answer");
+            }
         }
     }
 
@@ -227,16 +312,10 @@ impl Context {
         Ok((owner, Properties::parse(&values)))
     }
 
-    /// Forgets the items `gone` picks, and says so.
-    fn forget(&self, gone: impl Fn(&String, &String) -> bool) {
-        let mut known = self.known();
-        let keys: Vec<String> = known
-            .iter()
-            .filter(|(key, owner)| gone(key, owner))
-            .map(|(key, _)| key.clone())
-            .collect();
+    /// Forgets the items `gone` picks, and the reads under way it picks, and says so.
+    fn forget(&self, gone: impl Fn(&str, Option<&str>) -> bool) {
+        let keys = self.known().forget(gone);
         for key in keys {
-            known.remove(&key);
             tracing::debug!(key, "tray item gone");
             let _ = self.sink.unbounded_send(Event::Gone(key));
         }
@@ -273,4 +352,67 @@ async fn item_signals(bus: &Connection) -> zbus::Result<BoxStream<'static, (Stri
         Some((header.sender()?.to_string(), header.path()?.to_string()))
     });
     Ok(changed.boxed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY: &str = ":1.42/StatusNotifierItem";
+
+    #[test]
+    fn an_item_read_then_gone_is_shown_then_forgotten() {
+        let mut ledger = Ledger::default();
+        let id = ledger.begin(KEY);
+        assert!(ledger.finish(id, Some(String::from(":1.42"))));
+        assert!(ledger.contains(KEY));
+        let gone = ledger.forget(|key, owner| owned_by(":1.42", key, owner));
+        assert_eq!(gone, [KEY]);
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn an_application_that_leaves_while_its_item_is_read_leaves_no_ghost() {
+        let mut ledger = Ledger::default();
+        // By its unique name, and by a well-known name its key carries.
+        for (key, name) in [
+            (KEY, ":1.42"),
+            (
+                "org.kde.StatusNotifierItem-7-1/StatusNotifierItem",
+                "org.kde.StatusNotifierItem-7-1",
+            ),
+            ("org.example.Chat", "org.example.Chat"),
+        ] {
+            let id = ledger.begin(key);
+            // The departure is heard before the read ends: nothing to forget yet.
+            assert!(
+                ledger
+                    .forget(|k, owner| owned_by(name, k, owner))
+                    .is_empty()
+            );
+            assert!(!ledger.finish(id, Some(String::from(":1.42"))), "{key}");
+            assert!(ledger.is_empty(), "{key}");
+        }
+        // Unregistered by the watcher while read.
+        let id = ledger.begin(KEY);
+        ledger.forget(|k, _| k == KEY);
+        assert!(!ledger.finish(id, Some(String::from(":1.42"))));
+        assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn the_departure_of_another_application_spares_the_read() {
+        let mut ledger = Ledger::default();
+        let id = ledger.begin(KEY);
+        ledger.forget(|k, owner| owned_by(":1.4", k, owner));
+        assert!(ledger.finish(id, Some(String::from(":1.42"))));
+        // An item that registers again after leaving is read again and shown.
+        ledger.forget(|k, owner| owned_by(":1.42", k, owner));
+        let again = ledger.begin(KEY);
+        assert!(ledger.finish(again, Some(String::from(":1.42"))));
+        // A read that failed shows nothing and leaves nothing behind.
+        let failed = ledger.begin("org.example.Gone");
+        assert!(!ledger.finish(failed, None));
+        assert_eq!(ledger.len(), 1);
+    }
 }
