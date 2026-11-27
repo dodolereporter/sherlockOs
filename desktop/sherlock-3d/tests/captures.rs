@@ -36,6 +36,9 @@ fn srgb(color: Color) -> [f32; 4] {
 }
 
 fn main() -> Result {
+    if support::listed("captures") {
+        return Ok(());
+    }
     // SAFETY: no harness, so no other thread exists yet.
     let Some(driver) = (unsafe { support::pick_driver() }) else {
         support::skip("no Vulkan driver for the AMD chip, and no lavapipe");
