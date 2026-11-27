@@ -236,6 +236,25 @@ Every opening fades the panel in from a scale of 0.96, around the middle of its 
 a click beside, the shortcut again, the applications view opening), fades it out the same way
 before the surface goes. Frames are asked for only while it moves.
 
+The results move too (lot P-02d), on one spring without overshoot (`launcher::LIST_SPRING`,
+`motion::LIST_SPRING`, ratio 0.97, settled in about 250 ms), so that a row never passes its place
+nor the panel its height:
+
+| What | How |
+| --- | --- |
+| A result still there after a key | Slides from where it is drawn to its new place: nothing jumps when the results reorder |
+| A new result, a new section label | Fades in over 160 ms (`APPEAR`, `motion::LIST_APPEAR`) while it comes down 8 pixels to its place (`APPEAR_OFFSET`) |
+| A result gone | Leaves at once: the rows that stay slide over its place |
+| The panel | Its height follows the rows, growing or shrinking, its content cut to it |
+| The selection | A veil under the rows (`launcher::selection`) that slides from one row to the next, with the arrows and when the results move |
+
+Each item of the list is known by its section and its title (and its rank among the results of
+the same title), so a result is followed from one query to the next. An opening starts at rest:
+an empty search, the panel at its height, the selection on the first row. Frames are asked for
+while a row, the panel or the selection moves, never at rest. In software (the panel's own
+surface, see Surface) the surface takes its new height at once: a panel growing animates, a
+panel shrinking is cut to its new height at once.
+
 The first result is selected after every key. The keys are read with `event::listen_with`,
 whatever the field did with them: iced's text field takes Escape for itself. A click on a result
 starts it too.
@@ -440,6 +459,12 @@ RUST_LOG=launcher=debug cargo run -p launcher
   start starting nothing;
 - layout: the panel height for each state, the texts drawn, the surface's place, and three
   screenshots in `target/tmp`;
+- motion (`the_results_slide_into_place_and_the_panel_follows`): the first letter makes the
+  panel grow from its empty height, partway after 60 ms, at its height and at rest after; an
+  arrow slides the selection, then rest; fewer results shrink the panel gently, then rest;
+- the board of the typing (`the_typing_board`, ignored, slow: `cargo test -p launcher --test
+  launcher -- --ignored board`): the opening, then « e », « ed » and an arrow down, frames 0,
+  40, 80 and 240 ms after, in both themes, in `target/tmp/launcher-board.png`;
 - sources (`tests/sources.rs`): the order of the sections (applications, system, files,
   Sherlock last; the calculator first), an empty query showing nothing, 5 results a section and
   9 in all with Sherlock's row kept, a disabled Sherlock doing nothing; « Se déconnecter »,

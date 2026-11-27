@@ -2157,6 +2157,7 @@ dependencies = [
  "iced_exwlshell",
  "iced_test",
  "icon-theme",
+ "image",
  "libc",
  "mime-apps",
  "sherlock-ui",
