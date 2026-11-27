@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 
-use sherlock_3d::animator::{FADE, GAZE_LIMIT, PEEK_OPENING, PEEK_TILT};
+use sherlock_3d::animator::{FADE, GAZE_LIMIT, HEAD_GAZE_LIMIT, PEEK_OPENING, PEEK_TILT};
 use sherlock_3d::{Animator, Model, Mood, Pose};
 
 fn animator() -> Option<Animator> {
@@ -276,4 +276,29 @@ fn a_shut_eye_does_not_follow_the_gaze() {
         "the ajar eye looks down: {}",
         turned(left)
     );
+}
+
+#[test]
+fn the_head_bends_toward_the_field_even_with_closed_eyes() {
+    let Some(mut animator) = animator() else {
+        return;
+    };
+    animator.set_mood(Mood::EyesClosed);
+    play(&mut animator, 1.0);
+    let ahead = animator.facing().unwrap();
+    assert!(ahead.y.abs() < 0.05, "he faces ahead at first: {ahead}");
+    // The password field, far below.
+    animator.look_at(Some(glam::Vec3::new(0.0, -6.0, 4.0)));
+    play(&mut animator, 1.0);
+    let down = animator.facing().unwrap();
+    assert!(
+        down.y < -HEAD_GAZE_LIMIT.sin() * 0.8,
+        "the head bends down: {down}"
+    );
+    assert!(down.angle_between(ahead) <= HEAD_GAZE_LIMIT + 0.02);
+    // Back ahead once nothing is typed.
+    animator.look_at(None);
+    play(&mut animator, 1.0);
+    let back = animator.facing().unwrap();
+    assert!(back.angle_between(ahead) < 0.02, "{back}");
 }

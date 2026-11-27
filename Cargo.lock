@@ -1538,6 +1538,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "greeter"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "image",
+ "lock",
+ "serde_json",
+ "sherlock-3d",
+ "sherlock-ui",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

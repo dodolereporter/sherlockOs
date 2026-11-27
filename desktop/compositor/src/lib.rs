@@ -4,10 +4,12 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod arrival;
 pub mod capture;
 pub mod card;
 pub mod clicks;
 pub mod cursor;
+pub mod curtain;
 pub mod damage;
 pub mod decorations;
 pub mod displays;
@@ -17,6 +19,7 @@ pub mod focus;
 pub mod fullscreen;
 pub mod genie;
 pub mod gestures;
+mod greeter;
 mod handlers;
 // The hook of the selections, for the clipboard history (lot D-42).
 pub use handlers::{SECRET_HINT, SelectionOrigin, is_secret};
@@ -27,6 +30,7 @@ pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod lock;
+pub mod log_sync;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -37,6 +41,7 @@ pub mod output_management;
 pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
+pub mod power;
 pub mod render;
 pub mod screenshot_tool;
 mod shell;
@@ -110,7 +115,7 @@ pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
          [--workspaces N] [--snap-gap PX] [--minimize-effect genie|scale|none] \
-         [--window-animations on|off] [command [arguments…]]"
+         [--window-animations on|off] [--greeter] [--] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -198,8 +203,14 @@ pub struct State {
     intercepted_keys: Vec<Keycode>,
     /// The compositor runs in a window of another session (`--nested`).
     nested: bool,
+    /// The compositor of the login screen (`--greeter`, `greeter.rs`).
+    greeter: bool,
+    /// The bar and the dock arriving once the session opens (`arrival.rs`).
+    arrival: arrival::Arrival,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
+    /// Writes the session's log to disk, while locked (lot D-25f).
+    log_sync: log_sync::LogSync,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -250,8 +261,12 @@ pub struct State {
     capture: capture::Capture,
     /// The session lock (lot D-25a, ADR 0023).
     lock: lock::SessionLock,
+    /// The picture of the lock between the login, the session and the lock (lot D-24e).
+    curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// The screens off, like an old television (lot D-38).
+    power: power::Power,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -373,7 +388,12 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
+            greeter: false,
+            arrival: arrival::Arrival::default(),
             switch_vt: None,
+            log_sync: log_sync::LogSync::new(
+                std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
+            ),
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
@@ -399,7 +419,9 @@ impl State {
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
+            curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
+            power: power::Power::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -419,7 +441,8 @@ impl State {
         tracing::info!(socket = ?name, "Wayland socket open");
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(name.clone());
-        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        // The login screen has no shell (`greeter.rs`).
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|_| !self.greeter) {
             self.listen_shell_next_to(&PathBuf::from(dir).join(&name), event_loop);
         }
         Ok(name)
@@ -435,7 +458,9 @@ impl State {
         let socket = ListeningSocket::bind_absolute(path.clone())?;
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(path.clone().into_os_string());
-        self.listen_shell_next_to(&path, event_loop);
+        if !self.greeter {
+            self.listen_shell_next_to(&path, event_loop);
+        }
         Ok(())
     }
 
@@ -658,6 +683,23 @@ impl State {
         }
     }
 
+    /// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the
+    /// lock surface. After each frame of a screen, and slowly while the screens are dark.
+    pub fn send_frames(&self, output: &Output) {
+        let time = self.start_time.elapsed();
+        for window in self.space.elements() {
+            if self.window_output(window).as_ref() == Some(output) {
+                self.send_window_frame(window, output, time);
+            }
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        self.send_lock_frames(output, time);
+    }
+
     /// Something that may show on a screen changed: the screens draw a frame, those of the
     /// real session at their next vertical blank. Called for every client request, input event,
     /// screen change and wallpaper loaded, and by the methods that change the desktop.
@@ -697,6 +739,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_curtain();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
@@ -705,6 +748,7 @@ impl State {
         self.update_scales();
         self.refresh_output_management();
         self.refresh_lock();
+        self.refresh_power();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {

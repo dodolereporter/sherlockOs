@@ -742,6 +742,12 @@ mod tests {
             }
             | Item::Snapshot {
                 key, rect, alpha, ..
+            }
+            | Item::Curtain {
+                key, rect, alpha, ..
+            }
+            | Item::Squashed {
+                key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
             Item::Thumbnail { .. } => Vec::new(),
         }

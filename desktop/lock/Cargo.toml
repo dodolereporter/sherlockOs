@@ -47,7 +47,7 @@ sherlock-ui = { path = "../sherlock-ui" }
 # Sherlock in 3D in his bubble, the still picture in software (lot D-30, workspace crate).
 sherlock-3d = { path = "../sherlock-3d" }
 # The lock setting (`background`) and the wallpaper of the desktop (workspace crate).
-desktop-config = { path = "../desktop-config" }
+desktop-config = { path = "../desktop-config", features = ["lock-background"] }
 # The `Secret` type of the password, shared with the bar (workspace crate).
 system-services = { path = "../system-services" }
 thiserror = "=2.0.21"

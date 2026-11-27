@@ -8,16 +8,24 @@
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::RefCell,
         ffi::OsString,
         fs::{File, OpenOptions},
         os::{fd::AsFd, unix::net::UnixStream},
+        rc::Rc,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
 
     use std::io::Write as _;
 
-    use compositor::{State, lock::Programs, render::Item};
+    use compositor::{
+        State,
+        damage::{Key, Part},
+        lock::Programs,
+        power::{Phase, Then},
+        render::Item,
+    };
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::keyboard::Keycode,
@@ -27,6 +35,7 @@ mod tests {
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop,
         protocol::{
             wl_buffer::WlBuffer,
+            wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
             wl_keyboard::{self, WlKeyboard},
             wl_output::WlOutput,
@@ -43,6 +52,10 @@ mod tests {
         ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1},
         ext_session_lock_v1::{self, ExtSessionLockV1},
     };
+    use wayland_protocols::wp::idle_inhibit::zv1::client::{
+        zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1,
+        zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
+    };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
         xdg_toplevel::XdgToplevel,
@@ -57,8 +70,11 @@ mod tests {
     const KEY_SUPER: u32 = 125 + 8;
     const KEY_L: u32 = 38 + 8;
     const KEY_A: u32 = 16 + 8;
+    const KEY_LEFTSHIFT: u32 = 42 + 8;
+    const KEY_SPACE: u32 = 57 + 8;
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
+    const KEY_ESC: u32 = 1 + 8;
     const BTN_LEFT: u32 = 0x110;
 
     /// What a client has received.
@@ -74,6 +90,8 @@ mod tests {
         lock_sizes: Vec<(u32, u32)>,
         locked: bool,
         finished: bool,
+        /// Frame callbacks done.
+        frames: usize,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Seen {
@@ -212,6 +230,21 @@ mod tests {
         }
     }
 
+    impl Dispatch<WlCallback, ()> for Seen {
+        fn event(
+            seen: &mut Self,
+            _: &WlCallback,
+            event: wl_callback::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_callback::Event::Done { .. } = event {
+                seen.frames += 1;
+            }
+        }
+    }
+
     delegate_noop!(Seen: WlCompositor);
     delegate_noop!(Seen: ignore WlSurface);
     delegate_noop!(Seen: ignore WlSeat);
@@ -222,6 +255,8 @@ mod tests {
     delegate_noop!(Seen: ignore XdgToplevel);
     delegate_noop!(Seen: ZwlrLayerShellV1);
     delegate_noop!(Seen: ExtSessionLockManagerV1);
+    delegate_noop!(Seen: ZwpIdleInhibitManagerV1);
+    delegate_noop!(Seen: ZwpIdleInhibitorV1);
 
     /// A client connected to the compositor.
     struct Peer {
@@ -231,6 +266,8 @@ mod tests {
         registry: wl_registry::WlRegistry,
         /// Keeps the buffers' memory alive.
         files: Vec<File>,
+        /// Hung: reads and answers nothing any more.
+        frozen: bool,
     }
 
     impl Peer {
@@ -339,6 +376,7 @@ mod tests {
                 seen: Seen::default(),
                 registry,
                 files: Vec::new(),
+                frozen: false,
             });
             let i = self.peers.len() - 1;
             self.run_until("the globals", |h| !h.peers[i].seen.globals.is_empty());
@@ -355,7 +393,7 @@ mod tests {
                     .dispatch(Some(Duration::from_millis(5)), &mut self.state)
                     .unwrap();
                 self.state.refresh();
-                for peer in &mut self.peers {
+                for peer in self.peers.iter_mut().filter(|p| !p.frozen) {
                     if let Some(guard) = peer.queue.prepare_read() {
                         // Nothing to read is not an error, nor a connection that ended.
                         let _ = guard.read();
@@ -398,6 +436,8 @@ mod tests {
             let _keyboard = seat.get_keyboard(&qh, ());
             let _pointer = seat.get_pointer(&qh, ());
             let output: WlOutput = peer.bind();
+            // What the compositor pings; the client answers from its loop (`Seen`).
+            let _wm_base: XdgWmBase = peer.bind();
             let manager: ExtSessionLockManagerV1 = peer.bind();
             let lock = manager.lock(&qh, ());
             let surface = peer.bind::<WlCompositor>().create_surface(&qh, ());
@@ -639,6 +679,137 @@ mod tests {
         assert!(!h.lock_surface_drawn());
     }
 
+    impl Harness {
+        /// Items of the curtain drawn now (lot D-24e): without its pictures, the tests draw it
+        /// plain.
+        fn curtain_items(&self) -> usize {
+            self.items()
+                .iter()
+                .filter(|item| {
+                    matches!(item, Item::Shape { key, .. } if matches!(key.part, Part::Curtain(_)))
+                })
+                .count()
+        }
+
+        /// Client `i` asks for the lock and a surface on the screen, without drawing it yet.
+        fn ask_lock(&mut self, i: usize) -> Locking {
+            let peer = &self.peers[i];
+            let (qh, seat) = (peer.qh(), peer.bind::<WlSeat>());
+            let _keyboard = seat.get_keyboard(&qh, ());
+            let output: WlOutput = peer.bind();
+            let _wm_base: XdgWmBase = peer.bind();
+            let manager: ExtSessionLockManagerV1 = peer.bind();
+            let lock = manager.lock(&qh, ());
+            let surface = peer.bind::<WlCompositor>().create_surface(&qh, ());
+            let _lock_surface = lock.get_lock_surface(&surface, &output, &qh, ());
+            self.run_until("the lock surface configured", |h| {
+                h.peers[i].seen.lock_size.is_some()
+            });
+            Locking { lock, surface }
+        }
+    }
+
+    /// The lock of lot D-24e (ADR 0023 amended): the last frame of the desktop is frozen while
+    /// the desktop is still drawn, then the curtain comes down over it, and nothing alive of
+    /// the desktop is drawn; the lock surface shows once the curtain is down, and `locked` is
+    /// sent only after a frame with it down.
+    #[test]
+    fn the_curtain_comes_down_over_the_frozen_desktop_then_the_lock_shows() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        // A freezer that remembers what it was asked to draw: the desktop, not locked yet.
+        let frozen = Rc::new(RefCell::new(Vec::new()));
+        let seen = frozen.clone();
+        h.state.set_freezer(Box::new(move |state, output| {
+            let (_, view) = state.views().remove(0);
+            let items = compositor::render::items(state, (output, &view), None, false, state.now());
+            let windows = items
+                .0
+                .iter()
+                .filter(|i| matches!(i, Item::Window { .. }))
+                .count();
+            seen.borrow_mut().push((state.is_locked(), windows));
+            None
+        }));
+        let locker = h.connect_program();
+        let locking = h.ask_lock(locker);
+        assert!(h.state.is_locked());
+        assert_eq!(
+            *frozen.borrow(),
+            [(false, 1)],
+            "the desktop, frozen before the lock"
+        );
+        h.peers[locker].show(&locking.surface, 800, 600);
+        h.settle();
+        let lowering = h.state.curtain_lowering(h.state.now());
+        assert!(lowering.is_some(), "the curtain still comes down");
+        // Coming down: the curtain only, over the frozen frame; no window, no lock surface.
+        assert_eq!(h.window_items(), 0);
+        assert!(h.drawn_surfaces().is_empty());
+        assert!(h.curtain_items() > 0);
+        // A frame shown now does not confirm the lock.
+        h.show_frame();
+        h.settle();
+        assert!(!h.peers[locker].seen.locked);
+        // Down: the lock surface in front of the curtain, and the frozen frame gone.
+        h.run_until("the lock surface shown", |h| h.lock_surface_drawn());
+        assert!(h.state.curtain_lowering(h.state.now()).is_none());
+        assert_eq!(h.state.frozen_frames(), 0);
+        assert!(h.curtain_items() > 0);
+        assert_eq!(h.window_items(), 0);
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+    }
+
+    /// A lock program slow to draw: the curtain stays down, alone, and nothing of the desktop
+    /// shows meanwhile.
+    #[test]
+    fn a_slow_lock_program_leaves_the_curtain_down() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let _locking = h.ask_lock(locker);
+        let end = std::time::Instant::now() + sherlock_ui::lock::CURTAIN * 3;
+        while std::time::Instant::now() < end {
+            h.settle();
+            assert_eq!(h.window_items(), 0);
+            assert!(h.drawn_surfaces().is_empty());
+            assert!(h.curtain_items() > 0);
+        }
+        assert!(h.state.curtain_lowering(h.state.now()).is_none());
+    }
+
+    /// Unlocked, the curtain goes up off the live desktop, which is drawn only once the unlock
+    /// was accepted.
+    #[test]
+    fn once_unlocked_the_curtain_goes_up_off_the_live_desktop() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        assert_eq!(h.window_items(), 0);
+        locking.lock.unlock_and_destroy();
+        h.run_until("unlocked", |h| !h.state.is_locked());
+        // Going up: the curtain in front of the desktop, drawn again.
+        assert_eq!(h.window_items(), 1);
+        let items = h.items();
+        let first = items.iter().position(
+            |i| matches!(i, Item::Shape { key, .. } if matches!(key.part, Part::Curtain(_))),
+        );
+        let window = items.iter().position(|i| matches!(i, Item::Window { .. }));
+        assert!(
+            first.unwrap() < window.unwrap(),
+            "the curtain in front of the window"
+        );
+        h.run_until("the curtain up", |h| h.curtain_items() == 0);
+        assert_eq!(h.window_items(), 1);
+    }
+
     #[test]
     fn a_killed_lock_client_leaves_the_session_locked_then_the_rescue_shows() {
         // The lock program never locks: three failures, then the rescue program, which is not
@@ -819,6 +990,10 @@ mod tests {
         for (surface, (w, h_)) in surfaces.iter().zip(h.peers[locker].seen.lock_sizes.clone()) {
             h.peers[locker].show(surface, w as i32, h_ as i32);
         }
+        // Once the curtain is down (lot D-24e).
+        h.run_until("the curtain down", |h| {
+            h.state.curtain_lowering(h.state.now()).is_none()
+        });
         h.settle();
         // Each screen draws one surface, its own, over the whole screen.
         for (output, view) in h.state.views() {
@@ -1033,12 +1208,21 @@ mod tests {
         logind.signal("/org/freedesktop/login1", manager, "PrepareForSleep", &true);
         h.run_until("locked before the sleep", |h| h.state.is_locked());
         assert_eq!(h.window_items(), 0);
-        // The inhibitor is held until the screen shows the lock.
+        // The order: the lock, then the old television, then the inhibitor released (lot D-38).
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Leaving {
+                then: Then::Sleep,
+                ..
+            }
+        ));
         assert!(h.state.holds_sleep_inhibitor());
         h.show_frame();
         h.run_until("the inhibitor released", |h| {
             !h.state.holds_sleep_inhibitor()
         });
+        assert!(h.state.is_locked());
+        assert!(h.state.screens_dark(), "released once the screens are dark");
         // At wake-up, a new one is taken; the session is still locked.
         logind.signal(
             "/org/freedesktop/login1",
@@ -1048,6 +1232,10 @@ mod tests {
         );
         h.run_until("a new inhibitor", |h| h.state.holds_sleep_inhibitor());
         assert!(h.state.is_locked());
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Coming { .. } | Phase::On
+        ));
     }
 
     /// The lock program of `the_rescue_mode_takes_the_lock_and_comes_back_when_killed`: this
@@ -1071,6 +1259,7 @@ mod tests {
             seen,
             registry,
             files: Vec::new(),
+            frozen: false,
         };
         let qh = peer.qh();
         let output: WlOutput = peer.bind();
@@ -1119,6 +1308,10 @@ mod tests {
         let app = h.connect();
         h.show_window(app);
         h.chord(KEY_SUPER, KEY_L);
+        // Only a frame with the curtain down confirms the lock (lot D-24e).
+        h.run_until("the curtain down", |h| {
+            h.state.curtain_lowering(h.state.now()).is_none()
+        });
         h.show_frame();
         let pids = |mark: &std::path::Path| {
             std::fs::read_to_string(mark)
@@ -1163,5 +1356,453 @@ mod tests {
             .args(["-KILL", second.as_str()])
             .status();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Waits for the animation of the screens to end (`DURATION`, 350 ms).
+    fn after_the_animation(h: &mut Harness) {
+        let end = std::time::Instant::now() + sherlock_ui::screen_off::DURATION;
+        h.run_until("the animation", |_| std::time::Instant::now() > end);
+        h.settle();
+    }
+
+    #[test]
+    fn the_screens_go_off_like_a_television_and_draw_nothing_once_dark() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        h.state.screens_off(Then::Stay);
+        let Phase::Leaving { since, .. } = h.state.power_phase() else {
+            panic!("the screens go off");
+        };
+        let (output, view) = h.state.views().remove(0);
+        let at = |h: &Harness, ms: u64| {
+            let now = since + Duration::from_millis(ms);
+            compositor::render::items(&h.state, (&output, &view), None, false, now)
+        };
+        // At first, the whole picture, squashed more and more.
+        let squashed = |items: &[Item]| {
+            items.iter().find_map(|i| match i {
+                Item::Squashed { rect, .. } => Some(rect.size.h),
+                _ => None,
+            })
+        };
+        let (start, animating) = at(&h, 0);
+        assert!(animating);
+        assert_eq!(squashed(&start), Some(600), "the whole picture");
+        let middle = squashed(&at(&h, 100).0).unwrap();
+        assert!(middle < 600 && middle > 3, "{middle}");
+        // Then a line and its halo, no picture any more.
+        let (line, _) = at(&h, 250);
+        assert_eq!(squashed(&line), None);
+        let shapes = line
+            .iter()
+            .filter(|i| matches!(i, Item::Shape { .. }))
+            .count();
+        assert_eq!(shapes, 3, "the line, its halo and the black");
+        // The last frame is black.
+        let (last, _) = at(&h, 350);
+        assert_eq!(last.len(), 1, "black only");
+
+        after_the_animation(&mut h);
+        assert!(h.state.screens_dark());
+        // At rest, dark: black only, and nothing animates, so no frame is asked for.
+        let (items, animating) = at(&h, 5_000);
+        assert_eq!(items.len(), 1);
+        assert!(!animating);
+
+        // A key brings the screens back and goes nowhere else.
+        h.settle();
+        h.peers[app].seen.keys.clear();
+        h.key(KEY_A);
+        assert!(matches!(h.state.power_phase(), Phase::Coming { .. }));
+        after_the_animation(&mut h);
+        assert_eq!(h.state.power_phase(), Phase::On);
+        assert!(
+            h.peers[app].seen.keys.is_empty(),
+            "the waking key is not typed"
+        );
+        h.key(KEY_A);
+        h.run_until("the next key typed", |h| {
+            h.peers[app].seen.keys.contains(&evdev(KEY_A))
+        });
+    }
+
+    #[test]
+    fn super_shift_escape_locks_and_turns_the_screens_off() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        const KEY_SHIFT: u32 = 42 + 8;
+        const KEY_ESCAPE: u32 = 1 + 8;
+        for (code, state) in [
+            (KEY_SUPER, KeyState::Pressed),
+            (KEY_SHIFT, KeyState::Pressed),
+            (KEY_ESCAPE, KeyState::Pressed),
+            (KEY_ESCAPE, KeyState::Released),
+            (KEY_SHIFT, KeyState::Released),
+            (KEY_SUPER, KeyState::Released),
+        ] {
+            h.state.keyboard_key(Keycode::new(code), state, 10);
+        }
+        assert!(h.state.is_locked());
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Leaving {
+                then: Then::Stay,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_video_holds_off_the_lock_and_the_screens_off() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        let surface = h.show_window(app);
+        let manager: ZwpIdleInhibitManagerV1 = h.peers[app].bind();
+        let qh = h.peers[app].qh();
+        let inhibitor = manager.create_inhibitor(&surface, &qh, ());
+        h.settle();
+        assert!(h.state.idle_inhibited());
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        h.state.set_idle_lock(Some(Duration::from_millis(300)));
+        h.state
+            .set_screen_off_delay(Some(Duration::from_millis(300)));
+        let end = std::time::Instant::now() + Duration::from_millis(1600);
+        h.run_until("a while", |_| std::time::Instant::now() > end);
+        assert!(!h.state.is_locked(), "the video holds the lock off");
+        assert_eq!(h.state.power_phase(), Phase::On, "and the screens on");
+        // The video ends: the inactivity counts again, then the lock and the screens off.
+        inhibitor.destroy();
+        h.run_until("the lock and the screens off", |h| {
+            h.state.is_locked() && h.state.power_phase() != Phase::On
+        });
+    }
+
+    #[test]
+    fn a_veil_darkens_the_screens_before_the_idle_lock_and_any_input_lifts_it() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        // The lock comes in 5.5 s: the veil, `DIM_LEAD` (5 s) before, shows at the next check.
+        h.state.set_idle_lock(Some(Duration::from_millis(5500)));
+        let veil = |h: &Harness| {
+            h.items().iter().find_map(|i| match i {
+                Item::Shape { key, alpha, .. } if *key == Key::of(None, Part::IdleVeil) => {
+                    Some(*alpha)
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(veil(&h), None);
+        h.run_until("the veil", |h| h.state.dim().0 > 0.0);
+        assert!(!h.state.is_locked(), "the veil comes before the lock");
+        // It darkens gently, on top of everything, up to `DIM`.
+        let first = h.items();
+        assert!(
+            matches!(&first[0], Item::Shape { key, .. } if *key == Key::of(None, Part::IdleVeil)),
+            "the veil is over everything"
+        );
+        h.run_until("the veil darker", |h| {
+            h.state.dim().0 >= sherlock_ui::screen_off::DIM - 0.001
+        });
+        assert!((veil(&h).unwrap() - sherlock_ui::screen_off::DIM).abs() < 0.001);
+
+        // The slightest input lifts it at once, and the lock waits again.
+        h.key(KEY_A);
+        assert_eq!(h.state.dim().0, 0.0);
+        assert_eq!(veil(&h), None);
+        assert!(!h.state.is_locked());
+    }
+
+    /// Runs the loop for `duration`.
+    fn wait(h: &mut Harness, duration: Duration) {
+        let start = std::time::Instant::now();
+        h.run_until("a while", |_| start.elapsed() > duration);
+    }
+
+    #[test]
+    fn a_lock_program_that_hangs_is_killed_and_started_again_the_session_staying_locked() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        let syncs = h.state.log_sync_requests();
+        assert!(syncs >= 1, "the log is written to disk at the lock");
+        h.state.set_lock_ping_timeout(Duration::from_millis(300));
+
+        // A lock program that answers stays, key after key.
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(600));
+        assert!(h.state.lock_program_connected());
+        assert_eq!(h.state.lock_attempts(), 0, "nothing started again");
+
+        // It hangs: the next input pings it, and nothing answers.
+        h.peers[locker].frozen = true;
+        wait(&mut h, Duration::from_millis(1100));
+        h.click(400.0, 300.0);
+        h.run_until("the hung lock program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked(), "the session stays locked");
+        assert!(!h.lock_surface_drawn());
+        assert_eq!(h.window_items(), 0, "nothing of the session shows");
+        assert_eq!(h.state.lock_stage(), compositor::lock::Stage::Client);
+        // While locked, the log goes on being written to disk.
+        wait(
+            &mut h,
+            compositor::lock::LOG_SYNC + Duration::from_millis(200),
+        );
+        assert!(h.state.log_sync_requests() > syncs + 1);
+    }
+
+    #[test]
+    fn the_console_switch_works_while_locked() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let switched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = switched.clone();
+        h.state
+            .set_switch_vt(Box::new(move |vt| seen.borrow_mut().push(vt)));
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.settle();
+        h.peers[locker].seen.keys.clear();
+        // Ctrl + Alt + F2.
+        const KEY_LEFTCTRL: u32 = 29 + 8;
+        const KEY_LEFTALT: u32 = 56 + 8;
+        const KEY_F2: u32 = 60 + 8;
+        for code in [KEY_LEFTCTRL, KEY_LEFTALT] {
+            h.state
+                .keyboard_key(Keycode::new(code), KeyState::Pressed, 10);
+        }
+        h.key(KEY_F2);
+        for code in [KEY_LEFTALT, KEY_LEFTCTRL] {
+            h.state
+                .keyboard_key(Keycode::new(code), KeyState::Released, 11);
+        }
+        h.settle();
+        assert_eq!(*switched.borrow(), [2]);
+        assert!(h.state.is_locked(), "the session stays locked");
+        assert!(
+            !h.peers[locker].seen.keys.contains(&evdev(KEY_F2)),
+            "the switch goes to no client"
+        );
+    }
+
+    #[test]
+    fn with_the_screens_off_the_lock_program_still_gets_frames_and_is_not_taken_for_hung() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.set_lock_ping_timeout(Duration::from_millis(300));
+        h.state.screens_off(Then::Stay);
+        after_the_animation(&mut h);
+        assert!(h.state.screens_dark());
+
+        // Dark, nothing is drawn, but the frame callback it waits for still comes, slowly.
+        let qh = h.peers[locker].qh();
+        let _callback = locking.surface.frame(&qh, ());
+        locking.surface.commit();
+        h.run_until("a frame callback while dark", |h| {
+            h.peers[locker].seen.frames >= 1
+        });
+        // It presents again.
+        h.peers[locker].show(&locking.surface, 800, 600);
+        // A key while dark wakes the screens: no ping counts while they are off.
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        after_the_animation(&mut h);
+        assert_eq!(h.state.power_phase(), Phase::On);
+        // Back on, it answers its pings, and stays.
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(600));
+        assert!(h.lock_surface_drawn(), "its image shows");
+        assert!(h.state.lock_program_connected());
+        assert_eq!(h.state.lock_attempts(), 0, "never taken for hung");
+        assert!(h.state.is_locked());
+    }
+
+    #[test]
+    fn locked_with_the_screens_off_the_first_key_wakes_them_and_reaches_the_lock() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.screens_off(Then::Stay);
+        after_the_animation(&mut h);
+        h.settle();
+        h.peers[locker].seen.keys.clear();
+        h.key(KEY_A);
+        assert!(matches!(h.state.power_phase(), Phase::Coming { .. }));
+        h.run_until("the key on the lock", |h| {
+            h.peers[locker].seen.keys.contains(&evdev(KEY_A))
+        });
+    }
+
+    #[test]
+    fn locked_for_inactivity_over_a_launcher_a_notification_and_a_window_the_keys_go_to_the_lock() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        // The resident launcher: an overlay that takes the keyboard for itself.
+        let shell_client = h.connect();
+        let peer = &h.peers[shell_client];
+        let qh = peer.qh();
+        let _seat = peer.bind::<WlSeat>();
+        let launcher = peer.bind::<WlCompositor>().create_surface(&qh, ());
+        let shell: ZwlrLayerShellV1 = peer.bind();
+        let layer =
+            shell.get_layer_surface(&launcher, None, Layer::Overlay, "launcher".into(), &qh, ());
+        layer.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
+        layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
+        launcher.commit();
+        h.run_until("the launcher configured", |h| {
+            h.peers[shell_client].seen.layer_configured
+        });
+        h.peers[shell_client].show(&launcher, 800, 600);
+        // A notification on the top layer.
+        let peer = &h.peers[shell_client];
+        let note = peer.bind::<WlCompositor>().create_surface(&qh, ());
+        let banner =
+            shell.get_layer_surface(&note, None, Layer::Top, "notification".into(), &qh, ());
+        banner.set_anchor(Anchor::Top | Anchor::Right);
+        banner.set_size(300, 80);
+        note.commit();
+        h.settle();
+        h.peers[shell_client].show(&note, 300, 80);
+        h.settle();
+
+        // The session locks for inactivity, then the lock program takes the lock.
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        h.state.set_idle_lock(Some(Duration::from_millis(300)));
+        h.run_until("the lock after the delay", |h| h.state.is_locked());
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+
+        // A key and a tap reach the lock, and nothing else.
+        h.settle();
+        for peer in [app, shell_client] {
+            h.peers[peer].seen.keys.clear();
+        }
+        h.key(KEY_A);
+        h.click(400.0, 300.0);
+        h.run_until("the key and the tap on the lock", |h| {
+            let seen = &h.peers[locker].seen;
+            seen.keys.contains(&evdev(KEY_A)) && seen.presses >= 1
+        });
+        assert!(h.peers[app].seen.keys.is_empty());
+        assert!(h.peers[shell_client].seen.keys.is_empty());
+    }
+
+    #[test]
+    fn a_lock_program_that_shows_nothing_after_a_key_is_replaced() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.set_lock_image_timeout(Duration::from_millis(300));
+        // It shows what is typed: it stays.
+        h.key(KEY_A);
+        h.peers[locker].show(&locking.surface, 800, 600);
+        wait(&mut h, Duration::from_millis(600));
+        assert_eq!(h.state.lock_attempts(), 0);
+        // A modifier alone types nothing: nothing is awaited.
+        h.key(KEY_LEFTSHIFT);
+        wait(&mut h, Duration::from_millis(600));
+        assert_eq!(h.state.lock_attempts(), 0);
+        // It answers its pings, but shows nothing after a key: replaced.
+        h.key(KEY_A);
+        h.run_until("the blind lock program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked(), "the session stays locked");
+    }
+
+    /// The real lock program (`LOCK_PROGRAM`, `target/debug/sherlockos-lock`), in software, on
+    /// this headless compositor: the form comes with the lock; sent away, one key on the lock
+    /// at rest brings it back (lot D-25g).
+    /// Ignored without the program: `cargo build -p lock` first.
+    #[test]
+    #[ignore = "needs the lock program built: LOCK_PROGRAM=target/debug/sherlockos-lock"]
+    fn the_real_lock_program_shows_its_form_at_the_first_key() {
+        let Ok(program) = std::env::var("LOCK_PROGRAM") else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("lock-real-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("lock.log");
+        // A shell keeps the connection the compositor hands over (`WAYLAND_SOCKET`) and sends
+        // the program's log to a file; a home of its own, software rendering, no real service.
+        let script = format!(
+            "exec env -u DBUS_SESSION_BUS_ADDRESS -u DISPLAY HOME={dir} XDG_CONFIG_HOME={dir} XDG_CACHE_HOME={dir} ICED_BACKEND=tiny-skia \
+             RUST_LOG=info {program} 2>>{log}",
+            dir = dir.display(),
+            log = log.display()
+        );
+        let mut h = Harness::start(&["sh", "-c", &script], &["false"]);
+        let output = h.state.outputs()[0].clone();
+        let frames = |h: &mut Harness| {
+            let output = h.state.outputs()[0].clone();
+            h.state.send_lock_frames(&output, h.state.now());
+        };
+        h.state.lock_session();
+        let start = std::time::Instant::now();
+        while !h.state.lock_confirmed() && start.elapsed() < Duration::from_secs(20) {
+            h.settle();
+            h.state.lock_frame_shown(&output);
+            frames(&mut h);
+        }
+        assert!(
+            h.state.lock_confirmed(),
+            "{}",
+            std::fs::read_to_string(&log).unwrap_or_default()
+        );
+        // The form came with the lock (lot D-24d): its entrance played, then Escape sends it
+        // away, and the lock is at rest.
+        for _ in 0..200 {
+            frames(&mut h);
+            h.settle();
+        }
+        h.key(KEY_ESC);
+        for _ in 0..100 {
+            frames(&mut h);
+            h.settle();
+        }
+        let read = || std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!read().contains("form shown"));
+        h.key(KEY_SPACE);
+        let start = std::time::Instant::now();
+        loop {
+            frames(&mut h);
+            h.settle();
+            if read().contains("form shown") || start.elapsed() > Duration::from_secs(5) {
+                break;
+            }
+        }
+        let text = read();
+        let _ = std::process::Command::new("pkill")
+            .args(["-KILL", "-f", &program])
+            .status();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(text.contains("form shown"), "one Space, no form:\n{text}");
     }
 }

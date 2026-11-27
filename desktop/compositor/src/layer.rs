@@ -165,6 +165,7 @@ impl State {
         let checked = check_reserves(others.chain([layer.cached_state()]), screen.size);
         let shown = layer.user_data().get_or_insert(|| Cell::new(false));
         let content = has_content(surface);
+        let arrives = content && !shown.get();
         if let Err(reason) = checked {
             tracing::warn!(
                 namespace = layer.namespace(),
@@ -192,6 +193,9 @@ impl State {
         }
         let zone_changed = before != map.non_exclusive_zone();
         drop(map);
+        if arrives && shown.get() {
+            self.layer_arrives(layer.namespace());
+        }
         if zone_changed {
             self.reflow(&output);
         }

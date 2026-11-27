@@ -45,6 +45,7 @@ use smithay::{
 use crate::{
     State,
     anim::Visual,
+    curtain,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
     genie, is_override_redirect, mission_control, osd,
@@ -79,6 +80,8 @@ pub struct Scene {
     labels: RefCell<mission_control::Labels>,
     /// Texture of the on-screen display of the media keys (lot D-35).
     osd: RefCell<osd::Texture>,
+    /// Textures of the curtain, the picture of the lock (lot D-24e).
+    curtain: RefCell<curtain::Textures>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -154,7 +157,24 @@ pub enum Item {
         rect: Rectangle<i32, Physical>,
         radius: f32,
     },
-    /// The last image of a window that closes, stretched into `rect` (lot D-34).
+    /// `content`, a screen of `size` drawn at the origin, then squashed into `rect`: the
+    /// screens going off (lot D-38).
+    Squashed {
+        key: Key,
+        content: Vec<Item>,
+        size: Size<i32, Physical>,
+        rect: Rectangle<i32, Physical>,
+        alpha: f32,
+    },
+    /// The picture of the lock, light or dark, covering `rect`: the curtain (lot D-24e).
+    Curtain {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        light: bool,
+        alpha: f32,
+    },
+    /// The last image of a window that closes, stretched into `rect` (lot D-34); the last
+    /// frame of a screen, frozen under the curtain (lot D-24e).
     Snapshot {
         key: Key,
         texture: GlesTexture,
@@ -191,6 +211,10 @@ impl Item {
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             Item::Osd { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            // Its height changes with every frame of the squash.
+            Item::Squashed { rect, alpha, .. } => {
+                params_hash(&[rect.size.h as f32, rect.loc.y as f32, *alpha])
+            }
             _ => 0,
         }
     }
@@ -233,6 +257,7 @@ impl Scene {
             bars: RefCell::default(),
             labels: RefCell::default(),
             osd: RefCell::default(),
+            curtain: RefCell::default(),
         })
     }
 
@@ -255,6 +280,8 @@ impl Scene {
     ) -> (Vec<Vec<SceneElement>>, bool) {
         let mut animating = state.tick_theme();
         textures.update(renderer, &mut state.wallpaper);
+        state.curtain_frame(now);
+        self.curtain.borrow_mut().update(renderer, state);
         let mut screens = Vec::new();
         for (output, view) in views {
             let image = state.wallpaper.image_for(view.frame.size);
@@ -467,6 +494,57 @@ impl Scene {
                     })
                 })
                 .collect(),
+            Item::Squashed {
+                key,
+                content,
+                size,
+                rect,
+                alpha,
+            } => {
+                let inside = View {
+                    frame: Rectangle::from_size(size),
+                    frame_size: size,
+                    ..*view
+                };
+                let mut own = Ids::default();
+                let elements: Vec<_> = content
+                    .into_iter()
+                    .flat_map(|item| {
+                        self.elements(renderer, &mut own, item, &inside, wallpaper, mode)
+                    })
+                    .collect();
+                let black = sherlock_ui::screen_off::BLACK.premultiplied();
+                match window_anim::draw(renderer, size, &elements, black) {
+                    Ok(texture) => {
+                        let element = window_anim::element(renderer, texture, rect, alpha);
+                        vec![SceneElement::Decoration(ids.stamp(key, params, element))]
+                    }
+                    Err(err) => {
+                        tracing::warn!("screens off: drawing the picture: {err}");
+                        Vec::new()
+                    }
+                }
+            }
+            Item::Curtain {
+                key: _,
+                rect,
+                light,
+                alpha,
+            } => {
+                let textures = self.curtain.borrow();
+                let inside = View {
+                    frame: rect,
+                    ..*view
+                };
+                let cover = desktop_config::wallpaper::Mode::Cover;
+                textures
+                    .get(light)
+                    .map(|texture| {
+                        SceneElement::Wallpaper(wallpaper::element(texture, alpha, cover, &inside))
+                    })
+                    .into_iter()
+                    .collect()
+            }
             Item::Snapshot {
                 key,
                 texture,
@@ -491,12 +569,53 @@ pub fn items(
     wallpaper: bool,
     now: Duration,
 ) -> (Vec<Item>, bool) {
+    // The screens going off, dark or coming back: the old television over what they show
+    // (lot D-38).
+    if let Some(progress) = state.screen_off_progress(now) {
+        let dark = state.screens_dark();
+        return crate::power::items(view, progress, dark, |local| {
+            screen_items(state, (output, local), preview, wallpaper, now)
+        });
+    }
+    let (mut items, mut animating) = screen_items(state, (output, view), preview, wallpaper, now);
+    // The veil before the inactivity, over everything (lot D-38).
+    let (dim, darkening) = state.dim();
+    if dim > 0.0 {
+        let black = sherlock_ui::screen_off::BLACK.premultiplied();
+        items.insert(
+            0,
+            Item::Shape {
+                key: Key::of(None, Part::IdleVeil),
+                rect: view.frame,
+                fill: black,
+                border: black,
+                border_width: 0.0,
+                radius: 0.0,
+                alpha: dim,
+            },
+        );
+        animating |= darkening;
+    }
+    (items, animating)
+}
+
+/// What a screen shows with the screens on.
+fn screen_items(
+    state: &State,
+    (output, view): (&Output, &View),
+    preview: Option<Visual>,
+    wallpaper: bool,
+    now: Duration,
+) -> (Vec<Item>, bool) {
     // Locked: the lock surfaces only, or the plain background (lot D-25a).
     if state.is_locked() {
-        return crate::lock::items(state, (output, view));
+        return crate::lock::items(state, (output, view), now);
     }
     let mut items = Vec::new();
     let mut animating = preview.is_some();
+    // The curtain in front of the desktop: going up once unlocked, the opening of the session,
+    // the closing of the login screen (lot D-24e).
+    animating |= curtain::push_front(&mut items, state, view, now);
     let scale = view.scale as f32;
     // The area of a screenshot being chosen, then the on-screen display of the media keys, in
     // front of everything (lot D-35).
@@ -506,9 +625,13 @@ pub fn items(
     animating |= osd::push_item(&mut items, state, (output, view));
     // The shell's menus closing (lot UI-06), in front of their anchored surfaces.
     animating |= crate::popup_anim::push_closing(&mut items, state, (output, view), now);
-    push_layers(&mut items, (output, view), &[Layer::Overlay], |_, _| {
-        Some(Point::default())
-    });
+    animating |= push_layers(
+        &mut items,
+        (state, now),
+        (output, view),
+        &[Layer::Overlay],
+        |_, _| Some(Point::default()),
+    );
     // A fullscreen window covers the top layer, but for the edge the pointer brought back,
     // which slides in front (lot D-21e).
     let fullscreen = state.fullscreen_on(output);
@@ -522,7 +645,13 @@ pub fn items(
             }
         }
     };
-    push_layers(&mut items, (output, view), &[Layer::Top], top(true));
+    animating |= push_layers(
+        &mut items,
+        (state, now),
+        (output, view),
+        &[Layer::Top],
+        top(true),
+    );
     animating |= state.reveal_sliding(output, now);
     let mut behind = covered;
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
@@ -570,19 +699,38 @@ pub fn items(
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
         if behind && fullscreen.as_ref() == Some(window) {
-            push_layers(&mut items, (output, view), &[Layer::Top], top(false));
+            animating |= push_layers(
+                &mut items,
+                (state, now),
+                (output, view),
+                &[Layer::Top],
+                top(false),
+            );
             behind = false;
         }
     }
     if behind {
-        push_layers(&mut items, (output, view), &[Layer::Top], top(false));
+        animating |= push_layers(
+            &mut items,
+            (state, now),
+            (output, view),
+            &[Layer::Top],
+            top(false),
+        );
     }
-    push_layers(
+    animating |= push_layers(
         &mut items,
+        (state, now),
         (output, view),
         &[Layer::Bottom, Layer::Background],
         |_, _| Some(Point::default()),
     );
+    // The login screen shows the curtain, the picture of the lock, from its first frame: never
+    // the wallpaper of the desktop (lot D-24e).
+    if state.is_greeter() {
+        curtain::push(&mut items, state, view, 1.0, 1.0);
+        return (items, animating);
+    }
     // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
     // the frame, like the rest of the desktop.
     if wallpaper {
@@ -606,32 +754,39 @@ pub fn items(
 }
 
 /// Anchored surfaces of `layers`, the front one first, each with its menus in front: those
-/// that `shift` keeps, moved by the shift it gives them.
+/// that `shift` keeps, moved by the shift it gives them. The bar and the dock slide into place
+/// while the session opens (`arrival.rs`): `true` while they do.
 fn push_layers(
     items: &mut Vec<Item>,
+    (state, now): (&State, Duration),
     (output, view): (&Output, &View),
     layers: &[Layer],
     shift: impl Fn(&LayerMap, &LayerSurface) -> Option<Point<f64, Logical>>,
-) {
+) -> bool {
     let map = layer_map_for_output(output);
+    let mut arriving = false;
     for layer in layers {
         for surface in map.layers_on(*layer).rev() {
             let (Some(geometry), Some(shift)) = (map.layer_geometry(surface), shift(&map, surface))
             else {
                 continue;
             };
-            let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64() + shift;
-            let at = Placement {
-                view,
-                loc,
-                alpha: 1.0,
-            };
+            let mut loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64() + shift;
+            let mut alpha = 1.0;
+            if let Some((part, progress)) = state.arrival_progress(surface.namespace(), now) {
+                let screen = Rectangle::new((0, 0).into(), view.area.size);
+                loc.y += crate::arrival::offset(part, geometry, screen, progress);
+                alpha = progress.clamp(0.0, 1.0) as f32;
+                arriving = true;
+            }
+            let at = Placement { view, loc, alpha };
             push_surface(items, surface.wl_surface(), at, true);
             let mut rect = geometry.to_f64();
             rect.loc += shift;
             push_backdrop(items, view.rect(rect));
         }
     }
+    arriving
 }
 
 /// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn behind
