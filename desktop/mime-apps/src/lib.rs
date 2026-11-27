@@ -10,12 +10,14 @@ use std::ffi::OsString;
 
 pub mod dirs;
 pub mod entry;
+pub mod file;
 pub mod list;
 pub mod mime;
 pub mod terminals;
 
 pub use dirs::Dirs;
 pub use entry::{DesktopEntry, read_applications};
+pub use file::write_atomically;
 pub use list::{MimeApps, set_default};
 pub use mime::MimeDb;
 

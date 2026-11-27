@@ -5,6 +5,7 @@
 
 use std::{ffi::OsString, path::PathBuf};
 
+pub mod conf;
 pub mod lock;
 pub mod pointer;
 pub mod touchpad;

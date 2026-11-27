@@ -11,12 +11,13 @@ use sherlock_ui::metrics;
 
 use crate::app::{App, Change, Message};
 use crate::search::Setting;
+use crate::settings::File;
 
 impl App {
     pub(crate) fn touchpad(&self, width: f32) -> Vec<Element<'_, Message>> {
         let pad = &self.settings.touchpad;
         let click = |label, which| -> Element<'_, Message> {
-            let choose = Some(Message::Set(Change::Click(which)));
+            let choose = self.message(Change::Click(which));
             ui::radio(label, pad.click == which, choose).into()
         };
         let clicks: Element<'_, Message> = column![
@@ -25,7 +26,13 @@ impl App {
         ]
         .spacing(metrics::GAP_TIGHT)
         .into();
-        let toggle = |on: bool, change: fn(bool) -> Message| ui::toggle(on, Some(change)).into();
+        let toggle = |on: bool, change: fn(bool) -> Message| {
+            let file = match change(on) {
+                Message::Set(change) => crate::app::file_of(change),
+                _ => File::Touchpad,
+            };
+            ui::toggle(on, self.enabled(file, change)).into()
+        };
         let tap = toggle(pad.tap_to_click, |on| Message::Set(Change::TapToClick(on)));
         let natural = toggle(pad.natural_scroll, |on| {
             Message::Set(Change::NaturalScroll(on))
@@ -35,7 +42,10 @@ impl App {
         });
         let shown = self.settings.pointer.show_clicks;
         let show_clicks = toggle(shown, |on| Message::Set(Change::ShowClicks(on)));
-        let speed = ui::slider(self.speed(), Some(|v| Message::Set(Change::Speed(v))));
+        let speed = ui::slider(
+            self.speed(),
+            self.enabled(File::Touchpad, |v| Message::Set(Change::Speed(v))),
+        );
         vec![
             self.card(
                 Some(t::CLICKS),

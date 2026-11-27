@@ -912,6 +912,7 @@ dependencies = [
 name = "dock-config"
 version = "0.0.0"
 dependencies = [
+ "mime-apps",
  "sherlock-ui",
 ]
 

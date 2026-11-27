@@ -9,7 +9,7 @@
 
 use std::{
     ffi::OsString,
-    fmt, fs, io,
+    fs, io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -54,36 +54,38 @@ impl Config {
     }
 
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values are
-    /// refused, so that a typo does not go unnoticed.
+    /// refused, so that a typo does not go unnoticed: the error of the first one is returned.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let (config, mut problems) = Self::parse_lenient(text);
+        match problems.is_empty() {
+            true => Ok(config),
+            false => Err(problems.remove(0)),
+        }
+    }
+
+    /// Reads what can be read: each line that cannot is left at its default and listed.
+    pub fn parse_lenient(text: &str) -> (Self, Vec<Error>) {
         let mut config = Self::default();
-        for (i, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let error = |reason: String| Error::Line {
-                line: i + 1,
-                reason,
-            };
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| error("expected key = value".into()))?;
-            let value = value.trim();
-            match key.trim() {
+        let mut problems = Vec::new();
+        for (line, pair) in crate::conf::pairs(text) {
+            let taken = pair.and_then(|(key, value)| match key {
                 "idle-minutes" => {
                     config.idle_minutes = value
                         .parse()
                         .ok()
                         .filter(|m| *m <= MAX_IDLE_MINUTES)
                         .ok_or_else(|| {
-                            error(format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}"))
+                            format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}")
                         })?;
+                    Ok(())
                 }
-                key => return Err(error(format!("unknown key {key:?}"))),
+                key => Err(format!("unknown key {key:?}")),
+            });
+            if let Err(reason) = taken {
+                problems.push(Error::Line { line, reason });
             }
         }
-        Ok(config)
+        (config, problems)
     }
 
     /// Reads the settings file. A missing file is the default setting.
@@ -97,12 +99,13 @@ impl Config {
             }),
         }
     }
-}
 
-impl fmt::Display for Config {
-    /// The file as Control Room writes it: `parse` reads it back.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "idle-minutes = {}", self.idle_minutes)
+    /// `text`, the file as it is, with the delay set again if it changed; everything else
+    /// stays (see `touchpad::Config::write_into`). Control Room writes the file so.
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse_lenient(text);
+        let values = |c: &Self| [("idle-minutes", c.idle_minutes.to_string())];
+        crate::conf::update(text, &values(self), &values(&read))
     }
 }
 
@@ -117,9 +120,20 @@ mod tests {
 
     #[test]
     fn what_control_room_writes_reads_back() {
+        // The comment stays, the delay changes in place.
+        let mut config = Config { idle_minutes: 10 };
+        assert_eq!(
+            config.write_into("# mine\nidle-minutes = 5\n"),
+            "# mine\nidle-minutes = 10\n"
+        );
+        config.idle_minutes = 5;
+        assert_eq!(
+            config.write_into("idle-minutes = 5\n"),
+            "idle-minutes = 5\n"
+        );
         for idle_minutes in [0, 1, 15, MAX_IDLE_MINUTES] {
             let config = Config { idle_minutes };
-            assert_eq!(Config::parse(&config.to_string()).unwrap(), config);
+            assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
         }
     }
 

@@ -103,8 +103,15 @@ pub fn choices(catalog: &Catalog, kind: Kind) -> (Vec<Choice>, Option<Choice>) {
     }
 }
 
+/// Writes of `mimeapps.list` and `xdg-terminals.list`, one at a time: two choices made in a
+/// row each read, change and write the file, and neither loses the other.
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Makes `id` the default for every type of `kind`.
 pub fn set(dirs: &Dirs, desktops: &[String], kind: Kind, id: &str) -> io::Result<()> {
+    let _one_at_a_time = WRITING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if kind == Kind::Terminal {
         return terminals::set_default(dirs, id);
     }

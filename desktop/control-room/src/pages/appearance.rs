@@ -10,15 +10,13 @@ use sherlock_ui::{color, metrics, theme, typography, wallpapers};
 
 use crate::app::{App, Change, Message, hours};
 use crate::search::Setting;
+use crate::settings::File;
 use crate::thumbnails;
-
-fn set(change: Change) -> Option<Message> {
-    Some(Message::Set(change))
-}
 
 impl App {
     pub(crate) fn appearance(&self, width: f32) -> Vec<Element<'_, Message>> {
         let s = &self.settings;
+        let set = |change| self.message(change);
         let mode = s.appearance.mode;
         let modes = [
             (t::DARK, Mode::Dark),
@@ -37,6 +35,9 @@ impl App {
             let (light, dark) = (s.appearance.light_from, s.appearance.dark_from);
             let menu = |current, other, change: fn(_) -> Change| {
                 let chosen = crate::app::Hour(appearance_config::TimeOfDay::minutes(current));
+                if !self.can_change(File::Appearance) {
+                    return ui::description(chosen.to_string()).into();
+                }
                 ui::dropdown(
                     hours(current, other),
                     Some(chosen),
@@ -64,7 +65,7 @@ impl App {
 
         let follow = ui::toggle(
             s.wallpaper.follow_theme,
-            Some(|on| Message::Set(Change::FollowTheme(on))),
+            self.enabled(File::Wallpaper, |on| Message::Set(Change::FollowTheme(on))),
         );
         let mut wallpaper_rows = Vec::new();
         if let Some(path) = &s.wallpaper.path {
@@ -104,16 +105,16 @@ impl App {
         .map(|(label, p)| (label, p == d.position, set(Change::Position(p))));
         let size = ui::slider(
             self.dock_size(),
-            Some(|v| Message::Set(Change::DockSize(v))),
+            self.enabled(File::Dock, |v| Message::Set(Change::DockSize(v))),
         );
         let magnify = ui::toggle(
             d.magnification,
-            Some(|on| Message::Set(Change::Magnification(on))),
+            self.enabled(File::Dock, |on| Message::Set(Change::Magnification(on))),
         );
         let factor = ui::slider(
             self.magnification_factor(),
-            d.magnification
-                .then_some((|v| Message::Set(Change::MagnificationFactor(v))) as fn(u8) -> Message),
+            self.enabled(File::Dock, |v| Message::Set(Change::MagnificationFactor(v)))
+                .filter(|_| d.magnification),
         );
         let dock_rows = vec![
             self.row(Setting::DockSize, width, t::DOCK_SIZE_HELP, size, true),
@@ -218,7 +219,7 @@ impl App {
         ui::picture_choice(
             content,
             cr::WALLPAPER_RADIUS,
-            Some(Message::Set(Change::Wallpaper(wallpaper.id))),
+            self.message(Change::Wallpaper(wallpaper.id)),
         )
         .into()
     }

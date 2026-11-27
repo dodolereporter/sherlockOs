@@ -5,7 +5,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use appearance_config::AppearanceConfig;
@@ -94,6 +94,31 @@ pub enum File {
     Lock,
 }
 
+impl Paths {
+    /// Where `file` is.
+    pub fn of(&self, file: File) -> &Path {
+        match file {
+            File::Appearance => &self.appearance,
+            File::Dock => &self.dock,
+            File::Wallpaper => &self.wallpaper,
+            File::Touchpad => &self.touchpad,
+            File::Pointer => &self.pointer,
+            File::Lock => &self.lock,
+        }
+    }
+}
+
+impl File {
+    pub const ALL: [Self; 6] = [
+        Self::Appearance,
+        Self::Dock,
+        Self::Wallpaper,
+        Self::Touchpad,
+        Self::Pointer,
+        Self::Lock,
+    ];
+}
+
 /// Every setting Control Room shows.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Settings {
@@ -106,74 +131,115 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Reads every file. A missing file is its default; a file that cannot be read is its
-    /// default too, and goes to the log: changing a setting then writes it whole.
-    pub fn load(paths: &Paths) -> Self {
-        fn logged<T: Default, E: std::fmt::Display>(path: &Path, read: Result<T, E>) -> T {
-            read.unwrap_or_else(|error| {
-                tracing::warn!(%error, path = %path.display(), "settings file not read");
-                T::default()
-            })
-        }
-        fn problems<T, P: std::fmt::Display>(
-            path: &Path,
-            read: io::Result<(T, Vec<P>)>,
-        ) -> io::Result<T> {
-            read.map(|(config, problems)| {
-                for problem in problems {
-                    tracing::warn!(%problem, path = %path.display(), "settings file");
+    /// Reads every file, and lists those that cannot be changed: unreadable (permissions) or
+    /// not text. Those keep their defaults on screen and are never written. In a file that is
+    /// read, a line that cannot be understood is left aside and goes to the log; the others
+    /// count.
+    pub fn load(paths: &Paths) -> (Self, Vec<File>) {
+        let mut settings = Self::default();
+        let mut locked = Vec::new();
+        for file in File::ALL {
+            let path = paths.of(file);
+            match read_text(path) {
+                Ok(text) => settings.read(file, path, &text),
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "settings file not changeable");
+                    locked.push(file);
                 }
-                config
-            })
+            }
         }
-        Self {
-            appearance: logged(
-                &paths.appearance,
-                problems(&paths.appearance, AppearanceConfig::load(&paths.appearance)),
-            ),
-            dock: logged(
-                &paths.dock,
-                problems(&paths.dock, DockConfig::load(&paths.dock)),
-            ),
-            wallpaper: logged(&paths.wallpaper, wallpaper::Config::read(&paths.wallpaper)),
-            touchpad: logged(&paths.touchpad, touchpad::Config::read(&paths.touchpad)),
-            pointer: logged(&paths.pointer, pointer::Config::read(&paths.pointer)),
-            lock: logged(&paths.lock, lock::Config::read(&paths.lock)),
+        (settings, locked)
+    }
+
+    /// Takes the settings of `file` from its text; what is not understood goes to the log.
+    fn read(&mut self, file: File, path: &Path, text: &str) {
+        let problems: Vec<String> = match file {
+            File::Appearance => {
+                let (config, problems) = AppearanceConfig::parse(text);
+                self.appearance = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+            File::Dock => {
+                let (config, problems) = DockConfig::parse(text);
+                self.dock = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+            File::Wallpaper => {
+                let (config, problems) = wallpaper::Config::parse_lenient(text);
+                self.wallpaper = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+            File::Touchpad => {
+                let (config, problems) = touchpad::Config::parse_lenient(text);
+                self.touchpad = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+            File::Pointer => {
+                let (config, problems) = pointer::Config::parse_lenient(text);
+                self.pointer = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+            File::Lock => {
+                let (config, problems) = lock::Config::parse_lenient(text);
+                self.lock = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
+        };
+        for problem in problems {
+            tracing::warn!(%problem, path = %path.display(), "settings line left aside");
         }
     }
 
-    /// Writes `file` with the settings it holds.
-    pub fn save(&self, file: File, paths: &Paths) -> io::Result<()> {
+    /// `text` with the keys of `file` whose value these settings change set again.
+    fn write_into(&self, file: File, text: &str) -> String {
         match file {
-            File::Appearance => write(&paths.appearance, &self.appearance.to_text()),
-            File::Dock => self.dock.save(&paths.dock),
-            File::Wallpaper => write(&paths.wallpaper, &self.wallpaper.to_string()),
-            File::Touchpad => write(&paths.touchpad, &self.touchpad.to_string()),
-            File::Pointer => write(&paths.pointer, &self.pointer.to_string()),
-            File::Lock => write(&paths.lock, &self.lock.to_string()),
+            File::Appearance => self.appearance.write_into(text),
+            // The dock keeps the text it was read from.
+            File::Dock => self.dock.to_text(),
+            File::Wallpaper => self.wallpaper.write_into(text),
+            File::Touchpad => self.touchpad.write_into(text),
+            File::Pointer => self.pointer.write_into(text),
+            File::Lock => self.lock.write_into(text),
         }
+    }
+
+    /// Changes `file` on the disk: reads it as it is now, takes what it says (another program
+    /// or the user may have changed it since), makes `change` there, and writes only the keys
+    /// that change, with `mime_apps::write_atomically`. These settings then show the file as
+    /// written. A file that cannot be read is not written.
+    pub fn update(
+        &mut self,
+        file: File,
+        paths: &Paths,
+        change: impl FnOnce(&mut Self),
+    ) -> io::Result<()> {
+        let path = paths.of(file);
+        let text = read_text(path)?;
+        let mut fresh = self.clone();
+        fresh.read(file, path, &text);
+        change(&mut fresh);
+        let written = fresh.write_into(file, &text);
+        if written != text {
+            mime_apps::write_atomically(path, &written)?;
+        }
+        // Read back from what was written: the dock keeps that text for its next change.
+        self.read(file, path, &written);
+        Ok(())
     }
 }
 
-/// Writes `text` to `path` whole or not at all: to a temporary file beside it, flushed to the
-/// disk, then renamed over it. A program that reads the file never sees half of it, and a
-/// symbolic link (dotfiles kept in a repository) keeps pointing at the written file.
-pub fn write(path: &Path, text: &str) -> io::Result<()> {
-    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let dir = target.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(dir)?;
-    let name = target.file_name().unwrap_or_default().to_string_lossy();
-    let temporary = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = (|| {
-        let mut file = fs::File::create(&temporary)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temporary, &target)
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&temporary);
+/// The text of a settings file, empty when there is none. A file that cannot be read, or that
+/// is not text (not UTF-8, a NUL byte), is an error: it is never written over.
+pub fn read_text(path: &Path) -> io::Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) if text.contains('\0') => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "not a text file",
+        )),
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error),
     }
-    written
 }
 
 /// Locales to try for application names, most specific first: `fr_FR`, then `fr` (as

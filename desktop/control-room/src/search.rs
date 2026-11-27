@@ -8,6 +8,7 @@ use sherlock_ui::control_room::texts as t;
 use sherlock_ui::icon::Icon;
 
 use crate::apps::Kind;
+use crate::settings::File;
 
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,6 +152,25 @@ impl Setting {
 
     pub fn page(self) -> Page {
         self.entry().0
+    }
+
+    /// The settings file that holds it; none for the sound and the default applications,
+    /// which go through `pactl` and `mime-apps`.
+    pub fn file(self) -> Option<File> {
+        let file = match self.page() {
+            Page::Appearance => match self {
+                Self::Theme | Self::LightFrom | Self::DarkFrom => File::Appearance,
+                Self::Wallpaper | Self::FollowTheme => File::Wallpaper,
+                _ => File::Dock,
+            },
+            Page::Touchpad => match self {
+                Self::ShowClicks => File::Pointer,
+                _ => File::Touchpad,
+            },
+            Page::Lock => File::Lock,
+            Page::Sound | Page::DefaultApps => return None,
+        };
+        Some(file)
     }
 }
 

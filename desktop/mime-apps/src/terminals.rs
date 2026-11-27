@@ -61,7 +61,7 @@ pub fn set_default(dirs: &Dirs, id: &str) -> io::Result<()> {
             .filter(|line| ids(line).first() != Some(&id))
             .map(str::to_owned),
     );
-    crate::list::write_atomically(&path, &(lines.join("\n") + "\n"))
+    crate::file::write_atomically(&path, &(lines.join("\n") + "\n"))
 }
 
 #[cfg(test)]

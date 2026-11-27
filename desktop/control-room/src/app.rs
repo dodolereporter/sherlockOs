@@ -140,6 +140,8 @@ pub enum Message {
     /// The devices read, or the reason they are not.
     Audio(Result<Audio, Problem>),
     SetSound(sound::Change),
+    /// `pactl` made the change at the head of the queue, and read the devices again.
+    SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
 }
@@ -211,9 +213,17 @@ pub struct App {
     pub(crate) sound: Sound,
     /// The installed applications and their associations, once read.
     pub(crate) catalog: Option<Arc<Catalog>>,
-    /// Files changed and not written yet, volumes not set yet, and when to do it.
-    pending: Vec<File>,
+    /// Files that cannot be changed: unreadable, not text, or not writable. Their settings
+    /// are shown dimmed, and never written.
+    pub(crate) locked: Vec<File>,
+    /// Changes not written yet, in their order, and when to write them.
+    pending: Vec<Change>,
+    /// Volumes waiting for their slider to rest.
     volumes: Vec<(Device, u8)>,
+    /// What `pactl` is still to be asked, in order, the last volume of each device only, and
+    /// whether it is busy: one call at a time, as the media keys do.
+    pub(crate) sound_queue: Vec<sound::Change>,
+    pub(crate) sound_busy: bool,
     save_at: Option<Instant>,
     pub(crate) theme: ThemeFade,
     origin: Instant,
@@ -221,7 +231,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
-        let settings = Settings::load(&config.paths);
+        let (settings, locked) = Settings::load(&config.paths);
         let dirs = config.paths.wallpaper_dirs.clone();
         let app = Self {
             paths: config.paths,
@@ -235,6 +245,9 @@ impl App {
             thumbnails: HashMap::new(),
             sound: Sound::Loading,
             catalog: None,
+            locked,
+            sound_queue: Vec::new(),
+            sound_busy: false,
             pending: Vec::new(),
             volumes: Vec::new(),
             save_at: None,
@@ -389,15 +402,26 @@ impl App {
                     .collect();
             }
             Message::Set(change) => {
-                let file = self.apply(change);
-                if !self.pending.contains(&file) {
-                    self.pending.push(file);
+                if !self.can_change(file_of(change)) {
+                    return Task::none();
                 }
+                // Shown at once; written from the file as it is on the disk when it is written.
+                apply(&mut self.settings, change);
+                self.pending.push(change);
                 if is_continuous(change) {
                     self.save_at = Some(Instant::now() + cr::SAVE_DELAY);
                 } else {
                     return self.flush();
                 }
+            }
+            Message::SoundSet(read) => {
+                self.sound_busy = false;
+                let next = self.next_sound();
+                // While other changes wait, the page keeps showing them, not this answer.
+                if self.sound_busy {
+                    return next;
+                }
+                return self.update(Message::Audio(read));
             }
             Message::Audio(read) => {
                 self.sound = match read {
@@ -419,7 +443,10 @@ impl App {
                         self.volumes.push((device, v));
                         self.save_at = Some(Instant::now() + cr::SAVE_DELAY);
                     }
-                    change => return self.set_sound(change),
+                    change => {
+                        self.queue_sound(change);
+                        return self.next_sound();
+                    }
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
@@ -441,9 +468,35 @@ impl App {
     }
 
     /// Asks `pactl` for `change` off the interface thread, then shows the devices again.
-    fn set_sound(&self, change: sound::Change) -> Task<Message> {
+    /// Puts `change` in the queue of `pactl`: a volume replaces the one of its device still
+    /// waiting, in its place; a choice of device goes last.
+    fn queue_sound(&mut self, change: sound::Change) {
+        if let sound::Change::Volume(device, _) = change {
+            let waiting = self
+                .sound_queue
+                .iter_mut()
+                .find(|c| matches!(c, sound::Change::Volume(d, _) if *d == device));
+            if let Some(waiting) = waiting {
+                *waiting = change;
+                return;
+            }
+        }
+        self.sound_queue.push(change);
+    }
+
+    /// Asks `pactl` for the change at the head of the queue, unless it is busy: the changes
+    /// reach it one after the other, in the order they were made.
+    fn next_sound(&mut self) -> Task<Message> {
+        if self.sound_busy || self.sound_queue.is_empty() {
+            return Task::none();
+        }
+        let change = self.sound_queue.remove(0);
+        self.sound_busy = true;
         let pactl = self.pactl();
-        Task::perform(async move { sound::apply(&pactl, &change) }, Message::Audio)
+        Task::perform(
+            async move { sound::apply(&pactl, &change) },
+            Message::SoundSet,
+        )
     }
 
     /// Opens `page`: it comes in, and the folded sidebar goes.
@@ -457,22 +510,57 @@ impl App {
         self.sidebar.show(now, false);
     }
 
-    /// Writes the files changed. A file that cannot be written goes to the log; the setting
-    /// stays as chosen in the window.
-    /// The volumes waiting are set off the interface thread: the task returned.
+    /// The message of `change`, none when its file is locked: the control is disabled.
+    pub(crate) fn message(&self, change: Change) -> Option<Message> {
+        self.can_change(file_of(change))
+            .then_some(Message::Set(change))
+    }
+
+    /// `on_change` when the settings of `file` can be changed: a switch or a slider then
+    /// answers, and is disabled otherwise.
+    pub(crate) fn enabled<T>(
+        &self,
+        file: File,
+        on_change: fn(T) -> Message,
+    ) -> Option<fn(T) -> Message> {
+        self.can_change(file).then_some(on_change)
+    }
+
+    /// Whether the settings of `file` can be changed.
+    pub(crate) fn can_change(&self, file: File) -> bool {
+        !self.locked.contains(&file)
+    }
+
+    /// Writes the changes waiting, file by file: each file is read again as it is now, takes
+    /// its changes, and only the keys they touch are written (`Settings::update`). A file that
+    /// cannot be read or written goes to the log and becomes locked.
+    /// The volumes waiting go to `pactl`, in order: the task returned.
     pub fn flush(&mut self) -> Task<Message> {
         self.save_at = None;
-        for file in std::mem::take(&mut self.pending) {
-            if let Err(error) = self.settings.save(file, &self.paths) {
-                tracing::warn!(%error, ?file, "setting not written");
+        let changes = std::mem::take(&mut self.pending);
+        for file in File::ALL {
+            let mine: Vec<Change> = changes
+                .iter()
+                .copied()
+                .filter(|c| file_of(*c) == file)
+                .collect();
+            if mine.is_empty() || !self.can_change(file) {
+                continue;
+            }
+            let updated = self.settings.update(file, &self.paths, |settings| {
+                for change in mine {
+                    apply(settings, change);
+                }
+            });
+            if let Err(error) = updated {
+                tracing::warn!(%error, ?file, "setting not written: the file is now locked");
+                self.locked.push(file);
             }
         }
-        let volumes = std::mem::take(&mut self.volumes);
-        Task::batch(
-            volumes
-                .into_iter()
-                .map(|(device, v)| self.set_sound(sound::Change::Volume(device, v))),
-        )
+        for (device, v) in std::mem::take(&mut self.volumes) {
+            self.queue_sound(sound::Change::Volume(device, v));
+        }
+        self.next_sound()
     }
 
     /// Puts the animations at their end, for a capture.
@@ -481,60 +569,65 @@ impl App {
         self.sidebar = Slide::at_rest(self.sidebar.shown());
         self.spotlight = None;
     }
+}
 
-    /// Makes the change in the settings; returns the file that holds it.
-    fn apply(&mut self, change: Change) -> File {
-        let s = &mut self.settings;
-        let time = |Hour(minutes): Hour| TimeOfDay::new(minutes / 60 % 24, minutes % 60, 0);
-        match change {
-            Change::Mode(mode) => s.appearance.mode = mode,
-            Change::LightFrom(hour) => {
-                if let Some(t) = time(hour).filter(|t| *t != s.appearance.dark_from) {
-                    s.appearance.light_from = t;
-                }
-            }
-            Change::DarkFrom(hour) => {
-                if let Some(t) = time(hour).filter(|t| *t != s.appearance.light_from) {
-                    s.appearance.dark_from = t;
-                }
-            }
-            Change::Wallpaper(id) => {
-                s.wallpaper.wallpaper = Some(id.to_owned());
-                s.wallpaper.path = None;
-            }
-            Change::FollowTheme(on) => s.wallpaper.follow_theme = on,
-            Change::DockSize(v) => s.dock.icon_size = from_share(v, ICON_SIZES).round(),
-            Change::Magnification(on) => s.dock.magnification = on,
-            Change::MagnificationFactor(v) => {
-                s.dock.magnification_factor = (from_share(v, FACTORS) * 10.0).round() / 10.0;
-            }
-            Change::AutoHide(when) => s.dock.auto_hide = when,
-            Change::Position(edge) => s.dock.position = edge,
-            Change::Click(click) => s.touchpad.click = click,
-            Change::TapToClick(on) => s.touchpad.tap_to_click = on,
-            Change::NaturalScroll(on) => s.touchpad.natural_scroll = on,
-            Change::Speed(v) => {
-                let speed = f64::from(from_share(v, SPEEDS));
-                s.touchpad.speed = (speed * 100.0).round() / 100.0;
-            }
-            Change::Typing(on) => s.touchpad.disable_while_typing = on,
-            Change::ShowClicks(on) => s.pointer.show_clicks = on,
-            Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
-        }
-        match change {
-            Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
-            Change::Wallpaper(_) | Change::FollowTheme(_) => File::Wallpaper,
-            Change::DockSize(_)
-            | Change::Magnification(_)
-            | Change::MagnificationFactor(_)
-            | Change::AutoHide(_)
-            | Change::Position(_) => File::Dock,
-            Change::ShowClicks(_) => File::Pointer,
-            Change::LockAfter(_) => File::Lock,
-            _ => File::Touchpad,
-        }
+/// The file that holds a change.
+pub(crate) fn file_of(change: Change) -> File {
+    match change {
+        Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
+        Change::Wallpaper(_) | Change::FollowTheme(_) => File::Wallpaper,
+        Change::DockSize(_)
+        | Change::Magnification(_)
+        | Change::MagnificationFactor(_)
+        | Change::AutoHide(_)
+        | Change::Position(_) => File::Dock,
+        Change::ShowClicks(_) => File::Pointer,
+        Change::LockAfter(_) => File::Lock,
+        _ => File::Touchpad,
     }
+}
 
+/// Makes the change in the settings.
+fn apply(s: &mut Settings, change: Change) {
+    let time = |Hour(minutes): Hour| TimeOfDay::new(minutes / 60 % 24, minutes % 60, 0);
+    match change {
+        Change::Mode(mode) => s.appearance.mode = mode,
+        Change::LightFrom(hour) => {
+            if let Some(t) = time(hour).filter(|t| *t != s.appearance.dark_from) {
+                s.appearance.light_from = t;
+            }
+        }
+        Change::DarkFrom(hour) => {
+            if let Some(t) = time(hour).filter(|t| *t != s.appearance.light_from) {
+                s.appearance.dark_from = t;
+            }
+        }
+        Change::Wallpaper(id) => {
+            s.wallpaper.wallpaper = Some(id.to_owned());
+            s.wallpaper.path = None;
+        }
+        Change::FollowTheme(on) => s.wallpaper.follow_theme = on,
+        Change::DockSize(v) => s.dock.icon_size = from_share(v, ICON_SIZES).round(),
+        Change::Magnification(on) => s.dock.magnification = on,
+        Change::MagnificationFactor(v) => {
+            s.dock.magnification_factor = (from_share(v, FACTORS) * 10.0).round() / 10.0;
+        }
+        Change::AutoHide(when) => s.dock.auto_hide = when,
+        Change::Position(edge) => s.dock.position = edge,
+        Change::Click(click) => s.touchpad.click = click,
+        Change::TapToClick(on) => s.touchpad.tap_to_click = on,
+        Change::NaturalScroll(on) => s.touchpad.natural_scroll = on,
+        Change::Speed(v) => {
+            let speed = f64::from(from_share(v, SPEEDS));
+            s.touchpad.speed = (speed * 100.0).round() / 100.0;
+        }
+        Change::Typing(on) => s.touchpad.disable_while_typing = on,
+        Change::ShowClicks(on) => s.pointer.show_clicks = on,
+        Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
+    }
+}
+
+impl App {
     /// The id of the wallpaper chosen in the collection, `None` for an image of the user's.
     pub(crate) fn wallpaper(&self) -> Option<&str> {
         let config = &self.settings.wallpaper;

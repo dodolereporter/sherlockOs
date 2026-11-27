@@ -31,16 +31,29 @@ Displays come with D-26a3.
 | « Applications par défaut » | Browser, mail, text editor, terminal, files, images, video, music | `$XDG_CONFIG_HOME/mimeapps.list`; the terminal in `xdg-terminals.list` | Every program that opens a file or a link |
 
 A file is only written once a setting changes: until then, the programs keep their own
-defaults. A file is written whole or not at all (a temporary file renamed over it), and a
-symbolic link keeps pointing at it. The dock file keeps the keys Control Room does not show
-(pinned applications, icon theme). A switch, a segmented control or a menu writes at once; a
-slider writes `SAVE_DELAY` (150 ms) after its last step, and closing the window writes what
-waits. A file that cannot be read shows its defaults and goes to the log.
+defaults. Writing never starts from what Control Room read when it opened: the file is read
+again as it is on the disk, the change is made there, and only the line of the key that changed
+is replaced (or added at the end of its group). Comments, blank lines, other groups, unknown keys,
+lines the file gets wrong and the order all stay; an application pinned in the dock while
+Control Room is open stays pinned. Every file goes through `mime_apps::write_atomically`: whole
+or not at all, with the permissions it had (a 0600 file stays 0600), through its symbolic link
+even when the link is still dangling, the folder flushed after the rename.
+
+In a file that is read, a line that cannot be understood is left aside, goes to the log, and
+the other lines count. A file that cannot be read (permissions) or that is not text (not UTF-8,
+a NUL byte) is never written: its settings are shown disabled, with the sentence
+« Ce fichier de réglages ne peut pas être modifié. ». A file that cannot be written becomes so
+too.
+
+A switch, a segmented control or a menu writes at once; a slider writes `SAVE_DELAY` (150 ms)
+after its last step, and closing the window writes what waits.
 
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
 interface thread (`system_services::audio`). Choosing a device runs `set-default-sink` or
 `set-default-source`; PipeWire moves the sound to it. A volume is set once its slider rests.
+The changes reach `pactl` one at a time, in the order they were made, through a queue that
+keeps only the last volume of each device, as the media keys do.
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
 
@@ -50,7 +63,8 @@ with `desktop_config::lock`.
 **Default applications.** Each kind covers several types: the browser `x-scheme-handler/https`,
 `http` and `text/html`; images PNG, JPEG, GIF and WebP; and so on (`apps::Kind::types`). The
 menu offers the applications that declare the first type, and writes every type with
-`mime_apps::set_default`, as Evidence's « Toujours ouvrir avec » does. The terminal has no MIME
+`mime_apps::set_default`, as Evidence's « Toujours ouvrir avec » does. Two choices made in a row
+are written one after the other, each from the file as it is then. The terminal has no MIME
 type: the page offers the entries of category `TerminalEmulator` and writes
 `xdg-terminals.list`, the file of the proposed freedesktop specification that
 `xdg-terminal-exec` reads (`mime_apps::terminals`). The desktop's own programs still pick their
@@ -107,6 +121,9 @@ configuration:
 
 - every setting changed, written, then read back by the libraries of the programs, and found in
   the words each program reads;
+- an unknown key, a wrong line and the comments stay; a file that cannot be read, or is not
+  text, is never written and its settings are disabled; a 0600 file stays 0600 and a dangling
+  link stays a link; an application pinned in the dock while Control Room is open stays pinned;
 - the dock file keeps what Control Room does not show; a slider writes only once it rests; the
   two hours of the automatic theme never meet;
 - the search, without case nor accents, its order and its marks; a setting opened from the
@@ -114,7 +131,7 @@ configuration:
 - a click in the sidebar opens a page; in a narrow window the sidebar is folded, its button
   unfolds it, choosing a page folds it;
 - sound through a fake `pactl` that logs what it is asked: devices read without the monitors,
-  default and volume set; without `pactl`, the page says so;
+  default and volume set, one change at a time and in order; without `pactl`, the page says so;
 - default applications written to a temporary `mimeapps.list` and `xdg-terminals.list`, then
   read back by `mime-apps`;
 - the lock delay written and read back;
