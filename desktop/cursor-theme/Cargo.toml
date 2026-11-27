@@ -4,6 +4,7 @@ description = "Cursor theme of the desktop: shapes, hotspots, names, Xcursor wri
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [features]

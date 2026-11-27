@@ -4,9 +4,10 @@
 //! the row of workspaces with the fingers, then let it go with their velocity on the spring of
 //! the workspace slide (`anim::WorkspaceSlide`); up opens Mission Control, which follows the
 //! fingers, and down closes it; down on the desktop is the setting `swipe-down`, nothing by
-//! default. Four fingers and more, and pinches of three fingers or more, are reserved: taken,
-//! without effect. Gestures of fewer fingers go to the client under the pointer, through
-//! `zwp_pointer_gestures_v1`: pinch to zoom, holds.
+//! default. Four fingers pinching in open the applications view, spreading out close it, as
+//! Launchpad (lot D-41c). Four fingers and more otherwise, and the other pinches of three
+//! fingers or more, are reserved: taken, without effect. Gestures of fewer fingers go to the
+//! client under the pointer, through `zwp_pointer_gestures_v1`: pinch to zoom, holds.
 
 use std::collections::VecDeque;
 
@@ -49,6 +50,47 @@ pub const PROJECTION: f64 = 0.2;
 pub const MAX_VELOCITY: f64 = 6.0;
 /// Resistance past the bounds, as in iOS's rubber band: the view moves less and less.
 const RUBBER: f64 = 0.55;
+/// Fingers of the pinch that opens and closes the applications view, as Launchpad's.
+pub const APPLICATIONS_FINGERS: u32 = 4;
+/// Scale of the fingers' spread, from 1 at the start, under which a pinch opens the
+/// applications view, and over which it closes it: a clear movement, not a slip of the fingers.
+pub const PINCH_IN: f64 = 0.75;
+pub const PINCH_OUT: f64 = 1.33;
+
+/// What a four finger pinch asks of the applications view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinchAction {
+    /// Fingers drawn together: show it.
+    Show,
+    /// Fingers spread: hide it.
+    Hide,
+}
+
+/// A four finger pinch: it acts once, as soon as its fingers cross a threshold, as macOS does,
+/// then waits for the fingers to lift. Pure computation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pinch {
+    done: bool,
+}
+
+impl Pinch {
+    /// The fingers are at `scale` of their spread at the start: what to do, the first time
+    /// a threshold is crossed. A scale that is not a number does nothing.
+    pub fn update(&mut self, scale: f64) -> Option<PinchAction> {
+        if self.done || !scale.is_finite() {
+            return None;
+        }
+        let action = if scale <= PINCH_IN {
+            PinchAction::Show
+        } else if scale >= PINCH_OUT {
+            PinchAction::Hide
+        } else {
+            return None;
+        };
+        self.done = true;
+        Some(action)
+    }
+}
 
 /// Direction a swipe took once its fingers travelled `LOCK_DISTANCE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +223,8 @@ enum Route {
     Client,
     /// A swipe of the compositor's.
     Swipe(Swipe),
+    /// The four finger pinch of the applications view.
+    Pinch(Pinch),
     /// Reserved: taken, without effect.
     Reserved,
 }
@@ -204,12 +248,21 @@ impl Gestures {
     }
 }
 
-/// Route of a pinch or a hold of `fingers`.
+/// Route of a hold of `fingers`.
 fn route(fingers: u32) -> Route {
     if fingers < COMPOSITOR_FINGERS {
         Route::Client
     } else {
         Route::Reserved
+    }
+}
+
+/// Route of a pinch of `fingers`: four for the applications view.
+fn pinch_route(fingers: u32) -> Route {
+    if fingers == APPLICATIONS_FINGERS {
+        Route::Pinch(Pinch::default())
+    } else {
+        route(fingers)
     }
 }
 
@@ -297,7 +350,7 @@ impl State {
                     self.follow_overview(travel);
                 }
             }
-            Some(Route::Reserved) | None => {}
+            Some(Route::Reserved | Route::Pinch(_)) | None => {}
         }
     }
 
@@ -314,7 +367,7 @@ impl State {
                 self.send_to_client(|p, state| p.gesture_swipe_end(state, &event));
             }
             Some(Route::Swipe(swipe)) => self.finish_swipe(&swipe, time, cancelled),
-            Some(Route::Reserved) | None => {}
+            Some(Route::Reserved | Route::Pinch(_)) | None => {}
         }
     }
 
@@ -358,7 +411,7 @@ impl State {
     }
 
     pub fn gesture_pinch_begin(&mut self, fingers: u32, time: u32) {
-        let route = route(fingers);
+        let route = pinch_route(fingers);
         if let Route::Client = route {
             let serial = SERIAL_COUNTER.next_serial();
             let event = GesturePinchBeginEvent {
@@ -378,14 +431,22 @@ impl State {
         scale: f64,
         rotation: f64,
     ) {
-        if let Some(Route::Client) = self.gestures.pinch {
-            let event = GesturePinchUpdateEvent {
-                time,
-                delta,
-                scale,
-                rotation,
-            };
-            self.send_to_client(|p, state| p.gesture_pinch_update(state, &event));
+        match &mut self.gestures.pinch {
+            Some(Route::Client) => {
+                let event = GesturePinchUpdateEvent {
+                    time,
+                    delta,
+                    scale,
+                    rotation,
+                };
+                self.send_to_client(|p, state| p.gesture_pinch_update(state, &event));
+            }
+            Some(Route::Pinch(pinch)) => match pinch.update(scale) {
+                Some(PinchAction::Show) => self.show_applications(),
+                Some(PinchAction::Hide) => self.hide_applications(),
+                None => {}
+            },
+            _ => {}
         }
     }
 
@@ -480,6 +541,24 @@ mod tests {
         assert!(beyond > 1.0 && beyond < 2.0, "{beyond}");
         // From the middle of a slide, the view starts where it was.
         assert!((swiped(0.6, 1, 1, -40.0).view() - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_four_finger_pinch_acts_once_past_its_threshold() {
+        let mut pinch = Pinch::default();
+        assert_eq!(pinch.update(0.9), None);
+        assert_eq!(pinch.update(1.2), None);
+        assert_eq!(pinch.update(f64::NAN), None);
+        assert_eq!(pinch.update(0.7), Some(PinchAction::Show));
+        // Once: the fingers going on, or back out, do nothing more.
+        assert_eq!(pinch.update(0.5), None);
+        assert_eq!(pinch.update(1.5), None);
+        let mut out = Pinch::default();
+        assert_eq!(out.update(1.4), Some(PinchAction::Hide));
+        assert!(matches!(pinch_route(4), Route::Pinch(_)));
+        assert!(matches!(pinch_route(3), Route::Reserved));
+        assert!(matches!(pinch_route(5), Route::Reserved));
+        assert!(matches!(pinch_route(2), Route::Client));
     }
 
     #[test]
