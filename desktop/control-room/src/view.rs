@@ -211,6 +211,7 @@ impl App {
             ]
             .spacing(cr::TITLE_GAP);
             let cards = match self.page {
+                Page::Displays => self.displays(inner),
                 Page::Sound => self.sound(inner),
                 Page::Appearance => self.appearance(inner),
                 Page::Touchpad => self.touchpad(inner),

@@ -2,6 +2,7 @@
 
 mod appearance;
 mod apps;
+pub(crate) mod displays;
 mod lock;
 mod sound;
 mod touchpad;

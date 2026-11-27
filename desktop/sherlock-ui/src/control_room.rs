@@ -74,6 +74,21 @@ pub const APP_MENU_WIDTH: f32 = CONTROL_WIDTH;
 /// Step of the hours of the automatic theme, in minutes.
 pub const HOUR_STEP: u32 = 30;
 
+/// The « Écrans » page (lot D-26b): the arrangement's area, the margin around the screens in
+/// it, the corner radius of a screen, its thickness of the main screen's bar, and the
+/// smallest a screen is drawn.
+pub const ARRANGEMENT_HEIGHT: f32 = 200.0;
+pub const ARRANGEMENT_MARGIN: f32 = 24.0;
+pub const SCREEN_RADIUS: f32 = 6.0;
+pub const MAIN_BAR: f32 = 5.0;
+/// A change of mode, scale, rotation or of a screen on or off is undone after this long
+/// without « Garder », as on macOS and Windows: a screen left black comes back by itself.
+pub const CONFIRM_DELAY: Duration = Duration::from_secs(15);
+/// The scales offered.
+pub const SCALES: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+/// Width of the menus of resolution, refresh and rotation.
+pub const DISPLAY_MENU_WIDTH: f32 = 220.0;
+
 /// The interface texts of Control Room, in French.
 pub mod texts {
     pub use crate::texts::evidence::{CLOSE, MAXIMIZE, MINIMIZE};
@@ -96,6 +111,65 @@ pub mod texts {
     pub const LOCK_ABOUT: &str = "Quand ta session se verrouille toute seule.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
+
+    pub const DISPLAYS: &str = "Écrans";
+    pub const DISPLAYS_ABOUT: &str = "La définition, la taille et la place de chaque écran.";
+
+    // « Écrans ».
+    pub const ARRANGEMENT: &str = "Disposition";
+    pub const ARRANGEMENT_HELP: &str = "Glisse les écrans pour les placer comme sur ton bureau.";
+    pub const RESOLUTION: &str = "Résolution";
+    pub const RESOLUTION_HELP: &str = "Plus elle est haute, plus l'image est fine.";
+    pub const REFRESH: &str = "Fréquence";
+    pub const REFRESH_HELP: &str = "Les images que l'écran affiche chaque seconde.";
+    pub const SCALE: &str = "Échelle";
+    pub const SCALE_HELP: &str = "La taille du texte et des fenêtres.";
+    pub const ROTATION: &str = "Rotation";
+    pub const ROTATION_HELP: &str = "Pour un écran tourné sur le côté.";
+    pub const ROTATIONS: [&str; 4] = ["Standard", "90°", "180°", "270°"];
+    pub const MAIN_DISPLAY: &str = "Écran principal";
+    pub const MAIN_DISPLAY_HELP: &str = "La barre et les notifications s'y affichent.";
+    pub const MAKE_MAIN: &str = "En faire l'écran principal";
+    pub const IS_MAIN: &str = "C'est l'écran principal.";
+    pub const DISPLAY_ON: &str = "Utiliser cet écran";
+    pub const DISPLAY_ON_HELP: &str = "Éteint, il ne montre plus rien.";
+    pub const KEEP_DISPLAYS: &str = "Garder ces réglages d'affichage ?";
+    pub const KEEP: &str = "Garder";
+    pub const REVERT: &str = "Revenir";
+    pub const DISPLAYS_LOADING: &str = "Recherche des écrans…";
+    pub const DISPLAYS_UNAVAILABLE: &str = "Les écrans ne se règlent pas ici pour l'instant.";
+    pub const DISPLAY_REFUSED: &str = "L'écran a refusé ce réglage : rien n'a changé.";
+    pub const DISPLAY_OFF: &str = "Éteint";
+
+    /// What the confirmation says while it waits: « Retour aux réglages précédents dans 12 s. »
+    pub fn reverting_in(seconds: u64) -> String {
+        format!("Retour aux réglages précédents dans {seconds} s.")
+    }
+
+    /// A resolution in a menu: « 1920 × 1080 », « 2560 × 1600 (recommandée) ».
+    pub fn resolution(width: i32, height: i32, preferred: bool) -> String {
+        match preferred {
+            true => format!("{width} × {height} (recommandée)"),
+            false => format!("{width} × {height}"),
+        }
+    }
+
+    /// A refresh rate in millihertz, as a menu shows it: « 60 Hz », « 143,98 Hz ».
+    pub fn hertz(millihertz: i32) -> String {
+        let hundredths = (f64::from(millihertz) / 10.0).round() as i64;
+        match hundredths % 100 {
+            0 => format!("{} Hz", hundredths / 100),
+            rest => format!("{},{rest:02} Hz", hundredths / 100),
+        }
+    }
+
+    /// The scales of `SCALES`, as the segmented control shows them.
+    pub const SCALE_LABELS: [&str; 5] = ["100 %", "125 %", "150 %", "175 %", "200 %"];
+
+    /// A scale as a percentage: « 125 % ».
+    pub fn percent(scale: f64) -> String {
+        format!("{} %", (scale * 100.0).round())
+    }
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -210,6 +284,7 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const DISPLAY_WORDS: &str = "écran moniteur affichage définition taille hdmi projecteur";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";
@@ -238,6 +313,25 @@ mod tests {
         assert_eq!(texts::hour(7 * 60 + 30), "07:30");
         assert_eq!(texts::hour(0), "00:00");
         assert_eq!(texts::hour(23 * 60 + 59), "23:59");
+    }
+
+    #[test]
+    fn display_values_read_as_in_the_menus() {
+        assert_eq!(texts::hertz(60_000), "60 Hz");
+        assert_eq!(texts::hertz(59_951), "59,95 Hz");
+        assert_eq!(texts::hertz(143_981), "143,98 Hz");
+        assert_eq!(texts::percent(1.25), "125 %");
+        for (scale, label) in SCALES.iter().zip(texts::SCALE_LABELS) {
+            assert_eq!(texts::percent(*scale), label);
+        }
+        assert_eq!(
+            texts::resolution(1920, 1080, true),
+            "1920 × 1080 (recommandée)"
+        );
+        assert_eq!(
+            texts::reverting_in(15),
+            "Retour aux réglages précédents dans 15 s."
+        );
     }
 
     #[test]

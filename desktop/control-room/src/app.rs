@@ -23,6 +23,8 @@ use system_services::Problem;
 use system_services::audio::{Device, Pactl};
 
 use crate::apps::{self, Choice, Kind};
+use crate::displays;
+use crate::pages::displays::{Change as DisplayChange, Displays};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
 use crate::sound::{self, Audio};
@@ -144,6 +146,8 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// The « Écrans » page: the compositor's screens and what is changed of them.
+    Displays(DisplayChange),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -227,6 +231,8 @@ pub struct App {
     save_at: Option<Instant>,
     pub(crate) theme: ThemeFade,
     origin: Instant,
+    /// The screens, while the « Écrans » page is open or a change waits for « Garder ».
+    pub(crate) displays: Displays,
 }
 
 impl App {
@@ -253,6 +259,7 @@ impl App {
             save_at: None,
             theme: ThemeFade::default(),
             origin: Instant::now(),
+            displays: Displays::default(),
         };
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
             Message::Thumbnails(Arc::new(found))
@@ -298,6 +305,7 @@ impl App {
             || self.spotlight.is_some()
             || self.theme.running()
             || self.save_at.is_some()
+            || self.displays.confirm.is_some()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -333,7 +341,13 @@ impl App {
             receiver
         })
         .map(Message::Theme);
-        Subscription::batch([frames, tab, keys, appearance])
+        // Its own Wayland connection, only while the screens are shown or a change waits.
+        let screens = match self.page == Page::Displays || self.displays.confirm.is_some() {
+            true => Subscription::run(follow_screens)
+                .map(|e| Message::Displays(DisplayChange::Event(e))),
+            false => Subscription::none(),
+        };
+        Subscription::batch([frames, tab, keys, appearance, screens])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -370,6 +384,7 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                self.tick_displays(instant);
                 if self.spotlight.as_ref().is_some_and(|(_, f)| f.is_done(now)) {
                     self.spotlight = None;
                 }
@@ -450,6 +465,7 @@ impl App {
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::Displays(change) => self.update_displays(change),
             Message::SetApp(kind, choice) => {
                 let paths = self.paths.clone();
                 let reload = self.load_catalog();
@@ -569,6 +585,19 @@ impl App {
         self.sidebar = Slide::at_rest(self.sidebar.shown());
         self.spotlight = None;
     }
+}
+
+/// The screens of the compositor, from a thread of their own (`displays::run`), which stops
+/// once the subscription is dropped.
+fn follow_screens() -> impl iced::futures::Stream<Item = displays::Event> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let started = std::thread::Builder::new()
+        .name("screens".into())
+        .spawn(move || displays::run(|event| sender.unbounded_send(event).is_ok()));
+    if let Err(error) = started {
+        tracing::warn!(%error, "the screens cannot be read");
+    }
+    receiver
 }
 
 /// The file that holds a change.

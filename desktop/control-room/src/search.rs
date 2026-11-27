@@ -13,6 +13,7 @@ use crate::settings::File;
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
+    Displays,
     Sound,
     Appearance,
     Touchpad,
@@ -21,7 +22,8 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
+        Self::Displays,
         Self::Sound,
         Self::Appearance,
         Self::Touchpad,
@@ -31,6 +33,7 @@ impl Page {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS,
             Self::Sound => t::SOUND,
             Self::Appearance => t::APPEARANCE,
             Self::Touchpad => t::TOUCHPAD,
@@ -42,6 +45,7 @@ impl Page {
     /// The sentence under its title.
     pub fn about(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS_ABOUT,
             Self::Sound => t::SOUND_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
@@ -52,6 +56,7 @@ impl Page {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Displays => Icon::Desktop,
             Self::Sound => Icon::Sound,
             Self::Appearance => Icon::Image,
             Self::Touchpad => Icon::Touchpad,
@@ -64,6 +69,13 @@ impl Page {
 /// A setting, as the search finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
+    Arrangement,
+    Resolution,
+    Refresh,
+    Scale,
+    Rotation,
+    MainDisplay,
+    DisplayOn,
     Theme,
     LightFrom,
     DarkFrom,
@@ -89,7 +101,14 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 36] = [
+        Self::Arrangement,
+        Self::Resolution,
+        Self::Refresh,
+        Self::Scale,
+        Self::Rotation,
+        Self::MainDisplay,
+        Self::DisplayOn,
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -125,6 +144,13 @@ impl Setting {
     pub fn entry(self) -> (Page, &'static str, &'static str) {
         use Page::*;
         match self {
+            Self::Arrangement => (Displays, t::ARRANGEMENT, t::DISPLAY_WORDS),
+            Self::Resolution => (Displays, t::RESOLUTION, t::DISPLAY_WORDS),
+            Self::Refresh => (Displays, t::REFRESH, t::DISPLAY_WORDS),
+            Self::Scale => (Displays, t::SCALE, t::DISPLAY_WORDS),
+            Self::Rotation => (Displays, t::ROTATION, t::DISPLAY_WORDS),
+            Self::MainDisplay => (Displays, t::MAIN_DISPLAY, t::DISPLAY_WORDS),
+            Self::DisplayOn => (Displays, t::DISPLAY_ON, t::DISPLAY_WORDS),
             Self::Theme => (Appearance, t::THEME, t::THEME_WORDS),
             Self::LightFrom => (Appearance, t::LIGHT_FROM, t::HOURS_WORDS),
             Self::DarkFrom => (Appearance, t::DARK_FROM, t::HOURS_WORDS),
@@ -154,8 +180,8 @@ impl Setting {
         self.entry().0
     }
 
-    /// The settings file that holds it; none for the sound and the default applications,
-    /// which go through `pactl` and `mime-apps`.
+    /// The settings file that holds it; none for the screens, the sound and the default
+    /// applications, which go through the compositor, `pactl` and `mime-apps`.
     pub fn file(self) -> Option<File> {
         let file = match self.page() {
             Page::Appearance => match self {
@@ -168,7 +194,7 @@ impl Setting {
                 _ => File::Touchpad,
             },
             Page::Lock => File::Lock,
-            Page::Sound | Page::DefaultApps => return None,
+            Page::Displays | Page::Sound | Page::DefaultApps => return None,
         };
         Some(file)
     }
