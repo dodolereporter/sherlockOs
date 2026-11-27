@@ -3,7 +3,9 @@
 //! launcher is started on demand: started again while open, it closes the open one, so the
 //! same shortcut opens and closes it (`docs/launcher.md`). The program is
 //! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
-//! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41).
+//! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41),
+//! and Super + comma (Alt + comma nested) Control Room, as « Réglages » in the Sherlock menu
+//! of the bar does (lot Q-31).
 
 use std::{
     ffi::OsString,
@@ -18,6 +20,10 @@ pub const PROGRAM: &str = "launcher";
 
 /// The applications view (lot D-41), found the same way, started by F4.
 pub const APPLICATIONS: &str = "sherlockos-apps";
+
+/// Control Room, found the same way, started by Super + comma. The bar's Sherlock menu starts
+/// the same program for « Réglages ».
+pub const SETTINGS: &str = "control-room";
 
 /// The folder of the session's programs, as `sherlockos-session` exports it.
 pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
@@ -42,6 +48,11 @@ impl State {
         self.launcher_program = Some(program);
     }
 
+    /// Replaces the program Super + comma starts (the tests).
+    pub fn set_settings_program(&mut self, program: PathBuf) {
+        self.settings_program = Some(program);
+    }
+
     /// Starts the launcher, or closes it if it is open: a second launcher closes the first.
     pub(crate) fn start_launcher(&mut self) {
         let program = self
@@ -54,6 +65,15 @@ impl State {
     /// Opens the applications view, or closes it if it is open, the same way (lot D-41).
     pub(crate) fn start_applications(&mut self) {
         self.start_shell_program(program_named(APPLICATIONS, |key| std::env::var_os(key)));
+    }
+
+    /// Starts Control Room (lot Q-31).
+    pub(crate) fn start_settings(&mut self) {
+        let program = self
+            .settings_program
+            .clone()
+            .unwrap_or_else(|| program_named(SETTINGS, |key| std::env::var_os(key)));
+        self.start_shell_program(program);
     }
 
     /// Starts `program` with the compositor's Wayland socket and X11 display.
