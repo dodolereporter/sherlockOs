@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use sherlock_ui::{color, screenshot as ui};
@@ -197,7 +198,7 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
 fn work(settings: Settings, jobs: mpsc::Receiver<Image>, saved: channel::Sender<Arc<[u8]>>) {
-    let mut bus: Option<zbus::Connection> = None;
+    let notifier = notifier(settings.session_bus.clone());
     while let Ok(image) = jobs.recv() {
         let Some(folder) = settings
             .pictures
@@ -224,23 +225,58 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Image>, saved: channel::Sender<
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         let body = ui::saved_body(&name.unwrap_or_default());
-        let sent = zbus::block_on(async {
-            if bus.is_none() {
-                let builder = match &settings.session_bus {
-                    Some(address) => zbus::connection::Builder::address(address.as_str())?,
-                    None => zbus::connection::Builder::session()?,
-                };
-                bus = Some(builder.build().await?);
-            }
-            match &bus {
-                Some(bus) => system_services::notify::send(bus, ui::APP, ui::SAVED, &body)
-                    .await
-                    .map_err(|p| zbus::Error::Failure(p.to_string())),
-                None => Ok(0),
+        // Handed to the notifier: a notifications daemon that no longer answers never holds
+        // the next screenshots back. Past a few waiting, the confirmation is left out.
+        if let Some(notifier) = &notifier
+            && notifier.try_send(body).is_err()
+        {
+            tracing::warn!("screenshot notification left out: the notifier is behind");
+        }
+    }
+}
+
+/// Longest wait for the notifications daemon, to connect or to answer.
+const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
+
+/// Confirmations waiting for the notifier, at most.
+const NOTIFY_QUEUE: usize = 4;
+
+/// A thread of its own that sends the confirmations of the screenshots on the session bus at
+/// `address` (the session's without one), each call limited to `NOTIFY_LIMIT`. Its connection
+/// is made again after an error: a bus or a daemon that restarted is found again.
+fn notifier(address: Option<String>) -> Option<mpsc::SyncSender<String>> {
+    let (sender, bodies) = mpsc::sync_channel::<String>(NOTIFY_QUEUE);
+    let spawned = std::thread::Builder::new()
+        .name(String::from("screenshot-notify"))
+        .spawn(move || {
+            let mut bus: Option<zbus::Connection> = None;
+            while let Ok(body) = bodies.recv() {
+                let sent = zbus::block_on(async {
+                    if bus.is_none() {
+                        let builder = match &address {
+                            Some(address) => zbus::connection::Builder::address(address.as_str())?,
+                            None => zbus::connection::Builder::session()?,
+                        };
+                        bus = Some(builder.method_timeout(NOTIFY_LIMIT).build().await?);
+                    }
+                    match &bus {
+                        Some(bus) => system_services::notify::send(bus, ui::APP, ui::SAVED, &body)
+                            .await
+                            .map_err(|p| zbus::Error::Failure(p.to_string())),
+                        None => Ok(0),
+                    }
+                });
+                if let Err(err) = sent {
+                    tracing::warn!("screenshot notification: {err}");
+                    bus = None;
+                }
             }
         });
-        if let Err(err) = sent {
-            tracing::warn!("screenshot notification: {err}");
+    match spawned {
+        Ok(_) => Some(sender),
+        Err(err) => {
+            tracing::warn!("cannot start the screenshot notifier: {err}");
+            None
         }
     }
 }

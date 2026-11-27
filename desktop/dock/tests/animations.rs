@@ -235,7 +235,13 @@ fn dragging_a_pinned_icon_reorders_and_writes_the_file() {
     );
     let _ = dock.update(Message::Gesture(Gesture::Released));
     assert!(dock.held().is_none());
-    // Written once let go, atomically by dock-config, the comment kept.
+    // Written once let go, atomically by dock-config, the comment kept: on the dock's thread
+    // that saves, never on the interface's.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(&path).ok().as_deref() == Some(text) {
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let written = std::fs::read_to_string(&path).expect("file read");
     let (read, _) = DockConfig::parse(&written);
     let order = [
