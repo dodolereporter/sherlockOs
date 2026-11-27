@@ -302,12 +302,16 @@ impl Dock {
         if self.sent.hidden != Some(hidden) {
             self.sent.hidden = Some(hidden);
             tasks.push(self.input_region());
+            // The genie goes to the edge while hidden, to the icon once shown.
+            self.place_icons();
         }
         Task::batch(tasks)
     }
 
     /// Tells the control where each icon is on its screen, at rest and shown, when that
-    /// changed: the compositor keeps it for each window, for the minimize animation.
+    /// changed: the compositor keeps it for each window, for the minimize animation. While the
+    /// dock is hidden, each icon is laid flat along the edge (lot D-19e): a window minimized
+    /// then goes into the edge, where the dock hides, not to an empty place above it.
     fn place_icons(&mut self) {
         let Some((name, size)) = self.screen().and_then(|s| Some((s.name.clone()?, s.size?)))
         else {
@@ -316,6 +320,7 @@ impl Dock {
         let sizes = self.geometry.targets(None, self.items.len());
         let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
         let distance = 0;
+        let hidden = self.hide.hidden();
         let placed: Vec<_> = self
             .items
             .iter()
@@ -328,6 +333,11 @@ impl Dock {
                     distance,
                     *icon,
                 );
+                let rectangle = if hidden {
+                    layout::at_edge(self.geometry.position, size, rectangle)
+                } else {
+                    rectangle
+                };
                 (item.target(), name.clone(), rectangle)
             })
             .collect();
