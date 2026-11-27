@@ -2245,12 +2245,14 @@ name = "lock"
 version = "0.0.0"
 dependencies = [
  "appearance-config",
+ "desktop-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
  "image",
  "libc",
  "libloading",
+ "sherlock-3d",
  "sherlock-ui",
  "system-services",
  "thiserror 2.0.21",

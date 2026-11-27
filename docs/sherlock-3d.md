@@ -25,6 +25,12 @@ The crate looks for the file, in order (`locate::candidates`):
 4. `sherlockos/mascot/sherlock.glb` under every folder of `$XDG_DATA_DIRS`
    (`/usr/local/share:/usr/share` when unset), where the OS installs it.
 
+These paths can be written by the user, and the lock screen reads the model (lot D-25b):
+`Model::open` reads only a regular file (links followed) of `model::MAX_FILE` (32 MiB) at most,
+with that bound even if the file grows meanwhile, and decodes the textures with sides of
+8 192 pixels and 256 MiB at most. Anything else is an error, and the widget shows the still
+picture. The checksum of the file is not checked.
+
 Never change the model here: it is produced by Blender scripts in its own repository.
 
 ## What is in it

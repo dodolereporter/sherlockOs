@@ -1,10 +1,13 @@
 //! The lock setting, `<config dir>/lock.conf`: after how long without input the compositor
-//! locks the session (lot D-25a). The compositor reads it at start and again when it changes;
-//! Control Room's lock page writes it (lot D-26a).
+//! locks the session (lot D-25a), and the picture behind the lock screen (lot D-25b). The
+//! compositor and the lock screen read it at start and again when it changes; Control Room's
+//! lock page writes the delay (lot D-26a).
 //!
 //! ```text
 //! # Minutes without input before the session locks; 0: never (5 by default).
 //! idle-minutes = 5
+//! # The picture behind the lock screen, an absolute path (the theme's picture by default).
+//! background = /home/me/Pictures/lock.jpg
 //! ```
 
 use std::{
@@ -33,16 +36,19 @@ pub enum Error {
 }
 
 /// The lock setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Minutes without input before the lock; 0: never.
     pub idle_minutes: u32,
+    /// The picture behind the lock screen, instead of the theme's (lot D-25b).
+    pub background: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             idle_minutes: DEFAULT_IDLE_MINUTES,
+            background: None,
         }
     }
 }
@@ -77,6 +83,14 @@ impl Config {
                         .ok_or_else(|| {
                             format!("expected 0 to {MAX_IDLE_MINUTES}, not {value:?}")
                         })?;
+                    Ok(())
+                }
+                "background" => {
+                    let path = PathBuf::from(value);
+                    if !path.is_absolute() {
+                        return Err(format!("expected an absolute path, not {value:?}"));
+                    }
+                    config.background = Some(path);
                     Ok(())
                 }
                 key => Err(format!("unknown key {key:?}")),
@@ -121,7 +135,10 @@ mod tests {
     #[test]
     fn what_control_room_writes_reads_back() {
         // The comment stays, the delay changes in place.
-        let mut config = Config { idle_minutes: 10 };
+        let mut config = Config {
+            idle_minutes: 10,
+            ..Config::default()
+        };
         assert_eq!(
             config.write_into("# mine\nidle-minutes = 5\n"),
             "# mine\nidle-minutes = 10\n"
@@ -132,7 +149,10 @@ mod tests {
             "idle-minutes = 5\n"
         );
         for idle_minutes in [0, 1, 15, MAX_IDLE_MINUTES] {
-            let config = Config { idle_minutes };
+            let config = Config {
+                idle_minutes,
+                ..Config::default()
+            };
             assert_eq!(Config::parse(&config.write_into("")).unwrap(), config);
         }
     }
@@ -167,5 +187,13 @@ mod tests {
             config_file(var),
             Some(PathBuf::from("/cfg/sherlockos/lock.conf"))
         );
+    }
+
+    #[test]
+    fn the_background_is_an_absolute_path() {
+        assert_eq!(Config::default().background, None);
+        let set = Config::parse("background = /srv/lock.jpg").unwrap();
+        assert_eq!(set.background, Some(PathBuf::from("/srv/lock.jpg")));
+        assert!(Config::parse("background = lock.jpg").is_err());
     }
 }
