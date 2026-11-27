@@ -104,6 +104,9 @@ pub const BOUNCE_HEIGHT: f32 = 0.5;
 pub const BOUNCE_PERIOD: Duration = Duration::from_millis(600);
 /// The icon stops bouncing after this long even when no window of the application came.
 pub const BOUNCE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Hops of an icon whose window asks for attention, refused the keyboard (lot Q-52): a few,
+/// then it rests, as on macOS for a request that is not critical.
+pub const ATTENTION_HOPS: u32 = 3;
 
 /// Distance the pointer travels with the button held before the icon follows it: under it, a
 /// press and a release make a click.

@@ -469,7 +469,12 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   chevron. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
-  the item's menu (D-45a, below).
+  the item's menu (D-45a, below). With a left or middle click, the bar asks the compositor for
+  an `xdg-activation-v1` token on the surface clicked (the popup or the bar) and hands it to the
+  item with `ProvideXdgActivationToken` just before `Activate`, as Plasma does: the application
+  may bring its window forward with it, even minimized or on another workspace (lot Q-52, see
+  "Activation" in `docs/compositor.md`). An X11 application cannot hand it back; the token
+  granted lets its `_NET_ACTIVE_WINDOW` through. An item without the method activates as before.
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.

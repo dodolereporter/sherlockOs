@@ -598,6 +598,12 @@ own thread, connection included:
 They are tried in this order. `windows::Auto`, the control of the running dock, acts through
 the shell protocol while its source runs, through the wlroots one otherwise.
 
+A window that asks for attention (`attention`, version 4 of the shell protocol, lot Q-52: the
+compositor refused it the keyboard because no click let it come forward) makes the icon of its
+application bounce `ATTENTION_HOPS` hops (3), the launch bounce's, then rest; a window that keeps
+asking bounces once, and again only after it stopped asking. The dock binds the shell manager
+up to version 4.
+
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is
 not, the last part of it: `konsole` belongs to `org.kde.konsole.desktop`, and since lot D-21d

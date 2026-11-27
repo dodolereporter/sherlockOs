@@ -638,6 +638,48 @@ fn the_icon_stops_bouncing_at_the_timeout() {
     assert!(!dock.animating());
 }
 
+/// Lot Q-52: a window that asks for attention (refused the keyboard by the compositor) makes
+/// its icon bounce a few hops, once, then rest; asking again later bounces it again.
+#[test]
+fn the_icon_of_a_window_asking_for_attention_bounces_a_few_hops() {
+    let data = quick_app("quick-attention");
+    let mut dock = dock(&[data], &["org.example.Quick"], flat(), None);
+    settle(&mut dock);
+    let index = dock
+        .items
+        .iter()
+        .position(|i| i.name == "Rapide")
+        .expect("pinned");
+    let asking = |attention: bool| {
+        let mut window = Window::new(7, "QuickExample", false);
+        window.attention = attention;
+        Message::Windows(Windows {
+            list: vec![window],
+            ..Windows::default()
+        })
+    };
+    let _ = dock.update(asking(false));
+    let t0 = dock.now();
+    assert!(dock.calls.is_empty() && dock.lift(index, t0) == 0.0);
+    let _ = dock.update(asking(true));
+    let t0 = dock.now();
+    let period = tokens::BOUNCE_PERIOD;
+    assert!(dock.animating());
+    assert!(dock.lift(index, t0 + period / 2) > 20.0, "it hops");
+    // Still asking at the next list: not started again.
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+    let end = t0 + period * tokens::ATTENTION_HOPS;
+    assert!(dock.lift(index, end - period / 2) > 0.0);
+    let _ = dock.tick(end);
+    assert!(dock.calls.is_empty() && !dock.animating());
+    assert_eq!(dock.lift(index, end + period / 2), 0.0, "then it rests");
+    // Given the keyboard, then asking again: it bounces again.
+    let _ = dock.update(asking(false));
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+}
+
 /// A capture sets the active theme: one at a time.
 static THEME: Mutex<()> = Mutex::new(());
 

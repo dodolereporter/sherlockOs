@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use iced::futures::channel::oneshot;
 use iced::mouse::ScrollDelta;
 use iced::widget::{
     Column, Row, Stack, column, container, image, mouse_area, opaque, row, scrollable,
@@ -14,7 +15,9 @@ use iced::widget::{
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Rectangle, Task, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{
+    ActivationTokenSink, PixelSize, PopupAnchor, PopupGravity, Position, XdgActivationTokenV1State,
+};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::motion::{Animation, SCALE_PRECISION};
 use sherlock_ui::surface::{self, Elevation};
@@ -390,7 +393,24 @@ impl Bar {
         };
         tracing::debug!(key, ?click, "tray item clicked");
         let fallback = (click == Click::Primary).then(|| key.to_owned());
-        self.close_tray().chain(send(sent, fallback))
+        // A token of the click, for the application to bring its window forward with (lot
+        // Q-52): asked for on the surface clicked, the popup or the bar.
+        let in_popup = self.tray.open() && self.tray.in_popup().any(|i| i.key == key);
+        let clicked = if in_popup {
+            self.tray.popup
+        } else {
+            self.surface
+        };
+        let (ask, token) = match clicked {
+            Some(id) => {
+                let (ask, token) = activation_token(id);
+                (ask, Some(token))
+            }
+            None => (Task::none(), None),
+        };
+        self.close_tray()
+            .chain(ask)
+            .chain(send(sent, fallback, token))
     }
 
     /// The menu of the icon of `key`, under it: its D-Bus menu, with the style of ours; an item
@@ -402,7 +422,7 @@ impl Bar {
         let (service, path) = (item.service.clone(), item.path.clone());
         let Some(menu) = item.properties.menu.clone() else {
             let (x, y) = self.tray_point();
-            return send((service, path, Request::ContextMenu(x, y)), None);
+            return send((service, path, Request::ContextMenu(x, y)), None, None);
         };
         let Some(anchor) = self.tray_anchor(key) else {
             return Task::none();
@@ -458,7 +478,11 @@ impl Bar {
         let item = self.tray.items.iter().find(|i| i.key == key);
         let request = item.zip(Request::scroll(delta));
         request.map_or_else(Task::none, |(item, request)| {
-            send((item.service.clone(), item.path.clone(), request), None)
+            send(
+                (item.service.clone(), item.path.clone(), request),
+                None,
+                None,
+            )
         })
     }
 
@@ -632,15 +656,43 @@ pub fn icon_view<'a>(icon: Option<&Icon>, side: f32, name: &str) -> Element<'a, 
         .into()
 }
 
-/// Sends `request` to the item at `path` of `service`, on the connection of the menus. When
-/// `fallback` names an item, a refused `Activate` opens its menu instead, as KDE does.
+/// Asks the compositor for an activation token on behalf of the surface `id`, where the click
+/// was (lot Q-52): the receiver gets it, or closes without one.
+fn activation_token(id: Id) -> (Task<Message>, oneshot::Receiver<String>) {
+    let (sender, token) = oneshot::channel();
+    let sender = std::sync::Mutex::new(Some(sender));
+    let sink = ActivationTokenSink::callback(move |state| {
+        let taken = sender.lock().ok().and_then(|mut s| s.take());
+        if let (Some(sender), XdgActivationTokenV1State::Ready(token)) = (taken, state) {
+            let _ = sender.send(token.token().to_owned());
+        }
+    });
+    (
+        Task::done(Message::RequestActivationToken { id, sink }),
+        token,
+    )
+}
+
+/// Sends `request` to the item at `path` of `service`, on the connection of the menus, after
+/// the activation `token` when one comes (`ProvideXdgActivationToken`, as Plasma does): the
+/// application may bring its window forward with it. When `fallback` names an item, a refused
+/// `Activate` opens its menu instead, as KDE does.
 pub(super) fn send(
     (service, path, request): (String, String, Request),
     fallback: Option<String>,
+    token: Option<oneshot::Receiver<String>>,
 ) -> Task<Message> {
     Task::perform(
         async move {
             let bus = dbusmenu::bus().await?;
+            if let Some(Ok(token)) = match token {
+                Some(token) => Some(token.await),
+                None => None,
+            } && let Err(error) = crate::tray::provide_token(&bus, &service, &path, &token).await
+            {
+                // An item without the method (libappindicator) activates as before.
+                tracing::debug!(%error, "the item takes no activation token");
+            }
             request.send(&bus, &service, &path).await
         },
         move |sent| Message::TraySent(fallback.clone(), sent.map_err(|e| e.to_string())),
