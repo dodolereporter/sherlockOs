@@ -684,7 +684,11 @@ X11 client. Reasons:
   of resident memory (shared libraries included), without an X11 client.
 
 The display number is the first free one (`:1` under an X11 session that holds `:0`). It is in
-the log: `XWayland ready display=1`. Xwayland's messages go to the compositor's standard error,
+the log: `XWayland ready display=1`. The tests start their search at `:90`
+(`State::set_first_x_display`, `TEST_X_DISPLAY`, lot D-43): on its way from 0, smithay takes a
+display whose lock file is missing and removes its socket before binding it again, which must
+never touch a socket of the user's sessions. smithay takes only the number it is given, so the
+compositor tries the next 32 numbers itself. Xwayland's messages go to the compositor's standard error,
 mixed with its logs. At startup, warnings from xkbcomp are expected. With linux-dmabuf (lot
 D-06, see "GPU buffers"), Xwayland's glamor finds the render node in the default feedback and
 draws on the GPU: `(II) GLX: Initialized glamor GL provider`. Without it (software rendering,

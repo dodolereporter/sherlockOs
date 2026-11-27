@@ -44,6 +44,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod xwayland;
+pub use xwayland::TEST_X_DISPLAY;
 
 use std::{
     borrow::Cow,
@@ -195,6 +196,9 @@ pub struct State {
     xwm: Option<X11Wm>,
     /// Number of the X11 display (`DISPLAY=:N`), once XWayland is ready.
     pub x_display: Option<u32>,
+    /// First X11 display number tried, `None`: smithay's search from 0 (the tests start high,
+    /// lot D-43).
+    x_first_display: Option<u32>,
     /// The Wayland socket the programs the compositor starts connect to (`WAYLAND_DISPLAY`).
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
@@ -359,6 +363,7 @@ impl State {
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
+            x_first_display: None,
             socket_name: None,
             launcher_program: None,
             xwayland: None,
