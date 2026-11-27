@@ -37,11 +37,12 @@ pub fn set(text: &str, key: &str, value: &str) -> String {
 }
 
 /// `text` with each key of `mine` whose value differs from the one of `read` (the same keys,
-/// read from `text`) set again: only what changed is written.
+/// read from `text`) set again: only what changed is written. A value with a line break is
+/// refused: it would end its line and add others, so the key keeps the value of the file.
 pub(crate) fn update(text: &str, mine: &[(&str, String)], read: &[(&str, String)]) -> String {
     let mut text = text.to_owned();
     for ((key, value), (_, before)) in mine.iter().zip(read) {
-        if value != before {
+        if value != before && !mime_apps::breaks_line(value) {
             text = set(&text, key, value);
         }
     }
@@ -65,5 +66,14 @@ mod tests {
         assert_eq!(set("a = 1\na = 2\n", "a", "3"), "a = 1\na = 3\n");
         // A commented key is not the key.
         assert_eq!(set("# a = 1\n", "a", "3"), "# a = 1\na = 3\n");
+    }
+
+    #[test]
+    fn a_value_with_a_line_break_is_refused() {
+        let read = [("path", String::from("/a.png"))];
+        let mine = [("path", String::from("/b.png\nfollow-theme = false"))];
+        assert_eq!(update("path = /a.png\n", &mine, &read), "path = /a.png\n");
+        let mine = [("path", String::from("/b.png"))];
+        assert_eq!(update("path = /a.png\n", &mine, &read), "path = /b.png\n");
     }
 }

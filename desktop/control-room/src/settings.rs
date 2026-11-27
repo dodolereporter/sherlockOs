@@ -4,7 +4,6 @@
 //! is written and read back in a temporary folder by the tests.
 
 use std::ffi::OsString;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -257,7 +256,7 @@ impl Settings {
 /// The text of a settings file, empty when there is none. A file that cannot be read, or that
 /// is not text (not UTF-8, a NUL byte), is an error: it is never written over.
 pub fn read_text(path: &Path) -> io::Result<String> {
-    match fs::read_to_string(path) {
+    match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
         Ok(text) if text.contains('\0') => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "not a text file",
