@@ -10,6 +10,7 @@ pub mod clicks;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
+pub mod displays;
 pub mod dmabuf;
 pub mod edid;
 pub mod focus;
@@ -178,6 +179,8 @@ pub struct State {
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
     /// Screens and where they draw in the host frame.
     screens: Vec<output::Screen>,
+    /// Screens switched off, and the saved setting of each screen (ADR 0025).
+    displays: displays::Displays,
     gesture: Option<input::Gesture>,
     /// Touchpad gestures in progress, and the protocol that hands them to clients (lot D-31).
     gestures: gestures::Gestures,
@@ -352,6 +355,7 @@ impl State {
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
+            displays: displays::Displays::default(),
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
