@@ -80,6 +80,8 @@ pub enum Reason {
     SeveralAmdChips,
     /// An AMD chip, but no manifest of Mesa's Vulkan driver.
     NoVulkanDriver,
+    /// The rescue lock screen, in software whatever the machine (lot D-25c).
+    Rescue,
 }
 
 impl Choice {

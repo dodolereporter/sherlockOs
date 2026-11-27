@@ -397,4 +397,45 @@ mod tests {
         let shown = format!("{:?}", Message::Input(iced::window::Id::unique(), input));
         assert!(shown.contains("***") && !shown.contains('q'), "{shown}");
     }
+
+    #[test]
+    fn the_rescue_mode_unlocks_with_pam_and_keeps_its_field() {
+        let (pam, runner) = (
+            Arc::new(FakePam::default()),
+            Arc::new(FakeRunner::default()),
+        );
+        let mut lock = Lock::new("dodo".into(), pam.clone(), runner.clone()).rescue();
+        let id = window::Id::unique();
+        let _ = lock.update(Message::Surface(id));
+        let _ = lock.update(Message::Resized(id, Size::new(1366.0, 768.0)));
+        assert!(lock.form_shown(), "the field shows at once");
+        lock.set_now(Instant::now() + Duration::from_secs(2));
+        snapshot(&lock, id, (1366.0, 768.0), "rescue");
+        // Escape and a long quiet do not send the field away.
+        let escape = Input::Key {
+            key: Key::Escape,
+            text: None,
+        };
+        let _ = lock.update(Message::Input(id, escape));
+        let quiet = Instant::now() + sherlock_ui::lock::screen::FORM_TIMEOUT * 2;
+        let _ = lock.update(Message::Tick(quiet, Duration::from_secs(10)));
+        assert!(lock.form_shown());
+        let mut s = Screen {
+            lock,
+            primary: id,
+            other: window::Id::unique(),
+            pam,
+            runner,
+        };
+        // A wrong password is refused, the right one unlocks: PAM as in the normal mode.
+        let _ = s.lock.update(Message::Typed(Secret::new("faux".into())));
+        let _ = s.lock.update(Message::Submit);
+        checked(&mut s, Err(AuthError::Refused));
+        assert_eq!(s.lock.password_len(), 0);
+        s.pam.0.lock().unwrap().clear();
+        let _ = s.lock.update(Message::Typed(Secret::new(FAKE.into())));
+        let _ = s.lock.update(Message::Submit);
+        checked(&mut s, Ok(()));
+        assert!(matches!(s.lock.phase(), Phase::Leaving(_)));
+    }
 }

@@ -178,6 +178,8 @@ pub mod screen {
     pub const REBOOT: &str = "Redémarrer";
     pub const POWER_OFF: &str = "Éteindre";
     pub const CONFIRM: &str = "Reclique pour confirmer";
+    /// The line of the rescue mode (lot D-25c).
+    pub const RESCUE: &str = "Écran de verrouillage de secours";
 
     /// Days of the week, Monday to Sunday, and months, for the date of the screen.
     const WEEKDAYS: [&str; 7] = [

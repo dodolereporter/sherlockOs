@@ -115,6 +115,13 @@ impl Form {
         false
     }
 
+    /// Shows the form at `now`, without an input (the rescue mode).
+    pub fn show(&mut self, now: Duration) {
+        if !self.shown {
+            self.set(true, now);
+        }
+    }
+
     /// Sends the form away at `now` (the machine goes to sleep, or wakes up).
     pub fn hide(&mut self, now: Duration) {
         if self.shown {

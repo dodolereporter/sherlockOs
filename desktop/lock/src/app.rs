@@ -151,6 +151,8 @@ pub struct Lock {
     mascot: Option<Mascot>,
     /// The time since boot at the last tick.
     last_boot: Option<Duration>,
+    /// The rescue mode (`rescue`).
+    rescue: bool,
     /// The dark and light pictures behind the screen.
     background: Option<(image::Handle, image::Handle)>,
     /// The size, in pixels, the background was asked for.
@@ -187,6 +189,7 @@ impl Lock {
             asleep: false,
             mascot: None,
             last_boot: None,
+            rescue: false,
             background: None,
             asked: None,
             scale: 1.0,
@@ -194,6 +197,17 @@ impl Lock {
             authenticator,
             runner,
         }
+    }
+
+    /// The rescue mode (`--rescue`, lot D-25c): what the compositor starts once the lock screen
+    /// failed three times. In software, without Sherlock, background or animation: the user's
+    /// name, the password field, checked by PAM exactly as in the normal mode, and a line that
+    /// says it is the rescue lock screen. The field always shows.
+    pub fn rescue(mut self) -> Self {
+        self.rescue = true;
+        self.entered = true;
+        self.form.show(Duration::ZERO);
+        self
     }
 
     /// The form shows.
@@ -274,6 +288,9 @@ impl Lock {
     /// Reads the background once the screens are known, or again for a larger screen: at the
     /// size of the largest one, in pixels.
     fn ask_background(&mut self) -> Task<Message> {
+        if self.rescue {
+            return Task::none();
+        }
         let (w, h) = self.sizes.values().fold((0.0f32, 0.0f32), |(w, h), size| {
             (w.max(size.width), h.max(size.height))
         });
@@ -395,12 +412,15 @@ impl Lock {
                 self.last_boot = Some(boot);
                 if slept {
                     tracing::info!("woken up: the form leaves, the field empties");
-                    self.form.hide(self.elapsed());
+                    if !self.rescue {
+                        self.form.hide(self.elapsed());
+                    }
                     self.clear();
                     return Task::none();
                 }
                 let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
-                if self.form.tick(self.elapsed(), busy) {
+                // The rescue screen keeps its field: it has nothing else to show.
+                if !self.rescue && self.form.tick(self.elapsed(), busy) {
                     self.clear();
                 }
             }
@@ -438,6 +458,13 @@ impl Lock {
     fn input(&mut self, id: window::Id, input: Input) -> Task<Message> {
         self.asleep = false;
         let key = matches!(input, Input::Key { .. });
+        // The rescue screen always shows its field: the keys go there, the pointer picks it.
+        if self.rescue {
+            return match key {
+                true => Task::none(),
+                false => self.update(Message::Here(id)),
+            };
+        }
         let mut task = Task::none();
         if !key {
             task = self.update(Message::Here(id));
@@ -529,6 +556,9 @@ impl Lock {
 
     pub fn view(&self, id: window::Id) -> Element<'_, Message> {
         let colors = Colors::of(color::palette());
+        if self.rescue {
+            return self.rescue_view(id, &colors);
+        }
         let size = self
             .sizes
             .get(&id)
@@ -613,6 +643,36 @@ impl Lock {
             .push(page)
             .width(Length::Fill)
             .height(Length::Fill)
+            .into()
+    }
+
+    /// The rescue screen: its line, and on the screen of the pointer the name and the field, in
+    /// the middle of the plain background.
+    fn rescue_view(&self, id: window::Id, colors: &Colors) -> Element<'_, Message> {
+        let mut page = column![text(ui::RESCUE).size(ui::NAME_SIZE).color(colors.secondary)]
+            .align_x(Alignment::Center)
+            .spacing(ui::NAME_GAP);
+        if self.primary.is_none_or(|p| p == id) {
+            page = page
+                .push(
+                    text(self.user.as_str())
+                        .size(ui::NAME_SIZE)
+                        .font(Font {
+                            weight: iced::font::Weight::Semibold,
+                            ..typography::UI
+                        })
+                        .color(colors.text),
+                )
+                .push(self.pill(colors))
+                .push(self.hint(colors));
+        }
+        let fill = colors.background;
+        container(page)
+            .center(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(fill.into())),
+                ..container::Style::default()
+            })
             .into()
     }
 
