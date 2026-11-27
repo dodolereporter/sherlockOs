@@ -21,6 +21,9 @@ use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
 mod global;
+mod tray;
+
+pub use self::tray::{Click, Tray};
 
 use crate::calendar::Month;
 use crate::dbusmenu::Item;
@@ -114,6 +117,8 @@ pub struct Bar {
     pub app_names: HashMap<String, Option<String>>,
     /// The logical height of the screen each surface is on, when the compositor gives it.
     heights: HashMap<Id, f32>,
+    /// The notification area: its icons, its chevron and its popup (lot D-45).
+    pub tray: Tray,
 }
 
 /// An indicator of the bar. Together they make one button, which opens the control centre.
@@ -132,6 +137,8 @@ pub enum Target {
     /// A menu of the active application, by its id (lot D-36).
     AppMenu(i32),
     Workspace(usize),
+    /// The chevron of the notification area (lot D-45).
+    Tray,
     /// The indicators, one button: the control centre.
     Status,
     /// The date and time: the calendar.
@@ -206,6 +213,21 @@ pub enum Message {
     EntrySent(Result<(), String>),
     /// A click on the shadow of a menu.
     CloseAppMenus,
+    /// The notification area learnt something (lot D-45).
+    Tray(crate::tray::Event),
+    /// The chevron clicked: the popup opens, or closes.
+    ToggleTray,
+    /// Where the chevron is drawn in the bar surface.
+    TrayChevron(iced::Rectangle),
+    /// A button of the mouse on the icon of this key.
+    TrayClick(String, Click),
+    /// The wheel over the icon of this key.
+    TrayScroll(String, iced::mouse::ScrollDelta),
+    /// The pointer enters the icon of this key, or leaves it.
+    TrayHover(Option<String>),
+    TrayLeave(String),
+    /// The application got the click or the wheel, or why not.
+    TraySent(Result<(), String>),
 }
 
 impl Bar {
@@ -245,6 +267,7 @@ impl Bar {
             || self.shape.running()
             || (self.menu.is_some() && self.menu_unfold.running())
             || self.global.running()
+            || self.tray.running()
             || (self.panel.is_some() && (self.unfold.running() || self.quick.running() || swapping))
     }
 
@@ -289,6 +312,7 @@ impl Bar {
             Subscription::run(live::link).map(Message::Link),
             Subscription::run(live::bluetooth).map(Message::Radio),
             Subscription::run(|| watch(Auto::default(), "workspaces")).map(Message::Desktop),
+            Subscription::run(crate::tray::watch).map(Message::Tray),
             self.shell_events
                 .as_ref()
                 .map_or_else(Subscription::none, |events| {
@@ -303,6 +327,22 @@ impl Bar {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Tray(event) => return self.tray_event(event),
+            Message::ToggleTray => return self.toggle_tray(),
+            Message::TrayChevron(bounds) => self.tray.chevron = Some(bounds),
+            Message::TrayClick(key, click) => return self.tray_click(&key, click),
+            Message::TrayScroll(key, delta) => return self.tray_scroll(&key, delta),
+            Message::TrayHover(key) => self.tray.hovered = key,
+            Message::TrayLeave(key) if self.tray.hovered.as_ref() == Some(&key) => {
+                self.tray.hovered = None;
+            }
+            Message::TrayLeave(_) => {}
+            Message::TraySent(Err(error)) => {
+                tracing::warn!(%error, "the application did not get the click on its icon");
+            }
+            Message::TraySent(Ok(())) => {}
+            // Escape closes the popup of the notification area.
+            Message::MenuKey(menu::Key::Close) if self.tray_open() => return self.close_tray(),
             Message::Surface(id) => self.surface = Some(id),
             Message::Clock(time) => self.clock = Some(time),
             Message::Battery(battery) => self.battery = Some(battery),
@@ -492,13 +532,16 @@ impl Bar {
                 if self.menu_unfold.folded() {
                     tasks = tasks.chain(self.drop_menu());
                 }
-                return tasks.chain(self.tick_app_menus(at));
+                return tasks
+                    .chain(self.tick_app_menus(at))
+                    .chain(self.tick_tray(at));
             }
             Message::Closed(id) => {
                 // The compositor closes the menu and the panels on a click elsewhere
                 // (popup_done).
                 self.outputs.remove(&id);
                 self.app_menu_closed(id);
+                self.tray_closed(id);
                 if self.menu == Some(id) {
                     self.menu = None;
                     self.cursor = None;
@@ -585,6 +628,7 @@ impl Bar {
         std::iter::once(Target::Sherlock)
             .chain(app_menus.into_iter().map(Target::AppMenu))
             .chain((0..workspaces).map(Target::Workspace))
+            .chain(self.tray.shown().next().map(|_| Target::Tray))
             .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
@@ -601,6 +645,7 @@ impl Bar {
             Target::Sherlock => Message::ToggleMenu,
             Target::AppMenu(id) => Message::OpenAppMenuByKey(id),
             Target::Workspace(i) => Message::SelectWorkspace(i),
+            Target::Tray => Message::ToggleTray,
             Target::Status => Message::TogglePanel(Panel::Control),
             Target::Clock => Message::TogglePanel(Panel::Calendar),
         })
@@ -632,7 +677,8 @@ impl Bar {
         let closed = self
             .drop_panel()
             .chain(self.drop_menu())
-            .chain(self.drop_app_menus());
+            .chain(self.drop_app_menus())
+            .chain(self.drop_tray());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the panel cannot open");
             return closed;
@@ -777,7 +823,10 @@ impl Bar {
             self.menu_unfold.fold(animated::clock(), true);
             return Task::none();
         }
-        let closed = self.drop_panel().chain(self.drop_app_menus());
+        let closed = self
+            .drop_panel()
+            .chain(self.drop_app_menus())
+            .chain(self.drop_tray());
         let Some(surface) = self.surface else {
             tracing::warn!("bar surface unknown: the menu cannot open");
             return Task::none();
@@ -892,6 +941,9 @@ impl Bar {
         }
         if let Some(level) = self.global.level_of(id) {
             return self.view_app_menu(level);
+        }
+        if self.tray.popup == Some(id) {
+            return self.view_tray();
         }
         if self.menu == Some(id) {
             self.view_menu()
@@ -1057,6 +1109,9 @@ impl Bar {
     ) -> Element<'static, Message> {
         let gap = metrics::STATUS_GAP - 2.0 * panels::BAR_BUTTON_PADDING;
         let mut buttons = row![].spacing(gap.max(0.0)).align_y(Alignment::Center);
+        if let Some(chevron) = self.view_chevron() {
+            buttons = buttons.push(chevron);
+        }
         let status: Vec<_> = self
             .indicators()
             .into_iter()
@@ -1467,7 +1522,7 @@ mod tests {
                 Target::Workspace(i) => {
                     assert!(matches!(activated, Some(Message::SelectWorkspace(j)) if j == i));
                 }
-                Target::Status | Target::Clock | Target::AppMenu(_) => {
+                Target::Status | Target::Clock | Target::AppMenu(_) | Target::Tray => {
                     panic!("no indicator nor menu in this bar")
                 }
             }
