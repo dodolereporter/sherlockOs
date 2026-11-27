@@ -1,7 +1,7 @@
 #!/bin/sh
 # Starts a SherlockOS session, from the login screen (sherlockos.desktop) or from a text console:
-# the compositor on the screens of the machine, then the bar, the dock and the notification
-# daemon inside it.
+# the compositor on the screens of the machine, then the bar, the dock, the notification
+# daemon, the launcher and the applications view inside it.
 #
 # The programs are looked for next to this script (`just install-session` puts them in
 # /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN. That folder goes at the end of PATH: the
@@ -70,6 +70,15 @@ export PATH="$PATH:$bin"
 # above, so that it is added once.
 data="${SHERLOCKOS_DATA:-$(dirname "$(dirname "$bin")")/share/sherlockos}"
 export XDG_DATA_DIRS="$data:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+# The applications installed with Flatpak, for the user and for the system: the login screen
+# starts the session without the login shell that adds them (/etc/profile.d/flatpak.sh), so the
+# launcher, the dock and the portals would not see them (Q-23).
+for flatpak in "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/exports/share" /var/lib/flatpak/exports/share; do
+	case ":$XDG_DATA_DIRS:" in
+	*":$flatpak:"*) ;;
+	*) [ -d "$flatpak" ] && XDG_DATA_DIRS="$XDG_DATA_DIRS:$flatpak" ;;
+	esac
+done
 # The wallpapers that `just wallpapers` writes beside the programs' folder (target/wallpapers
 # when the session runs from the repository with SHERLOCKOS_BIN=target/release) come before the
 # installed ones, in <data folder>/sherlockos/wallpapers.
@@ -224,6 +233,11 @@ keep() {
 keep "$0/bar" &
 keep "$0/dock" &
 keep "$0/notifications" &
+# The launcher stays in memory, hidden (lot P-02): Super + Space starts `launcher`, which only asks
+# it to show or hide, so that it appears at once.
+keep "$0/launcher" --resident &
+# The applications view too (F4, the button of the dock): `sherlockos-apps` shows or hides it.
+keep "$0/sherlockos-apps" --resident &
 # The polkit agent, started again like the shell programs, and kwalletd6 without
 # gnome-keyring-daemon (lot D-35b).
 [ -n "${SHERLOCKOS_POLKIT_AGENT:-}" ] && keep "$SHERLOCKOS_POLKIT_AGENT" &

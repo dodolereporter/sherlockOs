@@ -69,9 +69,11 @@ the policy to the compositor, and has two gaps for a strict use:
    background, and the compositor starts the lock program again (`sherlockos-lock`), after a
    pause of 500 ms. A lock given up before `locked` takes its surfaces with it: they are no
    longer drawn nor given the keyboard. A program that ends without locking, or does not lock within 10 seconds,
-   counts as a failure. After 3 failures in a row, it starts `swaylock` on the same background
-   color; if that fails too (not installed), it draws a rescue screen itself: « Verrouillé »,
-   and Enter to try the programs again. The counter starts again at each unlock.
+   counts as a failure. After 3 failures in a row, it starts the rescue mode of the same program
+   (`sherlockos-lock --rescue`, lot D-25c: a plain field, PAM as in the normal mode, in
+   software), 3 times, through the same connection the compositor opens; then `swaylock` if it
+   is installed; only then it draws a screen itself, which cannot unlock: « Verrouillé », and
+   Enter to try the programs again. The counter starts again at each unlock.
 7. **The password** is checked by PAM only, in the lock program, for the user of the session
    only (lot D-25a2). The compositor never sees it.
 

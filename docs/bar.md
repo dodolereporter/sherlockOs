@@ -730,6 +730,16 @@ the spring's 2 % overshoot scaled the panel a little past its size. Now:
 ![A page halfway, cut to the glass](../desktop/bar/screenshots/page-sliding.png)
 ![The control centre turning into the calendar](../desktop/bar/screenshots/panels-switching.png)
 
+**UI-06.** A click elsewhere closes a panel, the Sherlock menu or an application's menu
+through the compositor (`popup_done`), and iced_exwlshell then destroys the popup at once: the
+bar cannot fold it back. The compositor keeps its last image and fades it out, slightly
+shrunk, over 150 ms (`docs/compositor.md`, "Menus and panels of the shell"); the same when the
+bar drops one popup at once to open another (a panel in place of the Sherlock menu). The
+steps of that closing, from `the_panels_close_with_their_last_image` (`tests/render.rs`):
+
+![The control centre closing on a click elsewhere, six steps over 150 ms](../desktop/bar/screenshots/control-centre-closing.png)
+![The notification centre closing the same way](../desktop/bar/screenshots/notifications-closing.png)
+
 **UI-04.** The icons fade with the panel (see « Icons that fade » in `docs/sherlock-ui.md`), and
 the control centre leaves out the row of the keyboard backlight on a machine without one: the
 panel opens shorter by that row (`panel::reserve_keyboard`, from the last read of the

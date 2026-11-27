@@ -80,6 +80,8 @@ pub enum Reason {
     SeveralAmdChips,
     /// An AMD chip, but no manifest of Mesa's Vulkan driver.
     NoVulkanDriver,
+    /// The rescue lock screen, in software whatever the machine (lot D-25c).
+    Rescue,
 }
 
 impl Choice {
@@ -166,6 +168,14 @@ impl Choice {
                 variables.extend(NEUTRALISED.map(|name| (name, None)));
                 variables
             }
+        }
+    }
+
+    /// Software for the rescue lock screen when `rescue`, this choice otherwise (lot D-25c).
+    pub fn or_rescue(self, rescue: bool) -> Self {
+        match rescue {
+            true => Self::Software(Reason::Rescue),
+            false => self,
         }
     }
 

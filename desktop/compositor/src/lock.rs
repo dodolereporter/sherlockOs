@@ -7,8 +7,10 @@
 //! from the lock that holds it, once `locked` was sent: smithay would end it on the request of
 //! any lock object, so the requests of `ext_session_lock_v1` are checked here first.
 //!
-//! If the lock program dies, the session stays locked: the compositor starts it again, then
-//! `swaylock` after `CLIENT_ATTEMPTS` failures, then draws a rescue screen itself. Only the lock
+//! If the lock program dies, the session stays locked: the compositor starts it again; after
+//! `CLIENT_ATTEMPTS` failures, the same program in its rescue mode (`--rescue`, lot D-25c: a
+//! plain field checked by PAM, in software), `RESCUE_ATTEMPTS` times; then `swaylock` if it is
+//! installed; and only then draws a screen of its own, which cannot unlock. Only the lock
 //! program the compositor started, through a connection it opened itself (`WAYLAND_SOCKET`),
 //! may lock, the session locked or not; its identity is forgotten when it dies. See "Session
 //! lock" in `docs/compositor.md`.
@@ -75,8 +77,12 @@ use crate::{
 
 /// Name of the lock program, beside the session's programs or in the `PATH`.
 pub const PROGRAM: &str = "sherlockos-lock";
-/// Starts of the lock program in a row before `swaylock`.
+/// Starts of the lock program in a row before its rescue mode.
 pub const CLIENT_ATTEMPTS: u32 = 3;
+/// Starts of the rescue mode in a row before `swaylock`.
+pub const RESCUE_ATTEMPTS: u32 = 3;
+/// The argument of the rescue mode of the lock program.
+pub const RESCUE_ARGUMENT: &str = "--rescue";
 /// Time a lock program has to take the lock before it counts as a failure.
 pub const START_TIMEOUT: Duration = Duration::from_secs(10);
 /// Pause before starting a lock program again.
@@ -84,29 +90,71 @@ pub const RELAUNCH_DELAY: Duration = Duration::from_millis(500);
 /// How often the lock program is checked on while the session is locked.
 const WATCH: Duration = Duration::from_millis(100);
 
-/// The programs that show the lock screen: ours, then the rescue one.
+/// The programs that show the lock screen: ours, its rescue mode, then `swaylock`.
 #[derive(Debug, Clone)]
 pub struct Programs {
     pub client: Vec<OsString>,
     pub rescue: Option<Vec<OsString>>,
+    pub swaylock: Option<Vec<OsString>>,
+}
+
+/// What shows the lock screen now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Client,
+    Rescue,
+    Swaylock,
+    /// The compositor's own screen: every program failed.
+    Screen,
+}
+
+impl Stage {
+    /// The stage of the `attempt`-th start (from 0).
+    pub fn of(attempt: u32) -> Self {
+        match attempt {
+            n if n < CLIENT_ATTEMPTS => Self::Client,
+            n if n < CLIENT_ATTEMPTS + RESCUE_ATTEMPTS => Self::Rescue,
+            n if n == CLIENT_ATTEMPTS + RESCUE_ATTEMPTS => Self::Swaylock,
+            _ => Self::Screen,
+        }
+    }
 }
 
 impl Programs {
     /// `PROGRAM` beside the session's programs (`SHERLOCKOS_BIN`) if it is there, else in the
-    /// `PATH`; `swaylock` on the background of the system screens as the rescue.
+    /// `PATH`; the same with `--rescue`; `swaylock` on the background of the system screens if
+    /// it is in the `PATH`.
     pub fn of(var: impl Fn(&str) -> Option<OsString>) -> Self {
         let client = var(BIN_VAR)
             .map(|dir| Path::new(&dir).join(PROGRAM))
             .filter(|path| path.is_file())
-            .unwrap_or_else(|| PathBuf::from(PROGRAM));
+            .unwrap_or_else(|| PathBuf::from(PROGRAM))
+            .into_os_string();
         let background = ui::Colors::of(color::palette()).background;
+        let swaylock = var("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("swaylock"))
+                .find(|file| file.is_file())
+        });
         Self {
-            client: vec![client.into_os_string()],
-            rescue: Some(vec![
-                "swaylock".into(),
-                "--color".into(),
-                ui::hex(background).into(),
-            ]),
+            rescue: Some(vec![client.clone(), RESCUE_ARGUMENT.into()]),
+            client: vec![client],
+            swaylock: swaylock.map(|program| {
+                vec![
+                    program.into_os_string(),
+                    "--color".into(),
+                    ui::hex(background).into(),
+                ]
+            }),
+        }
+    }
+
+    fn command(&self, stage: Stage) -> Option<&Vec<OsString>> {
+        match stage {
+            Stage::Client => Some(&self.client),
+            Stage::Rescue => self.rescue.as_ref(),
+            Stage::Swaylock => self.swaylock.as_ref(),
+            Stage::Screen => None,
         }
     }
 }
@@ -136,6 +184,8 @@ pub(crate) struct SessionLock {
     program: Option<ClientId>,
     /// Lock programs started since the session was locked.
     attempts: u32,
+    /// What was started last.
+    stage: Stage,
     child: Option<(Child, Instant)>,
     next_launch: Option<Instant>,
     /// Every lock program failed: the compositor draws the rescue screen.
@@ -160,6 +210,7 @@ impl SessionLock {
             child: None,
             next_launch: None,
             rescue_screen: false,
+            stage: Stage::Client,
             programs: None,
             watch: None,
         }
@@ -184,6 +235,11 @@ impl State {
                 .screens
                 .iter()
                 .all(|s| self.lock.shown.contains(&s.output))
+    }
+
+    /// What shows the lock screen, or was started last.
+    pub fn lock_stage(&self) -> Stage {
+        self.lock.stage
     }
 
     /// Every lock program failed: the compositor shows its rescue screen.
@@ -316,11 +372,19 @@ impl State {
             .programs
             .clone()
             .unwrap_or_else(|| Programs::of(|key| std::env::var_os(key)));
-        let command = match self.lock.attempts {
-            n if n < CLIENT_ATTEMPTS => Some(programs.client),
-            n if n == CLIENT_ATTEMPTS => programs.rescue,
-            _ => None,
-        };
+        // The next stage that has a program: no rescue mode or no `swaylock` skips it.
+        let mut command = None;
+        while command.is_none() && Stage::of(self.lock.attempts) != Stage::Screen {
+            let stage = Stage::of(self.lock.attempts);
+            command = programs.command(stage).cloned();
+            if command.is_none() {
+                self.lock.attempts = match stage {
+                    Stage::Rescue => CLIENT_ATTEMPTS + RESCUE_ATTEMPTS,
+                    _ => self.lock.attempts + 1,
+                };
+            }
+        }
+        self.lock.stage = Stage::of(self.lock.attempts);
         self.lock.attempts += 1;
         let Some((program, arguments)) = command.as_ref().and_then(|c| c.split_first()) else {
             tracing::warn!("lock: every lock program failed, the compositor shows the rescue");
@@ -700,7 +764,29 @@ mod tests {
         let programs = Programs::of(var(&dir));
         assert_eq!(programs.client, [dir.join(PROGRAM).into_os_string()]);
         let rescue = programs.rescue.unwrap();
-        assert_eq!(rescue[0], "swaylock");
+        assert_eq!(
+            rescue,
+            [dir.join(PROGRAM).into_os_string(), RESCUE_ARGUMENT.into()]
+        );
+        // swaylock only when it is installed.
+        assert_eq!(programs.swaylock, None);
+        std::fs::write(dir.join("swaylock"), b"").unwrap();
+        let path = dir.as_os_str().to_owned();
+        let with_path = |key: &str| (key == "PATH").then(|| path.clone());
+        let swaylock = Programs::of(with_path).swaylock.unwrap();
+        assert_eq!(swaylock[0], dir.join("swaylock").into_os_string());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_stages_follow_each_other() {
+        let stages: Vec<_> = (0..8).map(Stage::of).collect();
+        use Stage::*;
+        assert_eq!(
+            stages,
+            [
+                Client, Client, Client, Rescue, Rescue, Rescue, Swaylock, Screen
+            ]
+        );
     }
 }
