@@ -483,17 +483,17 @@ mod tests {
             out.extend(&body);
             out.extend(crc(&body).to_be_bytes());
         }
-        let mut raw = Vec::new();
-        for _ in 0..height {
-            raw.push(0);
-            for x in 0..width {
-                raw.extend(if x == 0 {
+        // Each row: its filter byte (none), then red for the first pixel, transparent after.
+        let row: Vec<u8> = std::iter::once(0)
+            .chain((0..width).flat_map(|x| {
+                if x == 0 {
                     [255, 0, 0, 255]
                 } else {
                     [0, 0, 0, 0]
-                });
-            }
-        }
+                }
+            }))
+            .collect();
+        let raw: Vec<u8> = (0..height).flat_map(|_| row.iter().copied()).collect();
         let (mut a, mut b) = (1u32, 0u32);
         for byte in &raw {
             a = (a + u32::from(*byte)) % 65521;
@@ -570,7 +570,7 @@ mod tests {
         // At first, nothing: the worker draws it.
         assert_eq!(raster(&handle, 30.0).id(), nothing().id());
         let mut waited = 0;
-        while drawn.try_next().is_err() && waited < 500 {
+        while drawn.try_recv().is_err() && waited < 500 {
             std::thread::sleep(std::time::Duration::from_millis(10));
             waited += 1;
         }
