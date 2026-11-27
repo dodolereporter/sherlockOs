@@ -343,6 +343,19 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
     assert!(dock.leaving.is_empty());
 }
 
+/// The file once the dock's thread that saves wrote it: its text when it is no longer `before`.
+fn changed(path: &std::path::Path, before: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text != before {
+            return text;
+        }
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Lot D-21d: an open application dragged across the separator among the pinned ones is
 /// pinned where it is let go; dragged back after it, it is unpinned; a pinned application let
 /// go out of the dock goes up in smoke. The file is read again just before it is written.
@@ -389,7 +402,11 @@ fn dragging_across_the_separator_pins_and_unpins() {
         "it follows the pointer"
     );
     let _ = dock.update(Message::Gesture(Gesture::Released));
-    let written = std::fs::read_to_string(&path).expect("file read");
+    // Written on the dock's thread that saves, never on the interface's.
+    let written = changed(
+        &path,
+        "[Dock]\nPinned=org.example.Files;example-editor;\nIconSize=40\n",
+    );
     let (read, _) = DockConfig::parse(&written);
     // Sherlock's place is written with the others (lot D-21h).
     let order = [
@@ -411,7 +428,7 @@ fn dragging_across_the_separator_pins_and_unpins() {
     assert_eq!(dock.separator, Some(3));
     assert_eq!(names(&dock)[3], "Terminal d'exemple");
     let _ = dock.update(Message::Gesture(Gesture::Released));
-    let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("file read"));
+    let (read, _) = DockConfig::parse(&changed(&path, &written));
     let order = ["org.example.Files", "sherlock", "example-editor"];
     assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
     let t = settle(&mut dock);
