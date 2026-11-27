@@ -10,8 +10,17 @@ publish.workspace = true
 # PipeWire, loaded at run time (ADR 0028): nothing to build against. The version already in
 # the lock.
 libloading = "=0.8.9"
+# The frame buffer shared with the compositor: the version already in the lock.
+memmap2 = "=0.9.12"
+# memfd and poll: the version smithay already pulls.
+rustix = { version = "=1.1.6", features = ["event", "fs"] }
+# The path of the compositor's shell socket (workspace crate).
+shell-protocol = { path = "../shell-protocol" }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
+# Client of the capture protocols, the versions the compositor's tests already use.
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
 
 [lints]
 workspace = true
