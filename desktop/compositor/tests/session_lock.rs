@@ -57,6 +57,7 @@ mod tests {
     const KEY_SUPER: u32 = 125 + 8;
     const KEY_L: u32 = 38 + 8;
     const KEY_A: u32 = 16 + 8;
+    const KEY_LEFTSHIFT: u32 = 42 + 8;
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
     const BTN_LEFT: u32 = 0x110;
@@ -1250,5 +1251,88 @@ mod tests {
             !h.peers[locker].seen.keys.contains(&evdev(KEY_F2)),
             "the switch goes to no client"
         );
+    }
+
+    #[test]
+    fn locked_for_inactivity_over_a_launcher_a_notification_and_a_window_the_keys_go_to_the_lock() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        // The resident launcher: an overlay that takes the keyboard for itself.
+        let shell_client = h.connect();
+        let peer = &h.peers[shell_client];
+        let qh = peer.qh();
+        let _seat = peer.bind::<WlSeat>();
+        let launcher = peer.bind::<WlCompositor>().create_surface(&qh, ());
+        let shell: ZwlrLayerShellV1 = peer.bind();
+        let layer =
+            shell.get_layer_surface(&launcher, None, Layer::Overlay, "launcher".into(), &qh, ());
+        layer.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
+        layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive);
+        launcher.commit();
+        h.run_until("the launcher configured", |h| {
+            h.peers[shell_client].seen.layer_configured
+        });
+        h.peers[shell_client].show(&launcher, 800, 600);
+        // A notification on the top layer.
+        let peer = &h.peers[shell_client];
+        let note = peer.bind::<WlCompositor>().create_surface(&qh, ());
+        let banner =
+            shell.get_layer_surface(&note, None, Layer::Top, "notification".into(), &qh, ());
+        banner.set_anchor(Anchor::Top | Anchor::Right);
+        banner.set_size(300, 80);
+        note.commit();
+        h.settle();
+        h.peers[shell_client].show(&note, 300, 80);
+        h.settle();
+
+        // The session locks for inactivity, then the lock program takes the lock.
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        h.state.set_idle_lock(Some(Duration::from_millis(300)));
+        h.run_until("the lock after the delay", |h| h.state.is_locked());
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+
+        // A key and a tap reach the lock, and nothing else.
+        h.settle();
+        for peer in [app, shell_client] {
+            h.peers[peer].seen.keys.clear();
+        }
+        h.key(KEY_A);
+        h.click(400.0, 300.0);
+        h.run_until("the key and the tap on the lock", |h| {
+            let seen = &h.peers[locker].seen;
+            seen.keys.contains(&evdev(KEY_A)) && seen.presses >= 1
+        });
+        assert!(h.peers[app].seen.keys.is_empty());
+        assert!(h.peers[shell_client].seen.keys.is_empty());
+    }
+
+    #[test]
+    fn a_lock_program_that_shows_nothing_after_a_key_is_replaced() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.state.set_lock_image_timeout(Duration::from_millis(300));
+        // It shows what is typed: it stays.
+        h.key(KEY_A);
+        h.peers[locker].show(&locking.surface, 800, 600);
+        wait(&mut h, Duration::from_millis(600));
+        assert_eq!(h.state.lock_attempts(), 0);
+        // A modifier alone types nothing: nothing is awaited.
+        h.key(KEY_LEFTSHIFT);
+        wait(&mut h, Duration::from_millis(600));
+        assert_eq!(h.state.lock_attempts(), 0);
+        // It answers its pings, but shows nothing after a key: replaced.
+        h.key(KEY_A);
+        h.run_until("the blind lock program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked(), "the session stays locked");
     }
 }

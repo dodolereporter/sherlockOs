@@ -75,6 +75,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.lock_surface_committed(surface);
         if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = compositor::get_parent(&root) {
