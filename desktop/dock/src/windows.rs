@@ -37,12 +37,32 @@ pub const OPEN_VAR: &str = "DOCK_OPEN";
 pub const ACTIVE_VAR: &str = "DOCK_ACTIVE";
 
 /// A window, as the compositor describes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Window {
+    /// Names the window while it exists: the compositor's id on the shell protocol, a number
+    /// of the source's own otherwise.
+    pub id: u64,
     /// Wayland `app_id`, or X11 class through XWayland.
     pub app_id: String,
+    pub title: String,
     /// Has the keyboard focus.
     pub activated: bool,
+    pub minimized: bool,
+    /// When it last got the keyboard, counted by the source: higher is more recent, 0 for a
+    /// window not seen active since the source started.
+    pub recency: u64,
+}
+
+impl Window {
+    /// A window of `app_id`, active or not, without title.
+    pub fn new(id: u64, app_id: &str, activated: bool) -> Self {
+        Self {
+            id,
+            app_id: app_id.to_owned(),
+            activated,
+            ..Self::default()
+        }
+    }
 }
 
 /// The open windows.
@@ -63,6 +83,31 @@ impl Windows {
             .iter()
             .filter(|w| owns(&w.app_id))
             .fold((0, false), |(n, active), w| (n + 1, active || w.activated))
+    }
+
+    /// The windows that `owns` claims, the least recent first: by the last time they got the
+    /// keyboard, then in the order they came.
+    pub fn owned(&self, owns: impl Fn(&str) -> bool) -> Vec<&Window> {
+        let mut owned: Vec<&Window> = self.list.iter().filter(|w| owns(&w.app_id)).collect();
+        owned.sort_by_key(|w| w.recency);
+        owned
+    }
+}
+
+/// Recency stamps of a source: a window that gets the keyboard gets the next one.
+#[derive(Debug, Default)]
+pub struct Stamps(u64);
+
+impl Stamps {
+    /// The recency of a window that was `before` active and is `now`: a new stamp when it
+    /// just got the keyboard, otherwise `recency` unchanged.
+    pub fn follow(&mut self, before: bool, now: bool, recency: u64) -> u64 {
+        if now && !before {
+            self.0 += 1;
+            self.0
+        } else {
+            recency
+        }
     }
 }
 
@@ -114,10 +159,8 @@ impl Placeholder {
             .split(',')
             .map(str::trim)
             .filter(|a| !a.is_empty())
-            .map(|app_id| Window {
-                app_id: app_id.to_owned(),
-                activated: active.is_some_and(|a| a.trim() == app_id),
-            })
+            .zip(1..)
+            .map(|(app_id, id)| Window::new(id, app_id, active.is_some_and(|a| a.trim() == app_id)))
             .collect();
         Self(Windows {
             list,
@@ -201,33 +244,45 @@ pub enum Request {
 }
 
 /// What a left click on an icon does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Click {
     /// Start the application: it has no window, or its windows cannot be acted on.
     Launch,
-    /// Bring its windows forward: open, but not in front.
-    Activate,
-    /// Minimize them: already in front, as on Windows and Plasma.
+    /// Bring these windows forward, in this order: the last one, the most recent, ends on top
+    /// with the keyboard.
+    Bring(Vec<u64>),
+    /// Minimize its windows: already in front (the author's choice, as on Windows and Plasma).
     Minimize,
 }
 
-/// The click on an icon whose application has `open` windows (count, one active), when the
-/// windows can be acted on (`controllable`).
-pub fn click(open: Option<(usize, bool)>, controllable: bool) -> Click {
-    match open {
-        Some((count, active)) if count > 0 && controllable => {
-            if active {
-                Click::Minimize
-            } else {
-                Click::Activate
-            }
-        }
-        _ => Click::Launch,
+/// The click on an icon whose application has `windows`, the least recent first
+/// (`Windows::owned`), when they can be acted on (`controllable`). As on macOS, an application
+/// behind comes forward with all its windows shown, the most recent on top; when they are all
+/// minimized, only the most recent one comes back.
+pub fn click(windows: &[&Window], controllable: bool) -> Click {
+    let Some(last) = windows.last().filter(|_| controllable) else {
+        return Click::Launch;
+    };
+    if windows.iter().any(|w| w.activated) {
+        return Click::Minimize;
+    }
+    let shown: Vec<u64> = windows
+        .iter()
+        .filter(|w| !w.minimized)
+        .map(|w| w.id)
+        .collect();
+    if shown.is_empty() {
+        Click::Bring(vec![last.id])
+    } else {
+        Click::Bring(shown)
     }
 }
 
 /// Which windows are an application's own, by `app_id`.
 pub type Owns = Box<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// Which windows a request goes to, by `app_id` and title.
+type Pick = Box<dyn Fn(&str, &str) -> bool + Send>;
 
 /// Where an icon is on its screen, for the windows of its application.
 pub struct Place {
@@ -241,6 +296,9 @@ pub struct Place {
 /// Acts on the windows of an application. `owns` says which windows are its own.
 pub trait Control: Send + Sync {
     fn send(&self, request: Request, owns: Owns);
+
+    /// Sends `request` to `window` alone.
+    fn send_to(&self, request: Request, window: &Window);
 
     /// Tells the compositor where the icon of each window is (`set_rectangle`), for the
     /// minimize animation: the windows of the first place that owns them. Replaces the
@@ -260,6 +318,13 @@ impl Control for Auto {
         }
     }
 
+    fn send_to(&self, request: Request, window: &Window) {
+        match crate::shell::control() {
+            Some(shell) => shell.send_to(request, window),
+            None => WlrControl.send_to(request, window),
+        }
+    }
+
     fn place(&self, places: Vec<Place>) {
         if let Some(shell) = crate::shell::control() {
             shell.place(places);
@@ -273,14 +338,15 @@ impl Control for Auto {
 #[derive(Debug, Default)]
 pub struct WlrControl;
 
-impl Control for WlrControl {
-    fn send(&self, request: Request, owns: Owns) {
+impl WlrControl {
+    /// Sends `request` to the windows `pick` takes, on a thread.
+    fn spawn(request: Request, pick: Pick, one: bool) {
         let spawned = std::thread::Builder::new()
             .name(String::from("windows-request"))
             .spawn(move || {
                 let sent = Connection::connect_to_env()
                     .map_err(SourceError::from)
-                    .and_then(|connection| act(connection, request, &*owns));
+                    .and_then(|connection| act_where(connection, request, &*pick, one));
                 match sent {
                     Ok(count) => tracing::info!(?request, count, "windows asked"),
                     Err(error) => tracing::warn!(?request, %error, "cannot act on the windows"),
@@ -292,10 +358,29 @@ impl Control for WlrControl {
     }
 }
 
+impl Control for WlrControl {
+    fn send(&self, request: Request, owns: Owns) {
+        Self::spawn(request, Box::new(move |app_id, _| owns(app_id)), false);
+    }
+
+    /// The handles of another connection carry no id: the first window with the same
+    /// `app_id` and title.
+    fn send_to(&self, request: Request, window: &Window) {
+        let (app_id, title) = (window.app_id.clone(), window.title.clone());
+        Self::spawn(
+            request,
+            Box::new(move |a, t| a == app_id && t == title),
+            true,
+        );
+    }
+}
+
 /// Fake control: records what is asked, acts on nothing.
 #[derive(Debug, Default, Clone)]
 pub struct Recorder {
     requests: Arc<Mutex<Vec<Request>>>,
+    /// The requests sent to one window, with its id.
+    targeted: Arc<Mutex<Vec<(Request, u64)>>>,
     /// Each `place`: the screen and rectangle of each icon, with the first `app_id` of the
     /// probe list it owns.
     places: Arc<Mutex<Vec<Vec<Placed>>>>,
@@ -326,6 +411,13 @@ impl Recorder {
             .clone()
     }
 
+    pub fn targeted(&self) -> Vec<(Request, u64)> {
+        self.targeted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn places(&self) -> Vec<Vec<Placed>> {
         self.places
             .lock()
@@ -340,6 +432,13 @@ impl Control for Recorder {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(request);
+    }
+
+    fn send_to(&self, request: Request, window: &Window) {
+        self.targeted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((request, window.id));
     }
 
     fn place(&self, places: Vec<Place>) {
@@ -365,13 +464,29 @@ pub fn act(
     request: Request,
     owns: &dyn Fn(&str) -> bool,
 ) -> Result<usize, SourceError> {
+    act_where(connection, request, &|app_id, _| owns(app_id), false)
+}
+
+/// Sends `request` to the windows whose `app_id` and title `pick` takes, the first one only
+/// with `one`.
+fn act_where(
+    connection: Connection,
+    request: Request,
+    pick: &dyn Fn(&str, &str) -> bool,
+    one: bool,
+) -> Result<usize, SourceError> {
     let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
     let _manager: ZwlrForeignToplevelManagerV1 = globals.bind(&queue.handle(), 1..=3, ())?;
     let seat: Option<WlSeat> = globals.bind(&queue.handle(), 1..=1, ()).ok();
     let mut toplevels = Toplevels::default();
     queue.roundtrip(&mut toplevels)?;
     let mut count = 0;
-    for toplevel in toplevels.list.iter().filter(|t| t.done && owns(&t.app_id)) {
+    let picked = toplevels
+        .list
+        .iter()
+        .filter(|t| t.done && pick(&t.app_id, &t.title))
+        .take(if one { 1 } else { usize::MAX });
+    for toplevel in picked {
         match (request, &seat) {
             (Request::Activate, Some(seat)) => toplevel.handle.activate(seat),
             (Request::Activate, None) => continue,
@@ -442,6 +557,9 @@ pub fn watch(open: fn() -> Option<Box<dyn Source>>) -> impl Stream<Item = Window
 #[derive(Debug, Default)]
 struct Toplevels {
     list: Vec<Toplevel>,
+    /// Ids given to the toplevels: this protocol has none.
+    next_id: u64,
+    stamps: Stamps,
     /// A `done` or a `closed` came since the last `wait`.
     changed: bool,
     /// The compositor stopped sending.
@@ -451,10 +569,16 @@ struct Toplevels {
 #[derive(Debug)]
 struct Toplevel {
     handle: ZwlrForeignToplevelHandleV1,
+    id: u64,
     app_id: String,
+    title: String,
     activated: bool,
+    minimized: bool,
+    recency: u64,
     pending_app_id: Option<String>,
-    pending_activated: Option<bool>,
+    pending_title: Option<String>,
+    /// Activated, minimized.
+    pending_state: Option<(bool, bool)>,
     /// The first `done` came: the toplevel is described.
     done: bool,
 }
@@ -467,8 +591,12 @@ impl Toplevels {
                 .iter()
                 .filter(|t| t.done)
                 .map(|t| Window {
+                    id: t.id,
                     app_id: t.app_id.clone(),
+                    title: t.title.clone(),
                     activated: t.activated,
+                    minimized: t.minimized,
+                    recency: t.recency,
                 })
                 .collect(),
             controllable: true,
@@ -477,13 +605,13 @@ impl Toplevels {
     }
 }
 
-/// Whether the `state` array of a toplevel holds `activated`. It is a list of `u32` in the
+/// Whether the `state` array of a toplevel holds `value`. It is a list of `u32` in the
 /// machine's byte order.
-fn is_activated(state: &[u8]) -> bool {
+fn holds(state: &[u8], value: handle::State) -> bool {
     let (values, _) = state.as_chunks::<4>();
     values
         .iter()
-        .any(|c| u32::from_ne_bytes(*c) == handle::State::Activated as u32)
+        .any(|c| u32::from_ne_bytes(*c) == value as u32)
 }
 
 impl Dispatch<WlRegistry, GlobalListContents> for Toplevels {
@@ -520,14 +648,22 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for Toplevels {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            manager::Event::Toplevel { toplevel } => state.list.push(Toplevel {
-                handle: toplevel,
-                app_id: String::new(),
-                activated: false,
-                pending_app_id: None,
-                pending_activated: None,
-                done: false,
-            }),
+            manager::Event::Toplevel { toplevel } => {
+                state.next_id += 1;
+                state.list.push(Toplevel {
+                    handle: toplevel,
+                    id: state.next_id,
+                    app_id: String::new(),
+                    title: String::new(),
+                    activated: false,
+                    minimized: false,
+                    recency: 0,
+                    pending_app_id: None,
+                    pending_title: None,
+                    pending_state: None,
+                    done: false,
+                });
+            }
             manager::Event::Finished => state.finished = true,
             _ => {}
         }
@@ -553,15 +689,25 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for Toplevels {
         let toplevel = &mut state.list[index];
         match event {
             handle::Event::AppId { app_id } => toplevel.pending_app_id = Some(app_id),
+            handle::Event::Title { title } => toplevel.pending_title = Some(title),
             handle::Event::State { state: flags } => {
-                toplevel.pending_activated = Some(is_activated(&flags));
+                let activated = holds(&flags, handle::State::Activated);
+                toplevel.pending_state = Some((activated, holds(&flags, handle::State::Minimized)));
             }
             handle::Event::Done => {
                 if let Some(app_id) = toplevel.pending_app_id.take() {
                     toplevel.app_id = app_id;
                 }
-                if let Some(activated) = toplevel.pending_activated.take() {
+                if let Some(title) = toplevel.pending_title.take() {
+                    toplevel.title = title;
+                }
+                if let Some((activated, minimized)) = toplevel.pending_state.take() {
+                    toplevel.recency =
+                        state
+                            .stamps
+                            .follow(toplevel.activated, activated, toplevel.recency);
                     toplevel.activated = activated;
+                    toplevel.minimized = minimized;
                 }
                 toplevel.done = true;
                 state.changed = true;
@@ -589,23 +735,65 @@ mod tests {
         assert!(!windows.controllable, "a placeholder acts on nothing");
     }
 
-    #[test]
-    fn a_click_brings_forward_minimizes_or_starts() {
-        // Open, not in front: brought forward. In front: minimized. Closed: started.
-        assert_eq!(click(Some((2, false)), true), Click::Activate);
-        assert_eq!(click(Some((1, true)), true), Click::Minimize);
-        assert_eq!(click(Some((0, false)), true), Click::Launch);
-        // Windows unknown, or a source that cannot act on them: started, never pretended.
-        assert_eq!(click(None, true), Click::Launch);
-        assert_eq!(click(Some((1, true)), false), Click::Launch);
+    /// Three windows of one application: 7 got the keyboard last, 5 before it, 6 never.
+    fn three() -> Windows {
+        let window = |id, recency| Window {
+            recency,
+            ..Window::new(id, "app", false)
+        };
+        Windows {
+            list: vec![window(5, 1), window(6, 0), window(7, 2)],
+            controllable: true,
+            ..Windows::default()
+        }
     }
 
     #[test]
-    fn the_state_array_says_activated() {
+    fn a_click_with_zero_one_or_several_windows() {
+        let none = Windows::default();
+        assert_eq!(click(&none.owned(|_| true), true), Click::Launch);
+        // One window behind: it comes forward; in front: minimized.
+        let mut one = Windows {
+            list: vec![Window::new(3, "app", false)],
+            controllable: true,
+            ..Windows::default()
+        };
+        assert_eq!(click(&one.owned(|_| true), true), Click::Bring(vec![3]));
+        one.list[0].activated = true;
+        assert_eq!(click(&one.owned(|_| true), true), Click::Minimize);
+        // A source that cannot act on its windows: started, never pretended.
+        assert_eq!(click(&one.owned(|_| true), false), Click::Launch);
+        // Several behind: all come forward, the most recent last, on top.
+        let mut several = three();
+        let owned = several.owned(|_| true);
+        assert_eq!(click(&owned, true), Click::Bring(vec![6, 5, 7]));
+        // Minimized ones stay down while others are shown; all minimized, the most recent
+        // comes back alone.
+        several.list[2].minimized = true;
+        assert_eq!(
+            click(&several.owned(|_| true), true),
+            Click::Bring(vec![6, 5])
+        );
+        several.list.iter_mut().for_each(|w| w.minimized = true);
+        assert_eq!(click(&several.owned(|_| true), true), Click::Bring(vec![7]));
+    }
+
+    #[test]
+    fn a_window_that_gets_the_keyboard_becomes_the_most_recent() {
+        let mut stamps = Stamps::default();
+        assert_eq!(stamps.follow(false, true, 0), 1);
+        assert_eq!(stamps.follow(true, true, 1), 1, "still active: unchanged");
+        assert_eq!(stamps.follow(false, false, 1), 1);
+        assert_eq!(stamps.follow(false, true, 0), 2);
+    }
+
+    #[test]
+    fn the_state_array_says_activated_and_minimized() {
         let bytes =
             |values: &[u32]| -> Vec<u8> { values.iter().flat_map(|v| v.to_ne_bytes()).collect() };
-        assert!(is_activated(&bytes(&[0, 2])));
-        assert!(!is_activated(&bytes(&[0, 1, 3])));
-        assert!(!is_activated(&[]));
+        assert!(holds(&bytes(&[0, 2]), handle::State::Activated));
+        assert!(!holds(&bytes(&[0, 1, 3]), handle::State::Activated));
+        assert!(holds(&bytes(&[1]), handle::State::Minimized));
+        assert!(!holds(&[], handle::State::Activated));
     }
 }

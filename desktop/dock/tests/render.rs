@@ -45,7 +45,8 @@ fn the_dock_renders_in_the_light_theme() {
     let _ = dock.update(Message::Surface(Id::unique()));
     let _ = dock.update(Message::Pointer(Pointer::Moved(icon_center(&dock, 1))));
     let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
-    let (width, height) = dock::menu::surface_size(&dock::menu::entries(dock.abilities(1)));
+    unfolded(&mut dock);
+    let (width, height) = dock::menu::surface_size(&dock.menu_lines(1));
     let size = (width as f32, height as f32);
     let ui = Simulator::with_size(dock::settings(), size, on_desktop(dock.view_menu()));
     assert!(capture(ui, "dock-menu-light").expect("screenshot written") > 2_000);
@@ -122,6 +123,12 @@ fn hovered(point: Point) -> Dock {
     dock.frame(Duration::from_secs(2));
     assert!(!dock.animating(), "settled");
     dock
+}
+
+/// Lets the menu that just opened unfold.
+fn unfolded(dock: &mut Dock) {
+    let _ = dock.tick(dock.now() + Duration::from_secs(1));
+    assert!(!dock.animating(), "the menu is open, still");
 }
 
 /// The center of icon `index` at rest.
@@ -205,18 +212,19 @@ fn the_menu_of_an_icon_renders_its_entries() {
     let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
     let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
     assert!(dock.menu_open());
-    let entries = dock::menu::entries(dock.abilities(1));
+    unfolded(&mut dock);
+    let entries = dock.menu_lines(1);
     let (width, height) = dock::menu::surface_size(&entries);
     let mut ui = Simulator::with_size(
         dock::settings(),
         (width as f32, height as f32),
         dock.view_menu(),
     );
+    // The terminal has one window, without title: listed under the application's name.
     for text in [
-        "Terminal d'exemple",
         "1 fenêtre",
-        "Ouvrir",
         "Nouvelle fenêtre",
+        "Nouvel onglet",
         "Retirer du Dock",
         "Quitter",
     ] {
@@ -371,10 +379,13 @@ fn a_click_brings_forward_or_minimizes_an_open_application() {
     assert_eq!(names[4], "Example Browser");
     dock.click(1);
     dock.click(4);
-    assert_eq!(recorder.requests(), [Request::Minimize, Request::Activate]);
+    // The terminal in front is minimized; the browser behind has its window brought forward.
+    assert_eq!(recorder.requests(), [Request::Minimize]);
+    assert_eq!(recorder.targeted(), [(Request::Activate, 2)]);
     // An application without window is started, not asked anything.
     dock.click(0);
-    assert_eq!(recorder.requests().len(), 2);
+    assert_eq!(recorder.requests().len(), 1);
+    assert_eq!(recorder.targeted().len(), 1);
 }
 
 #[test]
@@ -507,7 +518,7 @@ fn the_applications_button_comes_first() {
     );
     assert_eq!(names.len(), 6);
     let can = dock.abilities(0);
-    assert!(!can.launch && !can.keep && !can.unpin && !can.quit && !can.new_window);
+    assert!(!can.launch && !can.keep && !can.unpin && !can.act);
     let point = icon_center(&dock, 0);
     let _ = dock.hover(Some(point), Duration::ZERO);
     dock.frame(Duration::from_secs(2));

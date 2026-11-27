@@ -376,10 +376,8 @@ fn shell(app_ids: &[&str]) -> Message {
     Message::Windows(Windows {
         list: app_ids
             .iter()
-            .map(|a| Window {
-                app_id: String::from(*a),
-                activated: false,
-            })
+            .zip(1..)
+            .map(|(a, id)| Window::new(id, a, false))
             .collect(),
         ..Windows::default()
     })

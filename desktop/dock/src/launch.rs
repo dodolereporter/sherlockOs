@@ -20,18 +20,26 @@ pub enum LaunchError {
     Spawn { program: String, source: io::Error },
 }
 
-/// What to start: the application itself, or its « new window » action.
+/// What to start: the application itself, a new window of it, or one of its actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum What {
     App,
+    /// Its « new window » action when it declares one, otherwise its `Exec` again without
+    /// argument. An application with a single instance decides what that does.
     NewWindow,
+    /// The action of this index in `DesktopEntry::actions`.
+    Action(usize),
 }
 
 /// The command line `what` runs for `app`.
 pub fn command_line(app: &DesktopEntry, what: What) -> Option<Vec<String>> {
     let exec = match what {
         What::App => app.exec.as_deref()?,
-        What::NewWindow => app.new_window.as_ref()?.exec.as_str(),
+        What::NewWindow => match &app.new_window {
+            Some(action) => action.exec.as_str(),
+            None => app.exec.as_deref()?,
+        },
+        What::Action(index) => app.actions.get(index)?.exec.as_str(),
     };
     let line = entry::command_line(exec, &app.name, app.icon.as_deref(), &app.file);
     (!line.is_empty()).then_some(line)
@@ -120,6 +128,23 @@ mod tests {
         assert_eq!(
             command_line(&app, What::NewWindow),
             Some(vec!["sample".to_owned(), "--new".to_owned()])
+        );
+        assert_eq!(
+            command_line(&app, What::Action(0)),
+            command_line(&app, What::NewWindow)
+        );
+        assert_eq!(command_line(&app, What::Action(1)), None);
+    }
+
+    #[test]
+    fn without_a_new_window_action_the_application_is_started_again() {
+        let text = "[Desktop Entry]\nType=Application\nName=Single\nExec=single %F\n";
+        let app =
+            DesktopEntry::parse("single", Path::new("single.desktop"), text).expect("application");
+        assert_eq!(
+            command_line(&app, What::NewWindow),
+            Some(vec!["single".to_owned()]),
+            "its Exec, without argument"
         );
     }
 
