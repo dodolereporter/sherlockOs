@@ -15,9 +15,11 @@ use iced::futures::StreamExt;
 use zbus::Connection;
 use zbus::fdo::{self, DBusProxy, RequestNameFlags, RequestNameReply};
 use zbus::message::Header;
+use zbus::names::BusName;
 use zbus::object_server::SignalEmitter;
+use zbus::zvariant::ObjectPath;
 
-use super::{address, key};
+use super::{MAX_ITEMS, address, key};
 
 /// The well-known name, and the interface.
 pub const NAME: &str = "org.kde.StatusNotifierWatcher";
@@ -58,10 +60,23 @@ impl Watcher {
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> fdo::Result<()> {
         let (service, path) = address(service, &sender(&header)?);
+        // Only a real address is kept: a key that no owner can ever take back would stay.
+        if BusName::try_from(service.as_str()).is_err()
+            || ObjectPath::try_from(path.as_str()).is_err()
+        {
+            return Err(fdo::Error::InvalidArgs(format!(
+                "not an item: {service}{path}"
+            )));
+        }
         let key = key(&service, &path);
         let new = {
             let mut registered = self.lock();
             let new = !registered.items.contains(&key);
+            if new && registered.items.len() >= MAX_ITEMS {
+                return Err(fdo::Error::LimitsExceeded(String::from(
+                    "too many tray items",
+                )));
+            }
             if new {
                 registered.items.push(key.clone());
             }
@@ -83,6 +98,11 @@ impl Watcher {
     ) -> fdo::Result<()> {
         {
             let mut registered = self.lock();
+            if registered.hosts.len() >= MAX_ITEMS {
+                return Err(fdo::Error::LimitsExceeded(String::from(
+                    "too many tray hosts",
+                )));
+            }
             if !registered.hosts.iter().any(|h| h == service) {
                 registered.hosts.push(service.to_owned());
             }

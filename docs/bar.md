@@ -425,6 +425,10 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
 - **Bounded.** As for the global menu: every call has the 1.5 s limit of the menus' connection
   (`dbusmenu::TIMEOUT`) and runs on the bus's executor or in an iced task, never on the
   interface thread. An application that hangs keeps its item unread, never the bar frozen.
+  What an application sends is bounded too (`tray::MAX_*`): 40 items at most (the watcher
+  refuses more with `LimitsExceeded`, the host reads no more, and the popup's rows still fit a
+  small screen), an item registered only at a valid bus name and object path, 8 pixmaps per icon
+  of 512 pixels a side at most, and 256 characters of its id, title and tooltip.
 - **Icons.** The name first: in the folder the application gives (`IconThemePath`, where
   Electron and libappindicator write theirs, or a theme in it when it is an `icons` folder), then
   in the user's icon theme, what it inherits, `hicolor` and `pixmaps` (the `icon-theme` crate the

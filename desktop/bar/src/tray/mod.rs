@@ -21,6 +21,17 @@ pub const ITEM: &str = "org.kde.StatusNotifierItem";
 /// Where an item registered by its bus name alone is.
 pub const ITEM_PATH: &str = "/StatusNotifierItem";
 
+/// Items followed at most: the watcher refuses more, the host reads no more. Far above what a
+/// desktop shows, and the popup's rows still fit a small screen.
+pub const MAX_ITEMS: usize = 40;
+/// Pixmaps of one icon kept at most, and the largest side kept: an application cannot make the
+/// bar hold or upload more than a few megabytes for one icon.
+pub const MAX_PIXMAPS: usize = 8;
+pub const MAX_PIXMAP_SIDE: i32 = 512;
+/// Characters kept of a text an item sends (its id, its title, its tooltip): the line under the
+/// grid ends in « … » long before.
+pub const MAX_TEXT: usize = 256;
+
 /// What an item says of itself.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Status {
@@ -114,7 +125,7 @@ impl Properties {
     /// Reads `GetAll`'s answer. Unknown properties and wrong types are left out.
     pub fn parse(values: &HashMap<String, OwnedValue>) -> Self {
         let text = |name: &str| match values.get(name).map(|v| &**v) {
-            Some(Value::Str(s)) if !s.is_empty() => Some(s.as_str().to_owned()),
+            Some(Value::Str(s)) if !s.is_empty() => Some(bounded(s.as_str())),
             _ => None,
         };
         let pixmaps = |name: &str| values.get(name).map(|v| pixmaps(v)).unwrap_or_default();
@@ -154,13 +165,22 @@ impl Properties {
     }
 }
 
-/// `a(iiay)`.
+/// `text` cut to `MAX_TEXT` characters.
+fn bounded(text: &str) -> String {
+    text.chars().take(MAX_TEXT).collect()
+}
+
+/// `a(iiay)`: at most `MAX_PIXMAPS`, none wider or taller than `MAX_PIXMAP_SIDE`.
 fn pixmaps(value: &Value<'_>) -> Vec<Pixmap> {
     let Ok(value) = value.try_clone() else {
         return Vec::new();
     };
     let list = Vec::<(i32, i32, Vec<u8>)>::try_from(value).unwrap_or_default();
     list.into_iter()
+        .filter(|(width, height, _)| {
+            (1..=MAX_PIXMAP_SIDE).contains(width) && (1..=MAX_PIXMAP_SIDE).contains(height)
+        })
+        .take(MAX_PIXMAPS)
         .map(|(width, height, argb)| Pixmap {
             width,
             height,
@@ -174,7 +194,10 @@ fn tooltip(value: &Value<'_>) -> Option<(String, String)> {
     let value = value.try_clone().ok()?;
     type Tip = (String, Vec<(i32, i32, Vec<u8>)>, String, String);
     let (_, _, title, text) = Tip::try_from(value).ok()?;
-    let (title, text) = (strip_markup(&title), strip_markup(&text));
+    let (title, text) = (
+        bounded(&strip_markup(&title)),
+        bounded(&strip_markup(&text)),
+    );
     (!title.is_empty() || !text.is_empty()).then_some((title, text))
 }
 
@@ -362,6 +385,23 @@ mod tests {
             (":1.9".into(), "/org/blueman/sni".into())
         );
         assert_eq!(key(":1.7", "/a/b"), ":1.7/a/b");
+    }
+
+    #[test]
+    fn what_an_item_sends_is_bounded() {
+        let huge = MAX_PIXMAP_SIDE + 1;
+        let mut many = vec![(huge, 1i32, vec![0u8; huge as usize * 4])];
+        many.extend((0..20).map(|_| (1i32, 1i32, vec![0xFFu8, 1, 2, 3])));
+        let mut values: HashMap<String, OwnedValue> = HashMap::new();
+        let mut put = |name: &str, value: Value<'_>| {
+            values.insert(name.to_owned(), value.try_to_owned().unwrap());
+        };
+        put("IconPixmap", Value::from(many));
+        put("Title", Value::from("x".repeat(MAX_TEXT * 4)));
+        let read = Properties::parse(&values);
+        assert_eq!(read.icon.pixmaps.len(), MAX_PIXMAPS);
+        assert!(read.icon.pixmaps.iter().all(|p| p.width == 1));
+        assert_eq!(read.title.chars().count(), MAX_TEXT);
     }
 
     #[test]
