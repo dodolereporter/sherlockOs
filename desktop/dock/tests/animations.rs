@@ -323,6 +323,99 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
     assert!(dock.leaving.is_empty());
 }
 
+/// Lot D-21d: an open application dragged across the separator among the pinned ones is
+/// pinned where it is let go; dragged back after it, it is unpinned; a pinned application let
+/// go out of the dock goes up in smoke. The file is read again just before it is written.
+#[test]
+fn dragging_across_the_separator_pins_and_unpins() {
+    let dir = scratch("cross");
+    let path = dir.join("dock.conf");
+    let mut dock = dock(
+        &[],
+        &["org.example.Files", "example-editor"],
+        flat(),
+        Some(path.clone()),
+    );
+    open(&mut dock, "terminal");
+    let t = settle(&mut dock);
+    assert_eq!(
+        names(&dock),
+        ["Fichiers", "Sherlock", "Éditeur", "Terminal d'exemple"]
+    );
+    assert_eq!(dock.separator, Some(3));
+    // Another program changes the file meanwhile: the dock must not undo it.
+    std::fs::write(
+        &path,
+        "[Dock]\nPinned=org.example.Files;example-editor;\nIconSize=40\n",
+    )
+    .expect("file written");
+
+    // The terminal, after the separator, dragged to the second place.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 3);
+    // Over the left half of Sherlock: the second place.
+    let between = Point::new(rest.icons[1].center_x() - 8.0, terminal.y);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, between);
+    assert_eq!(dock.separator, None, "the separator went with it");
+    assert_eq!(
+        names(&dock),
+        ["Fichiers", "Terminal d'exemple", "Sherlock", "Éditeur"],
+        "pinned where the pointer is"
+    );
+    assert_eq!(
+        dock.held().map(|(i, _)| i),
+        Some(1),
+        "it follows the pointer"
+    );
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    let written = std::fs::read_to_string(&path).expect("file read");
+    let (read, _) = DockConfig::parse(&written);
+    let order = [
+        "org.example.Files",
+        "org.example.Terminal",
+        "example-editor",
+    ];
+    assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
+    assert_eq!(read.icon_size, 40.0, "what Control Room wrote stays");
+    let t = settle(&mut dock);
+
+    // Dragged back past the last icon: open, it is unpinned, after a new separator.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 1);
+    let end = Point::new(rest.icons[3].x + rest.icons[3].width + 40.0, terminal.y);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, end);
+    assert_eq!(dock.separator, Some(3));
+    assert_eq!(names(&dock)[3], "Terminal d'exemple");
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("file read"));
+    let order = ["org.example.Files", "example-editor"];
+    assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
+    let t = settle(&mut dock);
+
+    // An open application that is not pinned, let go out of the dock: it comes back, no smoke.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 3);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, Point::new(terminal.x, 2.0));
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert!(dock.poofs.is_empty());
+    assert_eq!(dock.separator, Some(3));
+    let t = settle(&mut dock);
+
+    // The files, pinned and closed, let go out of the dock: unpinned, in a puff of smoke.
+    let files = middle(&dock.layout(t), 0);
+    press(&mut dock, files);
+    drag_to(&mut dock, files, Point::new(files.x, 2.0));
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert_eq!(dock.pinned, ["example-editor"]);
+    assert_eq!(dock.poofs.len(), 1);
+    assert!(dock.animating(), "frames while it smokes");
+    settle(&mut dock);
+    assert!(dock.poofs.is_empty(), "gone");
+}
+
 #[test]
 fn only_pinned_applications_can_be_dragged_out() {
     let mut dock = dock(&[], &FOUR, flat(), None);
