@@ -421,7 +421,10 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   overlay icons, `ToolTip`, `Menu`, `ItemIsMenu`), and again on each signal of its interface
   (`NewIcon`, `NewAttentionIcon`, `NewOverlayIcon`, `NewTitle`, `NewToolTip`, `NewStatus`), a
   burst coalesced into one read (`bus::coalesce`). `Passive` hides it. It goes when the watcher
-  says so, or when its application leaves the bus (`NameOwnerChanged`).
+  says so, or when its application leaves the bus (`NameOwnerChanged`). An application that
+  leaves while its item is read leaves no ghost icon (lot D-45c): each read under way is noted
+  (`host::Ledger`), a departure marks the reads of its item (by key, or by the service the key
+  names), and a marked read is dropped when it ends.
 - **Bounded.** As for the global menu: every call has the 1.5 s limit of the menus' connection
   (`dbusmenu::TIMEOUT`) and runs on the bus's executor or in an iced task, never on the
   interface thread. An application that hangs keeps its item unread, never the bar frozen.
@@ -442,7 +445,9 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   under the grid, 26 high. The popup is as wide as its columns, at least 200, on the menus' glass,
   radius 12, with the menus' shadow on the GPU, 6 below the bar. Its middle is under the chevron's,
   and it never goes past where the panels end. Found from the chevron's real place
-  (`locate`), whatever the width of the indicators, the screen and its scale.
+  (`locate`), whatever the width of the indicators, the screen and its scale. It stops 24 above
+  the bottom of the screen, as the global menu does, and its grid scrolls above the tooltip line
+  (lot D-45c); never shorter than a row and that line.
 - **Chevron.** A ghost button like the indicators', veiled with its green mark while the popup is
   open. It points down, and turns half a turn up on the panels' spring as the popup opens, back as
   it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
