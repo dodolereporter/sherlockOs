@@ -4,8 +4,12 @@
 # daemon, the launcher and the applications view inside it.
 #
 # The programs are looked for next to this script (`just install-session` puts them in
-# /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN. That folder goes at the end of PATH: the
-# session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
+# /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN, which is exported with that folder: the
+# compositor, the dock and the bar start the launcher, the applications view, the lock screen and
+# Control Room from there, by their full path. That folder is not added to PATH (lot Q-39): its
+# programs have generic names (bar, dock, launcher, compositor) that a terminal of the session
+# must not run by mistake, nor take in place of another program of the same name. Evidence, the
+# one meant for the user, is linked into /usr/local/bin by `just install-session`.
 # XWayland starts too, for X11 applications; SHERLOCKOS_XWAYLAND=0 leaves it out (see "Real session"
 # in docs/compositor.md), and SHERLOCKOS_XEMBED=0 the proxy of the old X11 tray icons.
 # SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
@@ -65,7 +69,7 @@ else
 	unset SHERLOCKOS_OWN_BUS
 fi
 
-export PATH="$PATH:$bin"
+export SHERLOCKOS_BIN="$bin"
 # The data of the session, the application icons as a hicolor theme: in share/sherlockos beside the
 # libexec folder (/usr/local/share/sherlockos, where `just install-session` puts them), or in
 # SHERLOCKOS_DATA. First in XDG_DATA_DIRS, for the programs of the session only. After the re-exec

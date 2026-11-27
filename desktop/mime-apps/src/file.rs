@@ -28,36 +28,34 @@ pub fn resolve_links(path: &Path) -> PathBuf {
     current
 }
 
-/// Writes made by this process, for temporary names of their own: two writes at the same time,
-/// from two threads, never share one.
-static WRITES: AtomicU64 = AtomicU64::new(0);
-
-/// The largest settings file read: real ones hold a few kilobytes. A link to `/dev/zero` or a
-/// huge file in the configuration folder would otherwise take all the memory of the program
-/// that reads it (the compositor, the bar, the dock).
-pub const MAX_SETTINGS_SIZE: u64 = 1024 * 1024;
-
-/// The text of the settings file at `path`, `max` bytes at most, in UTF-8. Only a regular
-/// file is read, once its links are followed: a pipe or a device is refused without being
-/// opened for long. Errors keep their kind, so a missing file is still `NotFound`; one that
-/// is too large or not UTF-8 is `InvalidData`.
+/// Reads the text file at `path`, refusing what could take all the memory of the program that
+/// reads it: anything but a regular file once its links are followed (a link to `/dev/zero`, a
+/// pipe), a file of more than `max` bytes, a text that is not UTF-8. An absent file is
+/// `NotFound`, as with `std::fs::read_to_string`; a refused one is `InvalidData`.
 pub fn read_bounded(path: &Path, max: u64) -> io::Result<String> {
-    let metadata = std::fs::metadata(path)?;
-    if !metadata.is_file() {
+    if !std::fs::metadata(path)?.is_file() {
         return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+            io::ErrorKind::InvalidData,
             "not a regular file",
         ));
     }
     let mut bytes = Vec::new();
     std::fs::File::open(path)?
-        .take(max + 1)
+        .take(max.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > max {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "file too large"));
     }
-    String::from_utf8(bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "not UTF-8"))
+    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
+
+/// The largest settings file read (`dock.conf`, `index.theme`, `mimeapps.list`): real ones hold
+/// a few kilobytes.
+pub const MAX_SETTINGS_SIZE: u64 = 64 * 1024;
+
+/// Writes made by this process, for temporary names of their own: two writes at the same time,
+/// from two threads, never share one.
+static WRITES: AtomicU64 = AtomicU64::new(0);
 
 /// Whether `value` would end its line in a settings file and start another: a value with a
 /// line break is refused by every writer, never written.
@@ -153,6 +151,32 @@ mod tests {
     use crate::testing::TempDir;
 
     #[test]
+    fn bounded_reads_refuse_devices_and_large_files() {
+        let tmp = TempDir::new("bounded");
+        let small = tmp.path().join("small.conf");
+        std::fs::write(&small, "[Dock]\n").unwrap();
+        assert_eq!(read_bounded(&small, 16).unwrap(), "[Dock]\n");
+        assert_eq!(
+            read_bounded(&small, 3).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let zero = tmp.path().join("zero.conf");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        assert_eq!(
+            read_bounded(&zero, 16).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let binary = tmp.path().join("binary.conf");
+        std::fs::write(&binary, [0xff, 0xfe]).unwrap();
+        assert!(read_bounded(&binary, 16).is_err());
+        let missing = tmp.path().join("missing.conf");
+        assert_eq!(
+            read_bounded(&missing, 16).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
     fn permissions_and_links_are_kept() {
         let tmp = TempDir::new("file");
         let secret = tmp.path().join("secret.conf");
@@ -219,7 +243,7 @@ mod tests {
         std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
         assert_eq!(
             read_bounded(&link, MAX_SETTINGS_SIZE).unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
+            io::ErrorKind::InvalidData
         );
         let missing = tmp.path().join("missing.conf");
         assert_eq!(

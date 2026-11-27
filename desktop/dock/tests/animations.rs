@@ -502,6 +502,92 @@ fn quick_app(name: &str) -> PathBuf {
     dir.parent().map(Path::to_path_buf).unwrap_or_default()
 }
 
+/// Two applications that start at once and do nothing (`Exec=true`).
+fn quick_pair(name: &str) -> PathBuf {
+    let dir = scratch(name).join("applications");
+    assert!(std::fs::create_dir_all(&dir).is_ok(), "folder");
+    for letter in ["A", "B"] {
+        let entry = format!("[Desktop Entry]\nType=Application\nName=Rapide {letter}\nExec=true\n");
+        let path = dir.join(format!("org.example.Quick{letter}.desktop"));
+        assert!(std::fs::write(path, entry).is_ok(), "entry");
+    }
+    dir.parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// A click at `point`: the icon whose application it started, if any.
+fn clicked(dock: &mut Dock, point: Point) -> Option<usize> {
+    press(dock, point);
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    let launched = dock.launches.first().map(|l| l.target.clone());
+    if launched.is_some() {
+        settle_bounce(dock);
+    }
+    launched.and_then(|target| dock.items.iter().position(|i| i.target() == target))
+}
+
+/// Lot D-21f: Fitts's law, as on macOS. The gap between the glass and the screen edge and the
+/// spaces between the icons are the dock: a click pushed against the bottom edge, or 2 px
+/// above it, starts the icon of its column, and one between two icons the closer one.
+#[test]
+fn a_click_against_the_screen_edge_starts_the_icon_of_its_column() {
+    let data = quick_pair("fitts-bottom");
+    let pinned = ["org.example.QuickA", "org.example.QuickB"];
+    let mut dock = dock(&[data], &pinned, flat(), None);
+    let t = settle(&mut dock);
+    let layout = dock.layout(t);
+    // The first application, Sherlock, the second one.
+    let (first, sherlock, last) = (layout.icons[0], layout.icons[1], layout.icons[2]);
+    let bottom = dock.surface_size.height;
+    assert!(
+        bottom - first.y - first.height > 2.0,
+        "a gap below the glass"
+    );
+    // Below the icons, against the edge and 2 px above it.
+    assert_eq!(
+        clicked(&mut dock, Point::new(first.center_x(), bottom)),
+        Some(0)
+    );
+    assert_eq!(
+        clicked(&mut dock, Point::new(last.center_x(), bottom - 2.0)),
+        Some(2)
+    );
+    // In the space between two icons, 1 px from either.
+    let row = first.center_y();
+    let gap = (first.x + first.width, sherlock.x);
+    assert!(gap.1 - gap.0 >= 4.0, "{gap:?}");
+    assert_eq!(clicked(&mut dock, Point::new(gap.0 + 1.0, row)), Some(0));
+    assert_eq!(layout.icon_for(Point::new(gap.1 - 1.0, row)), Some(1));
+    let gap = (sherlock.x + sherlock.width, last.x);
+    assert_eq!(layout.icon_for(Point::new(gap.0 + 1.0, row)), Some(1));
+    assert_eq!(clicked(&mut dock, Point::new(gap.1 - 1.0, row)), Some(2));
+    // The surface takes the pointer down to the edge, and the dock counts it as on itself
+    // there: the magnification and the label follow the column.
+    let edge = Point::new(last.center_x(), bottom - 0.5);
+    assert!(dock.input_area().contains(edge), "{:?}", dock.input_area());
+    assert!(layout.contains(edge));
+    // Past the ends of the glass, nothing.
+    let past = Point::new(layout.bar.x - 4.0, bottom);
+    assert_eq!(clicked(&mut dock, past), None);
+}
+
+/// Lot D-21f: the same on the left edge, a click pushed against it.
+#[test]
+fn a_click_against_the_left_edge_starts_the_icon_of_its_row() {
+    let data = quick_pair("fitts-left");
+    let pinned = ["org.example.QuickA", "org.example.QuickB"];
+    let mut config = flat();
+    config.position = dock_config::Position::Left;
+    let mut dock = dock(&[data], &pinned, config, None);
+    let t = settle(&mut dock);
+    // The first application, Sherlock, the second one.
+    let last = dock.layout(t).icons[2];
+    assert!(last.x > 2.0, "a gap beside the glass");
+    assert_eq!(
+        clicked(&mut dock, Point::new(0.0, last.center_y())),
+        Some(2)
+    );
+}
+
 fn shell(app_ids: &[&str]) -> Message {
     Message::Windows(Windows {
         list: app_ids
