@@ -112,7 +112,19 @@ longest magnified bar, up to the top of the label, so that a magnified icon past
 reachable and the dock sees the pointer leave; the room kept at both ends for the label of an
 edge icon never takes the pointer. Checked in the nested KWin with a maximized KWrite: a click
 in the black band above the dock puts KWrite's cursor on the line under it, and the dock gets
-no pointer event.
+no pointer event. Since lot D-21f the region always reaches the screen edge over the length of
+the dock, the gap of 8 included (`Geometry::to_edge`): see "Fitts's law" below.
+
+**Fitts's law** (lot D-21f). As on macOS, the gap between the glass and the screen edge, and the
+spaces between the icons, are the dock: launching an application no longer means going down to
+the edge and coming back up. On the bar and between it and the edge, along the bar, the edge
+itself included, a press acts on the icon of its column: a click, a right click (its menu), a
+middle click, a drag (`Layout::icon_for`). Between two icons, the closer one wins, except for a
+right click on the bar itself, which opens the dock's own menu (D-21h, below). The pointer
+there is over the dock: the magnification and the label follow the column. On the left and
+right edges, the same towards the screen side. A hidden dock keeps its band of
+`dock::HIDE_STRIP`, which brings it back after `REVEAL_DELAY`; once it is out, the band at the
+edge is for clicks again. Past the ends of the glass, nothing is picked.
 
 ![A click above the dock reaches the window below](../desktop/dock/screenshots/dock-click-through.png)
 
@@ -210,8 +222,9 @@ The label goes to the closest icon, `floor(p × n)`. The pointer comes over the 
 the bar or over an icon grown past it. Once over it, it stays over it in the whole hover band:
 along the bar as drawn, from the screen edge to the top of the tallest icon
 (`Layout::hover_band`). So the magnification holds when the pointer runs along the top of the
-grown icons and crosses the gap between two of them; a click in that gap picks no icon. Out of
-the band, every icon heads back to 52.
+grown icons and crosses the gap between two of them; a click in that gap, above the bar, picks
+no icon (on the bar and below it, it picks the closer one: "Fitts's law"). Out of the band,
+every icon heads back to 52.
 
 Each icon side is a `motion::Animation` led by `dock::SPRING` (stiffness 1740, damping 52.6,
 damping ratio 0.63). The board's `cubic-bezier(0.2, 0.9, 0.3, 1.25)` over 150 ms peaks about
@@ -257,11 +270,14 @@ folders that come after (that is how a user removes a system application). So is
 whose `TryExec` program is missing. `NoDisplay=true` keeps the application, but the defaults
 never pick it.
 
-The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
-neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
-default roles, its open windows and « Nouvelle fenêtre », and this batch may not change it. The
-dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
-(and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
+The `mime-apps` crate (D-27) lists and reads the dock's desktop entries (since S-DOCK-1): the
+same folders as the launcher and the applications view, sub-folders included (Wine's
+`wine/Programs/…` gives the id `wine-Programs-…`, which « Garder dans le Dock » writes), and the
+same bounds: a regular file once its links are followed, of 256 KiB at most, in UTF-8. A link to
+`/dev/zero` or a huge file is skipped instead of filling the dock's memory. Its `DesktopEntry`
+has neither `StartupWMClass` nor the actions, so the dock still parses the text it is given
+with its own `KeyFile`. `dock.conf` and the user's `mimeapps.list` are read the same way, 64 KiB
+at most (`mime_apps::file::read_bounded`).
 
 Icons are looked up by the shared `icon-theme` crate (`docs/icon-theme.md`, since D-03), as
 the Icon Theme specification says, without the cache file: in the theme of `IconTheme` in the
@@ -812,6 +828,10 @@ X focus): the keyboard steps were checked in the nested KWin.
   is found by its id `evidence` and pinned first, before the file manager `mimeapps` names.
 - **Theme**: the dock fades to the light palette over the frames; captures at rest, hovered and
   of an icon's menu in the light theme (`dock-*-light-tiny-skia.png`).
+- **Fitts's law** (lot D-21f, `tests/animations.rs`): a click against the bottom edge and 2 px
+  above it starts the icon of its column, one 1 px from either icon of a gap starts the closer
+  one, the input region reaches the edge, nothing past the ends of the glass; on the left edge,
+  a click against the edge starts the icon of its row.
 - **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
   the longest magnified bar up to the label while hovered, on the bottom and right edges;
   rounding to whole pixels never shrinks it.

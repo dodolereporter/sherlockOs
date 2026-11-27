@@ -2012,7 +2012,8 @@ running them:
 - the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
-  launcher find it; it runs `evidence`, which the session finds in its `PATH`;
+  launcher find it; it runs `evidence`, which the session finds in its `PATH` through the link
+  `/usr/local/bin/evidence` (lot Q-39);
 - the application icons, a hicolor theme, go to `/usr/local/share/sherlockos/icons/` (D-03);
 - the portal setting `sherlockos-portals.conf` goes to `/usr/local/share/sherlockos/xdg-desktop-portal/`
   (D-35b, see "Everyday services");
@@ -2021,8 +2022,11 @@ running them:
 
 At the next login, SDDM offers « SherlockOS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `SherlockOS`) and `XDG_SESSION_TYPE=wayland`,
-adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there) and `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
+exports the folder of the programs as `SHERLOCKOS_BIN` (the compositor, the dock and the bar
+start the launcher, the applications view, the lock screen and Control Room from it, by their
+full path), without adding it to `PATH`: `bar`, `dock`, `launcher`, `compositor` or
+`notifications` typed in a terminal of the session run nothing of the shell, and no other
+program of that name is taken for one of them (lot Q-39). It adds `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
 launches the compositor, which launches the bar, the dock and the notification daemon once it
 is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given

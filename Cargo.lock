@@ -938,6 +938,7 @@ dependencies = [
  "iced_test",
  "icon-theme",
  "libc",
+ "mime-apps",
  "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
