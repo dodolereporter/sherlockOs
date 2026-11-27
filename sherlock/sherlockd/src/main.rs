@@ -17,7 +17,10 @@ use sherlockd::test_server::{self, Mode};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str =
-    "usage: sherlockd --demo | --claude-code <request> | --proxy | --test-server [case]";
+    "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case]";
+
+/// The longest request read on standard input.
+const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 
 const SYSTEM: &str =
     "Tu es Sherlock, l'agent de SherlockOS. Réponds en français, en tutoyant, par phrases courtes.";
@@ -38,7 +41,11 @@ fn main() -> anyhow::Result<()> {
         .as_slice()
     {
         ["--demo"] => demo(),
-        ["--claude-code", request] => claude_code(request),
+        // Never in the arguments: every local account reads them (`ps`, `/proc/*/cmdline`).
+        ["--claude-code"] => claude_code(&read_request(std::io::stdin().lock())?),
+        ["--claude-code", _] => {
+            bail!("the request is read on standard input, never in the arguments")
+        }
         ["--proxy"] => serve_proxy(),
         ["--test-server"] => test_server::run(Mode::Normal).context("test server"),
         ["--test-server", case] => {
@@ -77,8 +84,29 @@ async fn servers() -> anyhow::Result<McpServers> {
     Ok(servers)
 }
 
+/// The request on `input`, to its end: `MAX_REQUEST_BYTES` at most, in UTF-8, not empty.
+fn read_request(input: impl std::io::Read) -> anyhow::Result<String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_REQUEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("reading the request")?;
+    if bytes.len() as u64 > MAX_REQUEST_BYTES {
+        bail!("request longer than {MAX_REQUEST_BYTES} bytes");
+    }
+    let request = String::from_utf8(bytes).context("request not in UTF-8")?;
+    let request = request.trim();
+    if request.is_empty() {
+        bail!("empty request on standard input");
+    }
+    Ok(request.to_owned())
+}
+
 /// Serves the proxy on standard input and output, for Claude Code.
 fn serve_proxy() -> anyhow::Result<()> {
+    // Started by Claude Code: never outlives it, even killed.
+    sherlockd::process::die_with_own_parent().context("tying the proxy to Claude Code")?;
     runtime()?.block_on(async {
         let mut servers = servers().await?;
         let input = tokio::io::BufReader::new(tokio::io::stdin());
@@ -179,4 +207,21 @@ fn script() -> ScriptedProvider {
                 "Le serveur de test répond « {echo} ». Je n'ai pas vidé la corbeille ({refusal})."
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_request_comes_whole_and_bounded() {
+        assert_eq!(
+            read_request("  Range mes photos\n".as_bytes()).unwrap(),
+            "Range mes photos"
+        );
+        assert!(read_request("\n".as_bytes()).is_err());
+        assert!(read_request(&b"caf\xe9"[..]).is_err());
+        let long = "a".repeat(MAX_REQUEST_BYTES as usize + 1);
+        assert!(read_request(long.as_bytes()).is_err());
+    }
 }
