@@ -1143,6 +1143,18 @@ impl Dock {
         };
     }
 
+    /// The shape of the pointer over the dock (lot UI-07): the hand that points over an icon,
+    /// the closed hand while one is dragged, the arrow elsewhere.
+    pub fn interaction(&self) -> mouse::Interaction {
+        if self.press.as_ref().is_some_and(|p| p.dragging) {
+            return mouse::Interaction::Grabbing;
+        }
+        match self.pointer.and_then(|p| self.layout(self.now).icon_at(p)) {
+            Some(_) => mouse::Interaction::Pointer,
+            None => mouse::Interaction::None,
+        }
+    }
+
     /// The icon with the keyboard focus.
     pub fn focused(&self) -> Option<usize> {
         self.focus

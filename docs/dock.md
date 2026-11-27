@@ -469,6 +469,10 @@ the dock, which stays put on the screen when the surface changes size.
 
 ![An icon dragged between two others](../desktop/dock/screenshots/dock-drag.png)
 
+**Cursor** (lot UI-07). Over an icon the pointer is the hand that points, as over any button
+of the desktop; while an icon is dragged, the closed hand (`Dock::interaction`, given to the
+dock's `mouse_area`). Elsewhere on the dock, the arrow.
+
 **Drag and drop.** The left button now acts when it comes up: pressed and released on the same
 icon without moving 4 px, it is a click. Past 4 px, a pinned application follows the pointer
 (Sherlock and the open applications that are not pinned do not move). Along the dock it takes

@@ -140,7 +140,10 @@ pub const SHAPES: &[Shape] = &[
         "move",
         &["all-resize", "all-scroll", "fleur", "size_all", "dnd-move"],
     ),
-    shape_of("grabbing", &["grab", "openhand", "closedhand", "dnd-none"]),
+    // The open hand over what can be dragged, the closed one while it is (lot UI-07: before,
+    // both showed the closed hand, and pressing a slider changed nothing).
+    shape_of("grab", &["openhand"]),
+    shape_of("grabbing", &["closedhand", "dnd-none"]),
     shape_of(
         "not-allowed",
         &[

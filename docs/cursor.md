@@ -15,7 +15,7 @@ cursor from any background, short animations with a bounce.
 
 ## The shapes
 
-Seventeen drawings, in `assets/cursors/`. The CSS names that `wp_cursor_shape_v1` gives (versions
+Eighteen drawings, in `assets/cursors/`. The CSS names that `wp_cursor_shape_v1` gives (versions
 1 and 2) and the legacy X11 names are aliases: links to the file of the drawing.
 
 | Drawing | Name on the board | Hotspot | Also answers to |
@@ -30,7 +30,8 @@ Seventeen drawings, in `assets/cursors/`. The CSS names that `wp_cursor_shape_v1
 | `nwse-resize` | « Diagonale » | middle | `nw-resize`, `se-resize`, `bd_double_arrow`… |
 | `nesw-resize` | « Diagonale », mirrored | middle | `ne-resize`, `sw-resize`, `fd_double_arrow`… |
 | `move` | « Déplacer » | middle | `all-resize`, `all-scroll`, `fleur`, `size_all` |
-| `grabbing` | « Saisi » | palm (12.8, 14) | `grab`, `openhand`, `closedhand` |
+| `grab` | The open hand (lot UI-07, no board) | palm (12.8, 13) | `openhand` |
+| `grabbing` | « Saisi » | palm (12.8, 14) | `closedhand`, `dnd-none` |
 | `not-allowed` | « Interdit » | middle | `no-drop`, `forbidden`, `crossed_circle` |
 | `crosshair` | « Précision » | middle | `cell`, `cross`, `tcross`, `plus` |
 | `zoom-in` | « Zoom » | lens (10.5, 10.5) | |
@@ -40,8 +41,7 @@ Seventeen drawings, in `assets/cursors/`. The CSS names that `wp_cursor_shape_v1
 
 The boards draw fifteen of them. `nesw-resize` is the diagonal of the board turned the other
 way, `zoom-out` is its magnifier with a minus. The CSS names without a drawing take the closest
-one: a column edge moves as a window edge, a cell is aimed at as a point, `grab` shows the
-closed hand. The full list is `SHAPES` in `desktop/cursor-theme/src/lib.rs`, and a test checks
+one: a column edge moves as a window edge, a cell is aimed at as a point. The full list is `SHAPES` in `desktop/cursor-theme/src/lib.rs`, and a test checks
 that every CSS name has a shape.
 
 `sherlock` is the arrow with a magnifier badge, for Super + click: Sherlock explains what is
@@ -50,8 +50,14 @@ on a window that has not moved yet (lot C-01): released there, it is a Super + c
 past 4 pixels, it is the move of the window, with the four arrows of « Déplacer ». The action
 itself is reserved: the compositor logs it, Sherlock is not plugged in yet.
 
-The boards draw no open hand: `grab` shows the closed hand, like `grabbing`. The fifteen
-drawings of the boards are all in the theme (lot C-01 checked them against both boards).
+The boards draw no open hand. Until lot UI-07, `grab` showed the closed hand, like
+`grabbing`: over a slider the hand was already closed, and pressing it changed nothing, which
+the author read as « la main ne se ferme pas ». Lot UI-07 draws the open hand (`grab.svg`), the
+closed one opened, its four fingers apart and its thumb out, in the style of `pointer` and
+`grabbing`: over a slider the hand is open, held it closes, as on macOS. The fifteen drawings
+of the boards are all in the theme (lot C-01 checked them against both boards).
+
+![The hand that points, the open hand, the closed hand, dark and light](cursor/hands.png)
 
 ## The drawings
 
@@ -150,6 +156,38 @@ composited.
   the board grows to 2.6 in 8 % of its 3.6 s loop (288 ms), holds, then comes back past 1
   (0.92) to 1; the compositor takes 240 ms each way with the same bounce, 2.6 times, held a
   second after the last shake: the same motion, a little brisker.
+
+## Lot UI-07: why the hand did not show
+
+The author reported twice that the pointing hand never showed and that the hand did not close
+when held. What was checked, in a compositor without a screen (`--headless`), with the real
+programs and the pointer moved over them point by point, the shape the compositor would draw
+read after each move:
+
+- **The names reach the compositor.** The bar, Control Room (winit), the dock, Kate (Qt),
+  zenity (GTK 4) and Firefox (GTK 3) all name their cursor with `wp_cursor_shape_v1`, with the
+  serial of the pointer's entry; smithay accepts them (it refuses another serial, a test checks
+  it) and the compositor shows `pointer` over the buttons of the bar and of Control Room, at
+  scales 1, 1.25 and 2. A shape stays while the pointer moves on the same surface, and is
+  named again after the pointer crossed a window's decoration. `RUST_LOG=compositor::handlers=trace`
+  logs each shape a client names (`cursor image`).
+- **The theme has the drawings.** `/usr/local/share/icons/sherlockos/cursors/pointer` and the
+  `target/cursors` the trial session builds are the hand, distinct from the arrow.
+- **What was wrong.**
+  - The icons of the dock named no shape (`mouse_area` without `interaction`): the arrow over
+    them. They now show the hand that points, and the closed hand while an icon is dragged
+    (`Dock::interaction`).
+  - `grab` and `grabbing` were the same drawing: over a slider the hand was closed already,
+    and holding it changed nothing. `grab` is now the open hand.
+- **Not reproduced without a screen.** The drawing of the real session (`udev.rs`, the house
+  theme, the cursor plane) cannot run here. If the hand still does not show over a button of
+  the bar or of Control Room in the real session, the trace above tells whether its name came
+  in; then the drawing is the place to look.
+
+`tests/headless.rs`, `the_compositor_shows_the_cursor_a_client_names`: a client names its cursor
+as iced_exwlshell does (a device made for the request, the entry's serial, destroyed at once):
+the hand that points over a button, which stays while the pointer moves, the open hand over a
+slider, the closed hand while it is held; a stale serial changes nothing.
 
 ## Show the clicks
 
