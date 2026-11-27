@@ -2,7 +2,7 @@
 //! sidebar, listing, preview, status bar, right-click menu.
 
 use iced::widget::{
-    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, scrollable, space,
+    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, space,
     stack, text,
 };
 use iced::{Alignment, Element, Length, Padding};
@@ -12,6 +12,7 @@ use sherlock_ui::animated::{hoverable, reveal};
 use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::texts::{self, evidence as t};
 use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
@@ -405,7 +406,7 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scrollable(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
+            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
@@ -835,7 +836,7 @@ impl App {
             });
             // Rows keep their height (and long names their single line, with « … »): a list
             // longer than its room scrolls.
-            scrollable(Column::with_children(rows))
+            scroll(Column::with_children(rows))
                 .height(self.chooser_list_height())
                 .into()
         };

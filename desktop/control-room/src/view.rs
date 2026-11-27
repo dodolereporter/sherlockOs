@@ -3,7 +3,7 @@
 //! title bar slides it back over the page.
 
 use iced::widget::{
-    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row, scrollable,
+    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row,
     space, span, stack, svg,
 };
 use iced::{Alignment, Element, Length, Padding, Size};
@@ -12,6 +12,7 @@ use sherlock_ui::app_icon::AppIcon;
 use sherlock_ui::component as ui;
 use sherlock_ui::control_room::{self as cr, texts as t};
 use sherlock_ui::icon::Icon;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, theme, typography};
 
 use crate::app::{App, Message, SEARCH, WindowAction};
@@ -151,7 +152,7 @@ impl App {
             }
         }
         let (vertical, side) = cr::SIDEBAR_PADDING;
-        container(scrollable(nav).height(Length::Fill))
+        container(scroll(nav).height(Length::Fill))
             .width(cr::SIDEBAR_WIDTH)
             .height(Length::Fill)
             .padding([vertical, side])
@@ -227,7 +228,7 @@ impl App {
         let page = container(page)
             .center_x(Length::Fill)
             .padding([vertical, horizontal]);
-        container(scrollable(page).height(Length::Fill))
+        container(scroll(page).height(Length::Fill))
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::window)
