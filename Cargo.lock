@@ -315,6 +315,7 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "image",
  "launcher",
  "libc",
