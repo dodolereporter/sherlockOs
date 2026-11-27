@@ -471,7 +471,14 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   chevron. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
-  the item's menu (D-45a, below).
+  the item's menu (D-45a, below). `tests/tray_click.rs` clicks through the bar's real widgets, in
+  the order `iced_exwlshell` delivers the events (the button's click before the subscription
+  hears the release), against items made the way Chromium and Electron (registered by their
+  unique name), libayatana-appindicator (by an object path alone, `Activate` refused: its menu
+  opens) and `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48). What the
+  application then does with its window is up to the compositor: bringing a minimized window
+  back or raising one behind others needs the application to activate it, which the compositor
+  does not offer yet (`xdg-activation-v1`, X11's `_NET_ACTIVE_WINDOW`).
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
@@ -505,7 +512,9 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   chevron, in the order it was dropped; the bar shows where it would land, the icon faded in its
   slot, while the pointer is over it, and the icon left in the popup fades meanwhile. Dragged
   along the bar, a kept icon changes place; dragged below the bar, it fades and goes back into
-  the popup when let go. A press that does not move 6 pixels is a click. A kept icon answers the
+  the popup when let go. A press that does not move 6 pixels is a click. The drag ends with the
+  release: a click right after it is a click, even when it reaches the bar before the
+  subscription tells its press (Q-48: the first click after a drag used to be lost). A kept icon answers the
   clicks and the wheel as in the popup, and breathes when it needs attention; the chevron's dot
   only counts the icons of the popup. Without an icon left in the popup, no chevron.
 - **Saved.** The icons kept are remembered by their `Id`, the same from one start of the
