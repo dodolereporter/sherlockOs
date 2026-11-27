@@ -5,7 +5,7 @@
 //! lot D-35d), but for a slider held under the pointer.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -349,6 +349,8 @@ pub enum Message {
     Forget(String),
     ConfirmForget(bool),
     ToggleDoNotDisturb,
+    /// « Ne pas déranger » as the file says, read or written off the interface thread.
+    DoNotDisturb(Result<bool, Problem>),
     Volume(u8),
     Mute,
     Light(u8),
@@ -398,6 +400,27 @@ where
     )
 }
 
+/// Whether the notifications file at `path` says « Ne pas déranger »; a file that cannot be
+/// read says no.
+fn read_do_not_disturb(path: &Path) -> bool {
+    NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
+}
+
+/// Turns « Ne pas déranger » over in the file at `path` and returns the new state. Two
+/// toggles at once are made one after the other: neither is lost.
+fn toggle_do_not_disturb(path: &Path) -> system::Result<bool> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut config, _) = NotificationsConfig::load(path).unwrap_or_default();
+    config.do_not_disturb = !config.do_not_disturb;
+    config
+        .save(path)
+        .map_err(|error| Problem::Failed(error.to_string()))?;
+    Ok(config.do_not_disturb)
+}
+
 /// Runs blocking `work` (a command, a file) on a thread of its own, never on iced's pool: a
 /// sound server that hangs holds that thread only, for `pactl`'s time limit at most.
 fn blocking<T: Send + 'static>(
@@ -443,11 +466,17 @@ impl Quick {
         self.failure = None;
         self.refused = None;
         self.held = None;
-        self.do_not_disturb = self.settings.as_deref().map(|path| {
-            NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
-        });
+        // The file is read off the interface thread: the tile shows its last state meanwhile.
+        let do_not_disturb = match self.settings.clone() {
+            Some(path) => blocking(
+                move || Ok(read_do_not_disturb(&path)),
+                Message::DoNotDisturb,
+            ),
+            None => Task::none(),
+        };
         Task::batch([
             stopped,
+            do_not_disturb,
             self.read(Service::Wifi),
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
@@ -682,7 +711,12 @@ impl Quick {
                     });
                 }
             }
-            Message::ToggleDoNotDisturb => self.toggle_do_not_disturb(),
+            Message::ToggleDoNotDisturb => {
+                if let Some(path) = self.settings.clone() {
+                    return blocking(move || toggle_do_not_disturb(&path), Message::DoNotDisturb);
+                }
+            }
+            Message::DoNotDisturb(done) => self.do_not_disturb_done(done),
             Message::Volume(value) => {
                 self.held = Some(Service::Sound);
                 if let Load::Ready(output) = &mut self.sound {
@@ -935,15 +969,11 @@ impl Quick {
         self.read(Service::Wifi)
     }
 
-    fn toggle_do_not_disturb(&mut self) {
-        let Some(path) = self.settings.clone() else {
-            return;
-        };
-        let (mut config, _) = NotificationsConfig::load(&path).unwrap_or_default();
-        config.do_not_disturb = !config.do_not_disturb;
-        match config.save(&path) {
-            Ok(()) => {
-                self.do_not_disturb = Some(config.do_not_disturb);
+    /// « Ne pas déranger » read or written: the tile follows, or « Échec » under it.
+    fn do_not_disturb_done(&mut self, done: Result<bool, Problem>) {
+        match done {
+            Ok(on) => {
+                self.do_not_disturb = Some(on);
                 if self
                     .failure
                     .as_ref()
@@ -952,9 +982,8 @@ impl Quick {
                     self.failure = None;
                 }
             }
-            Err(error) => {
-                tracing::warn!(%error, "cannot write Do not disturb");
-                let problem = Problem::Failed(error.to_string());
+            Err(problem) => {
+                tracing::warn!(%problem, "cannot write Do not disturb");
                 self.failure = Some((Service::DoNotDisturb, problem));
             }
         }
@@ -2001,18 +2030,27 @@ mod tests {
             settings: Some(file.clone()),
             ..Quick::default()
         };
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert_eq!(quick.do_not_disturb, Some(true));
-        let (config, _) = NotificationsConfig::load(&file).unwrap();
-        assert!(config.do_not_disturb);
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
-        // A file that cannot be written: « Échec » under the tile.
-        let mut blocked = Quick {
-            settings: Some(PathBuf::from("/proc/no/notifications.conf")),
+        // The tile asks for a task: nothing is read or written on the interface thread. (Its
+        // thread writes a file of its own, apart from the one checked below.)
+        let mut asking = Quick {
+            settings: Some(dir.join("other").join("notifications.conf")),
             ..Quick::default()
         };
-        let _ = blocked.update(Message::ToggleDoNotDisturb);
+        assert!(asking.update(Message::ToggleDoNotDisturb).units() > 0);
+        assert!(asking.do_not_disturb.is_none());
+        let done = toggle_do_not_disturb(&file);
+        assert_eq!(done, Ok(true));
+        let _ = quick.update(Message::DoNotDisturb(done));
+        assert_eq!(quick.do_not_disturb, Some(true));
+        let (config, _) = NotificationsConfig::load(&file).unwrap();
+        assert!(config.do_not_disturb && read_do_not_disturb(&file));
+        assert_eq!(toggle_do_not_disturb(&file), Ok(false));
+        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
+        // A file that cannot be written: « Échec » under the tile.
+        let mut blocked = Quick::default();
+        let done = toggle_do_not_disturb(Path::new("/proc/no/notifications.conf"));
+        assert!(done.is_err());
+        let _ = blocked.update(Message::DoNotDisturb(done));
         assert!(matches!(blocked.failure, Some((Service::DoNotDisturb, _))));
         assert_eq!(blocked.failed(Service::DoNotDisturb), Some(words::FAILED));
         let _ = std::fs::remove_dir_all(&dir);

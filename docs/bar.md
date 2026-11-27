@@ -199,7 +199,9 @@ command that stops is restarted 30 s later. A burst of watch lines (a volume sli
 dragged, a network reconnecting) gives a single refresh: the lines that follow within
 `metrics::EVENT_COALESCE_MS` (150 ms) of each other are drained before reading again, for
 `metrics::EVENT_COALESCE_MAX_MS` (500 ms) at most, so that a long drag still refreshes. When the
-bar stops, the monitors stop quietly and are not restarted. A read
+bar stops, the monitors stop quietly and are not restarted. A reading
+command that gives no answer in 10 s (`source::RUN_LIMIT`, Q-42) is killed and counts as a read
+error: the icon keeps its state and the next change reads again. A read
 error, such as an `upower` output without a battery section, is logged as a warning once, until
 the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs (the last one in
 `desktop/system-services/fixtures`, with the sound shared with the media keys)
@@ -685,7 +687,7 @@ the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above t
 | --- | --- | --- | --- |
 | Wi-Fi | NetworkManager, system bus | `WirelessEnabled`, `WirelessHardwareEnabled`, the first device of type 2, its `ActiveAccessPoint` and `AccessPoints` | `WirelessEnabled`; `ActivateConnection` of a saved connection, else `AddAndActivateConnection` |
 | Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its `Device1` and their `Battery1` | `Powered`; `Connect`, `Disconnect`, `Pair`, `Trusted`, `RemoveDevice`, `StartDiscovery`, `StopDiscovery` |
-| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
+| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept; read and written on a thread of its own (Q-42), never on the interface's |
 | Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
 | Keyboard backlight | UPower, system bus; else `/sys/class/leds` and logind | `GetBrightness`, `GetMaxBrightness` of `org.freedesktop.UPower.KbdBacklight`; else the LED `…::kbd_backlight` | `SetBrightness`; else `Session.SetBrightness("leds", name, value)` |
