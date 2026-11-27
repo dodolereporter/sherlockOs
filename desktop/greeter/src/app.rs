@@ -659,6 +659,7 @@ impl Greeter {
         // He shrinks away once happy.
         let side = (diameter * grow * (1.0 - 0.4 * self.leaving())).max(1.0);
         let fill = fade(colors.bubble, self.presence(1));
+        let edge = fade(colors.bubble_border, self.presence(1));
         let t = self.elapsed();
         let looking = self
             .switched
@@ -687,13 +688,14 @@ impl Greeter {
             .align_x(Alignment::Center)
             .into(),
         };
+        // The bubble of the theme, with its edge, exactly as on the lock screen (lot D-25d).
         let bubble = container(mascot)
             .width(side)
             .height(side)
             .clip(true)
             .style(move |_| container::Style {
                 background: Some(Background::Color(fill)),
-                border: Border::default().rounded(side / 2.0),
+                border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
                 ..container::Style::default()
             });
         container(bubble).center(diameter).into()
@@ -747,15 +749,15 @@ impl Greeter {
                     border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
                     ..button::Style::default()
                 });
-            // The ring of the selected user, in the cream of what comes from Sherlock.
-            let cream = fade(colors.bubble, if selected { presence } else { 0.0 });
+            // The ring of the selected user, in the color of the text, readable in both themes.
+            let ring_color = fade(colors.text, if selected { presence } else { 0.0 });
             let ringed = container(face)
                 .center(ring)
                 .style(move |_| container::Style {
                     border: Border::default()
                         .rounded(ring / 2.0)
                         .width(ui::RING)
-                        .color(cream),
+                        .color(ring_color),
                     ..container::Style::default()
                 });
             bubbles = bubbles.push(ringed);

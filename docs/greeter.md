@@ -25,11 +25,14 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 - **Every screen** has an overlay surface of its own (layer-shell, one per screen, the keyboard
   taken): the picture of the lock, the date and the large time.
 - **The screen of the pointer** (the first one at start) also shows, from the top:
-  - Sherlock in 3D in his cream bubble (his still picture in software or without the model);
+  - Sherlock in 3D in his bubble, which follows the theme as on the lock screen (lot D-25d;
+    his still picture in software or without the model);
   - **the row of users**: a glass bubble with the initial of each human user, the selected one
-    larger with a cream ring, in the middle of the screen; « Autre… » (a person) last. The
-    others are dimmed. A click or the left and right arrows (while nothing is typed) choose
-    another one: the row slides on a spring and Sherlock looks at the new user for 1.2 s;
+    larger with a ring in the color of the text, in the middle of the screen; « Autre… » (a
+    person) last. The others are dimmed. A click or the left and right arrows (while nothing
+    is typed) choose another one: the row slides on a spring and Sherlock looks at the new user for 1.2 s. For
+    now only his eyes turn: `sherlock-3d` aims the eye bones only, and the turn of the head
+    waits for it;
   - the name of the selected user, or a pill to type one for « Autre… »;
   - the password pill with the eye and the arrow, and the line under it;
   - **the session**: a discreet segmented control, « Bureau » (SherlockOS) and « Mode jeu »,
