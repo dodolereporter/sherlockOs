@@ -2027,10 +2027,10 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   and `XDG_DATA_DIRS`, with `--systemd` on the user's shared bus (the portals are systemd user
   services there). The setting is never written into the home folder. Reading it from
   `XDG_DATA_DIRS` needs xdg-desktop-portal 1.18 or later (Debian 13 has 1.20).
-- **Screen sharing and screenshots** through the portals are not there yet: the
-  `xdg-desktop-portal-wlr` backend needs the `wlr-screencopy` protocol (or
-  `ext-image-copy-capture`), which Smithay 0.7 does not provide, and which this lot leaves to a
-  lot of its own. The screenshots of the compositor itself (Print Screen) come with lot D-35c.
+- **Screen sharing and screenshots** through the portals are not there yet. Since lot D-28b
+  the compositor offers a capture protocol to the shell socket (see "Screen capture"); the
+  portal backend that uses it comes with lot D-28d (ADR 0028). The screenshots of the
+  compositor itself (Print Screen) come with lot D-35c.
 
 Debian packages to install for all of it (the author installs them; `just install-session`
 prints the line for those missing): `xdg-desktop-portal`, `xdg-desktop-portal-gtk`,
@@ -2078,8 +2078,8 @@ theme. Each console switch logs `session paused` and `session active again`.
   handle having no screen).
 - The author's test of Xwayland in the real session, now on by default (lot D-35b): does it keep
   off the NVIDIA card with the dmabuf feedback?
-- Screen sharing and screenshots through the portals: the compositor offers no capture
-  protocol yet (see "Everyday services").
+- Screen sharing and screenshots through the portals: the capture protocol is there (lot
+  D-28b), the portal backend not yet (lot D-28d, see "Screen capture").
 - `DmabufBlocker` in the real session (see "GPU buffers").
 
 ### Frames of the real session (lot P-01)
@@ -2232,6 +2232,59 @@ libinput events to `State::process_input_event`:
 5. Three fingers down on a window: nothing. Write `swipe-down = minimize` in
    `~/.config/sherlockos/touchpad.conf`: within 2 seconds the log shows the new setting, and the
    gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
+
+## Screen capture (lot D-28b)
+
+Screen sharing (Discord, Meet in Chrome, Teams) goes through `xdg-desktop-portal`, whose
+`ScreenCast` backend takes the frames from the compositor and pushes them into PipeWire. ADR 0028
+sets the path: the compositor speaks the standard capture protocols, a portal backend of our own
+(lot D-28d) asks the user and feeds PipeWire, and the compositor holds the policy (indicator,
+stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
+
+- **Protocols.** `ext_image_copy_capture_manager_v1` and
+  `ext_output_image_capture_source_manager_v1`, version 1, written against `wayland-protocols`
+  0.32 since Smithay 0.7 has no helper for them. A window as a source
+  (`ext-foreign-toplevel-image-capture-source-v1`), the cursor painted into the frames and the
+  cursor sessions come with lot D-28c: until then `paint_cursors` is accepted and the frames
+  show no cursor, and a cursor session's capture session stops at once.
+- **Only the shell socket** sees these globals (`can_view`, as `sherlock_shell_v1`, ADR 0021):
+  they show every pixel of the session, so an ordinary application, a Flatpak one or XWayland
+  cannot capture anything, and has to go through the portal.
+- **Session.** On a screen, it gives the buffer it needs: the size of the screen's frame in
+  pixels, and two shared memory formats, `xrgb8888` and `argb8888`, the two every compositor
+  offers (`wl_shm` has no other here), blue first in memory: the copy swaps red and blue, which
+  the renderer reads first. A screen that goes away, or
+  changes size, stops its sessions (`stopped`, and the frame fails with `stopped`). Dmabuf
+  buffers come later.
+- **Frames.** One at a time per session. Once its capture is asked for, the frame waits for the
+  screen to show a new picture since the session's previous frame: the real session reports
+  each frame with damage it queues (`screen_changed`), so a frame comes at most once per
+  vertical blank, and never while the screen shows nothing new. The redraw counter could not
+  serve: every client request moves it, the capture's own included. Then the compositor draws
+  the screen offscreen as
+  it shows, without the cursor, with the screenshots' `Capturer` (lot D-35c), once per screen
+  for all its sessions. It copies the drawing row by row into the client's buffer, which may
+  have padded rows and start anywhere in its pool, then sends `transform` (normal), the damage
+  (the whole frame), the time (`CLOCK_MONOTONIC`) and `ready`. A buffer of another size fails
+  the frame with `buffer_constraints`, without a renderer (nested mode, tests
+  without one) with `unknown`; the session goes on. Protocol errors as the protocol says:
+  `duplicate_frame`, `no_buffer`, `already_captured`, `invalid_buffer_damage`,
+  `invalid_option`.
+- **Locked.** While the session is locked the screen is never drawn for a capture: every frame
+  is black and opaque, the session goes on. The lock screen itself is not shared either.
+- **Cost.** Each frame is a render of the screen offscreen, a read back and a copy, in the
+  compositor's thread: the price to measure at 1080p before lot D-28d, and the reason for the
+  dmabuf buffers that follow.
+- **Tests** (`tests/screencast.rs`, with a capturer of the test that draws a pattern): only the
+  shell client sees the globals; the session asks for 800 × 600 in `xrgb8888`; a frame into a
+  buffer with padded rows from 64 bytes into its pool is the pattern, the padding untouched;
+  the next frame waits while the screen shows nothing new and comes once a new picture is
+  reported; while locked the
+  frame is black and the screen never drawn (the test's lock programs leave at once: the
+  compositor's own lock screen); a buffer of another size fails the frame, and a buffer that
+  fits then gets one. With Mesa's software renderer
+  (`--ignored`): a red window in the middle of the screen is red in the captured frame, the
+  desktop around it is not.
 
 ## Mission Control
 

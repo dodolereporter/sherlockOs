@@ -43,6 +43,7 @@ pub mod popup_anim;
 pub mod power;
 pub mod render;
 mod screensaver;
+pub mod screencast;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -181,6 +182,8 @@ pub struct State {
     /// The edges of fullscreen screens where the pointer brings the bar or the dock back
     /// (lot D-21e).
     reveals: fullscreen::Reveals,
+    /// Screen capture sessions, for screen sharing (lot D-28b).
+    screencast: screencast::Screencast,
     /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
     /// them again.
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
@@ -373,6 +376,7 @@ impl State {
             popups: PopupManager::default(),
             popup_grab: None,
             reveals: fullscreen::Reveals::default(),
+            screencast: screencast::Screencast::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
@@ -397,7 +401,10 @@ impl State {
             launcher_program: None,
             xwayland: None,
             listener: None,
-            shell: shell::Shell::new(&dh),
+            shell: {
+                screencast::create_globals(&dh);
+                shell::Shell::new(&dh)
+            },
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -734,6 +741,7 @@ impl State {
         self.end_popup_closings();
         self.end_clicks();
         self.refresh_reveals();
+        self.refresh_screencast();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
