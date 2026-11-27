@@ -55,6 +55,7 @@ mod tests {
             working_dir: None,
             icon: None,
             mime_types: Vec::new(),
+            categories: Vec::new(),
             no_display: false,
             terminal: false,
             try_exec: None,
