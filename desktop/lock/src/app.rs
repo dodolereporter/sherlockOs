@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use iced::futures::channel::{mpsc, oneshot};
+use iced::futures::channel::mpsc;
 use iced::widget::{Space, button, column, container, image, row, stack, svg, text, text_input};
 use iced::{
     Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
@@ -514,18 +514,14 @@ impl Lock {
         self.phase = Phase::Checking(self.elapsed());
         // The field empties now: the password goes to PAM, and nowhere else.
         let password = std::mem::take(&mut self.password);
-        let (user, authenticator) = (self.user.clone(), self.authenticator.clone());
-        let (sender, receiver) = oneshot::channel();
-        let spawned = std::thread::Builder::new()
-            .name("pam".into())
-            .spawn(move || {
-                let _ = sender.send(authenticator.check(&user, password));
-            });
-        if let Err(err) = spawned {
-            return Task::done(Message::Checked(Err(AuthError::Unavailable(
-                err.to_string(),
-            ))));
-        }
+        tracing::info!("authentication: checking");
+        // On a thread of its own, with a limit: the interface never waits for PAM (D-25f).
+        let receiver = crate::pam::check_in_background(
+            self.authenticator.clone(),
+            self.user.clone(),
+            password,
+            crate::pam::TIMEOUT,
+        );
         Task::perform(receiver, |result| {
             Message::Checked(
                 result.unwrap_or_else(|_| Err(AuthError::Unavailable("no answer".into()))),
@@ -697,6 +693,7 @@ impl Lock {
         let grow = ui::BUBBLE_FROM + (1.0 - ui::BUBBLE_FROM) * self.progress(1).max(0.0);
         let side = (diameter * grow).max(1.0);
         let fill = fade(colors.bubble, self.presence(1));
+        let edge = fade(colors.bubble_border, self.presence(1));
         let field = self.field();
         // The field, under the bubble, the name and their gaps.
         let below = Point::new(
@@ -725,14 +722,16 @@ impl Lock {
             .align_x(Alignment::Center)
             .into(),
         };
-        // The round cream bubble, clipped: the still picture of software fills it like the 3D.
+        // The round bubble of the theme (night blue glass, or pale blue-grey: lot D-25d),
+        // clipped: the still picture of software fills it like the 3D. It follows the fade of
+        // the theme with the palette.
         let bubble = container(mascot)
             .width(side)
             .height(side)
             .clip(true)
             .style(move |_| container::Style {
                 background: Some(Background::Color(fill)),
-                border: Border::default().rounded(side / 2.0),
+                border: Border::default().rounded(side / 2.0).width(1.0).color(edge),
                 ..container::Style::default()
             });
         container(bubble).center(diameter).into()
