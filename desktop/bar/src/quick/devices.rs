@@ -206,6 +206,7 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(super::settings_link(words::BLUETOOTH_SETTINGS, None));
         page.into()
     }
 

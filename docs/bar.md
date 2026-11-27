@@ -577,15 +577,16 @@ that is neither the old one nor the new one.
 ## Sherlock menu
 
 It has the entries of the Menus board: a header with the user name and « Session ouverte »,
-then « À propos de cet ordinateur », « Réglages », « Mises à jour », « Passer en mode jeu »,
-« Verrouiller », « Fermer la session », « Éteindre ». Since D-36d they act:
+then « À propos de cet ordinateur », « Réglages », « Verrouiller » (with Super+L on its right,
+the compositor's shortcut), « Fermer la session », « Éteindre ». Since D-36d they act. The
+board's « Mises à jour » and « Passer en mode jeu » are not shown since D-20f: nothing is behind
+them yet, and an entry that does nothing misleads.
 
 | Entry | What it does |
 | --- | --- |
 | « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`, beside the session's programs in `$SHERLOCKOS_BIN` when it is there, else in the `PATH`: lot Q-39), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
 | « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
 | « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
-| « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |
 
 Every other entry closes the menu once it has run.
 
@@ -608,8 +609,8 @@ ring is drawn from that value and Enter activates that value, in the same update
 operations were tried first: under `iced_exwlshell` they are applied after the redraw, so the
 ring stayed one Tab behind the real focus and Enter activated the next button.
 
-The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
-them yet, so the menu does not show them.
+The board also shows the shortcuts Super+, and Super+G in the menu. Nothing binds them yet, so the
+menu shows Super+L only.
 
 ## Panels (D-20b, D-20c)
 
@@ -672,9 +673,9 @@ grid centred.
 
 ### Quick settings
 
-The control centre, after the right column of the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
-« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the keyboard backlight
-slider on a machine that has one, the graphics card and energy choices, then the user and the
+The control centre, after the right column of the Panels board: three tiles (« Wi-Fi », « Bluetooth »,
+« Ne pas déranger »), the volume and brightness sliders, the keyboard backlight
+slider on a machine that has one, the energy choices, then the user and the
 session buttons (`quick.rs`, services in `system/`; sound, brightnesses and their watchers in the
 `system-services` crate, shared with the media keys of the compositor). The panel keeps room for
 the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above the user row.
@@ -690,7 +691,6 @@ the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above t
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
 | Keyboard backlight | UPower, system bus; else `/sys/class/leds` and logind | `GetBrightness`, `GetMaxBrightness` of `org.freedesktop.UPower.KbdBacklight`; else the LED `…::kbd_backlight` | `SetBrightness`; else `Session.SetBrightness("leds", name, value)` |
 | « Énergie » | power-profiles-daemon, system bus | `ActiveProfile`, `Profiles`, under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles` | `ActiveProfile` |
-| « Mode jeu », « Carte graphique » | none yet | | Faded, « Bientôt » |
 | Session | the launcher's `Systemd` (`launcher::system`) | | `loginctl lock-session`, `terminate-session`, `systemctl reboot`, `poweroff` |
 
 **Every system write goes through D-Bus** to the service that owns the setting, which asks
@@ -735,6 +735,11 @@ protected one asks for its password below its line (a hidden field, Enter or « 
 NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
 (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
 depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
+
+**To Control Room** (D-20f). At the bottom of the pages of the Wi-Fi, the Bluetooth and the
+sound, after a line: « Réglages Wi-Fi… » runs `control-room --page network`, « Réglages du son… »
+`control-room --page sound` (the window already open shows that page, lot D-26n2), and
+« Réglages Bluetooth… » `control-room` (it has no Bluetooth page yet). The panel closes.
 
 **Outputs and inputs** (D-20g). A chevron at the right of the volume row (« Sorties et
 entrées ») opens the page of the sound (`quick/sound.rs`), as the Sound module of macOS:
@@ -1050,8 +1055,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Sherlock menu entries** (D-36d, `app.rs`, programs and session commands recorded, never
   run): « Réglages » and « À propos » start `control-room`; « Verrouiller » runs `Lock` at once;
   « Fermer la session » and « Éteindre » arm on the first click, ignore a double click, run once
-  on a later click, and Escape disarms; « Mises à jour » and « Passer en mode jeu » do nothing,
-  say « Bientôt » and take no highlight. From « Fichier » to « Édition » under the pointer
+  on a later click, and Escape disarms. From « Fichier » to « Édition » under the pointer
   (`tests/global_menu.rs`), « Fichier » stays while « Édition » is read, which then shows at its
   size with its entries, both buttons keeping their labels.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
@@ -1162,8 +1166,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
 - **User name**: the board shows a sample name. The bar reads the user's GECOS, otherwise the login.
-- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
-  yet, so they are not shown.
+- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Only Super+L is bound
+  (the lock, D-25a): the menu shows it alone.
+- **Not there yet** (D-20f): the board's « Mises à jour » and « Passer en mode jeu » in the menu,
+  « Mode jeu » and « Carte graphique » in the control centre. Nothing is behind them; they come
+  back with what they control.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
 - **« Éteindre »**: the board announces a submenu that it does not draw. The chevron is there; the
   entry is logged like the others.
@@ -1180,8 +1187,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   scrolls; the board's centre is only as high as its cards. A card per application, not per
   notification. The board's « Réglages » button of the user row is not there (Control Room
   does not exist yet); « Se déconnecter » and « Redémarrer » are added. The Wi-Fi tile has a
-  chevron for the network list, which no board draws, nor the calendar. « Carte graphique »
-  shows no active choice, since none exists yet.
+  chevron for the network list, which no board draws, nor the calendar.
 - **Panels** (D-20c): the notification centre moved from the side of the quick settings to
   under the calendar, as the author asked, as on a Mac.
 

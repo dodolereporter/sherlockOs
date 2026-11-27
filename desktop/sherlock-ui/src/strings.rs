@@ -42,8 +42,8 @@ pub mod top_bar {
     pub const SESSION_OPEN: &str = "Session ouverte";
     pub const ABOUT: &str = "À propos de cet ordinateur";
     pub const SETTINGS: &str = "Réglages";
-    pub const UPDATES: &str = "Mises à jour";
-    pub const GAME_MODE: &str = "Passer en mode jeu";
+    /// The shortcut on the right of « Verrouiller »: the compositor's (D-20f).
+    pub const LOCK_SHORTCUT: &str = "Super+L";
     pub const LOCK: &str = "Verrouiller";
     pub const LOG_OUT: &str = "Fermer la session";
     pub const POWER_OFF: &str = "Éteindre";

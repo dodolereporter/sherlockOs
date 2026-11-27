@@ -15,6 +15,11 @@ pub const CONTROL_ROOM: &str = "control-room";
 /// not in the `PATH` (lot Q-39), when it is there, else found in the `PATH`.
 pub trait Start: Send + Sync {
     fn start(&self, program: &str) -> io::Result<()>;
+
+    /// Starts `program` with `args`; by default, as `start` (the tests' starters).
+    fn start_with(&self, program: &str, _args: &[&str]) -> io::Result<()> {
+        self.start(program)
+    }
 }
 
 /// The real thing: a child process, waited for on a thread.
@@ -22,11 +27,16 @@ pub struct Spawn;
 
 impl Start for Spawn {
     fn start(&self, program: &str) -> io::Result<()> {
+        self.start_with(program, &[])
+    }
+
+    fn start_with(&self, program: &str, args: &[&str]) -> io::Result<()> {
         let path = std::env::var_os("SHERLOCKOS_BIN")
             .map(|dir| std::path::Path::new(&dir).join(program))
             .filter(|path| path.is_file())
             .unwrap_or_else(|| program.into());
         let mut command = Command::new(path);
+        command.args(args);
         sherlock_ui::gpu::for_child(&mut command);
         let mut child = command.spawn()?;
         let name = program.to_owned();
@@ -70,7 +80,12 @@ impl Default for Programs {
 impl Programs {
     /// Starts `program`, logging when it cannot.
     pub fn start(&self, program: &str) {
-        match self.0.start(program) {
+        self.start_with(program, &[]);
+    }
+
+    /// Starts `program` with `args`, logging when it cannot.
+    pub fn start_with(&self, program: &str, args: &[&str]) {
+        match self.0.start_with(program, args) {
             Ok(()) => tracing::info!(program, "program started from the Sherlock menu"),
             Err(error) => tracing::warn!(program, %error, "cannot start the program"),
         }

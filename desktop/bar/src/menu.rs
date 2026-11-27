@@ -5,26 +5,23 @@ use iced::Padding;
 use iced::keyboard::{self, Key as IcedKey, key::Named};
 use sherlock_ui::component::Trailing;
 use sherlock_ui::surface::Elevation;
-use sherlock_ui::{metrics, panels, strings::top_bar as text};
+use sherlock_ui::{metrics, strings::top_bar as text};
 
-/// The menu entries. None of them is wired yet: activating one logs it.
+/// The menu entries. What does not exist yet (the updates, the game mode) is not shown: an
+/// entry that does nothing would mislead (D-20f).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     About,
     Settings,
-    Updates,
-    GameMode,
     Lock,
     LogOut,
     PowerOff,
 }
 
 impl Action {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 5] = [
         Self::About,
         Self::Settings,
-        Self::Updates,
-        Self::GameMode,
         Self::Lock,
         Self::LogOut,
         Self::PowerOff,
@@ -34,28 +31,24 @@ impl Action {
         match self {
             Self::About => text::ABOUT,
             Self::Settings => text::SETTINGS,
-            Self::Updates => text::UPDATES,
-            Self::GameMode => text::GAME_MODE,
             Self::Lock => text::LOCK,
             Self::LogOut => text::LOG_OUT,
             Self::PowerOff => text::POWER_OFF,
         }
     }
 
-    /// The board also shows the shortcuts Super+, Super+G and Super+L. No compositor binds
-    /// them yet, so they are not shown: a shortcut that does nothing would mislead. What does
-    /// not exist yet says « Bientôt ».
+    /// The shortcut the compositor binds for it, shown on its right as on macOS (D-20f): only
+    /// Super+L, which locks; the board's Super+, is bound by nothing yet.
     pub fn trailing(self) -> Trailing<'static> {
-        if self.enabled() {
-            Trailing::None
-        } else {
-            Trailing::Shortcut(panels::text::SOON)
+        match self {
+            Self::Lock => Trailing::Shortcut(text::LOCK_SHORTCUT),
+            _ => Trailing::None,
         }
     }
 
-    /// Something runs behind the entry: not the updates nor the game mode yet (D-36d).
+    /// Something runs behind every entry shown.
     pub fn enabled(self) -> bool {
-        !matches!(self, Self::Updates | Self::GameMode)
+        true
     }
 
     /// Logging out and powering off lose unsaved work: a second click confirms them.
@@ -65,7 +58,7 @@ impl Action {
 
     /// First entry of a group: a separator comes before it.
     pub fn starts_group(self) -> bool {
-        self == Self::GameMode
+        self == Self::Lock
     }
 }
 
@@ -186,25 +179,27 @@ mod tests {
     #[test]
     fn arrows_walk_and_wrap() {
         assert_eq!(move_cursor(None, Key::Next), Some(0));
-        assert_eq!(move_cursor(None, Key::Previous), Some(6));
+        assert_eq!(move_cursor(None, Key::Previous), Some(4));
         assert_eq!(move_cursor(Some(0), Key::Next), Some(1));
-        assert_eq!(move_cursor(Some(6), Key::Next), Some(0));
-        assert_eq!(move_cursor(Some(0), Key::Previous), Some(6));
-        // « Mises à jour » and « Passer en mode jeu » do nothing yet: skipped.
-        assert_eq!(move_cursor(Some(1), Key::Next), Some(4));
-        assert_eq!(move_cursor(Some(4), Key::Previous), Some(1));
+        assert_eq!(move_cursor(Some(4), Key::Next), Some(0));
+        assert_eq!(move_cursor(Some(0), Key::Previous), Some(4));
         assert_eq!(move_cursor(Some(3), Key::First), Some(0));
-        assert_eq!(move_cursor(Some(3), Key::Last), Some(6));
+        assert_eq!(move_cursor(Some(3), Key::Last), Some(4));
     }
 
     #[test]
     fn the_menu_follows_the_design_board() {
         let labels: Vec<_> = Action::ALL.iter().map(|a| a.label()).collect();
         assert_eq!(labels[0], "À propos de cet ordinateur");
-        assert_eq!(labels[6], "Éteindre");
-        // Menus board: 256 wide; header of 54, two separators of 9, seven entries of 30,
-        // padding of 6, plus the gap of 6 below the bar.
-        assert_eq!(surface_size(margins(false)), (256, 6 + 12 + 54 + 18 + 210));
+        assert_eq!(labels[4], "Éteindre");
+        assert_eq!(
+            Action::Lock.trailing(),
+            Trailing::Shortcut(text::LOCK_SHORTCUT)
+        );
+        // Menus board: 256 wide; header of 54, two separators of 9, five entries of 30 (the
+        // board's seven but the two not there yet), padding of 6, plus the gap of 6 below the
+        // bar.
+        assert_eq!(surface_size(margins(false)), (256, 6 + 12 + 54 + 18 + 150));
     }
 
     /// Where the menu itself lands on the screen, from its surface and its margins.
