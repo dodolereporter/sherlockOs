@@ -233,9 +233,13 @@ pub fn is_executable(program: &str) -> bool {
         .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| runnable(&dir.join(program))))
 }
 
-/// The installed applications found in `<dir>/applications` of each data directory. When the
-/// same id is in several directories, the first one wins, even when it is deleted (`Hidden`)
-/// or its `TryExec` program is missing: then the application is not there at all.
+/// The installed applications found in `<dir>/applications` of each data directory, sub-folders
+/// included (Wine puts its own in `wine/Programs/…`, id `wine-Programs-…`). When the same id is
+/// in several directories, the first one wins, even when it is deleted (`Hidden`) or its
+/// `TryExec` program is missing: then the application is not there at all.
+///
+/// The files are listed and read by `mime-apps`, like the launcher and the applications view:
+/// the same ids, and the same bounds (a regular file of 256 KiB at most, in UTF-8).
 #[derive(Debug, Clone, Default)]
 pub struct Catalog {
     pub entries: Vec<DesktopEntry>,
@@ -247,20 +251,12 @@ impl Catalog {
         let mut entries: Vec<DesktopEntry> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for dir in data_dirs {
-            let Ok(files) = std::fs::read_dir(dir.join("applications")) else {
-                continue;
-            };
-            let mut paths: Vec<PathBuf> = files.filter_map(|f| f.ok().map(|f| f.path())).collect();
-            paths.sort();
-            for path in paths {
-                let Some(id) = desktop_id(&path) else {
-                    continue;
-                };
+            for (id, path) in mime_apps::entry::desktop_files(&dir.join("applications")) {
+                let id = id.strip_suffix(".desktop").unwrap_or(&id).to_owned();
                 if seen.contains(&id) {
                     continue;
                 }
-                let Some(entry) = std::fs::read_to_string(&path)
-                    .ok()
+                let Some(entry) = mime_apps::entry::read_entry(&path)
                     .and_then(|text| DesktopEntry::parse(&id, &path, &text))
                 else {
                     continue;
@@ -279,11 +275,6 @@ impl Catalog {
         let id = id.strip_suffix(".desktop").unwrap_or(id);
         self.entries.iter().find(|e| e.id == id)
     }
-}
-
-fn desktop_id(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    name.strip_suffix(".desktop").map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -334,6 +325,29 @@ mod tests {
         let masked = Catalog::load(&[fixtures().join("data-masking"), fixtures().join("data")]);
         assert!(masked.get("example-browser").is_none());
         assert!(masked.get("org.example.Files").is_some());
+    }
+
+    #[test]
+    fn sub_folders_are_read_and_large_files_left_out() {
+        let root = std::env::temp_dir().join(format!("dock-entries-{}", std::process::id()));
+        let apps = root.join("applications");
+        let wine = apps.join("wine/Programs/Example");
+        std::fs::create_dir_all(&wine).unwrap();
+        let entry =
+            |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n");
+        std::fs::write(wine.join("Game.desktop"), entry("Game")).unwrap();
+        let padding = "#".repeat(mime_apps::entry::MAX_ENTRY_SIZE as usize);
+        std::fs::write(
+            apps.join("huge.desktop"),
+            format!("{}{padding}\n", entry("Huge")),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/dev/zero", apps.join("zero.desktop")).unwrap();
+        let catalog = Catalog::load(std::slice::from_ref(&root));
+        let ids: Vec<&str> = catalog.entries.iter().map(|e| e.id.as_str()).collect();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(ids, ["wine-Programs-Example-Game"]);
+        assert!(catalog.get("wine-Programs-Example-Game.desktop").is_some());
     }
 
     #[test]

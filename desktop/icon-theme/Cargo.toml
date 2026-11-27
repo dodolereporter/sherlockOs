@@ -8,6 +8,8 @@ publish.workspace = true
 
 # Standard library only: `index.theme` and the settings files are small key files.
 [dependencies]
+# The bounded read of those files (workspace crate, standard library only).
+mime-apps = { path = "../mime-apps" }
 
 [lints]
 workspace = true

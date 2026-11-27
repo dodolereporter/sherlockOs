@@ -19,6 +19,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
 ] }
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 dock-config = { path = "../dock-config" }
+# Lists and reads the desktop entries, with the launcher's bounds and sub-folders (workspace
+# crate, standard library only).
+mime-apps = { path = "../mime-apps" }
 # Icon lookup shared with the launcher (workspace crate).
 icon-theme = { path = "../icon-theme" }
 # The theme of the appearance file, followed live (workspace crate).
