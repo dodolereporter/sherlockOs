@@ -410,6 +410,8 @@ impl View {
             }
             Message::Launch(place) => return self.launch(place),
             Message::Pointer(point) => self.pointer = point,
+            // Fading out, the view takes no more input: no menu opens nor runs (lot UI-06).
+            Message::Menu(_) | Message::MenuPick(_) if self.closing => {}
             Message::Menu(place) => self.open_menu(place),
             Message::MenuPick(entry) => return self.pick(entry),
             Message::Page(page) => {
