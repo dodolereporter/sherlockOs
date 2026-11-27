@@ -8,8 +8,8 @@ use iced::{Element, Length, Task, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use sherlock_ui::component::{self as ui, Mark, Trailing};
-use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::scroll::scroll;
+use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{animated, color, metrics, theme};
 
 use super::{Bar, Message};

@@ -3,8 +3,8 @@
 //! title bar slides it back over the page.
 
 use iced::widget::{
-    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row,
-    space, span, stack, svg,
+    Column, Row, column, container, mouse_area, opaque, responsive, rich_text, row, space, span,
+    stack, svg,
 };
 use iced::{Alignment, Element, Length, Padding, Size};
 use sherlock_ui::animated::reveal;

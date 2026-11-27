@@ -2,8 +2,7 @@
 //! sidebar, listing, preview, status bar, right-click menu.
 
 use iced::widget::{
-    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, space,
-    stack, text,
+    Column, Row, button, column, container, image, mouse_area, opaque, pin, row, space, stack, text,
 };
 use iced::{Alignment, Element, Length, Padding};
 use std::time::Duration;
