@@ -285,6 +285,16 @@ impl DockConfig {
         file.to_text()
     }
 
+    /// Reads the file at `path` again, changes it with `change` and writes it back: a change
+    /// made since by another program (Control Room) is kept, and a file that cannot be read
+    /// (not text, no permission) is never written over. Returns the configuration written.
+    pub fn update(path: &Path, change: impl FnOnce(&mut Self)) -> io::Result<Self> {
+        let (mut config, _) = Self::load(path)?;
+        change(&mut config);
+        config.save(path)?;
+        Ok(config)
+    }
+
     /// Writes the file at `path` with `mime_apps::write_atomically`: whole or not at all, its
     /// permissions and its links kept (a dangling link too), the folder flushed after.
     pub fn save(&self, path: &Path) -> io::Result<()> {
@@ -539,6 +549,29 @@ mod tests {
         assert!(std::fs::symlink_metadata(&path).expect("link").is_symlink());
         let target = std::fs::read_to_string(dir.join("dotfiles/dock.conf")).expect("target");
         assert_eq!(target, "[Dock]\nPosition=top\n");
+    }
+
+    #[test]
+    fn an_unreadable_file_is_never_written_over() {
+        let dir = std::env::temp_dir().join(format!("dock-config-update-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("dock.conf");
+        let pin = |config: &mut DockConfig| config.pinned = Some(vec![String::from("kitty")]);
+        // Not UTF-8: the change is refused and the bytes stay as they were.
+        let bytes = b"[Dock]\nIconTheme=caf\xe9\nIconSize=64\n";
+        std::fs::write(&path, bytes).expect("write");
+        assert!(DockConfig::update(&path, pin).is_err());
+        assert_eq!(std::fs::read(&path).expect("read"), bytes);
+        // Readable: only the list changes, what another program wrote since stays.
+        std::fs::write(&path, "# mine\n[Dock]\nIconSize=64\nPosition=left\n").expect("write");
+        let written = DockConfig::update(&path, pin).expect("update");
+        assert_eq!(written.position, Position::Left);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "# mine\n[Dock]\nIconSize=64\nPosition=left\nPinned=kitty;\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

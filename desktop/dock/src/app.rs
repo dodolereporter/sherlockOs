@@ -1761,8 +1761,10 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration, read again just before (`pins::write`),
-    /// and rebuilds the dock.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The file is read
+    /// again first and only its list changes (`pins::write`): the dock never writes what it has
+    /// in memory, so a file it could not read at startup is not replaced by one with the pinned
+    /// list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
