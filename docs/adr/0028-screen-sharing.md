@@ -1,6 +1,6 @@
 # ADR 0028: Screen sharing through a capture protocol of the compositor and a portal of our own
 
-- Status: proposed
+- Status: accepted (the author approved it on 2026-11-28)
 - Date: 2026-11-27
 - Lot: D-28b
 

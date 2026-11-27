@@ -73,6 +73,15 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - **Failures clean up.** A copy, or a move between disks, that fails removes what it created
   at the destination; the source is untouched. Modification times are kept from one disk to
   another.
+- **The path field.** Completion and the check of a typed path run on a thread of their own,
+  never on the interface thread nor on iced's pool: a folder that hangs (a network share
+  gone) holds that thread only, and no more than four such threads run. A completion reads at
+  most 20 000 entries within 500 ms, offers 200 folders at most, and leaves out names that are
+  not UTF-8 or hold a control character. A stale read, overtaken by a newer one, is dropped.
+  A typed path longer than 4096 bytes, or with a control character, is refused.
+- **Names shown safely.** In the listing, the preview and the breadcrumb, a control character
+  of a name shows as its picture (␊ for a line feed, ␛ for an escape) and a direction mark
+  (U+202E and its kin, which can make a name read « exe.txt » for an `.exe`) as �.
 - **Names are bytes.** Copy, move and conflict names keep the exact bytes of a name that is not
   UTF-8; only the display is lossy.
 
@@ -81,8 +90,40 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Sidebar: Favourites (home, Desktop, Documents, Downloads, Projets when `~/Projets` exists,
   Pictures, from xdg-user-dirs), Devices, System (system disk, trash). The favourite that
   contains the current folder is active; Home only for the home folder itself.
-- Toolbar: back, forward, breadcrumb (folded with "…" beyond five segments), git branch,
-  search in the current folder.
+- Toolbar: back, forward, path bar, git branch, search in the current folder.
+- Path bar (lot E-04, after Finder and Nautilus): a breadcrumb as wide as the toolbar allows;
+  each segment opens its folder. A name wider than `CRUMB_MAX_WIDTH` keeps its start and its end
+  around « … » (`sherlock_ui::ellipsis::fit_middle`); when the segments do not fit the bar,
+  those after the first fold behind « … » until the rest fits, so the bar follows the window's
+  width; « … » opens the deepest folded folder. Back and forward: the buttons, Alt+← and Alt+→,
+  the side buttons of the mouse; parent folder: Alt+↑ or Backspace.
+
+  Ctrl+L, a click on the empty part of the bar, or typing « / » or « ~ » in the listing turn
+  it into a text field, the current folder selected (empty in the trash); Maj+Ctrl+G
+  (« Aller » menu, « Aller au dossier… ») opens the same field in a sheet under the toolbar, as
+  on macOS. In the field:
+  - the subfolders that complete the name being typed show in a list under it (hidden ones
+    once a dot is typed or when the listing shows them; case ignored); Tab completes to the
+    picked one, the only one, or as far as they all agree; the arrows pick; a click opens;
+  - `~` is the home folder, a relative path starts from the current folder, `.` and `..` fold,
+    a pasted `file://` link is decoded and the blanks around a paste are dropped;
+  - Enter opens a folder; a file opens in its default application and is selected in its
+    folder;
+  - a path that leads nowhere, or where Evidence may not go, shakes the field (450 ms, three
+    swings that die out) and says why in the status bar; the field stays open;
+  - Escape, a click in the listing, or a navigation give the breadcrumb back.
+
+  The breadcrumb and the field cross-fade (160 ms each way); the list fades and slides in and
+  out; the sheet comes down and fades, over a dimmed window.
+
+  | 1920 × 1080 | Smallest window |
+  | --- | --- |
+  | ![](evidence/path-field-1080p.png) | ![](evidence/path-field-small.png) |
+  | ![](evidence/path-sheet-1080p.png) | ![](evidence/path-sheet-small.png) |
+
+  | 1920 × 1080 | Smallest window | In a WSLg window |
+  | --- | --- | --- |
+  | ![](evidence/path-crumbs-1080p.png) | ![](evidence/path-crumbs-small.png) | ![](evidence/path-wslg.png) |
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
   state (modified, new, ignored). Click a column header to sort, again to reverse. Folders
   stay first. Hidden files with Ctrl+H. A double click opens an item, selected or not: the
@@ -155,6 +196,40 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   Windows recovery and swap partitions (by partition type) and blocks without a mountable
   filesystem; blocks without a drive (loop devices, zram). LUKS volumes show locked. Eject is
   refused when no drive can be found for the volume.
+
+## Drag and drop and the clipboard of files (lot E-03)
+
+winit, under iced, neither starts a drag nor receives a drop on Wayland, and iced's clipboard
+only knows text. Evidence speaks `wl_data_device` itself (`src/dnd.rs`), on the window's own
+Wayland connection (`Backend::from_foreign_display`, from the window's raw handles), with an
+event queue of its own in a thread: its own `wl_seat`, `wl_pointer` (the serial of the press
+that starts a drag), `wl_keyboard` (the serial of the key that copies) and data device. The
+interface sends it commands and gets events back (`app/drag.rs`). Under X11 (the author's Plasma
+session), none of this starts: Evidence keeps its own clipboard.
+
+- **Dragging out.** A press on the name of a selected row, moved by more than
+  `drag::THRESHOLD` (6 px), becomes a drag of the whole selection (a plain press on a multiple
+  selection keeps it until the release, as in the Finder). It offers
+  `x-special/gnome-copied-files`, `text/uri-list` and the paths as text, to copy or move. The
+  picture under the pointer (`src/drag_image.rs`) stacks the cards of the first three files,
+  fanned and turned, the front one showing its icon or the thumbnail of a photo (PNG or JPEG of
+  24 MB at most), with the count in a pill past one file; drawn at scale 2 by resvg, in the drag
+  thread. The compositor draws it under the pointer and, if the drop is refused or cancelled
+  (Escape), glides it back (lot D-29c): Evidence keeps the picture `drag::RETURN` for that.
+  Discord and the other X11 applications receive it through the compositor's XDND bridge.
+- **Dropping in.** Files dragged over the window light up the folder row under the pointer, or
+  the whole listing for the folder shown (`drag::target`). A drop moves the files there, or
+  copies them with Ctrl held (`Prefer`), off the interface thread (`ops::move_into`,
+  `ops::copy_into`). A folder that keeps the pointer `drag::SPRING_DELAY` (0.8 s) blinks twice,
+  then opens, as the Finder's spring-loaded folders. Refused: the trash, a folder dragged onto
+  itself, files dropped back where they are.
+- **The clipboard.** Ctrl + C and Ctrl + X also put the files on the session's clipboard
+  (`copy` or `cut` in `x-special/gnome-copied-files`, `text/uri-list`, the paths as text).
+  Ctrl + V reads the session's clipboard first: files copied in Dolphin, Nautilus or another
+  Evidence are pasted, and cut ones moved. With no files there, Evidence's own clipboard.
+- **Security.** What comes from another application is read off the interface thread, 4 MiB
+  and 10,000 files at most, each piece awaited 5 s at most; only local `file://` addresses are
+  kept, absolute and without `..` (`src/transfer.rs`).
 
 ## Keyboard
 

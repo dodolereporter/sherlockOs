@@ -10,8 +10,12 @@
 //! texture is the ghost drawn during the closing. The ghost is out of the space: it takes no
 //! input, the pointer goes through it.
 //!
+//! Raised from behind another window (lot D-19d), a window grows from `motion::RAISE_SCALE` to 1
+//! on `motion::RAISE_SPRING`, its shadow growing and softening with it, and the windows it now
+//! covers step back to `motion::RECEDE_SCALE` and come back (`State::start_raise`).
+//!
 //! No animation for menus, X11 override-redirect windows, anchored surfaces, fullscreen
-//! windows, nor with `--window-animations off`. See "Opening and closing" in
+//! windows, nor with `--window-animations off`. See "Opening and closing" and "Raise" in
 //! `docs/compositor.md`.
 
 use std::time::Duration;
@@ -103,6 +107,48 @@ impl State {
         (ghosts.len(), textures)
     }
 
+    /// `window` comes to the front (lot D-19d): if a window above it on its workspace covers part
+    /// of it, it is raised with its animation, and those it is going to cover step back.
+    /// Nothing when it was fully visible, for a fullscreen window, with window animations off,
+    /// or while its genie runs: the genie comes first. Input goes to it at once. Call it before
+    /// raising it.
+    pub(crate) fn start_raise(&mut self, window: &Window) {
+        let now = self.now();
+        let shown = crate::window_data(window).shown.get();
+        let genie = self.minimize_progress(window, now).is_some();
+        if self.opens_at_once(window) || !shown || genie {
+            return;
+        }
+        let whole = |w: &Window| {
+            let mut rect = self.space.element_geometry(w)?;
+            let inset = crate::decorations::inset(w);
+            rect.loc.y -= inset;
+            rect.size.h += inset;
+            (!rect.size.is_empty()).then_some(rect)
+        };
+        let Some(rect) = whole(window).filter(|_| !is_override_redirect(window)) else {
+            return;
+        };
+        let covering: Vec<Window> = self
+            .space
+            .elements()
+            .skip_while(|w| *w != window)
+            .skip(1)
+            .filter(|w| !is_override_redirect(w) && self.is_visible(w))
+            .filter(|w| self.minimize_progress(w, now).is_none())
+            .filter(|w| whole(w).is_some_and(|r| r.overlaps(rect)))
+            .cloned()
+            .collect();
+        if covering.is_empty() {
+            return;
+        }
+        crate::window_data(window).motion.borrow_mut().raise(now);
+        for other in &covering {
+            crate::window_data(other).motion.borrow_mut().recede(now);
+        }
+        self.queue_redraw();
+    }
+
     /// The window opens at once, without its animation: fullscreen, or animations off.
     pub(crate) fn opens_at_once(&self, window: &Window) -> bool {
         self.window_anims.off || Arrangement::of(window).fullscreen
@@ -159,7 +205,7 @@ impl State {
 }
 
 /// The window and its title bar when the compositor draws one, in the space.
-fn whole_geometry(state: &State, window: &Window) -> Option<Rectangle<i32, Logical>> {
+pub(crate) fn whole_geometry(state: &State, window: &Window) -> Option<Rectangle<i32, Logical>> {
     let mut geometry = state.space.element_geometry(window)?;
     if state.decoration_bar(window).is_some() {
         let inset = ui_decorations::INSET.round() as i32;
@@ -276,6 +322,7 @@ pub fn snapshot(
         moving: false,
         decoration: if bare { 0.0 } else { 1.0 },
         scale: 1.0,
+        shadow: 1.0,
     };
     let mut items = Vec::new();
     let bar = state.decoration_bar(window);

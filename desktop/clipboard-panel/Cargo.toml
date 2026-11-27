@@ -1,0 +1,41 @@
+[package]
+name = "clipboard-panel"
+description = "Clipboard history of the desktop, Super + V: a layer-shell overlay opened on demand"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlockos-clipboard"
+path = "src/main.rs"
+
+[dependencies]
+# The same as the launcher (docs/launcher.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# The launcher's search folding, its theme following, settings and single instance (workspace
+# crate).
+launcher = { path = "../launcher" }
+# The history, through the shell's clipboard protocol (workspace crate), on the version of
+# wayland-client the dock and the bar pin.
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
+wayland-client = "=0.31.15"
+sherlock-ui = { path = "../sherlock-ui" }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[lints]
+workspace = true
