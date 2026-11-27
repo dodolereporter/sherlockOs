@@ -78,7 +78,25 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
-    let mut textures = Textures::default();
+    let textures = Rc::new(RefCell::new(Textures::default()));
+    // Screen sharing (lot D-28c), drawn the same way, between two frames. The host draws the
+    // pointer: no cursor in the frames.
+    let (weak_backend, weak_scene) = (Rc::downgrade(&backend), Rc::downgrade(&scene));
+    let weak_textures = Rc::downgrade(&textures);
+    state.set_capturer(Box::new(move |state, target, _| {
+        let (backend, scene) = (weak_backend.upgrade()?, weak_scene.upgrade()?);
+        let textures = weak_textures.upgrade()?;
+        let mut backend = backend.try_borrow_mut().ok()?;
+        let mut textures = textures.try_borrow_mut().ok()?;
+        crate::capture::image(
+            &scene,
+            backend.renderer(),
+            &mut textures,
+            state,
+            target,
+            None,
+        )
+    }));
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.
     let mut ids = Ids::default();
@@ -98,7 +116,8 @@ pub fn init(
                 WinitEvent::Redraw => {
                     // A client may change its cursor without the pointer moving.
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
-                    let frame = (&*scene, &mut ids, &mut textures, &mut preview);
+                    let mut textures = textures.borrow_mut();
+                    let frame = (&*scene, &mut ids, &mut *textures, &mut preview);
                     let locked = state.is_locked();
                     match render(&mut backend, frame, state) {
                         // The host window shows every screen at once (lot D-25a).
@@ -107,7 +126,12 @@ pub fn init(
                                 state.lock_frame_shown(&output);
                             }
                         }
-                        Ok(()) => {}
+                        // A new picture: the captures waiting for one are due.
+                        Ok(()) => {
+                            for output in state.outputs() {
+                                state.screen_changed(&output);
+                            }
+                        }
                         Err(err) => tracing::warn!("render: {err}"),
                     }
                     send_frames(state);

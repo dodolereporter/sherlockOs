@@ -155,8 +155,8 @@ mod tests {
             let mut renderer = renderer;
             let scene = Scene::new(&mut renderer).unwrap();
             let mut textures = wallpaper::Textures::default();
-            state.set_capturer(Box::new(move |state, target| {
-                capture::image(&scene, &mut renderer, &mut textures, state, target)
+            state.set_capturer(Box::new(move |state, target, _| {
+                capture::image(&scene, &mut renderer, &mut textures, state, target, None)
             }));
             state.enable_screenshots(Settings {
                 pictures: Some(dir.join("pictures")),
