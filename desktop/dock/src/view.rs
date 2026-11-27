@@ -119,6 +119,7 @@ impl Dock {
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
             .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
+            .on_scroll(Message::Scroll)
             .into()
     }
 

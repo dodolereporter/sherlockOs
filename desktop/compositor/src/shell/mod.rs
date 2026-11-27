@@ -83,7 +83,7 @@ fn is_shell_client(client: &Client) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct WindowId(u32);
 
-fn window_id(window: &Window) -> u32 {
+pub(crate) fn window_id(window: &Window) -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     window
         .user_data()
@@ -425,7 +425,7 @@ impl State {
     }
 
     /// The window of id `id`, shown or hidden.
-    fn window_by_id(&self, id: u32) -> Option<Window> {
+    pub(crate) fn window_by_id(&self, id: u32) -> Option<Window> {
         self.space.elements().find(|w| window_id(w) == id).cloned()
     }
 

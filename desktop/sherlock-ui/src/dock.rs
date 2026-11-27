@@ -77,6 +77,12 @@ pub const LABEL_FADE_MS: u64 = 120;
 // Motion of lot D-21c, after macOS: the dot of an application that opens or closes its last
 // window fades, and the menu of an icon unfolds from the icon like the menus of the bar.
 
+/// A swipe down over an icon opens App Expose once the scroll it sends goes this far down
+/// (logical pixels; a notch of a mouse wheel is enough), each scroll coming within
+/// `EXPOSE_SWIPE_GAP` of the previous one. A choice of D-21c2, to review on the machine.
+pub const EXPOSE_SWIPE: f32 = 40.0;
+pub const EXPOSE_SWIPE_GAP: Duration = Duration::from_millis(250);
+
 /// The dot under an icon appearing or going: the fade of an icon arriving.
 pub const DOT_FADE: Duration = ICON_FADE;
 /// The menu of an icon opening and closing: the spring, fade and scale of the bar's panels.
@@ -153,6 +159,8 @@ pub mod text {
     /// The button that opens the applications view (D-41), in its label and menu.
     pub const APPLICATIONS: &str = "Applications";
     pub const QUIT: &str = "Quitter";
+    /// App Expose (lot D-21c2): Mission Control on the windows of one application.
+    pub const SHOW_ALL: &str = "Afficher toutes les fenêtres";
 
     /// Number of open windows, at the top right of the menu, like « 3 en marche » on the board.
     pub fn windows(count: usize) -> String {
