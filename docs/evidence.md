@@ -178,6 +178,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
+  thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
+  « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
+  (« nom (copie) »), « Ignorer », or « Annuler ». While it runs, the status bar shows its share
+  done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
+  files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
+  failed leaves nothing half-written behind.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

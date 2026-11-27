@@ -22,6 +22,7 @@ pub mod probe;
 pub mod selection;
 pub mod startup;
 pub mod transfer;
+pub mod transfer_job;
 pub mod trash;
 pub mod udisks;
 mod view;
