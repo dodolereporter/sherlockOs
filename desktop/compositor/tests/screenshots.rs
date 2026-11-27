@@ -255,6 +255,28 @@ mod tests {
         h.run_until("the clipboard", |h| h.clipboard().is_some());
         let png = h.clipboard().unwrap();
         assert_eq!(&*png, std::fs::read(&shots[0]).unwrap().as_slice());
+        // Its thumbnail, in the bottom right corner once slid in (lot D-35e).
+        std::thread::sleep(sherlock_ui::screenshot_tool::ENTER + Duration::from_millis(50));
+        let thumb = h.state.thumbnail_rect().unwrap();
+        let right = thumb.loc.x + thumb.size.w;
+        let margin = f64::from(sherlock_ui::screenshot_tool::THUMBNAIL_MARGIN);
+        assert!(
+            thumb.loc.y > 300.0 && (800.0 - margin - right).abs() < 1.0,
+            "{thumb:?}"
+        );
+        // Dragged to the right edge, it goes; short of it, it comes back.
+        let middle = thumb.loc + thumb.size.downscale(2.0).to_point();
+        h.state.pointer_motion(middle, 10);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 11);
+        h.state
+            .pointer_motion((middle.x + 20.0, middle.y + 2.0).into(), 12);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 13);
+        assert!(h.state.thumbnail_rect().is_some());
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 14);
+        h.state
+            .pointer_motion((middle.x + 150.0, middle.y).into(), 15);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 16);
+        assert!(h.state.thumbnail_rect().is_none());
     }
 
     #[test]
@@ -295,19 +317,20 @@ mod tests {
         assert_eq!(image.dimensions(), (200, 150));
     }
 
-    /// The tool drawn for real over the desktop of a screen of `size` pixels at `scale`, an
-    /// area drawn from a third to two thirds of the screen, and the options menu open when
-    /// `menu`: the image of the screen, as the renderer shows it, before the tool opens and
+    /// The tool drawn for real over the desktop of a screen of `size` pixels at `scale`, at
+    /// `stage`: « area », an area drawn from a third to two thirds of the screen; « menu », the
+    /// same with the options menu open; « drawing », the area being drawn, with the loupe and
+    /// its size. The image of the screen, as the renderer shows it, before the tool opens and
     /// with it.
     fn board(
         size: (i32, i32),
         scale: f64,
-        menu: bool,
+        stage: &str,
     ) -> Option<(image::RgbaImage, image::RgbaImage)> {
         use compositor::capture::Target;
         use sherlock_ui::screenshot_tool::Control;
         let mut renderer = software_renderer()?;
-        let event_loop: EventLoop<'static, State> = EventLoop::try_new().unwrap();
+        let mut event_loop: EventLoop<'static, State> = EventLoop::try_new().unwrap();
         let mut state = State::new(&event_loop).unwrap();
         let output = state.add_output(size.into(), scale);
         let dir = std::env::temp_dir().join(format!("screenshots-board-{}", std::process::id()));
@@ -317,19 +340,28 @@ mod tests {
         });
         let scene = Scene::new(&mut renderer).unwrap();
         let mut textures = wallpaper::Textures::default();
+        state.set_capturer(Box::new(move |state, target| {
+            capture::image(&scene, &mut renderer, &mut textures, state, target)
+        }));
         let target = Target::Screen(output);
-        let mut draw = |state: &mut State| {
-            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target)?;
+        let draw = |state: &mut State| {
+            let shot = state.draw_target(&target)?;
             image::RgbaImage::from_raw(shot.width, shot.height, shot.rgba)
         };
         let before = draw(&mut state)?;
         let (w, h) = (f64::from(size.0) / scale, f64::from(size.1) / scale);
         state.pointer_motion((w / 3.0, h / 3.0).into(), 1);
         state.open_screenshot_tool();
+        // The screen kept for the loupe, taken once the key's event is handled.
+        event_loop
+            .dispatch(Some(Duration::from_millis(10)), &mut state)
+            .unwrap();
         state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
         state.pointer_motion((w * 2.0 / 3.0, h * 2.0 / 3.0).into(), 3);
-        state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
-        if menu {
+        if stage != "drawing" {
+            state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        }
+        if stage == "menu" {
             let button = state.screenshot_control(Control::Options).unwrap();
             let center = button.loc + button.size.downscale(2.0).to_point();
             state.pointer_motion(center, 5);
@@ -347,21 +379,18 @@ mod tests {
             return;
         }
         let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-        for (size, scale, menu) in [
-            ((1920, 1080), 1.0, false),
-            ((1920, 1080), 1.0, true),
-            ((1366, 768), 1.0, true),
-            ((2560, 1600), 2.0, false),
-            ((1920, 1200), 1.5, true),
+        for (size, scale, stage) in [
+            ((1920, 1080), 1.0, "area"),
+            ((1920, 1080), 1.0, "menu"),
+            ((1920, 1080), 1.0, "drawing"),
+            ((1366, 768), 1.0, "menu"),
+            ((1366, 768), 1.0, "drawing"),
+            ((2560, 1600), 2.0, "area"),
+            ((1920, 1200), 1.5, "menu"),
         ] {
-            let (before, image) = board(size, scale, menu).unwrap();
+            let (before, image) = board(size, scale, stage).unwrap();
             assert_eq!(image.dimensions(), (size.0 as u32, size.1 as u32));
-            let name = format!(
-                "screenshot-tool-{}x{}@{scale}{}.png",
-                size.0,
-                size.1,
-                if menu { "-menu" } else { "" }
-            );
+            let name = format!("screenshot-tool-{}x{}@{scale}-{stage}.png", size.0, size.1);
             let path = out.join(name);
             image.save(&path).unwrap();
             eprintln!("{}", path.display());

@@ -53,6 +53,10 @@ pub enum Part {
     /// buttons) and its texts, by their order.
     CaptureShape(usize),
     CaptureLabel(usize),
+    /// The thumbnail of the last screenshot and its outline, the loupe of the tool.
+    CaptureThumbnail,
+    CaptureThumbnailShadow,
+    CaptureLoupe,
     /// The ring of a click shown (lot C-01), by its number.
     Click(u64),
     /// The background of a locked screen, and the pills of the rescue screen, by their index

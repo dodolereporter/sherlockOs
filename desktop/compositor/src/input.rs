@@ -624,6 +624,11 @@ impl State {
         if self.overview_open() {
             return Some(CursorIcon::Default);
         }
+        if let Some(location) = self.seat.get_pointer().map(|p| p.current_location())
+            && self.over_thumbnail(location)
+        {
+            return self.thumbnail_cursor();
+        }
         if let Some(gesture) = &self.gesture {
             // A window taken by its title bar is held in the closed hand; moved with the
             // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
@@ -1035,6 +1040,10 @@ impl State {
             // Mission Control: no client has the pointer (lot D-33).
             self.overview_motion(location);
             None
+        } else if self.over_thumbnail(location) {
+            // The thumbnail of a screenshot (lot D-35e).
+            self.thumbnail_motion(location);
+            None
         } else {
             let hit = self.hit(location);
             self.hover_decoration(match &hit {
@@ -1101,6 +1110,13 @@ impl State {
             pointer.frame(self);
             let pressed = state == ButtonState::Pressed;
             self.tool_button(button == BTN_LEFT, pressed, location);
+            return;
+        }
+        if button == BTN_LEFT && self.over_thumbnail(location) {
+            // The thumbnail of a screenshot: the click goes to no client (lot D-35e).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            self.thumbnail_button(state == ButtonState::Pressed, location);
             return;
         }
         if self.overview_open() {

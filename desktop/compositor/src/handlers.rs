@@ -791,7 +791,13 @@ impl DataDeviceHandler for State {
 // Drag and drop between Wayland clients follows Smithay's default behavior. Between Wayland
 // and X11, smithay 0.7 has no XDND: it is left to lot D-29c (see `docs/compositor.md`).
 impl ClientDndGrabHandler for State {}
-impl ServerDndGrabHandler for State {}
+// The compositor starts one itself: the thumbnail of a screenshot carried into an application
+// (lot D-35e).
+impl ServerDndGrabHandler for State {
+    fn send(&mut self, mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>) {
+        self.send_dragged(&mime_type, fd);
+    }
+}
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
