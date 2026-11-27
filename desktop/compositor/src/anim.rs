@@ -189,7 +189,10 @@ impl WindowMotion {
         {
             self.raise = None;
         }
-        if self.recede.is_some_and(|start| now >= start + motion::RECEDE) {
+        if self
+            .recede
+            .is_some_and(|start| now >= start + motion::RECEDE)
+        {
             self.recede = None;
         }
         let raise = self.raise.map_or(1.0, |r| r.value(now));
