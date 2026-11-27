@@ -35,6 +35,7 @@ pub mod screen_off;
 pub mod screenshot;
 pub mod strings;
 pub mod texts;
+pub mod tray;
 pub mod typography;
 pub mod wallpapers;
 pub mod window;

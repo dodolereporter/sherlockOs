@@ -13,7 +13,7 @@ use sherlock_ui::{animated, color, metrics, theme};
 
 use super::{Bar, Message};
 use crate::dbusmenu::{self, Item, Toggle};
-use crate::global_menu::{self, Level, MORE_ID, Placement};
+use crate::global_menu::{self, Anchor, Level, MORE_ID, Placement};
 use crate::menu::Key;
 use crate::source::workspaces::AppMenu;
 use crate::unfold::Unfold;
@@ -96,6 +96,25 @@ impl Bar {
         id: i32,
         read: Result<Item, String>,
     ) -> Task<Message> {
+        if let Some(shown) = &mut self.global.item
+            && shown.address == menu
+        {
+            match read {
+                Ok(item) if id == 0 => shown.root = Some(item),
+                Ok(item) => {
+                    if let Some(root) = &mut shown.root {
+                        root.replace(item);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, service = menu.service, "the icon's menu does not answer");
+                    if id == 0 {
+                        return self.drop_app_menus();
+                    }
+                }
+            }
+            return self.opened_read(id);
+        }
         if self.global.address.as_ref() != Some(&menu) {
             return Task::none();
         }
@@ -121,6 +140,11 @@ impl Bar {
                 }
             }
         }
+        self.opened_read(id)
+    }
+
+    /// The menu `id` was read: it opens when it was waited for, else the menus shown follow it.
+    fn opened_read(&mut self, id: i32) -> Task<Message> {
         if let Some((opening, keyboard)) = self.global.opening
             && opening == id
         {
@@ -129,6 +153,19 @@ impl Bar {
             return self.open_level(0, id, cursor);
         }
         self.resize_levels()
+    }
+
+    /// Shows the menu at `address` of an icon of the notification area, at `anchor`, once the
+    /// application has filled it (lot D-45a).
+    pub(super) fn show_item_menu(&mut self, address: AppMenu, anchor: Anchor) -> Task<Message> {
+        let closed = self.drop_app_menus();
+        self.global.item = Some(global_menu::ItemMenu {
+            address: address.clone(),
+            root: None,
+            anchor,
+        });
+        self.global.opening = Some((0, false));
+        closed.chain(prepare(address, 0))
     }
 
     /// A menu of the bar clicked: it opens, or closes when it is the one open. While another
@@ -167,7 +204,11 @@ impl Bar {
     /// From one menu to the next, the menu shown stays until the next one is read, then gives
     /// it its place: the bar never shows an empty or half sized popup meanwhile (D-36d).
     pub(super) fn show_app_menu(&mut self, id: i32, keyboard: bool) -> Task<Message> {
-        let closed = self.drop_menu().chain(self.drop_panel());
+        // The menu shown stays until the next one is read (D-36d); the tray's closes (D-45a).
+        let closed = self
+            .drop_menu()
+            .chain(self.drop_panel())
+            .chain(self.drop_tray());
         let Some(menu) = self.global.address.clone() else {
             return closed.chain(self.drop_app_menus());
         };
@@ -210,8 +251,23 @@ impl Bar {
             self.level_height(level, &entries),
         );
         let height = size.1 as f32 - margins.top - margins.bottom;
-        let settings = if level == 0 {
-            let Some((x, _)) = global_menu::GlobalMenu::button(&placement, item) else {
+        let item_anchor = self.global.item.as_ref().map(|shown| shown.anchor);
+        let settings = if let (0, Some(Anchor::Popup(parent, x, y))) = (level, item_anchor) {
+            // An icon's menu under its cell, from the popup of the notification area.
+            IcedNewPopupSettings::new(
+                parent,
+                PixelSize::px(size.0, size.1),
+                Position::new((x - margins.left) as i32, (y - margins.top).max(0.0) as i32),
+                PixelSize::px(1, 1),
+            )
+            .anchor(PopupAnchor::TopLeft)
+            .gravity(PopupGravity::BottomRight)
+        } else if level == 0 {
+            let x = match item_anchor {
+                Some(Anchor::Bar(x)) => Some(x),
+                _ => global_menu::GlobalMenu::button(&placement, item).map(|(x, _)| x),
+            };
+            let Some(x) = x else {
                 return closed;
             };
             // As the Sherlock menu: the popup grows down from the centre of its top edge, so
@@ -273,7 +329,7 @@ impl Bar {
                 tracing::warn!(%error, "cannot limit the menu's input region");
             }
         });
-        let about = match (&self.global.address, level) {
+        let about = match (self.global.shown_address(), level) {
             (Some(menu), 1..) if item != MORE_ID => refresh(menu.clone(), item),
             _ => Task::none(),
         };
@@ -382,7 +438,7 @@ impl Bar {
         let entries = self.global.entries(shown.item, &placement);
         let entry = entries.get(index)?;
         let runs = entry.enabled && !entry.separator && !entry.opens();
-        runs.then(|| (self.global.address.clone(), entry.id))
+        runs.then(|| (self.global.shown_address().cloned(), entry.id))
             .and_then(|(menu, id)| Some((menu?, id)))
     }
 
@@ -455,6 +511,7 @@ impl Bar {
     /// Closes every popup of the menus at once.
     pub(super) fn drop_app_menus(&mut self) -> Task<Message> {
         self.global.opening = None;
+        self.global.item = None;
         self.drop_levels(0)
     }
 
@@ -472,6 +529,9 @@ impl Bar {
     pub(super) fn app_menu_closed(&mut self, id: Id) {
         if let Some(level) = self.global.level_of(id) {
             self.global.levels.truncate(level);
+            if level == 0 {
+                self.global.item = None;
+            }
         }
     }
 

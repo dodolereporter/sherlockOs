@@ -324,9 +324,11 @@ name = "bar"
 version = "0.0.0"
 dependencies = [
  "appearance-config",
+ "dock-config",
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "image",
  "launcher",
  "libc",

@@ -120,13 +120,23 @@ fn document(handle: &svg::Handle) -> Option<Vec<u8>> {
     }
 }
 
-type Cache = Mutex<HashMap<(u64, u32), image::Handle>>;
+type Cache = Mutex<HashMap<(u64, u32, Option<[u8; 3]>), image::Handle>>;
 
 /// The image of `handle` at the raster side of `side`, rasterized once.
 pub fn raster(handle: &svg::Handle, side: f32) -> image::Handle {
+    raster_in(handle, side, None)
+}
+
+/// The image of a single-color `handle` (a symbolic icon of a theme) in the color `tint`, its
+/// own color left out and its alpha kept: the icon follows the theme, light or dark (lot D-45).
+pub fn tinted(handle: &svg::Handle, side: f32, tint: crate::color::Color) -> image::Handle {
+    raster_in(handle, side, Some([tint.r, tint.g, tint.b]))
+}
+
+fn raster_in(handle: &svg::Handle, side: f32, tint: Option<[u8; 3]>) -> image::Handle {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let px = raster_side(side);
-    let key = (handle.id(), px);
+    let key = (handle.id(), px, tint);
     let cache = CACHE.get_or_init(Cache::default);
     if let Some(found) = cache
         .lock()
@@ -135,7 +145,12 @@ pub fn raster(handle: &svg::Handle, side: f32) -> image::Handle {
     {
         return found.clone();
     }
-    let pixels = document(handle).and_then(|bytes| rasterize(&bytes, px));
+    let mut pixels = document(handle).and_then(|bytes| rasterize(&bytes, px));
+    if let (Some(pixels), Some(tint)) = (pixels.as_mut(), tint) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[..3].copy_from_slice(&tint);
+        }
+    }
     let drawn = match pixels {
         Some(pixels) => image::Handle::from_rgba(px, px, pixels),
         // A document resvg cannot read draws nothing, as iced's own SVG would.
@@ -201,5 +216,25 @@ mod tests {
         assert_eq!(first.id(), raster(&handle, 53.0).id(), "the same step");
         assert_ne!(first.id(), raster(&handle, 90.0).id());
         assert!(rasterize(b"not an svg", 32).is_none());
+    }
+
+    #[test]
+    fn a_symbolic_icon_takes_the_tint_and_keeps_its_alpha() {
+        let handle = svg::Handle::from_memory(TILE.as_bytes());
+        let tint = crate::color::Color::rgb(0x14, 0x23, 0x3B);
+        let plain = raster(&handle, 20.0);
+        let tinted = tinted(&handle, 20.0, tint);
+        assert_ne!(plain.id(), tinted.id());
+        assert_eq!(tinted.id(), super::tinted(&handle, 20.0, tint).id());
+        let Some(pixels) = rasterize(TILE.as_bytes(), raster_side(20.0)) else {
+            panic!("the tile rasterizes");
+        };
+        let iced::advanced::image::Handle::Rgba { pixels: drawn, .. } = tinted else {
+            panic!("pixels");
+        };
+        for (shown, source) in drawn.chunks(4).zip(pixels.chunks(4)) {
+            assert_eq!(shown[3], source[3]);
+            assert_eq!(&shown[..3], &[0x14, 0x23, 0x3B]);
+        }
     }
 }
