@@ -685,3 +685,30 @@ fn settings_are_written_off_the_interface_thread_in_their_order() {
     assert!(read.tap_to_click && !read.natural_scroll);
     assert_eq!(app.settings.touchpad, read);
 }
+
+#[test]
+fn a_default_application_not_written_says_so() {
+    let (tmp, mut app) = bench("apps-failed", Vec::new());
+    install_apps(&tmp.0);
+    let _ = app.update(Message::Catalog(catalog(&app)));
+    let _ = app.update(Message::Go(Page::DefaultApps));
+    app.settle();
+    let _ = app.update(Message::AppWritten(Kind::Browser, false));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::LOCKED_FILE).is_ok());
+    drop(ui);
+    // Written the next time: the sentence goes.
+    let _ = app.update(Message::AppWritten(Kind::Browser, true));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::LOCKED_FILE).is_err());
+}
+
+#[test]
+fn the_page_left_fades_out_under_the_new_one() {
+    let (_tmp, mut app) = bench("leaving", Vec::new());
+    let _ = app.update(Message::Go(Page::Lock));
+    assert!(matches!(app.leaving, Some((Page::Appearance, _))));
+    std::thread::sleep(cr::PAGE_FADE);
+    let _ = app.update(Message::Frame(std::time::Instant::now()));
+    assert!(app.leaving.is_none());
+}
