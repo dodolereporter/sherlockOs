@@ -50,7 +50,52 @@ pub fn fit<'a>(content: &'a str, max: f32, mut measure: impl FnMut(&str) -> f32)
     }
 }
 
+/// Width of `content` on one line, in `font` at `size`, shaped by the renderer as `Ellipsis`
+/// shapes it: what a row of labels needs, to decide what fits before laying it out (the global
+/// menu of the bar, lot D-36).
+pub fn width(content: &str, font: Font, size: f32) -> f32 {
+    let line = core_text::Text {
+        content,
+        bounds: Size::new(f32::INFINITY, f32::INFINITY),
+        size: Pixels(size),
+        line_height: LineHeight::default(),
+        font,
+        align_x: text::Alignment::Default,
+        align_y: alignment::Vertical::Top,
+        shaping: text::Shaping::Auto,
+        wrapping: Wrapping::None,
+    };
+    <Renderer as core_text::Renderer>::Paragraph::with_text(line)
+        .min_bounds()
+        .width
+}
+
 type StyleFn<'a> = Box<dyn Fn(&Theme) -> text::Style + 'a>;
+
+/// What a cut depends on: the text, the room, the font and the size.
+type CutKey = (String, u32, Font, u32);
+
+/// Cuts kept at most: beyond, the cache starts again empty.
+const KEPT_CUTS: usize = 4096;
+
+/// The cuts found by any `Ellipsis` of the program.
+static CUTS: std::sync::Mutex<Option<std::collections::HashMap<CutKey, String>>> =
+    std::sync::Mutex::new(None);
+
+fn cut_found(key: &CutKey) -> Option<String> {
+    let cuts = CUTS.lock().ok()?;
+    cuts.as_ref()?.get(key).cloned()
+}
+
+fn keep_cut(key: CutKey, shown: String) {
+    if let Ok(mut cuts) = CUTS.lock() {
+        let cuts = cuts.get_or_insert_with(std::collections::HashMap::new);
+        if cuts.len() >= KEPT_CUTS {
+            cuts.clear();
+        }
+        cuts.insert(key, shown);
+    }
+}
 
 /// A single line of text, cut with « … » when it is too long for its width.
 pub struct Ellipsis<'a> {
@@ -165,13 +210,24 @@ impl<Message> Widget<Message, Theme, Renderer> for Ellipsis<'_> {
             self.size.to_bits(),
         );
         if state.cut_for.as_ref() != Some(&key) {
-            let unbounded = Size::new(f32::INFINITY, max.height);
-            let shown = fit(&self.content, max.width, |probe| {
-                <Renderer as core_text::Renderer>::Paragraph::with_text(self.text(probe, unbounded))
-                    .min_bounds()
-                    .width
-            });
-            state.shown = shown.into_owned();
+            // A surface opened again (a resident program, lot P-02) has new states: the cut
+            // found before is kept for the whole program, so that it is not shaped again.
+            state.shown = match cut_found(&key) {
+                Some(shown) => shown,
+                None => {
+                    let unbounded = Size::new(f32::INFINITY, max.height);
+                    let shown = fit(&self.content, max.width, |probe| {
+                        <Renderer as core_text::Renderer>::Paragraph::with_text(
+                            self.text(probe, unbounded),
+                        )
+                        .min_bounds()
+                        .width
+                    })
+                    .into_owned();
+                    keep_cut(key.clone(), shown.clone());
+                    shown
+                }
+            };
             state.cut_for = Some(key);
         }
         let _ = state.paragraph.update(self.text(state.shown.as_str(), max));

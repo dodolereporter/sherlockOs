@@ -39,6 +39,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
@@ -211,6 +212,34 @@ size and margins, and computes the work area.
   above them, the snap preview between the top surfaces and the windows. The pointer follows
   the same order. Anchored surfaces are drawn as they are: no rounded corners, border or
   shadow, which are the client's business (the bar draws its own glass).
+- **Fullscreen covers the bar and the dock (lot D-21e).** As on macOS, a fullscreen window
+  (Wayland `set_fullscreen` or X11 `_NET_WM_STATE_FULLSCREEN`: F11 in Chrome, or a video put
+  fullscreen, which makes the whole browser window fullscreen) covers the top layer of its
+  screen: the bar, the dock and the notifications are drawn just behind it, and the pointer
+  reaches them there no more. Windows above the fullscreen one (its dialogs) stay above. Only
+  the overlay layer stays in front: on-screen displays, urgent notifications, the lock screen.
+  Mission Control shows the bar as usual. `fullscreen::State::fullscreen_on` names the
+  frontmost fullscreen window of a screen, on the active workspace and not minimized.
+  - **Coming back.** The pointer resting against an edge for `motion::EDGE_REVEAL_DELAY`
+    (150 ms) brings the top surfaces lying along that edge back over the window: those
+    anchored to it and not to the opposite one, to both sides across or to neither (the bar
+    at the top, the dock at the bottom; not the notifications, in a corner). They slide in from
+    beyond the edge over `motion::EDGE_REVEAL` (250 ms, ease-out), take the pointer, and their
+    menus work as usual. A pointer passing by the edge does not bring them out: leaving it
+    restarts the wait.
+  - **Going back.** They slide out the same way once the pointer has left the band from the
+    edge to their far side, and none of them has a menu open. The keyboard, if one of them
+    had it, goes back to the window.
+  - **A dock hiding by itself.** A surface partly beyond its screen hides by itself (the dock
+    hidden for a fullscreen window, lot D-18c2): the band it keeps at the edge takes the
+    pointer over the window, as before, and its client brings it back with its own slide,
+    which the reveal does not add to; it is drawn in front once its edge is revealed.
+  - **Tests.** In `tests/headless.rs`, a window made fullscreen goes in front of the bar and
+    takes the pointer over its row, an overlay surface stays in front of it, and the bar is in
+    front again once the window leaves fullscreen. The pointer against the top edge brings the
+    bar no sooner than 150 ms later, sliding from above to its place, where it then has the
+    pointer. Moved away, it slides back behind the window; revealed again with a panel open,
+    the panel takes the pointer over the window and the bar stays until the panel closes.
 - **Exclusive zone.** What a surface reserves along its edge, plus its margin on that edge, is
   taken from the work area. Windows are centered, maximized and snapped inside it. When it
   changes (the bar starts, stops or resizes), maximized, fullscreen and snapped windows of that
@@ -339,8 +368,8 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy` | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
-| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `closed` |
+| `sherlock_shell_manager_v1` | `destroy`, `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`, sent even without window nor screen. A roundtrip after the
@@ -360,10 +389,11 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 2 (lot D-18d), which adds `snapped` to the
-  states of a screen. A client that binds version 1 (the bar) never receives it: a screen with
-  only a snapped window is an empty state for it, as before. A toplevel has the version of its
-  manager.
+- **Versions.** The global is offered at version 3. Version 2 (lot D-18d) adds `snapped` to
+  the states of a screen; a client that binds version 1 never receives it: a screen with only a
+  snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
+  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. A toplevel
+  has the version of its manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -469,6 +499,39 @@ that announced that workspace, the last one winning: a client's commit never app
 client's requests. After a change of the model, the compositor sends the workspaces added,
 removed or changed, then `done`.
 
+### Global menu (lot D-36)
+
+The bar shows the menus of the active application (`docs/bar.md`, "Global menu"). The
+application exports them with `com.canonical.dbusmenu` on the session bus; the compositor only
+says where, for each window: the `app_menu` event of `sherlock_shell_toplevel_v1` gives a bus
+name and an object path, both empty without a menu. It learns them two ways (`shell/appmenu.rs`):
+
+- **`org_kde_kwin_appmenu_manager`** (KDE's protocol, version 2, from `wayland-protocols-plasma`),
+  offered to every client: `create` on a surface, then `set_address`. Qt with KDE's platform
+  theme (`QT_QPA_PLATFORMTHEME=kde`) does it for each window. The address goes with the
+  surface; `release` removes it.
+- **The registrations of `com.canonical.AppMenu.Registrar`**, which the bar serves and passes
+  on with `register_app_menu` and `unregister_app_menu`. Qt's generic theme and qt6ct, which the
+  session uses, only call `RegisterWindow`, with the X11 window id, and under Wayland with the
+  id 1 for every window: an id that names nothing. The registration therefore carries the
+  process of the bus connection, which the bar asks the bus daemon for
+  (`GetConnectionUnixProcessID`) and the application cannot choose. The compositor gives the
+  menu to the X11 window of that id, if its `_NET_WM_PID` is that process or unknown; else to
+  the newest Wayland window of a client of that process (`SO_PEERCRED`) that has no menu yet;
+  else it keeps the registration (64 at most) for the next window of that process that shows
+  up. Qt registers its first menu before the window shows, so the main window takes it and a
+  dialog opened after it takes none. A window keeps the menu it took until
+  `unregister_app_menu` names that address, or until it closes. The address set by KDE's
+  protocol comes first.
+
+Seen with Kate 25.04 and Qt 6.8.2 against the compositor without a screen (`--headless`), on a
+private bus, `XDG_CURRENT_DESKTOP=SherlockOS`: with the generic theme, Kate registers
+`/MenuBar/1` with the id 1, withdraws it (`UnregisterWindow(1)`) when its menu bar moves to the
+main window, then registers `/MenuBar/2`, the menu it keeps; with KDE's theme it also sets the
+address of its surface with KDE's protocol. A Flatpak application reaches the bus through
+`xdg-dbus-proxy`, whose process is not the application's: under Wayland, its menu finds no
+window unless it uses KDE's protocol.
+
 ### Follow-ups for D-18c and later
 
 From the review of D-18a. Lot D-18w settled the workspace of a new window, set when it shows up,
@@ -560,6 +623,12 @@ ordinary socket, and a shell program.
   restored, the screen is uncovered.
 - **Frame callbacks.** A shown window gets one at every frame; minimized, none at 17 and 484 ms,
   one after a second.
+- **Global menu** (lot D-36). The address set with `org_kde_kwin_appmenu` reaches the shell in
+  `app_menu`, and empties when released. A registration of this process made before the window
+  shows goes to it; a dialog opened after it gets none; a second registration goes to the
+  dialog, the newest window without a menu. Another process's registration, and another
+  connection's `unregister_app_menu`, change nothing; the menu's own withdraws it. A manager
+  bound at version 2 receives no `app_menu`.
 - **Minimized and the work area.** A maximized window, minimized, gets the new work area when
   a dock with an exclusive zone appears.
 - **Keyboard after a close.** A window closing on a hidden workspace while nothing has the
@@ -703,6 +772,38 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   therefore cannot change what the user pastes into a Wayland application. The rule is strict,
   with no exception for command line tools: `xclip -i` launched from a Konsole (Wayland) sets
   nothing on the Wayland side. The log says so at the `debug` level: `X11 selection refused`.
+- Text goes through smithay, which maps `text/plain;charset=utf-8` to `UTF8_STRING` and
+  `text/plain` to `TEXT`. The other types (`image/png`, `text/uri-list`, `text/html`) keep their
+  name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
+  looks their atom up in a property that nothing writes, and the paste failed: the compositor
+  reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
+  with its own connection, and writes what comes into the Wayland client's pipe.
+- Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
+  by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
+  non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
+  (as `wl-copy` does) stopped at the first full pipe, and X11 got the first 64 KiB of a picture.
+  The compositor makes that end blocking again before handing it over.
+- A screenshot copied by the compositor (lot D-35c) is offered to X11 too, as `image/png`.
+- **Locked session: nothing passes.** No Wayland client is offered a selection, not even the lock
+  program, which has the keyboard; an offer received before the lock gives nothing when read;
+  an X11 client neither reads nor sets one. The selections may still change (a screenshot taken
+  just before lands), and XWayland still learns of it, but no one reads them before the unlock.
+  Limit: a Wayland client that kept an offer from another Wayland client, received before the
+  lock, reads it straight from that client, without the compositor.
+- smithay 0.7 calls `focus_changed` for a new keyboard focus only. When nobody has the keyboard
+  (lock without its surface yet, `focus(None)`), the compositor takes the selections away from
+  the client that had it, which kept being offered them before lot D-29.
+- **The hook for the clipboard history (lot D-42).** Every new selection, CLIPBOARD and PRIMARY,
+  from a Wayland client, an X11 application or the compositor, passes through
+  `State::selection_set` (`handlers.rs`) with its types and its origin (`SelectionOrigin`: the
+  Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
+  manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
+  that hint does not cross from an X11 application.
+- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
+  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
+  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
+  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
+  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
 
 ## GPU buffers (linux-dmabuf)
 
@@ -823,7 +924,8 @@ single thread. `render::Scene` compiles three programs at startup and lays out t
 front to back, as Smithay expects them:
 
 1. anchored surfaces of the overlay layer, then those of the top layer, each with its menus in
-   front;
+   front; on a screen with a fullscreen window, the top layer goes just behind that window,
+   unless an edge brought it back (see "Fullscreen covers the bar and the dock");
 2. the windows during their minimize effect (lots D-19 and Q-14), under the bar and the dock;
 3. the snap preview: translucent green rounded rectangle, 2 px green border;
 4. for each window, from the topmost to the lowest: its menus (`xdg_popup`, neither clipped nor
@@ -960,37 +1062,45 @@ lasts one hover.
 Nothing flickers: a window appears from zero opacity, and each animation starts from what was
 drawn in the previous frame.
 
-### Minimize effect (lot D-19)
+### Minimize effect (lots D-19, D-19b)
 
-Minimized, by the dock, its keys or its application, a window is sucked into its dock icon;
-activated, it comes back out the same way, backwards. `src/genie.rs`.
+Minimized, by the dock, its keys or its application, a window is sucked into its dock icon,
+as by macOS's genie; activated, it comes back out the same way, backwards. `src/genie.rs`.
 
-- **Genie.** The icon is the rectangle the dock gives with `set_rectangle`
-  (`State::icon_rectangle`, see "Shell protocol"). The effect lasts `motion::MINIMIZE` (300 ms
-  since lot Q-14, 450 ms before: found slow on the machine), at a constant pace, the same both
-  ways. During the first 40 % the sides bend: what is level with the window's top
-  keeps its width, what reaches the icon's top takes the icon's width, along a smoothstep curve
-  in between; the bottom of the window narrows toward the icon. During the rest, the window
-  slides down this funnel and is squeezed into the icon, whose rectangle it covers exactly at the
-  end; it fades over the last 15 % so that the icon takes over. A dock above the window gives the
-  same effect upside down.
+- **Genie** (lot D-19b). The icon is the rectangle the dock gives with `set_rectangle`
+  (`State::icon_rectangle`, see "Shell protocol"); the dock's edge is the edge of the icon's
+  screen nearest to it (`genie::Side`), so the same genie, turned, goes down, up, left or
+  right. The effect lasts `motion::MINIMIZE` (300 ms since lot Q-14), at a constant pace, the
+  same both ways. Each row of the window goes from its place to the same row of the icon along
+  an accelerating curve (`x²`): the edge nearest the dock leaves first, the far edge 40 % of
+  the way later, so the window is pulled into the icon and flows after it, faster and faster.
+  The sides close in a funnel whose sides are half a period of a sinusoid: the window's width at
+  its far edge at rest, the icon's width at the edge of the dock's glass; the funnel bends in
+  over the first 40 % of the way. The shadow fades out over the first 30 %, and what is left
+  fades over the last 10 %.
+- **Behind the glass** (lot D-19b). Nothing of the window shows past the edge of the dock's glass
+  toward the screen's middle, `genie::GLASS_MARGIN` (the dock's padding less its border, 11
+  logical pixels) from the icon: the window enters the glass exactly over its icon, as wide as
+  it, and is cut there, neither seen through the translucent glass nor under the dock. A window
+  that reaches behind the glass at rest is not cut at once: the cut goes up to the glass edge
+  over the first quarter of the way. A magnified icon changes nothing: the cut stays at the edge
+  of the glass, under the icon that grows past it. Until D-19b the window went down into the
+  icon rectangle behind the glass, and showed through it.
 - **Drawing: a shader rather than a mesh.** The window is first drawn as at rest into a texture
   of its size in pixels (its content clipped to its rounded corners, its border, and the title
-  bar the compositor draws for it since lot D-08); then a
-  single rectangle covers the area the deformed window takes (`Genie::bounds`), and
+  bar the compositor draws for it since lot D-08); then a single rectangle covers the area the
+  deformed window takes (`Genie::bounds`, nothing once all of it is behind the glass), and
   `genie.frag` computes for each of its pixels the point of the window it shows: the exact
-  inverse of the deformation, which is easy since each row of the window stays a horizontal
-  segment. Smithay's GLES renderer takes fragment programs of our own but no vertices of our
-  own (a mesh would mean raw GL calls next to its state), and a mesh of 1 × N strips drawn as
-  triangles bends the texture along the diagonal of each trapezoid. The corners and the border,
-  drawn into the texture, follow the deformation; the edges of the funnel are smoothed over one
-  pixel on the screen. The shadow is not deformed: it fades out while the sides bend. `Genie`
-  holds the same computation in Rust, for the area and the tests; the two must stay in line.
-- **Under the dock** (lot Q-14). The window is sucked into its icon, as on macOS: it is drawn
-  behind the anchored surfaces of the top and overlay layers (bar, dock, notifications), in
-  front of the other windows. From the back: the wallpaper, the windows, the genie, then the
-  bar, the dock and the notifications. In front of the dock (lot D-19), the window covered the
-  icon it went into.
+  inverse of the deformation. Each row stays a segment across the way: the shader finds the
+  row drawn at its place by halving (20 steps, the rows never cross), then the column between
+  the sides of the funnel there. Smithay's GLES renderer takes fragment programs of our own but
+  no vertices of our own, and a mesh of strips drawn as triangles bends the texture along the
+  diagonal of each trapezoid. The edges are smoothed over one pixel on the screen. `Genie`
+  holds the same computation in Rust (`Genie::point`), for the area and the tests; the two must
+  stay in line.
+- **Under the dock** (lot Q-14). The genie is drawn behind the anchored surfaces of the top and
+  overlay layers (bar, dock, notifications), in front of the other windows. From the back: the
+  wallpaper, the windows, the genie, then the bar, the dock and the notifications.
 - **Without an icon** (no dock, or a window without an icon in it), the scale effect: the window
   shrinks to `motion::MINIMIZE_SCALE` (a fifth) toward the bottom of its screen, centered under
   itself, and fades out; drawn like a window, stretched (`RescaleRenderElement`), with its
@@ -1081,6 +1191,23 @@ What lot C-01 found, image by image, in D-34's animations, and changed:
   already taken its content away, and keeping its last image (as for a window) would leave a
   ghost over what the click reaches; the menus of the bar and the dock (their own surfaces)
   have their own animations. X11 menus (override-redirect windows) appear at once.
+- **Menus and panels of the shell (lot UI-06).** The `xdg_popup`s of anchored surfaces, the
+  bar's panels and menus and the dock's menus, fold back by themselves on Escape, on their
+  button or on an entry chosen. But when the compositor closes them (a click elsewhere, a
+  workspace switch, Mission Control, the lock) iced_exwlshell destroys them at once on
+  `popup_done`, and a client that opens one menu in place of another drops the first at once.
+  So the compositor keeps their last image (`src/popup_anim.rs`): at the dismissal
+  (`State::dismiss_popups`, before `popup_done`) or when the client destroys the popup
+  (`XdgShellHandler::popup_destroyed`), while its buffer is still there, the backend draws the
+  popup into a texture (`set_popup_snapshotter`, the window snapshotter's offscreen path). That
+  image shrinks to `motion::POPUP_CLOSE_SCALE` (0.96) around its center and fades out over
+  `motion::POPUP_CLOSE` (150 ms) on `WINDOW_CLOSE_EASE`, in front of the anchored surfaces, then
+  is freed with the window ghosts (`end_popup_closings`). It takes no input: the click that
+  closed the menu reaches what is under it. Once per popup: a menu dismissed, then destroyed
+  by its client, closes once. A popup that faded out by itself leaves a transparent image, and
+  nothing shows; a popup without a buffer leaves none. Off with `--window-animations off`, and
+  while locked. Reopened during that fade, the menu opens by its own animation, over its
+  fading image.
 - **Not animated:** X11 override-redirect windows, anchored surfaces (bar, dock), fullscreen
   windows, a window closing on another workspace, minimized, or while Mission Control is open.
 - **Cost.** One frame per vertical blank while a window opens or closes (it counts as an
@@ -1097,7 +1224,9 @@ closing finishes.
 grows and fades in together without a bounce, still moving at 200 ms, over at 250; the bar
 scales with the window around the center of both; a skipped opening shows at once.
 `window_anim.rs`: the closing shrinks and fades in 180 ms, each step longer than the one
-before. `tests/headless.rs`: a window closing over another one takes no click, the one below
+before. `tests/shell.rs` (lot UI-06): a menu of the dock dismissed by a click elsewhere closes
+with its last image, which goes after its fade; one dropped by its client too; none with the
+animations off. `tests/headless.rs`: a window closing over another one takes no click, the one below
 does; frames are due while it closes, not after, and nothing is kept; a fullscreen window opens
 and closes at once; so does any window with the setting off.
 `the_opening_and_the_closing_are_drawn_halfway` draws a decorated window through its opening
@@ -1532,6 +1661,19 @@ cargo run -p compositor -- --nested --outputs 2 --scale 1 --scale 2 \
 `QT_QPA_PLATFORM=wayland` forces Konsole to speak Wayland: in an X11 session, Qt would choose
 X11, and Konsole would go through XWayland. `--separate` keeps the command from joining a Konsole
 that is already open.
+
+### Without a screen (`--headless`, lot D-36)
+
+```sh
+cargo run -p compositor -- --headless konsole
+```
+
+No window opens anywhere: the compositor makes one virtual screen of 1440 × 900 per `--scale`
+(one at scale 1 by default), draws nothing, and sends each window and anchored surface its
+frame callbacks every 16 ms. Real applications run against its protocols, to see what they ask
+for (`WAYLAND_DEBUG=1`, `RUST_LOG=compositor=debug`), without showing a window on the author's
+screen. Like the real session, it restricts EGL to Mesa for itself and what it launches, and
+starts XWayland only with `--xwayland`.
 
 ### An X11 application
 
@@ -2237,9 +2379,12 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **When the lock program dies.** The session stays locked on the background. The program is
   started again after 500 ms, on a new connection; the dead program's is forgotten. A lock
   given up before `locked` takes its surfaces with it. A program that ends without locking, or
-  does not lock within 10 seconds, is a failure. After 3 failures, `swaylock --color 0a1424`; if it is not
-  there or fails too, the compositor draws its rescue screen: « Verrouillé » and « Appuie sur
-  Entrée pour réessayer », Enter starting the programs again.
+  does not lock within 10 seconds, is a failure. After 3 failures, the same program in its
+  rescue mode, `sherlockos-lock --rescue` (lot D-25c: a plain password field checked by PAM, in
+  software, without Sherlock nor background), started the same way, on a connection the
+  compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
+  then the compositor's own screen, which cannot unlock: « Verrouillé » and « Appuie sur Entrée
+  pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
@@ -2413,8 +2558,8 @@ just verify
 | `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
 | `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
 | `src/render.rs` | An opaque window hides what is below but its rounded corners; a translucent one hides nothing. Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
-| `src/genie.rs` | Genie at 0 (the window), 0.5 (sliding, the bottom narrower than the top, rows in order) and 1 (exactly the icon's rectangle); mirrored for a dock above; scale effect without an icon; turned around halfway without a jump; the setting's names |
-| `tests/genie.rs` | The genie drawn for real at 0.5, see below |
+| `src/genie.rs` | Genie at 0 (the window), 0.5 (the bottom gone in first, the top narrower and lower, rows in order) and 1 (all of it behind the glass); at every frame nothing past the glass, and the window as wide as the icon where it enters it; each point moving toward the icon without a jump; a window behind the glass at rest not cut at once; the same genie turned for a dock at the top, left and right; scale effect without an icon; turned around halfway without a jump; the setting's names |
+| `tests/genie.rs` | The genie drawn for real at 0.5 and under a translucent dock, see below |
 | `src/stats.rs` | Frame rate, late frames, summary of animated frames |
 | `src/wallpaper.rs` | Placement at each screen's scale, variant per screen size in pixels, default wallpaper from the data folders and its pendant after `set_theme`, board's background for a missing or undecodable image, setting read again when it changes, image of an older setting dropped |
 | `desktop-config` | Settings read and written back, wrong lines refused with their number, missing file, XDG folders, choice per theme (default pair, fixed wallpaper, wallpaper without a pendant, user's path), variant choice (16:9, 16:10, scales 1 and 2, contain), cover / contain / center geometry, dither of a dark gradient (mean kept, reproducible), 4K variant identical to its original |
@@ -2433,6 +2578,7 @@ just verify
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
+| `tests/clipboard.rs` | Clipboard and primary selection between a Wayland client and X11 clients (x11rb): text, pictures of several MB (INCR), screenshot, nothing while locked (lot D-29) |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
@@ -2570,13 +2716,13 @@ windows of 800 × 600, a bar and a dock:
 The test in `tests/genie.rs` draws `genie.frag` for real without a screen: Mesa's software
 renderer (llvmpipe), through its EGL device (`EGL_MESA_device_software`), draws a window of
 240 × 160 with a title bar and a grid, halfway to an icon of 32 × 32, into a texture read back.
-The title bar is at the top row `Genie::row` gives, the body at the bottom one, the desktop
-just outside the narrowed bottom, above the window that slid down and in the icon not reached
-yet. The image is saved in `target/tmp/genie-half.png`. The whole way, in six steps, is saved
-in `target/tmp/genie-steps.png`, with an opaque dock and its icon drawn in front of the genie as
-the compositor orders them (lot Q-14): at the end, only the icon shows. Without Mesa's EGL
-(`libegl-mesa0`) the test says it has nothing to draw with, and fails on the CI, which installs
-it.
+The title bar and the body are where `Genie::point` puts them, the desktop just outside the
+narrowed sides, above the window that moved down and past the edge of the glass. The image is
+saved in `target/tmp/genie-half.png`. The whole way, in eight steps, is saved in
+`target/tmp/genie-steps.png`, under a translucent dock and its icon drawn in front of the genie
+as the compositor orders them (lot Q-14): at every step, the glass and what is under it are
+pixel for pixel as without the window. Without Mesa's EGL (`libegl-mesa0`) the test says it
+has nothing to draw with, and fails on the CI, which installs it.
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):

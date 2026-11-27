@@ -8,6 +8,8 @@
 //! its Wayland socket (`WAYLAND_DISPLAY`) and its X11 display (`DISPLAY`).
 //! `--measure` logs the frame rate and frame render time every second, then a summary at the
 //! end. The session then stops with the command.
+//! `--headless` runs it without any screen: one virtual screen of 1440 × 900 per scale, nothing
+//! drawn, for real applications checked without a window (lot D-36).
 //! `--outputs N` splits the window into N screens side by side. `--scale S` sets the scale of
 //! the screens (`1`, `1.25` or `1,25`…); given several times, one per screen in order.
 //! `--workspaces N` sets the number of workspaces, from 1 to 9 (3 by default). `--snap-gap PX`
@@ -63,7 +65,10 @@ fn main() -> Result<(), Error> {
     }
     let socket = state.listen(&event_loop)?;
     // The real session's devices are released before the seat when leaving, whatever happens.
-    let session = if options.nested {
+    let session = if options.headless {
+        compositor::headless::init(&event_loop, &mut state, &options.scales)?;
+        None
+    } else if options.nested {
         compositor::winit::init(&event_loop, &mut state, &options.scales)?;
         None
     } else {

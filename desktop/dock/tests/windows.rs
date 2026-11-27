@@ -214,13 +214,14 @@ fn the_windows_are_read_and_acted_on() {
 
     // The clicks of the dock: the browser, open behind, is brought forward; the terminal, in
     // front, is minimized. Each request goes on a connection of its own.
-    let browser = windows::click(Some(windows.of(|id| id == "ExampleBrowser")), true);
-    assert_eq!(browser, windows::Click::Activate);
+    let browser = windows::click(&windows.owned(|id| id == "ExampleBrowser"), true);
+    let id = windows.owned(|id| id == "ExampleBrowser")[0].id;
+    assert_eq!(browser, windows::Click::Bring(vec![id]));
     let sent = windows::act(fake.connections.remove(0), Request::Activate, &|id| {
         id == "ExampleBrowser"
     });
     assert_eq!(sent.expect("activated"), 1);
-    let terminal = windows::click(Some(windows.of(|id| id == "org.example.terminal")), true);
+    let terminal = windows::click(&windows.owned(|id| id == "org.example.terminal"), true);
     assert_eq!(terminal, windows::Click::Minimize);
     let sent = windows::act(fake.connections.remove(0), Request::Minimize, &|id| {
         id == "org.example.terminal"

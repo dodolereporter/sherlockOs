@@ -6,7 +6,7 @@
 //! one atomically (written beside it, then renamed).
 
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::Dirs;
@@ -132,7 +132,7 @@ pub fn set_default(dirs: &Dirs, desktops: &[String], mime: &str, app: &str) -> i
         if has_default {
             let text = set_in(&text, DEFAULTS, mime, app);
             let text = remove_from(&text, REMOVED, mime, app);
-            write_atomically(&path, &text)?;
+            crate::file::write_atomically(&path, &text)?;
         }
     }
     let path = dirs.config_home.join("mimeapps.list");
@@ -140,7 +140,7 @@ pub fn set_default(dirs: &Dirs, desktops: &[String], mime: &str, app: &str) -> i
     let text = set_in(&text, DEFAULTS, mime, app);
     let text = set_in(&text, ADDED, mime, app);
     let text = remove_from(&text, REMOVED, mime, app);
-    write_atomically(&path, &text)
+    crate::file::write_atomically(&path, &text)
 }
 
 fn read_optional(path: &Path) -> io::Result<Option<String>> {
@@ -220,49 +220,6 @@ fn set_in(text: &str, group: &str, mime: &str, app: &str) -> String {
         }
     }
     lines.join("\n") + "\n"
-}
-
-/// Follows symbolic links to the file they name, even if it does not exist yet; gives up
-/// after 40 links, like the kernel.
-fn resolve_links(path: &Path) -> PathBuf {
-    let mut current = path.to_path_buf();
-    for _ in 0..40 {
-        match std::fs::read_link(&current) {
-            Ok(target) => {
-                current = match current.parent() {
-                    Some(parent) if target.is_relative() => parent.join(target),
-                    _ => target,
-                };
-            }
-            Err(_) => return current,
-        }
-    }
-    current
-}
-
-/// Writes a file beside the target, flushes it to disk, then renames it over the target: a
-/// reader sees the old file or the new one, never half of one.
-fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
-    // A list kept elsewhere and linked into the configuration (dotfiles in a repository)
-    // is written where it lives: the link stays a link.
-    let target = resolve_links(path);
-    let path = target.as_path();
-    let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
-    std::fs::create_dir_all(dir)?;
-    let temporary = dir.join(format!(".mimeapps.list.{}.tmp", std::process::id()));
-    let written = (|| {
-        let mut file = std::fs::File::create(&temporary)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        if let Ok(meta) = std::fs::metadata(path) {
-            file.set_permissions(meta.permissions())?;
-        }
-        std::fs::rename(&temporary, path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
 }
 
 #[cfg(test)]

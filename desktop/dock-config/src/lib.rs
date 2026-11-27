@@ -1,6 +1,6 @@
 //! The dock's configuration file, `$XDG_CONFIG_HOME/dock/dock.conf`: reading, checking and
 //! writing. A library of its own, so that the dock and the settings application (Control Room,
-//! D-26) read and write the same file the same way. Standard library only.
+//! D-26) read and write the same file the same way.
 //!
 //! ```text
 //! [Dock]
@@ -20,9 +20,8 @@
 pub mod keyfile;
 
 use std::fmt;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use sherlock_ui::{dock, metrics};
 
@@ -213,83 +212,61 @@ impl DockConfig {
         }
     }
 
-    /// The file's text with the current settings. Keys left at their default and never written
-    /// stay absent; the pinned list is written once it is known.
+    /// The file's text with the current settings: the text read, where only the keys whose
+    /// value changed since are set again. Comments, other groups, unknown keys and their order
+    /// stay, and a key the file got wrong stays as written until it is changed: nothing that
+    /// was not touched moves.
     pub fn to_text(&self) -> String {
         let mut file = self.file.clone();
-        if let Some(pinned) = &self.pinned {
-            file.set(
-                GROUP,
-                PINNED,
-                &pinned.iter().map(|id| format!("{id};")).collect::<String>(),
-            );
+        let (read, _) = Self::parse(&file.to_text());
+        if self.pinned != read.pinned
+            && let Some(pinned) = &self.pinned
+        {
+            let list: String = pinned.iter().map(|id| format!("{id};")).collect();
+            file.set(GROUP, PINNED, &list);
         }
-        let defaults = Self::default();
-        let mut put = |key: &str, value: String, default: String| {
-            if file.get(GROUP, key).is_some() || value != default {
+        if self.icon_theme != read.icon_theme
+            && let Some(theme) = &self.icon_theme
+        {
+            file.set(GROUP, ICON_THEME, theme);
+        }
+        let mut put = |key: &str, value: String, before: String| {
+            if value != before {
                 file.set(GROUP, key, &value);
             }
         };
         put(
             ICON_SIZE,
             format_number(self.icon_size),
-            format_number(defaults.icon_size),
+            format_number(read.icon_size),
         );
         put(
             MAGNIFICATION,
             self.magnification.to_string(),
-            defaults.magnification.to_string(),
+            read.magnification.to_string(),
         );
         put(
             FACTOR,
             format_number(self.magnification_factor),
-            format_number(defaults.magnification_factor),
+            format_number(read.magnification_factor),
         );
         put(
             AUTO_HIDE,
             self.auto_hide.key().to_owned(),
-            defaults.auto_hide.key().to_owned(),
+            read.auto_hide.key().to_owned(),
         );
         put(
             POSITION,
             self.position.key().to_owned(),
-            defaults.position.key().to_owned(),
+            read.position.key().to_owned(),
         );
-        if let Some(theme) = &self.icon_theme {
-            file.set(GROUP, ICON_THEME, theme);
-        }
         file.to_text()
     }
 
-    /// Writes the file at `path`, creating its directory. The text goes to a temporary file of
-    /// its own (process id and a counter: the dock and the settings application may write at
-    /// the same time), flushed to the disk, then renamed over the old one, and the directory is
-    /// flushed too: a reader never sees half a file, and a crash leaves the old or the new one.
-    /// When `path` is a symbolic link, its target is written and the link kept.
+    /// Writes the file at `path` with `mime_apps::write_atomically`: whole or not at all, its
+    /// permissions and its links kept (a dangling link too), the folder flushed after.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let target = resolve_links(path)?;
-        let dir = match target.parent() {
-            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        std::fs::create_dir_all(&dir)?;
-        let name = target
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let count = SAVES.fetch_add(1, Ordering::Relaxed);
-        let temporary = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
-        let written = (|| {
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(self.to_text().as_bytes())?;
-            file.sync_all()?;
-            std::fs::rename(&temporary, &target)
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written?;
-        std::fs::File::open(&dir)?.sync_all()
+        mime_apps::write_atomically(path, &self.to_text())
     }
 }
 
@@ -307,29 +284,6 @@ pub fn move_pinned(pinned: &mut Vec<String>, id: &str, before: Option<&str>) -> 
         .unwrap_or(pinned.len());
     pinned.insert(to, moved);
     *pinned != previous
-}
-
-/// Saves made by this process, for unique temporary names.
-static SAVES: AtomicU64 = AtomicU64::new(0);
-
-/// The file a chain of symbolic links ends at (40 links at most, like the kernel), or `path`
-/// itself when it is not a link. A missing target is fine: it will be created.
-fn resolve_links(path: &Path) -> io::Result<PathBuf> {
-    let mut current = path.to_path_buf();
-    for _ in 0..40 {
-        match std::fs::read_link(&current) {
-            Ok(link) => {
-                current = match current.parent() {
-                    Some(dir) if link.is_relative() => dir.join(link),
-                    _ => link,
-                };
-            }
-            Err(error) if error.kind() == io::ErrorKind::InvalidInput => return Ok(current),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(current),
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::other("too many levels of symbolic links"))
 }
 
 /// A number of `key` within `bounds`, or `default` and a problem.

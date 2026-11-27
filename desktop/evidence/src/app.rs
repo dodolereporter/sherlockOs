@@ -240,8 +240,19 @@ pub enum WindowAction {
     Close,
 }
 
+/// The first state of the menus in the bar: the subscription starts once, whatever it holds.
+struct MenubarStart(crate::menubar::State);
+
+impl std::hash::Hash for MenubarStart {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        "menubar".hash(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// The menus in the bar: served, or an entry clicked there (lot D-36c).
+    MenuBar(crate::menubar::Event),
     Go(Location),
     Back,
     Forward,
@@ -332,6 +343,8 @@ enum Clip {
 
 /// The Evidence application.
 pub struct App {
+    /// The menus exported to the bar, once served (lot D-36c).
+    menubar: Option<crate::menubar::MenuBar>,
     pub(crate) config: Config,
     pub(crate) location: Location,
     history: Vec<Location>,
@@ -412,6 +425,7 @@ impl App {
         let start = Location::Folder(config.start.clone());
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
+            menubar: None,
             config,
             location: start,
             history: Vec::new(),
@@ -499,7 +513,16 @@ impl App {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
-        Subscription::batch([events, frames, devices, appearance])
+        let menubar = if crate::menubar::enabled() {
+            let state = self.menubar_state();
+            Subscription::run_with(MenubarStart(state), |start| {
+                crate::menubar::events(start.0.clone())
+            })
+            .map(Message::MenuBar)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([events, frames, devices, appearance, menubar])
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -568,6 +591,7 @@ impl App {
                 .unwrap_or_default(),
         });
         let task = self.handle(message);
+        self.sync_menubar();
         let now = self.now();
         if self.menu.is_some() {
             self.closing = None;
@@ -620,8 +644,47 @@ impl App {
         }
     }
 
+    /// What the menus in the bar depend on, now.
+    pub fn menubar_state(&self) -> crate::menubar::State {
+        crate::menubar::State {
+            selection: !self.selection.is_empty(),
+            in_trash: self.location == Location::Trash,
+            show_hidden: self.show_hidden,
+            show_preview: self.show_preview,
+            can_back: self.can_go_back(),
+            can_forward: self.can_go_forward(),
+            places: self
+                .config
+                .favorites
+                .iter()
+                .map(|p| (p.label, p.path.clone()))
+                .collect(),
+        }
+    }
+
+    /// Tells the menus in the bar what changed.
+    fn sync_menubar(&self) {
+        if let Some(menubar) = &self.menubar {
+            menubar.update(self.menubar_state());
+        }
+    }
+
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::MenuBar(crate::menubar::Event::Ready(menubar)) => self.menubar = Some(menubar),
+            Message::MenuBar(crate::menubar::Event::Click(action)) => {
+                use crate::menubar::Action;
+                let message = match action {
+                    Action::Run(command) => Message::Run(command),
+                    Action::Back => Message::Back,
+                    Action::Forward => Message::Forward,
+                    Action::Up => Message::Up,
+                    Action::Go(Some(path)) => Message::Go(Location::Folder(path)),
+                    Action::Go(None) => Message::Go(Location::Trash),
+                    Action::Window(action) => Message::Window(action),
+                };
+                return self.update(message);
+            }
             Message::Go(location) => return self.go(location),
             Message::Back => {
                 if let Some(previous) = self.history.pop() {

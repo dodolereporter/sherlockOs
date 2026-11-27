@@ -1,6 +1,7 @@
 //! Data and control for the programs of the shell (bar, dock): the private `sherlock_shell_v1`
 //! protocol (`toplevels.rs`) and the workspaces through `ext-workspace-v1` (`workspaces.rs`).
-//! Both are offered only to the clients of the shell socket (ADR 0021).
+//! Both are offered only to the clients of the shell socket (ADR 0021). The global menu of each
+//! window (`appmenu.rs`) comes from every client, and goes to the shell.
 //!
 //! Nothing in the rest of the compositor calls this module when a window changes: after each
 //! loop iteration, `State::refresh_shell` reads the windows and the screens, and each bound
@@ -11,6 +12,7 @@
 //! minimized. Hidden windows stay in the space, at their place: they keep their commits, their
 //! screen and their arrangement, and rendering, input and focus skip them (`State::is_visible`).
 
+mod appmenu;
 mod toplevels;
 mod workspaces;
 
@@ -53,6 +55,8 @@ pub(crate) struct Shell {
     workspace_model: workspaces::Workspaces,
     /// Slide from one workspace to the next.
     slide: crate::anim::WorkspaceSlide,
+    /// Menu registrations that no window took yet.
+    app_menus: appmenu::AppMenus,
 }
 
 /// Workspace of a window, by id: the active one when the window shows up.
@@ -63,6 +67,7 @@ impl Shell {
     pub(crate) fn new(dh: &DisplayHandle) -> Self {
         toplevels::create_global(dh);
         workspaces::create_global(dh);
+        appmenu::create_global(dh);
         Self::default()
     }
 }
@@ -448,6 +453,7 @@ impl State {
             .filter(|i| self.window_by_id(i.0).is_some())
             .collect();
         if !self.shell.managers.is_empty() {
+            self.assign_app_menus();
             let (windows, outputs) = self.snapshot();
             let dh = self.display_handle.clone();
             for manager in &mut self.shell.managers {
@@ -502,6 +508,7 @@ impl State {
                     workspace: self.workspace_of(window),
                     title: State::title(window).unwrap_or_default(),
                     app_id: app_id(window),
+                    menu: State::app_menu(window),
                     states,
                     output,
                     geometry,

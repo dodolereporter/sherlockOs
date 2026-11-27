@@ -183,6 +183,30 @@ field has the focus.
 | Tab, Shift+Tab | Move the focus through buttons and fields |
 | Escape | Clear the search and the selection |
 
+## Menus in the bar (lot D-36c)
+
+Under SherlockOS, Evidence's menus go to the bar, after its name, like those of Qt
+applications (`docs/bar.md`, "Global menu"). `menubar.rs` exports them with
+`com.canonical.dbusmenu` on the session bus, at `/MenuBar`, then calls `RegisterWindow` of
+`com.canonical.AppMenu.Registrar` when the session has one; the compositor gives the menu to
+Evidence's window by its process. Without a registrar they are only exported, and Evidence
+keeps its shortcuts and its right-click menu either way.
+
+| Menu | Entries |
+| --- | --- |
+| « Fichier » | « Nouveau dossier », « Ouvrir », « Terminal, dans ce dossier », « Renommer », « Dupliquer », « Copier le chemin », « Mettre à la corbeille », « Restaurer », « Vider la corbeille » |
+| « Édition » | « Couper », « Copier », « Coller », « Tout sélectionner » |
+| « Présentation » | « Fichiers cachés » and « Aperçu » (check marks), « Actualiser » |
+| « Aller » | « Précédent », « Suivant », « Dossier parent », the favourites of the sidebar, « Corbeille » |
+| « Fenêtre » | « Réduire », « Agrandir », « Fermer la fenêtre » |
+
+Each entry runs what its shortcut or the right-click menu runs, and shows that shortcut.
+Entries are enabled as the right-click menu's are: « Copier » needs a selection, « Coller » and
+« Nouveau dossier » a folder rather than the trash, « Restaurer » and « Vider la corbeille »
+the trash, « Précédent » and « Suivant » a history. When one of these changes, the bar is told
+(`LayoutUpdated`) and reads them again; the ids of the entries never change. A click in the bar
+comes back as an `Event` « clicked », which only runs an entry that is enabled.
+
 ## Selection
 
 As in Finder and Dolphin (lot E-01). The logic is in `selection`, without iced.
@@ -433,6 +457,13 @@ user's; no test calls the real UDisks.
 - `sherlock_ui::animated`: the hover fade, and a reused row that starts from rest;
   `sherlock_ui::component`: no hover on a disabled control.
 - `mime-apps`: see `docs/mime-apps.md`.
+
+- **Menus in the bar** (`tests/menubar.rs`, `menubar.rs`): on a private bus with a fake
+  registrar, the menus registered at `/MenuBar`, read as the bar reads them (the five menus,
+  the favourites under « Aller »), « Nouveau dossier » clicked coming back as its command, a
+  disabled « Copier » doing nothing until a selection enables it, which sends `LayoutUpdated`;
+  without a registrar, the menus are only exported. The entries follow the state, and a layout
+  carries labels, check marks and shortcuts.
 
 ## Theme
 

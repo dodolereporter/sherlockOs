@@ -30,7 +30,7 @@ use wayland_protocols::ext::workspace::v1::client::{
     ext_workspace_manager_v1::{self as workspaces, ExtWorkspaceManagerV1},
 };
 
-use super::workspaces::{Desktop, Group, Placeholder, Workspace};
+use super::workspaces::{AppMenu, Desktop, Group, Placeholder, Workspace};
 use super::{Source, SourceError};
 
 /// `wl_output` version that gives the screen's name.
@@ -39,6 +39,8 @@ const OUTPUT_VERSION: u32 = 4;
 const OUTPUT_RELEASE: u32 = 3;
 /// Delay between two tries of a shell socket that does not exist yet.
 pub const RETRY: Duration = Duration::from_secs(3);
+/// `sherlock_shell_manager_v1` version with the global menu.
+pub const APP_MENU_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShellError {
@@ -99,13 +101,14 @@ impl Shell {
             }
         }
         let manager = globals.bind(&handle, 1..=1, ())?;
-        let _: SherlockShellManagerV1 = globals.bind(&handle, 1..=1, ())?;
+        let shell: SherlockShellManagerV1 = globals.bind(&handle, 1..=APP_MENU_VERSION, ())?;
         queue.roundtrip(&mut objects)?;
         // The first batches are read right away: `wait` waits for the next ones.
         objects.changed = false;
         let switcher = Switcher {
             connection,
             manager,
+            shell,
             handles: Arc::clone(&objects.handles),
         };
         Ok(Self {
@@ -145,6 +148,7 @@ impl Shell {
 pub struct Switcher {
     connection: Connection,
     manager: ExtWorkspaceManagerV1,
+    shell: SherlockShellManagerV1,
     handles: Handles,
 }
 
@@ -165,10 +169,52 @@ impl Switcher {
             }
         }
     }
+
+    /// The compositor knows the global menu: `register_app_menu` can go.
+    pub fn has_app_menus(&self) -> bool {
+        self.shell.version() >= APP_MENU_VERSION
+    }
+
+    /// Passes a change of the registrar on to the compositor, without waiting.
+    pub fn app_menu(&self, change: crate::registrar::Change) {
+        if !self.has_app_menus() {
+            return;
+        }
+        use crate::registrar::Change;
+        match change {
+            Change::Register {
+                window,
+                pid,
+                service,
+                path,
+            } => self.shell.register_app_menu(window, pid, service, path),
+            Change::Unregister { service, path } => self.shell.unregister_app_menu(service, path),
+        }
+        if let Err(error) = self.connection.flush() {
+            tracing::warn!(%error, "cannot pass a window menu on to the compositor");
+        }
+    }
 }
 
 /// The switcher of the source the bar watches, once connected.
 static SWITCHER: Mutex<Option<Switcher>> = Mutex::new(None);
+
+/// What to do once connected to a compositor that knows the global menu: `bar::run` starts
+/// the registrar there. Tests leave it empty, and never take a name on a bus.
+static ON_APP_MENUS: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
+/// Runs `start` once the bar is connected to a compositor that takes the global menus.
+pub fn on_app_menus(start: impl FnOnce() + Send + 'static) {
+    *lock(&ON_APP_MENUS) = Some(Box::new(start));
+}
+
+/// Passes a change of the registrar on to the compositor, through the bar's connection.
+pub fn app_menu(change: crate::registrar::Change) {
+    match lock(&SWITCHER).as_ref() {
+        Some(switcher) => switcher.app_menu(change),
+        None => tracing::warn!("not connected to the compositor: window menu dropped"),
+    }
+}
 
 /// Switches to the workspace `id` through the bar's connection.
 pub fn switch_to(id: &str) {
@@ -208,8 +254,13 @@ impl Auto {
     }
 
     fn connected(&mut self, shell: Shell) {
-        *lock(&SWITCHER) = Some(shell.switcher());
+        let switcher = shell.switcher();
+        let app_menus = switcher.has_app_menus();
+        *lock(&SWITCHER) = Some(switcher);
         self.source = Some(Ok(shell));
+        if app_menus && let Some(start) = lock(&ON_APP_MENUS).take() {
+            start();
+        }
     }
 }
 
@@ -282,8 +333,8 @@ struct Objects {
     settled_groups: Vec<Group>,
     /// Settled by `ext-workspace-v1`, for `Switcher`.
     handles: Handles,
-    /// Settled by `sherlock_shell_v1`: each window's workspace, name, and whether it is active.
-    settled_windows: Vec<(String, String, bool)>,
+    /// Settled by `sherlock_shell_v1`.
+    settled_windows: Vec<Settled>,
     settled_covered: BTreeSet<String>,
     /// A batch was settled since the last `wait`.
     changed: bool,
@@ -309,6 +360,17 @@ struct Window {
     app_id: String,
     workspace: String,
     activated: bool,
+    menu: Option<AppMenu>,
+}
+
+/// A window of a settled batch.
+struct Settled {
+    workspace: String,
+    /// Its title, or its `app_id` without one.
+    name: String,
+    app_id: String,
+    activated: bool,
+    menu: Option<AppMenu>,
 }
 
 impl Objects {
@@ -367,7 +429,13 @@ impl Objects {
                 } else {
                     &w.title
                 };
-                (w.workspace.clone(), name.trim().to_owned(), w.activated)
+                Settled {
+                    workspace: w.workspace.clone(),
+                    name: name.trim().to_owned(),
+                    app_id: w.app_id.trim().to_owned(),
+                    activated: w.activated,
+                    menu: w.menu.clone(),
+                }
             })
             .collect();
         self.settled_covered = self.covered.clone();
@@ -378,7 +446,10 @@ impl Objects {
         let mut groups = self.settled_groups.clone();
         let mut active = BTreeSet::new();
         for workspace in groups.iter_mut().flat_map(|g| &mut g.workspaces) {
-            let on = self.settled_windows.iter().filter(|w| w.0 == workspace.id);
+            let on = self
+                .settled_windows
+                .iter()
+                .filter(|w| w.workspace == workspace.id);
             workspace.windows = Some(on.count());
             if workspace.active {
                 active.insert(workspace.id.as_str());
@@ -386,14 +457,15 @@ impl Objects {
         }
         // A window keeps its states on a workspace that is not shown: only the active
         // workspaces' active window names the application.
-        let app = self
+        let window = self
             .settled_windows
             .iter()
-            .find(|w| w.2 && active.contains(w.0.as_str()))
-            .map(|w| w.1.clone())
-            .filter(|name| !name.is_empty());
+            .find(|w| w.activated && active.contains(w.workspace.as_str()));
+        let app = window.map(|w| w.name.clone()).filter(|n| !n.is_empty());
         Desktop {
             groups,
+            menu: window.and_then(|w| w.menu.clone()),
+            app_id: window.map(|w| w.app_id.clone()).filter(|id| !id.is_empty()),
             app,
             covered: self.settled_covered.clone(),
             live: true,
@@ -564,6 +636,7 @@ impl Dispatch<SherlockShellManagerV1, ()> for Objects {
                 app_id: String::new(),
                 workspace: String::new(),
                 activated: false,
+                menu: None,
             }),
             shell::Event::Output { name, state: flags } => {
                 let maximized = holds(&flags, shell::OutputState::Maximized as u32);
@@ -603,6 +676,10 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Objects {
             toplevel::Event::Title { title } => window.title = title,
             toplevel::Event::AppId { app_id } => window.app_id = app_id,
             toplevel::Event::Workspace { workspace } => window.workspace = workspace,
+            toplevel::Event::AppMenu { service, path } => {
+                let some = !service.is_empty() && !path.is_empty();
+                window.menu = some.then_some(AppMenu { service, path });
+            }
             toplevel::Event::State { state: flags } => {
                 window.activated = holds(&flags, toplevel::State::Activated as u32);
             }

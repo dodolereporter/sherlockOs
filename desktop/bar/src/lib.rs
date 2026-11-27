@@ -5,11 +5,16 @@
 pub mod app;
 pub mod bus;
 pub mod calendar;
+pub mod dbusmenu;
+pub mod global_menu;
 pub mod history;
 pub mod live;
 pub mod menu;
+pub mod names;
 pub mod panel;
+pub mod programs;
 pub mod quick;
+pub mod registrar;
 pub mod shape;
 pub mod source;
 pub mod system;
@@ -67,6 +72,8 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
     if let Some(path) = appearance_config::path() {
         color::set_active(appearance_config::theme_now(&path));
     }
+    // On our compositor, the bar answers the global menu registrations (lot D-36).
+    source::shell::on_app_menus(start_registrar);
     // iced_exwlshell reports there the screen each surface is on.
     let (broadcast, shell_events) = iced_exwlshell::shell::channel();
     let boot = move || Bar::new(shell_events.clone());
@@ -91,6 +98,19 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
     // them here makes a normal exit or a dispatch error clean right away.
     source::shutdown();
     result
+}
+
+/// Serves `com.canonical.AppMenu.Registrar` on the session bus, the registrations going to the
+/// compositor. Without a session bus, or with another registrar on it, nothing is served.
+fn start_registrar() {
+    let sink: registrar::Sink = std::sync::Arc::new(source::shell::app_menu);
+    let served = zbus::block_on(async {
+        let bus = bus::session().await?;
+        registrar::serve(&bus, sink).await
+    });
+    if let Err(error) = served {
+        tracing::warn!(%error, "no global menu registrar");
+    }
 }
 
 fn namespace() -> String {

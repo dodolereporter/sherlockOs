@@ -67,7 +67,7 @@ cursor-board output="docs/cursor/board.png":
 
 # Builds the session (compositor, bar, dock) and the cursor themes, then prints the sudo commands that install them for the login screen, without running them
 install-session: cursors
-    cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock
+    cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock -p apps -p control-room
     desktop/compositor/session/install.sh "$PWD"
 
 # Installs Evidence for the user, without root: its binary in ~/.local/bin, its desktop entry, which the dock pins and the launcher lists, and its icon
@@ -90,6 +90,22 @@ install-evidence:
     # Its icon in the user's hicolor theme, at each size of desktop/sherlock-ui/icons/hicolor.
     theme=desktop/sherlock-ui/icons/hicolor
     for file in "$theme"/*/apps/evidence.*; do
+        install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
+    done
+
+# Installs Control Room for the user, without root: its binary in ~/.local/bin, its desktop entry and its icon
+install-control-room:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p control-room
+    exe="$HOME/.local/bin/control-room"
+    install -D -m 755 "${CARGO_TARGET_DIR:-target}/release/control-room" "$exe"
+    # Exec quoted as the desktop entry specification wants, as for Evidence.
+    quoted=$(printf '%s' "$exe" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')
+    sed "s|^Exec=control-room$|Exec=\"$quoted\"|" desktop/control-room/control-room.desktop \
+        | install -D -m 644 /dev/stdin "${XDG_DATA_HOME:-$HOME/.local/share}/applications/control-room.desktop"
+    theme=desktop/sherlock-ui/icons/hicolor
+    for file in "$theme"/*/apps/control-room.*; do
         install -D -m 644 "$file" "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/${file#"$theme"/}"
     done
 

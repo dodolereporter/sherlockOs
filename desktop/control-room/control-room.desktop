@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Control Room
+GenericName=Réglages
+Comment=Règle l'apparence, le pavé tactile et le reste du système
+Exec=control-room
+Icon=control-room
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=réglages;paramètres;préférences;settings;
+StartupWMClass=control-room
