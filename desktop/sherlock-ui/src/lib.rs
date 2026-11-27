@@ -29,6 +29,7 @@ pub mod notifications;
 pub mod osd;
 pub mod panels;
 pub mod screenshot;
+pub mod screenshot_tool;
 pub mod strings;
 pub mod texts;
 pub mod typography;
