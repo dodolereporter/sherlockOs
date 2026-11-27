@@ -514,6 +514,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // From behind another window, it comes to the front with an animation (lot D-19d).
+                self.start_raise(window);
                 self.space.raise_element(window, true);
             }
             None => self.space.elements().for_each(|w| {
@@ -580,6 +582,7 @@ impl State {
                 moving: false,
                 decoration: 0.0,
                 scale: 1.0,
+                shadow: 1.0,
             });
         }
         // Nothing drawn before the first content of the client: neither an empty frame nor
