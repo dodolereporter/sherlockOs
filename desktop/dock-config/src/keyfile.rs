@@ -76,9 +76,20 @@ impl KeyFile {
             .or_else(|| self.get(group, key))
     }
 
-    /// List value, separated by `;`.
+    /// List value, separated by `;`. A `;` inside an item is written `\;`, as the desktop entry
+    /// specification says (lot D-45c): an item that holds one stays whole.
     pub fn list(&self, group: &str, key: &str) -> Vec<String> {
-        self.split(group, key, ';')
+        self.raw(group, key).map(split_list).unwrap_or_default()
+    }
+
+    /// Sets `key` in `group` to the list `items`, each escaped, a `;` inside one as `\;`: what
+    /// `list` reads back.
+    pub fn set_list(&mut self, group: &str, key: &str, items: &[String]) {
+        let raw: Vec<String> = items
+            .iter()
+            .map(|item| escape(item).replace(';', "\\;"))
+            .collect();
+        self.set_raw(group, key, raw.join(";"));
     }
 
     /// List value separated by `separator`: icon themes use commas.
@@ -102,6 +113,11 @@ impl KeyFile {
     /// Sets `key` in `group` to `value`, escaped, adding the group if needed. A line break in
     /// `value` is written `\n`: it cannot start a line of its own.
     pub fn set(&mut self, group: &str, key: &str, value: &str) {
+        self.set_raw(group, key, escape(value));
+    }
+
+    /// Sets `key` in `group` to `escaped`, already escaped.
+    fn set_raw(&mut self, group: &str, key: &str, escaped: String) {
         let index = match self.groups.iter().position(|(name, _)| name == group) {
             Some(index) => index,
             None => {
@@ -109,7 +125,6 @@ impl KeyFile {
                 self.groups.len() - 1
             }
         };
-        let escaped = escape(value);
         let lines = &mut self.groups[index].1;
         let existing = lines
             .iter_mut()
@@ -166,6 +181,34 @@ fn escape(value: &str) -> String {
     out
 }
 
+/// The items of a raw list value: split at each `;` that is not escaped, `\;` turned into `;`,
+/// then each item unescaped and trimmed. Empty items are dropped.
+fn split_list(raw: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut item = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(';') => item.push(';'),
+                Some(next) => {
+                    item.push('\\');
+                    item.push(next);
+                }
+                None => item.push('\\'),
+            },
+            ';' => items.push(std::mem::take(&mut item)),
+            c => item.push(c),
+        }
+    }
+    items.push(item);
+    items
+        .iter()
+        .map(|item| unescape(item).trim().to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
 fn unescape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
@@ -195,6 +238,25 @@ fn unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_item_keeps_an_escaped_semicolon() {
+        let file = KeyFile::parse("[A]\nL=a\\;b;c;\\\\;d\\s;\\x\nOld=discord;steam;\n");
+        // `\;` inside an item, `\\` before a separator, `\s` and an unknown escape as before.
+        assert_eq!(file.list("A", "L"), ["a;b", "c", "\\", "d", "x"]);
+        assert_eq!(file.list("A", "Old"), ["discord", "steam"]);
+        let items: Vec<String> = ["chat;work", "a\\b", " lead", "plain", "line\nbreak"]
+            .map(String::from)
+            .to_vec();
+        let mut file = KeyFile::default();
+        file.set_list("A", "L", &items);
+        let text = file.to_text();
+        assert!(text.contains("L=chat\\;work;a\\\\b;"), "{text}");
+        assert_eq!(text.lines().count(), 2, "no line of its own: {text}");
+        let back = KeyFile::parse(&text).list("A", "L");
+        // Trimmed, as every list item is.
+        assert_eq!(back, ["chat;work", "a\\b", "lead", "plain", "line\nbreak"]);
+    }
 
     #[test]
     fn escapes_and_localized_keys() {

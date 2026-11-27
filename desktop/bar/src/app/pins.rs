@@ -147,6 +147,15 @@ impl Bar {
         })
     }
 
+    /// Whether an icon pressed in `place` is being dragged: that surface keeps the pointer for
+    /// the whole drag, and shows the closed hand wherever it goes (lot D-45c).
+    pub fn tray_dragged_from(&self, place: Place) -> bool {
+        self.tray
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.from == place && d.moving && !d.done)
+    }
+
     /// Where the pointer of `drag` is in the bar surface.
     fn in_bar(&self, drag: &Drag) -> Option<Point> {
         let at = drag.at?;
@@ -362,8 +371,12 @@ mod tests {
         let _ = pointer(&mut bar, popup, mouse::Event::ButtonPressed(Button::Left));
         moved(&mut bar, popup, 60.0, 30.0);
         assert!(bar.preview().is_none(), "not yet a drag");
+        assert!(!bar.tray_dragged_from(Place::Popup), "the hand still open");
         moved(&mut bar, popup, 60.0, 0.0);
         assert!(bar.preview().is_none(), "still over the popup");
+        // The popup, which keeps the pointer, shows the closed hand; not the bar.
+        assert!(bar.tray_dragged_from(Place::Popup));
+        assert!(!bar.tray_dragged_from(Place::Bar));
         // Over the bar: the icon shows where it would land.
         moved(&mut bar, popup, 60.0, -20.0);
         assert_eq!(
@@ -374,6 +387,10 @@ mod tests {
         let saved = pointer(&mut bar, popup, mouse::Event::ButtonReleased(Button::Left));
         assert!(saved.units() > 0, "written to the settings file");
         assert_eq!(bar.tray.pins, ["item-2"]);
+        assert!(
+            !bar.tray_dragged_from(Place::Popup),
+            "let go: the hand opens"
+        );
         // It left the popup for the bar.
         assert_eq!(bar.tray.in_popup().count(), 2);
         assert_eq!(bar.tray.pinned().count(), 1);
