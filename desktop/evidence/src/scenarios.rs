@@ -1763,3 +1763,53 @@ fn the_names_stay_at_every_width() {
     bench.press(Named::Space);
     assert!(!bench.app.panes().preview);
 }
+
+/// The rest of the path bar (lot E-04c): « … » lists the folded folders, the sheet remembers
+/// the last folders typed, the search folds to its icon in a narrow window.
+#[test]
+fn folded_folders_recent_folders_and_a_folded_search() {
+    let mut bench = Bench::new("path-rest");
+    let deep = "projet/un-dossier-au-nom-assez-long/deuxieme-niveau/troisieme/quatrieme/fin";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.send(Message::Resized(iced::Size::new(720.0, 460.0)));
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    bench.send(Message::Folded(true));
+    let items: Vec<String> = bench
+        .app
+        .folded
+        .items
+        .iter()
+        .map(|(l, _)| l.clone())
+        .collect();
+    assert!(items.contains(&"projet".to_owned()), "{items:?}");
+    let target = bench.app.folded.items[0].1.clone();
+    bench.send(Message::Go(target.clone()));
+    assert_eq!(bench.app.location, target);
+    assert!(!bench.app.folded.open);
+
+    // A folder reached by the field is remembered, the last first, and the sheet opens it.
+    bench.ctrl("l");
+    bench.send(Message::PathInput("~/projet".into()));
+    bench.send(Message::PathSubmit);
+    bench.ctrl("l");
+    bench.send(Message::PathInput(format!("~/{deep}")));
+    bench.send(Message::PathSubmit);
+    let labels: Vec<&str> = bench.app.recent.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, [format!("~/{deep}").as_str(), "~/projet"]);
+    bench.key(
+        Key::Character("g".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    bench.send(Message::PathRecent(1));
+    assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
+    assert!(bench.app.path_edit.is_none());
+
+    // At 720, the search is its icon until it is used; Escape folds it back.
+    assert!(bench.app.search_folded());
+    bench.send(Message::OpenSearch);
+    assert!(!bench.app.search_folded());
+    bench.press(Named::Escape);
+    assert!(bench.app.search_folded());
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    assert!(!bench.app.search_folded());
+}
