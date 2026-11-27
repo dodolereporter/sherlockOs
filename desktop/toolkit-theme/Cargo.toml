@@ -4,6 +4,7 @@ description = "Colors of the desktop for third-party toolkits (GTK 3, GTK 4, Qt,
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
