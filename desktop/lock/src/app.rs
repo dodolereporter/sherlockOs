@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use iced::futures::channel::{mpsc, oneshot};
-use iced::widget::{Space, button, column, container, image, row, stack, svg, text, text_input};
+use iced::futures::channel::mpsc;
+use iced::widget::{Space, button, column, container, image, row, stack, text, text_input};
 use iced::{
     Alignment, Background, Border, Color as IcedColor, ContentFit, Element, Event, Font, Length,
     Padding, Point, Size, Subscription, Task, keyboard, mouse, window,
