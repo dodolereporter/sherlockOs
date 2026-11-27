@@ -10,32 +10,44 @@ use crate::motion::{self, Spring};
 // Geometry, in logical pixels, on the 1440 × 900 reference screen. Everything but the texts,
 // the search field and the dots grows and shrinks with the screen (`Layout::fit`).
 
-/// Side of an application icon, and the scale its file is looked up for.
-pub const ICON: f32 = 80.0;
+/// Side of an application icon, and the scale its file is looked up for (lot P-02c: larger,
+/// as Launchpad's).
+pub const ICON: f32 = 88.0;
 pub const ICON_SCALE: u32 = 2;
 /// Tile of an application without icon: radius as a share of the icon, initial as a share.
 pub const TILE_RADIUS_RATIO: f32 = crate::metrics::DOCK_ICON_RADIUS_RATIO;
 pub const LETTER_RATIO: f32 = 0.42;
-/// A cell of the grid: the icon, its name under it, the veil of the selected one.
+/// The least width of a cell: how many columns fit. Its least height is the icon, the gap,
+/// one line of name and the padding (`Layout::fit`).
 pub const CELL_WIDTH: f32 = 148.0;
-pub const CELL_HEIGHT: f32 = 120.0;
-pub const CELL_PADDING: f32 = 6.0;
+pub const CELL_PADDING: f32 = 5.0;
 pub const CELL_RADIUS: f32 = 16.0;
 pub const LABEL_GAP: f32 = 8.0;
+/// Height of the line of a name.
+pub const LABEL_HEIGHT: f32 = crate::typography::UI_SIZE * crate::typography::LINE_HEIGHT;
+/// A name is cut with « … » past this share of the icon's side.
+pub const LABEL_WIDTH_RATIO: f32 = 1.5;
+/// The soft shadow under a name: a dark copy, this far below.
+pub const LABEL_SHADOW_OFFSET: f32 = 1.0;
+/// The cells spread over the room they have, up to these shares of their least size: the grid
+/// fills the screen, as Launchpad's, without scattering on a very wide one.
+pub const SPREAD: (f32, f32) = (1.7, 1.5);
 /// Columns and rows of a page: one at least, Launchpad's seven by five at most.
 pub const MIN_COLUMNS: usize = 1;
 pub const MAX_COLUMNS: usize = 7;
 pub const MIN_ROWS: usize = 1;
 pub const MAX_ROWS: usize = 5;
-/// Room around the grid: on the sides, above (the search field).
+/// Room on the sides of the grid.
 pub const SIDE_MARGIN: f32 = 80.0;
-pub const GRID_TOP: f32 = 132.0;
-/// The search field: width, distance from the screen top.
-pub const SEARCH_WIDTH: f32 = 280.0;
-pub const SEARCH_TOP: f32 = 52.0;
-/// Below the grid: the dots and the dock, which keep their size on every screen.
-pub const GRID_BOTTOM: f32 = 140.0;
-/// Page dots: diameter, gap, distance of their row from the screen bottom.
+/// The search field, a pill: width, height, distance from the screen top.
+pub const SEARCH_WIDTH: f32 = 240.0;
+pub const SEARCH_HEIGHT: f32 = 30.0;
+pub const SEARCH_TOP: f32 = 40.0;
+/// Between the field and the room of the grid, between that room and the dots.
+pub const GRID_GAP: f32 = 18.0;
+pub const DOTS_GAP: f32 = 8.0;
+/// Page dots: diameter, gap, distance of their row from the screen bottom (clear of the dock,
+/// which keeps its size on every screen).
 pub const DOT: f32 = 8.0;
 pub const DOT_GAP: f32 = 12.0;
 pub const DOTS_BOTTOM: f32 = 112.0;
@@ -56,42 +68,55 @@ pub struct Layout {
     /// The sizes, as a share of the reference ones.
     pub factor: f32,
     pub icon: f32,
+    /// A cell spread over the room of the grid, and the button inside it.
     pub cell: (f32, f32),
+    pub button: (f32, f32),
     pub columns: usize,
     pub rows: usize,
     pub search_top: f32,
+    /// Top of the grid, centered in its room.
     pub grid_top: f32,
 }
 
 impl Layout {
     /// The layout for a screen of `width` by `height` logical pixels, whatever its scale: the
     /// sizes follow the smaller of its two ratios to the reference screen, within
-    /// `MIN_FACTOR` and `MAX_FACTOR`; then as many cells as fit, within the bounds.
+    /// `MIN_FACTOR` and `MAX_FACTOR`; then as many cells as fit between the field and the dots,
+    /// within the bounds, spread over that room and centered in it.
     pub fn fit(width: f32, height: f32) -> Self {
         let (reference_width, reference_height) = crate::metrics::REFERENCE_SCREEN;
         let factor = (width / reference_width)
             .min(height / reference_height)
             .clamp(MIN_FACTOR, MAX_FACTOR);
-        let cell = (CELL_WIDTH * factor, CELL_HEIGHT * factor);
-        let grid_top = GRID_TOP * factor;
+        let icon = ICON * factor;
+        let button = (
+            CELL_WIDTH * factor,
+            icon + LABEL_GAP * factor + LABEL_HEIGHT + 2.0 * CELL_PADDING,
+        );
+        let search_top = SEARCH_TOP * factor;
+        let top = search_top + SEARCH_HEIGHT + GRID_GAP * factor;
+        let room = (
+            (width - 2.0 * SIDE_MARGIN * factor).max(0.0),
+            (height - DOTS_BOTTOM - DOTS_GAP - top).max(0.0),
+        );
         let fit = |room: f32, side: f32, (least, most): (usize, usize)| {
             ((room / side).floor().max(0.0) as usize).clamp(least, most)
         };
+        let columns = fit(room.0, button.0, (MIN_COLUMNS, MAX_COLUMNS));
+        let rows = fit(room.1, button.1, (MIN_ROWS, MAX_ROWS));
+        let cell = (
+            (room.0 / columns as f32).clamp(button.0, button.0 * SPREAD.0),
+            (room.1 / rows as f32).clamp(button.1, button.1 * SPREAD.1),
+        );
+        let grid_top = top + ((room.1 - rows as f32 * cell.1) / 2.0).max(0.0);
         Self {
             factor,
-            icon: ICON * factor,
+            icon,
             cell,
-            columns: fit(
-                width - 2.0 * SIDE_MARGIN * factor,
-                cell.0,
-                (MIN_COLUMNS, MAX_COLUMNS),
-            ),
-            rows: fit(
-                height - grid_top - GRID_BOTTOM,
-                cell.1,
-                (MIN_ROWS, MAX_ROWS),
-            ),
-            search_top: SEARCH_TOP * factor,
+            button,
+            columns,
+            rows,
+            search_top,
             grid_top,
         }
     }
@@ -103,7 +128,7 @@ impl Layout {
 
     /// Width of the name under an icon.
     pub fn label_width(&self) -> f32 {
-        self.cell.0 - 2.0 * CELL_PADDING
+        (self.icon * LABEL_WIDTH_RATIO).min(self.button.0 - 2.0 * CELL_PADDING)
     }
 
     /// Radius of the tile of an application without icon, and the size of its initial.
@@ -114,15 +139,46 @@ impl Layout {
     pub fn letter_size(&self) -> f32 {
         (self.icon * LETTER_RATIO).round()
     }
+
+    /// Center of the cell of `place` on its page, on a screen `width` wide.
+    pub fn center(&self, place: usize, width: f32) -> (f32, f32) {
+        let at = place % self.per_page().max(1);
+        let (column, line) = (at % self.columns, at / self.columns);
+        let left = (width - self.columns as f32 * self.cell.0) / 2.0;
+        (
+            left + (column as f32 + 0.5) * self.cell.0,
+            self.grid_top + (line as f32 + 0.5) * self.cell.1,
+        )
+    }
 }
+
+/// Where a started application goes, as the view fades out: the middle of the dock, at the
+/// bottom of a screen `height` high.
+pub fn dock_target(width: f32, height: f32) -> (f32, f32) {
+    let middle = crate::dock::MARGIN_BOTTOM + crate::metrics::DOCK_HEIGHT / 2.0;
+    (width / 2.0, height - middle)
+}
+
+// The backdrop: the wallpaper, blurred and darkened (lot P-02c).
+
+/// Width of the blurred copy of the wallpaper, whatever the screen: the GPU stretches it.
+pub const BACKDROP_WIDTH: u32 = 480;
+/// Blur of that copy, in its pixels (a Gaussian's sigma): about 50 pixels of a 1920 screen.
+pub const BACKDROP_BLUR: f32 = 12.0;
+/// Every wallpaper is darkened this much at least (its channels multiplied)...
+pub const BACKDROP_DIM: f32 = 0.85;
+/// ... and more if needed, so that no point is brighter than this relative luminance: the
+/// white names read at 4.5 to 1 on it, even under the veil of the selected cell.
+pub const BACKDROP_MAX_LUMINANCE: f32 = 0.11;
 
 // Motion.
 
 /// The icons arrive from this scale, fading in, and leave towards it (macOS Launchpad).
 pub const OPEN_SCALE: f32 = 1.1;
-/// The tile started grows to this scale as the view fades out.
-pub const LAUNCH_SCALE: f32 = 1.2;
-/// Opening and closing of the view: icons, veil and field together.
+/// The tile started goes to the dock (`dock_target`) as the view fades out, shrinking to the
+/// dock's icon.
+pub const LAUNCH_SIDE: f32 = crate::metrics::DOCK_ICON;
+/// Opening and closing of the view: icons, backdrop and field together.
 pub const OPEN_SPRING: Spring = motion::OPEN_SPRING;
 /// The view is open, or gone, within this share of its run.
 pub const OPEN_PRECISION: f64 = 0.01;
@@ -151,9 +207,12 @@ pub const BOUNCE_SPEED: f64 = 2.5;
 /// the search field stay light on dark on it. The menu follows the theme.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Colors {
-    /// Laid over the wallpaper: night blue, dense enough for the names on a white wallpaper.
+    /// Laid over the desktop when there is no wallpaper to blur: night blue, dense enough for
+    /// the names on a white desktop.
     pub veil: Color,
     pub label: Color,
+    /// The soft shadow under a name.
+    pub label_shadow: Color,
     /// Veil of the hovered cell, of the selected one.
     pub hover: Color,
     pub selected: Color,
@@ -165,22 +224,35 @@ pub struct Colors {
     pub tile_letter: Color,
     /// « Aucune application » under the field.
     pub nothing: Color,
-    /// The magnifier of the search field, which stays dark in both themes.
+    /// The search pill: a dark glass with a light edge, its texts and its magnifier.
+    pub field: Color,
+    pub field_edge: Color,
+    pub field_edge_focused: Color,
+    pub field_text: Color,
+    pub field_placeholder: Color,
+    pub field_selection: Color,
     pub field_icon: Color,
 }
 
 impl Colors {
     pub const DARK: Self = Self {
         veil: Color::rgba(6, 12, 24, 0.70),
-        label: color::TEXT_PRIMARY,
+        label: Color::rgb(255, 255, 255),
+        label_shadow: Color::rgba(0, 0, 0, 0.45),
         hover: Color::rgba(255, 255, 255, 0.08),
         selected: Color::rgba(255, 255, 255, 0.14),
         dot: Color::rgba(255, 255, 255, 0.32),
         dot_active: Color::rgba(255, 255, 255, 0.92),
         tile: color::BLUE_BRIGHT,
         tile_letter: color::DEEPEST,
-        nothing: Color::rgb(0xC5, 0xCE, 0xDB),
-        field_icon: color::TEXT_TERTIARY,
+        nothing: Color::rgb(255, 255, 255),
+        field: Color::rgba(8, 14, 26, 0.32),
+        field_edge: Color::rgba(255, 255, 255, 0.20),
+        field_edge_focused: Color::rgba(255, 255, 255, 0.34),
+        field_text: Color::rgb(255, 255, 255),
+        field_placeholder: Color::rgba(255, 255, 255, 0.75),
+        field_selection: Color::rgba(255, 255, 255, 0.30),
+        field_icon: Color::rgba(255, 255, 255, 0.75),
     };
 
     /// The light theme darkens the same way: only the menu changes.
@@ -230,9 +302,23 @@ mod styles {
         }
     }
 
-    /// The search field: the dark theme's, whatever the theme, on the dark backdrop.
-    pub fn field(_: &Theme, status: text_input::Status) -> text_input::Style {
-        theme::text_field(&theme::theme_for(color::Theme::Dark), status)
+    /// The search pill, the same in both themes, on the dark backdrop.
+    pub fn field(theme: &Theme, status: text_input::Status) -> text_input::Style {
+        let c = colors(theme);
+        let edge = match status {
+            text_input::Status::Focused { .. } => c.field_edge_focused,
+            _ => c.field_edge,
+        };
+        text_input::Style {
+            background: Background::Color(c.field.into()),
+            border: border::rounded(SEARCH_HEIGHT / 2.0)
+                .width(crate::metrics::BORDER_WIDTH)
+                .color(edge),
+            icon: c.field_icon.into(),
+            placeholder: c.field_placeholder.into(),
+            value: c.field_text.into(),
+            selection: c.field_selection.into(),
+        }
     }
 
     /// The veil over the whole screen.
@@ -285,6 +371,13 @@ mod styles {
         }
     }
 
+    /// The shadow of a name.
+    pub fn label_shadow(theme: &Theme) -> iced::widget::text::Style {
+        iced::widget::text::Style {
+            color: Some(colors(theme).label_shadow.into()),
+        }
+    }
+
     pub fn nothing(theme: &Theme) -> iced::widget::text::Style {
         iced::widget::text::Style {
             color: Some(colors(theme).nothing.into()),
@@ -296,25 +389,42 @@ mod styles {
 mod tests {
     use super::*;
 
+    /// The brightest grey the backdrop may hold (`BACKDROP_MAX_LUMINANCE`).
+    fn brightest_backdrop() -> Color {
+        (0..=255u8)
+            .rev()
+            .map(|v| Color::rgb(v, v, v))
+            .find(|c| c.luminance() <= BACKDROP_MAX_LUMINANCE)
+            .unwrap()
+    }
+
     #[test]
     fn the_names_read_on_any_wallpaper() {
         for (palette, colors) in [
             (&Palette::DARK, &Colors::DARK),
             (&Palette::LIGHT, &Colors::LIGHT),
         ] {
-            // The discs of the default wallpaper, and a white one: the worst backdrop.
-            let wallpapers = [palette.desktop_discs[2], Color::rgb(255, 255, 255)];
-            for below in wallpapers {
-                let veil = colors.veil.over(below);
+            // The blurred wallpaper at its brightest, and without one, the veil over the
+            // discs of the desktop and over a white one: the worst backdrops.
+            let backdrops = [
+                brightest_backdrop(),
+                colors.veil.over(palette.desktop_discs[2]),
+                colors.veil.over(Color::rgb(255, 255, 255)),
+            ];
+            for below in backdrops {
                 for (text, on) in [
-                    (colors.label, veil),
-                    (colors.label, colors.selected.over(veil)),
-                    (colors.nothing, veil),
+                    (colors.label, below),
+                    (colors.label, colors.selected.over(below)),
+                    (colors.nothing, below),
                 ] {
                     assert!(text.contrast(on) >= 4.5, "{text:?} on {on:?}");
                 }
+                let field = colors.field.over(below);
+                for text in [colors.field_text, colors.field_placeholder.over(field)] {
+                    assert!(text.contrast(field) >= 4.5, "{text:?} on {field:?}");
+                }
                 // The dots are not text: 3 to 1 for the page shown.
-                assert!(colors.dot_active.over(veil).contrast(veil) >= 3.0);
+                assert!(colors.dot_active.over(below).contrast(below) >= 3.0);
             }
             assert!(colors.tile_letter.contrast(colors.tile) >= 4.5);
             assert_eq!(Colors::of(palette), colors);
@@ -322,34 +432,46 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_follows_the_screen_within_its_bounds() {
-        // Logical sizes: 2560 × 1600 at scale 1.5 is 1707 × 1067, 3840 × 2160 at scale 2 is
-        // 1920 × 1080.
+    fn the_grid_fills_the_screen_within_its_bounds() {
+        // Logical sizes: 2560 × 1600 at scale 1.5 is 1707 × 1067, at 1.25 2048 × 1280; 3840 ×
+        // 2160 at scale 2 is 1920 × 1080.
         let screens = [
             (1366.0, 768.0),
             (1440.0, 900.0),
             (1920.0, 1080.0),
             (2560.0 / 1.5, 1600.0 / 1.5),
+            (2560.0 / 1.25, 1600.0 / 1.25),
             (1280.0, 720.0),
             (1024.0, 768.0),
             (800.0, 600.0),
             (3840.0, 2160.0),
+            (5120.0, 1440.0),
         ];
         for (width, height) in screens {
             let layout = Layout::fit(width, height);
             assert!((MIN_FACTOR..=MAX_FACTOR).contains(&layout.factor));
             assert!((MIN_COLUMNS..=MAX_COLUMNS).contains(&layout.columns));
             assert!((MIN_ROWS..=MAX_ROWS).contains(&layout.rows));
-            // The grid fits beside the margins, above the dots, the dots above the dock.
+            assert!(layout.cell.0 >= layout.button.0 && layout.cell.1 >= layout.button.1);
+            // The grid fits beside the margins, under the field, above the dots, the dots
+            // above the dock.
             let grid = layout.columns as f32 * layout.cell.0;
             assert!(grid <= width, "{width}: {layout:?}");
             let bottom = layout.grid_top + layout.rows as f32 * layout.cell.1;
+            let room_bottom = height - DOTS_BOTTOM - DOTS_GAP;
             assert!(
-                bottom <= height - DOTS_BOTTOM,
+                bottom <= room_bottom + 0.01,
                 "{width} × {height}: {layout:?}"
             );
-            assert!(layout.search_top + crate::metrics::FIELD_HEIGHT < layout.grid_top);
+            let top = layout.search_top + SEARCH_HEIGHT + GRID_GAP * layout.factor;
+            assert!(layout.grid_top >= top - 0.01);
+            // Centered in its room.
+            assert!(
+                ((layout.grid_top - top) - (room_bottom - bottom)).abs() < 0.5,
+                "{width} × {height}: {layout:?}"
+            );
             assert!(layout.icon <= ICON_LOOKUP as f32 + 1.0);
+            assert!(layout.label_width() <= layout.button.0);
         }
         const { assert!(DOTS_BOTTOM - DOT > crate::metrics::DOCK_HEIGHT) };
         let full = |w, h| {
@@ -358,11 +480,34 @@ mod tests {
         };
         // Launchpad's grid on the author's screen, the reference one, a small laptop, and the
         // larger ones, with larger icons.
-        for (width, height) in [(1366.0, 768.0), (1440.0, 900.0), (1920.0, 1080.0)] {
-            assert_eq!(full(width, height), (MAX_COLUMNS, MAX_ROWS));
+        for (width, height) in [
+            (1366.0, 768.0),
+            (1440.0, 900.0),
+            (1920.0, 1080.0),
+            (2560.0 / 1.25, 1600.0 / 1.25),
+        ] {
+            assert_eq!(full(width, height), (MAX_COLUMNS, MAX_ROWS), "{width}");
         }
         assert_eq!(Layout::fit(1440.0, 900.0).icon, ICON);
         assert!(Layout::fit(1920.0, 1080.0).icon > Layout::fit(1366.0, 768.0).icon);
         assert_eq!(full(100.0, 100.0), (MIN_COLUMNS, MIN_ROWS));
+        // On 1920 × 1080 the grid takes most of the screen, not its top.
+        let layout = Layout::fit(1920.0, 1080.0);
+        assert!(layout.columns as f32 * layout.cell.0 > 0.75 * 1920.0);
+        assert!(layout.rows as f32 * layout.cell.1 > 0.7 * 1080.0);
+    }
+
+    #[test]
+    fn a_cell_center_and_the_dock() {
+        let layout = Layout::fit(1920.0, 1080.0);
+        let (x, y) = layout.center(0, 1920.0);
+        let (x2, _) = layout.center(layout.columns - 1, 1920.0);
+        assert!((x + x2 - 1920.0).abs() < 0.01, "the grid is centered");
+        assert!((y - layout.grid_top - layout.cell.1 / 2.0).abs() < 0.01);
+        // The next page starts at the same place.
+        assert_eq!(layout.center(layout.per_page(), 1920.0), (x, y));
+        let (dx, dy) = dock_target(1920.0, 1080.0);
+        assert_eq!(dx, 960.0);
+        assert!(dy > 1080.0 - crate::metrics::DOCK_HEIGHT && dy < 1080.0);
     }
 }

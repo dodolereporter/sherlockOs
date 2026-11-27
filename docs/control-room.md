@@ -28,6 +28,7 @@ Displays come with D-26a3.
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
 | « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
 | « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
+| « Presse-papiers » | Clipboard history on or off, kept on disk or in memory (lot D-42) | `$XDG_CONFIG_HOME/sherlockos/clipboard.conf` (`history`, `keep-on-disk`) | Compositor (D-42) |
 | « Applications par défaut » | Browser, mail, text editor, terminal, files, images, video, music | `$XDG_CONFIG_HOME/mimeapps.list`; the terminal in `xdg-terminals.list` | Every program that opens a file or a link |
 
 A file is only written once a setting changes: until then, the programs keep their own
@@ -46,7 +47,11 @@ a NUL byte) is never written: its settings are shown disabled, with the sentence
 too.
 
 A switch, a segmented control or a menu writes at once; a slider writes `SAVE_DELAY` (150 ms)
-after its last step, and closing the window writes what waits.
+after its last step, and closing the window writes what waits, then closes. Reading, writing
+and flushing the files to the disk never happen on the interface thread: a batch of changes
+goes to a task (`Writes::run`), one batch at a time, in the order of the changes; the changes
+made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
+the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
 
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
@@ -56,6 +61,10 @@ The changes reach `pactl` one at a time, in the order they were made, through a 
 keeps only the last volume of each device, as the media keys do.
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
+
+**Clipboard.** `clipboard.conf` is read by the compositor within a second of a change (see
+"Clipboard history" in `docs/compositor.md`). « Historique du presse-papiers » off forgets
+everything at once; « Garder après la déconnexion » is disabled while the history is off.
 
 **Lock.** `lock.conf` is the file of D-25a, read by the compositor live; Control Room writes it
 with `desktop_config::lock`.
@@ -85,7 +94,17 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 
 ## Motion and sizes
 
-- A new page comes up from 12 px below while it fades in, on the spring of an opening.
+- A new page comes up from 12 px below while it fades in, on the spring of an opening; the page
+  left fades out under it over the same fade, rising a little, and takes no click.
+- The results of the search come in one after the other, 30 ms apart, each fading in and coming
+  up 6 px. A name too long for the sidebar is cut with « … » (its highlight is then left out).
+- A setting opened from the search is scrolled to on the spring of an opening, a section's gap
+  below the top of the page, unless it shows already (`scroll::find`: an operation finds the
+  row by its id and the page's scrollable in the window laid out). Then it is lit.
+- A choice of a list of radio buttons (a long sound output) is cut with « … ».
+- A default application that could not be written says « Ce fichier de réglages ne peut pas
+  être modifié. » under its menu, until it is written.
+- The dropdown menus are iced's `pick_list`: they open and close without motion (not done).
 - Switches, segmented controls, sliders and menus are those of sherlock-ui, with their own
   motion. The window's entrance and exit are the compositor's.
 - Below 720 px of width, the sidebar folds away. The button on the left of the title bar slides

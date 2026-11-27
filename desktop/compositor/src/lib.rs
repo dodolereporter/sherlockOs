@@ -7,10 +7,15 @@ pub mod anim;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+// The clipboard history of Super + V (lot D-42).
+pub mod clipboard_history;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
+pub mod displays;
 pub mod dmabuf;
+mod dnd;
+pub mod edid;
 pub mod focus;
 pub mod fullscreen;
 pub mod genie;
@@ -31,11 +36,13 @@ pub mod mission_control;
 pub mod options;
 pub mod osd;
 pub mod output;
+pub mod output_management;
 pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
 pub mod screencast;
+pub mod screenshot_tool;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -46,6 +53,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod x11_paste;
+mod xdnd;
 mod xwayland;
 
 use std::{
@@ -181,6 +189,10 @@ pub struct State {
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
     /// Screens and where they draw in the host frame.
     screens: Vec<output::Screen>,
+    /// Screens switched off, and the saved setting of each screen (ADR 0025).
+    displays: displays::Displays,
+    /// `wlr-output-management`: the clients that read and change the screens (lot D-26b).
+    output_management: output_management::OutputManagement,
     gesture: Option<input::Gesture>,
     /// Touchpad gestures in progress, and the protocol that hands them to clients (lot D-31).
     gestures: gestures::Gestures,
@@ -188,6 +200,8 @@ pub struct State {
     touchpad: touchpad::Touchpad,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
+    /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
+    dnd: dnd::Dnd,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -208,6 +222,8 @@ pub struct State {
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
+    applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
     xwayland: Option<RegistrationToken>,
     /// Listening Wayland socket in the loop, removed by `shutdown`.
@@ -246,6 +262,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What was copied, for Super + V (lot D-42).
+    clipboard: clipboard_history::ClipboardHistory,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -357,10 +375,16 @@ impl State {
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
+            displays: displays::Displays::default(),
+            output_management: {
+                output_management::create_global(&dh);
+                output_management::OutputManagement::default()
+            },
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
             clicks: clicks::Clicks::default(),
+            dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -371,6 +395,7 @@ impl State {
             x_display: None,
             socket_name: None,
             launcher_program: None,
+            applications_program: None,
             xwayland: None,
             listener: None,
             shell: {
@@ -393,6 +418,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -531,6 +557,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // From behind another window, it comes to the front with an animation (lot D-19d).
+                self.start_raise(window);
                 self.space.raise_element(window, true);
             }
             None => self.space.elements().for_each(|w| {
@@ -601,6 +629,7 @@ impl State {
                 moving: false,
                 decoration: 0.0,
                 scale: 1.0,
+                shadow: 1.0,
             });
         }
         // Nothing drawn before the first content of the client: neither an empty frame nor
@@ -688,13 +717,14 @@ impl State {
         self.end_popup_closings();
         self.end_clicks();
         self.refresh_screencast();
-
+        self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
         }
         self.update_scales();
+        self.refresh_output_management();
         self.refresh_lock();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
