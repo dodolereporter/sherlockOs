@@ -78,6 +78,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
+    )?;
     let mut textures = Textures::default();
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.

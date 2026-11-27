@@ -182,6 +182,8 @@ pub struct State {
     gestures: gestures::Gestures,
     /// Touchpad setting and the touchpads it applies to (lot D-31).
     touchpad: touchpad::Touchpad,
+    /// Keyboard layout and repeat of `keyboard.conf` (lot D-26c).
+    keyboard_setting: keyboard::KeyboardSetting,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
     /// Cursor requested by the client that has the pointer.
@@ -244,10 +246,11 @@ pub struct State {
     triggers: triggers::Triggers,
 }
 
-/// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
-/// clients with the keyboard, and followed by the media keys.
-pub const KEY_REPEAT_DELAY: i32 = 200;
-pub const KEY_REPEAT_RATE: i32 = 25;
+/// Delay before a held key repeats, in milliseconds, and repeats per second, until the keyboard
+/// setting says otherwise (`keyboard.conf`, lot D-26c): given to the clients with the keyboard,
+/// and followed by the media keys.
+pub const KEY_REPEAT_DELAY: i32 = desktop_config::keyboard::DEFAULT_REPEAT_DELAY as i32;
+pub const KEY_REPEAT_RATE: i32 = desktop_config::keyboard::DEFAULT_REPEAT_RATE as i32;
 
 /// Data attached to each window.
 #[derive(Default)]
@@ -354,6 +357,7 @@ impl State {
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
+            keyboard_setting: keyboard::KeyboardSetting::default(),
             clicks: clicks::Clicks::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
