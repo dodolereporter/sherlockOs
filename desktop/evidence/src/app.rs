@@ -303,9 +303,11 @@ pub enum Message {
     /// overtaken by a more recent navigation.
     Loaded(u64, Result<Vec<Entry>, ()>),
     /// Preview prepared off the interface thread.
-    Preview(PathBuf, Preview),
+    Preview(PathBuf, Preview, Option<preview::Real>),
     /// A program was started, or could not be.
     Launched(bool),
+    /// A program or a launcher was not handed to xdg-open.
+    ProgramRefused,
     /// Installed applications and associations, read off the interface thread.
     Catalog(Arc<mime_apps::Catalog>),
     /// Application icons, decoded off the interface thread.
@@ -383,6 +385,8 @@ pub struct App {
     pub(crate) search: String,
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
+    /// What the selected file really is, when its name hides it (audit I-3).
+    pub(crate) disguise: Option<preview::Real>,
     clipboard: Option<(Clip, Vec<PathBuf>)>,
     /// Item being renamed and its new name.
     pub(crate) renaming: Option<(PathBuf, String)>,
@@ -472,6 +476,7 @@ impl App {
             search: String::new(),
             repo: None,
             preview: Preview::Info,
+            disguise: None,
             clipboard: None,
             renaming: None,
             menu: None,
@@ -713,12 +718,12 @@ impl App {
         }
         self.preview_path.clone_from(&path);
         self.preview = Preview::Info;
+        self.disguise = None;
         match (wanted, path) {
-            (Some(entry), Some(path)) => {
-                Task::perform(async move { preview::load(&entry) }, move |preview| {
-                    Message::Preview(path.clone(), preview)
-                })
-            }
+            (Some(entry), Some(path)) => Task::perform(
+                async move { (preview::load(&entry), preview::disguise(&entry)) },
+                move |(preview, disguise)| Message::Preview(path.clone(), preview, disguise),
+            ),
             _ => Task::none(),
         }
     }
@@ -936,6 +941,12 @@ impl App {
                     error: true,
                 });
             }
+            Message::ProgramRefused => {
+                self.notice = Some(Notice {
+                    text: texts::IS_PROGRAM.into(),
+                    error: true,
+                });
+            }
             Message::Launched(started) => {
                 if !started {
                     self.notice = Some(Notice {
@@ -967,9 +978,10 @@ impl App {
                     return self.loaded(result);
                 }
             }
-            Message::Preview(path, preview) => {
+            Message::Preview(path, preview, disguise) => {
                 if self.preview_path.as_ref() == Some(&path) {
                     self.preview = preview;
+                    self.disguise = disguise;
                     self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
                 }
             }
@@ -2048,9 +2060,28 @@ impl App {
         let Some(entry) = self.selection.focus().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
-        let mut open = Process::new("xdg-open");
-        open.arg(&entry.path);
-        self.launch(open)
+        let path = entry.path.clone();
+        self.open_blind(path)
+    }
+
+    /// Opens a file no application was chosen for, with `xdg-open`, unless it is a program or
+    /// a launcher: `xdg-open` may run those, depending on the desktop (audit I-14).
+    pub(crate) fn open_blind(&mut self, path: PathBuf) -> Task<Message> {
+        let mut command = Process::new("xdg-open");
+        command.arg(&path);
+        if let Some(parent) = path.parent() {
+            command.current_dir(parent);
+        }
+        sherlock_ui::gpu::for_child(&mut command);
+        Task::perform(
+            async move {
+                if preview::is_program(&path) {
+                    return None;
+                }
+                Some(spawn_reaped(&mut command))
+            },
+            |started| started.map_or(Message::ProgramRefused, Message::Launched),
+        )
     }
 
     /// Opens with an application without touching the defaults.
@@ -2066,21 +2097,7 @@ impl App {
     fn launch(&mut self, mut command: Process) -> Task<Message> {
         // The program gets the environment Evidence started with, not its renderer choice.
         sherlock_ui::gpu::for_child(&mut command);
-        Task::perform(
-            async move {
-                match command.spawn() {
-                    Ok(mut child) => {
-                        std::thread::spawn(move || child.wait());
-                        true
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "launch failed");
-                        false
-                    }
-                }
-            },
-            Message::Launched,
-        )
+        Task::perform(async move { spawn_reaped(&mut command) }, Message::Launched)
     }
 
     fn paste(&mut self) -> Task<Message> {
@@ -2254,6 +2271,20 @@ fn read_location(
                     Some(entry)
                 })
                 .collect())
+        }
+    }
+}
+
+/// Starts a program without waiting for it; a thread reaps it when it ends.
+fn spawn_reaped(command: &mut Process) -> bool {
+    match command.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(error) => {
+            tracing::warn!(%error, "launch failed");
+            false
         }
     }
 }
