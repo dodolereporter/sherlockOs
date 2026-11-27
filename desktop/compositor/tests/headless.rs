@@ -511,6 +511,15 @@ mod tests {
 
         /// `show_decorated`, the content filled with `fill`.
         fn show_decorated_in(&mut self, fill: Color) -> (Shown, ZxdgToplevelDecorationV1) {
+            let shown = self.open_decorated(fill);
+            self.run_until("the placement", |_, s| {
+                location(s) == Some((200, 171).into())
+            });
+            shown
+        }
+
+        /// `show_decorated_in`, wherever the compositor places it, on any screen.
+        fn open_decorated(&mut self, fill: Color) -> (Shown, ZxdgToplevelDecorationV1) {
             let qh = self.queue.handle();
             let registry = self.conn.display().get_registry(&qh, ());
             self.run_until("the globals", |c, _| {
@@ -540,9 +549,7 @@ mod tests {
             let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
             surface.attach(Some(&buffer), 0, 0);
             surface.commit();
-            self.run_until("the placement", |_, s| {
-                location(s) == Some((200, 171).into())
-            });
+            self.run_until("the window", |_, s| s.space.elements().next().is_some());
             let shown = Shown {
                 seat,
                 toplevel,
@@ -3404,11 +3411,11 @@ mod tests {
     }
 
     impl Harness {
-        /// One screen of `size` pixels at scale 1.
-        fn start_screen(size: (i32, i32)) -> Self {
+        /// One screen of `size` pixels at `scale`.
+        fn start_screen(size: (i32, i32), scale: f64) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
-            state.add_output(size.into(), 1.0);
+            state.add_output(size.into(), scale);
             let (server_side, client_side) = UnixStream::pair().unwrap();
             state.insert_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
@@ -3423,16 +3430,82 @@ mod tests {
         }
     }
 
-    /// One row of the blur board: a Konsole full of text over nearly the whole screen, the real
-    /// bar with its calendar open and the real dock, in `theme`; drawn without the blur, then
-    /// with it.
-    fn blur_board_row(theme: &str, size: (i32, i32)) -> (Vec<u8>, Vec<u8>) {
+    /// Fills the window of `shown` with text over `size` logical pixels, its buffer at
+    /// `buffer_scale`: the source of these tests in the code font, as a terminal shows it.
+    fn text_window(h: &mut Harness, shown: &Shown, size: (i32, i32), buffer_scale: i32) -> File {
+        use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _, point};
+
+        let (w, ht) = (size.0 * buffer_scale, size.1 * buffer_scale);
+        let k = buffer_scale as f32;
+        let p = sherlock_ui::color::palette();
+        let (bg, fg) = (p.window, p.text_primary);
+        let mut pixels = vec![[bg.r, bg.g, bg.b].map(f32::from); (w * ht) as usize];
+        let font = FontRef::try_from_slice(sherlock_ui::typography::FONTS[2]).unwrap();
+        let px = PxScale::from(sherlock_ui::typography::CODE_SIZE * k);
+        let advance = font.as_scaled(px).h_advance(font.glyph_id('m'));
+        let line = sherlock_ui::typography::CODE_LINE_HEIGHT * k;
+        let mut draw_line = |text: &str, left: f32, baseline: f32| {
+            for (column, c) in text.chars().enumerate() {
+                let at = point(left + (column as f32 + 1.0) * advance, baseline);
+                let glyph = font.glyph_id(c).with_scale_and_position(px, at);
+                let Some(outline) = font.outline_glyph(glyph) else {
+                    continue;
+                };
+                let min = outline.px_bounds().min;
+                outline.draw(|gx, gy, cover| {
+                    let (x, y) = (min.x as i32 + gx as i32, min.y as i32 + gy as i32);
+                    if (0..w).contains(&x) && (0..ht).contains(&y) {
+                        let pixel = &mut pixels[(y * w + x) as usize];
+                        for (v, f) in pixel.iter_mut().zip([fg.r, fg.g, fg.b]) {
+                            *v += (f32::from(f) - *v) * cover.min(1.0);
+                        }
+                    }
+                });
+            }
+        };
+        // Blocks of 100 columns side by side, each going on where the last stopped, to fill
+        // the width.
+        let source: Vec<&str> = include_str!("headless.rs").lines().collect();
+        let rows = (ht as f32 / line) as usize;
+        let block = 100.0 * advance;
+        let blocks = (w as f32 / block).ceil() as usize;
+        for row in 0..rows {
+            let baseline = (row as f32 + 1.0) * line;
+            for b in 0..blocks {
+                let text = source[(b * rows + row) % source.len()];
+                draw_line(text, b as f32 * block, baseline);
+            }
+        }
+        let bytes: Vec<u8> = pixels
+            .iter()
+            .flat_map(|[r, g, b]| [*b as u8, *g as u8, *r as u8, 255])
+            .collect();
+        let qh = h.queue.handle();
+        let mut file = shm_file(bytes.len() as u64);
+        file.write_all(&bytes).unwrap();
+        let pool = shown
+            .shm
+            .create_pool(file.as_fd(), bytes.len() as i32, &qh, ());
+        let buffer = pool.create_buffer(0, w, ht, w * 4, Format::Argb8888, &qh, ());
+        shown.surface.set_buffer_scale(buffer_scale);
+        shown.surface.attach(Some(&buffer), 0, 0);
+        shown.surface.damage(0, 0, size.0, size.1);
+        shown.surface.commit();
+        settle(h);
+        file
+    }
+
+    /// One shot of the blur board: text over nearly the whole screen, the real bar with its
+    /// calendar open, the real dock and the on-screen display of the media keys, in `theme`, on
+    /// a screen of `size` pixels at `scale`; drawn without the blur, then with it.
+    fn blur_board_row(theme: &str, size: (i32, i32), scale: f64) -> (Vec<u8>, Vec<u8>) {
         use compositor::{theme as follow, wallpaper};
         use smithay::desktop::layer_map_for_output;
         use std::{path::PathBuf, process::Command};
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("blur-board-{theme}"));
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("blur-board-{theme}-{}x{}", size.0, size.1));
         let _ = std::fs::remove_dir_all(&dir);
         let config = dir.join("config");
         std::fs::create_dir_all(config.join("appearance")).unwrap();
@@ -3466,7 +3539,7 @@ mod tests {
         picture.to_rgb8().save(folder.join(name)).unwrap();
 
         let mut drawing = Drawing::new(size).expect("Mesa's software EGL device");
-        let mut h = Harness::start_screen(size);
+        let mut h = Harness::start_screen(size, scale);
         let handle = h.event_loop.handle();
         follow::follow_at(&handle, &mut h.state, appearance);
         h.state.wallpaper =
@@ -3489,24 +3562,20 @@ mod tests {
                 .env("HOME", &dir)
                 .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                 .env("RUST_LOG", "warn")
+                .env("RUST_BACKTRACE", "1")
                 .env("QT_QPA_PLATFORM", "wayland")
                 .env("ICED_BACKEND", "wgpu")
                 .env("VK_DRIVER_FILES", &lavapipe)
                 .spawn()
                 .unwrap()
         };
-        // Text over the whole width, written again once the window is maximized.
-        let text = "while true; do clear; ls -C -w \"$(tput cols)\" /usr/bin \\
-            | head -n \"$(($(tput lines) - 1))\"; sleep 2; done";
-        let system = std::path::Path::new("/usr/local/share:/usr/share");
-        // The programs of this build, next to the test's temporary folder.
-        let built = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("../debug");
+        // The programs of this build, next to the test's temporary folder, or where
+        // `SHERLOCKOS_BIN` says.
+        let built = std::env::var_os("SHERLOCKOS_BIN").map_or_else(
+            || PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("../debug"),
+            PathBuf::from,
+        );
         let mut children = vec![
-            spawn(
-                "konsole",
-                &["--separate", "--hide-menubar", "-e", "sh", "-c", text],
-                system,
-            ),
             spawn(built.join("bar").to_str().unwrap(), &[], &data),
             spawn(built.join("dock").to_str().unwrap(), &[], &data),
         ];
@@ -3531,32 +3600,37 @@ mod tests {
                 }
             }
         };
-        let started = std::time::Instant::now();
-        while h.state.space.elements().next().is_none() {
-            assert!(
-                started.elapsed() < Duration::from_secs(60),
-                "Konsole shows no window"
-            );
-            run(&mut h, &mut drawing, 200);
-        }
-        run(&mut h, &mut drawing, 2000);
-        // Nearly the whole screen, under the panel and behind the dock: a maximized
-        // window would stop above the dock.
+        run(&mut h, &mut drawing, 3000);
+        // Nearly the whole screen, under the panel and behind the dock.
+        let logical = (
+            (f64::from(size.0) / scale).round() as i32,
+            (f64::from(size.1) / scale).round() as i32,
+        );
+        let (shown, _decoration) = h.open_decorated(Palette::DARK.window);
+        let area = (logical.0 - 40, logical.1 - 50);
+        let _text = text_window(&mut h, &shown, area, scale.ceil() as i32);
         let window = h.state.space.elements().next().unwrap().clone();
-        let toplevel = window.toplevel().unwrap();
-        toplevel.with_pending_state(|state| state.size = Some((size.0 - 40, size.1 - 50).into()));
-        toplevel.send_configure();
-        run(&mut h, &mut drawing, 2000);
         h.state.space.map_element(window, (20, 40), true);
-        run(&mut h, &mut drawing, 4000);
+        run(&mut h, &mut drawing, 2000);
         // The calendar, a panel of the bar on the same glass as the control centre: a click on the
         // clock. The control centre would show the machine's network and Bluetooth, and without
         // the system bus it has no indicators to open it.
-        let at = (f64::from(size.0) - 45.0, 28.0);
+        let at = (f64::from(logical.0) - 45.0, 28.0);
         h.click(at.0, at.1, 10);
         run(&mut h, &mut drawing, 3000);
+        // The on-screen display of the media keys.
+        let level = compositor::osd::Level {
+            kind: sherlock_ui::osd::Kind::Volume,
+            percent: 60,
+            muted: false,
+        };
+        // Faded in, then shown again before each shot: it goes on the compositor's own clock.
+        h.state.show_osd(level, None);
+        run(&mut h, &mut drawing, 500);
+        h.state.show_osd(level, None);
         drawing.scene.blur.set_mode(Mode::Off);
         let before = drawing.settled(&mut h).1;
+        h.state.show_osd(level, None);
         drawing.scene.blur.set_mode(Mode::Blur);
         let after = drawing.settled(&mut h).1;
         for child in &mut children {
@@ -3567,12 +3641,12 @@ mod tests {
         (before, after)
     }
 
-    /// The board of lot D-37: the right half of the screen, Konsole's text behind the dock and a
-    /// panel of the bar, without then with the blur (columns), dark then light (rows):
-    /// `screenshots/blur-board.png`.
+    /// The board of lot D-37: the right half of the screen, text behind the dock, a panel of
+    /// the bar and the on-screen display, without then with the blur (columns), dark then light
+    /// (rows): `screenshots/blur-board.png`.
     #[test]
-    #[ignore = "needs Mesa's EGL, lavapipe, Konsole and `cargo build -p bar -p dock`"]
-    fn blur_board_with_konsole_the_dock_and_a_panel() {
+    #[ignore = "needs Mesa's EGL, lavapipe and `cargo build -p bar -p dock`"]
+    fn blur_board_with_text_the_dock_and_a_panel() {
         let size = (1440, 900);
         let (x0, width) = (560u32, 880u32);
         let mut board = image::RgbaImage::new(2 * width, 2 * size.1 as u32);
@@ -3582,7 +3656,7 @@ mod tests {
             } else {
                 sherlock_ui::color::Theme::Light
             });
-            let (before, after) = blur_board_row(theme, size);
+            let (before, after) = blur_board_row(theme, size, 1.0);
             for (column, pixels) in [before, after].into_iter().enumerate() {
                 let full =
                     image::RgbaImage::from_raw(size.0 as u32, size.1 as u32, pixels).unwrap();
@@ -3598,5 +3672,32 @@ mod tests {
         let path = format!("{}/screenshots/blur-board.png", env!("CARGO_MANIFEST_DIR"));
         board.save(&path).unwrap();
         eprintln!("board: {path}");
+    }
+
+    /// The board of lot D-37b, at two sizes and scales: 1920 × 1080 at scale 1, and 2560 × 1600
+    /// at scale 1.5. The screen without then with the blur, one above the other, from a third
+    /// of its width to its right edge: `screenshots/blur-board-<width>x<height>.png`.
+    #[test]
+    #[ignore = "needs Mesa's EGL, lavapipe and `cargo build -p bar -p dock`"]
+    fn blur_board_at_two_sizes() {
+        for (size, scale) in [((1920, 1080), 1.0), ((2560, 1600), 1.5)] {
+            let (before, after) = blur_board_row("dark", size, scale);
+            let (w, h) = (size.0 as u32, size.1 as u32);
+            let x0 = w / 3;
+            let mut board = image::RgbaImage::new(w - x0, 2 * h);
+            for (row, pixels) in [before, after].into_iter().enumerate() {
+                let full = image::RgbaImage::from_raw(w, h, pixels).unwrap();
+                let cut = image::imageops::crop_imm(&full, x0, 0, w - x0, h).to_image();
+                image::imageops::overlay(&mut board, &cut, 0, row as i64 * i64::from(h));
+            }
+            let path = format!(
+                "{}/screenshots/blur-board-{}x{}.png",
+                env!("CARGO_MANIFEST_DIR"),
+                size.0,
+                size.1
+            );
+            board.save(&path).unwrap();
+            eprintln!("board: {path}");
+        }
     }
 }
