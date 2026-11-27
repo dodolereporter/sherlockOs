@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use appearance_config::AppearanceConfig;
-use desktop_config::{keyboard, lock, pointer, touchpad, wallpaper};
+use desktop_config::{clipboard, keyboard, lock, pointer, touchpad, wallpaper};
 use dock_config::DockConfig;
 
 /// Where each file is, and where the installed wallpapers are.
@@ -24,6 +24,7 @@ pub struct Paths {
     /// Folders of installed wallpapers, most important first.
     pub wallpaper_dirs: Vec<PathBuf>,
     pub lock: PathBuf,
+    pub clipboard: PathBuf,
     /// Where the applications and `mimeapps.list` are, the current desktops (lower case,
     /// for `<desktop>-mimeapps.list`) and the locales of the application names.
     pub apps: mime_apps::Dirs,
@@ -47,6 +48,7 @@ impl Paths {
             keyboard: desktop.join(keyboard::FILE),
             pointer: desktop.join(pointer::FILE),
             lock: desktop.join(lock::FILE),
+            clipboard: desktop.join(clipboard::FILE),
             wallpaper_dirs,
             apps: mime_apps::Dirs {
                 config_home: config_home.into(),
@@ -71,6 +73,7 @@ impl Paths {
             .collect();
         Some(Self {
             lock: lock::config_file(var)?,
+            clipboard: clipboard::config_file(var)?,
             apps: mime_apps::Dirs::from_env(&home),
             desktops,
             locales: locales(),
@@ -96,6 +99,7 @@ pub enum File {
     Keyboard,
     Pointer,
     Lock,
+    Clipboard,
 }
 
 impl Paths {
@@ -109,12 +113,13 @@ impl Paths {
             File::Keyboard => &self.keyboard,
             File::Pointer => &self.pointer,
             File::Lock => &self.lock,
+            File::Clipboard => &self.clipboard,
         }
     }
 }
 
 impl File {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Appearance,
         Self::Dock,
         Self::Wallpaper,
@@ -122,6 +127,7 @@ impl File {
         Self::Keyboard,
         Self::Pointer,
         Self::Lock,
+        Self::Clipboard,
     ];
 }
 
@@ -135,6 +141,7 @@ pub struct Settings {
     pub keyboard: keyboard::Config,
     pub pointer: pointer::Config,
     pub lock: lock::Config,
+    pub clipboard: clipboard::Config,
 }
 
 impl Settings {
@@ -196,6 +203,11 @@ impl Settings {
                 self.lock = config;
                 problems.iter().map(ToString::to_string).collect()
             }
+            File::Clipboard => {
+                let (config, problems) = clipboard::Config::parse_lenient(text);
+                self.clipboard = config;
+                problems.iter().map(ToString::to_string).collect()
+            }
         };
         for problem in problems {
             tracing::warn!(%problem, path = %path.display(), "settings line left aside");
@@ -213,6 +225,7 @@ impl Settings {
             File::Keyboard => self.keyboard.write_into(text),
             File::Pointer => self.pointer.write_into(text),
             File::Lock => self.lock.write_into(text),
+            File::Clipboard => self.clipboard.write_into(text),
         }
     }
 

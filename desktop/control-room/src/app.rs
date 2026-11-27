@@ -157,6 +157,8 @@ pub enum Change {
     RepeatDelay(u8),
     RepeatRate(u8),
     LockAfter(Delay),
+    ClipboardHistory(bool),
+    ClipboardKeep(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,6 +814,7 @@ pub(crate) fn file_of(change: Change) -> File {
         Change::ShowClicks(_) => File::Pointer,
         Change::LockAfter(_) => File::Lock,
         Change::Layout(_) | Change::RepeatDelay(_) | Change::RepeatRate(_) => File::Keyboard,
+        Change::ClipboardHistory(_) | Change::ClipboardKeep(_) => File::Clipboard,
         _ => File::Touchpad,
     }
 }
@@ -872,6 +875,8 @@ fn apply(s: &mut Settings, change: Change) {
         }
         Change::RepeatRate(v) => s.keyboard.repeat_rate = from_share(v, RATES).round() as u32,
         Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
+        Change::ClipboardHistory(on) => s.clipboard.history = on,
+        Change::ClipboardKeep(on) => s.clipboard.keep_on_disk = on,
     }
 }
 

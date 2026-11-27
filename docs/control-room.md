@@ -30,6 +30,7 @@ D-26c the keyboard page and the gestures of the touchpad page. Displays come wit
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
 | « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
 | « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
+| « Presse-papiers » | Clipboard history on or off, kept on disk or in memory (lot D-42) | `$XDG_CONFIG_HOME/sherlockos/clipboard.conf` (`history`, `keep-on-disk`) | Compositor (D-42) |
 | « Applications par défaut » | Browser, mail, text editor, terminal, files, images, video, music | `$XDG_CONFIG_HOME/mimeapps.list`; the terminal in `xdg-terminals.list` | Every program that opens a file or a link |
 
 A file is only written once a setting changes: until then, the programs keep their own
@@ -74,6 +75,10 @@ follow them. In nested mode Alt stands for Super, which the page says.
 **Gestures.** « Toucher puis glisser » waits for « Toucher pour cliquer », and « Glissement
 prolongé » for both: their switches are disabled otherwise. Three fingers up, left and right,
 and two fingers pinched are listed under them, without a setting.
+
+**Clipboard.** `clipboard.conf` is read by the compositor within a second of a change (see
+"Clipboard history" in `docs/compositor.md`). « Historique du presse-papiers » off forgets
+everything at once; « Garder après la déconnexion » is disabled while the history is off.
 
 **Lock.** `lock.conf` is the file of D-25a, read by the compositor live; Control Room writes it
 with `desktop_config::lock`.

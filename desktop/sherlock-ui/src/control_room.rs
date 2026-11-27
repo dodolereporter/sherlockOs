@@ -132,6 +132,8 @@ pub mod texts {
     pub const KEYBOARD: &str = "Clavier";
     pub const KEYBOARD_ABOUT: &str =
         "La disposition des touches, leur répétition et les raccourcis.";
+    pub const CLIPBOARD: &str = "Presse-papiers";
+    pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
 
@@ -275,6 +277,13 @@ pub mod texts {
     pub const NEVER: &str = "Jamais";
     pub const ONE_HOUR: &str = "1 heure";
 
+    // « Presse-papiers ».
+    pub const CLIPBOARD_HISTORY_CARD: &str = "Historique";
+    pub const CLIPBOARD_HISTORY: &str = "Historique du presse-papiers";
+    pub const CLIPBOARD_HISTORY_HELP: &str = "Garde en mémoire tes 50 dernières copies, pour les retrouver avec Super + V. Jamais les mots de passe, rien pendant le verrouillage.";
+    pub const CLIPBOARD_KEEP: &str = "Garder après la déconnexion";
+    pub const CLIPBOARD_KEEP_HELP: &str = "Écrit l'historique sur le disque, avec les éléments épinglés. Sinon, il s'efface à la fin de la session.";
+
     /// A delay before the lock: « 1 minute », « 5 minutes ».
     pub fn minutes(count: u32) -> String {
         match count {
@@ -327,6 +336,7 @@ pub mod texts {
     pub const REPEAT_WORDS: &str = "clavier touches répétition maintenir tenir";
     pub const SHORTCUT_WORDS: &str = "clavier raccourcis touches super combinaisons";
     pub const GESTURE_WORDS: &str = "gestes doigts trackpad glisser balayer";
+    pub const CLIPBOARD_WORDS: &str = "presse-papiers copier coller historique super v vie privée";
     pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 
     /// Hour of the day as the menus show it: « 07:30 ».

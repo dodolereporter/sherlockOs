@@ -40,6 +40,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/clipboard_history/` | Clipboard history of Super + V: what is read of each copy, off the loop, and the history (lot D-42) |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
@@ -844,11 +845,93 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
-- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
-  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
-  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
-  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
-  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
+## Drag and drop (lot D-29c)
+
+Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds
+(`src/dnd.rs`):
+
+- **The icon** the client gives (`start_drag`), drawn under the pointer in front of everything
+  but the cursor, moved by its `wl_surface.offset`, at the screen's scale like the other
+  surfaces. It gets its frame callbacks.
+- **Escape cancels**: the grab first leaves the surface under the pointer (ended there, it
+  would drop), then ends; the source is told `cancelled`. The key never reaches a client.
+- **The way back**: a drop refused or cancelled, the icon glides back to where the drag started
+  (`motion::DRAG_RETURN`, 300 ms, fading to `DRAG_RETURN_ALPHA`), as long as its client keeps
+  the icon surface. A client that wants that animation destroys its icon after it.
+- **The cursor**: the arrow during a drag, with a plus over an X11 window that takes a copy,
+  the refusal over one that takes nothing.
+
+### From Wayland to X11 (XDND)
+
+smithay 0.7 has no XDND, and its grab would cancel any drop on an X11 window (XWayland has no
+data device). The compositor speaks XDND itself (`src/xdnd.rs`), as an X11 client of XWayland
+of its own, connected when XWayland is ready, whose socket is a source of the event loop:
+
+- Over an X11 window, the grab is given no surface. If the window has `XdndAware` (version 3 to
+  5, `XdndProxy` honored), the compositor owns `XdndSelection` with the source's types
+  (`XdndTypeList` past three), sends `XdndEnter`, then `XdndPosition` at each move, one at a
+  time (it waits for each `XdndStatus`), and `XdndLeave` when the pointer leaves it.
+- **Positions**: the X11 root coordinates are the logical coordinates of the space, which
+  XWayland uses at every scale: the position sent is the X11 window's own place plus the
+  pointer's offset from its surface (tested at scale 2 in `tests/dnd.rs`).
+- **The action**: copy, or move with Shift, among those the source allows.
+- **The drop**: released over a window that accepted, the release is held back from the grab;
+  `XdndDrop` goes to the window, the source is told `dnd_drop_performed`. The window reads the
+  data (`ConvertSelection`): the compositor asks the Wayland source through a pipe, reads it in
+  a thread and answers, by INCR past 1 MiB. At `XdndFinished`, the source is told `dnd_finished`
+  (or `cancelled` if the window refused it), and the grab ends once the source is gone (500 ms
+  at most): smithay's grab, which never saw the drop, would also tell it `cancelled`.
+- **Security**: only the X11 client under the pointer may read the drag (a window of its
+  connection, recognized by the client bits of its identifier); any other read is refused. A
+  type is read at most up to 64 MiB, and each piece is awaited 5 s at most; a window that
+  never finishes is given up after 5 s, and the drop cancelled.
+- `text/plain;charset=utf-8` and `text/plain` are also given for `UTF8_STRING`, `TEXT` and
+  `STRING`; the other types keep their name as atom (`text/uri-list`,
+  `x-special/gnome-copied-files`, `image/png`).
+
+## Clipboard history
+
+Lot D-42, `src/clipboard_history/`. What is copied, in Wayland and X11 applications, is kept for
+the Super + V panel of the shell (ADR 0030 for pasting).
+
+- **What is read.** Every new CLIPBOARD selection passes through `State::selection_set`. Once
+  it is in place, the compositor reads the one type worth keeping, the way a client pastes it:
+  `text/uri-list` first (files when every address is `file://`), then `image/png` or
+  `image/jpeg`, then `text/plain;charset=utf-8` or `text/plain`. A Wayland client's selection is
+  asked from it (`request_data_device_client_selection`); an X11 one goes through the bridge of
+  lot D-29; the compositor's own (a screenshot) is written by the loop. The primary selection is
+  never kept.
+- **Off the loop.** A thread per read (`MAX_READS` at most, 4) reads the pipe, non-blocking, with
+  a deadline of 3 s, and stops past the limit of its type: 1 MiB of text, 256 KiB of addresses,
+  16 MiB of picture. Too large is not kept at all, never cut. A picture is decoded with limits
+  (16384 px a side, 256 MiB of pixels) for its thumbnail, 160 px on its longest side, in PNG.
+  What was read comes back to the loop by a channel; a read that ends after a newer one is
+  dropped.
+- **The history** (`model.rs`): newest first, 50 items at most and 128 MiB of content, the
+  oldest unpinned going first. The same content copied again goes back to the top with its id
+  and its pin. « Tout effacer » keeps the pinned items. Each item has its kind (text, link,
+  files, picture), a preview of 4 lines and 300 characters at most, its thumbnail, the app_id or
+  X11 class of the window that had the keyboard, and its time.
+- **Never kept:** anything while the session is locked (checked when the copy is seen and when
+  its read ends), a secret: a selection that offers `x-kde-passwordManagerHint` (KeePassXC, KDE)
+  or the nspasteboard types `org.nspasteboard.ConcealedType` and `TransientType`, or a copy from
+  a password manager known by its app_id or class (KeePassXC, Bitwarden, 1Password, Enpass,
+  Secrets, Proton Pass, LastPass): from X11, smithay drops the hint, whose name has no `/`.
+- **Put back** (`State::put_back`): the item becomes the compositor's own selection, in every
+  type it was read as (a text as `text/plain;charset=utf-8` and `text/plain`, files as
+  `text/uri-list`, `x-special/gnome-copied-files` and their paths as text), offered to X11 too,
+  and moves to the top without being read again. Refused while locked.
+- **The setting**, `clipboard.conf` (`desktop_config::clipboard`), read again within a second
+  of a change: `history = on|off` (on by default; off forgets everything at once) and
+  `keep-on-disk = on|off` (off by default: memory only).
+- **On disk** (`disk.rs`), with `keep-on-disk = on` only: the whole history, pinned items
+  included, in `$XDG_STATE_HOME/sherlockos/clipboard-history` (mode 0600), written by a thread
+  of its own after each change (the last state only), through a file renamed over it; read back
+  in a thread when the setting is on, with the history's limits. Turned off, the file goes.
+- **For the shell** (`shell/clipboard.rs`): `sherlock_clipboard_history_v1`, only on the shell
+  socket (ADR 0021), lists the items (their thumbnail in a memfd), and takes `paste`,
+  `set_pinned`, `remove` and `clear` from the Super + V panel. Super + V (Alt + V nested) starts
+  `sherlockos-clipboard` as Super + Space starts the launcher; pasting follows ADR 0030.
 
 ## GPU buffers (linux-dmabuf)
 

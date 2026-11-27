@@ -18,16 +18,18 @@ pub enum Page {
     Keyboard,
     Touchpad,
     Lock,
+    Clipboard,
     DefaultApps,
 }
 
 impl Page {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Sound,
         Self::Appearance,
         Self::Keyboard,
         Self::Touchpad,
         Self::Lock,
+        Self::Clipboard,
         Self::DefaultApps,
     ];
 
@@ -38,6 +40,7 @@ impl Page {
             Self::Keyboard => t::KEYBOARD,
             Self::Touchpad => t::TOUCHPAD,
             Self::Lock => t::LOCK,
+            Self::Clipboard => t::CLIPBOARD,
             Self::DefaultApps => t::DEFAULT_APPS,
         }
     }
@@ -50,6 +53,7 @@ impl Page {
             Self::Keyboard => t::KEYBOARD_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
             Self::Lock => t::LOCK_ABOUT,
+            Self::Clipboard => t::CLIPBOARD_ABOUT,
             Self::DefaultApps => t::DEFAULT_APPS_ABOUT,
         }
     }
@@ -61,6 +65,7 @@ impl Page {
             Self::Keyboard => Icon::Keyboard,
             Self::Touchpad => Icon::Touchpad,
             Self::Lock => Icon::Lock,
+            Self::Clipboard => Icon::Document,
             Self::DefaultApps => Icon::Grid,
         }
     }
@@ -97,11 +102,13 @@ pub enum Setting {
     InputDevice,
     InputVolume,
     LockAfter,
+    ClipboardHistory,
+    ClipboardKeep,
     App(Kind),
 }
 
 impl Setting {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 38] = [
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -130,6 +137,8 @@ impl Setting {
         Self::InputDevice,
         Self::InputVolume,
         Self::LockAfter,
+        Self::ClipboardHistory,
+        Self::ClipboardKeep,
         Self::App(Kind::Browser),
         Self::App(Kind::Mail),
         Self::App(Kind::Editor),
@@ -172,6 +181,8 @@ impl Setting {
             Self::InputDevice => (Sound, t::INPUT_DEVICE, t::MICROPHONE_WORDS),
             Self::InputVolume => (Sound, t::INPUT_VOLUME, t::MICROPHONE_WORDS),
             Self::LockAfter => (Lock, t::LOCK_AFTER, t::LOCK_WORDS),
+            Self::ClipboardHistory => (Clipboard, t::CLIPBOARD_HISTORY, t::CLIPBOARD_WORDS),
+            Self::ClipboardKeep => (Clipboard, t::CLIPBOARD_KEEP, t::CLIPBOARD_WORDS),
             Self::App(kind) => (DefaultApps, kind.texts().0, t::APPS_WORDS),
         }
     }
@@ -198,6 +209,7 @@ impl Setting {
                 _ => File::Keyboard,
             },
             Page::Lock => File::Lock,
+            Page::Clipboard => File::Clipboard,
             Page::Sound | Page::DefaultApps => return None,
         };
         Some(file)
