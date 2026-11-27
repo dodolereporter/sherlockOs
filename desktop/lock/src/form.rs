@@ -36,6 +36,11 @@ pub enum Key {
     Space,
     Enter,
     Escape,
+    /// Tab, backward with Shift: once the form shows, it moves the focus between the field and
+    /// the buttons.
+    Tab {
+        back: bool,
+    },
     Other,
 }
 

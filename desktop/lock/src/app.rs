@@ -20,6 +20,7 @@ use iced_exwlshell::to_exwlshell_message;
 use sherlock_3d::Model;
 use sherlock_ui::color::{self, Color};
 use sherlock_ui::component;
+use sherlock_ui::focus::Focusable;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::CURTAIN;
 use sherlock_ui::lock::screen::{self as ui, Colors};
@@ -66,6 +67,8 @@ pub enum Message {
     Here(window::Id),
     /// A key, a click or the pointer on that surface: it may bring the form.
     Input(window::Id, Input),
+    /// A click on that surface: it may bring the form, and the field keeps the keyboard.
+    Pressed(window::Id),
     Typed(Secret),
     Submit,
     Checked(Result<(), AuthError>),
@@ -169,6 +172,8 @@ pub struct Lock {
     last_key: Option<Duration>,
     /// The first frame was drawn: the entrance starts from it at the latest.
     drawn: bool,
+    /// How many times the field was given the keyboard (the tests).
+    focus_requests: u32,
     /// The size, in pixels, the background was asked for.
     asked: Option<(u32, u32)>,
     /// The largest scale of the screens.
@@ -208,6 +213,7 @@ impl Lock {
             background_at: None,
             last_key: None,
             drawn: false,
+            focus_requests: 0,
             asked: None,
             scale: 1.0,
             theme: color::ThemeFade::default(),
@@ -239,6 +245,19 @@ impl Lock {
     /// The form shows.
     pub fn form_shown(&self) -> bool {
         self.form.shown()
+    }
+
+    /// How many times the field was given the keyboard: each case where macOS keeps it in the
+    /// field asks for it again (the tests).
+    pub fn focus_requests(&self) -> u32 {
+        self.focus_requests
+    }
+
+    /// Gives the keyboard to the password field: whatever took it (a click elsewhere, Escape in
+    /// the field, the spinner in its place), the next key goes there.
+    fn focus_field(&mut self) -> Task<Message> {
+        self.focus_requests += 1;
+        iced::widget::operation::focus(field())
     }
 
     /// Sherlock looks down at the field now.
@@ -387,11 +406,17 @@ impl Lock {
                 if self.primary.is_none() {
                     self.primary = Some(id);
                 }
-                return iced::widget::operation::focus(field());
+                return self.focus_field();
             }
             Message::Resized(id, size) => {
-                self.sizes.insert(id, size);
-                return self.ask_background();
+                // The first size of the screen of the field: its widgets exist from now on, so
+                // the field takes the keyboard as soon as the form shows.
+                let first = self.sizes.insert(id, size).is_none();
+                let background = self.ask_background();
+                if first && self.primary == Some(id) {
+                    return Task::batch([background, self.focus_field()]);
+                }
+                return background;
             }
             Message::Rescaled(scale) => {
                 self.scale = self.scale.max(scale);
@@ -401,10 +426,17 @@ impl Lock {
             Message::Here(id) => {
                 if self.primary != Some(id) && self.surfaces.contains(&id) {
                     self.primary = Some(id);
-                    return iced::widget::operation::focus(field());
+                    return self.focus_field();
                 }
             }
             Message::Input(id, input) => return self.input(id, input),
+            Message::Pressed(id) => {
+                let task = self.input(id, Input::Pointer);
+                if self.form.shown() && matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
+                    return Task::batch([task, self.focus_field()]);
+                }
+                return task;
+            }
             Message::Typed(typed) => {
                 if self.form.shown() && matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
                     self.typed |= !typed.is_empty();
@@ -414,7 +446,10 @@ impl Lock {
                     self.armed.disarm();
                 }
             }
-            Message::ShowPassword => self.reveal = !self.reveal,
+            Message::ShowPassword => {
+                self.reveal = !self.reveal;
+                return self.focus_field();
+            }
             Message::Submit => return self.submit(),
             Message::Checked(Ok(())) => {
                 tracing::info!("unlocked");
@@ -428,7 +463,7 @@ impl Lock {
                     AuthError::Unavailable(_) => Refusal::Unavailable,
                 };
                 self.phase = Phase::Refused(self.elapsed(), refusal);
-                return iced::widget::operation::focus(field());
+                return self.focus_field();
             }
             Message::Machine(machine) => {
                 let now = Instant::now();
@@ -441,6 +476,9 @@ impl Lock {
                         self.asleep = true;
                     }
                     self.runner.run(machine);
+                }
+                if self.form.shown() {
+                    return self.focus_field();
                 }
             }
             Message::Clock(clock) => {
@@ -481,7 +519,10 @@ impl Lock {
                 self.background_at = self.drawn.then(|| self.elapsed());
             }
             Message::Frame(now) => {
-                self.first_frame(now);
+                if self.first_frame(now) {
+                    // The field takes the keyboard with the first frame, whatever came before.
+                    return self.focus_field();
+                }
                 self.now = now;
                 self.theme.tick(now);
                 if let Phase::Leaving(at) = self.phase
@@ -502,16 +543,18 @@ impl Lock {
     }
 
     /// The first frame, at `now`: a lock screen slower than the curtain starts its entrance
-    /// from it, so that it is seen whole.
-    fn first_frame(&mut self, now: Instant) {
-        if std::mem::replace(&mut self.drawn, true) || self.rescue {
-            return;
+    /// from it, so that it is seen whole. `true` for the first one.
+    fn first_frame(&mut self, now: Instant) -> bool {
+        if std::mem::replace(&mut self.drawn, true) {
+            return false;
         }
-        if now.saturating_duration_since(self.start) > CURTAIN
+        if !self.rescue
+            && now.saturating_duration_since(self.start) > CURTAIN
             && let Some(start) = now.checked_sub(CURTAIN)
         {
             self.start = start;
         }
+        true
     }
 
     /// A key, a click or the pointer on the surface `id`.
@@ -532,6 +575,30 @@ impl Lock {
         if !self.form.shown() {
             // Nothing of what is typed: only that an input came to the lock at rest (D-25g).
             tracing::info!(key, "input on the lock at rest");
+        } else if let Input::Key { key: k, .. } = &input {
+            match *k {
+                // Escape empties the field and leaves the form; on an empty field, it sends the
+                // form away.
+                form::Key::Escape
+                    if !self.password.is_empty()
+                        && matches!(self.phase, Phase::Typing | Phase::Refused(..)) =>
+                {
+                    self.password = Secret::default();
+                    self.phase = Phase::Typing;
+                    self.form.input(self.elapsed(), Input::Pointer);
+                    return self.focus_field();
+                }
+                // Tab goes from the field to the buttons, and back.
+                form::Key::Tab { back } => {
+                    self.form.input(self.elapsed(), input);
+                    self.entered = true;
+                    return sherlock_ui::focus::advance(match back {
+                        true => sherlock_ui::focus::Direction::Previous,
+                        false => sherlock_ui::focus::Direction::Next,
+                    });
+                }
+                _ => {}
+            }
         }
         match self.form.input(self.elapsed(), input) {
             Outcome::Shown { typed } => {
@@ -551,7 +618,7 @@ impl Lock {
                     self.typed = true;
                     self.last_key = Some(self.elapsed());
                 }
-                return Task::batch([task, iced::widget::operation::focus(field())]);
+                return Task::batch([task, self.focus_field()]);
             }
             Outcome::Hidden => self.clear(),
             // A key once the form shows ends its entrance.
@@ -811,19 +878,20 @@ impl Lock {
     fn field_button(&self, icon: Icon, message: Message, colors: &Colors) -> Element<'_, Message> {
         let tint = fade(colors.text, self.presence(3));
         let hover = colors.button_hover;
-        button(
+        // Tab reaches it; Enter or Space presses it (`sherlock_ui::focus`).
+        let pressed = button(
             container(component::icon(icon, ui::FIELD_ICON, color_of(tint)))
                 .center(ui::FIELD_BUTTON),
         )
-        .on_press(message)
+        .on_press(message.clone())
         .padding(0)
         .style(move |_, status| button::Style {
             background: matches!(status, button::Status::Hovered | button::Status::Pressed)
                 .then(|| Background::Color(hover.into())),
             border: Border::default().rounded(ui::FIELD_BUTTON / 2.0),
             ..button::Style::default()
-        })
-        .into()
+        });
+        Focusable::new(pressed, Some(message), ui::FIELD_BUTTON / 2.0).into()
     }
 
     /// The line under the pill: why the password was refused.
@@ -877,6 +945,11 @@ impl Lock {
                     .color(edge),
                 ..button::Style::default()
             });
+            let round = Focusable::new(
+                round,
+                Some(Message::Machine(machine)),
+                ui::MACHINE_BUTTON / 2.0,
+            );
             column![
                 round,
                 text(label)
@@ -898,16 +971,23 @@ fn colors_selection() -> Color {
 fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
     match event {
         Event::Mouse(mouse::Event::CursorEntered) => Some(Message::Here(id)),
-        Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::ButtonPressed(_)) => {
-            Some(Message::Input(id, Input::Pointer))
-        }
+        Event::Mouse(mouse::Event::CursorMoved { .. }) => Some(Message::Input(id, Input::Pointer)),
+        Event::Mouse(mouse::Event::ButtonPressed(_)) => Some(Message::Pressed(id)),
         Event::Window(window::Event::Focused) => Some(Message::Here(id)),
         Event::Window(window::Event::Rescaled(scale)) => Some(Message::Rescaled(scale)),
         Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
             Some(Message::Resized(id, size))
         }
-        Event::Keyboard(keyboard::Event::KeyPressed { key, text, .. }) => {
+        Event::Keyboard(keyboard::Event::KeyPressed {
+            key,
+            text,
+            modifiers,
+            ..
+        }) => {
             let key = match key {
+                keyboard::Key::Named(keyboard::key::Named::Tab) => form::Key::Tab {
+                    back: modifiers.shift(),
+                },
                 keyboard::Key::Named(keyboard::key::Named::Space) => form::Key::Space,
                 keyboard::Key::Named(keyboard::key::Named::Enter) => form::Key::Enter,
                 keyboard::Key::Named(keyboard::key::Named::Escape) => form::Key::Escape,
