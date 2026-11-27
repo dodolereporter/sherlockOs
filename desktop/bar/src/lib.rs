@@ -5,9 +5,12 @@
 pub mod app;
 pub mod bus;
 pub mod calendar;
+pub mod dbusmenu;
+pub mod global_menu;
 pub mod history;
 pub mod live;
 pub mod menu;
+pub mod names;
 pub mod panel;
 pub mod quick;
 pub mod registrar;

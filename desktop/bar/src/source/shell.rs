@@ -368,6 +368,7 @@ struct Settled {
     workspace: String,
     /// Its title, or its `app_id` without one.
     name: String,
+    app_id: String,
     activated: bool,
     menu: Option<AppMenu>,
 }
@@ -431,6 +432,7 @@ impl Objects {
                 Settled {
                     workspace: w.workspace.clone(),
                     name: name.trim().to_owned(),
+                    app_id: w.app_id.trim().to_owned(),
                     activated: w.activated,
                     menu: w.menu.clone(),
                 }
@@ -463,6 +465,7 @@ impl Objects {
         Desktop {
             groups,
             menu: window.and_then(|w| w.menu.clone()),
+            app_id: window.map(|w| w.app_id.clone()).filter(|id| !id.is_empty()),
             app,
             covered: self.settled_covered.clone(),
             live: true,

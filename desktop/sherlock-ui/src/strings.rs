@@ -47,6 +47,38 @@ pub mod top_bar {
     pub const LOCK: &str = "Verrouiller";
     pub const LOG_OUT: &str = "Fermer la session";
     pub const POWER_OFF: &str = "Éteindre";
+
+    /// The button that holds the menus of the application that do not fit in the bar (lot
+    /// D-36).
+    pub const MORE_MENUS: &str = "»";
+
+    /// A keyboard shortcut of an application's menu, from its key combinations as D-Bus
+    /// menus name them (`[["Control", "Shift", "S"]]`): « Ctrl+Maj+S », the names of a French
+    /// keyboard. Combinations pressed in turn are separated by a comma: « Ctrl+T, O ».
+    pub fn shortcut(combinations: &[Vec<String>]) -> String {
+        let combinations = combinations.iter().map(|keys| combination(keys));
+        combinations.collect::<Vec<_>>().join(", ")
+    }
+
+    fn combination(keys: &[String]) -> String {
+        let name = |key: &str| match key {
+            "Control" => String::from("Ctrl"),
+            "Shift" => String::from("Maj"),
+            "Alt" => String::from("Alt"),
+            "Super" => String::from("Super"),
+            "Return" => String::from("Entrée"),
+            "Delete" => String::from("Suppr"),
+            "BackSpace" => String::from("Retour arrière"),
+            "Escape" => String::from("Échap"),
+            "space" => String::from("Espace"),
+            "Tab" => String::from("Tab"),
+            "plus" => String::from("+"),
+            "minus" => String::from("-"),
+            other if other.chars().count() == 1 => other.to_uppercase(),
+            other => other.to_owned(),
+        };
+        keys.iter().map(|k| name(k)).collect::<Vec<_>>().join("+")
+    }
 }
 
 /// Names of the color themes given to GTK, Qt and KDE applications, as their theme pickers
@@ -84,6 +116,22 @@ mod tests {
         assert_eq!(top_bar::workspace(2, None), "2");
         assert_eq!(top_bar::workspace(3, Some("")), "3");
         assert_eq!(percent(55), "55\u{202F}%");
+    }
+
+    #[test]
+    fn a_shortcut_takes_the_names_of_a_french_keyboard() {
+        let keys = |combinations: &[&[&str]]| {
+            let owned: Vec<Vec<String>> = combinations
+                .iter()
+                .map(|keys| keys.iter().map(|k| (*k).to_owned()).collect())
+                .collect();
+            top_bar::shortcut(&owned)
+        };
+        assert_eq!(keys(&[&["Control", "Shift", "s"]]), "Ctrl+Maj+S");
+        assert_eq!(keys(&[&["Control", "T"], &["O"]]), "Ctrl+T, O");
+        assert_eq!(keys(&[&["Alt", "Return"]]), "Alt+Entrée");
+        assert_eq!(keys(&[&["F11"]]), "F11");
+        assert_eq!(keys(&[]), "");
     }
 }
 

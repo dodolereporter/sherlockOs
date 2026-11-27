@@ -306,6 +306,60 @@ The compositor gives each registration to its window (`docs/compositor.md`, "Glo
 tells the bar the menu of each window (`app_menu`): `Desktop::menu` is the one of the active
 window.
 
+### The menus in the bar (D-36b)
+
+![Kate's « Fichier » open, « Actions sur les fichiers » under the pointer, on a 1920 × 1080 screen](../desktop/bar/screenshots/global-menu-1920.png)
+![The same in the light theme](../desktop/bar/screenshots/global-menu-1920-light.png)
+![The same menus on a 1366 × 768 screen: from « Projets » on, they go into « » »](../desktop/bar/screenshots/global-menu-1366.png)
+![The same in the light theme](../desktop/bar/screenshots/global-menu-1366-light.png)
+![« Affichage », its check marks and radio dots, on a 1366 × 768 screen](../desktop/bar/screenshots/global-menu-view-1366.png)
+![On the 1366 × 768 screen, the menus that do not fit in « » »](../desktop/bar/screenshots/global-menu-more-1366.png)
+
+The captures come from `cargo test -p bar --test global_menu`, in software at scale 2: the bar
+and each popup rendered apart, laid on the desktop's color where the compositor puts them. The
+menus are Kate 25.04's, as it exports them.
+
+- **What shows.** After the Sherlock button, the name of the active application in bold, from
+  its desktop entry (`names.rs`: the entry whose id is the window's `app_id`, or whose last part
+  or program is it, so `org.kde.kate` and the X11 class `konsole` are found), else the window's
+  title; then the application's menus, ghost buttons like the clock's (`panels::bar_button`),
+  veiled while open. Without a menu for the active window, the name alone. The name stops at
+  `APP_NAME_MAX` (220) with « … » when menus follow it.
+- **Room.** The name and the menus keep to the left half of the bar, less the workspaces of the
+  middle (`Bar::placement`, from the bar's real width and the widths of the labels as the
+  renderer shapes them, `sherlock_ui::ellipsis::width`). The menus that do not fit go into
+  « » », the last button, whose entries open them as submenus: on 1366 × 768, Kate keeps
+  « Fichier » to « Client LSP » in the bar.
+- **Reading.** `dbusmenu.rs` reads the whole tree once the window is active (`GetLayout(0, -1)`),
+  and again on each `LayoutUpdated` or `ItemsPropertiesUpdated` of that menu (a match rule on its
+  bus name and path, coalesced like the panels' signals). A click on a menu first sends
+  `AboutToShow`, reads that menu again, then opens it: an application that fills a menu as it
+  opens (Kate's recent files) shows it filled. Each call has a limit of 1.5 s
+  (`dbusmenu::TIMEOUT`, on the connection of the menus) and runs in an iced task: an application
+  that does not answer leaves the name alone, or the menu as it was read, and the bar goes on.
+  A late answer for an application no longer active is dropped.
+- **A menu.** An `xdg_popup` of the bar under its button, 6 below the bar, like the Sherlock
+  menu: the menu glass, entries of 30, separators, the shortcut on the right in tertiary text
+  (« Ctrl+Maj+N », the names of a French keyboard, « Ctrl+T, O » for keys pressed in turn), a
+  chevron for a submenu, a check mark or a radio dot in a column of its own before the labels
+  when the menu has any, disabled entries faded. Labels lose their mnemonic marks (`_` and `&`).
+  As wide as its widest entry, from 200 to 380; as tall as its entries, within the screen,
+  scrolling beyond.
+- **Submenus.** A popup of the menu's popup, at its right, 4 apart, its first entry level with
+  the entry that opens it. It opens when the pointer rests on that entry, or on a click, and
+  closes when the pointer goes to another entry of its parent.
+- **Pointer.** While a menu is open, the pointer on another menu of the bar opens it at once,
+  as on a Mac. A second click on the open menu, Escape, or a click outside closes them. A click
+  on an entry sends `Event` « clicked » to the application and closes the menus.
+- **Keys.** Up and Down walk the entries, past separators and disabled entries, wrapping
+  around; Home, End; Right opens the submenu of the highlighted entry, or the next menu of the
+  bar; Left closes the submenu, or opens the previous menu; Enter or Space runs the entry;
+  Escape closes the submenu, then the menu. Tab reaches the menus of the bar after the Sherlock
+  button, and Enter opens one with its first entry highlighted.
+- **Motion.** The menu of the bar unfolds from its top left corner and folds back like the
+  Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the new
+  one replaces the old at once, as on a Mac.
+
 ## Attached to the top edge
 
 While a maximized or fullscreen window is on its screen (the `output` state of
@@ -764,6 +818,16 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   board.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
   activates, Tab after Tab; Escape clears the ring.
+- **Global menu** (`tests/dbusmenu.rs`, `tests/global_menu.rs`, D-36b): a fake application on
+  a private bus exports Kate's « Fichier » and « Affichage »: the tree read (labels without
+  mnemonics, separators, a disabled submenu, « Ctrl+T, O », a check mark), `AboutToShow` before
+  the menu opens, a disabled entry doing nothing, the click on « Nouveau » reaching the
+  application as `Event` « clicked »; `LayoutUpdated` heard; an application that never answers
+  gives up within the limit and leaves the name alone. The menus follow the active window, a
+  late answer of the previous one dropped; the pointer and the keys from menu to menu; the
+  captures in both themes at 1920 × 1080 and 1366 × 768, every menu in the bar at 1920 and
+  « » » at 1366. In `global_menu.rs`, the placement and « » », the cursor, the width and height
+  of a menu; in `names.rs`, the application name from its `app_id`.
 - **Registrar** (`tests/registrar.rs`): on a private bus (its own `dbus-daemon`, never the
   user's bus), `RegisterWindow` answered in under 50 ms (the best of five) and passed on with
   the caller's process and bus name, `GetMenuForWindow`; a second registrar leaves the name to
@@ -830,8 +894,9 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   vanish on cream), and a light veil while the menu is open (a green ring would merge with the
   green logo). The menu avatar is the logo in its square instead of the mascot on cream (see
   Logo).
-- **Application menus** (« Fichier », « Édition »…): the board shows them after the application name.
-  They will come with the global menu of our applications, outside this batch.
+- **Application menus** (« Fichier », « Édition »…): since D-36, those of the active application,
+  Qt and KDE ones first (see « Global menu »). The board shows them without « » »: it only
+  appears when they do not fit.
 - **Containers and sandboxes**: the board shows them on the right. They will come with the L
   batches.
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
@@ -887,7 +952,7 @@ shows against one.
 
 ## What this batch does not do
 
-- The application name from its `.desktop` file: the bar shows the window title.
+- The application name from its `.desktop` file came with D-36.
 - The Sherlock menu actions: lock (login screen), game mode, settings, updates.
 - The game mode and the choice of the graphics card: their tiles wait for their batches.
 - Bluetooth: the first adapter only; no file transfer, no audio profile choice.
