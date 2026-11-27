@@ -13,7 +13,7 @@
 //! See "Real session" in `docs/compositor.md`.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
     time::{Duration, Instant},
@@ -42,7 +42,6 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent},
     },
-    desktop::layer_map_for_output,
     output::{Mode, Output, OutputModeSource, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
@@ -129,6 +128,8 @@ struct Head {
     /// The frame waiting for the vertical blank was built while the session was locked: once
     /// shown, the lock can be confirmed (lot D-25a).
     lock_queued: bool,
+    /// The screen is off (DPMS), the screens being dark (lot D-38).
+    off: bool,
 }
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
@@ -242,12 +243,18 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
-    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3):
-    // not on the login screen, which has no session to lock (`greeter.rs`).
+    // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3). The
+    // login screen has no session to lock (`greeter.rs`): its inactivity only turns the screens
+    // off, after the veil.
+    state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
     if !state.is_greeter() {
-        state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
         state.watch_logind(&event_loop.handle(), None)?;
     }
+    // The screens off after inactivity (lot D-38).
+    state.watch_power(
+        &event_loop.handle(),
+        desktop_config::power::config_file(var),
+    )?;
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();
@@ -315,14 +322,19 @@ pub fn init(
     let handle = event_loop.handle();
     let mut sources = insert_sources(&handle, &backend, notifier, drm_events, udev)?;
     let input = LibinputInputBackend::new(libinput);
+    // When libinput's events were last read (lot D-25g).
+    let read = Rc::new(Cell::new(Instant::now()));
+    let seen = read.clone();
     let token = handle
-        .insert_source(input, |event, _, state| {
+        .insert_source(input, move |event, _, state| {
+            seen.set(Instant::now());
             let since = state.perf.start();
             input_event(event, state);
             state.perf.stop(perf::Phase::Input, since);
         })
         .map_err(|e| e.error)?;
     sources.push(token);
+    sources.push(watch_input(&handle, &backend, read)?);
     // Every change that may show wakes the screens up (`State::queue_redraw`).
     let (ping, wake) = make_ping().map_err(|e| fail("frame scheduling", &e))?;
     let b = backend.clone();
@@ -412,6 +424,60 @@ fn insert_sources(
         udev.map_err(|e| e.error)?,
         timer.map_err(|e| e.error)?,
     ])
+}
+
+/// How often the input is checked on (lot D-25g).
+const INPUT_WATCH: Duration = Duration::from_secs(2);
+/// Events waiting that long, the source of libinput is not read any more.
+pub const INPUT_STALL: Duration = Duration::from_secs(5);
+
+/// The input is stalled: libinput has events waiting (`readable`) that nothing read for
+/// `quiet`. The loop reads a readable source at its next turn, within milliseconds: waiting
+/// seconds means it no longer does.
+pub fn input_stalled(quiet: Duration, readable: bool) -> bool {
+    readable && quiet >= INPUT_STALL
+}
+
+/// Watches the input (lot D-25g): the screen kept drawing while no key nor click came, and
+/// even the console switch did not work, twice while locked. When libinput has events nobody
+/// reads, it is logged with the state of the session, then libinput is suspended and resumed,
+/// which opens the devices again.
+fn watch_input(
+    handle: &LoopHandle<'static, State>,
+    backend: &Rc<RefCell<Backend>>,
+    read: Rc<Cell<Instant>>,
+) -> Result<RegistrationToken, Error> {
+    let b = backend.clone();
+    let timer = Timer::from_duration(INPUT_WATCH);
+    let token = handle.insert_source(timer, move |_, _, state| {
+        let mut backend = b.borrow_mut();
+        let quiet = read.get().elapsed();
+        let mut fds = [smithay::reexports::rustix::event::PollFd::new(
+            &backend.libinput,
+            smithay::reexports::rustix::event::PollFlags::IN,
+        )];
+        let zero = smithay::reexports::rustix::event::Timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        let readable =
+            smithay::reexports::rustix::event::poll(&mut fds, Some(&zero)).is_ok_and(|n| n > 0);
+        if input_stalled(quiet, readable) {
+            tracing::warn!(
+                ?quiet,
+                locked = state.is_locked(),
+                active = backend.session.is_active(),
+                "input stalled: libinput has events nobody reads; libinput suspended and resumed"
+            );
+            backend.libinput.suspend();
+            if backend.libinput.resume().is_err() {
+                tracing::warn!("libinput did not resume");
+            }
+            read.set(Instant::now());
+        }
+        TimeoutAction::ToDuration(INPUT_WATCH)
+    });
+    token.map_err(|e| Error::Session(format!("input watch: {}", e.error)))
 }
 
 fn input_event(event: InputEvent<LibinputInputBackend>, state: &mut State) {
@@ -550,6 +616,7 @@ impl Backend {
             ids: Ids::default(),
             period,
             lock_queued: false,
+            off: false,
         };
         self.heads.insert(crtc, head);
         Ok(())
@@ -558,7 +625,7 @@ impl Backend {
     /// The console was left: no more drawing nor input until it comes back. The keys held
     /// now are released for the clients: their releases will not come.
     fn pause(&mut self, state: &mut State) {
-        tracing::info!("session paused");
+        tracing::info!("session paused: libinput suspended");
         self.libinput.suspend();
         if let Some(keyboard) = state.seat.get_keyboard() {
             let time = state.start_time.elapsed().as_millis() as u32;
@@ -572,7 +639,7 @@ impl Backend {
     }
 
     fn activate(&mut self, state: &mut State) {
-        tracing::info!("session active again");
+        tracing::info!("session active again: libinput resumed");
         if self.libinput.resume().is_err() {
             tracing::warn!("libinput did not resume");
         }
@@ -615,7 +682,7 @@ impl Backend {
         }
         head.pacing.presented();
         let output = head.output.clone();
-        send_frames(state, &output);
+        state.send_frames(&output);
         self.render(state, crtc);
     }
 
@@ -651,6 +718,21 @@ impl Backend {
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
         };
+        // The screens dark: the screen goes off (DPMS) once, and nothing is drawn; the next
+        // frame queued turns it on again (lot D-38).
+        if state.screens_dark() {
+            if !head.off && self.session.is_active() {
+                match head.compositor.clear() {
+                    Ok(()) => tracing::info!(output = head.output.name(), "screen off"),
+                    Err(err) => tracing::warn!("DRM: turning the screen off: {err}"),
+                }
+                head.off = true;
+            }
+            return;
+        }
+        if std::mem::take(&mut head.off) {
+            head.pacing.reset();
+        }
         if !head.pacing.wants_frame(epoch) || !self.session.is_active() {
             return;
         }
@@ -759,7 +841,7 @@ impl Backend {
             tracing::info!(animation = animating, "measure: {period}");
         }
         if shown {
-            send_frames(state, &output);
+            state.send_frames(&output);
         } else {
             self.estimate(crtc, period);
         }
@@ -780,25 +862,20 @@ fn send_hidden_frames(state: &State) {
     }
 }
 
-/// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the lock
-/// surface.
-fn send_frames(state: &State, output: &Output) {
-    let time = state.start_time.elapsed();
-    let throttle = Some(Duration::ZERO);
-    for window in state.space.elements() {
-        if state.window_output(window).as_ref() == Some(output) {
-            state.send_window_frame(window, output, time);
-        }
-    }
-    for layer in layer_map_for_output(output).layers() {
-        layer.send_frame(output, time, throttle, |_, _| Some(output.clone()));
-    }
-    state.send_lock_frames(output, time);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_input_is_stalled_only_when_events_wait_unread() {
+        let long = INPUT_STALL + Duration::from_secs(1);
+        // Nobody touches the machine: nothing waits, nothing is wrong.
+        assert!(!input_stalled(long, false));
+        // Events just came: the loop reads them at its next turn.
+        assert!(!input_stalled(Duration::from_millis(10), true));
+        // Events wait for seconds: the source is not read any more.
+        assert!(input_stalled(long, true));
+    }
 
     fn rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
         Rectangle::new((x, y).into(), (w, h).into())

@@ -10,6 +10,8 @@
 //!   brightness keys;
 //! - no shell socket (there is no bar nor dock), and nothing locks: no lock program, no lock on
 //!   inactivity, on logind's demand nor on the lid;
+//! - the screens still go off after the inactivity, after the veil (lot D-38), and the input
+//!   still has its watchdog;
 //! - the compositor stops with the greeter (`Options::stops_with_command`): greetd starts the
 //!   chosen session once its greeter has left, and starts the greeter again if it failed.
 
@@ -23,6 +25,9 @@ impl State {
     pub fn enter_greeter_mode(&mut self) {
         self.greeter = true;
         self.stop_shell_socket();
+        // Nothing to lock: the inactivity only turns the screens off, and its veil comes before
+        // that alone.
+        self.set_idle_lock(None);
         tracing::info!("login screen: one program, fullscreen, no shortcut of the desktop");
     }
 
