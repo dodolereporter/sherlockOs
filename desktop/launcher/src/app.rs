@@ -13,6 +13,7 @@ use iced::widget::{
 use iced::window::{self, Id};
 use iced::{Alignment, Element, Event, Length, Padding, Subscription, Task, event};
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::animated::reveal;
 use sherlock_ui::component::{self as ui, Trailing};
@@ -66,6 +67,8 @@ pub enum Message {
     Reloaded(Reloaded),
     /// The theme of the appearance file changed.
     Theme(color::Theme),
+    /// The logical size of the screen the surface is on, from iced_exwlshell (L-1).
+    Screen(Option<(i32, i32)>),
 }
 
 /// Sources and what tells when their files are walked, as `crate::sources` gives them.
@@ -177,6 +180,12 @@ pub struct Launcher {
     drawn: Animation,
     places: Vec<Place>,
     highlight: Animation,
+    /// Logical size of the screen the panel is on, once known (L-1), and the side of the dock's
+    /// icons, read in its configuration when the screen is learnt: the panel keeps clear of it.
+    screen: Option<(f32, f32)>,
+    dock_icon: f32,
+    /// What tells the screen of the surface.
+    screens: Option<ShellReceiver>,
 }
 
 impl Launcher {
@@ -209,7 +218,29 @@ impl Launcher {
             drawn: still(look::panel_height(0, 0)),
             places: Vec::new(),
             highlight: still(0.0),
+            screen: None,
+            dock_icon: sherlock_ui::metrics::DOCK_ICON,
+            screens: None,
         }
+    }
+
+    /// The launcher, told of the screen of its surface by `screens`.
+    pub fn with_screens(mut self, screens: ShellReceiver) -> Self {
+        self.screens = Some(screens);
+        self
+    }
+
+    /// The launcher on a screen of this logical size (tests; `Message::Screen` otherwise).
+    pub fn with_screen(mut self, size: (f32, f32)) -> Self {
+        self.screen = Some(size);
+        self
+    }
+
+    /// Where the panel goes on its screen, and how many results it shows (L-1): the board's
+    /// panel until the screen is known.
+    pub fn fit(&self) -> look::Fit {
+        self.screen
+            .map_or_else(look::Fit::default, |size| look::fit(size, self.dock_icon))
     }
 
     /// A resident launcher (lot P-02): hidden at first, shown and hidden by the requests of
@@ -398,10 +429,17 @@ impl Launcher {
             }
             None => Subscription::none(),
         };
+        let screens = self
+            .screens
+            .as_ref()
+            .map_or_else(Subscription::none, |events| {
+                events.listen().filter_map(on_screen)
+            });
         Subscription::batch([
             event::listen_with(on_event),
             frames,
             service,
+            screens,
             Subscription::run(crate::appearance).map(Message::Theme),
         ])
     }
@@ -415,6 +453,7 @@ impl Launcher {
                 color::set_active(theme);
                 return Task::none();
             }
+            Message::Screen(size) => return self.screen_changed(size),
             _ => {}
         }
         // Anything but its own entry closes the menu; Escape closes it alone.
@@ -491,7 +530,7 @@ impl Launcher {
             &self.sources,
             &self.query,
             look::SECTION_RESULTS,
-            look::MAX_RESULTS,
+            self.fit().results,
         );
         self.armed = None;
         self.copied = None;
@@ -556,7 +595,7 @@ impl Launcher {
                 let settings = if self.full {
                     crate::screen_surface()
                 } else {
-                    crate::panel_surface(self.height())
+                    crate::panel_surface(self.height(), self.fit())
                 };
                 let (id, task) = Message::layershell_open(settings);
                 self.surface = Some(id);
@@ -761,12 +800,37 @@ impl Launcher {
         let Some(id) = self.surface.filter(|_| !self.full) else {
             return Task::none();
         };
-        let settings = crate::surface(self.height());
-        Task::done(Message::LayoutChange {
-            id,
-            anchor: settings.anchor,
-            size: settings.size,
-        })
+        let settings = crate::surface(self.height(), self.fit());
+        Task::batch([
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: settings.anchor,
+                size: settings.size,
+            }),
+            Task::done(Message::MarginChange {
+                id,
+                margin: settings.margin,
+            }),
+        ])
+    }
+
+    /// The screen of the surface, or its size, changed: the panel takes its place and its
+    /// number of results there.
+    fn screen_changed(&mut self, size: Option<(i32, i32)>) -> Task<Message> {
+        let size = size
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .map(|(w, h)| (w as f32, h as f32));
+        if size.is_none() || size == self.screen {
+            return Task::none();
+        }
+        let before = self.height();
+        self.screen = size;
+        self.dock_icon = dock_icon(self.dock_file.as_deref());
+        let resize = self.resize();
+        if self.query.trim().is_empty() {
+            return resize;
+        }
+        Task::batch([resize, self.search(before)])
     }
 
     pub fn view(&self, id: Id) -> Element<'_, Message> {
@@ -802,7 +866,7 @@ impl Launcher {
             .on_right_press(Message::Inside);
         let placed = container(panel)
             .padding(Padding {
-                top: look::TOP,
+                top: self.fit().top,
                 ..Padding::ZERO
             })
             .center_x(Length::Fill);
@@ -888,7 +952,7 @@ impl Launcher {
             list.into()
         };
         container(content)
-            .width(look::WIDTH)
+            .width(self.fit().width)
             .height(self.drawn_height())
             .padding(look::PADDING + metrics::BORDER_WIDTH)
             .clip(true)
@@ -933,23 +997,24 @@ impl Launcher {
         } else {
             (typography::UI_MEDIUM, p.text_primary, p.text_secondary)
         };
+        // One line each, ending with « … » when too long: a long file name or path never
+        // wraps in its row nor pushes the key cap out (L-2).
         let mut words = column![
-            ui::body(hit.title.as_str())
+            ui::ellipsis(hit.title.as_str())
                 .font(title_font)
                 .color(title_color)
-        ];
+                .width(Length::Fill)
+        ]
+        .width(Length::Fill);
         if let Some(subtitle) = self.subtitle(hit, index) {
             words = words.push(
-                text(subtitle)
+                ui::ellipsis(subtitle)
                     .size(typography::SMALL_SIZE)
-                    .color(line_color),
+                    .color(line_color)
+                    .width(Length::Fill),
             );
         }
-        let mut line = row![
-            tile(&hit.tile, &hit.title),
-            words,
-            Space::new().width(Length::Fill)
-        ]
+        let mut line = row![tile(&hit.tile, &hit.title), words]
         .spacing(look::GAP)
         // The whole height of the row, so that a result without a second line has its tile and
         // its title in the middle of the row, not at its top (Q-21).
@@ -980,6 +1045,24 @@ impl Launcher {
             row
         }
     }
+}
+
+/// The screen of the surface, from iced_exwlshell's events.
+fn on_screen(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { output, .. } => {
+            Some(Message::Screen(output.and_then(|o| o.info.logical_size)))
+        }
+        _ => None,
+    }
+}
+
+/// The side of the dock's icons at rest, from its configuration file; the default without one.
+fn dock_icon(path: Option<&std::path::Path>) -> f32 {
+    path.and_then(|path| dock_config::DockConfig::load(path).ok())
+        .map_or(sherlock_ui::metrics::DOCK_ICON, |(config, _)| {
+            config.icon_size
+        })
 }
 
 /// Set once the first view is built, for the log of the start.
