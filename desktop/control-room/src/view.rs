@@ -215,6 +215,7 @@ impl App {
                 Page::Appearance => self.appearance(inner),
                 Page::Touchpad => self.touchpad(inner),
                 Page::Lock => self.lock(inner),
+                Page::Clipboard => self.clipboard(inner),
                 Page::DefaultApps => self.default_apps(inner),
             };
             Column::new()

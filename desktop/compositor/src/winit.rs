@@ -78,6 +78,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
     let mut textures = Textures::default();
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.

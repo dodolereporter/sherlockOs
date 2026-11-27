@@ -1,10 +1,12 @@
 //! Settings of the desktop that several programs share: the compositor applies them, Control
 //! Room (lot D-26a) writes them: the wallpaper (see "Wallpapers" in `docs/compositor.md`),
 //! the touchpad (see "Touchpad" there), the pointer (see "Show the clicks" in
-//! `docs/cursor.md`) and the lock (see "Session lock" in `docs/compositor.md`).
+//! `docs/cursor.md`), the lock (see "Session lock" in `docs/compositor.md`) and the clipboard
+//! history (see "Clipboard history" there).
 
 use std::{ffi::OsString, path::PathBuf};
 
+pub mod clipboard;
 pub mod conf;
 pub mod lock;
 pub mod pointer;

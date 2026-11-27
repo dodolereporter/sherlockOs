@@ -94,6 +94,8 @@ pub mod texts {
     pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
     pub const LOCK: &str = "Verrouillage";
     pub const LOCK_ABOUT: &str = "Quand ta session se verrouille toute seule.";
+    pub const CLIPBOARD: &str = "Presse-papiers";
+    pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
 
@@ -173,6 +175,13 @@ pub mod texts {
     pub const NEVER: &str = "Jamais";
     pub const ONE_HOUR: &str = "1 heure";
 
+    // « Presse-papiers ».
+    pub const CLIPBOARD_HISTORY_CARD: &str = "Historique";
+    pub const CLIPBOARD_HISTORY: &str = "Historique du presse-papiers";
+    pub const CLIPBOARD_HISTORY_HELP: &str = "Garde en mémoire tes 50 dernières copies, pour les retrouver avec Super + V. Jamais les mots de passe, rien pendant le verrouillage.";
+    pub const CLIPBOARD_KEEP: &str = "Garder après la déconnexion";
+    pub const CLIPBOARD_KEEP_HELP: &str = "Écrit l'historique sur le disque, avec les éléments épinglés. Sinon, il s'efface à la fin de la session.";
+
     /// A delay before the lock: « 1 minute », « 5 minutes ».
     pub fn minutes(count: u32) -> String {
         match count {
@@ -221,6 +230,7 @@ pub mod texts {
     pub const SOUND_WORDS: &str = "son audio haut-parleurs casque enceinte hdmi";
     pub const MICROPHONE_WORDS: &str = "son audio micro microphone entrée casque";
     pub const LOCK_WORDS: &str = "verrouillage écran veille inactivité délai sécurité";
+    pub const CLIPBOARD_WORDS: &str = "presse-papiers copier coller historique super v vie privée";
     pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 
     /// Hour of the day as the menus show it: « 07:30 ».

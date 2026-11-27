@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="sherlock_clipboard_v1">
+  <description summary="the clipboard history, for the Super + V panel of the shell">
+    Private protocol between the compositor and the clipboard history panel of the shell (lot
+    D-42). The compositor keeps what is copied in Wayland and X11 applications; this protocol
+    lists it and acts on it. Like sherlock_shell_v1, its global is only offered to the clients
+    of the shell socket (ADR 0021): no application can read the history nor put an item back.
+
+    Putting an item back makes it the clipboard again; the user then pastes it (ADR 0029).
+
+    Versioning follows sherlock_shell_v1: a backward compatible change adds requests, events
+    or enum entries and bumps the version; an incompatible one renames the interface with a new
+    suffix.
+  </description>
+
+  <interface name="sherlock_clipboard_history_v1" version="1">
+    <description summary="the items copied">
+      Once bound, the compositor sends the state event, an item event for every item kept,
+      each followed by its thumbnail when it has one, then done. After that, it sends the
+      changes as they happen: new or changed items, removed items, the state, each batch ended
+      by done. A client applies what it received at done.
+
+      The client orders the items itself: pinned items first, then by time, newest first,
+      and by id, highest first, for the same time.
+    </description>
+
+    <enum name="kind">
+      <entry name="text" value="0" summary="text"/>
+      <entry name="link" value="1" summary="a web address alone"/>
+      <entry name="files" value="2" summary="files, copied in a file manager"/>
+      <entry name="image" value="3" summary="a picture"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop receiving events"/>
+    </request>
+
+    <request name="paste">
+      <description summary="put an item back on the clipboard">
+        The item of this id becomes the clipboard again, offered to Wayland and X11
+        applications in every type it was read as, and moves to the top. An unknown id, or a
+        locked session, does nothing.
+      </description>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="set_pinned">
+      <description summary="pin or unpin an item">
+        A pinned item is never removed to make room, nor by clear. Pinned: 1, else 0.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="pinned" type="uint"/>
+    </request>
+
+    <request name="remove">
+      <description summary="forget an item"/>
+      <arg name="id" type="uint"/>
+    </request>
+
+    <request name="clear">
+      <description summary="forget every item but the pinned ones"/>
+    </request>
+
+    <event name="state">
+      <description summary="whether the history keeps the copies">
+        1 when the history is on, 0 when the user turned it off in Control Room: then the
+        compositor keeps nothing, and lists nothing.
+      </description>
+      <arg name="enabled" type="uint"/>
+    </event>
+
+    <event name="item">
+      <description summary="an item is new or changed">
+        The id stays the item's for as long as the compositor runs. The preview is a few lines,
+        300 characters at most: the text, the address, the paths of the files one per line, or
+        the size of a picture. app is the app_id or X11 class of the window it was copied from,
+        empty when unknown. time is when it was copied, last, in seconds since the Unix epoch.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="kind" type="uint" enum="kind"/>
+      <arg name="pinned" type="uint"/>
+      <arg name="time" type="uint"/>
+      <arg name="app" type="string"/>
+      <arg name="preview" type="string"/>
+    </event>
+
+    <event name="thumbnail">
+      <description summary="the thumbnail of a picture">
+        A PNG of size bytes, 160 pixels on its longest side at most, from the start of a
+        read-only file. Sent after the item event of the picture.
+      </description>
+      <arg name="id" type="uint"/>
+      <arg name="fd" type="fd"/>
+      <arg name="size" type="uint"/>
+    </event>
+
+    <event name="removed">
+      <description summary="an item is gone"/>
+      <arg name="id" type="uint"/>
+    </event>
+
+    <event name="done">
+      <description summary="end of a batch of changes"/>
+    </event>
+  </interface>
+</protocol>

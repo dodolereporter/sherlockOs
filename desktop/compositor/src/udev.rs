@@ -244,6 +244,11 @@ pub fn init(
     )?;
     // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
     state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
     state.watch_logind(&event_loop.handle(), None)?;
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
