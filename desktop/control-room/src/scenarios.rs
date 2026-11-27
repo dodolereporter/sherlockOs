@@ -323,6 +323,7 @@ fn the_keyboard_page_survives_a_restart_and_keeps_an_unknown_layout() {
         "a slider writes once it rests"
     );
     let _ = app.flush();
+    app.finish_writes();
     // Opened again, as after a restart: everything is there.
     let (again, _) = App::new(Config {
         paths: app.paths.clone(),
@@ -333,6 +334,7 @@ fn the_keyboard_page_survives_a_restart_and_keeps_an_unknown_layout() {
     assert_eq!((kb.repeat_delay, kb.repeat_rate), (150, 26));
     // The system's layout empties the key: the compositor goes back to the system's.
     let _ = app.update(Message::Set(Change::Layout(LayoutChoice::System)));
+    app.finish_writes();
     let text = fs::read_to_string(&app.paths.keyboard).expect("file");
     assert!(text.starts_with("# mine\nlayout = \n"), "{text}");
     assert_eq!(Settings::load(&app.paths).0.keyboard.layout, None);
