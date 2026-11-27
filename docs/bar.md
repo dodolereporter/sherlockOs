@@ -346,6 +346,13 @@ menus are Kate 25.04's, as it exports them.
   (`dbusmenu::TIMEOUT`, on the connection of the menus) and runs in an iced task: an application
   that does not answer leaves the name alone, or the menu as it was read, and the bar goes on.
   A late answer for an application no longer active is dropped.
+- **Bounds** (Q-38). Any application on the session bus can send a layout, which the bar lays
+  out on its interface thread: one `GetLayout` keeps 200 entries at most (`dbusmenu::MAX_ENTRIES`,
+  all levels together), 8 levels of submenus, 256 characters of a label, and 4 key combinations
+  of 4 keys of 32 characters in a shortcut; the rest is left out. The notification centre keeps
+  of `List` the daemon's own bounds (`history::MAX_ENTRIES`, 100 notifications; the application
+  name, title, body and labels cut to the daemon's lengths; 32 actions with keys of 256 bytes),
+  since a program that takes the daemon's name after it could send more.
 - **A menu.** An `xdg_popup` of the bar under its button, 6 below the bar, like the Sherlock
   menu: the menu glass, entries of 30, separators, the shortcut on the right in tertiary text
   (« Ctrl+Maj+N », the names of a French keyboard, « Ctrl+T, O » for keys pressed in turn), a
