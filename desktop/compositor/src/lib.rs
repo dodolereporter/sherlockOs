@@ -38,6 +38,7 @@ pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
+pub mod screenshot_tool;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -211,6 +212,8 @@ pub struct State {
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
+    applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
     xwayland: Option<RegistrationToken>,
     /// Listening Wayland socket in the loop, removed by `shutdown`.
@@ -377,6 +380,7 @@ impl State {
             x_display: None,
             socket_name: None,
             launcher_program: None,
+            applications_program: None,
             xwayland: None,
             listener: None,
             shell: shell::Shell::new(&dh),
@@ -534,6 +538,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // From behind another window, it comes to the front with an animation (lot D-19d).
+                self.start_raise(window);
                 self.space.raise_element(window, true);
             }
             None => self.space.elements().for_each(|w| {
@@ -604,6 +610,7 @@ impl State {
                 moving: false,
                 decoration: 0.0,
                 scale: 1.0,
+                shadow: 1.0,
             });
         }
         // Nothing drawn before the first content of the client: neither an empty frame nor

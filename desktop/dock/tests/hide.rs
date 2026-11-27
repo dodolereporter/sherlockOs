@@ -267,20 +267,43 @@ fn each_window_gets_the_rectangle_of_its_icon_on_the_screen() {
         "Sherlock, in the middle, owns no window"
     );
 
-    // The pointer magnifies the icons, the dock hides: the places at rest do not change.
+    // The pointer magnifies the icons: the places at rest do not change.
     let count = places.len();
     let _ = dock.update(Message::Pointer(Pointer::Moved(icon.center())));
-    let _ = dock.update(windows(&[SCREEN]));
     settle(&mut dock);
     assert_eq!(recorder.places().len(), count, "nothing sent again");
 
-    // A new open application: the icons move, and are placed again.
+    // The pointer leaves, a window covers the screen, the dock hides: each icon is laid flat
+    // in the band along the edge, where the genie then goes (lot D-19e).
+    let _ = dock.update(Message::Pointer(Pointer::Left));
+    let _ = dock.update(windows(&[SCREEN]));
+    settle(&mut dock);
+    assert!(dock.hide.hidden());
+    let places = recorder.places();
+    let hidden = places.last().expect("placed again");
+    let strip = tokens::HIDE_STRIP.ceil() as i32;
+    assert_eq!(
+        hidden[2].rectangle,
+        (left + icon.x as i32, SIZE.1 - strip, 52, strip)
+    );
+    let count = places.len();
+
+    // A new open application, the screen still covered: the icons move, and are placed again,
+    // along the edge.
     let Placeholder(mut more) = Placeholder::new("terminal,ExampleBrowser", None);
     more.controllable = true;
+    more.covered = [String::from(SCREEN)].into_iter().collect();
     let _ = dock.update(Message::Windows(more));
     let places = recorder.places();
     assert_eq!(places.len(), count + 1);
     assert_eq!(places[count].len(), 4);
+    assert_eq!(places[count][3].rectangle.3, strip);
+
+    // Shown again: the icons where they are drawn.
+    let _ = dock.update(windows(&[]));
+    settle(&mut dock);
+    let shown = recorder.places();
+    assert_eq!(shown.last().expect("placed")[2].rectangle.3, 52);
 }
 
 #[test]

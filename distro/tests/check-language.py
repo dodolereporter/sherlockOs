@@ -30,6 +30,8 @@ EXCLUDED = (
     "docs/plan.md",
     "docs/contexte.md",
     "distro/tests/check-language.py",
+    # The French translation of the README, for visitors; README.md is the reference.
+    "README.fr.md",
 )
 
 # Data, not development text.

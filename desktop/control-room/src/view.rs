@@ -146,8 +146,18 @@ impl App {
                 container(ui::description(t::NO_RESULT)).padding([0.0, metrics::NAV_ITEM_PADDING]),
             );
         } else {
-            for hit in &self.hits {
-                nav = nav.push(self.hit(hit));
+            // One after the other, each fading in and coming up a little.
+            let now = self.now();
+            for (i, hit) in self.hits.iter().enumerate() {
+                let start = self.hits_since + cr::HIT_STAGGER * i as u32;
+                let shown = now.saturating_sub(start).as_secs_f32() / cr::PAGE_FADE.as_secs_f32();
+                let shown = shown.clamp(0.0, 1.0);
+                let line = color::with_opacity(shown, || self.hit(hit));
+                nav = nav.push(
+                    reveal(line)
+                        .opacity(shown)
+                        .offset(0.0, (1.0 - shown) * cr::HIT_RISE),
+                );
             }
         }
         let (vertical, side) = cr::SIDEBAR_PADDING;
@@ -178,10 +188,21 @@ impl App {
             at = mark.end;
         }
         spans.push(span(&name[at..]));
-        let title = rich_text(spans)
-            .font(typography::UI_MEDIUM)
-            .size(typography::UI_SIZE)
-            .color(p.text_primary);
+        // A name too long for the sidebar is cut with « … », without its highlight.
+        let room = cr::SIDEBAR_WIDTH - 2.0 * (cr::SIDEBAR_PADDING.1 + metrics::NAV_ITEM_PADDING);
+        let fits =
+            sherlock_ui::ellipsis::width(name, typography::UI_MEDIUM, typography::UI_SIZE) <= room;
+        let title: Element<'a, Message> = match fits {
+            true => rich_text(spans)
+                .font(typography::UI_MEDIUM)
+                .size(typography::UI_SIZE)
+                .color(p.text_primary)
+                .into(),
+            false => ui::ellipsis(name)
+                .font(typography::UI_MEDIUM)
+                .color(p.text_primary)
+                .into(),
+        };
         let detail = ui::ellipsis(page.name())
             .size(typography::SMALL_SIZE)
             .color(p.text_secondary);
@@ -195,22 +216,51 @@ impl App {
         .into()
     }
 
-    /// The page, in a column no wider than `CONTENT_MAX_WIDTH`, coming in when it changes.
+    /// The page, in a column no wider than `CONTENT_MAX_WIDTH`, coming in when it changes;
+    /// the page left fades out under it, rising a little, and takes no click.
     fn page_area(&self, width: f32) -> Element<'_, Message> {
         let now = self.now();
         let opacity = self.page_slide.opacity(now);
         let rise = (1.0 - self.page_slide.progress(now)) * cr::PAGE_RISE;
+        let page = scrollable(self.page_content(self.page, width, opacity, rise))
+            .id(crate::scroll::PAGE)
+            .height(Length::Fill);
+        let mut layers: Vec<Element<'_, Message>> = Vec::new();
+        if let Some((left, at)) = self.leaving {
+            let gone =
+                (now.saturating_sub(at).as_secs_f32() / cr::PAGE_FADE.as_secs_f32()).min(1.0);
+            let content = self.page_content(left, width, 1.0 - gone, -gone * cr::PAGE_RISE);
+            layers.push(scrollable(content).height(Length::Fill).into());
+            // Nothing reaches the page left.
+            layers.push(opaque(space().width(Length::Fill).height(Length::Fill)));
+        }
+        layers.push(page.into());
+        container(stack(layers))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::window)
+            .into()
+    }
+
+    /// The title and cards of `page`, at `opacity`, moved down by `rise`.
+    fn page_content(
+        &self,
+        page: Page,
+        width: f32,
+        opacity: f32,
+        rise: f32,
+    ) -> Element<'_, Message> {
         let (vertical, horizontal) = metrics::PAGE_PADDING;
         let inner = (width - 2.0 * horizontal).min(cr::CONTENT_MAX_WIDTH);
         let content = color::with_opacity(opacity, || {
             let heading = column![
-                ui::title(self.page.name()),
-                ui::body(self.page.about())
+                ui::title(page.name()),
+                ui::body(page.about())
                     .size(cr::SUBTITLE_SIZE)
                     .color(color::palette().text_secondary),
             ]
             .spacing(cr::TITLE_GAP);
-            let cards = match self.page {
+            let cards = match page {
                 Page::Displays => self.displays(inner),
                 Page::Sound => self.sound(inner),
                 Page::Appearance => self.appearance(inner),
@@ -225,13 +275,9 @@ impl App {
                 .max_width(cr::CONTENT_MAX_WIDTH)
         });
         let page = reveal(content).opacity(opacity).offset(0.0, rise);
-        let page = container(page)
+        container(page)
             .center_x(Length::Fill)
-            .padding([vertical, horizontal]);
-        container(scrollable(page).height(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(theme::window)
+            .padding([vertical, horizontal])
             .into()
     }
 
@@ -277,7 +323,8 @@ impl App {
             _ => setting.entry().1,
         };
         // A setting whose file cannot be changed says so, under its disabled control.
-        let help = match setting.file().is_none_or(|file| self.can_change(file)) {
+        let failed = matches!(setting, Setting::App(kind) if self.apps_failed.contains(&kind));
+        let help = match setting.file().is_none_or(|file| self.can_change(file)) && !failed {
             true => help,
             false => t::LOCKED_FILE,
         };
@@ -313,6 +360,7 @@ impl App {
         let line =
             row![space().height(metrics::SETTING_ROW_HEIGHT), line].align_y(Alignment::Center);
         container(line)
+            .id(crate::scroll::row(setting))
             .width(Length::Fill)
             .style(move |theme| {
                 let fill = faded(theme::palette(theme).selected_row, lit);

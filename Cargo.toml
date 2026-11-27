@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "desktop/appearance-config",
     "desktop/apps",
+    "desktop/autostart",
     "desktop/bar",
     "desktop/compositor",
     "desktop/control-room",
@@ -29,7 +30,9 @@ members = [
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.100.0"
-# The license is not chosen yet: nothing is published on crates.io.
+# The code is under the GPL, version 3 or later (LICENSE); the name, the logo and the mascot are
+# not (TRADEMARKS.md). Nothing is published on crates.io.
+license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.lints.rust]

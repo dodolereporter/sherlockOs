@@ -3,10 +3,12 @@
 //! with `loginctl` and `systemctl`, run directly, without a shell. Tests use a fake one.
 
 use std::ffi::OsString;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use sherlock_ui::launcher::{Glyph, text};
 
-use crate::launch::{self, LaunchError};
+use crate::launch::LaunchError;
 use crate::search::fold;
 use crate::source::{Action, Command, Hit, Power, Query, Source, Tile};
 
@@ -48,10 +50,76 @@ impl Systemd {
     }
 }
 
+/// How long a session command is waited for: what logind or polkit refuse, they refuse at once.
+/// A command still running past it (polkit asking for a password, the machine going down) is
+/// left to end on its own, reaped by a thread.
+pub const REFUSAL_WAIT: Duration = Duration::from_millis(300);
+
+/// The longest refusal kept, in bytes.
+const MAX_REFUSAL: u64 = 512;
+
 impl Session for Systemd {
+    /// Runs the command and reads its exit code for `REFUSAL_WAIT`: a refusal (another session
+    /// open, polkit) is an error with its reason, which the bar shows under its buttons,
+    /// instead of nothing at all.
     fn run(&self, power: Power) -> Result<(), LaunchError> {
-        launch::spawn(&self.command(power)).map(|_| ())
+        run_waiting(&self.command(power), REFUSAL_WAIT)
     }
+}
+
+/// Runs `command` without a shell, then waits `wait` at most for its answer.
+pub fn run_waiting(command: &Command, wait: Duration) -> Result<(), LaunchError> {
+    use std::io::Read;
+    let program = || command.program.to_string_lossy().into_owned();
+    let mut child = std::process::Command::new(&command.program)
+        .args(&command.args)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| LaunchError::Spawn {
+            program: program(),
+            source,
+        })?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                let mut detail = String::new();
+                if let Some(stderr) = child.stderr.take() {
+                    let _ = stderr.take(MAX_REFUSAL).read_to_string(&mut detail);
+                }
+                let detail = match detail.trim() {
+                    "" => status.to_string(),
+                    text => text.to_owned(),
+                };
+                return Err(LaunchError::Refused {
+                    program: program(),
+                    detail,
+                });
+            }
+            Ok(None) if start.elapsed() < wait => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => break,
+            Err(source) => {
+                return Err(LaunchError::Spawn {
+                    program: program(),
+                    source,
+                });
+            }
+        }
+    }
+    // Still running: reaped when it ends, without holding the caller.
+    let reaper = std::thread::Builder::new()
+        .name(String::from("session-command"))
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    if let Err(error) = reaper {
+        tracing::warn!(%error, "cannot wait for the session command");
+    }
+    Ok(())
 }
 
 /// No session: every command is refused. The launcher's default until one is given.
@@ -168,5 +236,46 @@ impl Source for System {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    fn sh(script: &str) -> Command {
+        Command {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            dir: None,
+        }
+    }
+
+    #[test]
+    fn a_refusal_is_read_and_a_long_command_is_not_waited_for() {
+        assert!(run_waiting(&sh("exit 0"), REFUSAL_WAIT).is_ok());
+        let refused = run_waiting(
+            &sh("echo 'Access denied' >&2; exit 1"),
+            Duration::from_secs(5),
+        );
+        let Err(LaunchError::Refused { detail, .. }) = refused else {
+            panic!("{refused:?}");
+        };
+        assert_eq!(detail, "Access denied");
+        // Polkit asking for a password, the machine going down: not waited for.
+        let start = Instant::now();
+        assert!(run_waiting(&sh("sleep 30"), Duration::from_millis(100)).is_ok());
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(matches!(
+            run_waiting(&sh("exit 0").with_program("/no/such/program"), REFUSAL_WAIT),
+            Err(LaunchError::Spawn { .. })
+        ));
+    }
+
+    impl Command {
+        fn with_program(mut self, program: &str) -> Self {
+            self.program = program.into();
+            self
+        }
     }
 }

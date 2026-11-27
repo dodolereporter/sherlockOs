@@ -10,6 +10,7 @@ pub mod apps;
 pub mod arrangement;
 pub mod displays;
 mod pages;
+pub mod scroll;
 pub mod search;
 pub mod settings;
 pub mod sound;
