@@ -631,6 +631,8 @@ impl SeatHandler for State {
     }
 
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        // Each shape a client names, accepted by smithay (lot UI-07): `RUST_LOG=compositor=trace`.
+        tracing::trace!(?image, "cursor image");
         self.cursor_status = image;
     }
 }
