@@ -1,8 +1,9 @@
 # Launcher
 
 `desktop/launcher` is the desktop's application launcher: a search field that finds the
-installed applications and starts them from the keyboard. It is a separate program started on
-demand, shown above everything with layer-shell (ADR 0005), written with iced 0.14 and
+installed applications and starts them from the keyboard. It is a separate program, resident:
+started with the session and kept in memory, its surface shown and hidden at once (lot P-02, see
+Resident service), above everything with layer-shell (ADR 0005), written with iced 0.14 and
 `iced_exwlshell` 0.21.4 like the bar (`docs/bar.md`) and the dock (`docs/dock.md`). Batch
 D-22a builds its core from the launcher of `Panneaux.dc.html`; D-22b adds the application
 icons, the calculator, the system commands, the files and « Demander à Sherlock ». The crate,
@@ -39,14 +40,14 @@ first three show the applications alone, as in D-22a.
 | Nothing found | Not on the board | « Aucun résultat » in secondary text, one row high; it only shows without the Sherlock source, which always answers |
 
 The light theme takes the light board's values: white glass at 0.88, night blue veils at the
-same opacity. The launcher reads the theme of the appearance file once at start
-(`appearance-config`, ADR 0019): it lives a few seconds and does not follow changes.
+same opacity. The launcher reads the theme of the appearance file (`appearance-config`, ADR
+0019) before its first frame, then follows it: a resident launcher lives as long as the session.
 
 ## Architecture
 
 | Module | Role |
 | --- | --- |
-| `main.rs` | Renderer choice, logs, single instance, then `run` |
+| `main.rs` | The press handed to the service, renderer choice, logs, single instance, then `run` |
 | `lib.rs` | Layer-shell surface, iced settings, theme, locales, sources, startup |
 | `app.rs` | State (`Launcher`), messages, keys, update, view |
 | `source.rs` | The `Source` trait, `Query`, `Hit`, `Tile`, `Action`, `Command`, `Power`, sections |
@@ -57,7 +58,9 @@ same opacity. The launcher reads the theme of the appearance file once at start
 | `ask.rs` | « Demander à Sherlock », a `Source` |
 | `search.rs` | Folding (case, accents), scoring a term, `Haystack` |
 | `launch.rs` | Starting a program without a shell |
-| `instance.rs` | The lock file that keeps one launcher at a time |
+| `instance.rs` | The lock file that keeps one launcher at a time, without the service |
+| `service.rs` | The resident service: its socket, its lock, the requests (lot P-02) |
+| `startup.rs` | The timing of the start, of each opening and of the animations, in the log |
 
 Every color, size and text comes from `sherlock_ui::launcher` (one new file and a `pub mod`
 line): the geometry, `panel_height`, the launcher's own colors for each theme (`Colors::DARK`,
@@ -76,7 +79,17 @@ the name), and nothing else changes there. The launcher leaves out `NoDisplay` e
 
 ### Surface
 
-Anchored to the top only, so the compositor centers it, with a top margin of 150 and an
+**Resident, on the GPU** (lot P-02): the surface covers the screen, anchored to its four edges,
+transparent, layer `Overlay`, exclusive zone -1, the keyboard `Exclusive`. The panel sits at the
+same place as below, centred, 150 below the top. A click anywhere beside the panel, on the
+desktop, a window, the bar or the dock, closes the launcher with its closing animation, and goes
+no further: the surface takes it, as Spotlight does. Its input region is the whole screen; the
+panel's own room (its padding, its labels) is not « beside ». A surface drawn in software has no
+alpha (ADR 0018): there the launcher keeps the surface below, the panel alone, and a click
+beside it does nothing. Which one a service uses is known before the first opening, from the
+surface that readies the renderer (see Resident service).
+
+**Otherwise**: anchored to the top only, so the compositor centers it, with a top margin of 150 and an
 exclusive zone of -1: the panel sits at the board's place whatever the bar reserves. Layer
 `Overlay`, above the bar, the dock and the windows. The keyboard is `Exclusive`: the launcher
 gets every key as soon as it maps, and the search field takes the focus at once. The surface is
@@ -218,6 +231,11 @@ What the interface should provide, for the launcher and the rest of the shell:
 | Enter | Runs the selected result (starts, opens, copies, runs the session command), then the launcher closes; « Redémarrer » and « Éteindre » want a second Enter |
 | Escape | Closes the launcher |
 
+Every opening fades the panel in from a scale of 0.96, around the middle of its top edge
+(`launcher::OPEN_SCALE`, `OPEN_SPRING`), and every closing, whatever its cause (Escape, a start,
+a click beside, the shortcut again, the applications view opening), fades it out the same way
+before the surface goes. Frames are asked for only while it moves.
+
 The first result is selected after every key. The keys are read with `event::listen_with`,
 whatever the field did with them: iced's text field takes Escape for itself. A click on a result
 starts it too.
@@ -246,11 +264,48 @@ right after, and ignores any further Enter or click meanwhile, so a repeated key
 twice. If the start fails, it stays open and logs the error; a `Path` that is not a folder is
 logged as such, apart from a missing program.
 
-### One launcher at a time
+### Resident service
 
-The launcher is started on demand: by the compositor's shortcut, **Super + Space** (Alt + Space
-in nested mode, where the host keeps Super), or by hand. Started again while open, it closes
-the open one: pressing the shortcut twice toggles it. The compositor starts
+Starting a program on each press cost about 200 ms before the panel showed, most of it in the
+renderer (Vulkan, wgpu, its pipelines) and the fonts (see Performance). So the session starts
+`launcher --resident` with the bar and the dock, and starts it again if it stops, as it does for
+them (`sherlockos-session`). The service:
+
+- takes `$XDG_RUNTIME_DIR/launcher.service.lock` (one service at a time, dropped by the kernel
+  with its holder) and listens on `$XDG_RUNTIME_DIR/launcher.sock`, replacing a socket left by
+  a service that died; the runtime folder is the user's alone (0700);
+- opens no panel, but draws once a surface of one pixel, on the background layer, without input
+  nor keyboard, then removes it: the renderer, its pipelines, the fonts and the SVG renderer are
+  ready before the first press, and the service knows whether the GPU draws;
+- shows the panel on `toggle` when it is hidden, and hides it otherwise (`hide` only hides); the
+  process, the renderer and the fonts stay;
+- creates its surface at the first opening; once the panel faded out, parks it rather than
+  removing it: one transparent pixel in a corner, on the background layer, without the keyboard,
+  its text field let go (its caret would blink, and draw the surface again). Its renderer keeps
+  what it drew: glyphs, shaped texts, layout. Shown again, the surface is anchored back to the
+  four edges, on the `Overlay` layer, with the keyboard: its first frame comes about 10 ms after
+  the press, where a new surface took 75 ms. In software the panel's own surface is removed, as
+  before, since a parked pixel would show black;
+- opens with an empty search, the first result selected, no menu, no confirmation armed, as a
+  new launcher would; it reads the applications again and walks the files again at each opening,
+  on a thread of the pool (the first opening uses those read at start);
+- asks the applications view's service to hide as it opens (`hide`), and the view does the same:
+  two overlays never fight for the keyboard.
+
+The compositor's shortcut, **Super + Space** (Alt + Space in nested mode, where the host keeps
+Super), still starts `launcher`. Right after choosing its renderer (ADR 0018: a few files of
+`/sys`, under a millisecond) and before anything that costs, that program connects to the socket, sends `toggle`, waits for `ok` (1 s at most) and stops. Without a service
+listening, it runs on its own, as below.
+
+iced_exwlshell 0.21 reports no keyboard focus to the program: the launcher cannot see it leave.
+With its surface over the screen and the keyboard `Exclusive`, only the compositor can take it
+away: the lock screen (which hides everything anyway), or the applications view, which hides the
+launcher as it opens.
+
+### One launcher at a time, without the service
+
+Without a service (another compositor, a session started by hand), the launcher is started on
+demand. Started again while open, it closes the open one: pressing the shortcut twice toggles it. The compositor starts
 `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH` otherwise,
 with its Wayland socket and X11 display (`compositor/src/launcher.rs`, lot C-01). The shortcut
 does not open Mission Control: the gesture key is no longer alone when it is released.
@@ -274,10 +329,65 @@ does not open Mission Control: the gesture key is no longer alone when it is rel
 - Without `XDG_RUNTIME_DIR` (or with a relative one, which the XDG specification ignores), or
   when the file cannot be opened, the launcher runs without the lock and logs a warning.
 
+## Performance
+
+Lot P-02, after the author found the launcher slow to appear. Measured on the reference laptop
+(Ryzen 7, AMD Renoir chip, Vulkan through RADV), release builds, in a headless KWin 6.3
+(`kwin_wayland --virtual`, 1920 × 1080) inside `bwrap` with a `/dev/dri` holding only the AMD
+render node, a D-Bus of its own and a temporary home: nothing reached the author's screen, and no
+NVIDIA device existed in the sandbox. The applications are the author's (203 desktop entries,
+the `kora` icon theme). A frame is shown when the program commits a buffer to its surface, read
+from `WAYLAND_DEBUG` (whose printing slows the program a little); other builds ran on the machine
+meanwhile.
+
+| From the press to the first frame | Before: a new program | After: the resident service |
+| --- | --- | --- |
+| First press | 274 ms | 83 ms (the surface created) |
+| Next presses | 205 to 218 ms, median 208 ms (5 runs) | 8.7 to 19 ms, median 10.2 ms (7 runs, the surface parked) |
+
+The first frame is drawn transparent, at the start of the opening: the panel shows from the next
+one, 17 ms later.
+
+Where the 208 ms went, from the program's own log (`startup.rs`) and the `startup` example of
+sherlock-ui (`cargo run --release -p sherlock-ui --example startup`):
+
+| Step | Time |
+| --- | --- |
+| Start of the process to the renderer choice | 0.3 ms |
+| Desktop entries read (`mime-apps`) | 20 to 22 ms |
+| Vulkan instance | 14 to 18 ms |
+| Adapter | 4 to 5 ms |
+| Device | 14 to 15 ms (172 ms the first time after the machine started) |
+| iced's pipelines (shaders) | 28 to 29 ms |
+| System fonts, read by iced's text (2,694 faces here), then again by its SVG renderer | 64 ms, twice |
+| The process started to its first view (Wayland, all of the GPU steps) | 134 ms |
+| First view to first frame (fonts, layout, drawing) | 73 ms |
+
+The GPU steps and the fonts come from the `startup` example, without a window, 3 runs; the
+others from the launcher's own log, 5 runs.
+
+The service pays all of it once, at the start of the session: its surface of one pixel is drawn
+280 ms after the process starts (6.4 s once, on a machine busy with other builds: the start does
+not block the session). An opening then only brings its surface back and draws it.
+
+| Animation, frames | Median interval | 95th percentile | Longest |
+| --- | --- | --- | --- |
+| Opening (18 to 23 frames, 8 runs) | 16.5 to 16.8 ms | 17.3 to 17.8 ms | 23.4 ms |
+| Closing (22 to 23 frames, 8 runs) | 16.5 to 16.9 ms | 17.2 to 17.6 ms | 17.9 ms |
+
+At rest, hidden: no frame and no CPU time in 5 s. Shown and still, the text field's caret
+blinks: iced draws the surface again twice a second for it. Memory of the service, hidden:
+87 MiB resident, 64 MiB proportional (shared libraries counted in part); a launcher started on
+demand took 74 to 80 MiB while it was open, and nothing once closed.
+
+The same figures come into the session's log: `start` lines (each step, `took_ms`, `at_ms`) and,
+after each opening or closing, a `frames` line (frame count, median, 95th percentile, longest).
+
 ## Running it
 
 ```sh
 cargo run -p launcher                 # in a Wayland session with layer-shell
+cargo run -p launcher -- --resident   # the service, hidden; `launcher` then shows or hides it
 RUST_LOG=launcher=debug cargo run -p launcher
 ```
 
@@ -294,9 +404,11 @@ RUST_LOG=launcher=debug cargo run -p launcher
   system track.
 - The settings of the board's « Réglages » section have no source yet (Control Room).
 - `OnlyShowIn` and `NotShowIn` are not checked (a limit of `mime-apps`).
-- A click outside the panel does nothing: the surface is only the panel, and with the keyboard
-  `Exclusive` the launcher keeps it until Escape or a start. To revisit with the compositor's
-  shortcut.
+- In software (no GPU, or a compositor without `linux-dmabuf`), or without the service, the
+  surface is only the panel: a click outside it does nothing, and the launcher keeps the
+  keyboard until Escape or a start.
+- The loss of the keyboard focus is not seen (iced_exwlshell does not report it); see Resident
+  service.
 - The `Comment` key is not read: the line under a name is its `GenericName`.
 - Folding knows the composed accented letters only: a name written with combining accents
   (`e` then U+0301) is not folded. Desktop entries and typed text hardly use them.
@@ -350,6 +462,15 @@ RUST_LOG=launcher=debug cargo run -p launcher
   the test program) closed by `SIGTERM`, the file emptied by a normal close and the lock free
   again, a live `sleep` and a dead id never signalled, a linked lock file refused, odd file
   contents signalling nobody.
+
+- resident service (`tests/service.rs`, `service.rs`): a toggle shows then hides the panel and
+  each opening starts with an empty search; Escape and a start hide it without ending the
+  program; a click beside the panel closes it and a click on it does not, on three screens; the
+  program started by the shortcut hands its press to the service and ends; an opening, from the
+  press sent to the panel laid out, under 100 ms (best of 5, in a debug build); the session
+  starts the service again when it stops (the real `sherlockos-session`, with fake programs);
+  requests acknowledged, a second service refused, a stale socket replaced, an unknown line
+  refused.
 
 `cargo test -p sherlock-ui launcher`: contrast of the texts on the panel, on the selected row
 and on Sherlock's row in both themes, of the glyphs on their tiles, the glyphs inside the grid,
