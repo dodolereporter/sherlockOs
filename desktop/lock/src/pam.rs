@@ -499,7 +499,10 @@ mod tests {
         let faildelay = rules.iter().position(|rule| rule[2] == "pam_faildelay.so");
         assert!(faildelay.is_some_and(|i| rules[i][1] == "optional"));
         for rule in &rules {
-            assert!(!rule.contains(&"login") && !rule.contains(&"pam_nologin.so"), "{rule:?}");
+            assert!(
+                !rule.contains(&"login") && !rule.contains(&"pam_nologin.so"),
+                "{rule:?}"
+            );
         }
         // The program never asks for the account checks.
         let code = include_str!("pam.rs");
