@@ -137,44 +137,72 @@ mod tests {
         let _ = s.lock.update(Message::Checked(expected));
     }
 
-    #[test]
-    fn the_states_render_in_both_themes() {
-        let themes = [(color::Theme::Dark, ""), (color::Theme::Light, "-light")];
-        let sizes = [((1920.0, 1080.0), ""), ((1366.0, 768.0), "-1366x768")];
-        for ((which, theme), (size, name)) in themes
-            .into_iter()
-            .flat_map(|t| sizes.into_iter().map(move |s| (t, s)))
-        {
-            let suffix = format!("{name}{theme}");
-            color::set_active(which);
-            let mut s = screen(size);
-            snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
-            show_form(&mut s);
-            snapshot(&s.lock, s.primary, size, &format!("form{suffix}"));
-            snapshot(&s.lock, s.other, size, &format!("other-screen{suffix}"));
+    /// The theme is a global of the process: the captures take it one at a time. Each one is a
+    /// test of its own, so that a runner with a process per test (`cargo nextest`, the CI) draws
+    /// them side by side; the single test took five minutes of the CI (lot Q-18b).
+    static THEME: Mutex<()> = Mutex::new(());
 
-            let _ = s
-                .lock
-                .update(Message::Typed(Secret::new("motdepas".into())));
-            snapshot(&s.lock, s.primary, size, &format!("typing{suffix}"));
-            let _ = s.lock.update(Message::ShowPassword);
-            snapshot(&s.lock, s.primary, size, &format!("peek{suffix}"));
-            let _ = s.lock.update(Message::ShowPassword);
+    /// Each state in `which` on a screen of `size`, the files named with `suffix`.
+    fn states(which: color::Theme, size: (f32, f32), suffix: &str) {
+        let _one = THEME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        color::set_active(which);
+        let mut s = screen(size);
+        snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
+        show_form(&mut s);
+        snapshot(&s.lock, s.primary, size, &format!("form{suffix}"));
+        snapshot(&s.lock, s.other, size, &format!("other-screen{suffix}"));
 
-            let _ = s.lock.update(Message::Submit);
-            assert!(matches!(s.lock.phase(), Phase::Checking(_)));
-            assert_eq!(s.lock.password_len(), 0, "the field empties at once");
-            s.lock.set_now(Instant::now() + Duration::from_millis(4300));
-            snapshot(&s.lock, s.primary, size, &format!("spinner{suffix}"));
+        let _ = s
+            .lock
+            .update(Message::Typed(Secret::new("motdepas".into())));
+        snapshot(&s.lock, s.primary, size, &format!("typing{suffix}"));
+        let _ = s.lock.update(Message::ShowPassword);
+        snapshot(&s.lock, s.primary, size, &format!("peek{suffix}"));
+        let _ = s.lock.update(Message::ShowPassword);
 
-            checked(&mut s, Err(AuthError::Refused));
-            assert!(matches!(s.lock.phase(), Phase::Refused(..)));
-            // In the middle of the shake.
-            s.lock.set_now(Instant::now() + Duration::from_millis(4350));
-            snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
-        }
+        let _ = s.lock.update(Message::Submit);
+        assert!(matches!(s.lock.phase(), Phase::Checking(_)));
+        assert_eq!(s.lock.password_len(), 0, "the field empties at once");
+        s.lock.set_now(Instant::now() + Duration::from_millis(4300));
+        snapshot(&s.lock, s.primary, size, &format!("spinner{suffix}"));
+
+        checked(&mut s, Err(AuthError::Refused));
+        assert!(matches!(s.lock.phase(), Phase::Refused(..)));
+        // In the middle of the shake.
+        s.lock.set_now(Instant::now() + Duration::from_millis(4350));
+        snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
         color::set_active(color::Theme::Dark);
-        // The two other screens of the brief, in the same test: the theme is a global.
+    }
+
+    #[test]
+    fn the_states_render_in_the_dark_theme() {
+        states(color::Theme::Dark, (1920.0, 1080.0), "");
+    }
+
+    #[test]
+    fn the_states_render_in_the_light_theme() {
+        states(color::Theme::Light, (1920.0, 1080.0), "-light");
+    }
+
+    #[test]
+    fn the_states_render_on_a_small_screen_in_the_dark_theme() {
+        states(color::Theme::Dark, (1366.0, 768.0), "-1366x768");
+    }
+
+    #[test]
+    fn the_states_render_on_a_small_screen_in_the_light_theme() {
+        states(color::Theme::Light, (1366.0, 768.0), "-1366x768-light");
+    }
+
+    /// The two other screens of the brief: the rest, the form and the second screen.
+    #[test]
+    fn the_rest_and_the_form_render_on_large_screens() {
+        let _one = THEME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        color::set_active(color::Theme::Dark);
         for (size, name) in [
             ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-scale-150"),
             ((1920.0, 1080.0), "3840x2160-scale-200"),
