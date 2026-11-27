@@ -420,9 +420,13 @@ impl Bar {
             let y = margins.top + inset + row * step + look::CELL + look::GAP;
             return Some(Anchor::Popup(popup, x, y));
         }
-        let index = self.tray.pinned().position(|i| i.key == key)?;
-        let row = self.tray.pinned_row?;
-        Some(Anchor::Bar(row.x + index as f32 * super::pins::SLOT))
+        let pinned = self.tray.pinned().position(|i| i.key == key);
+        if let (Some(index), Some(row)) = (pinned, self.tray.pinned_row) {
+            return Some(Anchor::Bar(row.x + index as f32 * super::pins::SLOT));
+        }
+        // The popup already folding back (an `Activate` refused after a click in it): under
+        // the chevron.
+        self.tray.chevron.map(|chevron| Anchor::Bar(chevron.x))
     }
 
     /// What a click on the icon of `key` asks of its application, and where.

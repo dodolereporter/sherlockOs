@@ -478,5 +478,14 @@ mod tests {
         let _ = bar.update(Message::Tray(Event::Changed(Box::new(only_menu))));
         let _ = bar.update(Message::TrayClick(item(3).key, Click::Primary));
         assert!(bar.global.item.is_some());
+        // An `Activate` the application refuses opens the menu, under the chevron once the
+        // popup folds back.
+        let mut bar = open();
+        let _ = bar.update(Message::TrayClick(item(1).key, Click::Primary));
+        assert!(!bar.tray_open() && bar.global.item.is_none());
+        let refused = Err(String::from("org.freedesktop.DBus.Error.UnknownMethod"));
+        let _ = bar.update(Message::TraySent(Some(item(1).key), refused));
+        let anchor = bar.global.item.as_ref().map(|m| m.anchor);
+        assert_eq!(anchor, Some(Anchor::Bar(1500.0)));
     }
 }
