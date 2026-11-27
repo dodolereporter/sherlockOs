@@ -14,6 +14,7 @@ pub mod launch;
 pub mod layout;
 pub mod menu;
 pub mod pins;
+pub mod save;
 pub mod shell;
 mod view;
 pub mod watch;
@@ -125,6 +126,8 @@ impl Sources {
 pub fn run() -> Result<(), iced_exwlshell::Error> {
     // The dock has no text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
+    // Icon files are rasterized by a worker thread, never by the one that draws the dock.
+    sherlock_ui::raster::draw_in_background();
     // The theme of the file before the first frame; the subscription follows it afterwards.
     if let Some(path) = appearance_config::path() {
         color::set_active(appearance_config::theme_now(&path));

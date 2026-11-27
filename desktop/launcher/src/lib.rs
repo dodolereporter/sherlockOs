@@ -234,6 +234,8 @@ pub enum Mode {
 /// it is resident.
 pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
     startup::timed("theme read", apply_theme);
+    // Icon files are rasterized by a worker thread, never by the one that draws the panel.
+    sherlock_ui::raster::draw_in_background();
     let resident = match mode {
         Mode::OnDemand => None,
         Mode::Resident(inbox) => Some(inbox),

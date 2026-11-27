@@ -77,10 +77,18 @@ impl Triggers {
         }
         self.stamp = stamp;
         self.config = match &self.file {
-            Some(file) => Config::read(file).unwrap_or_else(|err| {
-                tracing::warn!("lock: {}: {err}", file.display());
-                Config::default()
-            }),
+            Some(file) => match Config::read_lenient(file) {
+                Ok((config, problems)) => {
+                    for problem in problems {
+                        tracing::warn!("lock: {}: {problem}, line ignored", file.display());
+                    }
+                    config
+                }
+                Err(err) => {
+                    tracing::warn!("lock: {}: {err}", file.display());
+                    Config::default()
+                }
+            },
             None => Config::default(),
         };
         tracing::info!(idle = ?self.config.idle(), "lock setting");

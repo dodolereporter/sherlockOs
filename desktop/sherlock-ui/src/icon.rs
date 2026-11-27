@@ -80,11 +80,12 @@ pub enum Icon {
     Sidebar,
     /// A person: « Autre… » on the login screen (lot D-24).
     Person,
+    Keyboard,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -132,6 +133,7 @@ impl Icon {
         Self::Grid,
         Self::Sidebar,
         Self::Person,
+        Self::Keyboard,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -232,6 +234,10 @@ impl Icon {
             // A window with its sidebar: shows or hides a folded sidebar.
             Self::Sidebar => "M4 5h16v14H4zM10 5v14",
             Self::Person => "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5 20a7 7 0 0 1 14 0",
+            // The keyboard of the backlight, without its rays, a little taller: Control Room.
+            Self::Keyboard => {
+                "M4.5 7h15A1.5 1.5 0 0 1 21 8.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 16.5v-8A1.5 1.5 0 0 1 4.5 7zM7 10h.01M10 10h.01M14 10h.01M17 10h.01M7 12.5h.01M17 12.5h.01M8.5 15h7"
+            }
         }
     }
 
