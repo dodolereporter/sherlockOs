@@ -781,7 +781,7 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CancelArea));
             }
-            if state.dragging() && sym == Keysym::Escape {
+            if (state.dragging() || state.dragging_from_x11()) && sym == Keysym::Escape {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CancelDrag));
             }
@@ -870,7 +870,9 @@ impl State {
             }
             Shortcut::CancelDrag => {
                 let time = u32::try_from(self.now().as_millis()).unwrap_or(u32::MAX);
-                self.cancel_drag(time);
+                if !self.cancel_drag(time) {
+                    self.cancel_x11_drag(time);
+                }
                 return;
             }
             Shortcut::Lock => {
@@ -998,6 +1000,8 @@ impl State {
             });
             // A drag over an X11 window: the compositor speaks XDND to it (lot D-29c).
             let hidden = self.dragging() && self.drag_motion(hit.as_ref(), location);
+            // An X11 drag reaching a Wayland surface is carried on (lot D-29c).
+            self.x11_drag_motion(hit.as_ref(), location);
             match hit {
                 Some(Hit::Surface(_, surface, origin) | Hit::Layer(_, surface, origin))
                     if !hidden =>

@@ -12,6 +12,7 @@ pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
 mod dnd;
+mod dnd_x11;
 pub mod focus;
 pub mod fullscreen;
 pub mod genie;

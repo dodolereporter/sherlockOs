@@ -843,6 +843,28 @@ of its own, connected when XWayland is ready, whose socket is a source of the ev
   `STRING`; the other types keep their name as atom (`text/uri-list`,
   `x-special/gnome-copied-files`, `image/png`).
 
+### From X11 to Wayland
+
+An X11 application drags with XDND: it owns `XdndSelection`, keeps the pointer (XWayland got
+the press) and talks to the X11 window under it. When the pointer, its button held since a
+press on an X11 window, reaches a Wayland surface while an X11 client owns `XdndSelection`, the
+compositor carries the drag on (`src/dnd_x11.rs`):
+
+- It reads the types offered, from the owner's `XdndTypeList`, else from the selection's
+  `TARGETS` (300 ms at most); `UTF8_STRING` becomes `text/plain;charset=utf-8`, the other
+  names without a `/` are left out; 64 types at most.
+- It starts a drag of its own on the Wayland side (smithay's `start_dnd`), offering copy and
+  move: the Wayland clients see an ordinary drag, with its enter, motions and drop.
+- A Wayland client that reads it gets `XdndSelection`, read from the X11 application in a
+  thread, INCR included (`x11_paste::paste_drag`).
+- Once the client is done (`finish`), the drag cancelled (Escape, a refused drop), or 5 s after
+  the drop, the X11 application's button goes up, inside XWayland only (XTEST): it ends its own
+  drag.
+- Limits: once carried to Wayland, the drag does not come back to X11 windows (the X11
+  application no longer sees the pointer); the X11 application's own picture of the drag stays
+  where the pointer left its windows. Only a Wayland client under the pointer is offered the
+  drag, as for any drag.
+
 ## GPU buffers (linux-dmabuf)
 
 A client that draws on the GPU hands over its image as a dmabuf: GPU memory shared by file

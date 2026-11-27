@@ -58,6 +58,24 @@ enum Error {
 
 /// Reads `selection` of the X server `:display` as `mime_type`, into `fd`, in a thread.
 pub(crate) fn paste(display: u32, selection: SelectionTarget, mime_type: String, fd: OwnedFd) {
+    let name = match selection {
+        SelectionTarget::Clipboard => "CLIPBOARD",
+        SelectionTarget::Primary => "PRIMARY",
+    };
+    read_in_thread(display, name, mime_type, fd);
+}
+
+/// Reads the drag of an X11 application (`XdndSelection`) as `mime_type`, into `fd`, in a
+/// thread (lot D-29c). Text is asked as `UTF8_STRING`.
+pub(crate) fn paste_drag(display: u32, mime_type: String, fd: OwnedFd) {
+    let mime_type = match mime_type.as_str() {
+        "text/plain;charset=utf-8" => String::from("UTF8_STRING"),
+        _ => mime_type,
+    };
+    read_in_thread(display, "XdndSelection", mime_type, fd);
+}
+
+fn read_in_thread(display: u32, selection: &'static str, mime_type: String, fd: OwnedFd) {
     let spawned = thread::Builder::new()
         .name("x11-paste".into())
         .spawn(move || {
@@ -70,12 +88,7 @@ pub(crate) fn paste(display: u32, selection: SelectionTarget, mime_type: String,
     }
 }
 
-fn transfer(
-    display: u32,
-    selection: SelectionTarget,
-    mime_type: &str,
-    fd: OwnedFd,
-) -> Result<(), Error> {
+fn transfer(display: u32, selection: &str, mime_type: &str, fd: OwnedFd) -> Result<(), Error> {
     // The client's end may be non-blocking: this thread writes plainly, and waits.
     rustix::fs::fcntl_getfl(&fd)
         .and_then(|flags| rustix::fs::fcntl_setfl(&fd, flags - rustix::fs::OFlags::NONBLOCK))
@@ -100,10 +113,7 @@ fn transfer(
         COPY_FROM_PARENT,
         &aux,
     )?;
-    let name = match selection {
-        SelectionTarget::Clipboard => "CLIPBOARD",
-        SelectionTarget::Primary => "PRIMARY",
-    };
+    let name = selection;
     let atom = |name: &str| -> Result<Atom, Error> {
         Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
     };

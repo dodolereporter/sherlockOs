@@ -30,9 +30,7 @@ use smithay::{
         seat::WaylandFocus,
         selection::{
             SelectionHandler, SelectionTarget,
-            data_device::{
-                DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus,
-            },
+            data_device::{DataDeviceHandler, DataDeviceState, set_data_device_focus},
             primary_selection::{
                 PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
             },
@@ -766,8 +764,8 @@ impl DataDeviceHandler for State {
     }
 }
 
-// The drags of Wayland clients: `dnd.rs`. The compositor starts none of its own.
-impl ServerDndGrabHandler for State {}
+// The drags of Wayland clients: `dnd.rs`; those of X11 applications carried to Wayland:
+// `dnd_x11.rs`.
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&self) -> &PrimarySelectionState {

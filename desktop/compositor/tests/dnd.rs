@@ -30,11 +30,13 @@ mod tests {
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
+        event_created_child,
         protocol::{
             wl_buffer::WlBuffer,
             wl_compositor::WlCompositor,
-            wl_data_device::WlDataDevice,
+            wl_data_device::{self, WlDataDevice},
             wl_data_device_manager::{DndAction, WlDataDeviceManager},
+            wl_data_offer::{self, WlDataOffer},
             wl_data_source::{self, WlDataSource},
             wl_pointer::{self, WlPointer},
             wl_registry,
@@ -79,6 +81,11 @@ mod tests {
         pressed: Option<u32>,
         /// What the sources were told, in order.
         source_events: Vec<&'static str>,
+        /// The offers received, with their types; the one dragged over the window and the
+        /// serial of its `enter`; a drop came.
+        offers: Vec<(WlDataOffer, Vec<String>)>,
+        entered: Option<(WlDataOffer, u32)>,
+        dropped: bool,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Seen {
@@ -193,7 +200,47 @@ mod tests {
     delegate_noop!(Seen: ignore WlBuffer);
     delegate_noop!(Seen: ignore XdgToplevel);
     delegate_noop!(Seen: WlDataDeviceManager);
-    delegate_noop!(Seen: ignore WlDataDevice);
+
+    impl Dispatch<WlDataDevice, ()> for Seen {
+        fn event(
+            seen: &mut Self,
+            _: &WlDataDevice,
+            event: wl_data_device::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            match event {
+                wl_data_device::Event::DataOffer { id } => seen.offers.push((id, Vec::new())),
+                wl_data_device::Event::Enter { serial, id, .. } => {
+                    seen.entered = id.map(|offer| (offer, serial));
+                }
+                wl_data_device::Event::Drop => seen.dropped = true,
+                _ => {}
+            }
+        }
+
+        event_created_child!(Seen, WlDataDevice, [
+            wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, ()),
+        ]);
+    }
+
+    impl Dispatch<WlDataOffer, ()> for Seen {
+        fn event(
+            seen: &mut Self,
+            offer: &WlDataOffer,
+            event: wl_data_offer::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_data_offer::Event::Offer { mime_type } = event
+                && let Some(types) = seen.offers.iter_mut().find(|o| o.0 == *offer)
+            {
+                types.1.push(mime_type);
+            }
+        }
+    }
 
     struct Harness {
         event_loop: EventLoop<'static, State>,
@@ -604,6 +651,164 @@ mod tests {
         assert_eq!(h.seen.source_events, ["cancelled"]);
         h.state.pointer_button(BTN_LEFT, ButtonState::Released, 8);
 
+        h.state.shutdown();
+    }
+
+    /// An X11 application that drags a file: it owns `XdndSelection` with `XdndTypeList`, and
+    /// gives `text/uri-list`, until `stop` is dropped.
+    fn x11_drag_source(display: u32) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
+        let (stop, stopped) = mpsc::channel::<()>();
+        let (owning, owned) = mpsc::channel();
+        thread::spawn(move || {
+            let (conn, screen) = RustConnection::connect(Some(&format!(":{display}"))).unwrap();
+            let root = conn.setup().roots[screen].root;
+            let window = conn.generate_id().unwrap();
+            conn.create_window(
+                0,
+                window,
+                root,
+                0,
+                0,
+                200,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap();
+            let (selection, list, uri) = (
+                atom(&conn, "XdndSelection"),
+                atom(&conn, "XdndTypeList"),
+                atom(&conn, URI_LIST),
+            );
+            conn.change_property32(PropMode::REPLACE, window, list, AtomEnum::ATOM, &[uri])
+                .unwrap();
+            conn.map_window(window).unwrap();
+            conn.set_selection_owner(window, selection, CURRENT_TIME)
+                .unwrap();
+            conn.flush().unwrap();
+            let _ = owning.send(());
+            while let Err(mpsc::RecvTimeoutError::Timeout) =
+                stopped.recv_timeout(Duration::from_millis(2))
+            {
+                while let Some(event) = conn.poll_for_event().unwrap() {
+                    if let Event::SelectionRequest(req) = event {
+                        let property = if req.target == uri {
+                            conn.change_property8(
+                                PropMode::REPLACE,
+                                req.requestor,
+                                req.property,
+                                uri,
+                                FILES,
+                            )
+                            .unwrap();
+                            req.property
+                        } else {
+                            NONE
+                        };
+                        let notify = x11rb::protocol::xproto::SelectionNotifyEvent {
+                            response_type: x11rb::protocol::xproto::SELECTION_NOTIFY_EVENT,
+                            sequence: 0,
+                            time: req.time,
+                            requestor: req.requestor,
+                            selection: req.selection,
+                            target: req.target,
+                            property,
+                        };
+                        conn.send_event(false, req.requestor, EventMask::NO_EVENT, notify)
+                            .unwrap();
+                        conn.flush().unwrap();
+                    }
+                }
+            }
+        });
+        (stop, owned)
+    }
+
+    #[test]
+    fn a_file_dragged_from_x11_drops_on_wayland() {
+        let event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((800, 600).into(), 1.0);
+        state.set_lock_programs(Programs {
+            client: Vec::new(),
+            rescue: None,
+            swaylock: None,
+        });
+        let started = Rc::new(Cell::new(None));
+        let done = started.clone();
+        state
+            .start_xwayland(&event_loop, move |_, display| done.set(Some(display)))
+            .unwrap();
+        let (server_side, client_side) = UnixStream::pair().unwrap();
+        state.insert_client(server_side);
+        let conn = Connection::from_socket(client_side).unwrap();
+        let queue = conn.new_event_queue();
+        let registry = conn.display().get_registry(&queue.handle(), ());
+        let mut h = Harness {
+            event_loop,
+            state,
+            conn,
+            queue,
+            seen: Seen::default(),
+            registry,
+            surface: None,
+            device: None,
+            _file: None,
+        };
+        let mut startup = |_: &mut Harness| started.get();
+        h.wait_within(XWAYLAND_STARTUP_BUDGET, "XWayland startup", &mut startup);
+        let display = started.get().flatten().expect("XWayland did not start");
+        h.wait("the globals", |h| {
+            (!h.seen.globals.is_empty()).then_some(())
+        });
+        h.show_window();
+        let wayland = wayland_window(&h.state).unwrap();
+        let (_stop, owned) = x11_drag_source(display);
+        h.join("the X11 drag source", &owned);
+        let x11 = h.wait("the X11 window", |h| {
+            x11_window(&h.state).filter(|w| h.state.focused_window().as_ref() == Some(w))
+        });
+        let w_rect = h.state.space.element_geometry(&wayland).unwrap();
+        let x_rect = h.state.space.element_geometry(&x11).unwrap();
+        let on_x11 = (x_rect.loc + (100, 50).into()).to_f64();
+        let on_wayland = (w_rect.loc + (10, 10).into()).to_f64();
+
+        // Pressed in the X11 window, dragged out onto the Wayland one: the Wayland client is
+        // offered the X11 types.
+        h.state.pointer_motion(on_x11, 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.idle(Duration::from_millis(50));
+        h.state.pointer_motion(on_wayland, 3);
+        let (offer, serial) = h.wait("the enter of the drag", |h| h.seen.entered.clone());
+        let types = h
+            .seen
+            .offers
+            .iter()
+            .find(|o| o.0 == offer)
+            .map(|o| o.1.clone());
+        assert_eq!(types.unwrap_or_default(), [URI_LIST]);
+        offer.accept(serial, Some(URI_LIST.into()));
+        offer.set_actions(DndAction::Copy, DndAction::Copy);
+        h.idle(Duration::from_millis(50));
+
+        // Dropped: the client reads the file list from the X11 application, and finishes.
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        h.wait("the drop", |h| h.seen.dropped.then_some(()));
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        offer.receive(URI_LIST.into(), writer.as_fd());
+        let _ = h.conn.flush();
+        drop(writer);
+        let (sender, read) = mpsc::channel();
+        thread::spawn(move || {
+            let mut data = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut reader, &mut data);
+            let _ = sender.send(data);
+        });
+        assert_eq!(h.join("the files read", &read), FILES);
+        offer.finish();
+        h.idle(Duration::from_millis(100));
         h.state.shutdown();
     }
 }
