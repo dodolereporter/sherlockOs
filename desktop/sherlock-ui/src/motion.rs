@@ -317,6 +317,12 @@ pub const EDGE_REVEAL: Duration = Duration::from_millis(250);
 /// (`docs/contexte.md`), longer than a hover, since every surface changes at once.
 pub const THEME_FADE: Duration = Duration::from_millis(250);
 
+/// A drag and drop refused or cancelled (D-29c): what was dragged glides back to where it was
+/// taken, on `Ease::OutCubic`, and fades a little on the way, as on macOS.
+pub const DRAG_RETURN: Duration = Duration::from_millis(300);
+/// Opacity of the dragged icon when it is back where it was taken.
+pub const DRAG_RETURN_ALPHA: f32 = 0.4;
+
 /// Frame rate the desktop must hold, animations included (`docs/contexte.md`).
 pub const FRAME_RATE: u32 = 60;
 

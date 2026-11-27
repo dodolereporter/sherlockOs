@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
+mod dnd;
 pub mod focus;
 pub mod fullscreen;
 pub mod genie;
@@ -45,6 +46,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod x11_paste;
+mod xdnd;
 mod xwayland;
 
 use std::{
@@ -184,6 +186,8 @@ pub struct State {
     touchpad: touchpad::Touchpad,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
+    /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
+    dnd: dnd::Dnd,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -355,6 +359,7 @@ impl State {
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
             clicks: clicks::Clicks::default(),
+            dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
@@ -678,6 +683,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
