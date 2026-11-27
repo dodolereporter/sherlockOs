@@ -33,7 +33,7 @@ Surface):
 | Neighbours | Pushed by the flex layout | The bar widens on both sides, the gap of 8 stays |
 | Label | Cream pill 108 above the bar, the icon closest to the pointer, `opacity 120ms` | Same, centered on the icon, faded in 120 ms |
 | Dot | 5, cream, 9 below the icon | Same; green for the active application (see Differences) |
-| Sherlock | In the middle | In the middle, the author's Sherlock tile (D-03) |
+| Sherlock | In the middle | In the middle at first, the author's Sherlock tile (D-03); moved or taken out like a pinned application since D-21h |
 
 ## Architecture
 
@@ -279,7 +279,7 @@ is optional:
 
 ```ini
 [Dock]
-Pinned=evidence;org.kde.konsole;org.kde.kate;app.zen_browser.zen;
+Pinned=evidence;org.kde.konsole;sherlock;org.kde.kate;app.zen_browser.zen;
 IconTheme=breeze
 IconSize=52
 Magnification=true
@@ -297,6 +297,7 @@ Position=bottom
 | `MagnificationFactor` | From 1.0 to 2.0 (`dock::MAGNIFICATION_MIN`, `MAX`) | 1.7 (`metrics::DOCK_MAGNIFICATION`) |
 | `AutoHide` | `never`, `always`, `smart` (see Hiding) | `smart` |
 | `Position` | `bottom`, `top`, `left`, `right` | `bottom` |
+| `ShowSherlock` | `true`, `false`: Sherlock in the dock | `true` |
 
 Words are read without regard to case. A value that cannot be read or is out of its bounds is
 ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
@@ -325,10 +326,18 @@ kept, even when the target does not exist yet. `to_text` starts from the text re
 the keys whose value changed since (D-26a): comments, unknown keys and a value the file got
 wrong stay as they were.
 
-`Pinned` lists desktop file ids (`.desktop` accepted). Sherlock is not in it: it is always in
-the middle (as many applications on its left as on its right, one more on the left for an odd
-count). An id that is not installed is skipped and logged. An empty `Pinned=` is a choice:
-Sherlock alone.
+`Pinned` lists desktop file ids (`.desktop` accepted), and Sherlock's place as the token
+`sherlock` (`dock_config::SHERLOCK`, lot D-21h). Without the token, a file written before
+Sherlock could move, Sherlock is in the middle (as many applications on its left as on its
+right, one more on the left for an odd count), and the file is not written for it: the token is
+written, where Sherlock is shown, the first time the pinned list changes (a drag, « Garder dans
+le Dock », « Retirer du Dock »), so that Sherlock stays where it was rather than going back to
+the middle. `ShowSherlock=false` takes it out of the dock, token or not. An id that is not
+installed is skipped and logged. An empty `Pinned=` is a choice: Sherlock alone.
+
+Before writing its pinned list, the dock reads the file again (`pins::write`): a change another
+program made since the dock last read it, a setting of Control Room or a comment, is kept. The
+dock's list wins over a list changed meanwhile: it is the order on screen.
 
 Without `Pinned`, the dock fills five roles with what is installed and shown in menus: files,
 terminal, editor, browser, games. For each, our own application (Evidence, desktop file id
@@ -426,8 +435,7 @@ slate tile, drawn by `sherlock_ui::dock::applications_icon` in the style of the 
 icons. A click starts the applications view (`docs/apps.md`), `$SHERLOCKOS_BIN/sherlockos-apps`
 or `sherlockos-apps` in the `PATH`; started again while open, the view closes, so the button
 toggles it. It is not in `Pinned`, cannot be dragged, and the dragged applications never take
-its place (`drag::orders` keeps it first). Its menu, like Sherlock's, has every entry disabled.
-Sherlock stays in the middle of the pinned applications.
+its place (`drag::orders` keeps it first). Its menu has every entry disabled.
 
 ![The « Applications » button, the pointer over it](../desktop/dock/screenshots/dock-applications.png)
 
@@ -479,10 +487,10 @@ the dock, which stays put on the screen when the surface changes size.
 ![An icon dragged between two others](../desktop/dock/screenshots/dock-drag.png)
 
 **Drag and drop.** The left button now acts when it comes up: pressed and released on the same
-icon without moving 4 px, it is a click. Past 4 px, a pinned application follows the pointer
-(Sherlock and the open applications that are not pinned do not move). Along the dock it takes
-the place nearest the pointer among the pinned applications, Sherlock staying in their middle:
-the dock tries each place with the current sizes and keeps the one that puts the icon closest
+icon without moving 4 px, it is a click. Past 4 px, a pinned application or Sherlock follows
+the pointer (the open applications that are not pinned and the « Applications » button do not
+move). Along the dock it takes the place nearest the pointer among the pinned icons, Sherlock
+one of them since D-21h: the dock tries each place with the current sizes and keeps the one that puts the icon closest
 to the pointer; the others make room with `SHIFT_SPRING`. Let go, it flies to its place and the
 new order is written to `dock.conf` by `dock-config` (`move_pinned`, then the atomic
 `DockConfig::save`), only if the order shown changed: a pinned application that is not
@@ -494,7 +502,8 @@ keeps the pointer until the button comes up.
 **Dragged out.** When the pointer is more than half the icon past the bar, away from the edge,
 the icon is out: its room closes, it is drawn at half opacity. Back over the dock, its room
 opens again. Let go out of the dock, a pinned application is unpinned and the file written; it
-shrinks and fades where it was let go. A pinned application that is open moves after the
+shrinks and fades where it was let go. Sherlock does the same, and `ShowSherlock=false` is
+written. A pinned application that is open moves after the
 separator instead, as with « Retirer du dock ». The icon is drawn inside the dock surface:
 higher than it, it stays at its top edge (a drag icon of its own, `wl_data_device`, is not
 offered by `iced_exwlshell`).
@@ -609,11 +618,26 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Each window, in the order they came: its title, « … » when too long, the application's name when it has none; the active one checked. A click brings it forward alone | The source can act on its windows |
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
-| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, except Sherlock |
+| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
 | Separator, then « Quitter » | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
-is disabled. « Quitter » asks each window to close (`close`, the toolkit's own close): an
+but « Retirer du Dock » is disabled.
+
+**The dock's own menu** (D-21h). A right click on the bar outside the icons, on the separator
+or between two icons, opens the dock's menu, as the Dock options of macOS, from the pointer:
+header « Dock », and « Afficher Sherlock dans le Dock », checked while Sherlock is there. It
+takes Sherlock out, or puts it back in the middle of the pinned applications, its place
+written. Sherlock is in neither the applications view nor the launcher (only « Demander à
+Sherlock », a search result), and neither can drag an icon to the dock yet: this menu is the way
+back.
+
+| Dark | Light |
+| --- | --- |
+| ![The dock's own menu, dark](../desktop/dock/screenshots/dock-own-menu-dark.png) | ![The dock's own menu, light](../desktop/dock/screenshots/dock-own-menu-light.png) |
+
+`the_docks_own_menu_renders_and_toggles_sherlock` (`tests/render.rs`) renders it in both themes
+(`dock-own-menu-{dark,light}`), 290 wide (`dock::OWN_MENU_WIDTH`) so that its entry is not cut. « Quitter » asks each window to close (`close`, the toolkit's own close): an
 application with unsaved work asks first, as on macOS. The compositor offers no confirmation of
 its own, and the dock adds none.
 
@@ -742,6 +766,11 @@ X focus): the keyboard steps were checked in the nested KWin.
   picks no icon; crossing it keeps the magnification, leaving the band lets it go.
 - **Menu identity**: the pinned order changes while a menu is open; « Retirer du dock »
   removes the application of the menu, not the one now at its place.
+- **Sherlock** (`tests/sherlock.rs`, D-21h): dragged to the left end, the others moving aside,
+  its place written; an old file without the token keeps it in the middle and is not written by
+  a click, a drag back, a menu or a new reading; taken out from its menu and by a drag out of
+  the dock, put back from the dock's menu; a file changed by another program between the dock's
+  reading and its writing keeps that change.
 - **Writing the file**: comments kept, a value with a line break escaped, unique temporary
   files with saves from four threads at once, a symbolic link kept and its target written.
 - **Watching**: the file saved, replaced by a rename, deleted, then its folder deleted and made

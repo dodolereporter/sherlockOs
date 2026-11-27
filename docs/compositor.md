@@ -38,6 +38,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
+| `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
@@ -691,6 +692,45 @@ limits above).
 The real session (lot D-14) has one output per connector with a screen, side by side in the
 order they are found, each with a frame of its own (see "Real session").
 
+### Changing the screens (ADR 0025, lot D-26b)
+
+The compositor offers `wlr-output-management-unstable-v1`, version 3 (`src/output_management.rs`):
+every screen is a head with its connector name, its EDID make, model and serial number, its
+modes (the preferred one first), and whether it is on with its mode, place, rotation and scale.
+A change of any of them is sent again, followed by `done` and a new serial. A client sends a
+whole configuration and tests or applies it; Control Room's « Écrans » page, `wlr-randr` and
+`kanshi` speak it. What a client may get wrong is a protocol error, as the protocol says: a mode
+of another head, a property set twice, a head configured twice or left out; a scale that is not
+positive. A configuration made on an older serial is cancelled.
+
+`src/displays.rs` checks the whole configuration before anything changes (`check_screens`):
+every screen known, at least one on, a mode the screen lists (a refresh of 0, or within half a
+hertz, finds the mode of that size), a rotation only where the screen can turn, a scale from 0.5
+to 4, a place within 65 536 points of the origin. `apply_screens` gives the hardware its part
+first: in the real session, `DrmCompositor::use_mode`, the rotation in the screen's
+`OutputModeSource`, or `clear` for a screen switched off; a refusal there puts back what had
+already changed and the configuration fails. The space follows: modes, scales and rotations,
+the screens at their places, windows moved with their screen, snapped and maximized ones
+refitted. A screen switched off loses its `wl_output` but stays a head, off, until it is lit
+again or unplugged. The main screen is the one at the origin.
+
+| Backend | Modes | Rotation | Off |
+| --- | --- | --- | --- |
+| Real session | Every mode of the connector | Yes | Yes |
+| `--headless`, tests | Its size, 1280 × 800, 1440 × 900, 1920 × 1080, 2560 × 1440 | Yes | Yes |
+| `--nested` | The slice of the window only | No | No |
+
+**Saved per screen.** In the real session, every screen is named by its EDID (`src/edid.rs`:
+the first block of 128 bytes, header and checksum checked; the maker's three letters, the name
+and serial descriptors, else the product code and serial number). A configuration that has held
+for `SAVE_AFTER` (20 seconds, longer than the 15 of Control Room's confirmation) is written to
+`$XDG_CONFIG_HOME/sherlockos/displays.conf` (`desktop_config::displays`), whole, off the event
+loop, through `mime_apps::write_atomically`: a session that dies while a change waits for its
+confirmation keeps the setting that worked. When a screen is plugged in, or at start, its saved
+mode, rotation, scale and place are taken again; a screen saved off is lit anyway, so that a
+machine never starts black. The file keeps the 32 screens met last; it is bounded (64 KiB, names
+of 64 characters, sizes, refresh, scale and places checked) and a wrong line is left aside.
+
 ## XWayland
 
 XWayland is an X11 server that is also a Wayland client of the compositor. Each X11 window has
@@ -777,7 +817,12 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
   looks their atom up in a property that nothing writes, and the paste failed: the compositor
   reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
-  with its own connection, and writes what comes into the Wayland client's pipe.
+  with its own connection, and writes what comes into the Wayland client's pipe. Bounded since
+  lot D-29b: 4 such pastes at once (one more closes the client's pipe at once, the client
+  reads nothing), 256 MiB and 60 s each, and the client's pipe written without blocking, each
+  piece within 5 s: a client that asks for pastes and never reads them cannot pile up threads
+  nor connections to XWayland, whose number of clients is limited. Each paste ends with its
+  thread, its connection and its window.
 - Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
   by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
   non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
@@ -1240,6 +1285,31 @@ the top of its bar coming down to its place without passing it, opaque at 250 ms
 and `xterm`; each grows and fades in. Close them (Super + Q, or their close button): each
 shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
 `--window-animations off`, nothing is animated.
+
+### Raise (lot D-19d)
+
+A window that comes to the front from behind another one, whatever brings it there (the dock,
+the window switcher, a click, Mission Control, its application), no longer jumps there. As it is
+raised (`State::focus`, through `State::start_raise` in `src/window_anim.rs`):
+
+- if a window above it on its workspace covers part of it (the whole windows, title bars
+  included), it grows from `motion::RAISE_SCALE` (0.97) to 1 around its center on
+  `motion::RAISE_SPRING` (ratio 1.0: no visible bounce, settled in about 200 ms), and its shadow
+  grows and softens from `motion::RAISE_SHADOW` (0.6) of its offset and blur to its own
+  (`Visual::shadow`);
+- the windows it now covers step back to `motion::RECEDE_SCALE` (0.995) around their center
+  and come back, over `motion::RECEDE` (200 ms), along half a sinusoid (`motion::recede`);
+- nothing when it was fully visible, for a fullscreen window, with `--window-animations off`,
+  or while its genie runs: a window restored from the dock comes back by the genie only.
+
+The window is in front and has the keyboard at once; the pointer reaches it at its real place.
+Raised again before the end, or raised while it steps back, a window goes on from the scale it
+is drawn at, without a jump (`WindowMotion::raise`). One frame per blank while it runs, none at
+rest. No board draws it: the values are choices of the lot, to review on the machine.
+
+**Manual test.** Two overlapping windows: click the one behind, or pick it in the dock or in
+Mission Control; it grows into place and the other steps back. A window already fully visible comes
+to the front without animation.
 
 ### What rendering does not do yet
 
@@ -1949,6 +2019,17 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   unlocked (nothing unlocks it at login: the login screen's PAM module is not set up for this
   session). Alone on the machine, the session uses the user's bus, and the keyring already
   running there, if any.
+- **Old X11 tray icons** (lot D-45b). Programs that only know the X11 tray (XEmbed), such as
+  AnyDesk 7.1.4 with its `GtkStatusIcon`, would show no icon in the bar. When `xembedsniproxy`
+  is installed (KDE's, shipped with `plasma-workspace` on Debian 13), the script starts it with
+  the shell programs, a second after the bar, on XWayland's display, and starts it again like
+  them when it stops: it turns each X11 tray icon into a `StatusNotifierItem` registered with the
+  bar's watcher (see "Notification area" in `docs/bar.md`). The log says `session: X11 tray
+  icons: <path>`. Not started without XWayland, nor with `SHERLOCKOS_XEMBED=0`. The autostart of
+  the session (`desktop/autostart`, lot D-44, still in review) leaves its `/etc/xdg/autostart`
+  entry out (`OnlyShowIn=KDE`, and the list of what the session starts itself), so it never runs
+  twice. A proxy of our own may replace it later if needed. To check on the machine: whether
+  the icons come back after the bar restarts, since the proxy registers each icon once.
 - **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
   file chooser from Flatpak or Firefox, for instance). It reads `sherlockos-portals.conf` (the name of `XDG_CURRENT_DESKTOP`, `SherlockOS`, in lower case)
   (`desktop/compositor/session/`), which `just install-session` puts in
@@ -2558,8 +2639,8 @@ just verify
 | --- | --- |
 | `src/layout.rs` | Centering, moving, resizing by each edge, opposite corner fixed during the whole gesture, client minimum and maximum sizes. Grab band: each side, each corner, wider at the corners, nothing inside, narrow window. Snapping: top, left and right edges, four corners, geometry of each zone with and without the gap, return to the previous size under the pointer |
 | `sherlock-ui/src/color.rs` | Colors premultiplied by their opacity |
-| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
-| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
+| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump. Raise spring settled in about 200 ms without overshoot |
+| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out. Raise: scale and shadow growing to rest, step back there and back, turned around without a jump |
 | `src/render.rs` | An opaque window hides what is below but its rounded corners; a translucent one hides nothing. Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/genie.rs` | Genie at 0 (the window), 0.5 (the bottom gone in first, the top narrower and lower, rows in order) and 1 (all of it behind the glass); at every frame nothing past the glass, and the window as wide as the icon where it enters it; each point moving toward the icon without a jump; a window behind the glass at rest not cut at once; the same genie turned for a dock at the top, left and right; scale effect without an icon; turned around halfway without a jump; the setting's names |
 | `tests/genie.rs` | The genie drawn for real at 0.5 and under a translucent dock, see below |
@@ -2586,6 +2667,12 @@ just verify
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
 The tests in `tests/headless.rs`:
+
+- **A window raised from behind grows, the other steps back** (lot D-19d): in front with the
+  keyboard at once, its scale and shadow growing to 1, the other window at its furthest step
+  back halfway, then rest. Fully visible, or with animations off: nothing plays. Turned around
+  halfway: no jump, both at rest at the end. `board_of_the_raise` (ignored, Mesa's EGL) saves
+  six steps in `target/tmp/raise-board.png`.
 
 - **Configure.** A client creates a titled window and receives its configure. It is maximized,
   goes fullscreen, comes back, then closes.

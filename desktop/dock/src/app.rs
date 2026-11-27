@@ -25,18 +25,19 @@ use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::hide::{self, Hide};
 use crate::icons::IconLookup;
-use crate::items::{Builder, Glyph, Item, Kind, Target};
+use crate::items::{self, Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
+use crate::pins;
 use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
-/// The menu of an icon, while it is open.
+/// The menu of an icon, or the dock's own, while it is open.
 #[derive(Debug, Clone)]
 pub(crate) struct OpenMenu {
     pub(crate) id: Id,
-    /// The icon the menu belongs to, by identity.
-    pub(crate) target: Target,
+    /// The icon the menu belongs to, by identity; `None` for the dock's own menu.
+    pub(crate) target: Option<Target>,
     pub(crate) entries: Vec<Line>,
     pub(crate) cursor: Option<usize>,
     /// Opening, open, or closing before its popup goes.
@@ -122,8 +123,11 @@ pub struct Dock {
     pub items: Vec<Item>,
     /// Index of the first open application that is not pinned: the separator goes before it.
     pub separator: Option<usize>,
-    /// Desktop file ids of the pinned applications, from the configuration or the defaults.
+    /// Desktop file ids of the pinned applications, from the configuration or the defaults,
+    /// with Sherlock's token (`dock_config::SHERLOCK`) once it has a place of its own.
     pub pinned: Vec<String>,
+    /// Sherlock is in the dock.
+    pub sherlock: bool,
     pub(crate) sources: Sources,
     glyphs: HashMap<String, Glyph>,
     pub geometry: Geometry,
@@ -178,6 +182,7 @@ impl Dock {
             items: Vec::new(),
             separator: None,
             pinned: sources.pinned.clone(),
+            sherlock: sources.config.sherlock,
             sources,
             glyphs: HashMap::new(),
             geometry,
@@ -365,6 +370,7 @@ impl Dock {
         let icon_size = (self.geometry.icon * self.geometry.factor).round() as u32;
         let mut builder = Builder {
             applications: self.sources.applications,
+            sherlock: self.sherlock,
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,
@@ -689,6 +695,7 @@ impl Dock {
         if let Some(pinned) = &config.pinned {
             self.pinned.clone_from(pinned);
         }
+        self.sherlock = config.sherlock;
         self.geometry = Geometry::from_config(&config);
         let now = self.clock();
         self.hide.set_mode(config.auto_hide, now);
@@ -883,7 +890,7 @@ impl Dock {
                     let draggable = self
                         .index_of(&target)
                         .and_then(|i| self.items.get(i))
-                        .is_some_and(|i| i.pinned && i.entry().is_some());
+                        .is_some_and(|i| i.pinned && i.pin_id().is_some());
                     if let Some(press) = self.press.as_mut() {
                         press.dragging = draggable;
                     }
@@ -919,9 +926,6 @@ impl Dock {
         // Among the orders the pinned icons can take, the one that puts the icon nearest the
         // pointer.
         let pinned = self.separator.unwrap_or(self.items.len());
-        let Some(sherlock) = self.items.iter().position(|i| i.kind == Kind::Sherlock) else {
-            return Task::none();
-        };
         let sides: Vec<f32> = self
             .tracks
             .iter()
@@ -943,17 +947,17 @@ impl Dock {
             .iter()
             .take_while(|i| i.kind == Kind::Applications)
             .count();
-        let Some(best) = drag::orders(fixed, pinned, sherlock, index)
+        let Some(best) = drag::orders(fixed, pinned, index)
             .into_iter()
             .min_by(|a, b| distance(a).total_cmp(&distance(b)))
         else {
             return Task::none();
         };
-        let ids: Vec<&str> = best
+        let ids: Vec<String> = best
             .iter()
-            .filter_map(|&i| self.items[i].entry().map(|e| e.id.as_str()))
+            .filter_map(|&i| self.items[i].pin_id().map(String::from))
             .collect();
-        let Some(id) = self.items[index].entry().map(|e| e.id.clone()) else {
+        let Some(id) = self.items[index].pin_id().map(String::from) else {
             return Task::none();
         };
         if ids == self.shown_pins() {
@@ -964,7 +968,8 @@ impl Dock {
             .iter()
             .position(|i| *i == id)
             .and_then(|place| ids.get(place + 1))
-            .map(|next| (*next).to_owned());
+            .cloned();
+        self.list_sherlock();
         if dock_config::move_pinned(&mut self.pinned, &id, before.as_deref()) {
             return self.refresh(self.geometry);
         }
@@ -1024,13 +1029,25 @@ impl Dock {
         Task::none()
     }
 
-    /// The pinned applications shown, in order.
-    fn shown_pins(&self) -> Vec<&str> {
+    /// The pinned icons shown, in order: desktop file ids and Sherlock's token.
+    fn shown_pins(&self) -> Vec<String> {
         let end = self.separator.unwrap_or(self.items.len());
         self.items[..end.min(self.items.len())]
             .iter()
-            .filter_map(|i| i.entry().map(|e| e.id.as_str()))
+            .filter_map(|i| i.pin_id().map(String::from))
             .collect()
+    }
+
+    /// Writes Sherlock's token in the pinned list where Sherlock is shown, when the list has
+    /// none (a file written before it could move): the pinned list is about to change, and
+    /// Sherlock must stay where it is rather than go back to the middle.
+    fn list_sherlock(&mut self) {
+        if !self.sherlock || self.pinned.iter().any(|p| p == dock_config::SHERLOCK) {
+            return;
+        }
+        let shown = self.shown_pins();
+        let shown: Vec<&str> = shown.iter().map(String::as_str).collect();
+        items::place_sherlock(&mut self.pinned, &shown);
     }
 
     fn pointer(&mut self, event: Pointer, now: Duration) -> Task<Message> {
@@ -1063,10 +1080,16 @@ impl Dock {
                 match (button, target, self.pointer) {
                     (mouse::Button::Left, Some(index), Some(point)) => {
                         let target = self.items[index].target();
-                        let shown = self.shown_pins().into_iter().map(String::from).collect();
+                        let shown = self.shown_pins();
                         self.press = Some(Press::new(target, point, self.pinned.clone(), shown));
                     }
                     (mouse::Button::Right, Some(index), _) => return self.open_menu(index),
+                    // On the separator or between the icons: the dock's own menu.
+                    (mouse::Button::Right, None, Some(point))
+                        if self.layout(now).bar.contains(point) =>
+                    {
+                        return self.open_dock_menu(point);
+                    }
                     (mouse::Button::Middle, Some(index), _) => self.new_window(index),
                     _ => {}
                 }
@@ -1174,7 +1197,7 @@ impl Dock {
         Abilities {
             launch: entry.is_some_and(|e| e.exec.is_some()),
             keep: !pinned && entry.is_some(),
-            unpin: pinned && entry.is_some(),
+            unpin: pinned && item.and_then(Item::pin_id).is_some(),
             act: item.is_some_and(|i| i.entry().is_some() || matches!(i.kind, Kind::Window(_)))
                 && self.controllable(),
         }
@@ -1341,17 +1364,40 @@ impl Dock {
     }
 
     fn open_menu(&mut self, index: usize) -> Task<Message> {
+        let entries = self.menu_lines(index);
+        let Some(icon) = self.layout(self.now).icons.get(index).copied() else {
+            return self.drop_menu();
+        };
+        let target = self.items.get(index).map(Item::target);
+        self.show_menu(target, entries, icon)
+    }
+
+    /// The dock's own menu, from `point` on its bar, as if an icon of no width were there.
+    fn open_dock_menu(&mut self, point: Point) -> Task<Message> {
+        let bar = self.layout(self.now).bar;
+        let at = if self.geometry.position.is_vertical() {
+            iced::Rectangle::new(Point::new(bar.x, point.y), Size::new(bar.width, 0.0))
+        } else {
+            iced::Rectangle::new(Point::new(point.x, bar.y), Size::new(0.0, bar.height))
+        };
+        self.show_menu(None, menu::dock_entries(self.sherlock), at)
+    }
+
+    /// Opens the menu of `target` with `entries`, against `icon` on the side away from the
+    /// screen edge.
+    fn show_menu(
+        &mut self,
+        target: Option<Target>,
+        entries: Vec<Line>,
+        icon: iced::Rectangle,
+    ) -> Task<Message> {
         let close = self.drop_menu();
         let Some(surface) = self.surface else {
             tracing::warn!("dock surface unknown: the menu cannot open");
             return close;
         };
-        let entries = self.menu_lines(index);
         let (width, height) = menu::surface_size(&entries);
         let layout = self.layout(self.now);
-        let Some(icon) = layout.icons.get(index) else {
-            return close;
-        };
         // Off the bar, 12 away from it, centered on the icon. The gap is not part of the menu
         // surface: it would be drawn black over the magnified icons (opaque software
         // rendering).
@@ -1399,7 +1445,7 @@ impl Dock {
         let id = Id::unique();
         self.menu = Some(OpenMenu {
             id,
-            target: self.items[index].target(),
+            target,
             entries,
             cursor: None,
             unfold: Unfold::opening(self.now),
@@ -1450,6 +1496,17 @@ impl Dock {
             return Task::none();
         };
         let close = self.close_menu();
+        if entry == Entry::ShowSherlock {
+            let task = if self.sherlock {
+                self.hide_sherlock()
+            } else {
+                self.show_sherlock()
+            };
+            return Task::batch([close, task]);
+        }
+        let Some(target) = target else {
+            return close;
+        };
         // The icons may have moved since the menu opened: find the application again.
         let Some(index) = self.index_of(&target) else {
             tracing::info!(
@@ -1484,6 +1541,7 @@ impl Dock {
                 self.request(index, Request::Close);
                 Task::none()
             }
+            Entry::ShowSherlock => Task::none(),
         };
         Task::batch([close, task])
     }
@@ -1500,32 +1558,59 @@ impl Dock {
             return Task::none();
         };
         tracing::info!(app = id, "pinned");
+        self.list_sherlock();
         self.pinned.push(id);
         self.save_pinned()
     }
 
-    /// Removes icon `index` from the pinned list. Sherlock stays in the middle; an application
-    /// still open moves after the separator.
+    /// Removes icon `index` from the pinned list: Sherlock leaves the dock, the others keep
+    /// their places, an application still open moves after the separator.
     pub fn unpin(&mut self, index: usize) -> Task<Message> {
         let Some(id) = self
             .items
             .get(index)
             .filter(|i| i.pinned)
-            .and_then(Item::entry)
-            .map(|e| e.id.clone())
+            .and_then(Item::pin_id)
+            .map(String::from)
         else {
             return Task::none();
         };
+        if id == dock_config::SHERLOCK {
+            return self.hide_sherlock();
+        }
         tracing::info!(app = id, "unpinned");
+        self.list_sherlock();
         self.pinned.retain(|p| *p != id);
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration and rebuilds the dock.
+    /// Takes Sherlock out of the dock.
+    pub fn hide_sherlock(&mut self) -> Task<Message> {
+        tracing::info!("Sherlock taken out of the dock");
+        self.sherlock = false;
+        self.pinned.retain(|p| p != dock_config::SHERLOCK);
+        self.save_pinned()
+    }
+
+    /// Puts Sherlock back in the middle of the pinned applications, where it was at first.
+    pub fn show_sherlock(&mut self) -> Task<Message> {
+        tracing::info!("Sherlock back in the dock");
+        self.sherlock = true;
+        self.pinned.retain(|p| p != dock_config::SHERLOCK);
+        let shown = self.shown_pins();
+        let mut shown: Vec<&str> = shown.iter().map(String::as_str).collect();
+        shown.insert(shown.len().div_ceil(2), dock_config::SHERLOCK);
+        items::place_sherlock(&mut self.pinned, &shown);
+        self.save_pinned()
+    }
+
+    /// Writes the pinned list to the configuration, read again just before (`pins::write`),
+    /// and rebuilds the dock.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
+        self.sources.config.sherlock = self.sherlock;
         if let Some(path) = &self.sources.config_path
-            && let Err(error) = self.sources.config.save(path)
+            && let Err(error) = pins::write(path, &self.pinned, self.sherlock)
         {
             tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
         }
