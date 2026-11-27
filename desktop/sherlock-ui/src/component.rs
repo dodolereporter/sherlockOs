@@ -485,6 +485,46 @@ pub fn menu_item_with<'a, Message: Clone + 'a>(
     control
 }
 
+/// What stands before the label of a menu entry that can be checked (lot D-36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    /// Nothing, but the room: the labels of a menu stay aligned.
+    Blank,
+    /// A check mark.
+    Check,
+    /// The dot of the chosen one among several.
+    Radio,
+}
+
+/// The mark of a menu entry, in a column of `metrics::MENU_MARK_COLUMN`, in the color of the
+/// text: faded with a disabled entry.
+pub fn menu_mark<'a, Message: 'a>(mark: Mark, enabled: bool) -> Element<'a, Message> {
+    let p = color::palette();
+    let tint = if enabled {
+        p.text_primary
+    } else {
+        p.text_tertiary
+    };
+    let content: Element<'a, Message> = match mark {
+        Mark::Blank => space().into(),
+        Mark::Check => icon(Icon::Check, metrics::ICON_SIZE_SMALL, tint).into(),
+        Mark::Radio => container(space())
+            .width(metrics::MENU_RADIO_DOT)
+            .height(metrics::MENU_RADIO_DOT)
+            .style(move |_| container::Style {
+                background: Some(iced::Background::Color(tint.into())),
+                border: iced::border::rounded(metrics::MENU_RADIO_DOT / 2.0),
+                ..container::Style::default()
+            })
+            .into(),
+    };
+    container(content)
+        .width(metrics::MENU_MARK_COLUMN)
+        .center_x(metrics::MENU_MARK_COLUMN)
+        .center_y(Length::Fill)
+        .into()
+}
+
 /// Marks a menu entry as open: its submenu is shown.
 pub fn open<'a, Message: Clone + 'a>(mut item: Control<'a, Message>) -> Control<'a, Message> {
     item.style = Box::new(theme::menu_item_open);

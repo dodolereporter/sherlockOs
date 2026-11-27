@@ -195,6 +195,14 @@ pub const MENU_ITEM_RADIUS: f32 = 7.0;
 pub const MENU_ITEM_PADDING: f32 = 10.0;
 /// Menu separator: top and side margins.
 pub const MENU_SEPARATOR_MARGIN: (f32, f32) = (4.0, 8.0);
+/// Menus of an application in the bar (lot D-36): narrowest and widest menu, room for the
+/// check mark or radio dot before the labels, size of the radio dot, widest application name
+/// before its menus.
+pub const APP_MENU_MIN_WIDTH: f32 = 200.0;
+pub const APP_MENU_MAX_WIDTH: f32 = 380.0;
+pub const MENU_MARK_COLUMN: f32 = 16.0;
+pub const MENU_RADIO_DOT: f32 = 6.0;
+pub const APP_NAME_MAX: f32 = 220.0;
 
 // Controls.
 

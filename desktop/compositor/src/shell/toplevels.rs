@@ -16,8 +16,12 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 
 use crate::State;
 
-/// Version of the global. Version 2 adds the `snapped` state of a screen.
-const VERSION: u32 = 2;
+/// Version of the global. Version 2 adds the `snapped` state of a screen, version 3 the global
+/// menu.
+const VERSION: u32 = 3;
+
+/// First version with the global menu.
+const APP_MENU_SINCE: u32 = 3;
 
 pub(super) fn create_global(dh: &DisplayHandle) {
     dh.create_global::<State, SherlockShellManagerV1, ()>(VERSION, ());
@@ -28,6 +32,8 @@ pub(super) fn create_global(dh: &DisplayHandle) {
 pub(super) struct Snapshot {
     pub title: String,
     pub app_id: String,
+    /// Where its menu is exported, both empty without one.
+    pub menu: super::appmenu::MenuAddress,
     /// Values of `ToplevelState`.
     pub states: Vec<u32>,
     pub output: String,
@@ -149,6 +155,9 @@ fn send(resource: &SherlockShellToplevelV1, old: Option<&Snapshot>, new: &Snapsh
     if old.is_none_or(|o| o.app_id != new.app_id) {
         resource.app_id(new.app_id.clone());
     }
+    if resource.version() >= APP_MENU_SINCE && old.is_none_or(|o| o.menu != new.menu) {
+        resource.app_menu(new.menu.service.clone(), new.menu.path.clone());
+    }
     if old.is_none_or(|o| o.states != new.states) {
         resource.state(bytes(&new.states));
     }
@@ -205,8 +214,23 @@ impl Dispatch<SherlockShellManagerV1, ()> for State {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let sherlock_shell_manager_v1::Request::Destroy = request {
-            state.shell.managers.retain(|m| &m.resource != resource);
+        use sherlock_shell_manager_v1::Request;
+        match request {
+            Request::Destroy => state.shell.managers.retain(|m| &m.resource != resource),
+            Request::RegisterAppMenu {
+                window,
+                pid,
+                service,
+                path,
+            } => state.register_app_menu(super::appmenu::Registration {
+                window,
+                pid,
+                address: super::appmenu::MenuAddress { service, path },
+            }),
+            Request::UnregisterAppMenu { service, path } => {
+                state.unregister_app_menu(&service, &path);
+            }
+            _ => {}
         }
     }
 }
