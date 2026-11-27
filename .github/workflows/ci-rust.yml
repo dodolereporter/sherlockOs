@@ -59,11 +59,19 @@ jobs:
       # lavapipe, Mesa's software Vulkan driver, on which sherlock-3d renders the mascot.
       # Keep this list in line with the prerequisites of CLAUDE.md and docs/ci.md.
       - name: Install the system libraries
+        # The runner image also lists packages.microsoft.com, which we do not use and which
+        # sometimes answers 403: an error of `apt-get update` that failed the whole job. Its
+        # lists go first, and a failed download is tried again.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev \
-            libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1 libegl-mesa0 \
-            dbus-daemon mesa-vulkan-drivers
+          { grep -l -r packages.microsoft.com /etc/apt/sources.list.d/ || true; } | xargs -r sudo rm -f --
+          for attempt in 1 2 3; do
+            sudo apt-get -o Acquire::Retries=3 update && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep $((attempt * 15))
+          done
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends libxkbcommon-dev \
+            libwayland-dev libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland \
+            libegl1 libegl-mesa0 dbus-daemon mesa-vulkan-drivers
 
       # `just verify` runs check-language, a Python script that only uses the standard library.
       - name: Show the Python of check-language

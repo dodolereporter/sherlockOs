@@ -167,7 +167,10 @@ impl Bar {
     /// From one menu to the next, the menu shown stays until the next one is read, then gives
     /// it its place: the bar never shows an empty or half sized popup meanwhile (D-36d).
     pub(super) fn show_app_menu(&mut self, id: i32, keyboard: bool) -> Task<Message> {
-        let closed = self.drop_menu().chain(self.drop_panel());
+        let closed = self
+            .drop_menu()
+            .chain(self.drop_panel())
+            .chain(self.drop_tray());
         let Some(menu) = self.global.address.clone() else {
             return closed.chain(self.drop_app_menus());
         };
