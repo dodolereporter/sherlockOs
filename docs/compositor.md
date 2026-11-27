@@ -1737,7 +1737,9 @@ How it works (`src/udev.rs`):
   and drawing stop, and the keys still held are released for the clients; when it comes back,
   the screens are reset, read again (a screen may have been plugged in meanwhile) and redrawn.
 - **Way out.** **Ctrl + Alt + Backspace stops the compositor**, whatever has the keyboard: the
-  emergency exit when nothing answers any more. These keys never reach a client. In nested mode
+  emergency exit when nothing answers any more. Not while locked (lot D-25j): it then goes to
+  the lock as a Backspace, and if the compositor stops or crashes while locked, the session
+  ends (see "Session lock"). These keys never reach a client. In nested mode
   they do nothing (the host session keeps its consoles, and closing the window stops it).
 - **Leaving.** The screens and the card are released first, which gives the console back its
   display state, then the seat (`RealSession::close`).
@@ -1764,7 +1766,8 @@ it.
    With `--xwayland` after `compositor`, X11 applications too (the script gives it unless
    `SHERLOCKOS_XWAYLAND=0`), at the risk of waking the NVIDIA card (see above).
 
-4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
+4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back
+   (unlocked only: stopped while locked, the session ends, lot D-25j).
    Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
    compositor waits on its console, Ctrl + Alt + F3 comes back to it.
 
@@ -2290,8 +2293,14 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   which a press on another screen changes), the pointer only to the lock surface under it.
   Grabs, menus, gestures and Mission Control are cancelled at the lock; touchpad gestures do
   nothing. The only keys the compositor still takes: Ctrl + Alt + F1 to F12 (console switch),
-  Ctrl + Alt + Backspace (stops the compositor, which ends the session, it does not open it),
   the volume, microphone and brightness keys, and Enter on the rescue screen.
+- **Stopped while locked** (lot D-25j, ADR 0023 amendment). Ctrl + Alt + Backspace does nothing
+  while locked: it goes to the lock as a Backspace. At the lock the compositor creates the file
+  `SHERLOCKOS_LOCK_MARK` names (`$XDG_RUNTIME_DIR/sherlockos-locked` in `sherlockos-session`),
+  and removes it at the unlock; if the compositor ends while it is there, stopped or crashed,
+  `sherlockos-session` ends the logind session (`loginctl terminate-session $XDG_SESSION_ID`;
+  without one, it kills the process that started it) instead of giving back the console it
+  came from, already logged in.
 - **Unlocking.** Only `unlock_and_destroy` from the lock that holds the session, once `locked`
   was sent; any other is the `invalid_unlock` protocol error. A second lock is refused
   (`finished`).
@@ -2381,7 +2390,9 @@ Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock s
    still locked (background, then the lock screen again).
 3. Ctrl + Alt + F3 then back: still locked. Plug a screen in while locked: it shows the
    background or the lock, never the desktop.
-4. Ctrl + Alt + Backspace while locked: the session ends, SDDM or the console comes back.
+4. Ctrl + Alt + Backspace while locked: nothing (a Backspace in the field). From another
+   console, `pkill -KILL compositor` while locked: the session ends (`loginctl list-sessions`
+   no longer lists it), the console it was started from asks for a login again.
 
 ## Measuring
 

@@ -61,6 +61,9 @@ mod tests {
     const KEY_SPACE: u32 = 57 + 8;
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
+    const KEY_LEFTCTRL: u32 = 29 + 8;
+    const KEY_LEFTALT: u32 = 56 + 8;
+    const KEY_BACKSPACE: u32 = 14 + 8;
     const BTN_LEFT: u32 = 0x110;
 
     /// What a client has received.
@@ -1556,6 +1559,42 @@ mod tests {
         let _ = std::process::Command::new("kill")
             .args(["-KILL", pid.trim()])
             .status();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Ctrl + Alt + Backspace never stops the compositor while locked: it goes to the lock as
+    /// a Backspace; the file that says the session is locked lives from the lock to the unlock
+    /// (lot D-25j).
+    #[test]
+    fn ctrl_alt_backspace_does_nothing_while_locked_and_the_lock_is_marked() {
+        let dir = std::env::temp_dir().join(format!("lock-mark-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mark = dir.join("sherlockos-locked");
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        h.state.set_lock_mark(Some(mark.clone()));
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        assert!(mark.exists(), "marked at the lock");
+
+        for key in [KEY_LEFTCTRL, KEY_LEFTALT] {
+            h.state
+                .keyboard_key(Keycode::new(key), KeyState::Pressed, 10);
+        }
+        h.key(KEY_BACKSPACE);
+        for key in [KEY_LEFTALT, KEY_LEFTCTRL] {
+            h.state
+                .keyboard_key(Keycode::new(key), KeyState::Released, 11);
+        }
+        h.run_until("the Backspace on the lock", |h| {
+            h.peers[locker].seen.keys.contains(&evdev(KEY_BACKSPACE))
+        });
+        assert!(h.state.is_locked());
+
+        locking.lock.unlock_and_destroy();
+        h.run_until("unlocked", |h| !h.state.is_locked());
+        assert!(!mark.exists(), "unmarked at the unlock");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
