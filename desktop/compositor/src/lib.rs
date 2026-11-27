@@ -12,6 +12,7 @@ pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
 pub mod focus;
+pub mod fullscreen;
 pub mod genie;
 pub mod gestures;
 mod handlers;
@@ -164,6 +165,9 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// The edges of fullscreen screens where the pointer brings the bar or the dock back
+    /// (lot D-21e).
+    reveals: fullscreen::Reveals,
     /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
     /// them again.
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
@@ -338,6 +342,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
@@ -661,6 +666,7 @@ impl State {
         self.end_minimize_effects();
         self.end_closings();
         self.end_clicks();
+        self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;

@@ -14,14 +14,19 @@ mod tests {
 
     use std::io::Write as _;
 
-    use compositor::State;
+    use compositor::{State, render::Item};
     use sherlock_ui::color::{Color, Palette};
     use smithay::reexports::wayland_server::Resource as _;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
-        utils::{Logical, Point, Rectangle},
+        utils::{Logical, Physical, Point, Rectangle},
+    };
+    use smithay::{
+        desktop::layer_map_for_output,
+        reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface,
+        wayland::{seat::WaylandFocus as _, shell::wlr_layer::Layer as ServerLayer},
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, delegate_noop,
@@ -2173,6 +2178,217 @@ mod tests {
         h.state
             .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 6);
         assert_eq!(h.state.space.element_geometry(&window), before);
+        drop(file);
+    }
+
+    /// Lot D-21e: the front-to-back rank of what draws `surface` at `at`, and where: its
+    /// origin, or the corner of its window.
+    fn drawn_at(
+        s: &State,
+        surface: &ServerSurface,
+        at: Duration,
+    ) -> Option<(usize, Point<i32, Physical>)> {
+        let output = s.space.outputs().next().unwrap().clone();
+        let view = s.views()[0].1;
+        let (items, _) = compositor::render::items(s, (&output, &view), None, false, at);
+        items.iter().enumerate().find_map(|(i, item)| match item {
+            Item::Surface {
+                surface: drawn,
+                origin,
+                ..
+            } if drawn == surface => Some((i, *origin)),
+            Item::Window {
+                surface: drawn,
+                rect,
+                ..
+            } if drawn == surface => Some((i, rect.loc)),
+            _ => None,
+        })
+    }
+
+    /// `front` is drawn in front of `back` at `at`.
+    fn in_front(s: &State, front: &ServerSurface, back: &ServerSurface, at: Duration) -> bool {
+        match (drawn_at(s, front, at), drawn_at(s, back, at)) {
+            (Some((front, _)), Some((back, _))) => front < back,
+            _ => false,
+        }
+    }
+
+    /// The surface that has the pointer at (`x`, `y`).
+    fn pointed(h: &mut Harness, x: f64, y: f64, time: u32) -> Option<ServerSurface> {
+        h.state.pointer_motion((x, y).into(), time);
+        h.state.seat.get_pointer().unwrap().current_focus()
+    }
+
+    /// The bar, then a window made fullscreen and drawn at the size of the screen: the bar and
+    /// the window as the compositor knows them.
+    fn fullscreen_under_bar(h: &mut Harness) -> (Anchored, Shown, ServerSurface, ServerSurface) {
+        let bar = show_bar(h);
+        let shown = h.show_window();
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let bar_surface = layer_map_for_output(&output)
+            .layers()
+            .next()
+            .unwrap()
+            .wl_surface()
+            .clone();
+        let window = h.state.space.elements().next().unwrap().clone();
+        let window = window.wl_surface().unwrap().into_owned();
+        // Not fullscreen yet: the bar has the pointer over its row, and is drawn in front.
+        assert_eq!(pointed(h, 400.0, 20.0, 1), Some(bar_surface.clone()));
+        assert!(in_front(&h.state, &bar_surface, &window, h.state.now()));
+        shown.toplevel.set_fullscreen(None);
+        h.wait_size("fullscreen", 800, 600);
+        h.redraw(&shown, 800, 600);
+        (bar, shown, bar_surface, window)
+    }
+
+    /// Lot D-21e: a fullscreen window covers the bar, which is on the top layer, as on macOS;
+    /// the overlay layer (on-screen displays, the lock screen) stays in front of it.
+    #[test]
+    fn a_fullscreen_window_covers_the_bar_but_not_the_overlay() {
+        let mut h = Harness::start();
+        let (_bar, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let _osd = anchor(
+            &mut h,
+            Spec {
+                layer: Layer::Overlay,
+                anchor: Anchor::Bottom,
+                size: (200, 60),
+                zone: 0,
+                margin: (0, 0, 40, 0),
+                keyboard: KeyboardInteractivity::None,
+            },
+        );
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let osd = layer_map_for_output(&output)
+            .layers_on(ServerLayer::Overlay)
+            .next()
+            .unwrap()
+            .wl_surface()
+            .clone();
+        let now = h.state.now();
+        assert!(
+            in_front(&h.state, &window, &bar, now),
+            "the window over the bar"
+        );
+        assert!(
+            in_front(&h.state, &osd, &window, now),
+            "the overlay over the window"
+        );
+        // The row of the bar belongs to the window, the pointer passing by it too.
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 2), Some(window.clone()));
+        assert_eq!(pointed(&mut h, 400.0, 0.0, 3), Some(window.clone()));
+        settle(&mut h);
+        assert!(in_front(&h.state, &window, &bar, h.state.now()));
+        // Out of fullscreen, the bar is in front again.
+        let shown = &_shown;
+        shown.toplevel.unset_fullscreen();
+        h.run_until("out of fullscreen", |c, _| {
+            !c.configures
+                .last()
+                .unwrap()
+                .2
+                .contains(&XdgState::Fullscreen)
+        });
+        assert!(in_front(&h.state, &bar, &window, h.state.now()));
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 4), Some(bar));
+    }
+
+    /// Lot D-21e: the pointer resting against the top edge for 150 ms brings the bar down over
+    /// the fullscreen window, sliding in from above; it then has the pointer.
+    #[test]
+    fn the_bar_comes_over_a_fullscreen_window_after_a_rest_at_the_top() {
+        let mut h = Harness::start();
+        let (_bar, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let rest = h.state.now();
+        assert_eq!(pointed(&mut h, 400.0, 0.0, 2), Some(window.clone()));
+        settle(&mut h);
+        assert!(
+            in_front(&h.state, &window, &bar, h.state.now()),
+            "not at once"
+        );
+        h.run_until("the bar revealed", |_, s| {
+            in_front(s, &bar, &window, s.now())
+        });
+        assert!(h.state.now() >= rest + Duration::from_millis(150));
+        // It slides down from above the screen to its place, 10 below the edge.
+        let now = h.state.now();
+        let (_, start) = drawn_at(&h.state, &bar, now).unwrap();
+        assert!(start.y < 10, "{start:?}");
+        assert!(animating(&h, now));
+        let (_, end) = drawn_at(&h.state, &bar, now + Duration::from_millis(300)).unwrap();
+        assert_eq!((end.x, end.y), (12, 10));
+        // Down from the edge, the pointer reaches it, and it stays.
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 3), Some(bar.clone()));
+        settle(&mut h);
+        assert!(in_front(&h.state, &bar, &window, h.state.now()));
+    }
+
+    /// Lot D-21e: the bar goes back up once the pointer leaves it, but not while one of its
+    /// panels is open: that panel takes the pointer, over the fullscreen window.
+    #[test]
+    fn the_bar_goes_back_behind_once_the_pointer_leaves_it_and_its_panels() {
+        let mut h = Harness::start();
+        let (bar_client, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let reveal = |h: &mut Harness, time: u32| {
+            pointed(h, 400.0, 0.0, time);
+            h.run_until("the bar revealed", |_, s| {
+                in_front(s, &bar, &window, s.now())
+            });
+        };
+        reveal(&mut h, 2);
+        // Below the bar: it slides back up, then is behind the window again.
+        assert_eq!(pointed(&mut h, 400.0, 300.0, 3), Some(window.clone()));
+        settle(&mut h);
+        let now = h.state.now();
+        assert!(animating(&h, now), "it slides out");
+        h.run_until("the bar behind the window", |_, s| {
+            in_front(s, &window, &bar, s.now())
+        });
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 4), Some(window.clone()));
+
+        // Revealed again, it opens a panel of 200 × 150 below its right end.
+        reveal(&mut h, 5);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(560, 0, 2, 36);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar_client.layer.get_popup(&popup);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar_client
+            .shm
+            .create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        settle(&mut h);
+        // The pointer on the panel, then away from both: the bar stays.
+        let panel = pointed(&mut h, 580.0, 150.0, 6);
+        assert!(panel.is_some() && panel != Some(window.clone()) && panel != Some(bar.clone()));
+        pointed(&mut h, 300.0, 400.0, 7);
+        settle(&mut h);
+        assert!(
+            in_front(&h.state, &bar, &window, h.state.now()),
+            "a panel is open"
+        );
+        // The panel closed, the bar goes.
+        popup.destroy();
+        surface.destroy();
+        settle(&mut h);
+        h.run_until("the bar behind the window", |_, s| {
+            in_front(s, &window, &bar, s.now())
+        });
         drop(file);
     }
 
