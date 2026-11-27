@@ -3150,4 +3150,185 @@ mod tests {
         );
         h.state.shutdown();
     }
+
+    impl Harness {
+        /// One screen of `size` pixels at scale 1.
+        fn start_screen(size: (i32, i32)) -> Self {
+            let event_loop = EventLoop::try_new().unwrap();
+            let mut state = State::new(&event_loop).unwrap();
+            state.add_output(size.into(), 1.0);
+            let (server_side, client_side) = UnixStream::pair().unwrap();
+            state.insert_client(server_side);
+            let conn = Connection::from_socket(client_side).unwrap();
+            let queue = conn.new_event_queue();
+            Self {
+                event_loop,
+                state,
+                conn,
+                queue,
+                client: Client::default(),
+            }
+        }
+    }
+
+    /// One row of the blur board: a maximized Konsole full of text, the real bar with its
+    /// control centre open and the real dock, in `theme`; drawn without the blur, then with it.
+    fn blur_board_row(theme: &str, size: (i32, i32)) -> (Vec<u8>, Vec<u8>) {
+        use compositor::{theme as follow, wallpaper};
+        use smithay::desktop::layer_map_for_output;
+        use std::{path::PathBuf, process::Command};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("blur-board-{theme}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = dir.join("config");
+        std::fs::create_dir_all(config.join("appearance")).unwrap();
+        std::fs::create_dir_all(config.join("dock")).unwrap();
+        let appearance = config.join("appearance/appearance.conf");
+        std::fs::write(&appearance, format!("[Appearance]\nTheme={theme}\n")).unwrap();
+        // The dock stays over the maximized window.
+        std::fs::write(config.join("dock/dock.conf"), "[Dock]\nAutoHide=never\n").unwrap();
+        let data = dir.join("data");
+        let vulkan = data.join("vulkan/icd.d");
+        std::fs::create_dir_all(&vulkan).unwrap();
+        // Lavapipe under the name the shell keeps on a machine with an AMD chip (ADR 0018), so
+        // that its glass is translucent as on the machine.
+        let lavapipe = vulkan.join("radeon_icd.json");
+        std::fs::copy("/usr/share/vulkan/icd.d/lvp_icd.json", &lavapipe).unwrap();
+        let id = if theme == "dark" {
+            "first-clue"
+        } else {
+            "first-clue-light"
+        };
+        let picture = image::open(root.join(format!("assets/wallpapers/{id}.jpg")))
+            .unwrap()
+            .resize_to_fill(
+                size.0 as u32,
+                size.1 as u32,
+                image::imageops::FilterType::Triangle,
+            );
+        let folder = data.join("wallpapers").join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        let name = format!("{}x{}.png", picture.width(), picture.height());
+        picture.to_rgb8().save(folder.join(name)).unwrap();
+
+        let mut drawing = Drawing::new(size).expect("Mesa's software EGL device");
+        let mut h = Harness::start_screen(size);
+        let handle = h.event_loop.handle();
+        follow::follow_at(&handle, &mut h.state, appearance);
+        h.state.wallpaper =
+            wallpaper::Wallpaper::start(&handle, None, vec![data.join("wallpapers")]).unwrap();
+        h.state
+            .listen_at(dir.join("wayland-blur"), &h.event_loop)
+            .unwrap();
+        let spawn = |program: &str, args: &[&str]| {
+            Command::new(program)
+                .args(args)
+                .env_clear()
+                .env("XDG_RUNTIME_DIR", &dir)
+                .env("WAYLAND_DISPLAY", "wayland-blur")
+                .env("XDG_CONFIG_HOME", &config)
+                .env("XDG_DATA_HOME", dir.join("data-home"))
+                .env("HOME", &dir)
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("RUST_LOG", "warn")
+                .env("QT_QPA_PLATFORM", "wayland")
+                .env("ICED_BACKEND", "wgpu")
+                .env("VK_DRIVER_FILES", &lavapipe)
+                .spawn()
+                .unwrap()
+        };
+        let source = root.join("desktop/compositor/src/render.rs");
+        let text = format!("cat {}; exec sleep 600", source.display());
+        // The programs of this build, next to the test's temporary folder.
+        let built = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("../debug");
+        let mut children = vec![
+            spawn(
+                "konsole",
+                &["--separate", "--hide-menubar", "-e", "sh", "-c", &text],
+            ),
+            spawn(built.join("bar").to_str().unwrap(), &[]),
+            spawn(built.join("dock").to_str().unwrap(), &[]),
+        ];
+        let run = |h: &mut Harness, drawing: &mut Drawing, ms: u64| {
+            let end = std::time::Instant::now() + Duration::from_millis(ms);
+            while std::time::Instant::now() < end {
+                h.conn.flush().unwrap();
+                h.event_loop
+                    .dispatch(Some(Duration::from_millis(16)), &mut h.state)
+                    .unwrap();
+                h.state.refresh();
+                drawing.frame(h);
+                let output = h.state.space.outputs().next().unwrap().clone();
+                let time = h.state.now();
+                for window in h.state.space.elements().cloned().collect::<Vec<_>>() {
+                    h.state.send_window_frame(&window, &output, time);
+                }
+                for layer in layer_map_for_output(&output).layers() {
+                    layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| {
+                        Some(output.clone())
+                    });
+                }
+            }
+        };
+        let started = std::time::Instant::now();
+        while h.state.space.elements().next().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "Konsole shows no window"
+            );
+            run(&mut h, &mut drawing, 200);
+        }
+        run(&mut h, &mut drawing, 2000);
+        // Maximized, under the bar and behind the dock.
+        h.shortcut(KEY_UP);
+        run(&mut h, &mut drawing, 4000);
+        // The control centre: a click on the indicators, at the right of the bar.
+        let at = (f64::from(size.0) - 170.0, 28.0);
+        h.click(at.0, at.1, 10);
+        run(&mut h, &mut drawing, 3000);
+        drawing.scene.blur.set_mode(Mode::Off);
+        let before = drawing.settled(&mut h).1;
+        drawing.scene.blur.set_mode(Mode::Blur);
+        let after = drawing.settled(&mut h).1;
+        for child in &mut children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        h.state.shutdown();
+        (before, after)
+    }
+
+    /// The board of lot D-37: the right half of the screen, Konsole's text behind the dock and
+    /// the control centre, without then with the blur (columns), dark then light (rows):
+    /// `screenshots/blur-board.png`.
+    #[test]
+    #[ignore = "needs Mesa's EGL, lavapipe, Konsole and `cargo build -p bar -p dock`"]
+    fn blur_board_with_konsole_the_dock_and_the_control_centre() {
+        let size = (1440, 900);
+        let (x0, width) = (560u32, 880u32);
+        let mut board = image::RgbaImage::new(2 * width, 2 * size.1 as u32);
+        for (row, theme) in ["dark", "light"].into_iter().enumerate() {
+            sherlock_ui::color::set_active(if theme == "dark" {
+                sherlock_ui::color::Theme::Dark
+            } else {
+                sherlock_ui::color::Theme::Light
+            });
+            let (before, after) = blur_board_row(theme, size);
+            for (column, pixels) in [before, after].into_iter().enumerate() {
+                let full =
+                    image::RgbaImage::from_raw(size.0 as u32, size.1 as u32, pixels).unwrap();
+                let cut = image::imageops::crop_imm(&full, x0, 0, width, size.1 as u32).to_image();
+                let (x, y) = (
+                    column as i64 * i64::from(width),
+                    row as i64 * i64::from(size.1),
+                );
+                image::imageops::overlay(&mut board, &cut, x, y);
+            }
+        }
+        sherlock_ui::color::set_active(sherlock_ui::color::Theme::Dark);
+        let path = format!("{}/screenshots/blur-board.png", env!("CARGO_MANIFEST_DIR"));
+        board.save(&path).unwrap();
+        eprintln!("board: {path}");
+    }
 }
