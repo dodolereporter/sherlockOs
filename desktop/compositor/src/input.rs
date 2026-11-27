@@ -742,13 +742,38 @@ impl State {
         None
     }
 
+    /// The key types a character, whatever the layout: a key of the main block or of the
+    /// keypad, without Ctrl, Alt nor the logo key (lot D-25g).
+    fn key_types(&self, key: Keycode) -> bool {
+        let held = self
+            .seat
+            .get_keyboard()
+            .map(|k| k.modifier_state())
+            .is_some_and(|m| m.ctrl || m.alt || m.logo);
+        // evdev codes, plus 8: 1 to =, Q to ], A to `, \ to /, space, the key left of Z, the
+        // keypad's digits and signs.
+        let typing = [
+            (2, 13),
+            (16, 27),
+            (30, 41),
+            (43, 53),
+            (57, 57),
+            (86, 86),
+            (71, 83),
+        ];
+        let code = key.raw().wrapping_sub(8);
+        !held && typing.iter().any(|(a, b)| (*a..=*b).contains(&code))
+    }
+
     /// A key (xkb code) is pressed or released. Entry point of every backend, and of the
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
-        // Locked: the lock program must answer (lot D-25f).
-        self.ping_lock_program();
+        // Locked: the lock program must answer, and show what is typed (lots D-25f, D-25g).
+        if key_state == KeyState::Pressed {
+            self.lock_input(self.key_types(key));
+        }
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -1054,7 +1079,9 @@ impl State {
         };
         self.overview.cancel_tap();
         if self.is_locked() {
-            self.ping_lock_program();
+            if state == ButtonState::Pressed {
+                self.lock_input(false);
+            }
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
             if state == ButtonState::Pressed {
