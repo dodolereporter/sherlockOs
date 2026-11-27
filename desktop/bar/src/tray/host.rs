@@ -20,7 +20,7 @@ use zbus::zvariant::OwnedValue;
 use zbus::{Connection, MatchRule, MessageStream};
 
 use super::icon::Finder;
-use super::{ITEM, Item, Properties, address, watcher};
+use super::{ITEM, Item, MAX_ITEMS, Properties, address, watcher};
 use crate::{bus, dbusmenu};
 
 /// What the bar learns of the notification area.
@@ -178,6 +178,13 @@ impl Context {
 
     /// Reads the item of `key` and sends it.
     async fn read(&self, key: String) {
+        {
+            let known = self.known();
+            if known.len() >= MAX_ITEMS && !known.contains_key(&key) {
+                tracing::debug!(key, "too many tray items: one more left out");
+                return;
+            }
+        }
         let (service, path) = address(&key, "");
         match self.properties(&service, &path).await {
             Ok((owner, properties)) => {

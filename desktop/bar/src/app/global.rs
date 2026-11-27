@@ -103,7 +103,7 @@ impl Bar {
                 Ok(item) if id == 0 => shown.root = Some(item),
                 Ok(item) => {
                     if let Some(root) = &mut shown.root {
-                        root.replace(item);
+                        root.graft(item);
                     }
                 }
                 Err(error) => {
@@ -130,7 +130,7 @@ impl Bar {
             }
             Ok(item) => {
                 if let Some(root) = &mut self.global.root {
-                    root.replace(item);
+                    root.graft(item);
                 }
             }
             Err(error) => {
@@ -200,21 +200,36 @@ impl Bar {
 
     /// Opens the menu `id` of the bar, once the application has filled it (`AboutToShow`);
     /// opened from the keyboard, its first entry highlighted.
+    ///
+    /// From one menu to the next, the menu shown stays until the next one is read, then gives
+    /// it its place: the bar never shows an empty or half sized popup meanwhile (D-36d).
     pub(super) fn show_app_menu(&mut self, id: i32, keyboard: bool) -> Task<Message> {
         let closed = self
-            .drop_app_menus()
-            .chain(self.drop_menu())
+            .drop_menu()
             .chain(self.drop_panel())
             .chain(self.drop_tray());
+        // An icon's menu shown from the bar gives its place: its levels are not the
+        // application's.
+        let closed = if self.global.item.is_some() {
+            closed.chain(self.drop_app_menus())
+        } else {
+            closed
+        };
         let Some(menu) = self.global.address.clone() else {
-            return closed;
+            return closed.chain(self.drop_app_menus());
         };
         if id == MORE_ID {
             let cursor = keyboard.then(|| self.first_entry(id)).flatten();
             return closed.chain(self.open_level(0, id, cursor));
         }
+        // A menu folding back goes at once; one shown stays, without its submenus.
+        let shown = if self.folding_app_menus() {
+            self.drop_app_menus()
+        } else {
+            self.drop_levels(1)
+        };
         self.global.opening = Some((id, keyboard));
-        closed.chain(prepare(menu, id))
+        closed.chain(shown).chain(prepare(menu, id))
     }
 
     /// Opens the popup of the menu `item` at `level`, its first entry highlighted with

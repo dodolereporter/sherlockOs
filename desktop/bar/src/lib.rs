@@ -13,6 +13,7 @@ pub mod locate;
 pub mod menu;
 pub mod names;
 pub mod panel;
+pub mod programs;
 pub mod quick;
 pub mod registrar;
 pub mod shape;
