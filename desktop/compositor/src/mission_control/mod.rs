@@ -82,6 +82,9 @@ pub struct Overview {
     swipe: Option<f64>,
     hovered: Option<Target>,
     press: Option<Press>,
+    /// App Expose: only the windows of these ids, without the strip of the workspaces. Kept
+    /// while the view closes, so that they go back the way they came.
+    only: Option<Vec<u32>>,
     /// The gesture key is down and nothing else happened since: its release toggles the view.
     tap: bool,
     toggle: bool,
@@ -221,9 +224,40 @@ impl State {
 
     /// Opens the view, unless a window is being moved or a surface keeps the keyboard (lock).
     pub fn open_overview(&mut self) {
+        if self.overview.open {
+            return;
+        }
+        self.overview.only = None;
         if self.enter_overview() {
             self.overview.animate(self.now(), 1.0);
         }
+    }
+
+    /// App Expose (lot D-21c2): the view with only the windows of `ids` that it would show,
+    /// without the strip of the workspaces. Nothing when none of them is shown; while the
+    /// view is open, it shows these instead.
+    pub fn show_windows(&mut self, ids: Vec<u32>) {
+        let shown = ids.iter().any(|id| {
+            self.window_by_id(*id)
+                .is_some_and(|w| self.is_visible(&w) && !is_override_redirect(&w))
+        });
+        if !shown {
+            tracing::debug!(?ids, "app expose: no window to show");
+            return;
+        }
+        let was = self.overview.only.replace(ids);
+        if self.overview.open {
+            self.refresh_overview_pointer();
+        } else if self.enter_overview() {
+            self.overview.animate(self.now(), 1.0);
+        } else {
+            self.overview.only = was;
+        }
+    }
+
+    /// The window ids App Expose shows, if the view is App Expose.
+    pub fn overview_only(&self) -> Option<&[u32]> {
+        self.overview.only.as_deref()
     }
 
     /// Closes the view: the windows go back to their place, the keyboard to the window that
@@ -291,6 +325,10 @@ impl State {
             .elements()
             .filter(|w| self.is_visible(w) && !is_override_redirect(w))
             .filter(|w| self.window_output(w).as_ref() == Some(output))
+            .filter(|w| {
+                let only = self.overview.only.as_ref();
+                only.is_none_or(|ids| ids.contains(&crate::shell::window_id(w)))
+            })
             .filter_map(|window| {
                 let real = decorations::frame(window, self.space.element_geometry(window)?);
                 let real = real.to_f64();
@@ -317,7 +355,12 @@ impl State {
             })
             .collect();
         let mut area = work.to_f64();
-        let (top, margin) = (strip_height(), f64::from(mc::MARGIN));
+        // App Expose has no strip: the windows take its room.
+        let margin = f64::from(mc::MARGIN);
+        let top = match self.overview.only {
+            Some(_) => margin,
+            None => strip_height(),
+        };
         area.loc.y += top;
         area.size.h -= top + margin;
         area.loc.x += margin;
@@ -340,6 +383,9 @@ impl State {
     /// The thumbnails of the workspaces on `output`, in their order, once the view is open:
     /// centered at the top of the work area, as wide as the screen is for their height.
     pub fn overview_strip(&self, output: &Output) -> Vec<RectF> {
+        if self.overview.only.is_some() {
+            return Vec::new();
+        }
         let (Some(work), Some(screen)) =
             (self.work_area(output), self.space.output_geometry(output))
         else {
