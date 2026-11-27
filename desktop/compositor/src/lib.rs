@@ -10,7 +10,9 @@ pub mod clicks;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
+pub mod displays;
 pub mod dmabuf;
+pub mod edid;
 pub mod focus;
 pub mod fullscreen;
 pub mod genie;
@@ -177,6 +179,8 @@ pub struct State {
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
     /// Screens and where they draw in the host frame.
     screens: Vec<output::Screen>,
+    /// Screens switched off, and the saved setting of each screen (ADR 0025).
+    displays: displays::Displays,
     gesture: Option<input::Gesture>,
     /// Touchpad gestures in progress, and the protocol that hands them to clients (lot D-31).
     gestures: gestures::Gestures,
@@ -351,6 +355,7 @@ impl State {
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
+            displays: displays::Displays::default(),
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
@@ -522,6 +527,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // From behind another window, it comes to the front with an animation (lot D-19d).
+                self.start_raise(window);
                 self.space.raise_element(window, true);
             }
             None => self.space.elements().for_each(|w| {
@@ -592,6 +599,7 @@ impl State {
                 moving: false,
                 decoration: 0.0,
                 scale: 1.0,
+                shadow: 1.0,
             });
         }
         // Nothing drawn before the first content of the client: neither an empty frame nor
