@@ -4,7 +4,6 @@
 //! is written and read back in a temporary folder by the tests.
 
 use std::ffi::OsString;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
