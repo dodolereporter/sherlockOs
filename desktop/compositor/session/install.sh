@@ -39,6 +39,9 @@ sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo cp -r $q/desktop/sherlock-ui/icons/hicolor $data/icons/
+# The pictures of the lock screen, dark and light (lot D-25b):
+sudo install -D -m 644 $q/assets/lock/lock-dark.jpg $data/lock/lock-dark.jpg
+sudo install -D -m 644 $q/assets/lock/lock-light.jpg $data/lock/lock-light.jpg
 # The PAM service of the lock screen (lot D-25a):
 sudo install -m 644 $q/desktop/lock/pam/sherlockos-lock /etc/pam.d/sherlockos-lock
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):

@@ -79,6 +79,13 @@ impl Catalog {
         self.tiles.is_empty()
     }
 
+    /// Looks every icon up now, off the interface's thread: the view then finds them at once.
+    pub fn look_up_icons(&self) {
+        for tile in &self.tiles {
+            let _ = self.apps.icon(&tile.entry);
+        }
+    }
+
     /// The icon file of `tile`, looked up the first time it is drawn.
     pub fn icon(&self, tile: &Tile) -> Option<PathBuf> {
         self.apps.icon(&tile.entry)

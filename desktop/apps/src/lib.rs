@@ -5,15 +5,20 @@
 
 pub mod app;
 pub mod catalog;
+pub mod icons;
 pub mod pager;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
+use iced_exwlshell::reexport::{
+    Anchor, KeyboardInteractivity, Layer, LayerSize, NewLayerShellSettings,
+};
 use iced_exwlshell::settings::{ExWlSettings, LayerShellSettings, StartMode};
 use iced_exwlshell::shell::{ShellInfo, ShellType};
 use launcher::apps::Apps;
+use launcher::service::Inbox;
+use launcher::startup;
 use sherlock_ui::apps as look;
 use sherlock_ui::{color, theme};
 
@@ -21,7 +26,7 @@ use app::{Message, View};
 use catalog::Catalog;
 
 /// Name of the layer-shell surface, readable by the compositor.
-const NAMESPACE: &str = "sherlockos-apps";
+pub const NAMESPACE: &str = "sherlockos-apps";
 
 /// Name of the lock file that keeps one view at a time (`launcher::instance`).
 pub const LOCK: &str = "sherlockos-apps.lock";
@@ -40,6 +45,20 @@ pub fn surface() -> LayerShellSettings {
     }
 }
 
+/// The surface of a resident view, opened at each showing: the same as `surface`.
+pub fn new_surface() -> NewLayerShellSettings {
+    let screen = surface();
+    NewLayerShellSettings {
+        anchor: screen.anchor,
+        layer: screen.layer,
+        size: screen.size,
+        exclusive_zone: Some(screen.exclusive_zone),
+        keyboard_interactivity: screen.keyboard_interactivity,
+        namespace: Some(String::from(NAMESPACE)),
+        ..NewLayerShellSettings::default()
+    }
+}
+
 /// The installed applications of this session, as the launcher reads them, with icons looked
 /// up for the grid's size.
 pub fn catalog() -> Catalog {
@@ -50,27 +69,50 @@ pub fn catalog() -> Catalog {
     let theme = icon_theme::user_theme(&dirs.config_home);
     let icons =
         icon_theme::Lookup::new(&data, Some(&home), theme.as_deref()).context("Applications");
-    let apps = Apps::load(&dirs, &launcher::locales(), terminal)
-        .with_icons(icons)
-        .with_icon_size(look::ICON_LOOKUP, look::ICON_SCALE);
+    let apps = startup::timed("desktop entries read", || {
+        Apps::load(&dirs, &launcher::locales(), terminal)
+    })
+    .with_icons(icons)
+    .with_icon_size(look::ICON_LOOKUP, look::ICON_SCALE);
     let catalog = Catalog::new(apps);
+    startup::timed("icons looked up", || catalog.look_up_icons());
     tracing::info!(applications = catalog.len(), ?theme, "applications");
     catalog
 }
 
-/// Runs the view until an application starts or it is closed.
-pub fn run() -> Result<(), iced_exwlshell::Error> {
-    launcher::apply_theme();
+/// Runs the view: until an application starts or it is closed, or for the whole session when
+/// it is resident (`inbox`, lot P-02).
+pub fn run(inbox: Option<Inbox>) -> Result<(), iced_exwlshell::Error> {
+    startup::timed("theme read", launcher::apply_theme);
     let view = View::new(catalog(), Arc::new(launcher::launch::spawn));
+    let layer = match inbox {
+        Some(_) => LayerShellSettings {
+            start_mode: StartMode::Background,
+            ..LayerShellSettings::default()
+        },
+        None => surface(),
+    };
+    let reload: app::Reload = Arc::new(catalog);
+    // Where the surfaces land: a resident view draws its icons for that screen at its start.
+    let (broadcast, outputs) = iced_exwlshell::shell::channel();
     // The daemon wants a boot function it may call again: the view is handed over once.
     let first = std::sync::Mutex::new(Some(view));
     let boot = move || {
-        let view = first
+        let mut view = first
             .lock()
             .ok()
             .and_then(|mut v| v.take())
             .unwrap_or_else(|| View::new(catalog(), Arc::new(launcher::launch::spawn)));
-        (view, iced::Task::none())
+        let task = match inbox.clone() {
+            Some(inbox) => {
+                view = view
+                    .resident(inbox, reload.clone())
+                    .with_outputs(outputs.clone());
+                view.warm_up()
+            }
+            None => iced::Task::none(),
+        };
+        (view, task)
     };
     iced_exwlshell::daemon(boot, namespace, View::update, View::view)
         .theme(|_: &View, _| Some(theme::theme()))
@@ -84,7 +126,8 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         })
         .settings(launcher::settings())
         .wl_settings(ExWlSettings {
-            layer_settings: surface(),
+            layer_settings: layer,
+            shell_broadcast: broadcast,
             ..ExWlSettings::default()
         })
         .run()

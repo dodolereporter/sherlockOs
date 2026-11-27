@@ -63,6 +63,10 @@ appearance-config = { path = "../appearance-config" }
 name = "gallery"
 required-features = ["iced"]
 
+[[example]]
+name = "startup"
+required-features = ["iced"]
+
 [[test]]
 name = "gallery"
 required-features = ["iced"]
