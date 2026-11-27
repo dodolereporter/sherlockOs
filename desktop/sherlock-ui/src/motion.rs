@@ -353,6 +353,27 @@ pub const GEOMETRY_PRECISION: f64 = 0.5;
 /// Precision below which an animated scale is settled.
 pub const SCALE_PRECISION: f64 = 0.001;
 
+/// The "Reduce motion" setting (UI-11): when on, what only decorates a change (a scrollbar
+/// that fades, widens or stretches at a limit) jumps to its end instead of moving. The
+/// desktop has no such setting yet: a program that reads one calls `set_reduced` at start-up
+/// and when it changes. Off by default.
+static REDUCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns "Reduce motion" on or off for the whole process.
+pub fn set_reduced(on: bool) {
+    REDUCED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether "Reduce motion" is on.
+pub fn reduced() -> bool {
+    REDUCED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `duration`, or nothing while "Reduce motion" is on.
+pub fn unless_reduced(duration: Duration) -> Duration {
+    if reduced() { Duration::ZERO } else { duration }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
