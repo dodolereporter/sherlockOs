@@ -45,8 +45,6 @@ pub enum Logind {
     Sleep(bool),
     /// A new `delay` inhibitor of the sleep.
     Inhibitor(OwnedFd),
-    /// Another program blocks `idle` (lot D-38).
-    IdleBlocked(bool),
 }
 
 /// The triggers held by the state.
@@ -157,7 +155,8 @@ impl State {
     }
 
     fn check_idle(&mut self) {
-        // A video in full screen, or logind blocking `idle`: the inactivity waits (lot D-38).
+        // A visible video, a cookie on the bus, logind: the inactivity waits, and starts again
+        // when the last one goes (lot D-43).
         if self.idle_inhibited() {
             self.note_input();
             return;
@@ -208,22 +207,11 @@ impl State {
                 }
             })
             .map_err(|err| err.error)?;
-        let (idle_address, idle_sender) = (address.clone(), sender.clone());
         let spawned = std::thread::Builder::new()
             .name("logind".into())
             .spawn(move || {
                 if let Err(err) = listen(address, &sender) {
                     tracing::warn!("logind: {err}: no lock from logind, nor before the sleep");
-                }
-            });
-        if let Err(err) = spawned {
-            tracing::warn!("logind: no thread: {err}");
-        }
-        let spawned = std::thread::Builder::new()
-            .name("logind-idle".into())
-            .spawn(move || {
-                if let Err(err) = watch_idle_block(idle_address, &idle_sender) {
-                    tracing::warn!("logind: {err}: its idle inhibitors are not followed");
                 }
             });
         if let Err(err) = spawned {
@@ -264,7 +252,6 @@ impl State {
                 self.triggers.sleeping = None;
                 self.screens_on();
             }
-            Logind::IdleBlocked(blocked) => self.set_logind_idle(blocked),
             Logind::Inhibitor(fd) => self.triggers.inhibitor = Some(fd),
         }
     }
@@ -282,35 +269,6 @@ impl State {
             self.triggers.sleeping = None;
             self.triggers.inhibitor = None;
         }
-    }
-}
-
-/// How often logind's `BlockInhibited` is read.
-const IDLE_BLOCK_EVERY: Duration = Duration::from_secs(5);
-
-/// Reads whether another program blocks `idle` through logind (`BlockInhibited`), every
-/// `IDLE_BLOCK_EVERY`, and says so when it changes.
-fn watch_idle_block(
-    address: Option<String>,
-    sender: &channel::Sender<Logind>,
-) -> Result<(), zbus::Error> {
-    use zbus::blocking::{Connection, Proxy, connection::Builder};
-    let connection = match address {
-        Some(address) => Builder::address(address.as_str())?.build()?,
-        None => Connection::system()?,
-    };
-    let manager = Proxy::new(&connection, LOGIND, MANAGER_PATH, MANAGER)?;
-    let mut last = None;
-    loop {
-        let blocked: String = manager.get_property("BlockInhibited")?;
-        let idle = blocked.split(':').any(|what| what == "idle");
-        if last != Some(idle) {
-            last = Some(idle);
-            if sender.send(Logind::IdleBlocked(idle)).is_err() {
-                return Ok(());
-            }
-        }
-        std::thread::sleep(IDLE_BLOCK_EVERY);
     }
 }
 
