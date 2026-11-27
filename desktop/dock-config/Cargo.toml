@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 # Bounds and defaults of the settings: the tokens only, without iced.
 sherlock-ui = { path = "../sherlock-ui", default-features = false }
+# The one safe writer of settings files (permissions, links, flush): standard library only,
+# like this crate (workspace crate).
+mime-apps = { path = "../mime-apps" }
 
 [lints]
 workspace = true

@@ -163,8 +163,11 @@ pub struct App {
     /// The folded sidebar, over the page in a narrow window.
     pub(crate) sidebar: Slide,
     pub(crate) thumbnails: HashMap<&'static str, image::Handle>,
-    /// Files changed and not written yet, and when to write them.
-    pending: Vec<File>,
+    /// Files that cannot be changed: unreadable, not text, or not writable. Their settings
+    /// are shown dimmed, and never written.
+    pub(crate) locked: Vec<File>,
+    /// Changes not written yet, in their order, and when to write them.
+    pending: Vec<Change>,
     save_at: Option<Instant>,
     pub(crate) theme: ThemeFade,
     origin: Instant,
@@ -172,7 +175,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
-        let settings = Settings::load(&config.paths);
+        let (settings, locked) = Settings::load(&config.paths);
         let dirs = config.paths.wallpaper_dirs.clone();
         let app = Self {
             paths: config.paths,
@@ -184,6 +187,7 @@ impl App {
             spotlight: None,
             sidebar: Slide::at_rest(false),
             thumbnails: HashMap::new(),
+            locked,
             pending: Vec::new(),
             save_at: None,
             theme: ThemeFade::default(),
@@ -312,10 +316,12 @@ impl App {
                     .collect();
             }
             Message::Set(change) => {
-                let file = self.apply(change);
-                if !self.pending.contains(&file) {
-                    self.pending.push(file);
+                if !self.can_change(file_of(change)) {
+                    return Task::none();
                 }
+                // Shown at once; written from the file as it is on the disk when it is written.
+                apply(&mut self.settings, change);
+                self.pending.push(change);
                 if is_continuous(change) {
                     self.save_at = Some(Instant::now() + cr::SAVE_DELAY);
                 } else {
@@ -337,13 +343,50 @@ impl App {
         self.sidebar.show(now, false);
     }
 
-    /// Writes the files changed. A file that cannot be written goes to the log; the setting
-    /// stays as chosen in the window.
+    /// The message of `change`, none when its file is locked: the control is disabled.
+    pub(crate) fn message(&self, change: Change) -> Option<Message> {
+        self.can_change(file_of(change))
+            .then_some(Message::Set(change))
+    }
+
+    /// `on_change` when the settings of `file` can be changed: a switch or a slider then
+    /// answers, and is disabled otherwise.
+    pub(crate) fn enabled<T>(
+        &self,
+        file: File,
+        on_change: fn(T) -> Message,
+    ) -> Option<fn(T) -> Message> {
+        self.can_change(file).then_some(on_change)
+    }
+
+    /// Whether the settings of `file` can be changed.
+    pub(crate) fn can_change(&self, file: File) -> bool {
+        !self.locked.contains(&file)
+    }
+
+    /// Writes the changes waiting, file by file: each file is read again as it is now, takes
+    /// its changes, and only the keys they touch are written (`Settings::update`). A file that
+    /// cannot be read or written goes to the log and becomes locked.
     pub fn flush(&mut self) {
         self.save_at = None;
-        for file in std::mem::take(&mut self.pending) {
-            if let Err(error) = self.settings.save(file, &self.paths) {
-                tracing::warn!(%error, ?file, "setting not written");
+        let changes = std::mem::take(&mut self.pending);
+        for file in File::ALL {
+            let mine: Vec<Change> = changes
+                .iter()
+                .copied()
+                .filter(|c| file_of(*c) == file)
+                .collect();
+            if mine.is_empty() || !self.can_change(file) {
+                continue;
+            }
+            let updated = self.settings.update(file, &self.paths, |settings| {
+                for change in mine {
+                    apply(settings, change);
+                }
+            });
+            if let Err(error) = updated {
+                tracing::warn!(%error, ?file, "setting not written: the file is now locked");
+                self.locked.push(file);
             }
         }
     }
@@ -354,58 +397,63 @@ impl App {
         self.sidebar = Slide::at_rest(self.sidebar.shown());
         self.spotlight = None;
     }
+}
 
-    /// Makes the change in the settings; returns the file that holds it.
-    fn apply(&mut self, change: Change) -> File {
-        let s = &mut self.settings;
-        let time = |Hour(minutes): Hour| TimeOfDay::new(minutes / 60 % 24, minutes % 60, 0);
-        match change {
-            Change::Mode(mode) => s.appearance.mode = mode,
-            Change::LightFrom(hour) => {
-                if let Some(t) = time(hour).filter(|t| *t != s.appearance.dark_from) {
-                    s.appearance.light_from = t;
-                }
-            }
-            Change::DarkFrom(hour) => {
-                if let Some(t) = time(hour).filter(|t| *t != s.appearance.light_from) {
-                    s.appearance.dark_from = t;
-                }
-            }
-            Change::Wallpaper(id) => {
-                s.wallpaper.wallpaper = Some(id.to_owned());
-                s.wallpaper.path = None;
-            }
-            Change::FollowTheme(on) => s.wallpaper.follow_theme = on,
-            Change::DockSize(v) => s.dock.icon_size = from_share(v, ICON_SIZES).round(),
-            Change::Magnification(on) => s.dock.magnification = on,
-            Change::MagnificationFactor(v) => {
-                s.dock.magnification_factor = (from_share(v, FACTORS) * 10.0).round() / 10.0;
-            }
-            Change::AutoHide(when) => s.dock.auto_hide = when,
-            Change::Position(edge) => s.dock.position = edge,
-            Change::Click(click) => s.touchpad.click = click,
-            Change::TapToClick(on) => s.touchpad.tap_to_click = on,
-            Change::NaturalScroll(on) => s.touchpad.natural_scroll = on,
-            Change::Speed(v) => {
-                let speed = f64::from(from_share(v, SPEEDS));
-                s.touchpad.speed = (speed * 100.0).round() / 100.0;
-            }
-            Change::Typing(on) => s.touchpad.disable_while_typing = on,
-            Change::ShowClicks(on) => s.pointer.show_clicks = on,
-        }
-        match change {
-            Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
-            Change::Wallpaper(_) | Change::FollowTheme(_) => File::Wallpaper,
-            Change::DockSize(_)
-            | Change::Magnification(_)
-            | Change::MagnificationFactor(_)
-            | Change::AutoHide(_)
-            | Change::Position(_) => File::Dock,
-            Change::ShowClicks(_) => File::Pointer,
-            _ => File::Touchpad,
-        }
+/// The file that holds a change.
+pub(crate) fn file_of(change: Change) -> File {
+    match change {
+        Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
+        Change::Wallpaper(_) | Change::FollowTheme(_) => File::Wallpaper,
+        Change::DockSize(_)
+        | Change::Magnification(_)
+        | Change::MagnificationFactor(_)
+        | Change::AutoHide(_)
+        | Change::Position(_) => File::Dock,
+        Change::ShowClicks(_) => File::Pointer,
+        _ => File::Touchpad,
     }
+}
 
+/// Makes the change in the settings.
+fn apply(s: &mut Settings, change: Change) {
+    let time = |Hour(minutes): Hour| TimeOfDay::new(minutes / 60 % 24, minutes % 60, 0);
+    match change {
+        Change::Mode(mode) => s.appearance.mode = mode,
+        Change::LightFrom(hour) => {
+            if let Some(t) = time(hour).filter(|t| *t != s.appearance.dark_from) {
+                s.appearance.light_from = t;
+            }
+        }
+        Change::DarkFrom(hour) => {
+            if let Some(t) = time(hour).filter(|t| *t != s.appearance.light_from) {
+                s.appearance.dark_from = t;
+            }
+        }
+        Change::Wallpaper(id) => {
+            s.wallpaper.wallpaper = Some(id.to_owned());
+            s.wallpaper.path = None;
+        }
+        Change::FollowTheme(on) => s.wallpaper.follow_theme = on,
+        Change::DockSize(v) => s.dock.icon_size = from_share(v, ICON_SIZES).round(),
+        Change::Magnification(on) => s.dock.magnification = on,
+        Change::MagnificationFactor(v) => {
+            s.dock.magnification_factor = (from_share(v, FACTORS) * 10.0).round() / 10.0;
+        }
+        Change::AutoHide(when) => s.dock.auto_hide = when,
+        Change::Position(edge) => s.dock.position = edge,
+        Change::Click(click) => s.touchpad.click = click,
+        Change::TapToClick(on) => s.touchpad.tap_to_click = on,
+        Change::NaturalScroll(on) => s.touchpad.natural_scroll = on,
+        Change::Speed(v) => {
+            let speed = f64::from(from_share(v, SPEEDS));
+            s.touchpad.speed = (speed * 100.0).round() / 100.0;
+        }
+        Change::Typing(on) => s.touchpad.disable_while_typing = on,
+        Change::ShowClicks(on) => s.pointer.show_clicks = on,
+    }
+}
+
+impl App {
     /// The id of the wallpaper chosen in the collection, `None` for an image of the user's.
     pub(crate) fn wallpaper(&self) -> Option<&str> {
         let config = &self.settings.wallpaper;

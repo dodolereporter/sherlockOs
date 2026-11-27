@@ -308,11 +308,15 @@ pinned list apply at once, the surface takes its new size, anchor, margin and ex
 The watcher sends its first reading to the dock too, so that a change between the dock's own
 reading at startup and the watcher's start is not missed.
 
-**Writing.** `DockConfig::save` writes a temporary file of its own in the same folder (process
-id and a counter: the dock and Control Room may write at the same time), flushes it to the
-disk, renames it over the old file and flushes the folder: a reader sees the old or the new
-file, never half of one, and two writers never mix. When `dock.conf` is a symbolic link (a
-dotfiles folder), its target is written and the link kept.
+**Writing.** `DockConfig::save` goes through `mime_apps::write_atomically`, the one safe
+writer of the desktop's settings files: a temporary file of its own in the same folder (process
+id and a counter: the dock and Control Room may write at the same time), created with the
+permissions of the file it replaces, flushed to the disk, renamed over the old file, then the
+folder flushed: a reader sees the old or the new file, never half of one, and two writers never
+mix. When `dock.conf` is a symbolic link (a dotfiles folder), its target is written and the link
+kept, even when the target does not exist yet. `to_text` starts from the text read and sets only
+the keys whose value changed since (D-26a): comments, unknown keys and a value the file got
+wrong stay as they were.
 
 `Pinned` lists desktop file ids (`.desktop` accepted). Sherlock is not in it: it is always in
 the middle (as many applications on its left as on its right, one more on the left for an odd

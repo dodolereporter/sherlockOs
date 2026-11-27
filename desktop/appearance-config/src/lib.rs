@@ -1,6 +1,6 @@
 //! The appearance settings file, `$XDG_CONFIG_HOME/appearance/appearance.conf`: the theme, and
 //! the hours of the automatic mode. Every program reads it the same way and follows it live
-//! (`follow`); the settings application (Control Room, D-26a) writes it (`to_text`). Depends on the
+//! (`follow`); the settings application (Control Room, D-26a) writes it (`write_into`). Depends on the
 //! tokens of sherlock-ui, on `libc` and on `tracing`.
 //!
 //! ```text
@@ -241,15 +241,26 @@ impl AppearanceConfig {
         }
     }
 
-    /// The file's text with these settings, as Control Room writes it: `parse` reads it back.
-    /// The times are written to the minute.
-    pub fn to_text(&self) -> String {
-        format!(
-            "[{GROUP}]\n{THEME}={}\n{LIGHT_FROM}={}\n{DARK_FROM}={}\n",
-            self.mode.key(),
-            self.light_from,
-            self.dark_from
-        )
+    /// `text`, the file as it is, with the keys whose value differs from what it says set to
+    /// these settings': the line of the key in `[Appearance]` is replaced, or the key is added
+    /// at the end of the group (the group at the end of the file without one). Comments, other
+    /// groups, unknown keys and the order stay. Control Room writes the file so.
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse(text);
+        let values = |c: &Self| {
+            [
+                (THEME, c.mode.key().to_owned()),
+                (LIGHT_FROM, c.light_from.to_string()),
+                (DARK_FROM, c.dark_from.to_string()),
+            ]
+        };
+        let mut text = text.to_owned();
+        for ((key, value), (_, before)) in values(self).into_iter().zip(values(&read)) {
+            if value != before {
+                text = set(&text, key, &value);
+            }
+        }
+        text
     }
 
     /// The theme at `now`, and the time of day of the next switch of the automatic mode;
@@ -269,6 +280,50 @@ impl AppearanceConfig {
         };
         (theme, Some(next))
     }
+}
+
+/// `text` with `key=value` in the `[Appearance]` group: its last line there replaced, or a
+/// line added at the end of the group, after its last line that is not blank.
+fn set(text: &str, key: &str, value: &str) -> String {
+    let line = format!("{key}={value}");
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut group = "";
+    let (mut found, mut end) = (None, None);
+    for (i, raw) in text.lines().enumerate() {
+        let trimmed = raw.trim();
+        if let Some(name) = trimmed.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            group = name;
+            continue;
+        }
+        if group != GROUP {
+            continue;
+        }
+        if !trimmed.is_empty() {
+            end = Some(i);
+        }
+        let is_key = trimmed
+            .split_once('=')
+            .is_some_and(|(k, _)| !trimmed.starts_with('#') && k.trim() == key);
+        if is_key {
+            found = Some(i);
+        }
+    }
+    let header = lines.iter().position(|l| l.trim() == format!("[{GROUP}]"));
+    match (found, end, header) {
+        (Some(at), _, _) => lines[at] = line,
+        (None, Some(at), _) => lines.insert(at + 1, line),
+        (None, None, Some(at)) => lines.insert(at + 1, line),
+        (None, None, None) => {
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{GROUP}]"));
+            lines.push(line);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn problem(key: &'static str, value: &str, expected: &str) -> Problem {
@@ -344,12 +399,33 @@ mod tests {
             light_from: at(6, 30, 0),
             dark_from: at(20, 0, 0),
         };
-        let (read, problems) = AppearanceConfig::parse(&config.to_text());
+        let (read, problems) = AppearanceConfig::parse(&config.write_into(""));
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(read, config);
         assert_eq!(config.light_from.minutes(), 6 * 60 + 30);
-        let (read, _) = AppearanceConfig::parse(&AppearanceConfig::default().to_text());
-        assert_eq!(read, AppearanceConfig::default());
+        assert_eq!(AppearanceConfig::default().write_into(""), "");
+    }
+
+    #[test]
+    fn control_room_changes_one_key_and_keeps_the_rest() {
+        let text = "# mine\n[Other]\nA=1\n\n[Appearance]\n# my hours\nTheme=dark\nFuture=x\n\n[Last]\nB=2\n";
+        let (mut config, _) = AppearanceConfig::parse(text);
+        config.mode = Mode::Light;
+        assert_eq!(
+            config.write_into(text),
+            "# mine\n[Other]\nA=1\n\n[Appearance]\n# my hours\nTheme=light\nFuture=x\n\n[Last]\nB=2\n"
+        );
+        // A key not there yet goes at the end of its group.
+        config.light_from = at(8, 0, 0);
+        assert_eq!(
+            config.write_into(text),
+            "# mine\n[Other]\nA=1\n\n[Appearance]\n# my hours\nTheme=light\nFuture=x\nAutoLightFrom=08:00\n\n[Last]\nB=2\n"
+        );
+        // Without the group, it is added at the end.
+        assert_eq!(
+            config.write_into("[Other]\nA=1\n"),
+            "[Other]\nA=1\n\n[Appearance]\nTheme=light\nAutoLightFrom=08:00\n"
+        );
     }
 
     #[test]

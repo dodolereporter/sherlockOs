@@ -272,6 +272,11 @@ impl App {
             Setting::Position => t::POSITION,
             _ => setting.entry().1,
         };
+        // A setting whose file cannot be changed says so, under its disabled control.
+        let help = match self.can_change(setting.file()) {
+            true => help,
+            false => t::LOCKED_FILE,
+        };
         let label = column![
             ui::body(name).font(typography::UI_MEDIUM),
             ui::body(help)

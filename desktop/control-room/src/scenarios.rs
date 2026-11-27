@@ -18,7 +18,7 @@ use sherlock_ui::{theme, typography};
 
 use crate::app::{App, Change, Config, Hour, Message};
 use crate::search::{Page, Setting};
-use crate::settings::{Paths, Settings};
+use crate::settings::{File, Paths, Settings};
 use crate::thumbnails;
 
 /// A temporary folder, removed at the end.
@@ -93,7 +93,8 @@ fn every_setting_is_written_and_read_back() {
     }
     // A slider waits for its rest; closing the window writes what waits.
     app.flush();
-    let read = Settings::load(&app.paths);
+    let (read, locked) = Settings::load(&app.paths);
+    assert!(locked.is_empty());
     let s = &read;
     let written = &app.settings;
     assert_eq!(s.appearance, written.appearance);
@@ -138,6 +139,130 @@ fn a_file_keeps_what_control_room_does_not_show() {
     assert!(text.contains("Position=right"));
 }
 
+/// The application on files already there, in a temporary `XDG_CONFIG_HOME`.
+fn bench_with(name: &str, files: &[(&str, &str)]) -> (TempDir, App) {
+    let tmp = TempDir::new(name);
+    let paths = Paths::under(&tmp.0.join("config"), Vec::new());
+    for (relative, text) in files {
+        let path = tmp.0.join("config").join(relative);
+        fs::create_dir_all(path.parent().expect("folder")).expect("folder");
+        fs::write(path, text).expect("settings file");
+    }
+    let (app, _) = App::new(Config {
+        paths,
+        page: Page::Appearance,
+    });
+    (tmp, app)
+}
+
+#[test]
+fn an_unknown_key_and_the_comments_stay() {
+    let touchpad = "# my touchpad\nspeed = 0.4\nfuture-key = 3\nclick = middle\n";
+    let appearance = "# mine\n[Appearance]\nTheme=dark\nFuture=x\n\n[Other]\nA=1\n";
+    let (_tmp, mut app) = bench_with(
+        "unknown",
+        &[
+            ("sherlockos/touchpad.conf", touchpad),
+            ("appearance/appearance.conf", appearance),
+        ],
+    );
+    // Read as far as it goes: the speed counts, the rest is left aside, nothing is locked.
+    assert_eq!(app.settings.touchpad.speed, 0.4);
+    assert!(app.locked.is_empty());
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    let _ = app.update(Message::Set(Change::Mode(Mode::Light)));
+    let text = |path: &Path| fs::read_to_string(path).expect("file");
+    assert_eq!(
+        text(&app.paths.touchpad),
+        "# my touchpad\nspeed = 0.4\nfuture-key = 3\nclick = middle\ntap-to-click = false\n"
+    );
+    assert_eq!(
+        text(&app.paths.appearance),
+        "# mine\n[Appearance]\nTheme=light\nFuture=x\n\n[Other]\nA=1\n"
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_never_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new("unreadable");
+    let paths = Paths::under(&tmp.0.join("config"), Vec::new());
+    fs::create_dir_all(paths.touchpad.parent().expect("folder")).expect("folder");
+    fs::write(&paths.touchpad, "speed = 0.4\n").expect("file");
+    fs::set_permissions(&paths.touchpad, fs::Permissions::from_mode(0o000)).expect("chmod");
+    // Not text: a NUL byte.
+    fs::write(&paths.pointer, "show-clicks = true\0\n").expect("file");
+    let (mut app, _) = App::new(Config {
+        paths: paths.clone(),
+        page: Page::Touchpad,
+    });
+    if fs::read(&paths.touchpad).is_ok() {
+        // Run as root: permissions do not stop it, nothing to check for that file.
+        return;
+    }
+    assert!(app.locked.contains(&File::Touchpad) && app.locked.contains(&File::Pointer));
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    let _ = app.update(Message::Set(Change::ShowClicks(false)));
+    app.flush();
+    fs::set_permissions(&paths.touchpad, fs::Permissions::from_mode(0o644)).expect("chmod");
+    assert_eq!(
+        fs::read_to_string(&paths.touchpad).expect("file"),
+        "speed = 0.4\n"
+    );
+    assert_eq!(
+        fs::read(&paths.pointer).expect("file"),
+        b"show-clicks = true\0\n"
+    );
+    // On screen: the setting says why, and its control does nothing.
+    assert!(app.message(Change::TapToClick(false)).is_none());
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::LOCKED_FILE).is_ok());
+}
+
+#[test]
+fn permissions_and_a_dangling_link_are_kept() {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, mut app) = bench_with("modes", &[("sherlockos/touchpad.conf", "speed = 0.4\n")]);
+    fs::set_permissions(&app.paths.touchpad, fs::Permissions::from_mode(0o600)).expect("chmod");
+    // The wallpaper file is a link into dotfiles not written yet.
+    let dotfiles = tmp.0.join("dotfiles/wallpaper.conf");
+    std::os::unix::fs::symlink(&dotfiles, &app.paths.wallpaper).expect("link");
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    let _ = app.update(Message::Set(Change::Wallpaper("ring")));
+    let mode = fs::metadata(&app.paths.touchpad)
+        .expect("file")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+    let link = fs::symlink_metadata(&app.paths.wallpaper).expect("link");
+    assert!(link.file_type().is_symlink(), "the link stays a link");
+    assert!(
+        fs::read_to_string(dotfiles)
+            .expect("target")
+            .contains("wallpaper = ring")
+    );
+}
+
+#[test]
+fn an_application_pinned_in_the_dock_meanwhile_stays_pinned() {
+    let (_tmp, mut app) = bench_with("dock", &[("dock/dock.conf", "[Dock]\nPinned=evidence;\n")]);
+    // While Control Room is open, the dock pins an application.
+    let pinned = "[Dock]\n# pinned in the dock\nPinned=evidence;firefox;\n";
+    fs::write(&app.paths.dock, pinned).expect("dock pins");
+    let _ = app.update(Message::Set(Change::DockSize(100)));
+    app.flush();
+    let text = fs::read_to_string(&app.paths.dock).expect("dock");
+    assert!(
+        text.contains("# pinned in the dock\nPinned=evidence;firefox;"),
+        "{text}"
+    );
+    assert!(text.contains("IconSize=96"), "{text}");
+    // And Control Room now knows it.
+    let pins = app.settings.dock.pinned.clone().expect("pinned");
+    assert_eq!(pins, ["evidence", "firefox"]);
+}
+
 #[test]
 fn a_slider_writes_once_it_rests() {
     let (_tmp, mut app) = bench("slider", Vec::new());
@@ -146,7 +271,7 @@ fn a_slider_writes_once_it_rests() {
     assert!(!app.paths.touchpad.exists(), "not while it moves");
     std::thread::sleep(cr::SAVE_DELAY);
     let _ = app.update(Message::Frame(std::time::Instant::now()));
-    assert_eq!(Settings::load(&app.paths).touchpad.speed, -0.6);
+    assert_eq!(Settings::load(&app.paths).0.touchpad.speed, -0.6);
 }
 
 #[test]

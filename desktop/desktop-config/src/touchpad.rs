@@ -144,50 +144,56 @@ names!(SwipeDown, Minimize = "minimize", Nothing = "nothing");
 
 impl Config {
     /// Reads `key = value` lines; `#` starts a comment line. Unknown keys and values, and a
-    /// speed out of its range, are refused, so that a typo does not go unnoticed.
+    /// speed out of its range, are refused, so that a typo does not go unnoticed: the error of
+    /// the first one is returned.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let (config, mut problems) = Self::parse_lenient(text);
+        match problems.is_empty() {
+            true => Ok(config),
+            false => Err(problems.remove(0)),
+        }
+    }
+
+    /// Reads what can be read: each line that cannot is left at its default and listed.
+    /// Control Room shows the file so, and changes it without losing the rest.
+    pub fn parse_lenient(text: &str) -> (Self, Vec<Error>) {
         let mut config = Self::default();
-        for (i, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let error = |reason: String| Error::Line {
-                line: i + 1,
-                reason,
-            };
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| error("expected key = value".into()))?;
-            let value = value.trim();
-            let flag = || {
-                value
-                    .parse::<bool>()
-                    .map_err(|_| error(format!("expected true or false, not {value:?}")))
-            };
-            match key.trim() {
-                "tap-to-click" => config.tap_to_click = flag()?,
-                "tap-and-drag" => config.tap_and_drag = flag()?,
-                "drag-lock" => config.drag_lock = flag()?,
-                "natural-scroll" => config.natural_scroll = flag()?,
-                "disable-while-typing" => config.disable_while_typing = flag()?,
-                "speed" => {
-                    let (low, high) = SPEED_RANGE;
-                    config.speed = value
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|s| (low..=high).contains(s))
-                        .ok_or_else(|| {
-                            error(format!("expected a number from -1 to 1, not {value:?}"))
-                        })?;
-                }
-                "acceleration" => config.acceleration = value.parse().map_err(error)?,
-                "click" => config.click = value.parse().map_err(error)?,
-                "swipe-down" => config.swipe_down = value.parse().map_err(error)?,
-                key => return Err(error(format!("unknown key {key:?}"))),
+        let mut problems = Vec::new();
+        for (line, pair) in crate::conf::pairs(text) {
+            if let Err(reason) = pair.and_then(|(key, value)| config.take(key, value)) {
+                problems.push(Error::Line { line, reason });
             }
         }
-        Ok(config)
+        (config, problems)
+    }
+
+    /// Takes the value of one key.
+    fn take(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let flag = || {
+            value
+                .parse::<bool>()
+                .map_err(|_| format!("expected true or false, not {value:?}"))
+        };
+        match key {
+            "tap-to-click" => self.tap_to_click = flag()?,
+            "tap-and-drag" => self.tap_and_drag = flag()?,
+            "drag-lock" => self.drag_lock = flag()?,
+            "natural-scroll" => self.natural_scroll = flag()?,
+            "disable-while-typing" => self.disable_while_typing = flag()?,
+            "speed" => {
+                let (low, high) = SPEED_RANGE;
+                self.speed = value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| (low..=high).contains(s))
+                    .ok_or_else(|| format!("expected a number from -1 to 1, not {value:?}"))?;
+            }
+            "acceleration" => self.acceleration = value.parse()?,
+            "click" => self.click = value.parse()?,
+            "swipe-down" => self.swipe_down = value.parse()?,
+            key => return Err(format!("unknown key {key:?}")),
+        }
+        Ok(())
     }
 
     /// Reads the settings file. A missing file is the default setting.
@@ -201,20 +207,31 @@ impl Config {
             }),
         }
     }
-}
 
-impl fmt::Display for Config {
-    /// The file as Control Room writes it: `parse` reads it back.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "tap-to-click = {}", self.tap_to_click)?;
-        writeln!(f, "tap-and-drag = {}", self.tap_and_drag)?;
-        writeln!(f, "drag-lock = {}", self.drag_lock)?;
-        writeln!(f, "natural-scroll = {}", self.natural_scroll)?;
-        writeln!(f, "disable-while-typing = {}", self.disable_while_typing)?;
-        writeln!(f, "speed = {}", self.speed)?;
-        writeln!(f, "acceleration = {}", self.acceleration)?;
-        writeln!(f, "click = {}", self.click)?;
-        writeln!(f, "swipe-down = {}", self.swipe_down)
+    /// Each key and its value as written in the file.
+    fn values(&self) -> [(&'static str, String); 9] {
+        [
+            ("tap-to-click", self.tap_to_click.to_string()),
+            ("tap-and-drag", self.tap_and_drag.to_string()),
+            ("drag-lock", self.drag_lock.to_string()),
+            ("natural-scroll", self.natural_scroll.to_string()),
+            (
+                "disable-while-typing",
+                self.disable_while_typing.to_string(),
+            ),
+            ("speed", self.speed.to_string()),
+            ("acceleration", self.acceleration.to_string()),
+            ("click", self.click.to_string()),
+            ("swipe-down", self.swipe_down.to_string()),
+        ]
+    }
+
+    /// `text`, the file as it is, with the keys whose value differs from what it says set to
+    /// this setting's: comments, unknown keys, lines it gets wrong and the order stay. Control
+    /// Room writes the file so.
+    pub fn write_into(&self, text: &str) -> String {
+        let (read, _) = Self::parse_lenient(text);
+        crate::conf::update(text, &self.values(), &read.values())
     }
 }
 
@@ -255,11 +272,8 @@ mod tests {
         };
         assert_eq!(config, expected);
         // What Control Room writes reads back the same.
-        assert_eq!(Config::parse(&expected.to_string()).unwrap(), expected);
-        assert_eq!(
-            Config::parse(&Config::default().to_string()).unwrap(),
-            Config::default()
-        );
+        assert_eq!(Config::parse(&expected.write_into("")).unwrap(), expected);
+        assert_eq!(Config::default().write_into(""), "");
     }
 
     #[test]
@@ -278,6 +292,26 @@ mod tests {
                 other => panic!("{text}: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn control_room_changes_one_key_and_keeps_the_rest() {
+        let text = "# my touchpad\nspeed = 0.4\nclick = middle\n\n# kept\nfuture = 1\n";
+        let (mut config, problems) = Config::parse_lenient(text);
+        // The lines it gets wrong are listed; the others are read.
+        assert_eq!(problems.len(), 2);
+        assert_eq!(config.speed, 0.4);
+        config.tap_to_click = false;
+        assert_eq!(
+            config.write_into(text),
+            "# my touchpad\nspeed = 0.4\nclick = middle\n\n# kept\nfuture = 1\ntap-to-click = false\n"
+        );
+        config.speed = 0.5;
+        let written = config.write_into(text);
+        assert!(
+            written.contains("speed = 0.5\nclick = middle\n"),
+            "{written}"
+        );
     }
 
     #[test]

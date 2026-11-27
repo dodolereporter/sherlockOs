@@ -7,6 +7,8 @@ use std::ops::Range;
 use sherlock_ui::control_room::texts as t;
 use sherlock_ui::icon::Icon;
 
+use crate::settings::File;
+
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
@@ -106,6 +108,21 @@ impl Setting {
 
     pub fn page(self) -> Page {
         self.entry().0
+    }
+
+    /// The file that holds it.
+    pub fn file(self) -> File {
+        match self.page() {
+            Page::Appearance => match self {
+                Self::Theme | Self::LightFrom | Self::DarkFrom => File::Appearance,
+                Self::Wallpaper | Self::FollowTheme => File::Wallpaper,
+                _ => File::Dock,
+            },
+            Page::Touchpad => match self {
+                Self::ShowClicks => File::Pointer,
+                _ => File::Touchpad,
+            },
+        }
     }
 }
 

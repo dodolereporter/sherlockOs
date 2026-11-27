@@ -76,6 +76,8 @@ pub mod texts {
     pub const SEARCH: &str = "Rechercher un réglage";
     pub const NO_RESULT: &str = "Aucun réglage ne correspond.";
     pub const SHOW_SIDEBAR: &str = "Afficher les sections";
+    /// Under a setting whose file cannot be read or written: it is left alone.
+    pub const LOCKED_FILE: &str = "Ce fichier de réglages ne peut pas être modifié.";
 
     // Pages: their name in the sidebar, the subtitle under their title.
     pub const APPEARANCE: &str = "Apparence";

@@ -22,6 +22,9 @@ sherlock-ui = { path = "../sherlock-ui" }
 appearance-config = { path = "../appearance-config" }
 desktop-config = { path = "../desktop-config" }
 dock-config = { path = "../dock-config" }
+# The one safe writer of settings files, shared with the dock and `mimeapps.list`
+# (workspace crate).
+mime-apps = { path = "../mime-apps" }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",
