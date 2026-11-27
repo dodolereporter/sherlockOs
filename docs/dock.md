@@ -271,11 +271,14 @@ folders that come after (that is how a user removes a system application). So is
 whose `TryExec` program is missing. `NoDisplay=true` keeps the application, but the defaults
 never pick it.
 
-The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
-neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
-default roles, its open windows and « Nouvelle fenêtre », and this batch may not change it. The
-dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
-(and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
+The `mime-apps` crate (D-27) lists and reads the dock's desktop entries (since S-DOCK-1): the
+same folders as the launcher and the applications view, sub-folders included (Wine's
+`wine/Programs/…` gives the id `wine-Programs-…`, which « Garder dans le Dock » writes), and the
+same bounds: a regular file once its links are followed, of 256 KiB at most, in UTF-8. A link to
+`/dev/zero` or a huge file is skipped instead of filling the dock's memory. Its `DesktopEntry`
+has neither `StartupWMClass` nor the actions, so the dock still parses the text it is given
+with its own `KeyFile`. `dock.conf` and the user's `mimeapps.list` are read the same way, 64 KiB
+at most (`mime_apps::file::read_bounded`).
 
 Icons are looked up by the shared `icon-theme` crate (`docs/icon-theme.md`, since D-03), as
 the Icon Theme specification says, without the cache file: in the theme of `IconTheme` in the
