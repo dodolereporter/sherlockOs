@@ -5,7 +5,7 @@ use iced::Padding;
 use iced::keyboard::{self, Key as IcedKey, key::Named};
 use sherlock_ui::component::Trailing;
 use sherlock_ui::surface::Elevation;
-use sherlock_ui::{metrics, strings::top_bar as text};
+use sherlock_ui::{metrics, panels, strings::top_bar as text};
 
 /// The menu entries. None of them is wired yet: activating one logs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,13 +43,24 @@ impl Action {
     }
 
     /// The board also shows the shortcuts Super+, Super+G and Super+L. No compositor binds
-    /// them yet, so they are not shown: a shortcut that does nothing would mislead.
+    /// them yet, so they are not shown: a shortcut that does nothing would mislead. What does
+    /// not exist yet says « Bientôt ».
     pub fn trailing(self) -> Trailing<'static> {
-        match self {
-            // The design board announces a submenu that it does not draw.
-            Self::PowerOff => Trailing::Submenu,
-            _ => Trailing::None,
+        if self.enabled() {
+            Trailing::None
+        } else {
+            Trailing::Shortcut(panels::text::SOON)
         }
+    }
+
+    /// Something runs behind the entry: not the updates nor the game mode yet (D-36d).
+    pub fn enabled(self) -> bool {
+        !matches!(self, Self::Updates | Self::GameMode)
+    }
+
+    /// Logging out and powering off lose unsaved work: a second click confirms them.
+    pub fn needs_confirmation(self) -> bool {
+        matches!(self, Self::LogOut | Self::PowerOff)
     }
 
     /// First entry of a group: a separator comes before it.
@@ -150,16 +161,21 @@ pub fn key(event: keyboard::Event) -> Option<Key> {
     })
 }
 
-/// Highlighted entry after `key`. Arrows wrap around; with no highlighted entry, Down takes the
-/// first one and Up the last one.
+/// Highlighted entry after `key`. Arrows wrap around and skip the entries that do nothing yet;
+/// with no highlighted entry, Down takes the first one and Up the last one.
 pub fn move_cursor(cursor: Option<usize>, key: Key) -> Option<usize> {
-    let last = Action::ALL.len() - 1;
-    match (key, cursor) {
-        (Key::First, _) | (Key::Next, None) => Some(0),
+    let usable: Vec<usize> = (0..Action::ALL.len())
+        .filter(|i| Action::ALL[*i].enabled())
+        .collect();
+    let (first, last) = (*usable.first()?, *usable.last()?);
+    let at = cursor.and_then(|c| usable.iter().position(|u| *u == c));
+    match (key, at) {
+        (Key::First, _) | (Key::Next, None) => Some(first),
         (Key::Last, _) | (Key::Previous, None) => Some(last),
-        (Key::Next, Some(i)) => Some(if i >= last { 0 } else { i + 1 }),
-        (Key::Previous, Some(i)) => Some(if i == 0 { last } else { i - 1 }),
-        (Key::Activate | Key::Close | Key::Left | Key::Right, cursor) => cursor,
+        (Key::Next, Some(p)) => Some(usable.get(p + 1).copied().unwrap_or(first)),
+        (Key::Previous, Some(0)) => Some(last),
+        (Key::Previous, Some(p)) => Some(usable[p - 1]),
+        (Key::Activate | Key::Close | Key::Left | Key::Right, _) => cursor,
     }
 }
 
@@ -174,6 +190,9 @@ mod tests {
         assert_eq!(move_cursor(Some(0), Key::Next), Some(1));
         assert_eq!(move_cursor(Some(6), Key::Next), Some(0));
         assert_eq!(move_cursor(Some(0), Key::Previous), Some(6));
+        // « Mises à jour » and « Passer en mode jeu » do nothing yet: skipped.
+        assert_eq!(move_cursor(Some(1), Key::Next), Some(4));
+        assert_eq!(move_cursor(Some(4), Key::Previous), Some(1));
         assert_eq!(move_cursor(Some(3), Key::First), Some(0));
         assert_eq!(move_cursor(Some(3), Key::Last), Some(6));
     }

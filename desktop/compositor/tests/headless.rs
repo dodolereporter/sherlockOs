@@ -43,6 +43,10 @@ mod tests {
             wl_surface::WlSurface,
         },
     };
+    use wayland_protocols::wp::cursor_shape::v1::client::{
+        wp_cursor_shape_device_v1::{Shape as CursorShape, WpCursorShapeDeviceV1},
+        wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+    };
     use wayland_protocols::wp::fractional_scale::v1::client::{
         wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
         wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -77,6 +81,9 @@ mod tests {
         configures: Vec<(i32, i32, Vec<XdgState>)>,
         /// Serial of the last button press received.
         button_serial: Option<u32>,
+        /// Serial of the last `wl_pointer.enter`: what `wp_cursor_shape_device_v1.set_shape`
+        /// must give.
+        enter_serial: Option<u32>,
         /// Keys received: evdev code, pressed or released.
         keys: Vec<(u32, bool)>,
         /// The compositor has answered the last `wl_display.sync`.
@@ -209,8 +216,10 @@ mod tests {
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            if let wl_pointer::Event::Button { serial, .. } = event {
-                client.button_serial = Some(serial);
+            match event {
+                wl_pointer::Event::Button { serial, .. } => client.button_serial = Some(serial),
+                wl_pointer::Event::Enter { serial, .. } => client.enter_serial = Some(serial),
+                _ => {}
             }
         }
     }
@@ -334,6 +343,8 @@ mod tests {
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
     delegate_noop!(Client: WpFractionalScaleManagerV1);
+    delegate_noop!(Client: WpCursorShapeManagerV1);
+    delegate_noop!(Client: WpCursorShapeDeviceV1);
     delegate_noop!(Client: XdgPositioner);
 
     /// Shared memory for a buffer of `size` bytes, without a file left on disk.
@@ -1802,6 +1813,43 @@ mod tests {
         keyboard: KeyboardInteractivity::OnDemand,
     };
 
+    /// Lot D-21g: as on macOS, a dock that hides by itself reserves no room. A maximized window,
+    /// then the dock hidden as the real one is (no zone, all but 2 of its 76 below the edge),
+    /// brought back by the pointer (its margin back to 0) and hidden again: the window gets no
+    /// new configure, and keeps its size.
+    #[test]
+    fn a_dock_revealed_then_hidden_does_not_resize_a_maximized_window() {
+        let mut h = Harness::start();
+        let _shown = h.show_window_with(true);
+        h.wait_size("maximized", 800, 600);
+        let hidden = Spec {
+            zone: -1,
+            margin: (0, 0, 2 - 76, 0),
+            ..DOCK
+        };
+        let dock = anchor(&mut h, hidden);
+        settle(&mut h);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let size = h.state.space.element_geometry(&window).map(|g| g.size);
+        let configures = h.client.configures.len();
+        // Revealed, then hidden again, a few steps of its slide each way.
+        for bottom in [-50, -20, 0, -20, -50, 2 - 76] {
+            dock.layer.set_margin(0, 0, bottom, 0);
+            dock.surface.commit();
+            settle(&mut h);
+            assert_eq!(
+                h.state.output_area(),
+                Some(rect(0, 0, 800, 600)),
+                "{bottom}"
+            );
+        }
+        assert_eq!(h.client.configures.len(), configures, "no new configure");
+        assert_eq!(
+            h.state.space.element_geometry(&window).map(|g| g.size),
+            size
+        );
+    }
+
     /// Lot D-18d: a maximized or snapped window pulled by its title bar comes off under the
     /// pointer at its previous size and stays where it is dropped, also when the dock comes
     /// back and the work area shrinks.
@@ -3238,5 +3286,78 @@ mod tests {
         assert_eq!(at(&light, 400, 140), [bar.r, bar.g, bar.b]);
         assert_ne!(at(&dark, 40, 300), at(&light, 40, 300));
         color::set_active(Theme::Dark);
+    }
+
+    /// Lot UI-07: a client names its cursor the way iced_exwlshell does (a cursor shape device
+    /// made for the request, the serial of the pointer's entry, the device destroyed at once),
+    /// and the compositor shows it: the hand that points over a button, the open hand over a
+    /// slider, the closed hand while the slider is held. A shape named with another serial is
+    /// refused, as the protocol says. Over the dock, the arrow.
+    #[test]
+    fn the_compositor_shows_the_cursor_a_client_names() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals
+                .iter()
+                .any(|g| g.1 == "wp_cursor_shape_manager_v1")
+        });
+        let manager: WpCursorShapeManagerV1 = h.bind(&registry);
+        let pointer = shown.seat.get_pointer(&qh, ());
+        h.run_until("the pointer", |_, _| true);
+        h.client.enter_serial = None;
+        h.state.pointer_motion((400.0, 300.0).into(), 1);
+        h.run_until("the entry", |c, _| c.enter_serial.is_some());
+        let serial = h.client.enter_serial.unwrap();
+        let name = |h: &mut Harness, shape: CursorShape, serial: u32| {
+            let device = manager.get_pointer(&pointer, &h.queue.handle(), ());
+            device.set_shape(serial, shape);
+            device.destroy();
+            h.run_until("the shape", |_, _| true);
+            h.run_until("the shape", |_, _| true);
+        };
+        // Over a button.
+        name(&mut h, CursorShape::Pointer, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Pointer));
+        // The pointer moves on the button: the shape stays.
+        h.state.pointer_motion((410.0, 305.0).into(), 2);
+        h.run_until("the motion", |_, _| true);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Pointer));
+        // Over a slider, then pressed on it.
+        name(&mut h, CursorShape::Grab, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grab));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+        name(&mut h, CursorShape::Grabbing, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        // A stale serial changes nothing.
+        name(&mut h, CursorShape::Text, serial.wrapping_sub(1));
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+
+        // The dock keeps the arrow, as on macOS: over an icon, pressed and dragged. Its icons
+        // name no shape (`mouse_area` without `interaction`), which iced_exwlshell sends as
+        // the default one at the pointer's entry.
+        let _dock = anchor(&mut h, DOCK);
+        h.client.enter_serial = None;
+        h.state.pointer_motion((400.0, 560.0).into(), 5);
+        h.run_until("the entry on the dock", |c, _| c.enter_serial.is_some());
+        let serial = h.client.enter_serial.unwrap();
+        name(&mut h, CursorShape::Default, serial);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "over an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+        h.state.pointer_motion((440.0, 556.0).into(), 7);
+        h.run_until("the drag", |_, _| true);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "dragging an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 8);
     }
 }
