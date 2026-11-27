@@ -438,4 +438,61 @@ mod tests {
         checked(&mut s, Ok(()));
         assert!(matches!(s.lock.phase(), Phase::Leaving(_)));
     }
+
+    thread_local! {
+        /// The time of the world for `revealing_input_keeps_the_form`.
+        static WALL: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn wall() -> Instant {
+        WALL.with(|w| w.get()).unwrap()
+    }
+
+    /// The bug of Q-44: at rest, neither frames nor ticks come, so the clock of the lock stops.
+    /// The input that brings the form, a minute later, must count from the time of the world:
+    /// otherwise Sherlock shows at once, without his spring, and leaves at the next tick.
+    #[test]
+    fn revealing_input_keeps_the_form() {
+        let inputs = [
+            ("space", Some((Key::Space, " ")), 0),
+            ("letter", Some((Key::Other, "p")), 1),
+            ("enter", Some((Key::Enter, "\r")), 0),
+            ("click", None, 0),
+        ];
+        for (name, input, typed) in inputs {
+            let mut s = screen((1920.0, 1080.0));
+            assert!(!s.lock.form_shown());
+            let at = Instant::now() + Duration::from_secs(60);
+            WALL.with(|w| w.set(Some(at)));
+            s.lock.set_wall(wall);
+            match input {
+                Some((k, text)) => key(&mut s, k, text),
+                None => {
+                    let _ = s.lock.update(Message::Input(s.primary, Input::Pointer));
+                }
+            }
+            assert!(s.lock.form_shown(), "{name}");
+            // The bubble grows with its spring from the input on.
+            let _ = s
+                .lock
+                .update(Message::Frame(at + Duration::from_millis(30)));
+            let bubble = s.lock.presence(1);
+            assert!(
+                bubble > 0.0 && bubble < 0.9,
+                "{name}: the entrance plays ({bubble})"
+            );
+            // The ticks start again with the form: it stays.
+            for (second, boot) in [(1, 100), (2, 101), (5, 104)] {
+                let tick = at + Duration::from_secs(second);
+                let _ = s
+                    .lock
+                    .update(Message::Tick(tick, Duration::from_secs(boot)));
+                assert!(s.lock.form_shown(), "{name}: still shown after {second} s");
+            }
+            let _ = s.lock.update(Message::Frame(at + Duration::from_secs(5)));
+            assert_eq!(s.lock.presence(1), 1.0, "{name}: the entrance ends");
+            assert_eq!(s.lock.presence(3), 1.0, "{name}: the pill is up");
+            assert_eq!(s.lock.password_len(), typed, "{name}: a letter is not lost");
+        }
+    }
 }
