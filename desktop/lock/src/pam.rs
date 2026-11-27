@@ -5,10 +5,13 @@
 //! own. The password goes to PAM through the conversation function, in a copy PAM frees; ours
 //! is overwritten with zeros as soon as it is handed over, and never logged. A check that takes
 //! longer than `TIMEOUT` counts as PAM unavailable (lot D-25f): the field comes back, and the
-//! interface never waits for PAM.
+//! interface never waits for PAM. Only one check runs at a time (lot D-25m): while the thread of
+//! a check that hangs is still there, a new try is answered `Busy` at once, so that threads
+//! stuck in PAM never pile up.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -69,6 +72,9 @@ pub enum AuthError {
     /// PAM itself could not run: no library, no service, an error of the system.
     #[error("PAM unavailable: {0}")]
     Unavailable(String),
+    /// The previous check has not given its thread back yet (lot D-25m).
+    #[error("a check is still running")]
+    Busy,
 }
 
 /// What checks a password: PAM, or a fake one in the tests.
@@ -81,15 +87,33 @@ pub trait Authenticator: Send + Sync + 'static {
 /// in its spinner forever, with no way to try again (lot D-25f).
 pub const TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Gives the check back when its thread ends, however it ends.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Checks `password` for `user` on a thread of its own: the answer, or `Unavailable` once
-/// `limit` has passed. Returns at once; a check that hangs is left to its thread.
+/// `limit` has passed. Returns at once; a check that hangs is left to its thread, and until that
+/// thread ends, any other check with the same `busy` is answered `Busy` at once, the password
+/// wiped without reaching PAM.
 pub fn check_in_background(
     authenticator: Arc<dyn Authenticator>,
+    busy: &Arc<AtomicBool>,
     user: String,
     password: Secret,
     limit: Duration,
 ) -> oneshot::Receiver<Result<(), AuthError>> {
     let (sender, receiver) = oneshot::channel();
+    if busy.swap(true, Ordering::SeqCst) {
+        tracing::warn!("PAM: the previous check still runs, this one is refused");
+        let _ = sender.send(Err(AuthError::Busy));
+        return receiver;
+    }
+    let running = Running(Arc::clone(busy));
     // The first answer wins: PAM's, or the end of the limit.
     let sender = Arc::new(Mutex::new(Some(sender)));
     let answer = |sender: &Mutex<Option<oneshot::Sender<_>>>, result| {
@@ -100,7 +124,10 @@ pub fn check_in_background(
     let pam = Arc::clone(&sender);
     let spawned = std::thread::Builder::new()
         .name("pam".into())
-        .spawn(move || answer(&pam, authenticator.check(&user, password)));
+        .spawn(move || {
+            let _running = running;
+            answer(&pam, authenticator.check(&user, password));
+        });
     if let Err(err) = spawned {
         answer(&sender, Err(AuthError::Unavailable(err.to_string())));
         return receiver;
@@ -370,6 +397,7 @@ mod tests {
         let slow = Arc::new(Slow(Duration::from_secs(30)));
         let receiver = check_in_background(
             slow,
+            &Arc::default(),
             "dodo".into(),
             Secret::new("x".into()),
             Duration::from_millis(200),
@@ -384,11 +412,37 @@ mod tests {
         let quick = Arc::new(Slow(Duration::from_millis(10)));
         let receiver = check_in_background(
             quick,
+            &Arc::default(),
             "dodo".into(),
             Secret::new("x".into()),
             Duration::from_secs(5),
         );
         assert!(wait(receiver).is_ok());
+    }
+
+    /// One check at a time (lot D-25m): while a check that hangs keeps its thread, the next
+    /// tries are answered at once and start no thread; once it ends, a try reaches PAM again.
+    #[test]
+    fn a_check_that_hangs_holds_back_the_next_ones_without_new_threads() {
+        let busy = Arc::default();
+        let check = |pam: Duration, limit: Duration| {
+            check_in_background(
+                Arc::new(Slow(pam)),
+                &busy,
+                "dodo".into(),
+                Secret::new("x".into()),
+                limit,
+            )
+        };
+        let hung = check(Duration::from_millis(800), Duration::from_millis(100));
+        assert!(matches!(wait(hung), Err(AuthError::Unavailable(_))));
+        for _ in 0..5 {
+            let again = check(Duration::ZERO, Duration::from_secs(5));
+            assert_eq!(wait(again), Err(AuthError::Busy));
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        let later = check(Duration::ZERO, Duration::from_secs(5));
+        assert_eq!(wait(later), Ok(()));
     }
 
     /// A conversation as PAM leads it: `messages`, then the answers read back and freed.

@@ -94,11 +94,15 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - **Memory closed** (lot D-25k). The first thing `main` does: `PR_SET_DUMPABLE` at 0 (no other
   process of the user may trace the program nor read `/proc/<pid>/mem`, and no core dump) and
   `RLIMIT_CORE` at 0, since a panic aborts. A failure is logged, the lock goes on.
-- **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
-  text in its own state, and `on_input` hands a new `String` at each key before it becomes a
-  `Secret`; iced frees them without overwriting them. They live in the memory of this process
-  only, for the time the field shows them; a process able to read it (ptrace) could read the
-  password anyway.
+- **The text field never holds the password** (lot D-25m). iced's `text_input` keeps its own
+  copy of its value, rebuilt at each frame and freed without being wiped. So, while hidden, the
+  field is given one mask per character (characters of the private use area, a different one
+  at each place, drawn as dots), never the password; each edit of the field (a key, an erase, a
+  paste, a selection replaced) is found by comparing the new value with the masks, and applied
+  to the `Secret` (`app::edited`), in one allocation. What is left in iced's memory: the
+  characters typed, one by one, in the `String` that `on_input` hands over (wrapped in a
+  `Secret` at once, so wiped), and, while the eye shows the password, the password itself, as on
+  the screen. The memory of the program is closed to the user's other processes (lot D-25k).
 - **Tries.** The lock screen runs as the user, so it cannot write the counters of
   pam_faillock: failures are not counted, as with swaylock. Each wrong password waits for the
   delay of pam_faildelay (3 s, in our service) before PAM answers, and only one check
@@ -106,8 +110,10 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   keeps drawing.
 - **A PAM that hangs** (lot D-25f). The interface never waits for PAM: the check runs on a
   thread of its own, and after 20 s (`pam::TIMEOUT`) without an answer it counts as PAM
-  unavailable: the spinner stops, the field comes back with « Vérification impossible. Réessaie. », and
-  the next try starts a new check. A module waiting for a daemon (`pam_winbind`, in Debian's
+  unavailable: the spinner stops, the field comes back with « Vérification impossible. Réessaie. ».
+  One check at a time (lot D-25m): until the thread of the check that hangs ends, a new try is
+  answered at once with « Vérification encore en cours. Réessaie dans un instant. », its
+  password wiped without reaching PAM, so that threads stuck in PAM never pile up. A module waiting for a daemon (`pam_winbind`, in Debian's
   `common-auth` when Samba's winbind is installed) or for the network can no longer leave the
   lock screen in its spinner for good. The session log says « authentication: checking » at each
   try.
