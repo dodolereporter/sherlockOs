@@ -38,7 +38,9 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
+| `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/clipboard_history/` | Clipboard history of Super + V: what is read of each copy, off the loop, and the history (lot D-42) |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
@@ -693,6 +695,45 @@ limits above).
 The real session (lot D-14) has one output per connector with a screen, side by side in the
 order they are found, each with a frame of its own (see "Real session").
 
+### Changing the screens (ADR 0025, lot D-26b)
+
+The compositor offers `wlr-output-management-unstable-v1`, version 3 (`src/output_management.rs`):
+every screen is a head with its connector name, its EDID make, model and serial number, its
+modes (the preferred one first), and whether it is on with its mode, place, rotation and scale.
+A change of any of them is sent again, followed by `done` and a new serial. A client sends a
+whole configuration and tests or applies it; Control Room's « Écrans » page, `wlr-randr` and
+`kanshi` speak it. What a client may get wrong is a protocol error, as the protocol says: a mode
+of another head, a property set twice, a head configured twice or left out; a scale that is not
+positive. A configuration made on an older serial is cancelled.
+
+`src/displays.rs` checks the whole configuration before anything changes (`check_screens`):
+every screen known, at least one on, a mode the screen lists (a refresh of 0, or within half a
+hertz, finds the mode of that size), a rotation only where the screen can turn, a scale from 0.5
+to 4, a place within 65 536 points of the origin. `apply_screens` gives the hardware its part
+first: in the real session, `DrmCompositor::use_mode`, the rotation in the screen's
+`OutputModeSource`, or `clear` for a screen switched off; a refusal there puts back what had
+already changed and the configuration fails. The space follows: modes, scales and rotations,
+the screens at their places, windows moved with their screen, snapped and maximized ones
+refitted. A screen switched off loses its `wl_output` but stays a head, off, until it is lit
+again or unplugged. The main screen is the one at the origin.
+
+| Backend | Modes | Rotation | Off |
+| --- | --- | --- | --- |
+| Real session | Every mode of the connector | Yes | Yes |
+| `--headless`, tests | Its size, 1280 × 800, 1440 × 900, 1920 × 1080, 2560 × 1440 | Yes | Yes |
+| `--nested` | The slice of the window only | No | No |
+
+**Saved per screen.** In the real session, every screen is named by its EDID (`src/edid.rs`:
+the first block of 128 bytes, header and checksum checked; the maker's three letters, the name
+and serial descriptors, else the product code and serial number). A configuration that has held
+for `SAVE_AFTER` (20 seconds, longer than the 15 of Control Room's confirmation) is written to
+`$XDG_CONFIG_HOME/sherlockos/displays.conf` (`desktop_config::displays`), whole, off the event
+loop, through `mime_apps::write_atomically`: a session that dies while a change waits for its
+confirmation keeps the setting that worked. When a screen is plugged in, or at start, its saved
+mode, rotation, scale and place are taken again; a screen saved off is lit anyway, so that a
+machine never starts black. The file keeps the 32 screens met last; it is bounded (64 KiB, names
+of 64 characters, sizes, refresh, scale and places checked) and a wrong line is left aside.
+
 ## XWayland
 
 XWayland is an X11 server that is also a Wayland client of the compositor. Each X11 window has
@@ -779,7 +820,12 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
   looks their atom up in a property that nothing writes, and the paste failed: the compositor
   reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
-  with its own connection, and writes what comes into the Wayland client's pipe.
+  with its own connection, and writes what comes into the Wayland client's pipe. Bounded since
+  lot D-29b: 4 such pastes at once (one more closes the client's pipe at once, the client
+  reads nothing), 256 MiB and 60 s each, and the client's pipe written without blocking, each
+  piece within 5 s: a client that asks for pastes and never reads them cannot pile up threads
+  nor connections to XWayland, whose number of clients is limited. Each paste ends with its
+  thread, its connection and its window.
 - Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
   by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
   non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
@@ -801,11 +847,93 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
-- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
-  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
-  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
-  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
-  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
+## Drag and drop (lot D-29c)
+
+Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds
+(`src/dnd.rs`):
+
+- **The icon** the client gives (`start_drag`), drawn under the pointer in front of everything
+  but the cursor, moved by its `wl_surface.offset`, at the screen's scale like the other
+  surfaces. It gets its frame callbacks.
+- **Escape cancels**: the grab first leaves the surface under the pointer (ended there, it
+  would drop), then ends; the source is told `cancelled`. The key never reaches a client.
+- **The way back**: a drop refused or cancelled, the icon glides back to where the drag started
+  (`motion::DRAG_RETURN`, 300 ms, fading to `DRAG_RETURN_ALPHA`), as long as its client keeps
+  the icon surface. A client that wants that animation destroys its icon after it.
+- **The cursor**: the arrow during a drag, with a plus over an X11 window that takes a copy,
+  the refusal over one that takes nothing.
+
+### From Wayland to X11 (XDND)
+
+smithay 0.7 has no XDND, and its grab would cancel any drop on an X11 window (XWayland has no
+data device). The compositor speaks XDND itself (`src/xdnd.rs`), as an X11 client of XWayland
+of its own, connected when XWayland is ready, whose socket is a source of the event loop:
+
+- Over an X11 window, the grab is given no surface. If the window has `XdndAware` (version 3 to
+  5, `XdndProxy` honored), the compositor owns `XdndSelection` with the source's types
+  (`XdndTypeList` past three), sends `XdndEnter`, then `XdndPosition` at each move, one at a
+  time (it waits for each `XdndStatus`), and `XdndLeave` when the pointer leaves it.
+- **Positions**: the X11 root coordinates are the logical coordinates of the space, which
+  XWayland uses at every scale: the position sent is the X11 window's own place plus the
+  pointer's offset from its surface (tested at scale 2 in `tests/dnd.rs`).
+- **The action**: copy, or move with Shift, among those the source allows.
+- **The drop**: released over a window that accepted, the release is held back from the grab;
+  `XdndDrop` goes to the window, the source is told `dnd_drop_performed`. The window reads the
+  data (`ConvertSelection`): the compositor asks the Wayland source through a pipe, reads it in
+  a thread and answers, by INCR past 1 MiB. At `XdndFinished`, the source is told `dnd_finished`
+  (or `cancelled` if the window refused it), and the grab ends once the source is gone (500 ms
+  at most): smithay's grab, which never saw the drop, would also tell it `cancelled`.
+- **Security**: only the X11 client under the pointer may read the drag (a window of its
+  connection, recognized by the client bits of its identifier); any other read is refused. A
+  type is read at most up to 64 MiB, and each piece is awaited 5 s at most; a window that
+  never finishes is given up after 5 s, and the drop cancelled.
+- `text/plain;charset=utf-8` and `text/plain` are also given for `UTF8_STRING`, `TEXT` and
+  `STRING`; the other types keep their name as atom (`text/uri-list`,
+  `x-special/gnome-copied-files`, `image/png`).
+
+## Clipboard history
+
+Lot D-42, `src/clipboard_history/`. What is copied, in Wayland and X11 applications, is kept for
+the Super + V panel of the shell (ADR 0030 for pasting).
+
+- **What is read.** Every new CLIPBOARD selection passes through `State::selection_set`. Once
+  it is in place, the compositor reads the one type worth keeping, the way a client pastes it:
+  `text/uri-list` first (files when every address is `file://`), then `image/png` or
+  `image/jpeg`, then `text/plain;charset=utf-8` or `text/plain`. A Wayland client's selection is
+  asked from it (`request_data_device_client_selection`); an X11 one goes through the bridge of
+  lot D-29; the compositor's own (a screenshot) is written by the loop. The primary selection is
+  never kept.
+- **Off the loop.** A thread per read (`MAX_READS` at most, 4) reads the pipe, non-blocking, with
+  a deadline of 3 s, and stops past the limit of its type: 1 MiB of text, 256 KiB of addresses,
+  16 MiB of picture. Too large is not kept at all, never cut. A picture is decoded with limits
+  (16384 px a side, 256 MiB of pixels) for its thumbnail, 160 px on its longest side, in PNG.
+  What was read comes back to the loop by a channel; a read that ends after a newer one is
+  dropped.
+- **The history** (`model.rs`): newest first, 50 items at most and 128 MiB of content, the
+  oldest unpinned going first. The same content copied again goes back to the top with its id
+  and its pin. « Tout effacer » keeps the pinned items. Each item has its kind (text, link,
+  files, picture), a preview of 4 lines and 300 characters at most, its thumbnail, the app_id or
+  X11 class of the window that had the keyboard, and its time.
+- **Never kept:** anything while the session is locked (checked when the copy is seen and when
+  its read ends), a secret: a selection that offers `x-kde-passwordManagerHint` (KeePassXC, KDE)
+  or the nspasteboard types `org.nspasteboard.ConcealedType` and `TransientType`, or a copy from
+  a password manager known by its app_id or class (KeePassXC, Bitwarden, 1Password, Enpass,
+  Secrets, Proton Pass, LastPass): from X11, smithay drops the hint, whose name has no `/`.
+- **Put back** (`State::put_back`): the item becomes the compositor's own selection, in every
+  type it was read as (a text as `text/plain;charset=utf-8` and `text/plain`, files as
+  `text/uri-list`, `x-special/gnome-copied-files` and their paths as text), offered to X11 too,
+  and moves to the top without being read again. Refused while locked.
+- **The setting**, `clipboard.conf` (`desktop_config::clipboard`), read again within a second
+  of a change: `history = on|off` (on by default; off forgets everything at once) and
+  `keep-on-disk = on|off` (off by default: memory only).
+- **On disk** (`disk.rs`), with `keep-on-disk = on` only: the whole history, pinned items
+  included, in `$XDG_STATE_HOME/sherlockos/clipboard-history` (mode 0600), written by a thread
+  of its own after each change (the last state only), through a file renamed over it; read back
+  in a thread when the setting is on, with the history's limits. Turned off, the file goes.
+- **For the shell** (`shell/clipboard.rs`): `sherlock_clipboard_history_v1`, only on the shell
+  socket (ADR 0021), lists the items (their thumbnail in a memfd), and takes `paste`,
+  `set_pinned`, `remove` and `clear` from the Super + V panel. Super + V (Alt + V nested) starts
+  `sherlockos-clipboard` as Super + Space starts the launcher; pasting follows ADR 0030.
 
 ## GPU buffers (linux-dmabuf)
 
@@ -1278,6 +1406,31 @@ than one with the veil (2.7 against 1.7 ms at 800 × 600 on the author's machine
 with Konsole, the real bar and dock, without then with the blur, dark then light:
 `cargo build -p bar -p dock && cargo test -p compositor --test headless -- --ignored blur_board`
 writes `screenshots/blur-board.png`.
+
+### Raise (lot D-19d)
+
+A window that comes to the front from behind another one, whatever brings it there (the dock,
+the window switcher, a click, Mission Control, its application), no longer jumps there. As it is
+raised (`State::focus`, through `State::start_raise` in `src/window_anim.rs`):
+
+- if a window above it on its workspace covers part of it (the whole windows, title bars
+  included), it grows from `motion::RAISE_SCALE` (0.97) to 1 around its center on
+  `motion::RAISE_SPRING` (ratio 1.0: no visible bounce, settled in about 200 ms), and its shadow
+  grows and softens from `motion::RAISE_SHADOW` (0.6) of its offset and blur to its own
+  (`Visual::shadow`);
+- the windows it now covers step back to `motion::RECEDE_SCALE` (0.995) around their center
+  and come back, over `motion::RECEDE` (200 ms), along half a sinusoid (`motion::recede`);
+- nothing when it was fully visible, for a fullscreen window, with `--window-animations off`,
+  or while its genie runs: a window restored from the dock comes back by the genie only.
+
+The window is in front and has the keyboard at once; the pointer reaches it at its real place.
+Raised again before the end, or raised while it steps back, a window goes on from the scale it
+is drawn at, without a jump (`WindowMotion::raise`). One frame per blank while it runs, none at
+rest. No board draws it: the values are choices of the lot, to review on the machine.
+
+**Manual test.** Two overlapping windows: click the one behind, or pick it in the dock or in
+Mission Control; it grows into place and the other steps back. A window already fully visible comes
+to the front without animation.
 
 ### What rendering does not do yet
 
@@ -1986,6 +2139,17 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   unlocked (nothing unlocks it at login: the login screen's PAM module is not set up for this
   session). Alone on the machine, the session uses the user's bus, and the keyring already
   running there, if any.
+- **Old X11 tray icons** (lot D-45b). Programs that only know the X11 tray (XEmbed), such as
+  AnyDesk 7.1.4 with its `GtkStatusIcon`, would show no icon in the bar. When `xembedsniproxy`
+  is installed (KDE's, shipped with `plasma-workspace` on Debian 13), the script starts it with
+  the shell programs, a second after the bar, on XWayland's display, and starts it again like
+  them when it stops: it turns each X11 tray icon into a `StatusNotifierItem` registered with the
+  bar's watcher (see "Notification area" in `docs/bar.md`). The log says `session: X11 tray
+  icons: <path>`. Not started without XWayland, nor with `SHERLOCKOS_XEMBED=0`. The autostart of
+  the session (`desktop/autostart`, lot D-44, still in review) leaves its `/etc/xdg/autostart`
+  entry out (`OnlyShowIn=KDE`, and the list of what the session starts itself), so it never runs
+  twice. A proxy of our own may replace it later if needed. To check on the machine: whether
+  the icons come back after the bar restarts, since the proxy registers each icon once.
 - **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
   file chooser from Flatpak or Firefox, for instance). It reads `sherlockos-portals.conf` (the name of `XDG_CURRENT_DESKTOP`, `SherlockOS`, in lower case)
   (`desktop/compositor/session/`), which `just install-session` puts in
@@ -2128,7 +2292,8 @@ gives no two finger swipe, but a device that would is passed on.
 | 3 | Up | Opens Mission Control, which follows the fingers (see "Mission Control") |
 | 3 | Down | Closes Mission Control; out of it, nothing, or minimizes the window that has the keyboard with `swipe-down = minimize` |
 | 3 | Pinch, hold | Reserved |
-| 4 and more | Any | Reserved |
+| 4 | Pinch in, out | Opens, closes the applications view (lot D-41c, `docs/apps.md`) |
+| 4 and more | Any other | Reserved |
 | 1 and 2 | Pinch, hold, swipe | To the client under the pointer |
 
 "Reserved" means taken without effect: no client receives it, so that giving it a role later
@@ -2180,6 +2345,8 @@ libinput events to `State::process_input_event`:
 - **The ends of the row.** Fingers to the right on the first workspace: the row resists, then
   springs back; at the other end, one workspace at a time up to the third.
 - **Reserved.** Four fingers, three up, three down without a window: no workspace change.
+- **Applications view.** Four fingers pinching in start `sherlockos-apps --show`, spreading out
+  `--hide`, once per pinch, past 0.75 or 1.33 of the fingers' spread (lot D-41c).
 - **To the client.** A client binds `zwp_pointer_gestures_v1` and its swipe, pinch and hold
   objects, with a window under the pointer: it receives a two finger pinch (begin, scale, end),
   a hold (cancelled) and a two finger swipe; it receives nothing of three or four finger swipes,
@@ -2592,8 +2759,8 @@ just verify
 | --- | --- |
 | `src/layout.rs` | Centering, moving, resizing by each edge, opposite corner fixed during the whole gesture, client minimum and maximum sizes. Grab band: each side, each corner, wider at the corners, nothing inside, narrow window. Snapping: top, left and right edges, four corners, geometry of each zone with and without the gap, return to the previous size under the pointer |
 | `sherlock-ui/src/color.rs` | Colors premultiplied by their opacity |
-| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump |
-| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out |
+| `sherlock-ui/src/motion.rs` | Springs: convergence to the target, slight and bounded overshoot (between 0.5 and 4 %), response time (90 % in less than 150 ms, settled in less than 300 ms), target change without a jump in value or velocity, no overshoot for a critically damped or overdamped spring. Fade: duration of a hover, resumes without a jump. Raise spring settled in about 200 ms without overshoot |
+| `src/anim.rs` | Centered opening starting from zero opacity. Animated snap of the position then of the size, drag followed without delay before and after. Flag consumed even without a change or during an animation, stopped by a gesture. A size given slides at once, before the client takes it, and a refused size is let go after `SIZE_WAIT` without a jump. Decoration lost on a spring when maximized, none from the start, turning around halfway. Preview that appears, slides and fades out. Raise: scale and shadow growing to rest, step back there and back, turned around without a jump |
 | `src/render.rs` | An opaque window hides what is below but its rounded corners; a translucent one hides nothing. Discs at their place on the board at 1440 by 900, round on another screen. Shadow dimensions of the board's window, at scale 1 and 1.5. Corner radius, reduced for a small window. Clip flipped with the frame. Space to frame conversion of a screen at scale 2 and 1.25, without gaps |
 | `src/genie.rs` | Genie at 0 (the window), 0.5 (the bottom gone in first, the top narrower and lower, rows in order) and 1 (all of it behind the glass); at every frame nothing past the glass, and the window as wide as the icon where it enters it; each point moving toward the icon without a jump; a window behind the glass at rest not cut at once; the same genie turned for a dock at the top, left and right; scale effect without an icon; turned around halfway without a jump; the setting's names |
 | `tests/genie.rs` | The genie drawn for real at 0.5 and under a translucent dock, see below |
@@ -2620,6 +2787,12 @@ just verify
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
 The tests in `tests/headless.rs`:
+
+- **A window raised from behind grows, the other steps back** (lot D-19d): in front with the
+  keyboard at once, its scale and shadow growing to 1, the other window at its furthest step
+  back halfway, then rest. Fully visible, or with animations off: nothing plays. Turned around
+  halfway: no jump, both at rest at the end. `board_of_the_raise` (ignored, Mesa's EGL) saves
+  six steps in `target/tmp/raise-board.png`.
 
 - **Configure.** A client creates a titled window and receives its configure. It is maximized,
   goes fullscreen, comes back, then closes.

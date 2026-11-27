@@ -251,7 +251,8 @@ pub fn endpoints(list: &str) -> Vec<Endpoint> {
             found.push((endpoint, false));
         } else if let Some((endpoint, monitor)) = found.last_mut() {
             if let Some(text) = line.strip_prefix("Description:") {
-                endpoint.description = text.trim().to_owned();
+                // A Bluetooth output is described by the device's own name: cleaned.
+                endpoint.description = crate::names::shown(text);
             } else if let Some(sink) = line.strip_prefix("Monitor of Sink:") {
                 *monitor = sink.trim() != "n/a";
             }
@@ -272,10 +273,10 @@ pub fn description(sinks: &str, name: &str) -> String {
         if let Some(found) = line.strip_prefix("Name:") {
             current = found.trim() == name;
         } else if current && let Some(text) = line.strip_prefix("Description:") {
-            return text.trim().to_owned();
+            return crate::names::shown(text);
         }
     }
-    name.to_owned()
+    crate::names::shown(name)
 }
 
 /// The default output or the default microphone.

@@ -34,6 +34,27 @@ pub struct Level {
     pub unfold: Unfold,
 }
 
+/// The menu of an icon of the notification area, shown with the same popups (lot D-45a).
+#[derive(Debug, Clone)]
+pub struct ItemMenu {
+    /// Where the application exports it.
+    pub address: AppMenu,
+    /// Its tree, once read: the root, whose children are its entries.
+    pub root: Option<Item>,
+    pub anchor: Anchor,
+}
+
+/// Where the menu of an icon opens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Anchor {
+    /// Under the bar, its glass's left edge at this x of the bar surface: an icon kept in the
+    /// bar.
+    Bar(f32),
+    /// In the popup `Id` of the notification area, its glass's top left corner at this x and y:
+    /// under an icon of the popup.
+    Popup(Id, f32, f32),
+}
+
 /// The menus of the active application.
 #[derive(Debug, Default)]
 pub struct GlobalMenu {
@@ -46,6 +67,9 @@ pub struct GlobalMenu {
     /// The menu being read before it opens: its id, and whether the keyboard opens it. A click
     /// elsewhere meanwhile replaces it.
     pub opening: Option<(i32, bool)>,
+    /// The menu of an icon of the notification area, while it is the one shown: the levels
+    /// are then its own.
+    pub item: Option<ItemMenu>,
 }
 
 /// How a label is measured: its width in the font of the bar, bold or not.
@@ -84,6 +108,10 @@ impl GlobalMenu {
     /// The entries the menu `id` shows: those of a menu or a submenu, or for « » » the menus
     /// that do not fit in the bar.
     pub fn entries(&self, id: i32, placement: &Placement) -> Vec<&Item> {
+        if let Some(item) = &self.item {
+            let found = item.root.as_ref().and_then(|root| root.find(id));
+            return found.map(|i| i.shown().collect()).unwrap_or_default();
+        }
         if id == MORE_ID {
             let kept: Vec<i32> = placement.menus.iter().map(|m| m.0).collect();
             let tops = self.tops().into_iter();
@@ -102,9 +130,20 @@ impl GlobalMenu {
         item.map_or("", |i| i.label.as_str())
     }
 
-    /// The menu of the bar that is open, if any.
+    /// The menu of the bar that is open, if any: none while an icon's menu is shown.
     pub fn open_top(&self) -> Option<i32> {
-        self.levels.first().map(|l| l.item)
+        self.item
+            .is_none()
+            .then(|| self.levels.first().map(|l| l.item))
+            .flatten()
+    }
+
+    /// Where the menus shown are exported: the icon's, else the application's.
+    pub fn shown_address(&self) -> Option<&AppMenu> {
+        match &self.item {
+            Some(item) => Some(&item.address),
+            None => self.address.as_ref(),
+        }
     }
 
     /// The level shown in the popup `popup`.

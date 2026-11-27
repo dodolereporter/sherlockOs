@@ -3,9 +3,10 @@
 //! The only place where colors, sizes and interface texts are written. The tokens (`color`,
 //! `cursor`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `app_icon`, `logo`,
 //! `window`, `decorations`, `mission_control`, `click`, `osd`, `evidence`, `lock`,
-//! `control_room`, `blur`) depend on nothing, and neither does `gpu`, the choice of the renderer. The
-//! theme and the iced components sit behind the `iced` feature, on by default, the `glass`
-//! that asks for the blur behind the `layer-shell` feature; `panels`,
+//! `control_room`, `blur`) depend on nothing, and neither does `gpu`, the choice of the
+//! renderer. The theme and the iced components sit behind the `iced` feature, on by default
+//! (among them `scroll`, the one scroll area), the `glass` that asks for the blur behind the
+//! `layer-shell` feature; `panels`,
 //! `launcher` and `apps` hold both, their components behind that feature. The gallery lives in `examples/gallery`. See
 //! `docs/sherlock-ui.md`.
 
@@ -13,11 +14,13 @@ pub mod app_icon;
 pub mod apps;
 pub mod blur;
 pub mod click;
+pub mod clipboard;
 pub mod color;
 pub mod control_room;
 pub mod cursor;
 pub mod decorations;
 pub mod dock;
+pub mod drag;
 pub mod evidence;
 pub mod gpu;
 pub mod icon;
@@ -31,8 +34,10 @@ pub mod notifications;
 pub mod osd;
 pub mod panels;
 pub mod screenshot;
+pub mod screenshot_tool;
 pub mod strings;
 pub mod texts;
+pub mod tray;
 pub mod typography;
 pub mod wallpapers;
 pub mod window;
@@ -53,6 +58,8 @@ pub mod glass;
 pub mod pointer;
 #[cfg(feature = "iced")]
 pub mod raster;
+#[cfg(feature = "iced")]
+pub mod scroll;
 #[cfg(feature = "iced")]
 pub mod surface;
 #[cfg(feature = "iced")]

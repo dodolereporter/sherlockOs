@@ -177,7 +177,9 @@ program starter. `Systemd`, the real one, runs without a shell:
 | « Éteindre » | `systemctl poweroff` |
 
 `<id>` is `$XDG_SESSION_ID`, or an empty argument, which `loginctl` reads as the caller's
-session. Locking only asks logind to lock: the session needs a locker that listens (the lock
+session. `Systemd` reads the exit code for 300 ms (`REFUSAL_WAIT`, Q-43): a refusal of logind
+or polkit is a `LaunchError::Refused` with its reason (the bar shows « Refusé »; the launcher
+stays open and logs it); a command still running then is reaped by a thread. Locking only asks logind to lock: the session needs a locker that listens (the lock
 screen is a later batch). Everything but locking loses unsaved work, so « Se déconnecter »,
 « Redémarrer » and « Éteindre » ask for confirmation: the first Enter (or click) turns their
 line into « Appuie encore sur Entrée pour confirmer »; a second one runs the command, if it is
@@ -207,10 +209,13 @@ disabled. A real index (watching changes, more folders) is a later batch.
 
 « Demander à Sherlock » is always the last row when the query is not empty. sherlockd has no
 interface for the shell yet, nor an option that takes a request: it knows `--demo`,
-`--claude-code <request>` (a demonstration), `--proxy` and `--test-server`. The row is
-therefore shown disabled, its line « Bientôt », and Enter does nothing. `ask::ASK_OPTION` names
-the option once it exists (`--ask`): the row then runs `<terminal> -e sherlockd --ask
-"<query>"`, the query in a single argument, without a shell (tested with the option set).
+`--claude-code` (a demonstration, its request on standard input), `--proxy` and
+`--test-server`. The row is therefore shown disabled, its line « Bientôt », and Enter does
+nothing. `ask::ASK_OPTION` names the option once it exists (`--ask`): the row then runs
+`<terminal> -e sherlockd --ask <file>`, without a shell (tested with the option set). The query
+is never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`, S-11): it
+is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd-requests/`,
+0600 from its creation in 0700 folders, which sherlockd reads then removes.
 
 What the interface should provide, for the launcher and the rest of the shell:
 
@@ -235,6 +240,25 @@ Every opening fades the panel in from a scale of 0.96, around the middle of its 
 (`launcher::OPEN_SCALE`, `OPEN_SPRING`), and every closing, whatever its cause (Escape, a start,
 a click beside, the shortcut again, the applications view opening), fades it out the same way
 before the surface goes. Frames are asked for only while it moves.
+
+The results move too (lot P-02d), on one spring without overshoot (`launcher::LIST_SPRING`,
+`motion::LIST_SPRING`, ratio 0.97, settled in about 250 ms), so that a row never passes its place
+nor the panel its height:
+
+| What | How |
+| --- | --- |
+| A result still there after a key | Slides from where it is drawn to its new place: nothing jumps when the results reorder |
+| A new result, a new section label | Fades in over 160 ms (`APPEAR`, `motion::LIST_APPEAR`) while it comes down 8 pixels to its place (`APPEAR_OFFSET`) |
+| A result gone | Leaves at once: the rows that stay slide over its place |
+| The panel | Its height follows the rows, growing or shrinking, its content cut to it |
+| The selection | A veil under the rows (`launcher::selection`) that slides from one row to the next, with the arrows and when the results move |
+
+Each item of the list is known by its section and its title (and its rank among the results of
+the same title), so a result is followed from one query to the next. An opening starts at rest:
+an empty search, the panel at its height, the selection on the first row. Frames are asked for
+while a row, the panel or the selection moves, never at rest. In software (the panel's own
+surface, see Surface) the surface takes its new height at once: a panel growing animates, a
+panel shrinking is cut to its new height at once.
 
 The first result is selected after every key. The keys are read with `event::listen_with`,
 whatever the field did with them: iced's text field takes Escape for itself. A click on a result
@@ -440,6 +464,12 @@ RUST_LOG=launcher=debug cargo run -p launcher
   start starting nothing;
 - layout: the panel height for each state, the texts drawn, the surface's place, and three
   screenshots in `target/tmp`;
+- motion (`the_results_slide_into_place_and_the_panel_follows`): the first letter makes the
+  panel grow from its empty height, partway after 60 ms, at its height and at rest after; an
+  arrow slides the selection, then rest; fewer results shrink the panel gently, then rest;
+- the board of the typing (`the_typing_board`, ignored, slow: `cargo test -p launcher --test
+  launcher -- --ignored board`): the opening, then « e », « ed » and an arrow down, frames 0,
+  40, 80 and 240 ms after, in both themes, in `target/tmp/launcher-board.png`;
 - sources (`tests/sources.rs`): the order of the sections (applications, system, files,
   Sherlock last; the calculator first), an empty query showing nothing, 5 results a section and
   9 in all with Sherlock's row kept, a disabled Sherlock doing nothing; « Se déconnecter »,

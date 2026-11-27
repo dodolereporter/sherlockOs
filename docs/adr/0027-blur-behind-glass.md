@@ -1,6 +1,6 @@
 # ADR 0027: Blur behind glass, asked with ext-background-effect-v1, drawn by the compositor
 
-- Status: proposed
+- Status: accepted (the author approved it on 2026-11-28)
 - Date: 2026-11-27
 - Lot: D-37
 
