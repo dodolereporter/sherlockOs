@@ -12,6 +12,7 @@ pub mod audio;
 pub mod backlight;
 pub mod keyboard;
 pub mod mpris;
+pub mod names;
 pub mod notify;
 pub mod secret;
 pub mod watch;
