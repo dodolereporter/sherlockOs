@@ -8,8 +8,8 @@
 use sherlock_ui::window as ui;
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
         SwitchToggleEvent,
     },
     desktop::{Window, WindowSurfaceType},
@@ -665,10 +665,13 @@ impl State {
 
     /// What is under the pointer at `pos`. The band of a window comes before the windows it
     /// covers, not before those above it. Overlay and top anchored
-    /// surfaces come before the windows, bottom and background ones after.
+    /// surfaces come before the windows, bottom and background ones after. A fullscreen
+    /// window covers the top layer, unless its edge brought it back (lot D-21e).
     pub(crate) fn hit(&self, pos: Point<f64, Logical>) -> Option<Hit> {
-        self.layer_hit(pos, &[Layer::Overlay, Layer::Top])
+        self.layer_hit(pos, &[Layer::Overlay])
+            .or_else(|| self.top_hit(pos, true))
             .or_else(|| self.window_hit(pos))
+            .or_else(|| self.top_hit(pos, false))
             .or_else(|| self.layer_hit(pos, &[Layer::Bottom, Layer::Background]))
     }
 
@@ -680,7 +683,7 @@ impl State {
         if let Some(hit) = self.layer_hit(pos, &[Layer::Overlay]) {
             return Some(hit);
         }
-        match self.layer_hit(pos, &[Layer::Top]) {
+        match self.top_hit(pos, true) {
             Some(Hit::Layer(main, surface, origin)) if main != surface => {
                 Some(Hit::Layer(main, surface, origin))
             }
@@ -917,11 +920,21 @@ impl State {
                 for axis in [Axis::Horizontal, Axis::Vertical] {
                     let v120 = event.amount_v120(axis);
                     let amount = event.amount(axis).or(v120.map(|v| v * 15.0 / 120.0));
-                    if let Some(amount) = amount.filter(|a| *a != 0.0) {
-                        frame = frame.value(axis, amount);
-                        if let Some(v120) = v120 {
-                            frame = frame.v120(axis, v120 as i32);
+                    match amount {
+                        Some(amount) if amount != 0.0 => {
+                            frame = frame.value(axis, amount);
+                            if let Some(v120) = v120 {
+                                frame = frame.v120(axis, v120 as i32);
+                            }
                         }
+                        // The fingers left the touchpad: libinput says so with a zero on a
+                        // continuous source, which clients need as `axis_stop` to end the
+                        // gesture (Qt and GTK otherwise never end it, nor start kinetic
+                        // scrolling) (Q-22).
+                        Some(_) if event.source() != AxisSource::Wheel => {
+                            frame = frame.stop(axis);
+                        }
+                        _ => {}
                     }
                 }
                 pointer.axis(self, frame);

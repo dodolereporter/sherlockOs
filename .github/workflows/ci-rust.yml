@@ -30,7 +30,9 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 15 minutes stopped being enough once the lock screen, the greeter and their renders came
+    # (Q-24): a run of `just verify` is cancelled in the middle of the tests.
+    timeout-minutes: 30
     steps:
       - name: Check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
