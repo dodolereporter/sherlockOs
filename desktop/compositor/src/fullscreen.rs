@@ -156,8 +156,8 @@ impl State {
 
     /// Where `surface`, of the top layer of `output` (whose layers are `map`), goes: in front
     /// of the windows, shifted by its slide (`Some`), or behind the fullscreen window that
-    /// covers the screen (`None`, `covered`). `input`: for the pointer, which the band of a
-    /// surface hiding by itself takes in front all the same.
+    /// covers the screen (`None`, `covered`). `input`: for the pointer, which takes a surface
+    /// coming at its place, and the band of a surface hiding by itself in front all the same.
     pub(crate) fn top_shift(
         &self,
         (output, map, covered): (&Output, &LayerMap, bool),
@@ -176,7 +176,11 @@ impl State {
                 .iter()
                 .find(|r| &r.output == output && r.edge == edge)
         });
+        // The pointer has a coming surface at its place from the start of its slide, as on
+        // macOS, and no longer a leaving one.
+        let reveal = reveal.filter(|r| !(input && r.leaving()));
         match (reveal, along, size) {
+            (Some(_), Some(_), Some(_)) if input => Some(Point::default()),
             (Some(reveal), Some((edge, rect)), Some(size)) => {
                 let slides = reveal.sliding.contains(surface.wl_surface());
                 let shown = if slides {
@@ -186,7 +190,7 @@ impl State {
                 };
                 Some(edge.shift(edge.reach(rect, size), shown))
             }
-            (None, Some((_, rect)), Some(size)) if input && !on_screen(rect, size) => {
+            (_, Some((_, rect)), Some(size)) if input && !on_screen(rect, size) => {
                 Some(Point::default())
             }
             _ => None,

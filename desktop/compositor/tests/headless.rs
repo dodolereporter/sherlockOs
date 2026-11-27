@@ -2223,8 +2223,8 @@ mod tests {
     /// The bar, then a window made fullscreen and drawn at the size of the screen: the bar and
     /// the window as the compositor knows them.
     fn fullscreen_under_bar(h: &mut Harness) -> (Anchored, Shown, ServerSurface, ServerSurface) {
-        let bar = show_bar(h);
         let shown = h.show_window();
+        let bar = show_bar(h);
         let output = h.state.space.outputs().next().unwrap().clone();
         let bar_surface = layer_map_for_output(&output)
             .layers()
