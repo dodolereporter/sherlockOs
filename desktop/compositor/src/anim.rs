@@ -18,9 +18,12 @@ pub struct Visual {
     /// Share of the corners, border and shadow drawn: 1 for a floating or snapped window, 0
     /// for a maximized or fullscreen one, in between while it changes.
     pub decoration: f32,
-    /// Scale of the whole window while it opens (1 at rest): its title bar, corners and shadow
-    /// follow it (lot C-01).
+    /// Scale of the whole window while it opens, is raised or steps back (1 at rest): its title
+    /// bar, corners and shadow follow it (lots C-01, D-19d).
     pub scale: f64,
+    /// Share of the shadow's offset and blur: 1 at rest, less while the window is raised, its
+    /// shadow growing back (lot D-19d).
+    pub shadow: f64,
 }
 
 /// `rect` scaled by `scale` around its center.
@@ -116,6 +119,10 @@ pub struct WindowMotion {
     expected: Option<(RectF, Option<Duration>)>,
     /// Maximized or fullscreen: the decoration goes away.
     bare: bool,
+    /// Raise (lot D-19d): the scale, from `motion::RAISE_SCALE` to 1. `None` at rest.
+    raise: Option<Animation>,
+    /// Step back behind a raised window (lot D-19d): when it started. `None` at rest.
+    recede: Option<Duration>,
     /// Decoration drawn at the last frame, and its animation towards the state.
     decoration: f64,
     decoration_motion: Option<Animation>,
@@ -141,6 +148,57 @@ impl WindowMotion {
         self.geometry = None;
         self.animate_next = false;
         self.expected = None;
+    }
+
+    /// The window comes to the front from behind another one (lot D-19d): it grows to its size
+    /// on `motion::RAISE_SPRING`, from `motion::RAISE_SCALE`, its shadow with it. Raised again,
+    /// or raised while it steps back, it grows from the scale it is drawn at: no jump.
+    pub fn raise(&mut self, now: Duration) {
+        let from = match (self.raise, self.recede) {
+            (None, None) => motion::RAISE_SCALE,
+            _ => self.scale_at(now),
+        };
+        self.recede = None;
+        self.raise = Some(Animation::new(motion::RAISE_SPRING, from, 1.0, now));
+    }
+
+    /// A raised window now covers this one: it steps back and comes back over `motion::RECEDE`.
+    /// A step under way goes on, without a jump.
+    pub fn recede(&mut self, now: Duration) {
+        if self.recede.is_none() {
+            self.recede = Some(now);
+        }
+    }
+
+    /// Scale of the raise and of the step back at `now`, 1 without them.
+    fn scale_at(&self, now: Duration) -> f64 {
+        let raise = self.raise.map_or(1.0, |r| r.value(now));
+        let back = self.recede.map_or(0.0, |start| {
+            let run = now.saturating_sub(start).as_secs_f32() / motion::RECEDE.as_secs_f32();
+            motion::recede(run)
+        });
+        raise * (1.0 - (1.0 - motion::RECEDE_SCALE) * f64::from(back))
+    }
+
+    /// Scale and shadow share of the raise and of the step back at `now`; both forgotten once
+    /// over.
+    fn lift(&mut self, now: Duration) -> (f64, f64) {
+        if self
+            .raise
+            .is_some_and(|r| r.is_done(now, motion::SCALE_PRECISION))
+        {
+            self.raise = None;
+        }
+        if self
+            .recede
+            .is_some_and(|start| now >= start + motion::RECEDE)
+        {
+            self.recede = None;
+        }
+        let raise = self.raise.map_or(1.0, |r| r.value(now));
+        let risen = ((raise - motion::RAISE_SCALE) / (1.0 - motion::RAISE_SCALE)).clamp(0.0, 1.0);
+        let shadow = motion::RAISE_SHADOW + (1.0 - motion::RAISE_SHADOW) * risen;
+        (self.scale_at(now), shadow)
     }
 
     /// The window is maximized or fullscreen (`bare`): its corners, border and shadow go away
@@ -246,12 +304,14 @@ impl WindowMotion {
             }
         };
         let start = motion::WINDOW_OPEN_SCALE;
+        let (lift, shadow) = self.lift(now);
         Visual {
             rect,
             opacity: progress,
             moving: self.geometry.is_some() || self.expected.is_some(),
             decoration,
-            scale: start + (1.0 - start) * f64::from(progress),
+            scale: (start + (1.0 - start) * f64::from(progress)) * lift,
+            shadow,
         }
     }
 
@@ -261,6 +321,8 @@ impl WindowMotion {
             || self.geometry.is_some()
             || self.expected.is_some()
             || self.decoration_motion.is_some()
+            || self.raise.is_some()
+            || self.recede.is_some()
     }
 }
 
@@ -309,6 +371,7 @@ impl PreviewMotion {
             moving: false,
             decoration: 1.0,
             scale: 1.0,
+            shadow: 1.0,
         })
     }
 }
@@ -471,6 +534,76 @@ mod tests {
         assert!(motion.is_animating());
         assert_eq!(motion.frame(ms(250), place).scale, 1.0);
         assert!(!motion.is_animating());
+    }
+
+    /// A window opened at once, as with animations off: at rest from its first frame.
+    fn at_rest() -> WindowMotion {
+        let mut motion = WindowMotion::default();
+        motion.skip_opening();
+        motion.frame(ms(0), rect(100, 100, 400, 300));
+        motion
+    }
+
+    #[test]
+    fn a_raised_window_grows_its_shadow_with_it_then_rests() {
+        let (mut motion, place) = (at_rest(), rect(100, 100, 400, 300));
+        motion.raise(ms(1000));
+        let steps: Vec<Visual> = [1000, 1050, 1100, 1150]
+            .map(|t| motion.frame(ms(t), place))
+            .to_vec();
+        assert_eq!(steps[0].scale, motion::RAISE_SCALE);
+        assert_eq!(steps[0].shadow, motion::RAISE_SHADOW);
+        for pair in steps.windows(2) {
+            assert!(pair[1].scale > pair[0].scale && pair[1].scale <= 1.0);
+            assert!(pair[1].shadow > pair[0].shadow && pair[1].shadow <= 1.0);
+        }
+        // Its place and opacity do not move.
+        assert!(
+            steps
+                .iter()
+                .all(|v| v.rect == place.to_f64() && v.opacity == 1.0)
+        );
+        assert!(motion.is_animating());
+        let end = motion.frame(ms(1250), place);
+        assert_eq!((end.scale, end.shadow), (1.0, 1.0));
+        assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn a_covered_window_steps_back_and_comes_back() {
+        let (mut motion, place) = (at_rest(), rect(100, 100, 400, 300));
+        motion.recede(ms(1000));
+        let scale = |motion: &mut WindowMotion, t| motion.frame(ms(t), place).scale;
+        assert_eq!(scale(&mut motion, 1000), 1.0);
+        let middle = scale(&mut motion, 1100);
+        assert!((middle - motion::RECEDE_SCALE).abs() < 1e-6, "{middle}");
+        assert!(scale(&mut motion, 1150) > middle);
+        assert_eq!(motion.frame(ms(1200), place).shadow, 1.0);
+        assert_eq!(scale(&mut motion, 1200), 1.0);
+        assert!(!motion.is_animating());
+    }
+
+    #[test]
+    fn a_raise_turned_around_halfway_goes_on_without_a_jump() {
+        let place = rect(100, 100, 400, 300);
+        // Raised, then covered again by the window it had just covered.
+        let mut raised = at_rest();
+        raised.raise(ms(1000));
+        let before = raised.frame(ms(1060), place).scale;
+        raised.recede(ms(1060));
+        assert_eq!(raised.frame(ms(1060), place).scale, before);
+        assert!(raised.frame(ms(1120), place).scale < 1.0);
+        assert_eq!(raised.frame(ms(1500), place).scale, 1.0);
+        // Stepping back, then raised: it grows from where it is, not from `RAISE_SCALE`.
+        let mut covered = at_rest();
+        covered.recede(ms(1000));
+        let before = covered.frame(ms(1060), place).scale;
+        covered.raise(ms(1060));
+        let now = covered.frame(ms(1060), place).scale;
+        assert!((now - before).abs() < 1e-9, "{before} then {now}");
+        assert!(covered.frame(ms(1100), place).scale > now);
+        assert_eq!(covered.frame(ms(1500), place).scale, 1.0);
+        assert!(!covered.is_animating());
     }
 
     #[test]

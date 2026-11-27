@@ -819,6 +819,14 @@ scroll area, at rest, while scrolling and hovered, dark and light, at 1280 × 80
 | Scrolling | ![](sherlock-ui/scroll/dark-scrolling.png) | ![](sherlock-ui/scroll/light-scrolling.png) |
 | Hovered | ![](sherlock-ui/scroll/dark-hovered.png) | ![](sherlock-ui/scroll/light-hovered.png) |
 
+A window with a sidebar and a page, each its own scroll area: the page scrolling at 1280 × 800,
+then hovered at 1920 × 1080 (the sidebar, not scrolled, shows nothing):
+
+![Scrolling, dark, 1280 × 800](sherlock-ui/scroll/dark-1280x800-scrolling.png)
+![Scrolling, light, 1280 × 800](sherlock-ui/scroll/light-1280x800-scrolling.png)
+![Hovered, dark, 1920 × 1080](sherlock-ui/scroll/dark-1920x1080-hovered.png)
+![Hovered, light, 1920 × 1080](sherlock-ui/scroll/light-1920x1080-hovered.png)
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like

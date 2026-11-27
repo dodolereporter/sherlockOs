@@ -72,6 +72,26 @@ pub fn toggle_applications() -> Result<u32, LaunchError> {
     spawn(&program, &[], None)
 }
 
+/// Program of the launcher, Super + Space (`docs/launcher.md`).
+pub const LAUNCHER: &str = "launcher";
+
+/// The launcher to start, found as the compositor finds it: beside the session's programs
+/// (`SHERLOCKOS_BIN`), else in the `PATH`.
+pub fn launcher_program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+    var("SHERLOCKOS_BIN")
+        .map(|dir| Path::new(&dir).join(LAUNCHER))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| LAUNCHER.into())
+}
+
+/// Opens the launcher, where Sherlock is asked, as Super + Space does (lot D-21m): the click
+/// on Sherlock's icon until Sherlock has a window of its own (A-19). Started again while open,
+/// the launcher closes, as with the shortcut.
+pub fn open_launcher() -> Result<u32, LaunchError> {
+    let program = launcher_program(|key| std::env::var_os(key));
+    spawn(&program, &[], None)
+}
+
 /// Starts `program` with `args`, in `dir`, and returns at once.
 fn spawn(program: &Path, args: &[String], dir: Option<&Path>) -> Result<u32, LaunchError> {
     let mut command = Command::new(program);
@@ -181,6 +201,18 @@ mod tests {
         std::fs::write(dir.join(APPLICATIONS), b"").expect("program");
         assert_eq!(applications_program(var), dir.join(APPLICATIONS));
         assert_eq!(applications_program(|_| None), PathBuf::from(APPLICATIONS));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_launcher_is_found_beside_the_programs_then_in_the_path() {
+        let dir = std::env::temp_dir().join(format!("dock-launcher-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("directory");
+        let var = |key: &str| (key == "SHERLOCKOS_BIN").then(|| dir.clone().into_os_string());
+        assert_eq!(launcher_program(var), PathBuf::from(LAUNCHER));
+        std::fs::write(dir.join(LAUNCHER), b"").expect("program");
+        assert_eq!(launcher_program(var), dir.join(LAUNCHER));
+        assert_eq!(launcher_program(|_| None), PathBuf::from(LAUNCHER));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

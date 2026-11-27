@@ -18,7 +18,8 @@ Its texts stay in French, from `sherlock-ui`.
 These come from the headless rendering test (`tests/view.rs`), on the fixtures of
 `desktop/apps/fixtures` and the desktop's own application icons (`sherlock-ui/icons`). The
 simulator draws at scale 2: a capture of 1920 × 1080 logical pixels is the 3840 × 2160 screen at
-scale 2, pixel for pixel. It has no wallpaper behind the veil: the desktop's flat color stands in.
+scale 2, pixel for pixel. Behind the view, the wallpaper of the theme from `assets/wallpapers`,
+blurred as in a session.
 
 | Screen | Capture |
 | --- | --- |
@@ -35,38 +36,70 @@ dock's icons and macOS.
 
 | Element | View |
 | --- | --- |
-| Backdrop | A night blue veil, `rgba(6,12,24,0.70)`, over the whole screen, in both themes as macOS does. The wallpaper blurred under it waits for the blur of D-37; with the software renderer the transparent surface comes out black (see the dock's « Opaque surface ») |
-| Search field | Laid out as `component::search_field`, 280 wide, centered, at the top; it has the keyboard from the start. It keeps the dark theme's colors in the light theme too: the backdrop stays dark |
-| Grid | Up to 7 columns by 5 rows, as many as the screen holds (see Sizes); icons of 80 on the reference screen, their name under them in the interface font, cut with « … » (`ellipsis`) |
+| Backdrop | The wallpaper of the active theme, blurred and darkened, as Launchpad's (lot P-02c, see Backdrop). Without a wallpaper to read, a night blue veil, `rgba(6,12,24,0.70)`, over the desktop |
+| Search field | A pill, 240 by 30, centered at the top: a dark glass `rgba(8,14,26,0.32)` with a white edge of 0.20 (0.34 with the keyboard), a white magnifier and placeholder at 0.75, white text. It has the keyboard from the start: the first letter typed searches. The same in both themes: the backdrop stays dark |
+| Grid | Up to 7 columns by 5 rows, spread over the screen between the field and the dots and centered in that room, as Launchpad's (see Sizes); icons of 88 on the reference screen |
+| Names | White, under a soft shadow (a copy at `rgba(0,0,0,0.45)`, 1 below), cut with « … » (`ellipsis`) past 1.5 times the icon's width |
 | Application without icon | Its initial on the launcher's blue tile, radius 27 % like the dock |
 | Hovered, selected cell | A white veil of 0.08, of 0.14 for the selection, radius 16 |
 | Page dots | 8 across, 12 apart, 112 above the screen bottom, clear of the dock; the page shown bright; a click on a dot goes to its page; none for a single page |
 | Nothing found | « Aucune application » in secondary text |
 
-The names read at 4.5 to 1 at least on the veil over the default wallpaper and over a white
-one, selected or not (`sherlock_ui::apps` tests). Every color, size, duration and text comes
-from `sherlock_ui::apps`.
+The names, the field's text and its placeholder read at 4.5 to 1 at least on the brightest
+backdrop allowed, and on the veil over the default wallpaper and over a white one, selected or
+not (`sherlock_ui::apps` tests). Every color, size, duration and text comes from
+`sherlock_ui::apps`.
+
+### Backdrop
+
+`backdrop.rs`. The wallpaper of the active theme, as the compositor picks it (`wallpaper.conf`:
+the user's image, or the chosen wallpaper of the collection or its pendant in that theme, its
+smallest variant), is cut to cover the screen as the compositor does, reduced to 480 wide
+(`BACKDROP_WIDTH`), blurred by a Gaussian of 12 of those pixels (`BACKDROP_BLUR`, about 50 on a
+1920 screen) and darkened: by 0.85 at least (`BACKDROP_DIM`), more if needed so that no point is
+brighter than a luminance of 0.11 (`BACKDROP_MAX_LUMINANCE`), where the white names still read
+at 4.5 to 1 under the selected cell's veil. A dark wallpaper is barely darkened, a white one
+much. The GPU stretches it over the screen (`ContentFit::Cover`).
+
+It is computed once per wallpaper and per screen, on the pool, and kept as a PNG in
+`$XDG_CACHE_HOME/sherlockos/` (`~/.cache/sherlockos/`), named by a key of the file, its time and
+length, the screen in pixels and the processing; the six newest are kept. At each opening, and
+when the screen, the scale or the theme changes, the key is computed again (a few `stat`): the
+same key costs nothing, a new one is read from the cache, or computed (its time is logged,
+`wallpaper blurred`) while the view opens with the picture it had. A wallpaper read
+from the user is bounded as on the lock screen (a regular file of 64 MiB at most, 16384 pixels
+on a side, 256 MiB to decode); anything unreadable leaves the veil. It does not use the blur of
+the compositor (D-37): the view's surface would need it on every frame of its opening, the
+picture costs nothing once computed. The `mode` of the setting is not followed: the backdrop
+always covers the screen.
 
 ### Sizes
 
 `apps::Layout::fit(width, height)` lays the view out for the screen, in logical pixels, so the
 scale only changes the sharpness. The sizes follow the smaller of the two ratios to the
-1440 × 900 reference screen, from 0.75 to 1.3 times (`MIN_FACTOR`, `MAX_FACTOR`): icons, cells,
-side margins, the place of the field and of the grid. The texts, the field and the dots keep
-their size, and so does the room below the grid (140), since the dock keeps its own. Then as
-many cells as fit, from 1 to 7 columns and 1 to 5 rows.
+1440 × 900 reference screen, from 0.75 to 1.3 times (`MIN_FACTOR`, `MAX_FACTOR`): icons, the
+least cell, the side margins, the place of the field. The texts, the field and the dots keep
+their size, and so do the dots' place above the bottom (112), since the dock keeps its own.
+Then as many least cells (148 wide, the icon, its name and their gaps high) as fit between the
+side margins and between the field and the dots, from 1 to 7 columns and 1 to 5 rows. The
+cells then spread over that room, up to 1.7 times their width and 1.5 times their height, and
+the grid is centered in it, across and down: it fills the screen instead of hanging at its top.
+The button of a cell keeps the least size, centered in its cell: a click between two of them is
+beside, and closes the view.
 
-| Screen (logical) | Factor | Icon | Grid |
-| --- | --- | --- | --- |
-| 1366 × 768 | 0.85 | 68 | 7 × 5 |
-| 1440 × 900 (reference) | 1 | 80 | 7 × 5 |
-| 1707 × 1067 (2560 × 1600 at 1.5) | 1.19 | 95 | 7 × 5 |
-| 1920 × 1080 (and 4K at 2) | 1.2 | 96 | 7 × 5 |
-| 1280 × 720 (a projector) | 0.8 | 64 | 7 × 4 |
-| 800 × 600 | 0.75 | 60 | 6 × 4 |
+| Screen (logical) | Factor | Icon | Grid | Cell |
+| --- | --- | --- | --- | --- |
+| 1366 × 768 | 0.85 | 75 | 7 × 5 | 176 × 114 |
+| 1440 × 900 (reference) | 1 | 88 | 7 × 5 | 183 × 138 |
+| 1707 × 1067 (2560 × 1600 at 1.5) | 1.19 | 104 | 7 × 5 | 217 × 170 |
+| 2048 × 1280 (2560 × 1600 at 1.25) | 1.3 | 114 | 7 × 5 | 263 × 211 |
+| 1920 × 1080 (and 4K at 2) | 1.2 | 106 | 7 × 5 | 247 × 172 |
+| 1280 × 720 (a projector) | 0.8 | 70 | 7 × 4 | 165 × 131 |
+| 800 × 600 | 0.75 | 66 | 6 × 4 | 113 × 102 |
 
-The icons are looked up for the largest (104, at scale 2). The test checks on these screens and
-more that the grid fits between the margins and above the dots, and the dots above the dock.
+The icons are looked up for the largest (114, at scale 2). The test checks on these screens and
+more that the grid fits between the margins, under the field and above the dots, centered in its
+room, and the dots above the dock.
 
 ## Architecture
 
@@ -175,7 +208,11 @@ but the dock is under the view: there is nothing to drop on. « Garder dans le D
 | The keyboard | F4 alone, caught by the compositor (`docs/compositor.md`) |
 | A terminal | `sherlockos-apps` |
 
-The four finger pinch is another batch.
+Four fingers pinching in on the touchpad open the view, spreading out close it, as Launchpad
+(lot D-41c): the compositor starts `sherlockos-apps --show` or `--hide`, which hand `show` or
+`hide` to the service (`show` leaves an open view as it is; `--hide` starts nothing when no
+service runs). The pinch acts once, as soon as the fingers pass 0.75 or 1.33 of their spread; the
+view does not follow the fingers yet.
 
 ### Resident service
 
@@ -217,9 +254,9 @@ After macOS. Everything is computed from the time, from the springs of `sherlock
 
 | Moment | What moves | Token |
 | --- | --- | --- |
-| Opening | The grid from a scale of 1.1 to 1, the icons, the veil and the field from transparent | `apps::OPEN_SCALE`, `OPEN_SPRING` (`motion::OPEN_SPRING`) |
-| Closing (Escape, a click beside) | The reverse | Same |
-| Starting | The application grows to 1.2 while the view fades out | `LAUNCH_SCALE` |
+| Opening | The blurred wallpaper fades in over the desktop, the grid comes from a scale of 1.1 to 1, the icons, the field and the dots from transparent | `apps::OPEN_SCALE`, `OPEN_SPRING` (`motion::OPEN_SPRING`) |
+| Closing (Escape, a click beside, the dock's button, F4) | The reverse | Same |
+| Starting | The application goes to the middle of the dock, shrinking to the dock's icon (52), while the view fades out; the grid stays in place | `LAUNCH_SIDE`, `dock_target` |
 | Page turn | The pages slide | `PAGE_SPRING` (`motion::SNAP_SPRING`) |
 | Swipe past the ends | Rubber band, `(1 - 1 / (excess × 0.55 / width + 1)) × width`, as on iOS | `RUBBER` |
 | Wheel past the ends | The pages are thrown 2.5 pages a second past the end, the spring brings them back | `BOUNCE_SPEED` |
@@ -284,7 +321,9 @@ time in 5 s, 90 MiB resident, 67 MiB proportional (the icons drawn: 189 × 96 ×
 | `the_menu_renders_in_both_themes` | The menu's captures |
 | `dock::pins::tests` | The list written, defaults included, other keys kept |
 | `pager::tests` | Page count, notches, bounce, swipe, rubber band |
-| `sherlock_ui::apps::tests` | Contrasts, the grid on eight screens |
+| `sherlock_ui::apps::tests` | Contrasts on the brightest backdrop, the grid on ten screens, centered, the cell centers and the dock |
+| `backdrop::tests` | The wallpaper cut to the screen, blurred, darkened enough, even a white one; computed once per wallpaper and screen, read from the cache, a new key for a new screen or wallpaper, a broken file leaving the veil |
+| `the_opening_board` (ignored, slow) | The board of the opening: six frames and the view open, dark and light, 1920 × 1080 and 1366 × 768, in `target/tmp/apps-opening-board.png` |
 | `a_resident_view_toggles_and_opens_afresh_on_its_first_page` | Hidden at first, shown and hidden by the service, the search empty and the first page at each opening, nothing drawn while hidden, the launcher's opening hiding it |
 | `the_icons_are_drawn_once_at_their_size_on_the_screen` | Every icon drawn at the grid's size in pixels of the screen (scale 1.5), none drawn twice |
 | `icons::tests` | An SVG drawn in its proportions, centred, at its side in pixels |
@@ -301,7 +340,6 @@ close it.
 
 ## What this batch does not do
 
-- The blurred wallpaper: D-37.
 - Folders of applications, a later batch.
-- The four finger pinch: another batch.
+- The four finger pinch opens and closes the view, but the view does not follow the fingers.
 - Dragging an icon to the dock (see Menu of an application).
