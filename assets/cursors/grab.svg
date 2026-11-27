@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" data-hotspot="12.8 13">
+  <!-- The open hand, over what can be dragged (a slider): the closed hand of `grabbing` opened,
+       its four fingers apart and its thumb out, as on macOS. Drawn in lot UI-07; no board has it. -->
+  <style id="theme">
+    .body { fill: #F4EBE3 }
+    .edge { stroke: #0B1220 }
+    .ink { stroke: #F4EBE3 }
+    .track { stroke: #F4EBE3; stroke-opacity: 0.3 }
+  </style>
+  <path class="body edge" d="M7.4 12.6V7a1.3 1.3 0 0 1 2.6 0V11.2h0.4V5.6a1.3 1.3 0 0 1 2.6 0V11.2h0.4V6.4a1.3 1.3 0 0 1 2.6 0V11.6h0.4V8.6a1.1 1.1 0 0 1 2.2 0V16a5.6 5.6 0 0 1-5.6 5.6h-1.4a5.6 5.6 0 0 1-4.7-2.6L3.8 14.2a1.6 1.6 0 0 1 2.6-1.9L7.4 13.6Z"
+        stroke-width="2.6" stroke-linejoin="round" paint-order="stroke"/>
+</svg>
