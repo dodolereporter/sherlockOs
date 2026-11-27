@@ -26,7 +26,7 @@ use crate::apps::{self, Choice, Kind};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
 use crate::sound::{self, Audio};
-use crate::thumbnails::{self, Thumbnail};
+use crate::thumbnails;
 
 /// Identifier of the search field.
 pub const SEARCH: &str = "search";
@@ -135,7 +135,9 @@ pub enum Message {
     Frame(Instant),
     Theme(Theme),
     Window(WindowAction),
-    Thumbnails(Arc<Vec<Thumbnail>>),
+    Thumbnails(Arc<thumbnails::Loaded>),
+    /// The changes written, from off the interface thread.
+    Written(Arc<Written>),
     Set(Change),
     /// The devices read, or the reason they are not.
     Audio(Result<Audio, Problem>),
@@ -144,6 +146,10 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// Whether the default application of a kind was written.
+    AppWritten(Kind, bool),
+    /// Where the page scrolls to for the setting opened: from, to.
+    ScrollTo(Option<(f64, f64)>),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -203,6 +209,14 @@ pub struct App {
     pub(crate) page: Page,
     /// The page coming in.
     pub(crate) page_slide: Slide,
+    /// The page going out, and since when.
+    pub(crate) leaving: Option<(Page, Duration)>,
+    /// The page scrolling to the setting the search opened: from, to, on a spring.
+    scroll: Option<Animation>,
+    /// When the results of the search came, for their staggered entrance.
+    pub(crate) hits_since: Duration,
+    /// Kinds of default application whose writing failed: their row says so.
+    pub(crate) apps_failed: Vec<Kind>,
     pub(crate) query: String,
     pub(crate) hits: Vec<Hit>,
     /// The setting opened from the search, lit while it fades.
@@ -210,6 +224,8 @@ pub struct App {
     /// The folded sidebar, over the page in a narrow window.
     pub(crate) sidebar: Slide,
     pub(crate) thumbnails: HashMap<&'static str, image::Handle>,
+    /// The installed wallpapers, once found off the interface thread.
+    pub(crate) installed: Option<Vec<&'static wallpapers::Wallpaper>>,
     pub(crate) sound: Sound,
     /// The installed applications and their associations, once read.
     pub(crate) catalog: Option<Arc<Catalog>>,
@@ -225,6 +241,10 @@ pub struct App {
     pub(crate) sound_queue: Vec<sound::Change>,
     pub(crate) sound_busy: bool,
     save_at: Option<Instant>,
+    /// The batch of changes being written, off the interface thread.
+    writing: Option<Writes>,
+    /// The window closes once the changes waiting are written.
+    closing: bool,
     pub(crate) theme: ThemeFade,
     origin: Instant,
 }
@@ -238,11 +258,16 @@ impl App {
             settings,
             page: config.page,
             page_slide: Slide::at_rest(true),
+            leaving: None,
+            scroll: None,
+            hits_since: Duration::ZERO,
+            apps_failed: Vec::new(),
             query: String::new(),
             hits: Vec::new(),
             spotlight: None,
             sidebar: Slide::at_rest(false),
             thumbnails: HashMap::new(),
+            installed: None,
             sound: Sound::Loading,
             catalog: None,
             locked,
@@ -251,6 +276,8 @@ impl App {
             pending: Vec::new(),
             volumes: Vec::new(),
             save_at: None,
+            writing: None,
+            closing: false,
             theme: ThemeFade::default(),
             origin: Instant::now(),
         };
@@ -294,6 +321,9 @@ impl App {
     fn animating(&self) -> bool {
         let now = self.now();
         self.page_slide.running(now)
+            || self.leaving.is_some()
+            || self.scroll.is_some()
+            || self.hits_since + cr::HITS_ENTRANCE > now
             || self.sidebar.running(now)
             || self.spotlight.is_some()
             || self.theme.running()
@@ -341,7 +371,16 @@ impl App {
         match message {
             Message::Go(page) => self.go(page),
             Message::Search(query) => {
-                self.hits = search::search(&query);
+                let hits = search::search(&query);
+                // A new list of results comes in, one after the other.
+                if hits
+                    .iter()
+                    .map(|h| h.setting)
+                    .ne(self.hits.iter().map(|h| h.setting))
+                {
+                    self.hits_since = now;
+                }
+                self.hits = hits;
                 self.query = query;
             }
             Message::OpenFirst => {
@@ -353,6 +392,19 @@ impl App {
                 self.go(setting.page());
                 let fade = Fade::new(1.0, 0.0, now, cr::SPOTLIGHT);
                 self.spotlight = Some((setting, fade));
+                // The page scrolls to the setting, once it is laid out.
+                return crate::scroll::find(setting).map(Message::ScrollTo);
+            }
+            Message::ScrollTo(found) => {
+                if let Some((from, to)) = found {
+                    self.scroll = Some(Animation::new(cr::PAGE_SPRING, from, to, now));
+                }
+            }
+            Message::AppWritten(kind, ok) => {
+                self.apps_failed.retain(|k| *k != kind);
+                if !ok {
+                    self.apps_failed.push(kind);
+                }
             }
             Message::ToggleSidebar => {
                 let shown = !self.sidebar.shown();
@@ -370,6 +422,27 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                if self
+                    .leaving
+                    .is_some_and(|(_, at)| now >= at + cr::PAGE_FADE)
+                {
+                    self.leaving = None;
+                }
+                if let Some(scroll) = self.scroll {
+                    if scroll.is_done(now, SCALE_PRECISION) {
+                        self.scroll = None;
+                    }
+                    let y = scroll.value(now) as f32;
+                    let to = operation::AbsoluteOffset {
+                        x: None,
+                        y: Some(y),
+                    };
+                    let moved = operation::scroll_to(crate::scroll::PAGE, to);
+                    if self.save_at.is_some_and(|at| instant >= at) {
+                        return Task::batch([moved, self.flush()]);
+                    }
+                    return moved;
+                }
                 if self.spotlight.as_ref().is_some_and(|(_, f)| f.is_done(now)) {
                     self.spotlight = None;
                 }
@@ -378,22 +451,29 @@ impl App {
                 }
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::Window(WindowAction::Close) => {
+                // Closing writes the settings and sets the volumes still waiting first; while
+                // a batch is written, the window closes once it is (`written`).
+                self.closing = true;
+                let waiting = self.flush();
+                if self.writing.is_some() {
+                    return waiting;
+                }
+                return waiting.chain(close_window());
+            }
             Message::Window(action) => {
-                // Closing sets the volumes still waiting first, then closes.
-                let waiting = match action {
-                    WindowAction::Close => self.flush(),
-                    _ => Task::none(),
-                };
-                let window = window::latest().and_then(move |id| match action {
+                return window::latest().and_then(move |id| match action {
                     WindowAction::Drag => window::drag(id),
                     WindowAction::Minimize => window::minimize(id, true),
                     WindowAction::Maximize => window::toggle_maximize(id),
                     WindowAction::Close => window::close(id),
                 });
-                return waiting.chain(window);
             }
+            Message::Written(written) => return self.written(&written),
             Message::Thumbnails(found) => {
+                self.installed = Some(found.installed.clone());
                 self.thumbnails = found
+                    .thumbnails
                     .iter()
                     .map(|t| {
                         let pixels = t.pixels.clone();
@@ -456,12 +536,14 @@ impl App {
                 let write = Task::perform(
                     async move { apps::set(&paths.apps, &paths.desktops, kind, &choice.id) },
                     move |written| {
-                        if let Err(error) = written {
+                        if let Err(error) = &written {
                             tracing::warn!(%error, ?kind, "default application not written");
                         }
+                        // The row says it was not written, under the menu back at the old one.
+                        Message::AppWritten(kind, written.is_ok())
                     },
                 );
-                return write.discard().chain(reload);
+                return write.chain(reload);
             }
         }
         Task::none()
@@ -503,9 +585,12 @@ impl App {
     fn go(&mut self, page: Page) {
         let now = self.now();
         if page != self.page {
+            // The page left fades out under the one coming in.
+            self.leaving = Some((self.page, now));
             self.page = page;
             self.page_slide = Slide::coming(now);
             self.spotlight = None;
+            self.scroll = None;
         }
         self.sidebar.show(now, false);
     }
@@ -531,44 +616,133 @@ impl App {
         !self.locked.contains(&file)
     }
 
-    /// Writes the changes waiting, file by file: each file is read again as it is now, takes
-    /// its changes, and only the keys they touch are written (`Settings::update`). A file that
-    /// cannot be read or written goes to the log and becomes locked.
-    /// The volumes waiting go to `pactl`, in order: the task returned.
+    /// Writes the changes waiting, off the interface thread (`Writes::run`), one batch at a
+    /// time and in their order: while a batch is written, the next changes wait. The volumes
+    /// waiting go to `pactl`, in order. Both are in the task returned.
     pub fn flush(&mut self) -> Task<Message> {
         self.save_at = None;
-        let changes = std::mem::take(&mut self.pending);
+        for (device, v) in std::mem::take(&mut self.volumes) {
+            self.queue_sound(sound::Change::Volume(device, v));
+        }
+        let write = self.write_next();
+        Task::batch([write, self.next_sound()])
+    }
+
+    /// Starts writing the changes waiting, unless a batch is being written.
+    fn write_next(&mut self) -> Task<Message> {
+        if self.writing.is_some() {
+            return Task::none();
+        }
+        let changes: Vec<Change> = std::mem::take(&mut self.pending)
+            .into_iter()
+            .filter(|c| self.can_change(file_of(*c)))
+            .collect();
+        if changes.is_empty() {
+            return Task::none();
+        }
+        let job = Writes {
+            settings: self.settings.clone(),
+            paths: self.paths.clone(),
+            changes,
+        };
+        self.writing = Some(job.clone());
+        Task::perform(async move { job.run() }, |written| {
+            Message::Written(Arc::new(written))
+        })
+    }
+
+    /// A batch is written: the settings show the files as written, with the changes made
+    /// since on top; a file that could not be written becomes locked. The next batch starts,
+    /// and a window waiting to close closes once nothing is left.
+    fn written(&mut self, written: &Written) -> Task<Message> {
+        self.writing = None;
+        for (file, error) in &written.failed {
+            tracing::warn!(%error, ?file, "setting not written: the file is now locked");
+            if !self.locked.contains(file) {
+                self.locked.push(*file);
+            }
+        }
+        self.settings = written.settings.clone();
+        for change in &self.pending {
+            apply(&mut self.settings, *change);
+        }
+        let next = self.write_next();
+        if self.closing && self.writing.is_none() {
+            return next.chain(close_window());
+        }
+        next
+    }
+
+    /// Writes synchronously what the tasks would write: the tests do not run the tasks.
+    #[cfg(test)]
+    pub fn finish_writes(&mut self) {
+        let _ = self.write_next();
+        while let Some(job) = self.writing.clone() {
+            let _ = self.written(&job.run());
+        }
+    }
+
+    /// Puts the animations at their end, for a capture.
+    pub fn settle(&mut self) {
+        self.page_slide = Slide::at_rest(true);
+        self.leaving = None;
+        self.hits_since = Duration::ZERO;
+        self.sidebar = Slide::at_rest(self.sidebar.shown());
+        self.spotlight = None;
+    }
+}
+
+/// The changes of a batch, with the settings and the files they start from.
+#[derive(Debug, Clone)]
+pub(crate) struct Writes {
+    settings: Settings,
+    paths: Paths,
+    changes: Vec<Change>,
+}
+
+/// What a batch wrote: the settings as the files now say, and the files that failed.
+#[derive(Debug, Clone)]
+pub struct Written {
+    settings: Settings,
+    failed: Vec<(File, String)>,
+}
+
+impl Writes {
+    /// File by file: each file is read again as it is now, takes its changes, and only the
+    /// keys they touch are written (`Settings::update`). Reads, writes and flushes to the
+    /// disk: never on the interface thread.
+    fn run(self) -> Written {
+        let Self {
+            mut settings,
+            paths,
+            changes,
+        } = self;
+        let mut failed = Vec::new();
         for file in File::ALL {
             let mine: Vec<Change> = changes
                 .iter()
                 .copied()
                 .filter(|c| file_of(*c) == file)
                 .collect();
-            if mine.is_empty() || !self.can_change(file) {
+            if mine.is_empty() {
                 continue;
             }
-            let updated = self.settings.update(file, &self.paths, |settings| {
+            let updated = settings.update(file, &paths, |settings| {
                 for change in mine {
                     apply(settings, change);
                 }
             });
             if let Err(error) = updated {
-                tracing::warn!(%error, ?file, "setting not written: the file is now locked");
-                self.locked.push(file);
+                failed.push((file, error.to_string()));
             }
         }
-        for (device, v) in std::mem::take(&mut self.volumes) {
-            self.queue_sound(sound::Change::Volume(device, v));
-        }
-        self.next_sound()
+        Written { settings, failed }
     }
+}
 
-    /// Puts the animations at their end, for a capture.
-    pub fn settle(&mut self) {
-        self.page_slide = Slide::at_rest(true);
-        self.sidebar = Slide::at_rest(self.sidebar.shown());
-        self.spotlight = None;
-    }
+/// Closes the window.
+fn close_window() -> Task<Message> {
+    window::latest().and_then(window::close)
 }
 
 /// The file that holds a change.

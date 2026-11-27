@@ -99,6 +99,7 @@ fn every_setting_is_written_and_read_back() {
     // A slider waits for its rest; closing the window writes what waits.
     let _ = app.update(Message::Set(Change::LockAfter(Delay(15))));
     let _ = app.flush();
+    app.finish_writes();
     let (read, locked) = Settings::load(&app.paths);
     assert!(locked.is_empty());
     let s = &read;
@@ -142,6 +143,7 @@ fn a_file_keeps_what_control_room_does_not_show() {
         page: Page::Appearance,
     });
     let _ = app.update(Message::Set(Change::Position(Position::Right)));
+    app.finish_writes();
     let text = fs::read_to_string(&paths.dock).expect("dock");
     assert!(text.contains("Pinned=evidence;") && text.contains("IconTheme=breeze"));
     assert!(text.contains("Position=right"));
@@ -179,6 +181,7 @@ fn an_unknown_key_and_the_comments_stay() {
     assert!(app.locked.is_empty());
     let _ = app.update(Message::Set(Change::TapToClick(false)));
     let _ = app.update(Message::Set(Change::Mode(Mode::Light)));
+    app.finish_writes();
     let text = |path: &Path| fs::read_to_string(path).expect("file");
     assert_eq!(
         text(&app.paths.touchpad),
@@ -212,6 +215,7 @@ fn a_file_that_cannot_be_read_is_never_written() {
     let _ = app.update(Message::Set(Change::TapToClick(false)));
     let _ = app.update(Message::Set(Change::ShowClicks(false)));
     let _ = app.flush();
+    app.finish_writes();
     fs::set_permissions(&paths.touchpad, fs::Permissions::from_mode(0o644)).expect("chmod");
     assert_eq!(
         fs::read_to_string(&paths.touchpad).expect("file"),
@@ -237,6 +241,7 @@ fn permissions_and_a_dangling_link_are_kept() {
     std::os::unix::fs::symlink(&dotfiles, &app.paths.wallpaper).expect("link");
     let _ = app.update(Message::Set(Change::TapToClick(false)));
     let _ = app.update(Message::Set(Change::Wallpaper("ring")));
+    app.finish_writes();
     let mode = fs::metadata(&app.paths.touchpad)
         .expect("file")
         .permissions()
@@ -260,6 +265,7 @@ fn an_application_pinned_in_the_dock_meanwhile_stays_pinned() {
     fs::write(&app.paths.dock, pinned).expect("dock pins");
     let _ = app.update(Message::Set(Change::DockSize(100)));
     let _ = app.flush();
+    app.finish_writes();
     let text = fs::read_to_string(&app.paths.dock).expect("dock");
     assert!(
         text.contains("# pinned in the dock\nPinned=evidence;firefox;"),
@@ -279,6 +285,7 @@ fn a_slider_writes_once_it_rests() {
     assert!(!app.paths.touchpad.exists(), "not while it moves");
     std::thread::sleep(cr::SAVE_DELAY);
     let _ = app.update(Message::Frame(std::time::Instant::now()));
+    app.finish_writes();
     assert_eq!(Settings::load(&app.paths).0.touchpad.speed, -0.6);
 }
 
@@ -407,7 +414,8 @@ const SIZES: [((f32, f32), &str); 2] = [((1920.0, 1032.0), "wide"), ((520.0, 760
 fn captures_of_the_pages_in_both_themes() {
     let (_, dirs) = wallpapers();
     let found = Arc::new(thumbnails::load(dirs));
-    assert_eq!(found.len(), sherlock_ui::wallpapers::ALL.len());
+    assert_eq!(found.installed.len(), sherlock_ui::wallpapers::ALL.len());
+    assert_eq!(found.thumbnails.len(), sherlock_ui::wallpapers::ALL.len());
     for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         let _theme = in_theme(which);
         for (page, page_name) in [
@@ -659,4 +667,48 @@ fn pactl_gets_the_changes_one_at_a_time_in_order() {
     assert!(app.sound_busy && app.sound_queue.is_empty());
     let _ = app.update(Message::SoundSet(sound::read(&pactl)));
     assert!(!app.sound_busy);
+}
+
+#[test]
+fn settings_are_written_off_the_interface_thread_in_their_order() {
+    let (_tmp, mut app) = bench("off-thread", Vec::new());
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    // `update` hands the batch to a task: it writes nothing itself.
+    assert!(!app.paths.touchpad.exists());
+    assert!(!app.settings.touchpad.tap_to_click, "shown at once");
+    // Changed again while the first batch is written: they wait, and go after it.
+    let _ = app.update(Message::Set(Change::TapToClick(true)));
+    let _ = app.update(Message::Set(Change::NaturalScroll(false)));
+    assert!(app.settings.touchpad.tap_to_click);
+    app.finish_writes();
+    let read = Settings::load(&app.paths).0.touchpad;
+    assert!(read.tap_to_click && !read.natural_scroll);
+    assert_eq!(app.settings.touchpad, read);
+}
+
+#[test]
+fn a_default_application_not_written_says_so() {
+    let (tmp, mut app) = bench("apps-failed", Vec::new());
+    install_apps(&tmp.0);
+    let _ = app.update(Message::Catalog(catalog(&app)));
+    let _ = app.update(Message::Go(Page::DefaultApps));
+    app.settle();
+    let _ = app.update(Message::AppWritten(Kind::Browser, false));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::LOCKED_FILE).is_ok());
+    drop(ui);
+    // Written the next time: the sentence goes.
+    let _ = app.update(Message::AppWritten(Kind::Browser, true));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::LOCKED_FILE).is_err());
+}
+
+#[test]
+fn the_page_left_fades_out_under_the_new_one() {
+    let (_tmp, mut app) = bench("leaving", Vec::new());
+    let _ = app.update(Message::Go(Page::Lock));
+    assert!(matches!(app.leaving, Some((Page::Appearance, _))));
+    std::thread::sleep(cr::PAGE_FADE);
+    let _ = app.update(Message::Frame(std::time::Instant::now()));
+    assert!(app.leaving.is_none());
 }

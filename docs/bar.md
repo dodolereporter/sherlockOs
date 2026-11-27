@@ -74,6 +74,12 @@ The Wi-Fi and Bluetooth states come from the system bus (`live.rs`): read when t
 then again on NetworkManager's `PropertiesChanged` (its state, its connectivity, the strength of
 an access point) and on BlueZ's `PropertiesChanged`, `InterfacesAdded` and `InterfacesRemoved`,
 coalesced like the panels' (`bus::coalesce`), each read sent only when it changed: nothing polls.
+Each rule names the objects of its service (`path_namespace` `/org/freedesktop/NetworkManager`
+or `/org/bluez`, BlueZ's `ObjectManager` on `/`, Q-43): the system connection is shared and zbus
+does not filter a well-known sender name on its side, so without the path an RSSI of BlueZ read
+NetworkManager again, and the other way round, panel closed. When the system bus closes (D-Bus
+restarted), the icons show unavailable, then follow again on a new connection after 1 s, 2 s, 4 s…
+up to 60 s; the cached connections of `system::system` are opened again once closed.
 Without NetworkManager on the bus, a Wi-Fi network shows every arc, as before. The microphone has
 no indicator in the bar, so its mute is not shown.
 
@@ -423,7 +429,10 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   overlay icons, `ToolTip`, `Menu`, `ItemIsMenu`), and again on each signal of its interface
   (`NewIcon`, `NewAttentionIcon`, `NewOverlayIcon`, `NewTitle`, `NewToolTip`, `NewStatus`), a
   burst coalesced into one read (`bus::coalesce`). `Passive` hides it. It goes when the watcher
-  says so, or when its application leaves the bus (`NameOwnerChanged`).
+  says so, or when its application leaves the bus (`NameOwnerChanged`). An application that
+  leaves while its item is read leaves no ghost icon (lot D-45c): each read under way is noted
+  (`host::Ledger`), a departure marks the reads of its item (by key, or by the service the key
+  names), and a marked read is dropped when it ends.
 - **Bounded.** As for the global menu: every call has the 1.5 s limit of the menus' connection
   (`dbusmenu::TIMEOUT`) and runs on the bus's executor or in an iced task, never on the
   interface thread. An application that hangs keeps its item unread, never the bar frozen.
@@ -444,7 +453,9 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   under the grid, 26 high. The popup is as wide as its columns, at least 200, on the menus' glass,
   radius 12, with the menus' shadow on the GPU, 6 below the bar. Its middle is under the chevron's,
   and it never goes past where the panels end. Found from the chevron's real place
-  (`locate`), whatever the width of the indicators, the screen and its scale.
+  (`locate`), whatever the width of the indicators, the screen and its scale. It stops 24 above
+  the bottom of the screen, as the global menu does, and its grid scrolls above the tooltip line
+  (lot D-45c); never shorter than a row and that line.
 - **Chevron.** A ghost button like the indicators', veiled with its green mark while the popup is
   open. It points down, and turns half a turn up on the panels' spring as the popup opens, back as
   it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
@@ -498,13 +509,19 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
 
   A drop changes the bar at once, then the file is read again just before it is written, the
   change applied to what it holds (another bar, an editor), its other lines kept, written to a
-  temporary file renamed over it (`tray/pins.rs`). Read when the bar starts.
+  temporary file renamed over it (`tray/pins.rs`). Read when the bar starts. An `Id` is the
+  application's own text: a `;` in it is written `\;`, as in a desktop entry, and read back
+  whole (`KeyFile::set_list` and `list`, lot D-45c); a file written before reads the same, and
+  the next drop writes it in this form.
 - **Moves during a drag.** While a button is held, Wayland gives the pointer's moves to the
   surface it was pressed in, outside it too: the popup gets them over the bar, the bar below
   itself. The bar places them in its own surface from where it put the popup. The moves are only
   asked for while an icon is pressed (`pins::on_pointer`): a pointer crossing the bar sends no
   message. The popup and the menus never leave their surfaces: what is dragged shows in the bar's
-  slot, not under the pointer.
+  slot, not under the pointer. Once the press became a drag, the surface that keeps the pointer
+  shows the closed hand (`grabbing`) wherever it goes, over the bar or not
+  (`sherlock_ui::pointer::held`, lot D-45c), and the pointer gets its usual shape back when it
+  is let go.
 
 ### The X11 tray (XEmbed)
 
@@ -783,7 +800,17 @@ notification centre follows `Changed` the same way.
 D-25 exists, logind has no locker to tell, and the button does nothing visible); « Se déconnecter », « Redémarrer » and
 « Éteindre » want a second click at least 400 ms after the first (`launcher::CONFIRM_DELAY`),
 so that a double click only arms them. The armed button turns amber and « Reclique pour
-confirmer » replaces the user's name; any other click cancels it.
+confirmer » replaces the user's name; any other click cancels it. The command's exit code is
+read for 300 ms (`launcher::system::REFUSAL_WAIT`, Q-43): logind or polkit refusing (another
+session open, no right) shows « Refusé » under the buttons, with the reason in the log; a
+command still running then (polkit asking for a password) is left to end, reaped by a thread.
+
+**Names from far away (Q-43).** A Bluetooth device's name and a sound output's description (a
+Bluetooth headset's is its own name) are cleaned before they are shown
+(`system_services::names::shown`): control characters and bidirectional formatting characters
+left out, 64 characters at most with « … ». A device named with a right-to-left override or a
+line break cannot pass for another one under « Oublier » or « Confirmer ». The SSID of a Wi-Fi
+network is not cleaned yet (it waits for D-20e, which changes `network.rs`).
 
 ![The control centre](../desktop/bar/screenshots/control-centre.png)
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)

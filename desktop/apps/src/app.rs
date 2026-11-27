@@ -438,6 +438,7 @@ impl View {
             Message::Service(Request::Toggle) if self.shown() => return self.close(),
             Message::Service(Request::Toggle) => return self.show(),
             Message::Service(Request::Hide) if self.shown() => return self.close(),
+            Message::Service(Request::Show) if !self.shown() => return self.show(),
             Message::Service(_) => {}
             Message::Scale(scale) if scale > 0.0 => {
                 let changed = scale != self.scale;

@@ -2,7 +2,7 @@
 //! whole configuration that is checked before anything changes, then applied to the
 //! hardware first and to the space after. The setting of each screen is saved under its EDID
 //! names in `displays.conf`, once it has held for `SAVE_AFTER`, and taken again when the
-//! screen comes back. `wlr-output-management` (`output_management.rs`, D-26b3) is how clients ask.
+//! screen comes back. `wlr-output-management` (`output_management.rs`) is how clients ask.
 
 use std::{path::PathBuf, time::Duration};
 
