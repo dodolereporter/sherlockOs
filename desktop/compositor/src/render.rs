@@ -527,6 +527,8 @@ pub fn items(
     // front of everything (lot D-35).
     // The rings of the clicks shown, in front of everything (lot C-01).
     animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
+    // What a drag carries, under the pointer (lot D-29c).
+    animating |= crate::dnd::push_icon(&mut items, state, view, now);
     animating |= crate::screenshot_tool::push_items(&mut items, state, (output, view));
     animating |= crate::screenshot_thumbnail::push_item(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));

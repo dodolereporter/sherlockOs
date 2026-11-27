@@ -199,7 +199,8 @@ mod tests {
         }
 
         fn clipboard(&self) -> Option<Arc<[u8]>> {
-            current_data_device_selection_userdata(&self.state.seat).and_then(|d| d.clone())
+            current_data_device_selection_userdata(&self.state.seat)
+                .and_then(|d| d.as_ref().and_then(|held| held.bytes("image/png")))
         }
     }
 

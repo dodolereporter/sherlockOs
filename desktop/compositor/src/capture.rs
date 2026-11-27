@@ -470,7 +470,8 @@ impl State {
         }
     }
 
-    /// A client pastes the screenshot: `png` is written into `fd` by the loop, as the pipe takes
+    /// A client pastes the compositor's selection (a screenshot, an item of the clipboard
+    /// history): `png`, whatever its type, is written into `fd` by the loop, as the pipe takes
     /// it, never waiting for the reader; no thread per paste.
     pub(crate) fn paste_png(&mut self, fd: OwnedFd, png: Arc<[u8]>) {
         let pastes = self.capture.pastes.clone();
@@ -520,10 +521,16 @@ impl State {
 
     /// The image goes to the clipboard, as `image/png`, for X11 applications too (lot D-29).
     pub fn copy_png(&mut self, png: Arc<[u8]>) {
-        let mime = vec![String::from("image/png")];
+        self.hold_selection(crate::clipboard_history::Held::png(png));
+    }
+
+    /// The compositor offers `held` as the clipboard, to Wayland and X11 applications: a
+    /// screenshot, or an item of the clipboard history.
+    pub(crate) fn hold_selection(&mut self, held: crate::clipboard_history::Held) {
+        let mime = held.types();
         let origin = crate::handlers::SelectionOrigin::Compositor;
         self.selection_set(SelectionTarget::Clipboard, origin, &mime);
-        set_data_device_selection(&self.display_handle, &self.seat, mime.clone(), Some(png));
+        set_data_device_selection(&self.display_handle, &self.seat, mime.clone(), Some(held));
         self.offer_to_xwayland(SelectionTarget::Clipboard, Some(mime));
     }
 }
