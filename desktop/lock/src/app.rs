@@ -833,8 +833,8 @@ fn spinner<'a>(elapsed: Duration, tint: Color) -> Element<'a, Message> {
         .style(move |_, _| svg::Style {
             color: Some(tint.into()),
         })
-        // The renderers ignore the alpha of an SVG's color: the opacity carries it.
-        .opacity(tint.a)
+        // The renderers ignore the alpha of an SVG's color: the opacity carries it (UI-04).
+        .opacity(color::icon_opacity(tint))
         .into()
 }
 
