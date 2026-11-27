@@ -1,6 +1,6 @@
 # ADR 0025: display configuration through wlr-output-management
 
-- Status: proposed
+- Status: accepted (the author approved it on 2026-11-27)
 - Date: 2026-11-27
 - Lot: D-26a3 (decision), D-26b (work)
 
