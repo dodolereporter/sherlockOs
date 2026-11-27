@@ -2,6 +2,7 @@
 
 mod appearance;
 mod apps;
+mod keyboard;
 mod lock;
 mod sound;
 mod touchpad;

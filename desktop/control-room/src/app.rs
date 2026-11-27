@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use appearance_config::{Mode, TimeOfDay};
-use desktop_config::touchpad::{self, Click};
+use desktop_config::keyboard as keyboard_config;
+use desktop_config::touchpad::{self, Click, SwipeDown};
 use dock_config::{AutoHide, Position};
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{image, operation};
@@ -83,6 +84,45 @@ pub(crate) fn delays(current: u32) -> Vec<Delay> {
     delays
 }
 
+/// A keyboard layout of the menu: the system's, one of `KEYBOARD_LAYOUTS` (its index), or
+/// another one written in the file, which the menu shows but does not offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutChoice {
+    System,
+    Known(usize),
+    Other,
+}
+
+impl LayoutChoice {
+    /// The choice that `config` holds.
+    pub(crate) fn of(config: &keyboard_config::Config) -> Self {
+        let Some(layout) = &config.layout else {
+            return Self::System;
+        };
+        cr::KEYBOARD_LAYOUTS
+            .iter()
+            .position(|(l, v, _)| l == layout && *v == config.variant)
+            .map_or(Self::Other, Self::Known)
+    }
+
+    /// What the menu offers: the system's, then every known layout.
+    pub(crate) fn offered() -> Vec<Self> {
+        let known = (0..cr::KEYBOARD_LAYOUTS.len()).map(Self::Known);
+        std::iter::once(Self::System).chain(known).collect()
+    }
+}
+
+impl std::fmt::Display for LayoutChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::System => texts::SYSTEM_LAYOUT,
+            Self::Known(i) => cr::KEYBOARD_LAYOUTS.get(*i).map_or("", |(_, _, n)| n),
+            Self::Other => texts::OTHER_LAYOUT,
+        };
+        f.write_str(name)
+    }
+}
+
 /// What the sound page knows of the devices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sound {
@@ -110,6 +150,12 @@ pub enum Change {
     Speed(u8),
     Typing(bool),
     ShowClicks(bool),
+    TapAndDrag(bool),
+    DragLock(bool),
+    SwipeDown(SwipeDown),
+    Layout(LayoutChoice),
+    RepeatDelay(u8),
+    RepeatRate(u8),
     LockAfter(Delay),
 }
 
@@ -144,6 +190,8 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// Text typed in the field where the keyboard is tried.
+    TryKeys(String),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -224,6 +272,8 @@ pub struct App {
     /// whether it is busy: one call at a time, as the media keys do.
     pub(crate) sound_queue: Vec<sound::Change>,
     pub(crate) sound_busy: bool,
+    /// What was typed in the field where the keyboard is tried.
+    pub(crate) trial: String,
     save_at: Option<Instant>,
     pub(crate) theme: ThemeFade,
     origin: Instant,
@@ -248,6 +298,7 @@ impl App {
             locked,
             sound_queue: Vec::new(),
             sound_busy: false,
+            trial: String::new(),
             pending: Vec::new(),
             volumes: Vec::new(),
             save_at: None,
@@ -450,6 +501,9 @@ impl App {
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::TryKeys(text) => {
+                self.trial = text.chars().take(cr::TRIAL_MAX).collect();
+            }
             Message::SetApp(kind, choice) => {
                 let paths = self.paths.clone();
                 let reload = self.load_catalog();
@@ -583,6 +637,7 @@ pub(crate) fn file_of(change: Change) -> File {
         | Change::Position(_) => File::Dock,
         Change::ShowClicks(_) => File::Pointer,
         Change::LockAfter(_) => File::Lock,
+        Change::Layout(_) | Change::RepeatDelay(_) | Change::RepeatRate(_) => File::Keyboard,
         _ => File::Touchpad,
     }
 }
@@ -623,6 +678,25 @@ fn apply(s: &mut Settings, change: Change) {
         }
         Change::Typing(on) => s.touchpad.disable_while_typing = on,
         Change::ShowClicks(on) => s.pointer.show_clicks = on,
+        Change::TapAndDrag(on) => s.touchpad.tap_and_drag = on,
+        Change::DragLock(on) => s.touchpad.drag_lock = on,
+        Change::SwipeDown(what) => s.touchpad.swipe_down = what,
+        Change::Layout(LayoutChoice::System) => {
+            s.keyboard.layout = None;
+            s.keyboard.variant.clear();
+        }
+        Change::Layout(LayoutChoice::Known(i)) => {
+            if let Some((layout, variant, _)) = cr::KEYBOARD_LAYOUTS.get(i) {
+                s.keyboard.layout = Some((*layout).to_owned());
+                s.keyboard.variant = (*variant).to_owned();
+            }
+        }
+        Change::Layout(LayoutChoice::Other) => {}
+        Change::RepeatDelay(v) => {
+            let step = cr::REPEAT_DELAY_STEP as f32;
+            s.keyboard.repeat_delay = ((from_share(v, DELAYS) / step).round() * step) as u32;
+        }
+        Change::RepeatRate(v) => s.keyboard.repeat_rate = from_share(v, RATES).round() as u32,
         Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
     }
 }
@@ -646,6 +720,14 @@ impl App {
         to_share(self.settings.dock.magnification_factor, FACTORS)
     }
 
+    pub(crate) fn repeat_delay(&self) -> u8 {
+        to_share(self.settings.keyboard.repeat_delay as f32, DELAYS)
+    }
+
+    pub(crate) fn repeat_rate(&self) -> u8 {
+        to_share(self.settings.keyboard.repeat_rate as f32, RATES)
+    }
+
     pub(crate) fn speed(&self) -> u8 {
         to_share(self.settings.touchpad.speed as f32, SPEEDS)
     }
@@ -659,11 +741,24 @@ const SPEEDS: (f32, f32) = (
     touchpad::SPEED_RANGE.1 as f32,
 );
 
+const DELAYS: (f32, f32) = (
+    keyboard_config::REPEAT_DELAY_RANGE.0 as f32,
+    keyboard_config::REPEAT_DELAY_RANGE.1 as f32,
+);
+const RATES: (f32, f32) = (
+    keyboard_config::REPEAT_RATE_RANGE.0 as f32,
+    keyboard_config::REPEAT_RATE_RANGE.1 as f32,
+);
+
 /// A slider moves by steps: its file is written once it rests.
 fn is_continuous(change: Change) -> bool {
     matches!(
         change,
-        Change::DockSize(_) | Change::MagnificationFactor(_) | Change::Speed(_)
+        Change::DockSize(_)
+            | Change::MagnificationFactor(_)
+            | Change::Speed(_)
+            | Change::RepeatDelay(_)
+            | Change::RepeatRate(_)
     )
 }
 
