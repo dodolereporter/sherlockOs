@@ -279,6 +279,21 @@ pub const WINDOW_CLOSE_SCALE: f64 = 0.92;
 /// faster: it never lingers once nearly transparent.
 pub const WINDOW_CLOSE_EASE: Ease = Ease::InQuad;
 
+/// Menus and panels of the shell (the bar's, the dock's) that close without their own animation
+/// (lot UI-06): a click elsewhere, a workspace switch, another menu taking their place. The
+/// compositor keeps their last image, which shrinks to `POPUP_CLOSE_SCALE` and fades out over
+/// `POPUP_CLOSE` on `WINDOW_CLOSE_EASE`, as quickly as a menu fades on a Mac.
+pub const POPUP_CLOSE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.1);
+/// Scale of a shell popup at the end of that closing: the size a panel unfolds from.
+pub const POPUP_CLOSE_SCALE: f64 = 0.96;
+
+/// Scale and opacity of a shell popup closing, `opacity` going from 1 to 0 on its fade.
+pub fn popup_closing(opacity: f32) -> (f64, f32) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let scale = POPUP_CLOSE_SCALE + (1.0 - POPUP_CLOSE_SCALE) * f64::from(opacity);
+    (scale, opacity)
+}
+
 /// Menus and popups of the windows appear with this fade, without moving: short, so that a
 /// menu is readable at once (lot C-01). The lower end of a hover.
 pub const MENU_FADE: Duration = Duration::from_millis(crate::metrics::HOVER_MS.0);
@@ -410,6 +425,12 @@ mod tests {
         assert!(close.value(ms(135)) < 0.5, "{}", close.value(ms(135)));
         assert_eq!(close.value(ms(180)), 0.0);
         assert!(WINDOW_CLOSE < WINDOW_OPEN && WINDOW_OPEN > FADE);
+        // A shell popup closes faster than a window, and shrinks less (lot UI-06).
+        assert!(POPUP_CLOSE < WINDOW_CLOSE && POPUP_CLOSE_SCALE > WINDOW_CLOSE_SCALE);
+        assert_eq!(popup_closing(1.0), (1.0, 1.0));
+        assert_eq!(popup_closing(0.0), (POPUP_CLOSE_SCALE, 0.0));
+        let (half, _) = popup_closing(0.5);
+        assert!(half > POPUP_CLOSE_SCALE && half < 1.0);
     }
 
     #[test]
