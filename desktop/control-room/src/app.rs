@@ -146,6 +146,10 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// Whether the default application of a kind was written.
+    AppWritten(Kind, bool),
+    /// Where the page scrolls to for the setting opened: from, to.
+    ScrollTo(Option<(f64, f64)>),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -205,6 +209,14 @@ pub struct App {
     pub(crate) page: Page,
     /// The page coming in.
     pub(crate) page_slide: Slide,
+    /// The page going out, and since when.
+    pub(crate) leaving: Option<(Page, Duration)>,
+    /// The page scrolling to the setting the search opened: from, to, on a spring.
+    scroll: Option<Animation>,
+    /// When the results of the search came, for their staggered entrance.
+    pub(crate) hits_since: Duration,
+    /// Kinds of default application whose writing failed: their row says so.
+    pub(crate) apps_failed: Vec<Kind>,
     pub(crate) query: String,
     pub(crate) hits: Vec<Hit>,
     /// The setting opened from the search, lit while it fades.
@@ -246,6 +258,10 @@ impl App {
             settings,
             page: config.page,
             page_slide: Slide::at_rest(true),
+            leaving: None,
+            scroll: None,
+            hits_since: Duration::ZERO,
+            apps_failed: Vec::new(),
             query: String::new(),
             hits: Vec::new(),
             spotlight: None,
@@ -305,6 +321,9 @@ impl App {
     fn animating(&self) -> bool {
         let now = self.now();
         self.page_slide.running(now)
+            || self.leaving.is_some()
+            || self.scroll.is_some()
+            || self.hits_since + cr::HITS_ENTRANCE > now
             || self.sidebar.running(now)
             || self.spotlight.is_some()
             || self.theme.running()
@@ -352,7 +371,16 @@ impl App {
         match message {
             Message::Go(page) => self.go(page),
             Message::Search(query) => {
-                self.hits = search::search(&query);
+                let hits = search::search(&query);
+                // A new list of results comes in, one after the other.
+                if hits
+                    .iter()
+                    .map(|h| h.setting)
+                    .ne(self.hits.iter().map(|h| h.setting))
+                {
+                    self.hits_since = now;
+                }
+                self.hits = hits;
                 self.query = query;
             }
             Message::OpenFirst => {
@@ -364,6 +392,19 @@ impl App {
                 self.go(setting.page());
                 let fade = Fade::new(1.0, 0.0, now, cr::SPOTLIGHT);
                 self.spotlight = Some((setting, fade));
+                // The page scrolls to the setting, once it is laid out.
+                return crate::scroll::find(setting).map(Message::ScrollTo);
+            }
+            Message::ScrollTo(found) => {
+                if let Some((from, to)) = found {
+                    self.scroll = Some(Animation::new(cr::PAGE_SPRING, from, to, now));
+                }
+            }
+            Message::AppWritten(kind, ok) => {
+                self.apps_failed.retain(|k| *k != kind);
+                if !ok {
+                    self.apps_failed.push(kind);
+                }
             }
             Message::ToggleSidebar => {
                 let shown = !self.sidebar.shown();
@@ -381,6 +422,27 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                if self
+                    .leaving
+                    .is_some_and(|(_, at)| now >= at + cr::PAGE_FADE)
+                {
+                    self.leaving = None;
+                }
+                if let Some(scroll) = self.scroll {
+                    if scroll.is_done(now, SCALE_PRECISION) {
+                        self.scroll = None;
+                    }
+                    let y = scroll.value(now) as f32;
+                    let to = operation::AbsoluteOffset {
+                        x: None,
+                        y: Some(y),
+                    };
+                    let moved = operation::scroll_to(crate::scroll::PAGE, to);
+                    if self.save_at.is_some_and(|at| instant >= at) {
+                        return Task::batch([moved, self.flush()]);
+                    }
+                    return moved;
+                }
                 if self.spotlight.as_ref().is_some_and(|(_, f)| f.is_done(now)) {
                     self.spotlight = None;
                 }
@@ -474,12 +536,14 @@ impl App {
                 let write = Task::perform(
                     async move { apps::set(&paths.apps, &paths.desktops, kind, &choice.id) },
                     move |written| {
-                        if let Err(error) = written {
+                        if let Err(error) = &written {
                             tracing::warn!(%error, ?kind, "default application not written");
                         }
+                        // The row says it was not written, under the menu back at the old one.
+                        Message::AppWritten(kind, written.is_ok())
                     },
                 );
-                return write.discard().chain(reload);
+                return write.chain(reload);
             }
         }
         Task::none()
@@ -521,9 +585,12 @@ impl App {
     fn go(&mut self, page: Page) {
         let now = self.now();
         if page != self.page {
+            // The page left fades out under the one coming in.
+            self.leaving = Some((self.page, now));
             self.page = page;
             self.page_slide = Slide::coming(now);
             self.spotlight = None;
+            self.scroll = None;
         }
         self.sidebar.show(now, false);
     }
@@ -618,6 +685,8 @@ impl App {
     /// Puts the animations at their end, for a capture.
     pub fn settle(&mut self) {
         self.page_slide = Slide::at_rest(true);
+        self.leaving = None;
+        self.hits_since = Duration::ZERO;
         self.sidebar = Slide::at_rest(self.sidebar.shown());
         self.spotlight = None;
     }
