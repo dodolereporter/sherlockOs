@@ -24,6 +24,7 @@ pub mod startup;
 pub mod transfer;
 pub mod trash;
 pub mod udisks;
+pub mod undo;
 mod view;
 
 #[cfg(test)]

@@ -46,6 +46,9 @@ pub struct State {
     pub in_trash: bool,
     pub show_hidden: bool,
     pub show_preview: bool,
+    /// Something can be undone, or redone (lot E-10).
+    pub can_undo: bool,
+    pub can_redo: bool,
     pub can_back: bool,
     pub can_forward: bool,
     /// The places of « Aller »: label and folder.
@@ -178,6 +181,20 @@ pub fn tree(state: &State) -> Node {
         2,
         texts::MENU_EDIT,
         vec![
+            usable(
+                entry(36, texts::UNDO, run(Command::Undo), &["Control", "z"]),
+                state.can_undo,
+            ),
+            usable(
+                entry(
+                    37,
+                    texts::REDO,
+                    run(Command::Redo),
+                    &["Control", "Shift", "z"],
+                ),
+                state.can_redo,
+            ),
+            separator(38),
             usable(
                 entry(30, texts::CUT, run(Command::Cut), &["Control", "x"]),
                 some && folder,

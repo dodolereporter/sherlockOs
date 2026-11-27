@@ -353,6 +353,12 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Undo and redo (lot E-10).
+    pub const UNDO: &str = "Annuler";
+    pub const REDO: &str = "Rétablir";
+    pub const UNDONE: &str = "C'est annulé.";
+    pub const REDONE: &str = "C'est rétabli.";
+    pub const NOTHING_TO_UNDO: &str = "Il n'y a rien à annuler.";
     pub const PATH_COPIED: &str = "Chemin copié.";
     pub const TRASH_EMPTIED: &str = "La corbeille est vide.";
 
