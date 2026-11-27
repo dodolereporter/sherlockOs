@@ -332,6 +332,8 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// The folder shown changed, by another program (lot E-09).
+    FolderChanged(PathBuf),
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
     /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
@@ -424,6 +426,9 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
+    /// rename, a lasso).
+    folder_changed: bool,
     device_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
@@ -501,6 +506,7 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            folder_changed: false,
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
@@ -557,6 +563,15 @@ impl App {
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
             _ => None,
         });
+        // The folder shown, watched for the changes of other programs (lot E-09); only with
+        // the live sources, never in the tests.
+        let folder = match &self.location {
+            Location::Folder(dir) if self.config.watch_devices => {
+                Subscription::run_with(crate::watch::Watched(dir.clone()), crate::watch::changes)
+                    .map(Message::FolderChanged)
+            }
+            _ => Subscription::none(),
+        };
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
             Subscription::run(crate::udisks::stream).map(Message::Devices)
         } else {
@@ -575,7 +590,7 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([events, frames, devices, appearance, menubar])
+        Subscription::batch([events, frames, folder, devices, appearance, menubar])
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -703,7 +718,17 @@ impl App {
                 self.always = false;
             }
         }
-        Task::batch([task, self.preview_task()])
+        let reread = if self.folder_changed
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.lasso.is_none()
+        {
+            self.folder_changed = false;
+            self.load(&[])
+        } else {
+            Task::none()
+        };
+        Task::batch([task, self.preview_task(), reread])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -980,6 +1005,11 @@ impl App {
             }
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
             Message::Escaped => self.close_path_edit(),
+            Message::FolderChanged(dir) => {
+                if self.location == Location::Folder(dir) {
+                    self.folder_changed = true;
+                }
+            }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {

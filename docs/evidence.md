@@ -178,6 +178,11 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- The folder shown is watched (lot E-09, `watch`): inotify on the folder, on a thread of its
+  own, so that a file downloaded, made in a terminal or removed by another program shows or goes
+  without F5. Changes closer than 100 ms are one, and the folder is read again at most every
+  400 ms, so that a build or a download never floods the interface. The selection is kept; while
+  a menu, a rename or a lasso is under way, the reading waits for it to end.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

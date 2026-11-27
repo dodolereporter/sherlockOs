@@ -25,6 +25,7 @@ pub mod transfer;
 pub mod trash;
 pub mod udisks;
 mod view;
+pub mod watch;
 
 #[cfg(test)]
 mod scenarios;
