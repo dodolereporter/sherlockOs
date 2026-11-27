@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use iced::futures::channel::mpsc;
@@ -40,6 +41,51 @@ impl std::fmt::Debug for Mascot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Mascot")
     }
+}
+
+/// What the text field holds in place of the `i`-th character of the hidden password (lot
+/// D-25m): a character of the private use area, which nobody types, different at each place so
+/// that an erase in the middle is found where it was; the field draws dots anyway.
+fn mask(i: usize) -> char {
+    char::from_u32(0xE000 + (i % 6400) as u32).unwrap_or('\u{E000}')
+}
+
+/// The masks of a hidden password of `length` characters.
+fn masks(length: usize) -> String {
+    (0..length).map(mask).collect()
+}
+
+/// The password after the field went from `shown` (what it held: `password`, or its masks) to
+/// `new`: the characters `new` kept at both ends stand for the password's, the ones between are
+/// what was typed or pasted (lot D-25m). Built in one allocation, never grown, so that no copy is
+/// left behind; the caller's `new` is a `Secret` too.
+pub(crate) fn edited(password: &Secret, shown: &Secret, new: &str) -> Secret {
+    let (old, shown) = (password.as_str(), shown.as_str());
+    let length = shown.chars().count();
+    let prefix = shown
+        .chars()
+        .zip(new.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let rest = length.min(new.chars().count()) - prefix;
+    let suffix = shown
+        .chars()
+        .rev()
+        .zip(new.chars().rev())
+        .take(rest)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let byte = |text: &str, chars: usize| {
+        text.char_indices()
+            .nth(chars)
+            .map_or(text.len(), |(i, _)| i)
+    };
+    let new_end = new.chars().count() - suffix;
+    let mut text = String::with_capacity(old.len() + new.len());
+    text.push_str(&old[..byte(old, prefix)]);
+    text.push_str(&new[byte(new, prefix)..byte(new, new_end)]);
+    text.push_str(&old[byte(old, length - suffix)..]);
+    Secret::new(text)
 }
 
 /// The id of the password field.
@@ -125,6 +171,7 @@ pub enum Refusal {
     Wrong,
     TooMany,
     Unavailable,
+    Busy,
 }
 
 pub struct Lock {
@@ -161,6 +208,8 @@ pub struct Lock {
     scale: f32,
     theme: color::ThemeFade,
     authenticator: Arc<dyn Authenticator>,
+    /// A check of PAM holds its thread (lot D-25m).
+    checking: Arc<AtomicBool>,
     runner: Arc<dyn Runner>,
 }
 
@@ -195,6 +244,7 @@ impl Lock {
             scale: 1.0,
             theme: color::ThemeFade::default(),
             authenticator,
+            checking: Arc::default(),
             runner,
         }
     }
@@ -250,6 +300,17 @@ impl Lock {
 
     pub fn armed(&self) -> Option<Machine> {
         self.armed.get()
+    }
+
+    /// What the text field holds (lot D-25m): the password itself only while the eye shows it;
+    /// otherwise one mask per character, which the field draws as dots, so that iced's own
+    /// copies of its value (rebuilt at every frame, freed without being wiped) never hold the
+    /// password.
+    fn shown(&self) -> Secret {
+        match self.reveal {
+            true => Secret::new(self.password.as_str().to_owned()),
+            false => Secret::new(masks(self.password_len())),
+        }
     }
 
     pub fn password_len(&self) -> usize {
@@ -364,7 +425,7 @@ impl Lock {
             Message::Typed(typed) => {
                 if self.form.shown() && matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
                     self.typed |= !typed.is_empty();
-                    self.password = typed;
+                    self.password = edited(&self.password, &self.shown(), typed.as_str());
                     self.phase = Phase::Typing;
                     self.armed.disarm();
                 }
@@ -381,6 +442,7 @@ impl Lock {
                     AuthError::Refused => Refusal::Wrong,
                     AuthError::TooManyTries => Refusal::TooMany,
                     AuthError::Unavailable(_) => Refusal::Unavailable,
+                    AuthError::Busy => Refusal::Busy,
                 };
                 self.phase = Phase::Refused(self.elapsed(), refusal);
                 return iced::widget::operation::focus(field());
@@ -511,6 +573,7 @@ impl Lock {
         // On a thread of its own, with a limit: the interface never waits for PAM (D-25f).
         let receiver = crate::pam::check_in_background(
             self.authenticator.clone(),
+            &self.checking,
             self.user.clone(),
             password,
             crate::pam::TIMEOUT,
@@ -754,7 +817,7 @@ impl Lock {
             let text_color = fade(colors.text, presence);
             let placeholder = fade(colors.placeholder, presence);
             // Read-only while the form leaves: no key goes into a field on its way out.
-            let input = text_input(ui::PASSWORD, self.password.as_str())
+            let input = text_input(ui::PASSWORD, self.shown().as_str())
                 .id(field())
                 .secure(!self.reveal)
                 .on_input_maybe(
@@ -834,6 +897,7 @@ impl Lock {
             Phase::Refused(_, Refusal::Wrong) => ui::WRONG,
             Phase::Refused(_, Refusal::TooMany) => ui::TOO_MANY,
             Phase::Refused(_, Refusal::Unavailable) => ui::UNAVAILABLE,
+            Phase::Refused(_, Refusal::Busy) => ui::BUSY,
             _ => "",
         };
         text(words)
@@ -1043,4 +1107,44 @@ fn clock() -> mpsc::UnboundedReceiver<Clock> {
         tracing::warn!("clock: {err}");
     }
     receiver
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+
+    /// The field holds masks only; its edits land on the password (lot D-25m).
+    #[test]
+    fn the_hidden_field_holds_masks_and_its_edits_reach_the_password() {
+        let password = Secret::new("abc".into());
+        let shown = Secret::new(masks(3));
+        let edit = |new: String| edited(&password, &shown, &new).as_str().to_owned();
+        // Typed at the end, at the start, in the middle; several characters pasted.
+        assert_eq!(edit(format!("{}d", masks(3))), "abcd");
+        assert_eq!(edit(format!("é{}", masks(3))), "éabc");
+        let m = masks(3);
+        let m: Vec<char> = m.chars().collect();
+        assert_eq!(edit(format!("{}X{}{}", m[0], m[1], m[2])), "aXbc");
+        assert_eq!(edit(format!("{}{}€€{}", m[0], m[1], m[2])), "ab€€c");
+        // Erased at the end, at the start, in the middle, all of it; a selection replaced.
+        assert_eq!(edit(masks(2)), "ab");
+        assert_eq!(edit(format!("{}{}", m[1], m[2])), "bc");
+        assert_eq!(edit(format!("{}{}", m[0], m[2])), "ac");
+        assert_eq!(edit(String::new()), "");
+        assert_eq!(edit(format!("{}z", m[0])), "az");
+        // From an empty field.
+        let empty = Secret::default();
+        assert_eq!(edited(&empty, &empty, "pw").as_str(), "pw");
+    }
+
+    #[test]
+    fn the_revealed_field_edits_the_password_itself() {
+        let password = Secret::new("motdepasse".into());
+        let shown = Secret::new("motdepasse".into());
+        assert_eq!(edited(&password, &shown, "motdepase").as_str(), "motdepase");
+        assert_eq!(
+            edited(&password, &shown, "motdepasse!").as_str(),
+            "motdepasse!"
+        );
+    }
 }

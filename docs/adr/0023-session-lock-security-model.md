@@ -76,6 +76,10 @@ the policy to the compositor, and has two gaps for a strict use:
    Enter to try the programs again. The counter starts again at each unlock.
 7. **The password** is checked by PAM only, in the lock program, for the user of the session
    only (lot D-25a2). The compositor never sees it.
+   The program's text field never holds the password while hidden (lot D-25m): it holds one
+   mask per character, and the edits are applied to the password, kept in a `Secret` wiped on
+   drop; only the characters typed, one by one, pass through iced, in wiped strings. One PAM
+   check at a time: a check that hangs holds back the next tries until its thread ends.
 
 ## Consequences
 
