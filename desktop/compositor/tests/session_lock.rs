@@ -17,7 +17,12 @@ mod tests {
 
     use std::io::Write as _;
 
-    use compositor::{State, lock::Programs, render::Item};
+    use compositor::{
+        State,
+        lock::Programs,
+        power::{Phase, Then},
+        render::Item,
+    };
     use smithay::{
         backend::input::{ButtonState, KeyState},
         input::keyboard::Keycode,
@@ -42,6 +47,10 @@ mod tests {
         ext_session_lock_manager_v1::ExtSessionLockManagerV1,
         ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1},
         ext_session_lock_v1::{self, ExtSessionLockV1},
+    };
+    use wayland_protocols::wp::idle_inhibit::zv1::client::{
+        zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1,
+        zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
@@ -222,6 +231,8 @@ mod tests {
     delegate_noop!(Seen: ignore XdgToplevel);
     delegate_noop!(Seen: ZwlrLayerShellV1);
     delegate_noop!(Seen: ExtSessionLockManagerV1);
+    delegate_noop!(Seen: ZwpIdleInhibitManagerV1);
+    delegate_noop!(Seen: ZwpIdleInhibitorV1);
 
     /// A client connected to the compositor.
     struct Peer {
@@ -1033,12 +1044,21 @@ mod tests {
         logind.signal("/org/freedesktop/login1", manager, "PrepareForSleep", &true);
         h.run_until("locked before the sleep", |h| h.state.is_locked());
         assert_eq!(h.window_items(), 0);
-        // The inhibitor is held until the screen shows the lock.
+        // The order: the lock, then the old television, then the inhibitor released (lot D-38).
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Leaving {
+                then: Then::Sleep,
+                ..
+            }
+        ));
         assert!(h.state.holds_sleep_inhibitor());
         h.show_frame();
         h.run_until("the inhibitor released", |h| {
             !h.state.holds_sleep_inhibitor()
         });
+        assert!(h.state.is_locked());
+        assert!(h.state.screens_dark(), "released once the screens are dark");
         // At wake-up, a new one is taken; the session is still locked.
         logind.signal(
             "/org/freedesktop/login1",
@@ -1048,6 +1068,10 @@ mod tests {
         );
         h.run_until("a new inhibitor", |h| h.state.holds_sleep_inhibitor());
         assert!(h.state.is_locked());
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Coming { .. } | Phase::On
+        ));
     }
 
     /// The lock program of `the_rescue_mode_takes_the_lock_and_comes_back_when_killed`: this
@@ -1163,5 +1187,127 @@ mod tests {
             .args(["-KILL", second.as_str()])
             .status();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Waits for the animation of the screens to end (`DURATION`, 350 ms).
+    fn after_the_animation(h: &mut Harness) {
+        let end = std::time::Instant::now() + sherlock_ui::screen_off::DURATION;
+        h.run_until("the animation", |_| std::time::Instant::now() > end);
+        h.settle();
+    }
+
+    #[test]
+    fn the_screens_go_off_like_a_television_and_draw_nothing_once_dark() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        h.state.screens_off(Then::Stay);
+        let Phase::Leaving { since, .. } = h.state.power_phase() else {
+            panic!("the screens go off");
+        };
+        let (output, view) = h.state.views().remove(0);
+        let at = |h: &Harness, ms: u64| {
+            let now = since + Duration::from_millis(ms);
+            compositor::render::items(&h.state, (&output, &view), None, false, now)
+        };
+        // At first, the whole picture, squashed more and more.
+        let squashed = |items: &[Item]| {
+            items.iter().find_map(|i| match i {
+                Item::Squashed { rect, .. } => Some(rect.size.h),
+                _ => None,
+            })
+        };
+        let (start, animating) = at(&h, 0);
+        assert!(animating);
+        assert_eq!(squashed(&start), Some(600), "the whole picture");
+        let middle = squashed(&at(&h, 100).0).unwrap();
+        assert!(middle < 600 && middle > 3, "{middle}");
+        // Then a line and its halo, no picture any more.
+        let (line, _) = at(&h, 250);
+        assert_eq!(squashed(&line), None);
+        let shapes = line
+            .iter()
+            .filter(|i| matches!(i, Item::Shape { .. }))
+            .count();
+        assert_eq!(shapes, 3, "the line, its halo and the black");
+        // The last frame is black.
+        let (last, _) = at(&h, 350);
+        assert_eq!(last.len(), 1, "black only");
+
+        after_the_animation(&mut h);
+        assert!(h.state.screens_dark());
+        // At rest, dark: black only, and nothing animates, so no frame is asked for.
+        let (items, animating) = at(&h, 5_000);
+        assert_eq!(items.len(), 1);
+        assert!(!animating);
+
+        // A key brings the screens back and goes nowhere else.
+        h.settle();
+        h.peers[app].seen.keys.clear();
+        h.key(KEY_A);
+        assert!(matches!(h.state.power_phase(), Phase::Coming { .. }));
+        after_the_animation(&mut h);
+        assert_eq!(h.state.power_phase(), Phase::On);
+        assert!(
+            h.peers[app].seen.keys.is_empty(),
+            "the waking key is not typed"
+        );
+        h.key(KEY_A);
+        h.run_until("the next key typed", |h| {
+            h.peers[app].seen.keys.contains(&evdev(KEY_A))
+        });
+    }
+
+    #[test]
+    fn super_shift_escape_locks_and_turns_the_screens_off() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        const KEY_SHIFT: u32 = 42 + 8;
+        const KEY_ESCAPE: u32 = 1 + 8;
+        for (code, state) in [
+            (KEY_SUPER, KeyState::Pressed),
+            (KEY_SHIFT, KeyState::Pressed),
+            (KEY_ESCAPE, KeyState::Pressed),
+            (KEY_ESCAPE, KeyState::Released),
+            (KEY_SHIFT, KeyState::Released),
+            (KEY_SUPER, KeyState::Released),
+        ] {
+            h.state.keyboard_key(Keycode::new(code), state, 10);
+        }
+        assert!(h.state.is_locked());
+        assert!(matches!(
+            h.state.power_phase(),
+            Phase::Leaving {
+                then: Then::Stay,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_video_holds_off_the_lock_and_the_screens_off() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        let surface = h.show_window(app);
+        let manager: ZwpIdleInhibitManagerV1 = h.peers[app].bind();
+        let qh = h.peers[app].qh();
+        let inhibitor = manager.create_inhibitor(&surface, &qh, ());
+        h.settle();
+        assert!(h.state.idle_inhibited());
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        h.state.set_idle_lock(Some(Duration::from_millis(300)));
+        h.state
+            .set_screen_off_delay(Some(Duration::from_millis(300)));
+        let end = std::time::Instant::now() + Duration::from_millis(1600);
+        h.run_until("a while", |_| std::time::Instant::now() > end);
+        assert!(!h.state.is_locked(), "the video holds the lock off");
+        assert_eq!(h.state.power_phase(), Phase::On, "and the screens on");
+        // The video ends: the inactivity counts again, then the lock and the screens off.
+        inhibitor.destroy();
+        h.run_until("the lock and the screens off", |h| {
+            h.state.is_locked() && h.state.power_phase() != Phase::On
+        });
     }
 }

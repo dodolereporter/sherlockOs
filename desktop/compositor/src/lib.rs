@@ -29,6 +29,7 @@ pub mod osd;
 pub mod output;
 pub mod pacing;
 pub mod perf;
+pub mod power;
 pub mod render;
 mod shell;
 pub mod stats;
@@ -231,6 +232,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// The screens off, like an old television (lot D-38).
+    power: power::Power,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -371,6 +374,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            power: power::Power::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -666,6 +670,7 @@ impl State {
         }
         self.update_scales();
         self.refresh_lock();
+        self.refresh_power();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {

@@ -58,6 +58,13 @@ pub enum Part {
     /// (lot D-25a).
     LockBackground,
     LockLabel(usize),
+    /// The screens off (lot D-38): the black, the light over the squashed picture, the picture,
+    /// the line or the dot, and its halo.
+    ScreenOff,
+    ScreenOffGlow,
+    ScreenOffPicture,
+    ScreenOffLine,
+    ScreenOffHalo,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

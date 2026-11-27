@@ -353,10 +353,12 @@ impl State {
 
     /// Sends `locked` once every screen has shown a locked frame.
     fn confirm_lock(&mut self) {
-        let all = self
-            .screens
-            .iter()
-            .all(|s| self.lock.shown.contains(&s.output));
+        // Dark screens show nothing: as good as a locked frame (lot D-38).
+        let all = self.screens_dark()
+            || self
+                .screens
+                .iter()
+                .all(|s| self.lock.shown.contains(&s.output));
         if self.lock.locked
             && all
             && let Some(confirm) = self.lock.confirm.take()

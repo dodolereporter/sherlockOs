@@ -129,6 +129,8 @@ struct Head {
     /// The frame waiting for the vertical blank was built while the session was locked: once
     /// shown, the lock can be confirmed (lot D-25a).
     lock_queued: bool,
+    /// The screen is off (DPMS), the screens being dark (lot D-38).
+    off: bool,
 }
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
@@ -245,6 +247,11 @@ pub fn init(
     // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
     state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
     state.watch_logind(&event_loop.handle(), None)?;
+    // The screens off after inactivity (lot D-38).
+    state.watch_power(
+        &event_loop.handle(),
+        desktop_config::power::config_file(var),
+    )?;
     // The media keys, through the machine's sound, logind and players (lot D-35).
     state.enable_media_keys(crate::media_keys::Controls::system());
     let mut switcher = session.clone();
@@ -544,6 +551,7 @@ impl Backend {
             ids: Ids::default(),
             period,
             lock_queued: false,
+            off: false,
         };
         self.heads.insert(crtc, head);
         Ok(())
@@ -645,6 +653,21 @@ impl Backend {
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
         };
+        // The screens dark: the screen goes off (DPMS) once, and nothing is drawn; the next
+        // frame queued turns it on again (lot D-38).
+        if state.screens_dark() {
+            if !head.off && self.session.is_active() {
+                match head.compositor.clear() {
+                    Ok(()) => tracing::info!(output = head.output.name(), "screen off"),
+                    Err(err) => tracing::warn!("DRM: turning the screen off: {err}"),
+                }
+                head.off = true;
+            }
+            return;
+        }
+        if std::mem::take(&mut head.off) {
+            head.pacing.reset();
+        }
         if !head.pacing.wants_frame(epoch) || !self.session.is_active() {
             return;
         }
