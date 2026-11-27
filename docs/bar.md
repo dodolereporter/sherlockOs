@@ -736,6 +736,20 @@ NetworkManager keeps the connection, its password readable by root only. WPA and
 (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
 depuis les Réglages. ». The tile reads « Connexion… » until NetworkManager reports the network.
 
+**Outputs and inputs** (D-20g). A chevron at the right of the volume row (« Sorties et
+entrées ») opens the page of the sound (`quick/sound.rs`), as the Sound module of macOS:
+« Sortie », the outputs of `pactl list sinks` (speakers, HDMI, a Bluetooth headset), and
+« Entrée », the inputs of `pactl list sources` without the monitors of the outputs, 16 each at
+most, the one in use checked. A click moves the sound to another (`set-default-sink`,
+`set-default-source`), checked at once. Under the inputs, the slider of the microphone in use
+and its mute button (`set-source-volume`, `set-source-mute`), one call at a time, the latest
+value winning, and a read meanwhile never moves it while it is held. Every call runs on a
+thread of its own. While the page is open, `pactl subscribe` (the watcher of D-35d, which now
+also follows the inputs: `on source #`) reads it again: a headset plugged in, an output chosen
+elsewhere. Without an input, « Aucun micro ».
+
+![The outputs and the inputs](../desktop/bar/screenshots/sound-devices.png)
+
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
 the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
 
