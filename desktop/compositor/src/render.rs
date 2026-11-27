@@ -701,7 +701,8 @@ pub(crate) fn push_window(
     let decoration = visual.decoration;
     let decorated = decoration > 0.0;
     let scale = view.scale as f32;
-    // While it opens, the whole window is scaled: its bar, corners and shadow with it.
+    // While it opens, is raised or steps back, the whole window is scaled: its bar, corners and
+    // shadow with it.
     let opening = visual.scale;
     // The title bar the compositor draws sits above the content: the corners, the border, the
     // shadow and the clip go around both.
@@ -766,7 +767,7 @@ pub(crate) fn push_window(
     if decorated && shadow {
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
-            shadow: Shadow::of(frame, view.scale * opening),
+            shadow: Shadow::of(frame, view.scale * opening * visual.shadow),
             color: color::palette().shadow.premultiplied(),
             radius,
             alpha: visual.opacity * decoration,
