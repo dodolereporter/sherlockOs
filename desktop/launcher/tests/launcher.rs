@@ -504,7 +504,9 @@ fn the_typing_board() {
         let mut start = Duration::ZERO;
         for (step, message) in steps.iter().enumerate() {
             if let Some(message) = message {
-                start += Duration::from_secs(2);
+                // Past the time the captures took: the launcher's clock never goes back to an
+                // earlier moment than the real one.
+                start = base.elapsed() + Duration::from_secs(1);
                 let _ = launcher.update(Message::Frame(base + start));
                 let _ = launcher.update(message.clone());
             }

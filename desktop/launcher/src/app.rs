@@ -880,7 +880,9 @@ impl Launcher {
                     .width(Length::Fill)
                     .height(look::ROW_HEIGHT)
                     .style(look::selection),
-            ];
+            ]
+            // The first layer gives the stack its size: the whole panel, not the veil's rows.
+            .height(Length::Fill);
             stack![veil, list].into()
         } else {
             list.into()
