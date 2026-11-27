@@ -321,8 +321,18 @@ mod tests {
         let dir = folder("sysfs");
         let light = dir.join("amdgpu_bl1");
         std::fs::create_dir_all(&light).unwrap();
-        std::fs::write(light.join("brightness"), "51").unwrap();
-        std::fs::write(light.join("actual_brightness"), "51").unwrap();
+        std::fs::write(light.join("brightness"), "051").unwrap();
+        std::fs::write(light.join("actual_brightness"), "051").unwrap();
+        // Written in place, as the kernel does: `fs::write` truncates first, and the empty
+        // file between the two is a change of its own, seen or not depending on the timing.
+        let set = |value: &str| {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(light.join("actual_brightness"))
+                .unwrap();
+            file.write_all(value.as_bytes()).unwrap();
+        };
         std::fs::write(light.join("max_brightness"), "255").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let wanted = Arc::new(AtomicBool::new(true));
@@ -335,10 +345,10 @@ mod tests {
         .unwrap()
         .unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        std::fs::write(light.join("actual_brightness"), "128").unwrap();
+        set("128");
         assert!(reaches(&count, 1));
         // The same value written again is no change.
-        std::fs::write(light.join("actual_brightness"), "128").unwrap();
+        set("128");
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(count.load(Ordering::SeqCst), 1);
         wanted.store(false, Ordering::SeqCst);
