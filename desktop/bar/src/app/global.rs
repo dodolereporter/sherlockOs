@@ -19,7 +19,7 @@ use crate::source::workspaces::AppMenu;
 use crate::unfold::Unfold;
 
 /// Room kept under the menus, above the bottom of the screen.
-const SCREEN_ROOM: f32 = 24.0;
+pub(super) const SCREEN_ROOM: f32 = 24.0;
 
 impl Bar {
     /// The menus of the active application are open.

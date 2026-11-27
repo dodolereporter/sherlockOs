@@ -215,3 +215,19 @@ fn a_text_field_shows_the_text_cursor_but_disabled() {
     assert_eq!(shape(field(true), OVER), Interaction::Text);
     assert_eq!(shape(field(false), OVER), Interaction::NotAllowed);
 }
+
+#[test]
+fn what_holds_a_dragged_icon_shows_the_closed_hand_everywhere() {
+    let button = || ui::primary_button("Relancer", press());
+    let held = |held: bool| -> Element<'static, Msg> { pointer::held(button(), held).into() };
+    // Held: over it, away from it, and past the edges of the surface (a drag keeps the pointer).
+    assert_eq!(shape(held(true), OVER), Interaction::Grabbing);
+    assert_eq!(shape(held(true), AWAY), Interaction::Grabbing);
+    assert_eq!(
+        shape(held(true), Point::new(-40.0, 200.0)),
+        Interaction::Grabbing
+    );
+    // Not held: what the content asks for, never the forbidden sign.
+    assert_eq!(shape(held(false), OVER), Interaction::Pointer);
+    assert_ne!(shape(held(false), AWAY), Interaction::NotAllowed);
+}
