@@ -39,9 +39,13 @@ fn terminal() -> Option<Vec<OsString>> {
     Some(vec!["test-terminal".into(), "-e".into()])
 }
 
-/// A `hicolor` theme holding the desktop's own application icons (`sherlock-ui/icons`).
+/// A `hicolor` theme holding the desktop's own application icons (`sherlock-ui/icons`), in a
+/// folder of each call: the tests run in parallel, and a copy truncates the file another test
+/// may be reading.
 fn icons() -> icon_theme::Lookup {
-    let data = std::env::temp_dir().join(format!("apps-icons-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let data = std::env::temp_dir().join(format!("apps-icons-{}-{n}", std::process::id()));
     if let Err(error) = write_icons(&data) {
         panic!("cannot copy the icons: {error}");
     }
