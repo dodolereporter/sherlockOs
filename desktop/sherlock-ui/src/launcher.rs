@@ -56,17 +56,28 @@ pub const OPEN_SCALE: f32 = 0.96;
 pub const OPEN_SPRING: crate::motion::Spring = crate::motion::OPEN_SPRING;
 /// How close to its end the opening or the closing counts as done.
 pub const OPEN_PRECISION: f64 = 0.01;
+/// The results moving to their new place, the panel's height following them, the selection
+/// sliding (lot P-02d).
+pub const LIST_SPRING: crate::motion::Spring = crate::motion::LIST_SPRING;
+/// How close to their place, in pixels, the moving rows and the panel's edge count as there.
+pub const LIST_PRECISION: f64 = 0.5;
+/// A new result fades in over this time, coming down this far to its place.
+pub const APPEAR: std::time::Duration = crate::motion::LIST_APPEAR;
+pub const APPEAR_OFFSET: f32 = 8.0;
+/// Height of a section label, its padding included.
+pub fn label_height() -> f32 {
+    let (top, _, bottom) = SECTION_PADDING;
+    top + crate::typography::SECTION_LABEL_SIZE * crate::typography::LINE_HEIGHT + bottom
+}
 
 /// Height of the panel holding `sections` section labels and `rows` result rows: its border
 /// and padding, the search row and the line under it, the labels, the rows.
 pub fn panel_height(sections: usize, rows: usize) -> f32 {
-    let label = crate::typography::SECTION_LABEL_SIZE * crate::typography::LINE_HEIGHT;
-    let (top, _, bottom) = SECTION_PADDING;
     let border = crate::metrics::BORDER_WIDTH;
     2.0 * (border + PADDING)
         + SEARCH_HEIGHT
         + border
-        + sections as f32 * (top + label + bottom)
+        + sections as f32 * label_height()
         + rows as f32 * ROW_HEIGHT
 }
 
@@ -317,6 +328,16 @@ mod styles {
     }
 
     /// A result row: the selection blue when it is selected, a veil under the pointer.
+    /// The selection, a veil that slides under the rows (lot P-02d).
+    pub fn selection(theme: &Theme) -> container::Style {
+        let p = theme::palette(theme);
+        container::Style {
+            background: Some(Background::Color(p.selected_row.into())),
+            border: border::rounded(ROW_RADIUS),
+            ..container::Style::default()
+        }
+    }
+
     pub fn row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
         move |theme, status| {
             let p = theme::palette(theme);
