@@ -1920,6 +1920,16 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   unlocked (nothing unlocks it at login: the login screen's PAM module is not set up for this
   session). Alone on the machine, the session uses the user's bus, and the keyring already
   running there, if any.
+- **Old X11 tray icons** (lot D-45b). Programs that only know the X11 tray (XEmbed), such as
+  AnyDesk 7.1.4 with its `GtkStatusIcon`, would show no icon in the bar. When `xembedsniproxy`
+  is installed (KDE's, shipped with `plasma-workspace` on Debian 13), the script starts it with
+  the shell programs, a second after the bar, on XWayland's display, and starts it again like
+  them when it stops: it turns each X11 tray icon into a `StatusNotifierItem` registered with the
+  bar's watcher (see "Notification area" in `docs/bar.md`). The log says `session: X11 tray
+  icons: <path>`. Not started without XWayland, nor with `SHERLOCKOS_XEMBED=0`. The autostart of
+  the session (`desktop/autostart`) leaves its `/etc/xdg/autostart` entry out (`OnlyShowIn=KDE`,
+  and the list of what the session starts itself), so it never runs twice. A proxy of our own may
+  replace it later if needed.
 - **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
   file chooser from Flatpak or Firefox, for instance). It reads `sherlockos-portals.conf` (the name of `XDG_CURRENT_DESKTOP`, `SherlockOS`, in lower case)
   (`desktop/compositor/session/`), which `just install-session` puts in
