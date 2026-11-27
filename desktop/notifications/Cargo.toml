@@ -27,6 +27,10 @@ iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["m
 # bar and the dock already pin.
 libc = "=0.2.191"
 # Do not disturb (workspace crate).
+# Icons named by a theme name, looked up as the launcher and the dock do (workspace crates,
+# lot D-23d).
+icon-theme = { path = "../icon-theme" }
+mime-apps = { path = "../mime-apps" }
 notifications-config = { path = "../notifications-config" }
 sherlock-ui = { path = "../sherlock-ui" }
 thiserror = "=2.0.21"

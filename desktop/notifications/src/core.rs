@@ -222,6 +222,13 @@ impl Core {
         self.send(events);
         true
     }
+    /// « × » or a swipe: the notification closes, dismissed by the user, with no action.
+    pub fn dismiss(&self, id: u32) {
+        if self.close(id) {
+            self.signal_closed(id, Reason::Dismissed);
+        }
+    }
+
     /// A click on the bubble: its default action, if it has one, then it closes.
     pub fn click(&self, id: u32) {
         let default = self.open(id).is_some_and(|note| note.has_default());

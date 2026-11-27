@@ -83,6 +83,22 @@ pub const MAX_PIXELS_SIDE: u32 = 256;
 pub const MAX_WAITING: usize = 50;
 /// Notifications the history keeps, the newest ones.
 pub const HISTORY: usize = 100;
+/// The bubbles of one application pile up behind its newest one (D-23d): each level shows
+/// `PILE_STEP` of the one behind, `PILE_DEPTH` levels at most, as on macOS.
+pub const PILE_STEP: f32 = 6.0;
+pub const PILE_DEPTH: usize = 2;
+/// Swiped to the right past this share of its width, a bubble goes; the fingers rest
+/// `SWIPE_END` before the swipe is over. Pulled the other way, it moves this share only.
+pub const SWIPE_DISMISS: f32 = 0.35;
+pub const SWIPE_END: Duration = Duration::from_millis(120);
+pub const SWIPE_RESISTANCE: f32 = 0.25;
+/// A wheel line turned sideways moves a bubble this much.
+pub const SWIPE_LINE: f32 = 40.0;
+/// The cross of « × », inside its button the size of the tile.
+pub const CLOSE_GLYPH: f32 = 12.0;
+/// The theme icon of a notification is looked up at twice the tile (screens at scale 2).
+pub const ICON_LOOKUP_SIZE: u32 = 40;
+
 /// The spring of a bubble sliding in and out, and of the stack closing up: the spring of an
 /// opening window.
 pub const SPRING: motion::Spring = motion::OPEN_SPRING;
@@ -93,6 +109,13 @@ pub mod text {
     pub const UNKNOWN_APP: &str = "Application";
     /// The button that lists the actions beyond the row, as on macOS.
     pub const OPTIONS: &str = "Options";
+    /// « × » on a bubble under the pointer.
+    pub const CLOSE: &str = "Fermer";
+    /// Under a pile of bubbles, and under the pile opened.
+    pub fn more(count: usize) -> String {
+        crate::panels::text::more(count)
+    }
+    pub const SHOW_LESS: &str = "Afficher moins";
 }
 
 #[cfg(feature = "iced")]
@@ -191,6 +214,23 @@ mod styles {
             }
         }
         all.into()
+    }
+
+    /// « × » of a bubble under the pointer (D-23d): the size of the application's tile, so that
+    /// the header keeps its height when it shows.
+    pub fn close_button<'a, Message: Clone + 'a>(on_press: Message) -> iced::Element<'a, Message> {
+        let tint = crate::color::palette().text_secondary;
+        let glyph = crate::component::icon(crate::icon::Icon::Close, CLOSE_GLYPH, tint);
+        let content = container(glyph).center(iced::Length::Fill);
+        let mut control = crate::component::Control::new(
+            content,
+            theme::icon_button,
+            Some(on_press),
+            TILE_RADIUS,
+        );
+        control.label = Some(text::CLOSE);
+        control.button = control.button.width(TILE).height(TILE).padding(0);
+        control.into()
     }
 
     /// An action: the first one is the primary button of the board, the others secondary.
