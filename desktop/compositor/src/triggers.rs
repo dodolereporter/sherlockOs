@@ -338,17 +338,19 @@ fn listen(address: Option<String>, sender: &channel::Sender<Logind>) -> Result<(
         Ok(fd.into())
     };
     let send = |event| sender.send(event).is_ok();
+    // Listening first: a `PrepareForSleep` sent right after the inhibitor is taken is not lost.
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(LOGIND)?
+        .build();
+    let messages = MessageIterator::for_match_rule(rule, &connection, None)?;
     match inhibit() {
         Ok(fd) => {
             send(Logind::Inhibitor(fd));
         }
         Err(err) => tracing::warn!("logind: no sleep inhibitor: {err}"),
     }
-    let rule = zbus::MatchRule::builder()
-        .msg_type(zbus::message::Type::Signal)
-        .sender(LOGIND)?
-        .build();
-    for message in MessageIterator::for_match_rule(rule, &connection, None)? {
+    for message in messages {
         let message = message?;
         let header = message.header();
         let (Some(member), Some(path)) = (header.member(), header.path()) else {
