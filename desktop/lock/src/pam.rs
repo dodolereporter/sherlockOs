@@ -267,13 +267,12 @@ impl Authenticator for Pam {
         let library = unsafe { libloading::Library::new(LIBRARY) }
             .map_err(|err| AuthError::Unavailable(err.to_string()))?;
         // SAFETY: the symbols have the types of <security/pam_appl.h>.
-        let (start, authenticate, account, end) = unsafe {
+        let (start, authenticate, end) = unsafe {
             let start = library.get::<StartFn>(b"pam_start\0");
             let authenticate = library.get::<StepFn>(b"pam_authenticate\0");
-            let account = library.get::<StepFn>(b"pam_acct_mgmt\0");
             let end = library.get::<StepFn>(b"pam_end\0");
-            match (start, authenticate, account, end) {
-                (Ok(s), Ok(a), Ok(m), Ok(e)) => (*s, *a, *m, *e),
+            match (start, authenticate, end) {
+                (Ok(s), Ok(a), Ok(e)) => (*s, *a, *e),
                 _ => return Err(unavailable("symbols")),
             }
         };
@@ -295,12 +294,12 @@ impl Authenticator for Pam {
         if status != PAM_SUCCESS || handle.is_null() {
             return Err(AuthError::Unavailable(format!("pam_start: {status}")));
         }
+        // Authentication only, as swaylock: no `pam_acct_mgmt`, whose answers (an account or a
+        // password expired during the session, `PAM_NEW_AUTHTOK_REQD`) would keep a user who
+        // gave the right password locked out of the session already open (lot D-25l).
         // SAFETY: a handle from pam_start, used on this thread only, ended once.
         let status = unsafe {
-            let mut status = authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK);
-            if status == PAM_SUCCESS {
-                status = account(handle, 0);
-            }
+            let status = authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK);
             end(handle, status);
             status
         };
@@ -482,5 +481,29 @@ mod tests {
     #[test]
     fn the_session_user_is_read_from_the_password_database() {
         assert!(session_user().is_some_and(|name| !name.is_empty()));
+    }
+
+    /// The PAM service shipped (lot D-25l): the password only, never `login`'s stack with its
+    /// pam_nologin (which refuses everyone during a `shutdown +N`), nor any account check.
+    #[test]
+    fn the_pam_service_checks_the_password_only() {
+        let service = include_str!("../pam/sherlockos-lock");
+        let rules: Vec<Vec<&str>> = service
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.split_whitespace().collect())
+            .collect();
+        assert!(rules.iter().all(|rule| rule[0] == "auth"), "{rules:?}");
+        assert!(rules.contains(&vec!["auth", "include", "common-auth"]));
+        let faildelay = rules.iter().position(|rule| rule[2] == "pam_faildelay.so");
+        assert!(faildelay.is_some_and(|i| rules[i][1] == "optional"));
+        for rule in &rules {
+            assert!(!rule.contains(&"login") && !rule.contains(&"pam_nologin.so"), "{rule:?}");
+        }
+        // The program never asks for the account checks.
+        let code = include_str!("pam.rs");
+        let account = ["pam_", "acct_mgmt"].concat();
+        assert!(!code.contains(&format!("b\"{account}")));
     }
 }

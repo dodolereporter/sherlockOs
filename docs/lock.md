@@ -78,8 +78,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 ## Password and PAM
 
 - PAM only, never a check of our own, nothing stored (ADR 0023). The service is
-  `sherlockos-lock` (`desktop/lock/pam/sherlockos-lock`: `auth` and `account` of `login`, like
-  swaylock), for the user of the session only, read from the password database (`getpwuid_r`),
+  `sherlockos-lock` (`desktop/lock/pam/sherlockos-lock`, lot D-25l: `common-auth` with
+  pam_faildelay at 3 s, not `login`'s stack, whose pam_nologin refused the right password once
+  `/run/nologin` existed, five minutes before a `shutdown +N`), for the user of the session only, read from the password database (`getpwuid_r`),
   not from `$USER`. Without `/etc/pam.d/sherlockos-lock`, PAM uses its `other` service, which
   refuses every password on Debian: `sherlockos-session` writes a warning in the session log,
   and `just install-session` prints the `sudo install` line, which the author runs.
@@ -100,7 +101,7 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   password anyway.
 - **Tries.** The lock screen runs as the user, so it cannot write the counters of
   pam_faillock: failures are not counted, as with swaylock. Each wrong password waits for the
-  delay of pam_faildelay from `login` (3 s on Debian) before PAM answers, and only one check
+  delay of pam_faildelay (3 s, in our service) before PAM answers, and only one check
   runs at a time: that is what slows the tries. The check runs on its own thread, the screen
   keeps drawing.
 - **A PAM that hangs** (lot D-25f). The interface never waits for PAM: the check runs on a
