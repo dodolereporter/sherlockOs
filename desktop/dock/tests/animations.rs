@@ -317,6 +317,12 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
         dock.pinned,
         ["org.example.Terminal", "example-editor", "example-browser"]
     );
+    // Written on the dock's thread that saves, never on the interface's.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("written"));
     assert_eq!(read.pinned.as_deref(), Some(&dock.pinned[..]));
     // It vanishes where it was let go: smaller and fainter, then gone.
