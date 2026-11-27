@@ -834,6 +834,8 @@ impl Backend {
                 Ok(()) => {
                     head.pacing.drawn(epoch, true, animating);
                     head.lock_queued = locked;
+                    // A new picture: the screen captures waiting for one are due (lot D-28b).
+                    state.screen_changed(&head.output);
                     None
                 }
                 Err(err) => Some(format!("DRM: {err}")),

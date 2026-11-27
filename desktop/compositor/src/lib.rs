@@ -42,6 +42,7 @@ pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
+pub mod screencast;
 pub mod screenshot_tool;
 mod shell;
 pub mod stats;
@@ -178,6 +179,9 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// Screen capture sessions, for screen sharing (lot D-28b).
+    screencast: screencast::Screencast,
+
     /// The edges of fullscreen screens where the pointer brings the bar or the dock back
     /// (lot D-21e).
     reveals: fullscreen::Reveals,
@@ -369,6 +373,8 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            screencast: screencast::Screencast::default(),
+
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
@@ -398,7 +404,10 @@ impl State {
             applications_program: None,
             xwayland: None,
             listener: None,
-            shell: shell::Shell::new(&dh),
+            shell: {
+                screencast::create_globals(&dh);
+                shell::Shell::new(&dh)
+            },
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -713,6 +722,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_screencast();
         self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
