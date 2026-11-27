@@ -39,7 +39,7 @@ use smithay::{
         rustix,
     },
     utils::{Logical, Physical, Point, Rectangle, Size},
-    wayland::selection::data_device::set_data_device_selection,
+    wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
@@ -425,10 +425,13 @@ impl State {
         self.capture.pastes.get()
     }
 
-    /// The image goes to the clipboard, as `image/png`.
-    fn copy_png(&mut self, png: Arc<[u8]>) {
+    /// The image goes to the clipboard, as `image/png`, for X11 applications too (lot D-29).
+    pub fn copy_png(&mut self, png: Arc<[u8]>) {
         let mime = vec![String::from("image/png")];
-        set_data_device_selection(&self.display_handle, &self.seat, mime, Some(png));
+        let origin = crate::handlers::SelectionOrigin::Compositor;
+        self.selection_set(SelectionTarget::Clipboard, origin, &mime);
+        set_data_device_selection(&self.display_handle, &self.seat, mime.clone(), Some(png));
+        self.offer_to_xwayland(SelectionTarget::Clipboard, Some(mime));
     }
 }
 
