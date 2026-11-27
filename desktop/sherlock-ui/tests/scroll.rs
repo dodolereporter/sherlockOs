@@ -134,7 +134,10 @@ fn the_knob_drags_the_content() {
     let _ = ui.simulate([frame()]);
     let expected = scroll::offset_at(area, content, knob.y + 100.0);
     let offset = last_offset(ui).expect("the area scrolled");
-    assert!((offset - expected).abs() < 0.5, "{offset} instead of {expected}");
+    assert!(
+        (offset - expected).abs() < 0.5,
+        "{offset} instead of {expected}"
+    );
 }
 
 /// A window like those of the desktop: a sidebar and a page, each its own scroll area.
