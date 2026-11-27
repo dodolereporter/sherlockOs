@@ -3,11 +3,12 @@
 //! notification centre under it (opened by the clock), as on a Mac. Their size, their place,
 //! and their views.
 
-use iced::widget::{Column, column, container, mouse_area, opaque, row, scrollable, space, text};
+use iced::widget::{Column, column, container, mouse_area, opaque, row, space, text};
 use iced::{Alignment, Element, Length, Padding};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::icon::Icon;
 use sherlock_ui::panels::{self, text as words};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, strings, typography};
 
@@ -187,7 +188,7 @@ pub fn center(history: &History, options: Option<u32>) -> Element<'_, Message> {
     let body: Element<'_, Message> = match history {
         History::Ready(groups) if !groups.is_empty() => {
             let cards = groups.iter().map(|group| card(group, options));
-            scrollable(Column::with_children(cards).spacing(panels::CENTER_GAP))
+            scroll(Column::with_children(cards).spacing(panels::CENTER_GAP))
                 .height(Length::Fill)
                 .into()
         }

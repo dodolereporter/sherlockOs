@@ -81,7 +81,11 @@ way. A PNG is at most 512 KiB, starts with its signature and declares at most 51
 side in its header, so that its decoding stays small; it is drawn through an SVG that embeds it
 as a `data:` URI. An SVG is at most 256 KiB, in UTF-8, with no document type (no entity) and
 every `href` pointing inside itself (`#…`): it cannot make resvg read a file or a picture of its
-own. Anything else, JPEG included, shows the initial. The longest path taken is 4,096 bytes.
+own. It also holds 4,096 elements and 16 `<use>` at most (`picture::MAX_SVG_ELEMENTS`,
+`MAX_SVG_USES`, Q-38): `<use>` copies what it names, and a few kibibytes of nested `<use>` make
+hundreds of thousands of shapes, which resvg would draw on the bubbles' interface thread
+(262,144 shapes took 1.1 s in a debug build; the worst SVG accepted, 4,000 shapes, under 0.1 s,
+and a blur as wide as can be asked 36 ms, measured by `tests/svg_cost.rs`). Anything else, JPEG included, shows the initial. The longest path taken is 4,096 bytes.
 
 **Limits.** Every field is bounded when the notification is read, so that neither a bubble nor
 the history holds much, whatever a client sends: the application name to 48 characters, the
