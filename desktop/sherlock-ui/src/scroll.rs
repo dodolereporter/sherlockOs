@@ -316,7 +316,10 @@ fn colors(palette: &Palette, look: Look) -> (Color, Color, Color, Color) {
         rest + (wide - rest) * look.expansion
     };
     let ink = palette.text_primary;
-    let tint = |a: f32| Color { a: a * look.opacity, ..ink };
+    let tint = |a: f32| Color {
+        a: a * look.opacity,
+        ..ink
+    };
     let edge = Color {
         a: EDGE_ALPHA * look.opacity,
         ..palette.window
@@ -638,7 +641,10 @@ impl<Message> Widget<Message, Theme, Renderer> for Scroll<'_, Message> {
         let read = self.read(tree, layout, renderer, None);
         let state = tree.state.downcast_mut::<State>();
         if let Some((_, content, after, _)) = read {
-            if state.offset.is_some_and(|before| (before - after).abs() > 0.01) {
+            if state
+                .offset
+                .is_some_and(|before| (before - after).abs() > 0.01)
+            {
                 state.presence.scrolled(now);
             }
             state.offset = Some(after);
@@ -712,8 +718,15 @@ impl<Message> Widget<Message, Theme, Renderer> for Scroll<'_, Message> {
             return;
         };
         if stretch.abs() < 0.1 {
-            self.inner
-                .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+            self.inner.draw(
+                &tree.children[0],
+                renderer,
+                theme,
+                style,
+                layout,
+                cursor,
+                viewport,
+            );
         } else {
             let shift = Vector::new(0.0, -stretch);
             let moved = Rectangle {
@@ -799,8 +812,8 @@ impl<Message> Scroll<'_, Message> {
             return;
         };
         let range = content - bounds.height;
-        let at_limit = delta < 0.0 && after <= FIT_TOLERANCE
-            || delta > 0.0 && after >= range - FIT_TOLERANCE;
+        let at_limit =
+            delta < 0.0 && after <= FIT_TOLERANCE || delta > 0.0 && after >= range - FIT_TOLERANCE;
         let rest = delta - (after - before);
         if !at_limit || rest.abs() <= FIT_TOLERANCE || rest.signum() != delta.signum() {
             return;
@@ -862,7 +875,9 @@ mod tests {
     static MOTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn motion_lock() -> std::sync::MutexGuard<'static, ()> {
-        MOTION.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        MOTION
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn ms(n: u64) -> Duration {
@@ -951,11 +966,18 @@ mod tests {
         let top = knob(AREA, 800.0, 0.0, 0.0, THIN).unwrap();
         assert!((top.height - track / 2.0).abs() < 0.01);
         assert_eq!(top.y, INSET);
-        assert_eq!(top.x + top.width, AREA.width - INSET, "against the right edge");
+        assert_eq!(
+            top.x + top.width,
+            AREA.width - INSET,
+            "against the right edge"
+        );
         let bottom = knob(AREA, 800.0, 400.0, 0.0, THIN).unwrap();
         assert!((bottom.y + bottom.height - (AREA.height - INSET)).abs() < 0.01);
         // A very long content: never below the minimum.
-        assert_eq!(knob(AREA, 1.0e6, 0.0, 0.0, THIN).unwrap().height, MIN_LENGTH);
+        assert_eq!(
+            knob(AREA, 1.0e6, 0.0, 0.0, THIN).unwrap().height,
+            MIN_LENGTH
+        );
         // Dragging the knob back gives the offset it shows.
         let middle = knob(AREA, 800.0, 200.0, 0.0, WIDE).unwrap();
         assert!((offset_at(AREA, 800.0, middle.y) - 200.0).abs() < 0.01);
@@ -980,7 +1002,10 @@ mod tests {
         let area = 400.0;
         assert_eq!(rubber(0.0, area), 0.0);
         let (a, b) = (rubber(50.0, area), rubber(100.0, area));
-        assert!(a > 0.0 && a < 50.0 && b > a && b - a < a, "resists more and more");
+        assert!(
+            a > 0.0 && a < 50.0 && b > a && b - a < a,
+            "resists more and more"
+        );
         assert!(rubber(1.0e6, area) < area);
         assert_eq!(rubber(-50.0, area), -a);
         assert!((unrubber(a, area) - 50.0).abs() < 0.01);
@@ -988,14 +1013,21 @@ mod tests {
         let mut s = Stretch::default();
         s.push(-60.0, ms(0), area);
         assert!(s.active() && s.shown(ms(0), area) < 0.0);
-        assert_eq!(s.tick(ms(10), area), Some(RELEASE), "waits for the wheel to rest");
+        assert_eq!(
+            s.tick(ms(10), area),
+            Some(RELEASE),
+            "waits for the wheel to rest"
+        );
         // Pushing back towards the limit undoes the stretch, never past it.
         s.push(200.0, ms(20), area);
         assert_eq!(s.shown(ms(20), area), 0.0);
         s.push(-60.0, ms(30), area);
         let pulled = s.shown(ms(30), area);
         assert_eq!(s.tick(ms(30) + RELEASE, area), Some(ms(30) + RELEASE));
-        assert!((s.shown(ms(30) + RELEASE, area) - pulled).abs() < 0.01, "no jump");
+        assert!(
+            (s.shown(ms(30) + RELEASE, area) - pulled).abs() < 0.01,
+            "no jump"
+        );
         assert!(s.shown(ms(30) + RELEASE + ms(100), area) > pulled);
         let later = ms(30) + RELEASE + ms(1500);
         assert_eq!(s.tick(later, area), None);
