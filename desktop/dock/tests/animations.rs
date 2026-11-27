@@ -379,9 +379,11 @@ fn dragging_across_the_separator_pins_and_unpins() {
     let _ = dock.update(Message::Gesture(Gesture::Released));
     let written = std::fs::read_to_string(&path).expect("file read");
     let (read, _) = DockConfig::parse(&written);
+    // Sherlock's token is written where Sherlock is shown, as the list changes (lot D-21h).
     let order = [
         "org.example.Files",
         "org.example.Terminal",
+        "sherlock",
         "example-editor",
     ];
     assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
@@ -398,7 +400,7 @@ fn dragging_across_the_separator_pins_and_unpins() {
     assert_eq!(names(&dock)[3], "Terminal d'exemple");
     let _ = dock.update(Message::Gesture(Gesture::Released));
     let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("file read"));
-    let order = ["org.example.Files", "example-editor"];
+    let order = ["org.example.Files", "sherlock", "example-editor"];
     assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
     let t = settle(&mut dock);
 
@@ -417,7 +419,7 @@ fn dragging_across_the_separator_pins_and_unpins() {
     press(&mut dock, files);
     drag_to(&mut dock, files, Point::new(files.x, 2.0));
     let _ = dock.update(Message::Gesture(Gesture::Released));
-    assert_eq!(dock.pinned, ["example-editor"]);
+    assert_eq!(dock.pinned, ["sherlock", "example-editor"]);
     assert_eq!(dock.poofs.len(), 1);
     assert!(dock.animating(), "frames while it smokes");
     settle(&mut dock);
