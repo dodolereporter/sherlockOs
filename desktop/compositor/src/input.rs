@@ -146,6 +146,11 @@ enum Shortcut {
     Lock,
     /// Enter on the rescue screen of the lock: the lock programs are tried again.
     RetryLock,
+    /// Shift + Escape: the session locks and the screens go off (lot D-38).
+    ScreenOff,
+    /// A key while the screens are off or going off: they come back; unlocked, the key goes
+    /// nowhere.
+    Wake,
 }
 
 impl Shortcut {
@@ -202,11 +207,14 @@ impl Shortcut {
     }
 
     /// The only keys the compositor takes while the session is locked: the console switch,
-    /// Ctrl + Alt + Backspace, the volume and brightness keys, and Enter on the rescue screen.
+    /// Ctrl + Alt + Backspace, the volume and brightness keys, the gesture key with Shift and
+    /// Escape (the screens off), and Enter on the rescue screen.
     /// Every other key goes to the lock surface, or nowhere.
     fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
         let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
-        Self::in_greeter(state, m, key, sym).or(retry.then_some(Self::RetryLock))
+        Self::screen_off(state.nested, m, sym)
+            .or(Self::in_greeter(state, m, key, sym))
+            .or(retry.then_some(Self::RetryLock))
     }
 
     /// The only keys the compositor takes on the login screen (`greeter.rs`): the console
@@ -216,6 +224,12 @@ impl Shortcut {
         let media =
             MediaKey::of(sym).filter(|media| media.acts_while_locked() && state.takes_media_keys());
         Self::for_session(state.nested, m, sym).or(media.map(|media| Self::Media(media, key)))
+    }
+
+    /// The gesture key with Shift and Escape: lock and turn the screens off at once.
+    fn screen_off(nested: bool, m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        (gesture_modifier_held(nested, m) && m.shift && sym == Keysym::Escape)
+            .then_some(Self::ScreenOff)
     }
 }
 
@@ -735,11 +749,38 @@ impl State {
         None
     }
 
+    /// The key types a character, whatever the layout: a key of the main block or of the
+    /// keypad, without Ctrl, Alt nor the logo key (lot D-25g).
+    fn key_types(&self, key: Keycode) -> bool {
+        let held = self
+            .seat
+            .get_keyboard()
+            .map(|k| k.modifier_state())
+            .is_some_and(|m| m.ctrl || m.alt || m.logo);
+        // evdev codes, plus 8: 1 to =, Q to ], A to `, \ to /, space, the key left of Z, the
+        // keypad's digits and signs.
+        let typing = [
+            (2, 13),
+            (16, 27),
+            (30, 41),
+            (43, 53),
+            (57, 57),
+            (86, 86),
+            (71, 83),
+        ];
+        let code = key.raw().wrapping_sub(8);
+        !held && typing.iter().any(|(a, b)| (*a..=*b).contains(&code))
+    }
+
     /// A key (xkb code) is pressed or released. Entry point of every backend, and of the
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // Locked: the lock program must answer, and show what is typed (lots D-25f, D-25g).
+        if key_state == KeyState::Pressed {
+            self.lock_input(self.key_types(key));
+        }
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -767,6 +808,16 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            // The screens off: the key brings them back, and nothing else (lot D-38). Locked, it
+            // goes on to the lock too: the first key brings its form, as on macOS.
+            if state.input_wakes() {
+                if state.is_locked() {
+                    state.screens_on();
+                } else {
+                    state.intercepted_keys.push(key);
+                    return FilterResult::Intercept(Some(Shortcut::Wake));
+                }
+            }
             if state.is_locked() {
                 let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
                     return FilterResult::Forward;
@@ -792,6 +843,7 @@ impl State {
             let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
             let screenshot = capture::Kind::of(sym, mods).filter(|_| state.takes_screenshots());
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
+                .or_else(|| Shortcut::screen_off(state.nested, mods, sym))
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
                 .or(media.map(|media| Shortcut::Media(media, key)))
                 .or(screenshot.map(Shortcut::Screenshot))
@@ -877,6 +929,16 @@ impl State {
                 self.retry_lock_program();
                 return;
             }
+            Shortcut::ScreenOff => {
+                tracing::info!("Super + Shift + Escape: lock, the screens go off");
+                self.lock_session();
+                self.screens_off(crate::power::Then::Stay);
+                return;
+            }
+            Shortcut::Wake => {
+                self.screens_on();
+                return;
+            }
             Shortcut::SendToWorkspace(index) => {
                 let id = self.workspaces().id_at(index).map(str::to_owned);
                 if let (Some(window), Some(id)) = (self.focused_window(), id) {
@@ -939,12 +1001,15 @@ impl State {
             }
             // The lid closed: the session locks, whether logind puts the machine to sleep for
             // it or not (lot D-25a3).
-            InputEvent::SwitchToggle { event } => {
-                if event.switch() == Some(Switch::Lid) && event.state() == SwitchState::On {
-                    tracing::info!("lid closed: the session locks");
+            InputEvent::SwitchToggle { event } => match (event.switch(), event.state()) {
+                (Some(Switch::Lid), SwitchState::On) => {
+                    tracing::info!("lid closed: the session locks, the screens go off");
                     self.lock_session();
+                    self.screens_off(crate::power::Then::Stay);
                 }
-            }
+                (Some(Switch::Lid), SwitchState::Off) => self.screens_on(),
+                _ => {}
+            },
             event => {
                 self.note_input();
                 self.gesture_event(event);
@@ -956,6 +1021,10 @@ impl State {
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // The pointer brings the screens back (lot D-38).
+        if self.input_wakes() {
+            self.screens_on();
+        }
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -1005,6 +1074,11 @@ impl State {
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // A click brings the screens back, and goes nowhere else (lot D-38).
+        if self.input_wakes() {
+            self.screens_on();
+            return;
+        }
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;
@@ -1019,6 +1093,9 @@ impl State {
         };
         self.overview.cancel_tap();
         if self.is_locked() {
+            if state == ButtonState::Pressed {
+                self.lock_input(false);
+            }
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
             if state == ButtonState::Pressed {

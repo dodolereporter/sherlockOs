@@ -14,6 +14,12 @@
 //! program the compositor started, through a connection it opened itself (`WAYLAND_SOCKET`),
 //! may lock, the session locked or not; its identity is forgotten when it dies. See "Session
 //! lock" in `docs/compositor.md`.
+//!
+//! A lock program that hangs gets the same treatment (lot D-25f): after an input, the
+//! compositor pings it (`xdg_wm_base.ping`, answered by its event loop); without an answer
+//! within `PING_TIMEOUT`, it is killed and started again, and after `CLIENT_ATTEMPTS` the rescue
+//! mode follows. The log is written to disk at each lock and unlock, and every `LOG_SYNC` while
+//! locked, so that its end survives a forced restart.
 
 use std::{
     ffi::OsString,
@@ -46,8 +52,9 @@ use smithay::{
             ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
             ext_session_lock_v1::{self, ExtSessionLockV1},
         },
+        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
         wayland_server::{
-            Client, DataInit, Dispatch, DisplayHandle, Resource,
+            Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
             backend::{ClientId, DisconnectReason},
             delegate_dispatch, delegate_global_dispatch,
             protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -61,6 +68,7 @@ use smithay::{
             ExtLockSurfaceUserData, LockSurface, SessionLockHandler, SessionLockManagerGlobalData,
             SessionLockManagerState, SessionLockState, SessionLocker,
         },
+        shell::xdg::{ShellClient, XdgShellState},
     },
 };
 
@@ -89,6 +97,15 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(10);
 pub const RELAUNCH_DELAY: Duration = Duration::from_millis(500);
 /// How often the lock program is checked on while the session is locked.
 const WATCH: Duration = Duration::from_millis(100);
+/// Time the lock program has to answer a ping sent after an input, before it counts as hung
+/// (lot D-25f).
+pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
+/// At most one ping in this time: input comes in bursts.
+const PING_EVERY: Duration = Duration::from_secs(1);
+/// Time the lock program has to present an image after a key that types (lot D-25g).
+pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(3);
+/// How often the log is written to disk while locked.
+pub const LOG_SYNC: Duration = Duration::from_secs(5);
 
 /// The programs that show the lock screen: ours, its rescue mode, then `swaylock`.
 #[derive(Debug, Clone)]
@@ -193,6 +210,21 @@ pub(crate) struct SessionLock {
     programs: Option<Programs>,
     /// The timer of `watch_lock_program`, while locked.
     watch: Option<RegistrationToken>,
+    /// The client binding `xdg_wm_base` now.
+    binding: Option<ClientId>,
+    /// The shell client of the lock program: what the pings go to.
+    shell: Option<ShellClient>,
+    /// A ping sent and not answered yet, since then; the last ping sent.
+    ping: Option<Instant>,
+    pinged: Option<Instant>,
+    ping_timeout: Duration,
+    /// The last time the log was written to disk.
+    synced: Option<Instant>,
+    /// A key that types went to the lock program, since then, and no image came after it.
+    waiting_image: Option<Instant>,
+    image_timeout: Duration,
+    /// The first input while locked was logged.
+    input_logged: bool,
 }
 
 impl SessionLock {
@@ -213,6 +245,15 @@ impl SessionLock {
             stage: Stage::Client,
             programs: None,
             watch: None,
+            binding: None,
+            shell: None,
+            ping: None,
+            pinged: None,
+            ping_timeout: PING_TIMEOUT,
+            synced: None,
+            waiting_image: None,
+            image_timeout: IMAGE_TIMEOUT,
+            input_logged: false,
         }
     }
 }
@@ -245,6 +286,107 @@ impl State {
     /// Every lock program failed: the compositor shows its rescue screen.
     pub fn lock_rescue_shown(&self) -> bool {
         self.lock.locked && self.lock.rescue_screen
+    }
+
+    /// Replaces the time a lock program has to answer a ping (the tests).
+    pub fn set_lock_ping_timeout(&mut self, timeout: Duration) {
+        self.lock.ping_timeout = timeout;
+    }
+
+    /// Replaces the time a lock program has to present an image after a key (the tests).
+    pub fn set_lock_image_timeout(&mut self, timeout: Duration) {
+        self.lock.image_timeout = timeout;
+    }
+
+    /// An input while locked (lot D-25g): the keyboard goes back to the lock surface of the
+    /// screen if anything took it, the first one is logged with the surface that has the
+    /// keyboard, and after a key that types, the lock program must present an image.
+    pub(crate) fn lock_input(&mut self, types: bool) {
+        if !self.lock.locked {
+            return;
+        }
+        let wanted = self.lock_focus();
+        let focus = self.seat.get_keyboard().and_then(|k| k.current_focus());
+        if wanted.is_some() && focus != wanted {
+            tracing::warn!(?focus, "locked: the keyboard goes back to the lock surface");
+            self.set_keyboard_focus(None);
+        }
+        if !std::mem::replace(&mut self.lock.input_logged, true) {
+            let surface = self.keyboard_focus().map(|s| s.id());
+            tracing::info!(?surface, "first input delivered while locked");
+        }
+        if types && self.lock.owner.is_some() && self.lock.waiting_image.is_none() {
+            self.lock.waiting_image = Some(Instant::now());
+        }
+        self.ping_lock_program();
+    }
+
+    /// A surface committed: a lock surface with a new image ends the wait for one.
+    pub(crate) fn lock_surface_committed(&mut self, surface: &WlSurface) {
+        if self.lock.waiting_image.is_some()
+            && self
+                .lock
+                .surfaces
+                .iter()
+                .any(|s| s.surface.wl_surface() == surface)
+        {
+            self.lock.waiting_image = None;
+        }
+    }
+
+    /// The connection of the lock program is open.
+    pub fn lock_program_connected(&self) -> bool {
+        self.lock.program.is_some()
+    }
+
+    /// Requests to write the log to disk so far.
+    pub fn log_sync_requests(&self) -> u64 {
+        self.log_sync.requests()
+    }
+
+    /// Replaces the console switch (the tests).
+    pub fn set_switch_vt(&mut self, switch: Box<dyn FnMut(i32)>) {
+        self.switch_vt = Some(switch);
+    }
+
+    /// Lock programs started since the session was locked.
+    pub fn lock_attempts(&self) -> u32 {
+        self.lock.attempts
+    }
+
+    /// A client bound `xdg_wm_base`: the lock program's is kept for the pings.
+    pub(crate) fn shell_client_bound(&mut self, shell: ShellClient) {
+        if self.lock.binding.is_some() && self.lock.binding == self.lock.program {
+            self.lock.shell = Some(shell);
+        }
+    }
+
+    /// A client answered a ping.
+    pub(crate) fn shell_client_pong(&mut self, shell: &ShellClient) {
+        if self.lock.shell.as_ref() == Some(shell) {
+            self.lock.ping = None;
+        }
+    }
+
+    /// An input while locked: the lock program holding the lock is pinged, which only an event
+    /// loop alive answers (lot D-25f).
+    pub(crate) fn ping_lock_program(&mut self) {
+        let recent = self.lock.pinged.is_some_and(|at| at.elapsed() < PING_EVERY);
+        // Screens off, the program waits for its frame callbacks, sent slowly (lot D-38).
+        let on = self.power_phase() == crate::power::Phase::On;
+        let lock = &mut self.lock;
+        if !on || !lock.locked || lock.owner.is_none() || lock.ping.is_some() || recent {
+            return;
+        }
+        let Some(shell) = lock.shell.as_ref().filter(|s| s.alive()) else {
+            return;
+        };
+        let now = Instant::now();
+        lock.pinged = Some(now);
+        match shell.send_ping(SERIAL_COUNTER.next_serial()) {
+            Ok(()) => lock.ping = Some(now),
+            Err(err) => tracing::debug!("lock program: no ping: {err:?}"),
+        }
     }
 
     /// Replaces the lock programs (the tests).
@@ -299,6 +441,8 @@ impl State {
 
     fn enter_lock(&mut self) {
         tracing::info!("session locked");
+        self.sync_log();
+        (self.lock.input_logged, self.lock.waiting_image) = (false, None);
         let lock = &mut self.lock;
         (lock.locked, lock.rescue_screen) = (true, false);
         lock.shown.clear();
@@ -330,6 +474,8 @@ impl State {
 
     fn end_lock(&mut self) {
         tracing::info!("session unlocked");
+        self.sync_log();
+        (self.lock.ping, self.lock.pinged) = (None, None);
         let lock = &mut self.lock;
         (lock.locked, lock.rescue_screen) = (false, false);
         (lock.owner, lock.confirm, lock.next_launch) = (None, None, None);
@@ -357,10 +503,12 @@ impl State {
 
     /// Sends `locked` once every screen has shown a locked frame.
     fn confirm_lock(&mut self) {
-        let all = self
-            .screens
-            .iter()
-            .all(|s| self.lock.shown.contains(&s.output));
+        // Dark screens show nothing: as good as a locked frame (lot D-38).
+        let all = self.screens_dark()
+            || self
+                .screens
+                .iter()
+                .all(|s| self.lock.shown.contains(&s.output));
         if self.lock.locked
             && all
             && let Some(confirm) = self.lock.confirm.take()
@@ -454,6 +602,8 @@ impl State {
     /// The lock program is gone: its connection is closed, and nothing may lock until the next
     /// one starts.
     fn forget_lock_program(&mut self) {
+        (self.lock.shell, self.lock.ping) = (None, None);
+        self.lock.waiting_image = None;
         if let Some(id) = self.lock.program.take() {
             self.display_handle
                 .backend_handle()
@@ -467,6 +617,42 @@ impl State {
         if !self.lock.locked {
             self.lock.watch = None;
             return TimeoutAction::Drop;
+        }
+        if self.lock.synced.is_none_or(|at| at.elapsed() >= LOG_SYNC) {
+            self.sync_log();
+        }
+        // The screens off or coming back: the time of a ping pending, and of an image awaited
+        // after a key, starts again.
+        if self.power_phase() != crate::power::Phase::On {
+            if self.lock.ping.is_some() {
+                self.lock.ping = Some(Instant::now());
+            }
+            if self.lock.waiting_image.is_some() {
+                self.lock.waiting_image = Some(Instant::now());
+            }
+        }
+        let silent = self
+            .lock
+            .ping
+            .is_some_and(|at| at.elapsed() > self.lock.ping_timeout);
+        let blind = self
+            .lock
+            .waiting_image
+            .is_some_and(|at| at.elapsed() > self.lock.image_timeout);
+        if silent || blind {
+            tracing::warn!(
+                silent,
+                blind,
+                "the lock program does not answer, or shows nothing after a key: killed, the \
+                 session stays locked"
+            );
+            self.sync_log();
+            // As if its lock went without an unlock, without waiting for the connection's end.
+            (self.lock.owner, self.lock.confirm) = (None, None);
+            self.lock.surfaces.clear();
+            self.lock_program_failed();
+            self.set_keyboard_focus(None);
+            self.queue_redraw();
         }
         let owned = self.lock.owner.is_some();
         if let Some((child, started)) = self.lock.child.as_mut() {
@@ -495,6 +681,12 @@ impl State {
             self.launch_lock_program();
         }
         TimeoutAction::ToDuration(WATCH)
+    }
+
+    /// Asks for the log to be written to disk.
+    fn sync_log(&mut self) {
+        self.lock.synced = Some(Instant::now());
+        self.log_sync.request();
     }
 
     /// Enter on the rescue screen: the lock programs are tried again from the start.
@@ -649,6 +841,30 @@ impl SessionLockHandler for State {
 delegate_global_dispatch!(State: [ExtSessionLockManagerV1: SessionLockManagerGlobalData] => SessionLockManagerState);
 delegate_dispatch!(State: [ExtSessionLockManagerV1: ()] => SessionLockManagerState);
 delegate_dispatch!(State: [ExtSessionLockSurfaceV1: ExtLockSurfaceUserData] => SessionLockManagerState);
+
+/// The binding of `xdg_wm_base` goes to smithay, the client known meanwhile: `new_client`
+/// names the shell client only, and the lock program's is the one pinged (lot D-25f).
+impl GlobalDispatch<XdgWmBase, ()> for State {
+    fn bind(
+        state: &mut Self,
+        dh: &DisplayHandle,
+        client: &Client,
+        resource: New<XdgWmBase>,
+        global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        state.lock.binding = Some(client.id());
+        <XdgShellState as GlobalDispatch<XdgWmBase, (), Self>>::bind(
+            state,
+            dh,
+            client,
+            resource,
+            global_data,
+            data_init,
+        );
+        state.lock.binding = None;
+    }
+}
 
 /// Requests of a lock go to smithay, as `delegate_session_lock!` would send them, after two
 /// checks smithay does not make: `unlock_and_destroy` ends the lock only from the lock that

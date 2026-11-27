@@ -340,6 +340,41 @@ mod tests {
         assert!(!h.state.is_locked());
     }
 
+    /// Runs the loop until `done`, for 10 s at most.
+    fn wait(h: &mut Harness, what: &str, done: impl Fn(&Harness) -> bool) {
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while !done(h) {
+            assert!(
+                std::time::Instant::now() < end,
+                "timed out waiting for: {what}"
+            );
+            h.settle();
+        }
+    }
+
+    #[test]
+    fn the_login_screen_goes_dark_after_the_veil_and_never_locks() {
+        let mut h = Harness::start();
+        h.show_greeter();
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        h.state
+            .set_screen_off_delay(Some(Duration::from_millis(1500)));
+        wait(&mut h, "the veil", |h| h.state.dim().0 > 0.0);
+        assert!(!h.state.is_locked());
+        wait(&mut h, "the screens dark", |h| h.state.screens_dark());
+        assert!(!h.state.is_locked());
+        // A key brings them back, and does not reach the greeter.
+        h.seen.keys.clear();
+        h.state
+            .keyboard_key(Keycode::new(KEY_L), KeyState::Pressed, 20);
+        h.state
+            .keyboard_key(Keycode::new(KEY_L), KeyState::Released, 21);
+        h.settle();
+        assert!(!h.state.screens_dark() && !h.state.is_locked());
+        assert!(h.seen.keys.is_empty(), "{:?}", h.seen.keys);
+    }
+
     #[test]
     fn the_login_screen_opens_no_shell_socket() {
         let dir = std::env::temp_dir().join(format!("greeter-socket-{}", std::process::id()));
