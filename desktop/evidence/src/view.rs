@@ -26,6 +26,8 @@ use crate::icons::AppIcon;
 use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::preview::Preview;
 
+mod path;
+
 /// Vertical rule between two panels.
 fn vline<'a>() -> Element<'a, Message> {
     container(space())
@@ -121,6 +123,12 @@ impl App {
             let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
             layers.push(self.context_menu(menu, items, sub, false));
         }
+        if let Some(suggestions) = self.path_suggestions() {
+            layers.push(suggestions);
+        }
+        if let Some(sheet) = self.go_to_sheet() {
+            layers.push(sheet);
+        }
         if self.confirm_empty {
             layers.push(self.dialog());
         }
@@ -184,40 +192,7 @@ impl App {
             t::FORWARD,
             self.can_go_forward().then_some(Message::Forward),
         );
-        let mut crumbs = self.breadcrumb();
-        let folded = crumbs.len() > metrics::BREADCRUMB_MAX;
-        if folded {
-            crumbs.drain(1..crumbs.len() + 1 - metrics::BREADCRUMB_MAX);
-        }
-        let chevron = || {
-            ui::icon(
-                Icon::Chevron,
-                metrics::ICON_SIZE_TINY,
-                color::palette().text_tertiary,
-            )
-        };
-        let mut trail = Row::new()
-            .spacing(metrics::BREADCRUMB_GAP)
-            .align_y(Alignment::Center);
-        let count = crumbs.len();
-        for (i, (label, location)) in crumbs.into_iter().enumerate() {
-            if i > 0 {
-                trail = trail.push(chevron());
-            }
-            if folded && i == 1 {
-                trail = trail
-                    .push(ui::body(t::FOLDED).color(color::palette().text_tertiary))
-                    .push(chevron());
-            }
-            let current = i + 1 == count;
-            trail = trail.push(ui::crumb(label, current, Some(Message::Go(location))));
-        }
-        let trail = container(trail)
-            .height(metrics::BREADCRUMB_HEIGHT)
-            .padding([0.0, metrics::BREADCRUMB_PADDING])
-            .align_y(Alignment::Center)
-            .clip(true)
-            .style(theme::inset);
+        let trail = self.path_bar();
         let mut line = row![back, forward, trail]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center);
@@ -231,7 +206,8 @@ impl App {
             SEARCH,
             metrics::SEARCH_WIDTH,
         );
-        let line = line.push(space::horizontal()).push(search);
+        // The path bar takes the room left between the buttons and the search.
+        let line = line.push(search);
         container(line)
             .width(Length::Fill)
             .height(metrics::TOOLBAR_HEIGHT)
@@ -553,7 +529,7 @@ impl App {
                     .on_submit(Message::RenameSubmit)
                     .into()
             }
-            _ => ui::body(elide(&entry.name, name_chars))
+            _ => ui::body(elide(&crate::pathbar::visible(&entry.name), name_chars).into_owned())
                 .font(typography::UI_MEDIUM)
                 .wrapping(text::Wrapping::None)
                 .into(),
@@ -627,7 +603,7 @@ impl App {
                 let scale = typography::CARD_TITLE_SIZE / typography::UI_SIZE;
                 let chars = (room / (typography::UI_CHAR_WIDTH * scale)) as usize;
                 let title = column![
-                    ui::body(elide(&entry.name, chars))
+                    ui::body(elide(&crate::pathbar::visible(&entry.name), chars).into_owned())
                         .font(typography::UI_SEMIBOLD)
                         .size(typography::CARD_TITLE_SIZE)
                         .wrapping(text::Wrapping::None),

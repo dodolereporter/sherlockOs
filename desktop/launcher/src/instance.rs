@@ -121,6 +121,29 @@ mod tests {
     /// Set for the copy of this test program that plays a running launcher.
     const STAND_IN: &str = "LAUNCHER_TEST_STAND_IN";
 
+    /// Taken by the tests that start a process. Until its `exec`, a child is a copy of this
+    /// program: it holds a copy of every descriptor, the lock another test has just released
+    /// included, so that lock looked still taken; and its `/proc/<id>/exe` is still this
+    /// program, so a stranger looked like a launcher and was signalled. Both seen when several
+    /// test programs run at once.
+    static PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `child` once it runs its own program: `spawn` may return before the `exec`, until which
+    /// its command line is still ours. Gives up after 5 s.
+    fn started(child: std::process::Child) -> std::process::Child {
+        let ours = std::fs::read("/proc/self/cmdline").expect("our command line");
+        let theirs = format!("/proc/{}/cmdline", child.id());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let line = std::fs::read(&theirs).unwrap_or_default();
+            if !line.is_empty() && line != ours {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        child
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("launcher-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -147,6 +170,7 @@ mod tests {
 
     #[test]
     fn a_second_launcher_closes_the_first() {
+        let _processes = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp("instance");
         let lock = holds(&dir);
         let written = std::fs::read_to_string(dir.join(FILE)).expect("lock file");
@@ -154,12 +178,13 @@ mod tests {
         // Our own id is never signalled.
         assert!(matches!(claim(&dir), Ok(Claim::Second(None))));
         // A first launcher played by a copy of this program.
-        let mut first = std::process::Command::new(std::env::current_exe().expect("program"))
+        let first = std::process::Command::new(std::env::current_exe().expect("program"))
             .args(["--ignored", "--exact", "instance::tests::stand_in"])
             .env(STAND_IN, "1")
             .stdout(std::process::Stdio::null())
             .spawn()
             .expect("stand-in");
+        let mut first = started(first);
         std::fs::write(dir.join(FILE), first.id().to_string()).expect("pid written");
         let closed = claim(&dir).expect("claim");
         assert!(matches!(closed, Claim::Second(Some(pid)) if pid as u32 == first.id()));
@@ -174,12 +199,14 @@ mod tests {
 
     #[test]
     fn a_live_process_that_is_not_a_launcher_is_never_signalled() {
+        let _processes = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
         let dir = temp("stranger");
         let _lock = holds(&dir);
-        let mut stranger = std::process::Command::new("sleep")
+        let stranger = std::process::Command::new("sleep")
             .arg("30")
             .spawn()
             .expect("sleep");
+        let mut stranger = started(stranger);
         std::fs::write(dir.join(FILE), stranger.id().to_string()).expect("pid written");
         assert!(matches!(claim(&dir), Ok(Claim::Second(None))));
         std::thread::sleep(std::time::Duration::from_millis(100));
