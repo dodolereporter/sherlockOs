@@ -26,7 +26,7 @@ mod tests {
         desktop::Window,
         input::keyboard::Keycode,
         reexports::calloop::EventLoop,
-        utils::{Logical, Point},
+        utils::{Logical, Point, Rectangle},
     };
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
@@ -604,9 +604,15 @@ mod tests {
         let x11 = h.wait("the X11 window", |h| {
             x11_window(&h.state).filter(|w| h.state.focused_window().as_ref() == Some(w))
         });
+        // The X11 window beside the Wayland one: a press on the Wayland window raises it.
         let w_rect = h.state.space.element_geometry(&wayland).unwrap();
-        let x_rect = h.state.space.element_geometry(&x11).unwrap();
-        assert!(w_rect.contains_rect(x_rect), "{w_rect:?} {x_rect:?}");
+        let x_rect = Rectangle::<i32, Logical>::new(
+            (w_rect.loc.x + w_rect.size.w, 10).into(),
+            (200, 100).into(),
+        );
+        h.state.space.map_element(x11.clone(), x_rect.loc, false);
+        x11.x11_surface().unwrap().configure(x_rect).unwrap();
+        h.idle(Duration::from_millis(100));
         let beside = (w_rect.loc + Point::<i32, Logical>::from((10, 10))).to_f64();
         let over = (x_rect.loc + Point::<i32, Logical>::from((100, 50))).to_f64();
 
