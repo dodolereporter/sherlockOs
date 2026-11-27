@@ -335,7 +335,10 @@ mod tests {
     }
 
     fn shm_file(size: u64) -> File {
-        let path = std::env::temp_dir().join(format!("dnd-test-{}", std::process::id()));
+        // One per window: the tests run side by side in the same process.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("dnd-test-{}-{n}", std::process::id()));
         let file = OpenOptions::new()
             .read(true)
             .write(true)
