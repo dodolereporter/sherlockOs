@@ -4,6 +4,7 @@ description = "Installed applications, file types and default applications, afte
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 # Standard library only: desktop entries, the shared MIME database globs and mimeapps.list

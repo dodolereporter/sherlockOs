@@ -4,6 +4,7 @@ description = "Control Room, the settings application of the desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
@@ -28,6 +29,10 @@ mime-apps = { path = "../mime-apps" }
 # Outputs, microphones and their volumes through `pactl`, as the bar and the media keys
 # (workspace crate).
 system-services = { path = "../system-services" }
+# The screens page talks `wlr-output-management` to the compositor on a connection of its own
+# (ADR 0025): the versions the workspace already pulls, client side.
+wayland-client = "=0.31.15"
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",

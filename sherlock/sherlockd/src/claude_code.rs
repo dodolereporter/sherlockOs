@@ -221,6 +221,9 @@ impl ClaudeCodeConfig {
             .envs(clean_env(std::env::vars_os(), &CLAUDE_ENV_EXTRA))
             .envs(ENV)
             .kill_on_drop(true);
+        // A group of its own, which dies with sherlockd: Claude Code, the proxy it starts and
+        // the proxy's servers never outlive it, and a timeout stops them all (`stop`).
+        crate::process::own_group(&mut command);
         command
     }
 }
@@ -500,6 +503,7 @@ impl ClaudeCode {
                     .recursive(true)
                     .mode(0o700)
                     .create(dir)?;
+                check_private(dir)?;
                 dir.clone()
             }
             None => {
@@ -624,15 +628,27 @@ impl ClaudeCode {
         let result = tokio::time::timeout(delay, exchange)
             .await
             .unwrap_or(Err(ClaudeCodeError::Timeout(delay)));
-        stop(&mut child, result.is_ok()).await;
-        match tokio::time::timeout(Duration::from_secs(1), &mut stderr).await {
-            Ok(Ok(bytes)) if !bytes.is_empty() => {
-                let text = String::from_utf8_lossy(&bytes);
-                tracing::warn!("Claude Code stderr: {}", text.escape_debug());
+        let answered = result.is_ok();
+        // Should the task below be dropped (sherlockd ends first), the whole group goes.
+        let mut group = Group(child);
+        let end = async move {
+            stop(&mut group.0, answered).await;
+            match tokio::time::timeout(Duration::from_secs(1), &mut stderr).await {
+                Ok(Ok(bytes)) if !bytes.is_empty() => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    tracing::warn!("Claude Code stderr: {}", text.escape_debug());
+                }
+                Ok(_) => {}
+                // A descendant keeps standard error open: stop reading it.
+                Err(_) => stderr.abort(),
             }
-            Ok(_) => {}
-            // A descendant keeps standard error open: stop reading it.
-            Err(_) => stderr.abort(),
+        };
+        if answered {
+            // The answer is given at once: Claude Code ends on its own meanwhile, killed with its
+            // group past `SHORT_DELAY`.
+            tokio::spawn(end);
+        } else {
+            end.await;
         }
         result
     }
@@ -649,18 +665,51 @@ impl Drop for ClaudeCode {
     }
 }
 
+/// Claude Code, leader of its process group (`process::own_group`): dropped before it was
+/// reaped, the whole group is killed, the proxy and its servers with it.
+struct Group(Child);
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        crate::process::kill_group(&self.0);
+    }
+}
+
 /// Lets Claude Code finish after its answer, or kills it at once after an error or a timeout,
-/// then waits for the process so as not to leave a zombie.
+/// with its whole group (the proxy, its servers), then waits for the process so as not to leave
+/// a zombie.
 async fn stop(child: &mut Child, answered: bool) {
     if answered && let Ok(Ok(_)) = tokio::time::timeout(SHORT_DELAY, child.wait()).await {
         return;
     }
+    crate::process::kill_group(child);
     if let Err(error) = child.start_kill() {
-        tracing::warn!(%error, "killing Claude Code failed");
+        tracing::debug!(%error, "Claude Code already gone");
     }
     if let Err(error) = child.wait().await {
         tracing::warn!(%error, "waiting for Claude Code failed");
     }
+}
+
+/// The working directory named by the configuration, made by `DirBuilder` or there before: a
+/// folder (not a link), this user's, readable by nobody else. A folder put there by someone
+/// else, or opened to others, is refused: Claude Code would work in it.
+fn check_private(dir: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let meta = std::fs::symlink_metadata(dir)?;
+    // SAFETY: geteuid(2) takes nothing and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    if !meta.is_dir() || meta.uid() != me {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} n'est pas un dossier à moi", dir.display()),
+        ));
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        // Ours, but opened to others (made before with another umask): closed again.
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

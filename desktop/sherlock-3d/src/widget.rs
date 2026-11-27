@@ -5,6 +5,11 @@
 //! frames only while it is in the view and not paused: hidden or paused, it costs nothing. In
 //! software (tiny-skia), or without the model file, it shows a still picture of Sherlock.
 //!
+//! The still picture is cut here, once, and not by iced: tiny-skia draws an image whole, its
+//! `crop` and `border_radius` ignored, so the full picture overflowed the widget (lot Q-33). It
+//! is the top square of the picture (cap, face and scarf, like the 3D framing), as a disc for
+//! a round cut, and its drawing is clipped to the widget.
+//!
 //! ```ignore
 //! let mascot = Sherlock3d::new(model.clone())
 //!     .mood(Mood::Peek)
@@ -15,12 +20,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use glam::{Mat4, Vec2};
 use iced::advanced::layout::{self, Layout};
-use iced::advanced::renderer as advanced_renderer;
+use iced::advanced::renderer::{self as advanced_renderer, Renderer as _};
 use iced::advanced::widget::{Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::widget::image as still;
@@ -116,24 +121,16 @@ impl Sherlock3d {
 
 impl<'a, Message: 'a> From<Sherlock3d> for Element<'a, Message> {
     fn from(mascot: Sherlock3d) -> Self {
-        let round = matches!(mascot.cut, Cut::Circle { .. });
-        let picture = still_picture();
-        let side = picture.width;
-        let mut fallback = still::Image::new(picture.handle.clone())
+        // A disc stays whole and centered in any frame, as the 3D cut does; a rectangle is
+        // covered, the overflow clipped by `Choose::draw`.
+        let (handle, fit) = match mascot.cut {
+            Cut::Circle { radius } => (still_disc(radius), iced::ContentFit::Contain),
+            Cut::None => (still_picture().clone(), iced::ContentFit::Cover),
+        };
+        let fallback = still::Image::new(handle)
             .width(mascot.width)
             .height(mascot.height)
-            .content_fit(iced::ContentFit::Cover)
-            // The top of the picture: cap, face and scarf, like the 3D framing.
-            .crop(Rectangle {
-                x: 0,
-                y: 0,
-                width: side,
-                height: side,
-            });
-        if round {
-            // Large enough to round any size into a disc.
-            fallback = fallback.border_radius(f32::MAX / 4.0);
-        }
+            .content_fit(fit);
         let scene = mascot.model.clone().map(|model| {
             Element::from(
                 iced::widget::shader(Scene {
@@ -158,33 +155,79 @@ impl<'a, Message: 'a> From<Sherlock3d> for Element<'a, Message> {
     }
 }
 
-/// The still picture, decoded once.
-struct Picture {
-    handle: still::Handle,
-    width: u32,
-}
-
-fn still_picture() -> &'static Picture {
-    static PICTURE: OnceLock<Picture> = OnceLock::new();
-    PICTURE.get_or_init(|| {
+/// The top square of the still picture, decoded once, straight-alpha RGBA.
+fn still_square() -> &'static Option<image::RgbaImage> {
+    static SQUARE: OnceLock<Option<image::RgbaImage>> = OnceLock::new();
+    SQUARE.get_or_init(|| {
         match image::load_from_memory_with_format(STILL_PNG, image::ImageFormat::Png) {
-            Ok(decoded) => {
-                let rgba = decoded.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                Picture {
-                    handle: still::Handle::from_rgba(width, height, rgba.into_raw()),
-                    width,
-                }
-            }
+            Ok(decoded) => Some(top_square(decoded.to_rgba8())),
             Err(error) => {
                 tracing::warn!(%error, "cannot decode the still picture of Sherlock");
-                Picture {
-                    handle: still::Handle::from_rgba(1, 1, vec![0; 4]),
-                    width: 1,
-                }
+                None
             }
         }
     })
+}
+
+/// The top square of `picture`: as wide as it is, or as tall if it is wider than tall.
+fn top_square(picture: image::RgbaImage) -> image::RgbaImage {
+    let side = picture.width().min(picture.height());
+    let x = (picture.width() - side) / 2;
+    image::imageops::crop_imm(&picture, x, 0, side, side).to_image()
+}
+
+/// `square` cut to a disc centered in it, `radius` a share of half its side, antialiased.
+fn disc(square: &image::RgbaImage, radius: f32) -> image::RgbaImage {
+    let half = square.width() as f32 / 2.0;
+    let radius = radius.clamp(0.0, 1.0) * half;
+    let mut disc = square.clone();
+    for (x, y, pixel) in disc.enumerate_pixels_mut() {
+        let distance = (x as f32 + 0.5 - half).hypot(y as f32 + 0.5 - half);
+        let coverage = (radius - distance + 0.5).clamp(0.0, 1.0);
+        pixel[3] = (f32::from(pixel[3]) * coverage).round() as u8;
+    }
+    disc
+}
+
+fn handle_of(picture: &image::RgbaImage) -> still::Handle {
+    still::Handle::from_rgba(picture.width(), picture.height(), picture.as_raw().clone())
+}
+
+/// A transparent pixel, when the picture cannot be read.
+fn nothing() -> still::Handle {
+    still::Handle::from_rgba(1, 1, vec![0; 4])
+}
+
+/// The still picture, cut to its top square: what a rectangle shows.
+fn still_picture() -> &'static still::Handle {
+    static PICTURE: OnceLock<still::Handle> = OnceLock::new();
+    PICTURE.get_or_init(|| still_square().as_ref().map_or_else(nothing, handle_of))
+}
+
+/// The still picture as a disc of `radius`: each radius cut once, the handle shared.
+fn still_disc(radius: f32) -> still::Handle {
+    /// Radii kept at most: a program uses one or two.
+    const KEPT: usize = 8;
+    static DISCS: OnceLock<Mutex<HashMap<u32, still::Handle>>> = OnceLock::new();
+    let Some(square) = still_square() else {
+        return nothing();
+    };
+    let radius = if radius.is_finite() {
+        radius.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let mut discs = DISCS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if discs.len() >= KEPT && !discs.contains_key(&radius.to_bits()) {
+        discs.clear();
+    }
+    discs
+        .entry(radius.to_bits())
+        .or_insert_with(|| handle_of(&disc(square, radius)))
+        .clone()
 }
 
 /// Draws the scene on the GPU, the still picture in software.
@@ -288,7 +331,10 @@ impl<Message> Widget<Message, Theme, Renderer> for Choose<'_, Message> {
         viewport: &Rectangle,
     ) {
         let (index, element) = self.pick(renderer);
-        if let Some(child) = layout.children().nth(index) {
+        let Some(child) = layout.children().nth(index) else {
+            return;
+        };
+        let draw = |renderer: &mut Renderer| {
             element.as_widget().draw(
                 &tree.children[index],
                 renderer,
@@ -298,6 +344,12 @@ impl<Message> Widget<Message, Theme, Renderer> for Choose<'_, Message> {
                 cursor,
                 viewport,
             );
+        };
+        if index == 0 {
+            // A covered picture is larger than the widget: only the widget's part shows.
+            renderer.with_layer(layout.bounds(), draw);
+        } else {
+            draw(renderer);
         }
     }
 }
@@ -512,4 +564,38 @@ fn intersection(a: &Rectangle<u32>, b: &Rectangle<u32>) -> Option<Rectangle<u32>
         width: right - x,
         height: bottom - y,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_still_picture_is_its_top_square() {
+        let mut tall = image::RgbaImage::from_pixel(4, 10, image::Rgba([0, 0, 0, 255]));
+        tall.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        let square = top_square(tall);
+        assert_eq!(square.dimensions(), (4, 4));
+        assert_eq!(square.get_pixel(0, 0)[0], 255, "the top is kept");
+        let wide = image::RgbaImage::new(10, 4);
+        assert_eq!(top_square(wide).dimensions(), (4, 4));
+        let picture = still_square().as_ref().map(image::RgbaImage::dimensions);
+        assert!(picture.is_some_and(|(w, h)| w == h && w > 1), "{picture:?}");
+    }
+
+    #[test]
+    fn the_disc_is_transparent_outside_its_radius() {
+        let square = image::RgbaImage::from_pixel(100, 100, image::Rgba([10, 20, 30, 255]));
+        let full = disc(&square, 1.0);
+        assert_eq!(full.get_pixel(0, 0)[3], 0, "corner");
+        assert_eq!(full.get_pixel(99, 99)[3], 0, "corner");
+        assert_eq!(full.get_pixel(50, 50)[3], 255, "center");
+        assert_eq!(full.get_pixel(50, 1)[3], 255, "edge, inside");
+        assert_eq!(full.get_pixel(50, 50).0[..3], [10, 20, 30]);
+        let half = disc(&square, 0.5);
+        assert_eq!(half.get_pixel(50, 10)[3], 0, "outside half the radius");
+        // Out of range: clamped, never a panic.
+        assert_eq!(disc(&square, f32::NAN).get_pixel(0, 0)[3], 0);
+        assert_eq!(disc(&square, 3.0).get_pixel(0, 0)[3], 0);
+    }
 }
