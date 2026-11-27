@@ -11,9 +11,9 @@
 //! - with Super + Shift + Escape, which locks the session too.
 //!
 //! A key, the pointer, a gesture, the lid opened or the wake-up bring them back; the key or the
-//! click that wakes them goes nowhere else. While an application holds an idle inhibitor
-//! (`zwp_idle_inhibit_manager_v1`: a video in Firefox or mpv), or logind blocks `idle`, neither
-//! the inactivity lock nor the screens off for inactivity happen.
+//! click that wakes them goes nowhere else. While something keeps the session awake (a visible
+//! video, a cookie on the bus, logind: `inhibit.rs`, lot D-43), neither the inactivity lock nor
+//! the screens off for inactivity happen.
 
 use std::{
     path::{Path, PathBuf},
@@ -23,16 +23,11 @@ use std::{
 use desktop_config::power::Config;
 use sherlock_ui::{color, screen_off as ui};
 use smithay::{
-    delegate_idle_inhibit,
-    reexports::{
-        calloop::{
-            LoopHandle, RegistrationToken,
-            timer::{TimeoutAction, Timer},
-        },
-        wayland_server::{DisplayHandle, protocol::wl_surface::WlSurface},
+    reexports::calloop::{
+        LoopHandle, RegistrationToken,
+        timer::{TimeoutAction, Timer},
     },
-    utils::{IsAlive, Physical, Rectangle},
-    wayland::idle_inhibit::{IdleInhibitHandler, IdleInhibitManagerState},
+    utils::{Physical, Rectangle},
 };
 
 use crate::{
@@ -119,28 +114,19 @@ pub(crate) struct Power {
     stamp: Option<(SystemTime, u64)>,
     /// A delay set by the tests, over the file's.
     forced: Option<Option<Duration>>,
-    /// Surfaces with an idle inhibitor.
-    inhibitors: Vec<WlSurface>,
-    /// logind blocks `idle` (an inhibitor of another program).
-    logind_idle: bool,
     /// The timer of the frame callbacks while dark.
     dark_frames: Option<RegistrationToken>,
-    /// The protocol's global, kept alive.
-    _manager: IdleInhibitManagerState,
 }
 
 impl Power {
-    pub(crate) fn new(dh: &DisplayHandle) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             phase: Phase::On,
             config: Config::default(),
             file: None,
             stamp: None,
             forced: None,
-            inhibitors: Vec::new(),
-            logind_idle: false,
             dark_frames: None,
-            _manager: IdleInhibitManagerState::new::<State>(dh),
         }
     }
 
@@ -208,15 +194,6 @@ impl State {
     /// An input now brings the screens back, and goes nowhere else.
     pub(crate) fn input_wakes(&self) -> bool {
         matches!(self.power.phase, Phase::Leaving { .. } | Phase::Dark { .. })
-    }
-
-    /// An application or logind holds the screens on: no inactivity lock nor screens off.
-    pub fn idle_inhibited(&self) -> bool {
-        self.power.logind_idle || self.power.inhibitors.iter().any(IsAlive::alive)
-    }
-
-    pub(crate) fn set_logind_idle(&mut self, blocked: bool) {
-        self.power.logind_idle = blocked;
     }
 
     /// The screens go off, then `then`.
@@ -299,24 +276,6 @@ impl State {
         }
     }
 }
-
-impl IdleInhibitHandler for State {
-    fn inhibit(&mut self, surface: WlSurface) {
-        tracing::debug!("idle inhibited");
-        self.power.inhibitors.retain(IsAlive::alive);
-        self.power.inhibitors.push(surface);
-    }
-
-    fn uninhibit(&mut self, surface: WlSurface) {
-        if let Some(i) = self.power.inhibitors.iter().position(|s| *s == surface) {
-            self.power.inhibitors.remove(i);
-        }
-        // The inactivity counts from now, not from the last input before the video.
-        self.note_input();
-    }
-}
-
-delegate_idle_inhibit!(State);
 
 /// What a screen shows while the screens go off, are dark or come back: black, and the picture
 /// squashed (`inner`, the screen's items in a view of its own at the origin), the line or the

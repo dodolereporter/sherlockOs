@@ -24,6 +24,7 @@ mod handlers;
 // The hook of the selections, for the clipboard history (lot D-42).
 pub use handlers::{SECRET_HINT, SelectionOrigin, is_secret};
 pub mod headless;
+pub mod inhibit;
 mod input;
 pub mod keyboard;
 pub mod launcher;
@@ -44,6 +45,7 @@ pub mod popup_anim;
 pub mod power;
 pub mod render;
 pub mod screenshot_tool;
+mod screensaver;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -55,6 +57,7 @@ pub mod window_anim;
 pub mod winit;
 mod x11_paste;
 mod xwayland;
+pub use xwayland::TEST_X_DISPLAY;
 
 use std::{
     borrow::Cow,
@@ -227,6 +230,9 @@ pub struct State {
     xwm: Option<X11Wm>,
     /// Number of the X11 display (`DISPLAY=:N`), once XWayland is ready.
     pub x_display: Option<u32>,
+    /// First X11 display number tried, `None`: smithay's search from 0 (the tests start high,
+    /// lot D-43).
+    x_first_display: Option<u32>,
     /// The Wayland socket the programs the compositor starts connect to (`WAYLAND_DISPLAY`).
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
@@ -273,6 +279,8 @@ pub struct State {
     curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
+    inhibitors: inhibit::Inhibitors,
     /// The screens off, like an old television (lot D-38).
     power: power::Power,
 }
@@ -406,6 +414,7 @@ impl State {
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
+            x_first_display: None,
             socket_name: None,
             launcher_program: None,
             applications_program: None,
@@ -429,7 +438,8 @@ impl State {
             lock: lock::SessionLock::new(&dh),
             curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
-            power: power::Power::new(&dh),
+            inhibitors: inhibit::Inhibitors::new(&dh),
+            power: power::Power::new(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
