@@ -7,7 +7,8 @@
 # /usr/local/libexec/sherlockos), or in SHERLOCKOS_BIN. That folder goes at the end of PATH: the
 # session finds the launcher there, and Evidence, whose desktop entry runs `evidence`.
 # XWayland starts too, for X11 applications; SHERLOCKOS_XWAYLAND=0 leaves it out (see "Real session"
-# in docs/compositor.md), and SHERLOCKOS_XEMBED=0 the proxy of the old X11 tray icons. SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
+# in docs/compositor.md), and SHERLOCKOS_XEMBED=0 the proxy of the old X11 tray icons.
+# SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
 # folder of the application icons and of the portal setting (see below), SHERLOCKOS_WALLPAPERS
 # the folder of the wallpapers (see below), SHERLOCKOS_POLKIT_AGENTS
 # the polkit agents to try (see "Everyday services" in docs/compositor.md). The log of the session goes to

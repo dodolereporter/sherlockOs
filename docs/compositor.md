@@ -1956,9 +1956,10 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   them when it stops: it turns each X11 tray icon into a `StatusNotifierItem` registered with the
   bar's watcher (see "Notification area" in `docs/bar.md`). The log says `session: X11 tray
   icons: <path>`. Not started without XWayland, nor with `SHERLOCKOS_XEMBED=0`. The autostart of
-  the session (`desktop/autostart`) leaves its `/etc/xdg/autostart` entry out (`OnlyShowIn=KDE`,
-  and the list of what the session starts itself), so it never runs twice. A proxy of our own may
-  replace it later if needed.
+  the session (`desktop/autostart`, lot D-44, still in review) leaves its `/etc/xdg/autostart`
+  entry out (`OnlyShowIn=KDE`, and the list of what the session starts itself), so it never runs
+  twice. A proxy of our own may replace it later if needed. To check on the machine: whether
+  the icons come back after the bar restarts, since the proxy registers each icon once.
 - **Portals.** `xdg-desktop-portal` is started by the bus when an application asks for it (a
   file chooser from Flatpak or Firefox, for instance). It reads `sherlockos-portals.conf` (the name of `XDG_CURRENT_DESKTOP`, `SherlockOS`, in lower case)
   (`desktop/compositor/session/`), which `just install-session` puts in
