@@ -103,7 +103,7 @@ impl Bar {
                 Ok(item) if id == 0 => shown.root = Some(item),
                 Ok(item) => {
                     if let Some(root) = &mut shown.root {
-                        root.replace(item);
+                        root.graft(item);
                     }
                 }
                 Err(error) => {
