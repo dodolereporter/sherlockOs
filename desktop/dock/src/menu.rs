@@ -23,6 +23,8 @@ pub enum Entry {
     Keep,
     /// Removes it from the pinned list.
     Unpin,
+    /// App Expose: Mission Control on its windows.
+    ShowAll,
     /// Closes its windows. Needs a source of windows that can close them.
     Quit,
 }
@@ -67,6 +69,8 @@ pub struct Abilities {
     pub unpin: bool,
     /// Its windows can be acted on: brought forward, closed.
     pub act: bool,
+    /// App Expose can show its windows: the source offers it, and a window is shown.
+    pub expose: bool,
 }
 
 /// A window listed at the top of the menu.
@@ -80,7 +84,8 @@ pub struct Listed {
 /// The entries of an icon's menu, after the dock menu of macOS: the open windows (the active
 /// one checked), « Nouvelle fenêtre » (« Ouvrir » without a window), the other actions of the
 /// desktop entry (`actions`, by their index), « Garder dans le Dock » or « Retirer du Dock »,
-/// « Quitter ». An action that cannot be done is disabled, never pretended.
+/// « Afficher toutes les fenêtres », « Quitter ». An action that cannot be done is disabled,
+/// never pretended.
 pub fn entries(can: Abilities, windows: &[Listed], actions: &[(usize, String)]) -> Vec<Line> {
     let mut lines: Vec<Line> = windows
         .iter()
@@ -105,7 +110,12 @@ pub fn entries(can: Abilities, windows: &[Listed], actions: &[(usize, String)]) 
     } else {
         Line::new(Entry::Unpin, text::UNPIN, can.unpin).group()
     });
-    lines.push(Line::new(Entry::Quit, text::QUIT, can.act && !windows.is_empty()).group());
+    lines.push(Line::new(Entry::ShowAll, text::SHOW_ALL, can.act && can.expose).group());
+    lines.push(Line::new(
+        Entry::Quit,
+        text::QUIT,
+        can.act && !windows.is_empty(),
+    ));
     lines
 }
 
@@ -236,6 +246,7 @@ mod tests {
         keep: false,
         unpin: true,
         act: false,
+        expose: false,
     };
 
     fn labels(lines: &[Line]) -> Vec<(&str, bool)> {
@@ -254,6 +265,7 @@ mod tests {
                 ("Ouvrir", true),
                 ("Nouvel onglet", true),
                 ("Retirer du Dock", true),
+                ("Afficher toutes les fenêtres", false),
                 ("Quitter", false),
             ]
         );
@@ -263,12 +275,14 @@ mod tests {
             keep: false,
             unpin: false,
             act: false,
+            expose: false,
         };
         assert_eq!(
             labels(&entries(sherlock, &[], &[])),
             [
                 ("Ouvrir", false),
                 ("Retirer du Dock", false),
+                ("Afficher toutes les fenêtres", false),
                 ("Quitter", false)
             ]
         );
@@ -279,6 +293,7 @@ mod tests {
         let can = Abilities {
             act: true,
             keep: true,
+            expose: true,
             ..APP
         };
         let windows = [
@@ -301,16 +316,17 @@ mod tests {
                 ("plan.md", true),
                 ("Nouvelle fenêtre", true),
                 ("Garder dans le Dock", true),
+                ("Afficher toutes les fenêtres", true),
                 ("Quitter", true),
             ]
         );
         assert_eq!(lines[0].entry, Entry::Window(4));
         assert!(!lines[0].checked && lines[1].checked, "the active window");
         let groups: Vec<bool> = lines.iter().map(|l| l.starts_group).collect();
-        assert_eq!(groups, [false, false, true, true, true]);
+        assert_eq!(groups, [false, false, true, true, true, false]);
         // Windows a source cannot act on are listed, disabled, and « Quitter » too.
         let lines = entries(APP, &windows, &[]);
-        assert!(!lines[0].enabled && !lines[4].enabled);
+        assert!(!lines[0].enabled && !lines[4].enabled && !lines[5].enabled);
     }
 
     #[test]
@@ -320,7 +336,7 @@ mod tests {
         assert_eq!(
             move_cursor(&list, None, Key::Previous),
             Some(1),
-            "Quitter is off"
+            "App Expose and Quitter are off"
         );
         assert_eq!(
             move_cursor(&list, Some(1), Key::Next),
@@ -335,6 +351,7 @@ mod tests {
                 keep: false,
                 unpin: false,
                 act: false,
+                expose: false,
             },
             &[],
             &[],
@@ -363,10 +380,10 @@ mod tests {
     #[test]
     fn the_menu_surface_follows_the_design_board() {
         // Menus board: 240 wide; padding of 6, header of 28, entries of 30, a separator of 9
-        // before « Retirer du Dock » and before « Quitter ».
+        // before « Retirer du Dock » and before « Afficher toutes les fenêtres ».
         assert_eq!(
             surface_size(&entries(APP, &[], &[])),
-            (240, 12 + 28 + 90 + 18)
+            (240, 12 + 28 + 120 + 18)
         );
     }
 }

@@ -68,6 +68,7 @@ mod tests {
     const KEY_1: u32 = 10;
     const KEY_2: u32 = 11;
     const KEY_3: u32 = 12;
+    const KEY_ESC: u32 = 9;
 
     /// A window as the shell client knows it, applied at `done`.
     #[derive(Debug, Default, Clone)]
@@ -1188,6 +1189,67 @@ mod tests {
         h.state.set_workspace_count(5);
         h.run_until("five workspaces", |h| h.shell.client.workspaces.len() == 5);
         assert_eq!(h.state.workspaces().active(), "1");
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    /// App Expose (lot D-21c2): the shell opens Mission Control on some windows only.
+    #[test]
+    fn the_shell_opens_mission_control_on_the_windows_of_one_application() {
+        let mut h = Harness::start();
+        let manager = h.bind_manager();
+        for title in ["One", "Two", "Three"] {
+            h.open_window(title);
+        }
+        h.run_until("three windows", |h| h.shell.client.toplevels.len() == 3);
+        let id = |h: &Harness, title: &str| {
+            let toplevels = &h.shell.client.toplevels;
+            toplevels
+                .iter()
+                .find(|t| t.1.title == title)
+                .unwrap()
+                .1
+                .id
+                .unwrap()
+        };
+        let ids = |list: &[u32]| -> Vec<u8> { list.iter().flat_map(|v| v.to_ne_bytes()).collect() };
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let titles = |h: &Harness| -> Vec<String> {
+            let tiles = h.state.overview_tiles(&output, None);
+            let mut titles: Vec<String> = tiles
+                .iter()
+                .filter_map(|t| State::title(&t.window))
+                .collect();
+            titles.sort();
+            titles
+        };
+
+        // Unknown windows only: nothing opens.
+        manager.show_windows(ids(&[9_999]));
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert!(!h.state.overview_open());
+
+        // Two of the three, an unknown id among them: only those, without the strip.
+        let (one, three) = (id(&h, "One"), id(&h, "Three"));
+        manager.show_windows(ids(&[one, 9_999, three]));
+        h.run_until("app expose open", |h| h.state.overview_open());
+        assert_eq!(titles(&h), ["One", "Three"]);
+        assert!(h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), Some(&[one, 9_999, three][..]));
+
+        // Open, it shows other windows instead.
+        let two = id(&h, "Two");
+        manager.show_windows(ids(&[two]));
+        h.run_until("the other windows", |h| titles(h) == ["Two"]);
+
+        // Escape closes it; Mission Control opened afterwards shows everything, strip included.
+        h.keys(&[], KEY_ESC);
+        assert!(!h.state.overview_open());
+        h.state.open_overview();
+        assert_eq!(titles(&h), ["One", "Three", "Two"]);
+        assert!(!h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), None);
         assert!(h.shell.conn.protocol_error().is_none());
     }
 

@@ -16,8 +16,9 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 
 use crate::State;
 
-/// Version of the global. Version 2 adds the `snapped` state of a screen.
-const VERSION: u32 = 2;
+/// Version of the global. Version 2 adds the `snapped` state of a screen, version 4
+/// `show_windows` for App Expose (version 3 is the global menu of lot D-36).
+const VERSION: u32 = 4;
 
 pub(super) fn create_global(dh: &DisplayHandle) {
     dh.create_global::<State, SherlockShellManagerV1, ()>(VERSION, ());
@@ -205,8 +206,17 @@ impl Dispatch<SherlockShellManagerV1, ()> for State {
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
-        if let sherlock_shell_manager_v1::Request::Destroy = request {
-            state.shell.managers.retain(|m| &m.resource != resource);
+        match request {
+            sherlock_shell_manager_v1::Request::Destroy => {
+                state.shell.managers.retain(|m| &m.resource != resource);
+            }
+            sherlock_shell_manager_v1::Request::ShowWindows { windows } => {
+                let (ids, _) = windows.as_chunks::<4>();
+                let ids: Vec<u32> = ids.iter().map(|c| u32::from_ne_bytes(*c)).collect();
+                tracing::debug!(?ids, "app expose asked by the shell");
+                state.show_windows(ids);
+            }
+            _ => {}
         }
     }
 }

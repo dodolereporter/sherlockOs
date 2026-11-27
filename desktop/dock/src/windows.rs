@@ -74,6 +74,9 @@ pub struct Windows {
     pub controllable: bool,
     /// Names of the screens a maximized, fullscreen or snapped window is on (shell protocol only).
     pub covered: BTreeSet<String>,
+    /// The source can open App Expose on some windows (`show_windows`, version 4 of the shell
+    /// protocol).
+    pub expose: bool,
 }
 
 impl Windows {
@@ -251,26 +254,34 @@ pub enum Click {
     /// Bring these windows forward, in this order: the last one, the most recent, ends on top
     /// with the keyboard.
     Bring(Vec<u64>),
-    /// Minimize its windows: already in front (the author's choice, as on Windows and Plasma).
+    /// Minimize its windows: already in front with a single window shown (the author's
+    /// choice, as on Windows and Plasma).
     Minimize,
+    /// App Expose on these windows: already in front with several shown.
+    Expose(Vec<u64>),
 }
 
 /// The click on an icon whose application has `windows`, the least recent first
-/// (`Windows::owned`), when they can be acted on (`controllable`). As on macOS, an application
-/// behind comes forward with all its windows shown, the most recent on top; when they are all
-/// minimized, only the most recent one comes back.
-pub fn click(windows: &[&Window], controllable: bool) -> Click {
+/// (`Windows::owned`), when they can be acted on (`controllable`), and App Expose opened
+/// (`expose`). As on macOS, an application behind comes forward with all its windows shown,
+/// the most recent on top; when they are all minimized, only the most recent one comes back.
+/// In front, several windows shown open App Expose, to pick one; a single one is minimized.
+pub fn click(windows: &[&Window], controllable: bool, expose: bool) -> Click {
     let Some(last) = windows.last().filter(|_| controllable) else {
         return Click::Launch;
     };
-    if windows.iter().any(|w| w.activated) {
-        return Click::Minimize;
-    }
     let shown: Vec<u64> = windows
         .iter()
         .filter(|w| !w.minimized)
         .map(|w| w.id)
         .collect();
+    if windows.iter().any(|w| w.activated) {
+        return if expose && shown.len() > 1 {
+            Click::Expose(shown)
+        } else {
+            Click::Minimize
+        };
+    }
     if shown.is_empty() {
         Click::Bring(vec![last.id])
     } else {
@@ -300,6 +311,9 @@ pub trait Control: Send + Sync {
     /// Sends `request` to `window` alone.
     fn send_to(&self, request: Request, window: &Window);
 
+    /// Opens App Expose on the windows of `ids`. Only the shell protocol can.
+    fn show_windows(&self, _ids: &[u64]) {}
+
     /// Tells the compositor where the icon of each window is (`set_rectangle`), for the
     /// minimize animation: the windows of the first place that owns them. Replaces the
     /// previous places, and applies to the windows that come later.
@@ -322,6 +336,12 @@ impl Control for Auto {
         match crate::shell::control() {
             Some(shell) => shell.send_to(request, window),
             None => WlrControl.send_to(request, window),
+        }
+    }
+
+    fn show_windows(&self, ids: &[u64]) {
+        if let Some(shell) = crate::shell::control() {
+            shell.show_windows(ids);
         }
     }
 
@@ -381,6 +401,8 @@ pub struct Recorder {
     requests: Arc<Mutex<Vec<Request>>>,
     /// The requests sent to one window, with its id.
     targeted: Arc<Mutex<Vec<(Request, u64)>>>,
+    /// Each App Expose asked, with its windows.
+    exposed: Arc<Mutex<Vec<Vec<u64>>>>,
     /// Each `place`: the screen and rectangle of each icon, with the first `app_id` of the
     /// probe list it owns.
     places: Arc<Mutex<Vec<Vec<Placed>>>>,
@@ -418,6 +440,13 @@ impl Recorder {
             .clone()
     }
 
+    pub fn exposed(&self) -> Vec<Vec<u64>> {
+        self.exposed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     pub fn places(&self) -> Vec<Vec<Placed>> {
         self.places
             .lock()
@@ -439,6 +468,13 @@ impl Control for Recorder {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((request, window.id));
+    }
+
+    fn show_windows(&self, ids: &[u64]) {
+        self.exposed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(ids.to_vec());
     }
 
     fn place(&self, places: Vec<Place>) {
@@ -601,6 +637,7 @@ impl Toplevels {
                 .collect(),
             controllable: true,
             covered: BTreeSet::new(),
+            expose: false,
         }
     }
 }
@@ -751,31 +788,47 @@ mod tests {
     #[test]
     fn a_click_with_zero_one_or_several_windows() {
         let none = Windows::default();
-        assert_eq!(click(&none.owned(|_| true), true), Click::Launch);
+        assert_eq!(click(&none.owned(|_| true), true, true), Click::Launch);
         // One window behind: it comes forward; in front: minimized.
         let mut one = Windows {
             list: vec![Window::new(3, "app", false)],
             controllable: true,
             ..Windows::default()
         };
-        assert_eq!(click(&one.owned(|_| true), true), Click::Bring(vec![3]));
+        assert_eq!(
+            click(&one.owned(|_| true), true, true),
+            Click::Bring(vec![3])
+        );
         one.list[0].activated = true;
-        assert_eq!(click(&one.owned(|_| true), true), Click::Minimize);
+        assert_eq!(click(&one.owned(|_| true), true, true), Click::Minimize);
         // A source that cannot act on its windows: started, never pretended.
-        assert_eq!(click(&one.owned(|_| true), false), Click::Launch);
+        assert_eq!(click(&one.owned(|_| true), false, true), Click::Launch);
         // Several behind: all come forward, the most recent last, on top.
         let mut several = three();
         let owned = several.owned(|_| true);
-        assert_eq!(click(&owned, true), Click::Bring(vec![6, 5, 7]));
+        assert_eq!(click(&owned, true, true), Click::Bring(vec![6, 5, 7]));
+        // In front: App Expose on the windows shown; without it, minimized.
+        several.list[2].activated = true;
+        let owned = several.owned(|_| true);
+        assert_eq!(click(&owned, true, true), Click::Expose(vec![6, 5, 7]));
+        assert_eq!(click(&owned, true, false), Click::Minimize);
+        // A single window shown in front: minimized.
+        several.list[0].minimized = true;
+        several.list[1].minimized = true;
+        assert_eq!(click(&several.owned(|_| true), true, true), Click::Minimize);
         // Minimized ones stay down while others are shown; all minimized, the most recent
         // comes back alone.
+        let mut several = three();
         several.list[2].minimized = true;
         assert_eq!(
-            click(&several.owned(|_| true), true),
+            click(&several.owned(|_| true), true, true),
             Click::Bring(vec![6, 5])
         );
         several.list.iter_mut().for_each(|w| w.minimized = true);
-        assert_eq!(click(&several.owned(|_| true), true), Click::Bring(vec![7]));
+        assert_eq!(
+            click(&several.owned(|_| true), true, true),
+            Click::Bring(vec![7])
+        );
     }
 
     #[test]

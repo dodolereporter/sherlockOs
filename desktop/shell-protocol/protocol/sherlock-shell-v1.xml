@@ -26,10 +26,11 @@
     (sherlock_shell_manager_v2) and the protocol (sherlock_shell_v2). A toplevel object has the
     version of the manager that announced it.
 
-    Version 2 adds the snapped value of output_state.
+    Version 2 adds the snapped value of output_state. Version 4 adds show_windows, for App
+    Expose. Version 3 is taken by the global menu (lot D-36).
   </description>
 
-  <interface name="sherlock_shell_manager_v1" version="2">
+  <interface name="sherlock_shell_manager_v1" version="4">
     <description summary="list of the windows and state of the screens">
       Once bound, the compositor sends a toplevel event for every window that shows content,
       with its properties, then an output event for every screen, then done. After that, it
@@ -80,6 +81,20 @@
       <arg name="name" type="string" summary="wl_output name of the screen"/>
     </event>
 
+    <request name="show_windows" since="4">
+      <description summary="Mission Control on some windows: App Expose">
+        Opens Mission Control with only these windows, by the ids of their id events: the
+        windows of one application, as the dock groups them (a Wayland app_id and an X11 class
+        may both belong to it). Mission Control shows those of them that it would show, the
+        windows of the active workspace that are not minimized, without the strip of the
+        workspaces, and behaves as usual: a click on a window chooses it, a click elsewhere or
+        Escape closes the view. Unknown ids are ignored; when no window is left to show, the
+        request does nothing. While Mission Control is already open, it shows these windows
+        instead.
+      </description>
+      <arg name="windows" type="array" summary="window ids, 32-bit values in the machine's byte order"/>
+    </request>
+
     <event name="done">
       <description summary="end of a batch of changes">
         Every event since the previous done (or since the bind) forms one consistent state of
@@ -88,7 +103,7 @@
     </event>
   </interface>
 
-  <interface name="sherlock_shell_toplevel_v1" version="2">
+  <interface name="sherlock_shell_toplevel_v1" version="4">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
       manager. The id comes first, once. A window on a workspace that is not active keeps its

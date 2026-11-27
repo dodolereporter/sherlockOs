@@ -86,6 +86,7 @@ fn mixed() -> Windows {
             window(20, "org.example.terminal", "", 0),
         ],
         controllable: true,
+        expose: true,
         ..Windows::default()
     }
 }
@@ -276,6 +277,7 @@ fn the_menu_lists_the_windows_then_the_actions() {
             ("Nouvelle fenêtre", true, false),
             ("Nouvelle fenêtre de navigation privée", true, false),
             ("Retirer du Dock", true, false),
+            ("Afficher toutes les fenêtres", true, false),
             ("Quitter", true, false),
         ]
     );
@@ -296,6 +298,55 @@ fn the_menu_lists_the_windows_then_the_actions() {
     // While it folds back, it takes no other pick.
     let _ = dock.update(Message::MenuPick(Entry::Window(11)));
     assert_eq!(recorder.targeted().len(), 1);
+}
+
+/// App Expose (lot D-21c2): a click on the application in front with several windows, its
+/// menu, and a swipe down over its icon.
+#[test]
+fn app_expose_shows_the_windows_of_the_application() {
+    let recorder = Recorder::default();
+    let mut dock = dock_with(&[], &FOUR, &recorder);
+    let mut windows = mixed();
+    windows.list[1].activated = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    // In front with three windows: App Expose on them, nothing minimized.
+    dock.click(BROWSER);
+    assert_eq!(recorder.exposed(), [vec![11, 13, 12]]);
+    assert!(recorder.requests().is_empty());
+    // From the menu, the minimized ones left out.
+    windows.list[0].minimized = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    open_menu(&mut dock, BROWSER);
+    let _ = dock.update(Message::MenuPick(Entry::ShowAll));
+    assert_eq!(recorder.exposed()[1], [13, 12]);
+    settle(&mut dock);
+    // A swipe down over the icon: once, however far it goes, then again after a pause.
+    let point = center(&dock, BROWSER);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let pixels = |y| Message::Scroll(mouse::ScrollDelta::Pixels { x: 0.0, y });
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE / 2.0));
+    assert_eq!(recorder.exposed().len(), 2, "not far enough");
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE));
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE * 3.0));
+    assert_eq!(recorder.exposed().len(), 3, "once per swipe");
+    // Up does nothing; a notch of the wheel down, after a pause, opens it again.
+    let _ = dock.tick(dock.now() + tokens::EXPOSE_SWIPE_GAP * 2);
+    let _ = dock.update(pixels(-tokens::EXPOSE_SWIPE * 2.0));
+    assert_eq!(recorder.exposed().len(), 3);
+    let _ = dock.tick(dock.now() + tokens::EXPOSE_SWIPE_GAP * 2);
+    let _ = dock.update(Message::Scroll(mouse::ScrollDelta::Lines {
+        x: 0.0,
+        y: -1.0,
+    }));
+    assert_eq!(recorder.exposed().len(), 4);
+    // Without App Expose (a source before version 4): a click minimizes, the entry is off.
+    windows.expose = false;
+    let _ = dock.update(Message::Windows(windows));
+    dock.click(BROWSER);
+    assert_eq!(recorder.requests(), [Request::Minimize]);
+    let lines = dock.menu_lines(BROWSER);
+    let show_all = lines.iter().find(|l| l.entry == Entry::ShowAll);
+    assert!(show_all.is_some_and(|l| !l.enabled));
 }
 
 #[test]

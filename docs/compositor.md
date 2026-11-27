@@ -339,9 +339,12 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy` | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
 | `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `closed` |
 
+- **Versions.** The global is at version 4: version 2 adds the `snapped` state of a screen,
+  version 4 `show_windows` (lot D-21c2, see "App Expose" in Mission Control). Version 3 is
+  taken by the global menu of lot D-36.
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`, sent even without window nor screen. A roundtrip after the
   bind brings it.
@@ -2090,6 +2093,34 @@ surface keeps the keyboard (a lock screen).
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
+
+### App Expose
+
+Lot D-21c2: Mission Control on the windows of one application, as the macOS dock opens it.
+The dock asks for it with `show_windows` of `sherlock_shell_v1` (version 4), giving the ids of
+the windows (the `id` events): its click on the application in front with several windows, the
+« Afficher toutes les fenêtres » entry of its menu, a swipe down over its icon. Ids rather than
+an `app_id`: one application may have Wayland windows under its desktop file id and X11 ones
+under its class, which only the dock groups (by its desktop entries, see `docs/dock.md`).
+
+- `State::show_windows` keeps the ids (`Overview::only`) and opens the view; `overview_tiles`
+  then keeps only those windows, among the ones the view shows anyway (active workspace, not
+  minimized, X11 menus aside). Unknown ids are left out; with no window to show, nothing
+  opens.
+- **No strip**: the windows take its room, under a margin of 32 like the sides
+  (`overview_strip` is empty, so no thumbnail is drawn nor hit).
+- Everything else is Mission Control: the same grid, animation, titles and highlight; a click
+  on a window chooses it, a click elsewhere, Escape or the gesture key close the view. Asked
+  while the view is open, it shows the new windows at once. Opened by its keys or the fingers
+  afterwards, the view shows every window again.
+- **Not done**: the minimized windows, which macOS shows in a row at the bottom, and windows of
+  the application on other workspaces; a window the application opens while App Expose is
+  shown does not join it.
+
+`tests/shell.rs` (`the_shell_opens_mission_control_on_the_windows_of_one_application`): unknown
+ids open nothing; two of three windows, without the strip; asked again while open, other
+windows; Escape closes it, and Mission Control opened afterwards shows the three, strip
+included.
 
 ### Dragging to another workspace
 
