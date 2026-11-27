@@ -165,7 +165,10 @@ mod tests {
         assert_eq!(report.outcome, Outcome::Started);
         drop(greetd);
         let requests = fake.requests();
-        assert_eq!(requests[2]["cmd"], json!(["'/opt/mon bureau/start'", "--x"]));
+        assert_eq!(
+            requests[2]["cmd"],
+            json!(["'/opt/mon bureau/start'", "--x"])
+        );
     }
 
     #[test]

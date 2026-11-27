@@ -398,8 +398,14 @@ mod tests {
 
     #[test]
     fn each_word_reaches_the_session_whole_through_sh() {
-        assert_eq!(shell_word("/usr/local/libexec/sherlockos/sherlockos-session"), "/usr/local/libexec/sherlockos/sherlockos-session");
-        assert_eq!(shell_word("/opt/mon bureau/start"), "'/opt/mon bureau/start'");
+        assert_eq!(
+            shell_word("/usr/local/libexec/sherlockos/sherlockos-session"),
+            "/usr/local/libexec/sherlockos/sherlockos-session"
+        );
+        assert_eq!(
+            shell_word("/opt/mon bureau/start"),
+            "'/opt/mon bureau/start'"
+        );
         assert_eq!(shell_word("it's"), r"'it'\''s'");
         assert_eq!(shell_word(""), "''");
         // What greetd runs: `sh -c "exec " + cmd.join(" ")`, here with printf as the session.
