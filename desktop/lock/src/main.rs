@@ -6,6 +6,10 @@ use std::process::ExitCode;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
+    // First of all, before the password can be typed: no other process of the user may trace
+    // this program or read its memory, and a panic writes no core dump (lot D-25k). Logged once
+    // the log is set up.
+    let private = lock::keep_memory_private();
     // Before anything else: the renderer is chosen through the environment (ADR 0018).
     // `--rescue`: the rescue mode, which the compositor starts once the lock screen failed
     // three times; in software, whatever the machine (lot D-25c).
@@ -26,6 +30,9 @@ fn main() -> ExitCode {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+    if let Err(err) = private {
+        tracing::warn!("the memory of the lock screen could not be made private: {err}");
+    }
     tracing::info!(?renderer, "renderer");
     match lock::run(rescue) {
         Ok(()) => ExitCode::SUCCESS,

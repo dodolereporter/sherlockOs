@@ -96,6 +96,14 @@ use crate::{
     layout::{Resize, Zone},
 };
 
+/// Keeps the memory of the real session's compositor to itself (lot D-25k, ADR 0023): no other
+/// process of the user may trace it, read its memory (every key typed passes through it, the
+/// passwords of the lock screen included) nor make it act; and no core dump of it is written.
+/// Not inherited by the programs it starts: `execve` makes them dumpable again.
+pub fn keep_memory_private() -> rustix::io::Result<()> {
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+}
+
 /// What keeps the compositor from starting.
 #[derive(thiserror::Error)]
 pub enum Error {
