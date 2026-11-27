@@ -498,8 +498,8 @@ impl Layout {
     }
 
     /// The band a hovered dock keeps the pointer in: along the bar as it is drawn, from the
-    /// screen edge to the top of the tallest icon. The gaps between grown icons are in it, so
-    /// the magnification does not drop when the pointer crosses one.
+    /// screen edge, gap included, to the top of the tallest icon. The gaps between grown icons
+    /// are in it, so the magnification does not drop when the pointer crosses one.
     pub fn hover_band(&self) -> Rectangle {
         let (start, length) = self.along;
         let tallest = self
@@ -511,17 +511,56 @@ impl Layout {
             .geometry
             .bar_thickness()
             .max(self.geometry.inset() + tallest);
-        to_surface(&self.geometry, self.surface, start, 0.0, length, depth)
+        let gap = self.geometry.gap;
+        to_surface(
+            &self.geometry,
+            self.surface,
+            start,
+            -gap,
+            length,
+            depth + gap,
+        )
     }
 
-    /// Whether `point` is over the dock: the bar, or an icon that grew past it.
+    /// Whether `point` is over the dock: the bar and the gap down to the screen edge, or an
+    /// icon that grew past the bar.
     pub fn contains(&self, point: Point) -> bool {
-        self.bar.contains(point) || self.icon_at(point).is_some()
+        self.in_column(point) || self.icon_at(point).is_some()
     }
 
-    /// The icon under `point`. The gap between two icons belongs to neither.
+    /// Whether `point` is on the bar or between it and the screen edge, along the bar, the
+    /// edge itself included (lot D-21f).
+    fn in_column(&self, point: Point) -> bool {
+        let (along, depth) = along_depth(&self.geometry, self.surface, point);
+        let (start, length) = self.along;
+        (start..=start + length).contains(&along)
+            && (-self.geometry.gap..=self.geometry.bar_thickness()).contains(&depth)
+    }
+
+    /// The icon drawn under `point`. The gap between two icons belongs to neither.
     pub fn icon_at(&self, point: Point) -> Option<usize> {
         self.icons.iter().position(|icon| icon.contains(point))
+    }
+
+    /// The icon a press or a hover at `point` acts on (lot D-21f): the icon drawn there, or,
+    /// on the bar and between it and the screen edge, the nearest one along the dock. As on
+    /// macOS (Fitts's law), the pointer pushed against the edge is on the icon of its column,
+    /// and a space between two icons goes to the closer one.
+    pub fn icon_for(&self, point: Point) -> Option<usize> {
+        if let Some(index) = self.icon_at(point) {
+            return Some(index);
+        }
+        if !self.in_column(point) {
+            return None;
+        }
+        let along = self.along(point);
+        let distance = |icon: &Rectangle| {
+            let (start, side) = self.along_of(*icon);
+            (along - (start + side / 2.0)).abs()
+        };
+        (self.icons.iter().enumerate())
+            .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))
+            .map(|(index, _)| index)
     }
 
     /// The dot of an open application, between its icon and the screen edge.
