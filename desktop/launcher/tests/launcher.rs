@@ -158,6 +158,48 @@ fn kitty_starts_with_three_keys() {
     assert_eq!(programs(&started), ["kitty"]);
 }
 
+/// Typing « fir » in one interface kept from frame to frame, as the running launcher does: the
+/// first letter brings the results, the field keeps the keyboard for the next ones (lot Q-45).
+#[test]
+fn the_field_keeps_the_keyboard_when_the_results_come() {
+    use iced_test::core::renderer::Headless as _;
+    use iced_test::core::{Font, Size, clipboard, mouse};
+    use iced_test::runtime::user_interface::{Cache, UserInterface};
+
+    let (mut launcher, _) = recorded();
+    let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+        Font::with_name("Fira Sans"),
+        iced::Pixels(16.0),
+        None,
+    ))
+    .expect("a headless renderer");
+    let field = Point::new(look::WIDTH / 2.0, look::PADDING + look::SEARCH_HEIGHT / 2.0);
+    let cursor = mouse::Cursor::Available(field);
+    let mut cache = Cache::default();
+    for (n, letter) in ["f", "i", "r"].into_iter().enumerate() {
+        let size = Size::new(look::WIDTH, launcher.height());
+        let mut ui = UserInterface::build(launcher.view_panel(), size, cache, &mut renderer);
+        let mut events: Vec<Event> = Vec::new();
+        if n == 0 {
+            events.extend(iced_test::simulator::click());
+        }
+        events.extend(iced_test::simulator::typewrite(letter));
+        let mut messages = Vec::new();
+        let _ = ui.update(
+            &events,
+            cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        cache = ui.into_cache();
+        for message in messages {
+            let _ = launcher.update(message);
+        }
+    }
+    assert_eq!(launcher.query, "fir");
+}
+
 #[test]
 fn every_application_starts_with_two_letters_and_enter() {
     let apps = apps();

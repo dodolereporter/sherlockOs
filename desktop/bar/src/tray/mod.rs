@@ -7,6 +7,7 @@
 
 pub mod host;
 pub mod icon;
+pub mod pins;
 pub mod watcher;
 
 use std::collections::HashMap;
@@ -265,6 +266,8 @@ pub enum Request {
     SecondaryActivate(i32, i32),
     /// The wheel: so much, 120 a notch as Qt counts, vertical or not.
     Scroll(i32, bool),
+    /// A right click on an item without a D-Bus menu: it shows its own (lot D-45a).
+    ContextMenu(i32, i32),
 }
 
 impl Request {
@@ -294,6 +297,10 @@ impl Request {
             }
             Self::SecondaryActivate(x, y) => {
                 bus.call_method(service, path, interface, "SecondaryActivate", &(x, y))
+                    .await
+            }
+            Self::ContextMenu(x, y) => {
+                bus.call_method(service, path, interface, "ContextMenu", &(x, y))
                     .await
             }
             Self::Scroll(amount, vertical) => {

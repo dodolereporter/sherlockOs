@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use desktop_config::displays::Identity;
 use sherlock_ui::color;
 use smithay::{
     backend::{
@@ -50,7 +51,7 @@ use smithay::{
             ping::make_ping,
             timer::{TimeoutAction, Timer},
         },
-        drm::control::{Device as _, ModeTypeFlags, connector, crtc},
+        drm::control::{self, Device as _, ModeTypeFlags, connector, crtc, property},
         input::Libinput,
         rustix::fs::{Dev, OFlags},
     },
@@ -65,12 +66,20 @@ use crate::{
     damage::Ids,
     dmabuf,
     options::Options,
-    output::View,
+    output::{Details, View},
     pacing::{Pacing, Phase},
     perf,
     render::{Scene, SceneElement},
     wallpaper::{Textures, Wallpaper},
 };
+
+/// Time between two vertical blanks of `mode`.
+fn period(mode: control::Mode) -> Duration {
+    match mode.vrefresh() {
+        0 => DEFAULT_PERIOD,
+        hz => Duration::from_secs(1) / hz,
+    }
+}
 
 /// Only the cursor may leave the composition, for the cursor plane: a client buffer on a plane
 /// of its own would lose its rounded clip.
@@ -129,6 +138,10 @@ struct Head {
     /// The frame waiting for the vertical blank was built while the session was locked: once
     /// shown, the lock can be confirmed (lot D-25a).
     lock_queued: bool,
+    /// The modes of the screen, the preferred one first (lot D-26b).
+    modes: Vec<control::Mode>,
+    /// Switched off by a configuration: nothing drawn (lot D-26b).
+    off: bool,
 }
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
@@ -307,6 +320,14 @@ pub fn init(
             ..
         } = &mut *backend;
         crate::capture::image(scene, renderer, textures, state, target)
+    }));
+    // The screens' saved settings, and the hardware's part of a configuration (ADR 0025).
+    state.remember_screens(desktop_config::displays::config_file(var));
+    let weak = Rc::downgrade(&backend);
+    state.set_screen_driver(Box::new(move |output, wanted| {
+        let backend = weak.upgrade().ok_or("the session is closed")?;
+        let mut backend = backend.try_borrow_mut().map_err(|e| e.to_string())?;
+        backend.drive(output, wanted)
     }));
     backend.borrow_mut().scan(state);
     if backend.borrow().heads.is_empty() {
@@ -496,35 +517,55 @@ impl Backend {
         info: &connector::Info,
         crtc: crtc::Handle,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let modes = info.modes();
-        let preferred = modes
-            .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED));
-        let Some(mode) = preferred.or(modes.first()).copied() else {
+        let preferred = |m: &&control::Mode| m.mode_type().contains(ModeTypeFlags::PREFERRED);
+        let mut modes: Vec<control::Mode> = Vec::new();
+        for mode in info.modes().iter().filter(preferred).chain(info.modes()) {
+            if !modes.iter().any(|m| Mode::from(*m) == Mode::from(*mode)) {
+                modes.push(*mode);
+            }
+        }
+        let Some(mut mode) = modes.first().copied() else {
             return Ok(());
         };
         let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
+        let identity = self
+            .edid(info.handle())
+            .and_then(|edid| crate::edid::identity(&edid))
+            .unwrap_or_else(|| Identity::new("Unknown", &name, ""));
+        // The mode and rotation saved for this screen (ADR 0025).
+        let saved = state.saved_screen(&identity);
+        if let Some(wanted) = saved.as_ref().and_then(|s| s.mode) {
+            let size = (wanted.width, wanted.height).into();
+            let same = |m: &&control::Mode| {
+                let m = Mode::from(**m);
+                m.size == size && (m.refresh - wanted.refresh).abs() < 500
+            };
+            mode = modes.iter().find(same).copied().unwrap_or(mode);
+        }
+        let transform = saved.map_or(Transform::Normal, |s| {
+            crate::displays::transform(s.transform)
+        });
         let (w, h) = info.size().unwrap_or((0, 0));
         let output = Output::new(
             name.clone(),
             PhysicalProperties {
                 size: (w as i32, h as i32).into(),
                 subpixel: Subpixel::Unknown,
-                make: "Unknown".into(),
-                model: "Unknown".into(),
+                make: identity.make.clone(),
+                model: identity.model.clone(),
             },
         );
         let wl_mode = Mode::from(mode);
         output.change_current_state(Some(wl_mode), None, None, None);
-        output.set_preferred(wl_mode);
+        output.set_preferred(Mode::from(modes[0]));
 
         let surface = self.device.create_surface(crtc, mode, &[info.handle()])?;
         let flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
-        // The scene is built in frame pixels, at scale 1 (see "Rendering").
+        // The scene is built in frame pixels, at scale 1, turned (see "Rendering").
         let source = OutputModeSource::Static {
             size: wl_mode.size,
             scale: 1.0.into(),
-            transform: Transform::Normal,
+            transform,
         };
         let compositor = Compositor::new(
             source,
@@ -540,22 +581,77 @@ impl Backend {
             Some(self.gbm.clone()),
         )?;
         let scale = self.options.scale(state.outputs().len());
-        let period = match mode.vrefresh() {
-            0 => DEFAULT_PERIOD,
-            hz => Duration::from_secs(1) / hz,
+        tracing::info!(screen = name, ?mode, scale, ?identity, "screen plugged in");
+        let details = Details {
+            identity,
+            modes: modes.iter().map(|m| Mode::from(*m)).collect(),
+            rotates: true,
         };
-        tracing::info!(screen = name, ?mode, scale, "screen plugged in");
-        state.add_screen(output.clone(), wl_mode.size, scale);
+        state.plug_screen(output.clone(), wl_mode.size, scale, details);
         let head = Head {
             output,
             connector: info.handle(),
             compositor,
             pacing: Pacing::default(),
             ids: Ids::default(),
-            period,
+            period: period(mode),
             lock_queued: false,
+            modes,
+            off: false,
         };
         self.heads.insert(crtc, head);
+        Ok(())
+    }
+
+    /// The EDID of a connector's screen, as the card gives it.
+    fn edid(&self, connector: connector::Handle) -> Option<Vec<u8>> {
+        let properties = self.device.get_properties(connector).ok()?;
+        for (handle, value) in properties.iter() {
+            let info = self.device.get_property(*handle).ok()?;
+            if info.name().to_bytes() != b"EDID" {
+                continue;
+            }
+            if let property::Value::Blob(blob) = info.value_type().convert_value(*value) {
+                return self.device.get_property_blob(blob).ok();
+            }
+        }
+        None
+    }
+
+    /// Lights a screen at a mode, turned, or switches it off (`None`): the screen's part of
+    /// a configuration (ADR 0025). The new mode is tried at the next frame.
+    fn drive(&mut self, output: &Output, wanted: Option<(Mode, Transform)>) -> Result<(), String> {
+        let head = self
+            .heads
+            .values_mut()
+            .find(|h| h.output == *output)
+            .ok_or("no such screen")?;
+        let Some((mode, transform)) = wanted else {
+            head.compositor.clear().map_err(|e| e.to_string())?;
+            head.off = true;
+            return Ok(());
+        };
+        let drm_mode = head
+            .modes
+            .iter()
+            .find(|m| Mode::from(**m) == mode)
+            .copied()
+            .ok_or("no such mode")?;
+        if head.compositor.pending_mode() != drm_mode {
+            head.compositor
+                .use_mode(drm_mode)
+                .map_err(|e| e.to_string())?;
+        }
+        head.compositor
+            .set_output_mode_source(OutputModeSource::Static {
+                size: mode.size,
+                scale: 1.0.into(),
+                transform,
+            });
+        head.compositor.reset_buffers();
+        head.period = period(drm_mode);
+        head.pacing.reset();
+        head.off = false;
         Ok(())
     }
 
@@ -589,6 +685,12 @@ impl Backend {
             }
             head.compositor.reset_buffers();
             head.pacing.reset();
+            // A screen switched off stays off.
+            if head.off
+                && let Err(err) = head.compositor.clear()
+            {
+                tracing::warn!("DRM: {err}");
+            }
         }
         // Screens may have changed while away.
         self.scan(state);
@@ -655,7 +757,7 @@ impl Backend {
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
         };
-        if !head.pacing.wants_frame(epoch) || !self.session.is_active() {
+        if head.off || !head.pacing.wants_frame(epoch) || !self.session.is_active() {
             return;
         }
         let Some((output, view)) = state.views().into_iter().find(|(o, _)| *o == head.output)
