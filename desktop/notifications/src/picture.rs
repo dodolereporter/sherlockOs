@@ -14,6 +14,12 @@ pub const MAX_PNG_BYTES: u64 = 512 * 1024;
 pub const MAX_PNG_SIDE: u32 = 512;
 /// Largest SVG file read.
 pub const MAX_SVG_BYTES: u64 = 256 * 1024;
+/// Elements an SVG may hold, and `<use>` among them (Q-38). resvg draws on the bubbles'
+/// interface thread, and `<use>` copies what it names: 40 of them nested two by two make a
+/// million shapes in a few kibibytes. Measured in `tests/svg_cost.rs`: 262 144 shapes took
+/// 1.2 s; within these bounds, at most a few thousand shapes are drawn.
+pub const MAX_SVG_ELEMENTS: usize = 4096;
+pub const MAX_SVG_USES: usize = 16;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
@@ -89,10 +95,26 @@ fn check_png(bytes: &[u8]) -> io::Result<()> {
 
 /// An SVG that can load nothing: every `href` points inside the document (`#…`), and there is
 /// no document type, so no entity either.
-fn check_svg(bytes: &[u8]) -> io::Result<()> {
+/// It also holds `MAX_SVG_ELEMENTS` elements and `MAX_SVG_USES` `<use>` at most, so that its
+/// drawing stays short.
+pub fn check_svg(bytes: &[u8]) -> io::Result<()> {
     let text = std::str::from_utf8(bytes).map_err(|_| refused("SVG not in UTF-8"))?;
     if !text.contains("<svg") || text.contains("<!DOCTYPE") || text.contains("<!ENTITY") {
         return Err(refused("not a plain SVG"));
+    }
+    // An element starts with `<` and a name: not a closing tag, a comment or a declaration.
+    let elements = text
+        .match_indices('<')
+        .filter(|(at, _)| {
+            text[at + 1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+        })
+        .count();
+    let uses = text.matches("<use").count();
+    if elements > MAX_SVG_ELEMENTS || uses > MAX_SVG_USES {
+        return Err(refused("SVG too costly to draw"));
     }
     for (at, _) in text.match_indices("href") {
         let value = text[at + 4..]

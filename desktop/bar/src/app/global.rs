@@ -2,12 +2,13 @@
 //! their popups, the pointer and the keys. The tree and the placement are in `global_menu`, the
 //! calls to the application in `dbusmenu`.
 
-use iced::widget::{Column, container, mouse_area, opaque, scrollable};
+use iced::widget::{Column, container, mouse_area, opaque};
 use iced::window::Id;
 use iced::{Element, Length, Task, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
 use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
 use sherlock_ui::component::{self as ui, Mark, Trailing};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{animated, color, metrics, theme};
 
@@ -19,7 +20,7 @@ use crate::source::workspaces::AppMenu;
 use crate::unfold::Unfold;
 
 /// Room kept under the menus, above the bottom of the screen.
-const SCREEN_ROOM: f32 = 24.0;
+pub(super) const SCREEN_ROOM: f32 = 24.0;
 
 impl Bar {
     /// The menus of the active application are open.
@@ -609,7 +610,7 @@ impl Bar {
                     .on_enter(Message::HoverEntry(level, i))
                     .into()
             });
-            let list = scrollable(Column::with_children(rows));
+            let list = scroll(Column::with_children(rows));
             let panel = container(list)
                 .width(shown.width)
                 .height(Length::Fill)
