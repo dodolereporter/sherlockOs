@@ -360,6 +360,23 @@ menus are Kate 25.04's, as it exports them.
   Sherlock menu, on the GPU; a submenu unfolds the same way. From one menu to the next, the new
   one replaces the old at once, as on a Mac.
 
+### Which applications (D-36c)
+
+- **Qt and KDE** (Kate, Konsole, Dolphin): through the registrar with Qt's generic theme or
+  qt6ct, through KDE's protocol with KDE's theme. Checked with Kate and Konsole 25.04 against our
+  compositor without a screen: the bar reads Kate's 11 menus and Konsole's 7.
+- **Evidence**: exports its own menus (`docs/evidence.md`, "Menus in the bar"). Checked the same
+  way: the bar reads its 5 menus.
+- **GTK** (Firefox, GNOME applications): not yet. GTK 3 exports a menu bar through
+  `appmenu-gtk-module`, absent from the reference laptop and from Debian's default install; GTK
+  4 and libadwaita applications have no menu bar but a menu of their header bar, described with
+  `org.gtk.Menus` and `org.gtk.Actions` (GMenuModel) and announced through `gtk_shell1`, which
+  our compositor does not offer. Reading GMenuModel in the bar and offering `gtk_shell1` make a
+  lot of their own. Firefox, which draws its own menus, would not use either.
+- **X11 applications**: Qt over XWayland calls `RegisterWindow` with its real X11 window id,
+  which the compositor matches (tested with a fake registration only: XWayland was not started
+  for the check, it wakes the NVIDIA card on the reference laptop).
+
 ## Attached to the top edge
 
 While a maximized or fullscreen window is on its screen (the `output` state of

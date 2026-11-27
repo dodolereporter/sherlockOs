@@ -11,6 +11,7 @@ pub mod git;
 pub mod icons;
 pub mod listing;
 pub mod menu;
+pub mod menubar;
 pub mod ops;
 pub mod places;
 pub mod preview;
