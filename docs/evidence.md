@@ -24,6 +24,12 @@ are still drawn inside the window. Under X11, it keeps iced's own runtime on win
 bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
 closing the window, from its button or from the compositor, ends the program.
 
+Before choosing, Evidence reads the compositor's globals: `iced_exwlshell` needs `xdg_wm_base` 2
+at least, and an older compositor (WSLg's Weston offers version 1) gets the winit runtime
+instead, rather than a crash at start.
+
+In SherlockOS's compositor (nested, software rendering): ![](evidence/exwlshell-nested.png)
+
 Differences with winit, found while moving (the ADR's spike): `iced_exwlshell` 0.21.4 sets no
 smallest size on the window (`xdg_toplevel.set_min_size`), so `MIN_WINDOW` holds only under
 X11, and it has no resize from the edges of a client-side decorated window
