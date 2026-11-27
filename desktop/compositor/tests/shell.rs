@@ -50,6 +50,10 @@ mod tests {
         xdg_toplevel::{self, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
     };
+    use wayland_protocols_plasma::appmenu::client::{
+        org_kde_kwin_appmenu::OrgKdeKwinAppmenu,
+        org_kde_kwin_appmenu_manager::OrgKdeKwinAppmenuManager,
+    };
     use wayland_protocols_wlr::layer_shell::v1::client::{
         zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
         zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
@@ -79,6 +83,8 @@ mod tests {
         output: String,
         workspace: String,
         geometry: (i32, i32, i32, i32),
+        /// Bus name and object path of its menu (version 3).
+        menu: (String, String),
         closed: bool,
     }
 
@@ -206,6 +212,7 @@ mod tests {
                     width,
                     height,
                 } => seen.geometry = (x, y, width, height),
+                Event::AppMenu { service, path } => seen.menu = (service, path),
                 Event::Closed => seen.closed = true,
                 _ => {}
             }
@@ -394,6 +401,8 @@ mod tests {
     delegate_noop!(Client: WlShmPool);
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
+    delegate_noop!(Client: OrgKdeKwinAppmenuManager);
+    delegate_noop!(Client: OrgKdeKwinAppmenu);
 
     /// A connection, its queue and what it received.
     struct Side {
@@ -1480,5 +1489,93 @@ mod tests {
         assert_eq!(frame(&mut h, 11_100), 3);
         ask(&mut h);
         assert_eq!(frame(&mut h, 11_116), 3);
+    }
+
+    /// The menu the shell client was told for the window `id`.
+    fn menu_of(h: &Harness, id: u32) -> (String, String) {
+        h.shell.client.window(id).menu.clone()
+    }
+
+    fn menu(service: &str, path: &str) -> (String, String) {
+        (service.to_owned(), path.to_owned())
+    }
+
+    #[test]
+    fn a_window_gives_the_address_of_its_menu() {
+        let mut h = Harness::start();
+        let _manager = h.bind_manager();
+        let (_toplevel, surface) = h.open_window("Kate");
+        h.run_until("the window", |h| h.shell.client.toplevels.len() == 1);
+        let id = h.shell.client.toplevels[0].1.id.unwrap();
+        assert_eq!(menu_of(&h, id), menu("", ""), "no menu yet");
+
+        // KDE's protocol, as Qt does with KDE's platform theme.
+        let menus: OrgKdeKwinAppmenuManager = h.app.bind();
+        let appmenu = menus.create(&surface, &h.app.queue.handle(), ());
+        appmenu.set_address(String::from(":1.42"), String::from("/MenuBar/1"));
+        h.next_done("the menu");
+        assert_eq!(menu_of(&h, id), menu(":1.42", "/MenuBar/1"));
+        appmenu.release();
+        h.next_done("the menu withdrawn");
+        assert_eq!(menu_of(&h, id), menu("", ""));
+    }
+
+    #[test]
+    fn a_menu_registration_goes_to_the_window_of_its_process() {
+        let mut h = Harness::start();
+        let manager = h.bind_manager();
+        // The test clients are in this process: what the bus daemon would say of Kate.
+        let pid = std::process::id();
+        // Qt registers before its window shows: the menu waits for it.
+        manager.register_app_menu(7, pid, String::from(":1.5"), String::from("/MenuBar/1"));
+        h.open_window("Kate");
+        h.run_until("the window", |h| h.shell.client.toplevels.len() == 1);
+        let first = h.shell.client.toplevels[0].1.id.unwrap();
+        assert_eq!(menu_of(&h, first), menu(":1.5", "/MenuBar/1"));
+        // A dialog that comes after has no menu of its own.
+        h.open_window("Ouvrir");
+        h.run_until("the dialog", |h| h.shell.client.toplevels.len() == 2);
+        let dialog = h.shell.client.toplevels[1].1.id.unwrap();
+        assert_eq!(menu_of(&h, dialog), menu("", ""));
+        // A second registration goes to the newest window without a menu.
+        manager.register_app_menu(8, pid, String::from(":1.5"), String::from("/MenuBar/2"));
+        h.next_done("the second menu");
+        assert_eq!(menu_of(&h, dialog), menu(":1.5", "/MenuBar/2"));
+        assert_eq!(menu_of(&h, first), menu(":1.5", "/MenuBar/1"));
+        // Another process, or another connection, cannot take or withdraw them.
+        manager.register_app_menu(9, pid + 1, String::from(":1.9"), String::from("/x"));
+        manager.unregister_app_menu(String::from(":1.9"), String::from("/MenuBar/1"));
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert_eq!(menu_of(&h, first), menu(":1.5", "/MenuBar/1"));
+        // The menu's own connection withdraws it.
+        manager.unregister_app_menu(String::from(":1.5"), String::from("/MenuBar/1"));
+        h.next_done("the menu withdrawn");
+        assert_eq!(menu_of(&h, first), menu("", ""));
+        assert_eq!(menu_of(&h, dialog), menu(":1.5", "/MenuBar/2"));
+    }
+
+    #[test]
+    fn a_manager_of_version_2_hears_nothing_of_menus() {
+        let mut h = Harness::start();
+        let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
+        let (id, _, version) = name.unwrap().clone();
+        assert_eq!(version, 3);
+        let _manager: SherlockShellManagerV1 =
+            h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
+        let done = h.shell.client.done;
+        h.run_until("the first done", |h| h.shell.client.done > done);
+        let (_toplevel, surface) = h.open_window("Kate");
+        let menus: OrgKdeKwinAppmenuManager = h.app.bind();
+        let appmenu = menus.create(&surface, &h.app.queue.handle(), ());
+        appmenu.set_address(String::from(":1.42"), String::from("/MenuBar/1"));
+        h.next_done("the window");
+        for _ in 0..5 {
+            h.turn();
+        }
+        let window = &h.shell.client.toplevels[0].1;
+        assert_eq!(window.title, "Kate");
+        assert_eq!(window.menu, menu("", ""));
     }
 }

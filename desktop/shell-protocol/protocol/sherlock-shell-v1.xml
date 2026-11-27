@@ -26,10 +26,11 @@
     (sherlock_shell_manager_v2) and the protocol (sherlock_shell_v2). A toplevel object has the
     version of the manager that announced it.
 
-    Version 2 adds the snapped value of output_state.
+    Version 2 adds the snapped value of output_state. Version 3 adds the global menu: the
+    app_menu event of a window, and the register_app_menu and unregister_app_menu requests.
   </description>
 
-  <interface name="sherlock_shell_manager_v1" version="2">
+  <interface name="sherlock_shell_manager_v1" version="3">
     <description summary="list of the windows and state of the screens">
       Once bound, the compositor sends a toplevel event for every window that shows content,
       with its properties, then an output event for every screen, then done. After that, it
@@ -80,6 +81,37 @@
       <arg name="name" type="string" summary="wl_output name of the screen"/>
     </event>
 
+    <request name="register_app_menu" since="3">
+      <description summary="a menu registered with com.canonical.AppMenu.Registrar">
+        The shell serves com.canonical.AppMenu.Registrar on the session bus, and passes on each
+        RegisterWindow it answers. window is the window id given to RegisterWindow, pid the
+        process of the bus connection that called it (from the bus daemon), service the unique
+        name of that connection and path the object path given, where the connection exports
+        com.canonical.dbusmenu.
+
+        The compositor gives the menu to the X11 window of that id, if its process is pid or
+        unknown. Otherwise, since a toolkit under Wayland has no window id the compositor
+        knows, it gives it to the newest window of a Wayland client of process pid that has no
+        menu yet, or else to the next such window that shows up. A window keeps a menu given
+        this way until unregister_app_menu withdraws it, or until it closes. A window whose client
+        set an address with org_kde_kwin_appmenu keeps that address.
+      </description>
+      <arg name="window" type="uint" summary="window id given to RegisterWindow"/>
+      <arg name="pid" type="uint" summary="process of the bus connection"/>
+      <arg name="service" type="string" summary="unique bus name of the connection"/>
+      <arg name="path" type="string" summary="object path of the menu"/>
+    </request>
+
+    <request name="unregister_app_menu" since="3">
+      <description summary="a menu is withdrawn">
+        The menu that the connection service exported at path is gone: the connection called
+        UnregisterWindow for it, or left the bus. The window that had it no longer has a menu,
+        until a registration gives it another one.
+      </description>
+      <arg name="service" type="string" summary="unique bus name of the connection"/>
+      <arg name="path" type="string" summary="object path of the menu"/>
+    </request>
+
     <event name="done">
       <description summary="end of a batch of changes">
         Every event since the previous done (or since the bind) forms one consistent state of
@@ -88,7 +120,7 @@
     </event>
   </interface>
 
-  <interface name="sherlock_shell_toplevel_v1" version="2">
+  <interface name="sherlock_shell_toplevel_v1" version="3">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
       manager. The id comes first, once. A window on a workspace that is not active keeps its
@@ -210,6 +242,18 @@
       <arg name="y" type="int"/>
       <arg name="width" type="int"/>
       <arg name="height" type="int"/>
+    </event>
+
+    <event name="app_menu" since="3">
+      <description summary="global menu of the window">
+        Where the application exports the menu of this window with com.canonical.dbusmenu, on
+        the session bus: a bus name and an object path. Both are empty when the window has no
+        menu, or no longer has one. Sent with the other properties when the window appears,
+        then when it changes. The address comes from org_kde_kwin_appmenu, or from
+        register_app_menu.
+      </description>
+      <arg name="service" type="string" summary="bus name, empty without a menu"/>
+      <arg name="path" type="string" summary="object path, empty without a menu"/>
     </event>
 
     <event name="closed">

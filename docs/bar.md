@@ -270,6 +270,42 @@ placeholder even on our compositor, to compare with the design board:
 BAR_WORKSPACES="Code,Web,Jeu" BAR_APP="Éditeur" cargo run -p bar
 ```
 
+## Global menu (lot D-36)
+
+The menus of the active application go in the bar, after its name, as on a Mac. Qt and KDE
+applications export them with `com.canonical.dbusmenu` on the session bus, once a registrar
+owns `com.canonical.AppMenu.Registrar` there: they then hide the menu bar of their windows.
+
+### The registrar
+
+`registrar.rs` serves `com.canonical.AppMenu.Registrar` at `/com/canonical/AppMenu/Registrar`
+(`RegisterWindow`, `UnregisterWindow`, `GetMenuForWindow`, `GetMenus`, the signals
+`WindowRegistered` and `WindowUnregistered`), on the session bus of the bar.
+
+- **It always answers, at once.** A registrar that owns the name without answering made Konsole
+  wait 25 seconds for each window (`docs/compositor.md`, "D-Bus session bus"). `RegisterWindow`
+  asks the bus daemon for the caller's process (`GetConnectionUnixProcessID`), keeps the
+  registration, passes it on to the compositor (`register_app_menu` of `sherlock_shell_v1`,
+  written to the shell connection without waiting for anything) and answers. Measured by the
+  test on a private bus: under 50 ms, a few milliseconds in practice.
+- **Only on our compositor, never in Plasma's place.** `bar::run` starts it once the bar is
+  connected to a compositor that offers `sherlock_shell_manager_v1` at version 3; elsewhere
+  (a nested KWin) there is none. It asks for the name without queueing and without replacing
+  (`DO_NOT_QUEUE`): on a bus where another registrar answers (Plasma's `kded6`), it logs
+  `another registrar owns com.canonical.AppMenu.Registrar` and stays out of the way. On its own
+  bus (the session's own bus when Plasma runs beside it, or the user's bus when the session is
+  alone), it takes the name.
+- **Withdrawing.** Qt under Wayland gives every window the id 1. `UnregisterWindow(1)` from a
+  connection that registered several menus under that id withdraws only those it no longer
+  exports: the registrar answers first, then asks each path for its introspection, which no
+  longer names `com.canonical.dbusmenu` once Qt has removed the object. A connection that leaves
+  the bus (`NameOwnerChanged`) takes its menus with it. Each withdrawal goes to the compositor
+  as `unregister_app_menu` with the bus name and the path.
+
+The compositor gives each registration to its window (`docs/compositor.md`, "Global menu"), and
+tells the bar the menu of each window (`app_menu`): `Desktop::menu` is the one of the active
+window.
+
 ## Attached to the top edge
 
 While a maximized or fullscreen window is on its screen (the `output` state of
@@ -728,6 +764,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   board.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
   activates, Tab after Tab; Escape clears the ring.
+- **Registrar** (`tests/registrar.rs`): on a private bus (its own `dbus-daemon`, never the
+  user's bus), `RegisterWindow` answered in under 50 ms (the best of five) and passed on with
+  the caller's process and bus name, `GetMenuForWindow`; a second registrar leaves the name to
+  the first and passes nothing on; two menus under the id 1, `UnregisterWindow(1)` withdraws
+  only the one no longer exported, and the connection leaving the bus withdraws the other.
 - **Children** (`tests/children.rs`): no monitoring command survives the bar, after SIGTERM or
   SIGKILL.
 - **Bursts**: a burst of monitor lines gives a single refresh.

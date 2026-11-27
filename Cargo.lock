@@ -615,6 +615,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
+ "wayland-protocols-plasma",
  "wayland-protocols-wlr",
  "x11rb",
  "xcursor",
@@ -4419,6 +4420,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

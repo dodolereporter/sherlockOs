@@ -22,10 +22,21 @@ pub struct Desktop {
     pub groups: Vec<Group>,
     /// Title of the active window, or its `app_id` when it has none.
     pub app: Option<String>,
+    /// Where the active window's application exports its menu (lot D-36).
+    pub menu: Option<AppMenu>,
     /// Names of the screens a maximized or fullscreen window is on.
     pub covered: BTreeSet<String>,
     /// The compositor can switch workspaces: not the placeholder.
     pub live: bool,
+}
+
+/// Address of a `com.canonical.dbusmenu` menu on the session bus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppMenu {
+    /// Bus name of the application.
+    pub service: String,
+    /// Object path of the menu.
+    pub path: String,
 }
 
 /// Workspaces shown together, on the screens of `outputs`.
@@ -78,6 +89,7 @@ impl Desktop {
                 workspaces,
             }],
             app: app.map(str::to_owned),
+            menu: None,
             covered: BTreeSet::new(),
             live: false,
         }
