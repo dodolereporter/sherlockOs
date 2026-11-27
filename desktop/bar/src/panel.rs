@@ -170,7 +170,7 @@ pub enum History {
 
 /// The notification centre of the Panels board: its title and « Tout effacer », then a card per
 /// application, newest first.
-pub fn center(history: &History) -> Element<'_, Message> {
+pub fn center(history: &History, options: Option<u32>) -> Element<'_, Message> {
     let empty = !matches!(history, History::Ready(groups) if !groups.is_empty());
     let title = text(words::NOTIFICATIONS)
         .font(typography::TITLE)
@@ -186,7 +186,7 @@ pub fn center(history: &History) -> Element<'_, Message> {
         });
     let body: Element<'_, Message> = match history {
         History::Ready(groups) if !groups.is_empty() => {
-            let cards = groups.iter().map(card);
+            let cards = groups.iter().map(|group| card(group, options));
             scrollable(Column::with_children(cards).spacing(panels::CENTER_GAP))
                 .height(Length::Fill)
                 .into()
@@ -211,7 +211,7 @@ fn notice(line: &str) -> Element<'_, Message> {
 }
 
 /// The card of an application: its tile and name, then its newest notifications.
-fn card(group: &Group) -> Element<'_, Message> {
+fn card(group: &Group, options: Option<u32>) -> Element<'_, Message> {
     let initial: String = group
         .app
         .chars()
@@ -245,7 +245,7 @@ fn card(group: &Group) -> Element<'_, Message> {
     }
     let mut rows = vec![header.into()];
     for entry in group.entries.iter().take(panels::GROUP_MAX) {
-        rows.push(notification(entry, !single));
+        rows.push(notification(entry, !single, options == Some(entry.id)));
     }
     let hidden = group.entries.len().saturating_sub(panels::GROUP_MAX);
     if hidden > 0 {
@@ -260,7 +260,7 @@ fn card(group: &Group) -> Element<'_, Message> {
 
 /// One notification of a card: title, body, and its buttons while it is open. `timed`: its
 /// time on the right of its title, when the card holds several.
-fn notification(entry: &Entry, timed: bool) -> Element<'_, Message> {
+fn notification(entry: &Entry, timed: bool, options: bool) -> Element<'_, Message> {
     // A long title ends with « … »; the body below wraps.
     let title = ui::ellipsis(entry.summary.as_str())
         .font(typography::UI_SEMIBOLD)
@@ -281,25 +281,23 @@ fn notification(entry: &Entry, timed: bool) -> Element<'_, Message> {
     if !entry.body.is_empty() {
         lines.push(
             ui::body(entry.body.as_str())
+                .wrapping(text::Wrapping::WordOrGlyph)
                 .style(panels::secondary_text)
                 .into(),
         );
     }
-    let buttons: Vec<Element<'_, Message>> = entry
+    // Their row shares the width, « Options » beyond three, as in a bubble (D-23c).
+    let actions: Vec<(&str, Message)> = entry
         .actions
         .iter()
         .filter(|(key, _)| entry.open && key != "default")
-        .take(sherlock_ui::notifications::MAX_BUTTONS)
-        .enumerate()
-        .map(|(i, (key, label))| {
-            let invoke = Message::InvokeAction(entry.id, key.clone());
-            panels::action_button(label.as_str(), i == 0, Some(invoke)).into()
-        })
+        .map(|(key, label)| (label.as_str(), Message::InvokeAction(entry.id, key.clone())))
         .collect();
-    if !buttons.is_empty() {
-        let buttons = iced::widget::Row::with_children(buttons).spacing(panels::ACTION_GAP);
+    if !actions.is_empty() {
+        let toggle = Message::NotificationOptions(entry.id);
+        let actions = sherlock_ui::notifications::action_row(actions, options, toggle);
         lines.push(
-            container(buttons)
+            container(actions)
                 .padding(Padding {
                     top: 2.0,
                     ..Padding::ZERO

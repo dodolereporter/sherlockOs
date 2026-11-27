@@ -10,13 +10,15 @@ use iced::font::{Style, Weight};
 use iced::futures::channel::mpsc::{self, Receiver};
 use iced::futures::{Stream, StreamExt, stream};
 use iced::widget::{
-    Stack, button, column, container, float, image, mouse_area, pin, rich_text, row, sensor, span,
-    svg, text,
+    Stack, column, container, float, image, mouse_area, pin, rich_text, row, sensor, span, svg,
+    text,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Subscription, Task, Vector, mouse, window};
 use iced_exwlshell::actions::RegionActionCB;
 use iced_exwlshell::reexport::{Anchor, LayerSize};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::ellipsis::ellipsis;
 use sherlock_ui::motion::{Animation, GEOMETRY_PRECISION};
 use sherlock_ui::notifications::{self as ui, SPRING};
 use sherlock_ui::{color, typography};
@@ -39,6 +41,10 @@ pub enum Message {
     Hover(u64, bool),
     Click(u64),
     Action(u64, String),
+    /// « Options » of a bubble with more actions than its row holds.
+    Options(u64),
+    /// The screen of the bubbles, its logical height: as many bubbles show as it holds.
+    Screen(f32),
 }
 
 /// The events of the core waiting for the interface, merged so that they stay few however
@@ -179,11 +185,15 @@ struct Bubble {
     top: Animation,
     slide: Animation,
     leaving: bool,
+    /// Its « Options » list is open.
+    options: bool,
 }
 
 pub struct Notifications {
     core: Arc<Core>,
     inbox: Inbox,
+    /// iced_exwlshell's reports of the screen the surface is on.
+    shell_events: Option<ShellReceiver>,
     /// In the order they came: the newest is drawn at the top.
     bubbles: Vec<Bubble>,
     surface: Option<window::Id>,
@@ -198,6 +208,7 @@ impl Notifications {
         Self {
             core,
             inbox,
+            shell_events: None,
             bubbles: Vec::new(),
             surface: None,
             height: 0,
@@ -205,6 +216,13 @@ impl Notifications {
             now: Duration::ZERO,
             serials: 0,
         }
+    }
+
+    /// Told by `shell_events` of the screen of the stack: its height sets how many bubbles
+    /// show (D-23c).
+    pub fn with_shell_events(mut self, shell_events: ShellReceiver) -> Self {
+        self.shell_events = Some(shell_events);
+        self
     }
 
     fn animating(&self) -> bool {
@@ -223,6 +241,11 @@ impl Notifications {
         Subscription::batch([
             Subscription::run_with(self.inbox.clone(), Inbox::stream).map(Message::Core),
             Subscription::run(appearance).map(Message::Theme),
+            self.shell_events
+                .as_ref()
+                .map_or_else(Subscription::none, |events| {
+                    events.listen().filter_map(on_output)
+                }),
             frames,
         ])
     }
@@ -274,6 +297,12 @@ impl Notifications {
                     self.core.invoke(id, &key);
                 }
             }
+            Message::Options(serial) => {
+                if let Some(bubble) = self.bubbles.iter_mut().find(|b| b.serial == serial) {
+                    bubble.options = !bubble.options;
+                }
+            }
+            Message::Screen(height) => self.core.set_screen_height(height),
             Message::Theme(theme) => color::set_active(theme),
             _ => {}
         }
@@ -321,6 +350,7 @@ impl Notifications {
                 top: Animation::new(SPRING, 0.0, 0.0, now),
                 slide: Animation::new(SPRING, f64::from(OUT), f64::from(OUT), now),
                 leaving: false,
+                options: false,
             }),
         }
         let open = match self.surface {
@@ -445,17 +475,19 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
         .style(ui::tile)
         .into(),
     };
+    // The application's name and the title on one line each, ending with « … » (D-23c).
     let header = row![
         glyph,
-        text(app_name(note))
+        ellipsis(app_name(note))
             .size(ui::HEADER_SIZE)
             .style(ui::secondary_text)
+            .width(Length::Fill)
     ]
     .spacing(ui::HEADER_GAP)
     .align_y(Alignment::Center);
     let mut content = column![header].spacing(ui::ROW_GAP);
     if !note.summary.is_empty() {
-        content = content.push(text(&note.summary).font(typography::UI_SEMIBOLD));
+        content = content.push(ellipsis(note.summary.as_str()).font(typography::UI_SEMIBOLD));
     }
     if !note.body.is_empty() {
         let secondary = color::palette().text_secondary;
@@ -479,22 +511,20 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
                 span(s.text.as_str()).font(font).color(secondary)
             })
             .collect();
-        content = content.push(rich_text(spans));
+        // A word longer than the bubble (an address) breaks where it must; four lines at most.
+        let body = rich_text(spans)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .line_height(ui::BODY_LINE_HEIGHT)
+            .width(Length::Fill);
+        let lines = ui::BODY_LINES * typography::UI_SIZE * ui::BODY_LINE_HEIGHT;
+        content = content.push(container(body).max_height(lines.ceil()).clip(true));
     }
-    let buttons: Vec<Element<'_, Message>> = note
+    let actions: Vec<(&str, Message)> = note
         .buttons()
-        .enumerate()
-        .map(|(i, (key, label))| {
-            button(container(text(label.as_str())).center_y(Length::Fill))
-                .height(ui::BUTTON_HEIGHT)
-                .padding([0.0, ui::BUTTON_PADDING])
-                .style(ui::action(i == 0))
-                .on_press(Message::Action(id, key.clone()))
-                .into()
-        })
+        .map(|(key, label)| (label.as_str(), Message::Action(id, key.clone())))
         .collect();
-    if !buttons.is_empty() {
-        let actions = row(buttons).spacing(ui::BUTTON_GAP);
+    if !actions.is_empty() {
+        let actions = ui::action_row(actions, b.options, Message::Options(id));
         content = content.push(container(actions).padding(Padding::ZERO.top(ui::BUTTONS_TOP)));
     }
     let card = container(content)
@@ -507,6 +537,17 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
         .on_exit(Message::Hover(id, false))
         .interaction(mouse::Interaction::Pointer)
         .into()
+}
+
+/// The logical height of the screen of the stack, from iced_exwlshell's reports.
+fn on_output(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { output, .. } => {
+            let (_, height) = output?.info.logical_size?;
+            Some(Message::Screen(height as f32))
+        }
+        _ => None,
+    }
 }
 
 /// The theme of the appearance file, each time it changes.

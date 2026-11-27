@@ -87,7 +87,8 @@ own. Anything else, JPEG included, shows the initial. The longest path taken is 
 the history holds much, whatever a client sends: the application name to 48 characters, the
 title to 120, the body to 300 after markup (only its first 16 KiB are read), an action label to
 24; 32 actions at most, a key longer than 256 bytes dropping its action (a cut key would no
-longer be the application's), three buttons shown; an icon name to 255 bytes. The limits of
+longer be the application's), ten buttons shown (two and « Options » on the row, eight in its
+list); an icon name to 255 bytes. The limits of
 what shows are in `sherlock_ui::notifications`, the others are named constants of `model.rs`
 and `picture.rs`. Control characters and the invisible bidirectional formatting characters
 (U+200E, U+200F, U+061C, U+202A to U+202E, U+2066 to U+2069) are dropped from every text: they
@@ -129,8 +130,24 @@ passing its target never squeezes the last bubble, and plus 480 (`MEASURE_ROOM`)
 bubble is being laid out out of sight: in a surface of the stack's height, it would be measured
 squeezed. It shrinks back once everything settled.
 
+**Text and actions** (D-23c). The application name and the title stay on one line each,
+ending with « … » (`sherlock_ui::ellipsis`). The body wraps on words, and a word wider than the
+bubble (an address) breaks where it must (`Wrapping::WordOrGlyph`); four lines show at most
+(`notifications::BODY_LINES`), the rest is cut by the card. Up to three actions share the row
+of buttons in equal widths, each label on one line with « … »; with more, the first two stay and
+« Options » opens the others in a list under the row, as on macOS (`notifications::action_row`,
+shared with the notification centre of the bar). The bubble grows with the list, its neighbours
+moving down on their spring.
+
+![A crowded bubble: name and title cut, an address broken, two actions and « Options »](../desktop/notifications/screenshots/crowded.png)
+![« Options » open](../desktop/notifications/screenshots/options.png)
+
 **Stack.** The newest on top, 8 apart (the board's gap), four at most
-(`notifications::MAX_VISIBLE`); the others wait, in the order they came, and show as room
+(`notifications::MAX_VISIBLE`), fewer on a short screen: the daemon learns the logical height
+of its screen from iced_exwlshell and shows as many as fit between the bar and the dock
+(`notifications::visible_for`: 128 a bubble, 100 kept for the dock), one at least. 1280 × 800
+at 1.5 shows two, 1366 × 768 at 1.25 three, 1920 × 1080 at 1.5 four. A taller screen shows the
+waiting ones at once; a shorter one lets those shown finish. The others wait, in the order they came, and show as room
 frees up. Their timer starts when they show. At most 50 wait (`notifications::MAX_WAITING`):
 beyond, the oldest waiting one closes (reason 4, critical ones last) and stays in the history.
 Open notifications are thus never more than 54, and every walk over them stays short.
@@ -271,7 +288,7 @@ with the bar and the dock.
   history, the hidden ones closed with reason 4, switched off at once); `CloseNotification` of
   an unknown id is an error; two clients: the second cannot replace nor close the first one's
   notification; the name already taken.
-- **Core**: four bubbles at most, the next one shows when one closes; at most 50 waiting, the
+- **Core**: four bubbles at most, two on a screen 533 high, the next one shows when one closes; at most 50 waiting, the
   oldest non-critical closing first; the pointer holds the timer and gives back the time left,
   a replacement keeps it held; only the sender replaces or closes; the history keeps 100, a
   replacement takes its entry.

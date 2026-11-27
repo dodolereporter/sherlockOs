@@ -104,6 +104,8 @@ pub struct Bar {
     pub month: Option<Month>,
     /// What the notification centre shows.
     pub history: History,
+    /// The notification of the centre whose « Options » list is open (D-23c).
+    pub options: Option<u32>,
     /// The quick settings of the control centre.
     pub quick: Quick,
     /// The Wi-Fi signal, a connection under way, the Internet, from NetworkManager.
@@ -186,6 +188,8 @@ pub enum Message {
     ClearHistory,
     /// An action of an open notification, from the centre.
     InvokeAction(u32, String),
+    /// « Options » of a notification of the centre with more actions than its row holds.
+    NotificationOptions(u32),
     /// A call to the daemon ended.
     HistoryDone(Result<(), String>),
     /// The quick settings.
@@ -408,6 +412,9 @@ impl Bar {
                     async { history::clear(&bus::session().await?).await },
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
+            }
+            Message::NotificationOptions(id) => {
+                self.options = (self.options != Some(id)).then_some(id);
             }
             Message::InvokeAction(id, key) => {
                 return Task::perform(
@@ -1013,7 +1020,11 @@ impl Bar {
                 let width = panels::CENTER_WIDTH;
                 iced::widget::column![
                     panel::glass(calendar, width, panels::CALENDAR_HEIGHT),
-                    panel::glass(panel::center(&self.history), width, panels::CENTER_HEIGHT),
+                    panel::glass(
+                        panel::center(&self.history, self.options),
+                        width,
+                        panels::CENTER_HEIGHT
+                    ),
                 ]
                 .spacing(panels::PANEL_GAP)
                 .into()
