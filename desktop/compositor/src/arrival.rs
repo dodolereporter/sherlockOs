@@ -97,7 +97,7 @@ impl State {
             return None;
         }
         let shown = self.arrival.shown.iter().find(|s| s.0 == part)?.1;
-        let shown = shown.max(self.curtain_revealed(now));
+        let shown = shown.max(self.curtain_revealed());
         Some((part, progress(part, shown, now)?))
     }
 }

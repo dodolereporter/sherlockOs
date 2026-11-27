@@ -149,22 +149,23 @@ impl State {
         self.curtain.motion
     }
 
-    /// A frame is drawn at `now`: the opening of the session starts with the first one.
+    /// A frame is drawn at `now`: the opening of the session starts with the first one. Without
+    /// the pictures (none could be read, or the tests), there is no opening.
     pub fn curtain_frame(&mut self, now: Duration) {
         if self.curtain.motion == Motion::Opening(None) {
-            self.curtain.motion = if self.greeter {
-                Motion::Down
-            } else {
-                Motion::Opening(Some(now))
+            self.curtain.motion = match (self.greeter, self.curtain.pictures.is_some()) {
+                (true, _) => Motion::Down,
+                (false, true) => Motion::Opening(Some(now)),
+                (false, false) => Motion::Up,
             };
         }
     }
 
     /// When the bar and the dock may start to arrive: once the curtain of the opening is half
     /// gone. Zero without an opening.
-    pub(crate) fn curtain_revealed(&self, now: Duration) -> Duration {
+    pub(crate) fn curtain_revealed(&self) -> Duration {
         match self.curtain.motion {
-            Motion::Opening(start) => start.unwrap_or(now) + CURTAIN_BLACK + CURTAIN_REVEAL / 2,
+            Motion::Opening(Some(start)) => start + CURTAIN_BLACK + CURTAIN_REVEAL / 2,
             _ => Duration::ZERO,
         }
     }
@@ -327,8 +328,9 @@ pub fn push_front(items: &mut Vec<Item>, state: &State, view: &View, now: Durati
             push(&mut front, state, view, up, 1.0);
             true
         }
-        Motion::Opening(start) if !state.greeter => {
-            let t = now.saturating_sub(start.unwrap_or(now));
+        // Before the first frame, nothing: the frames of the backends start it.
+        Motion::Opening(Some(start)) if !state.greeter => {
+            let t = now.saturating_sub(start);
             if t < CURTAIN_BLACK {
                 let fade = CURTAIN_FADE_EASE.apply(share(t, CURTAIN_BLACK));
                 push(&mut front, state, view, 1.0, fade);
