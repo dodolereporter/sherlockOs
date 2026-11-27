@@ -376,7 +376,6 @@ mod tests {
     const KEY_DOWN: u32 = 116;
     const KEY_SHIFT: u32 = 50;
     const KEY_SPACE: u32 = 65;
-    const KEY_COMMA: u32 = 59;
 
     /// Window shown by `Harness::show_window`: 100 × 80, centered at (350, 260) in the 800 × 600
     /// screen. The buffer file lives as long as it does.
@@ -2651,6 +2650,32 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The xkb code of the key that types a comma in the layout of the harness, the machine's:
+    /// its own key in US (59), the key right of N in AZERTY (58).
+    fn comma_key() -> u32 {
+        use smithay::input::keyboard::xkb;
+        let layout = compositor::keyboard::Layout::system();
+        let names = layout.xkb();
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            names.rules,
+            names.model,
+            names.layout,
+            names.variant,
+            names.options.clone(),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the keymap of the machine");
+        (8..256)
+            .find(|&code| {
+                keymap
+                    .key_get_syms_by_level(xkb::Keycode::new(code), 0, 0)
+                    .contains(&xkb::Keysym::comma)
+            })
+            .expect("a key that types a comma")
+    }
+
     /// The gesture key and comma start Control Room, as « Réglages » in the bar's Sherlock menu
     /// does; comma alone goes to the client (lot Q-31).
     #[test]
@@ -2675,13 +2700,14 @@ mod tests {
             }
             0
         };
-        h.shortcut(KEY_COMMA);
+        let comma = comma_key();
+        h.shortcut(comma);
         assert_eq!(started(1), 1, "Control Room is started");
         assert!(!h.state.overview_open(), "the gesture key was not alone");
         h.state
-            .keyboard_key(Keycode::new(KEY_COMMA), KeyState::Pressed, 9);
+            .keyboard_key(Keycode::new(comma), KeyState::Pressed, 9);
         h.state
-            .keyboard_key(Keycode::new(KEY_COMMA), KeyState::Released, 10);
+            .keyboard_key(Keycode::new(comma), KeyState::Released, 10);
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(started(1), 1, "comma alone starts nothing");
         std::fs::remove_dir_all(&dir).unwrap();
