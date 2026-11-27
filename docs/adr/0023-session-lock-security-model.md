@@ -89,8 +89,14 @@ the policy to the compositor, and has two gaps for a strict use:
 - The lock program exits cleanly only after PAM accepted the password: the toolkit
   (`exwlshellev`) sends `unlock_and_destroy` on every clean exit, so an error must never end it
   cleanly (it aborts, and the compositor keeps the session locked).
-- Within the session, a process of the user can still trace the lock program
-  (`kernel.yama.ptrace_scope` at 0 on Debian): the distribution will set it to 1.
+- Within the session, a process of the user could trace the lock program and the compositor,
+  and read the password in their memory (`kernel.yama.ptrace_scope` at 0 on Debian). Lot D-25k:
+  both make themselves non-dumpable at start (`PR_SET_DUMPABLE` at 0, through rustix; the
+  compositor in the real session only), which also closes `/proc/<pid>/mem` to the user and
+  stops core dumps, the lock screen setting `RLIMIT_CORE` to 0 too, since it aborts on a panic;
+  and `distro/sysctl.d/60-sherlockos-ptrace.conf` sets `ptrace_scope` to 1, which
+  `just install-session` prints the command to install. The login screen (D-24) is to get the
+  same call once its lot is merged.
 - The protocol is applied by smithay plus our checks: a new version of smithay that changes
   `session_lock` must be read again against this ADR.
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the

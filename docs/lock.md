@@ -90,6 +90,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   when dropped. The conversation function gives PAM a `malloc` copy, which PAM frees; our copy
   is overwritten as soon as it is handed over. It is never logged.
 - The first key, which brings the form, travels as a `Secret` too (`form::Input`).
+- **Memory closed** (lot D-25k). The first thing `main` does: `PR_SET_DUMPABLE` at 0 (no other
+  process of the user may trace the program nor read `/proc/<pid>/mem`, and no core dump) and
+  `RLIMIT_CORE` at 0, since a panic aborts. A failure is logged, the lock goes on.
 - **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
   text in its own state, and `on_input` hands a new `String` at each key before it becomes a
   `Secret`; iced frees them without overwriting them. They live in the memory of this process

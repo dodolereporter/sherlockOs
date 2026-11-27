@@ -70,6 +70,10 @@ resvg = { version = "=0.45.1", default-features = false }
 # itself (lot D-29, `x11_paste.rs`), and the XWayland tests use it as their X11 client. The
 # version smithay already pulls for its X11 window manager: nothing new is built.
 x11rb = "=0.13.2"
+# PR_SET_DUMPABLE (lot D-25k, ADR 0023): no other process of the user may trace this one or
+# read its memory, and no core dump is written. A safe call instead of libc's prctl; the version
+# the workspace already builds (through wayland and calloop).
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "process"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.

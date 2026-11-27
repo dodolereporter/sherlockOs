@@ -1933,6 +1933,11 @@ How it works (`src/udev.rs`):
 - **Console switch.** Ctrl + Alt + F1 to F12 switch console. When the session is left, input
   and drawing stop, and the keys still held are released for the clients; when it comes back,
   the screens are reset, read again (a screen may have been plugged in meanwhile) and redrawn.
+- **Memory closed** (lot D-25k, ADR 0023). In the real session the compositor makes itself
+  non-dumpable at start (`PR_SET_DUMPABLE` at 0): every key typed passes through it, so no
+  other process of the user may trace it or read its memory, and no core dump of it is written.
+  The programs it starts are dumpable again (`execve`). Nested and headless, it stays open to a
+  debugger.
 - **Way out.** **Ctrl + Alt + Backspace stops the compositor**, whatever has the keyboard: the
   emergency exit when nothing answers any more. Not while locked (lot D-25j): it then goes to
   the lock as a Backspace, and if the compositor stops or crashes while locked, the session
