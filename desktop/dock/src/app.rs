@@ -1027,10 +1027,16 @@ impl Dock {
         };
         let margin = side * dock::CROSS_MARGIN;
         let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
-        if !item.pinned && along < border - margin {
+        let pins = !item.pinned && along < border - margin;
+        let unpins = item.pinned && open && along > border + margin;
+        if pins || unpins {
+            // Sherlock keeps the place it is shown at (lot D-21h), whatever the list becomes.
+            self.list_sherlock();
+        }
+        if pins {
             tracing::info!(app = id, "pinned by a drag");
             self.pinned.push(id);
-        } else if item.pinned && open && along > border + margin {
+        } else if unpins {
             tracing::info!(app = id, "unpinned by a drag");
             self.pinned.retain(|p| *p != id);
         } else {
