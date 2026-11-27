@@ -465,8 +465,7 @@ fn quick_app(name: &str) -> PathBuf {
     dir.parent().map(Path::to_path_buf).unwrap_or_default()
 }
 
-/// Two applications that start at once and do nothing (`Exec=true`), named "Rapide A" and
-/// "Rapide B".
+/// Two applications that start at once and do nothing (`Exec=true`).
 fn quick_pair(name: &str) -> PathBuf {
     let dir = scratch(name).join("applications");
     assert!(std::fs::create_dir_all(&dir).is_ok(), "folder");
@@ -499,7 +498,7 @@ fn a_click_against_the_screen_edge_starts_the_icon_of_its_column() {
     let mut dock = dock(&[data], &pinned, flat(), None);
     let t = settle(&mut dock);
     let layout = dock.layout(t);
-    // Rapide A, Sherlock, Rapide B.
+    // The first application, Sherlock, the second one.
     let (first, sherlock, last) = (layout.icons[0], layout.icons[1], layout.icons[2]);
     let bottom = dock.surface_size.height;
     assert!(
@@ -543,7 +542,7 @@ fn a_click_against_the_left_edge_starts_the_icon_of_its_row() {
     config.position = dock_config::Position::Left;
     let mut dock = dock(&[data], &pinned, config, None);
     let t = settle(&mut dock);
-    // Rapide A, Sherlock, Rapide B.
+    // The first application, Sherlock, the second one.
     let last = dock.layout(t).icons[2];
     assert!(last.x > 2.0, "a gap beside the glass");
     assert_eq!(
