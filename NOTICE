@@ -1,0 +1,19 @@
+SherlockOS
+Copyright (C) 2026 The SherlockOS contributors
+
+The source code of this repository is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version. The full text of the
+license is in the file LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+the GNU General Public License for more details.
+
+The license of the code does NOT cover the name "SherlockOS", the SherlockOS logo, nor Sherlock,
+the mascot (its 3D model, pictures, wallpapers and seasonal variants). They are not licensed:
+all rights reserved. See TRADEMARKS.md. A fork must change the name and the logo, and remove the
+mascot.
+
+Fonts, and the other works by third parties that this repository ships, keep their own
+licenses. See THIRD_PARTY.md.
