@@ -5,6 +5,7 @@ members = [
     "desktop/apps",
     "desktop/autostart",
     "desktop/bar",
+    "desktop/clipboard-panel",
     "desktop/compositor",
     "desktop/control-room",
     "desktop/cursor-theme",
