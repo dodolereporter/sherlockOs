@@ -189,6 +189,8 @@ struct Worker {
     selection: Option<WlDataOffer>,
     /// The offer dragged over the window, with its serial and where it is.
     over: Option<Over>,
+    /// The offer dropped, being read: the `leave` that follows the drop does not end it.
+    dropped: Option<Over>,
     preferred: Action,
     accept: bool,
     /// The drag started here: its source and icon.
@@ -235,6 +237,7 @@ fn run(
         offers: Vec::new(),
         selection: None,
         over: None,
+        dropped: None,
         preferred: Action::Move,
         accept: true,
         dragging: None,
@@ -502,7 +505,7 @@ impl Worker {
             }
             Read::Dropped(offer, data) => {
                 let files = data.and_then(|d| transfer::decode(transfer::URI_LIST, &d));
-                let over = self.over.take().filter(|o| o.offer == offer);
+                let over = self.dropped.take().filter(|o| o.offer == offer);
                 if let (Some((_, paths)), Some(over)) = (files, over) {
                     let action = over.action.unwrap_or(self.preferred);
                     // Version 3: the drop is done once read; the files are copied or moved
@@ -701,9 +704,11 @@ impl Dispatch<WlDataDevice, ()> for Worker {
                 worker.send(Event::Left);
             }
             wl_data_device::Event::Drop => {
-                let Some(offer) = worker.over.as_ref().map(|o| o.offer.clone()) else {
+                let Some(over) = worker.over.take() else {
                     return;
                 };
+                let offer = over.offer.clone();
+                worker.dropped = Some(over);
                 let reads = worker.reads.clone();
                 let read = offer.clone();
                 receive(&offer, transfer::URI_LIST, move |data| {

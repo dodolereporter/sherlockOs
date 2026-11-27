@@ -182,8 +182,14 @@ impl App {
             Event::Over(x, y) => {
                 let at = Point::new(x, y);
                 let target = self.folder_at(at);
-                // Dropped back where they are, the files would not move.
-                let home = target.is_none() && self.dnd.out.is_some();
+                // Dropped back in the folder they come from, the files would not move.
+                let here = self.drop_dir(None);
+                let home = target.is_none()
+                    && self
+                        .dnd
+                        .out
+                        .as_ref()
+                        .is_some_and(|out| out.iter().all(|p| p.parent() == here.as_deref()));
                 let allowed = !home && self.drop_dir(target).is_some();
                 let changed = self.dnd.over.as_ref().map(|o| (o.target, o.allowed));
                 if changed != Some((target, allowed)) {
