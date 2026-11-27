@@ -38,6 +38,7 @@ pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
+pub mod screenshot_tool;
 mod shell;
 pub mod stats;
 pub mod theme;
