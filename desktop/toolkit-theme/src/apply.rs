@@ -3,7 +3,6 @@
 //! database.
 
 use std::ffi::OsStr;
-use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -21,12 +20,20 @@ pub fn qt(layout: &Layout, theme: Theme) -> Result<Vec<std::path::PathBuf>, Erro
         if !install::is_installed(layout, &path) {
             continue;
         }
-        let current = match fs::read_to_string(&path) {
+        let current = match mime_apps::read_bounded(&path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(source) => return Err(Error::Io { path, source }),
         };
         if let Some(text) = crate::qt::with_palette(&current, &layout.qtct_palette(tool, theme)) {
+            if !crate::qt::has_palette(&current) {
+                // A file the user changed beyond the palette line: kept as it was beside it,
+                // `<name>.bak`, before the key is added.
+                let mut name = path.file_name().unwrap_or_default().to_owned();
+                name.push(".bak");
+                let backup = path.with_file_name(name);
+                install::write_atomic(&backup, current.as_bytes(), false)?;
+            }
             install::write_atomic(&path, text.as_bytes(), false)?;
             changed.push(path);
         }

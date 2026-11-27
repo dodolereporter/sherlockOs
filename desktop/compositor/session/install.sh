@@ -41,6 +41,9 @@ cat <<EOF
 sudo install -d $dest $applications $data/icons
 sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
 sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
+# Evidence, the one program meant for the user, where the session's PATH finds it (its desktop
+# entry runs \`evidence\`); the others stay out of the PATH:
+sudo ln -sf $dest/evidence /usr/local/bin/evidence
 sudo install -m 644 $q/desktop/compositor/session/sherlockos.desktop $sessions/
 sudo install -m 644 $q/desktop/evidence/evidence.desktop $applications/
 sudo install -m 644 $q/desktop/control-room/control-room.desktop $applications/
@@ -61,7 +64,7 @@ sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done)$icons/
 
 # To remove it:
-#   sudo rm -r $dest $data $sessions/sherlockos.desktop $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock
+#   sudo rm -r $dest $data $sessions/sherlockos.desktop /usr/local/bin/evidence $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock
 #   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 

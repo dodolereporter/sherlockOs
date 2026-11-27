@@ -112,7 +112,19 @@ longest magnified bar, up to the top of the label, so that a magnified icon past
 reachable and the dock sees the pointer leave; the room kept at both ends for the label of an
 edge icon never takes the pointer. Checked in the nested KWin with a maximized KWrite: a click
 in the black band above the dock puts KWrite's cursor on the line under it, and the dock gets
-no pointer event.
+no pointer event. Since lot D-21f the region always reaches the screen edge over the length of
+the dock, the gap of 8 included (`Geometry::to_edge`): see "Fitts's law" below.
+
+**Fitts's law** (lot D-21f). As on macOS, the gap between the glass and the screen edge, and the
+spaces between the icons, are the dock: launching an application no longer means going down to
+the edge and coming back up. On the bar and between it and the edge, along the bar, the edge
+itself included, a press acts on the icon of its column: a click, a right click (its menu), a
+middle click, a drag (`Layout::icon_for`). Between two icons, the closer one wins, except for a
+right click on the bar itself, which opens the dock's own menu (D-21h, below). The pointer
+there is over the dock: the magnification and the label follow the column. On the left and
+right edges, the same towards the screen side. A hidden dock keeps its band of
+`dock::HIDE_STRIP`, which brings it back after `REVEAL_DELAY`; once it is out, the band at the
+edge is for clicks again. Past the ends of the glass, nothing is picked.
 
 ![A click above the dock reaches the window below](../desktop/dock/screenshots/dock-click-through.png)
 
@@ -158,8 +170,9 @@ work area followed the dock's state. A maximized window was also resized twice o
 first above the dock, then over its room once the dock gave it up.
 
 Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
-screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
-(only the windows of the active workspace count), matched by name with the screen
+screen comes from the `output` event of `sherlock_shell_v1`, bound at version 4 (2 brings
+`snapped`, 4 App Expose) (only the windows of the active workspace count), matched by name with
+the screen
 iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
@@ -210,8 +223,9 @@ The label goes to the closest icon, `floor(p × n)`. The pointer comes over the 
 the bar or over an icon grown past it. Once over it, it stays over it in the whole hover band:
 along the bar as drawn, from the screen edge to the top of the tallest icon
 (`Layout::hover_band`). So the magnification holds when the pointer runs along the top of the
-grown icons and crosses the gap between two of them; a click in that gap picks no icon. Out of
-the band, every icon heads back to 52.
+grown icons and crosses the gap between two of them; a click in that gap, above the bar, picks
+no icon (on the bar and below it, it picks the closer one: "Fitts's law"). Out of the band,
+every icon heads back to 52.
 
 Each icon side is a `motion::Animation` led by `dock::SPRING` (stiffness 1740, damping 52.6,
 damping ratio 0.63). The board's `cubic-bezier(0.2, 0.9, 0.3, 1.25)` over 150 ms peaks about
@@ -257,11 +271,14 @@ folders that come after (that is how a user removes a system application). So is
 whose `TryExec` program is missing. `NoDisplay=true` keeps the application, but the defaults
 never pick it.
 
-The `mime-apps` crate (D-27) was merged while this batch was under way. Its `DesktopEntry` has
-neither `Categories`, `StartupWMClass`, `Path` nor the actions, which the dock needs for its
-default roles, its open windows and « Nouvelle fenêtre », and this batch may not change it. The
-dock keeps its own reader for now; moving it onto `mime-apps` once that crate reads these keys
-(and its `mimeapps.list` handling, which knows the desktop-specific files) is a small follow-up.
+The `mime-apps` crate (D-27) lists and reads the dock's desktop entries (since S-DOCK-1): the
+same folders as the launcher and the applications view, sub-folders included (Wine's
+`wine/Programs/…` gives the id `wine-Programs-…`, which « Garder dans le Dock » writes), and the
+same bounds: a regular file once its links are followed, of 256 KiB at most, in UTF-8. A link to
+`/dev/zero` or a huge file is skipped instead of filling the dock's memory. Its `DesktopEntry`
+has neither `StartupWMClass` nor the actions, so the dock still parses the text it is given
+with its own `KeyFile`. `dock.conf` and the user's `mimeapps.list` are read the same way, 64 KiB
+at most (`mime_apps::file::read_bounded`).
 
 Icons are looked up by the shared `icon-theme` crate (`docs/icon-theme.md`, since D-03), as
 the Icon Theme specification says, without the cache file: in the theme of `IconTheme` in the
@@ -322,6 +339,15 @@ made again, is read again 50 ms after the last event: icon size, magnification, 
 pinned list apply at once, the surface takes its new size, anchor, margin and exclusive zone.
 The watcher sends its first reading to the dock too, so that a change between the dock's own
 reading at startup and the watcher's start is not missed.
+
+**Writing the pinned list.** The dock never writes the configuration it holds in memory:
+`DockConfig::update` reads the file again, changes the list alone and writes it (Q-40). It does
+so on a thread of its own (`save::Saver`, Q-42): reading, writing and flushing take what the disk
+wants, the dock keeps drawing meanwhile, and of several changes waiting only the last is written.
+The icons of a new icon theme are looked up on a thread too, the old ones shown meanwhile. A file
+that cannot be read (not UTF-8, no permission), at startup or now, is never written over: the
+change is logged and the file keeps its other keys and its comments, and a change Control Room
+made since stays.
 
 **Writing.** `DockConfig::save` goes through `mime_apps::write_atomically`, the one safe
 writer of the desktop's settings files: a temporary file of its own in the same folder (process
@@ -405,6 +431,17 @@ Lot D-21c had set aside going from one window to the next on a click, which the 
 does not do; the author found the dock « did not handle several windows » without it, and lot
 D-21d adds it: a click on the application in front goes to its next window. The menu lists the
 windows too (see Menu of an icon).
+
+**App Expose** (lot D-21c2). « Afficher toutes les fenêtres » in the menu of an icon, and a
+swipe down over the icon, open Mission Control on the application's windows only (see "App
+Expose" in `docs/compositor.md`), to pick one, as macOS does from its dock. The swipe: the
+scroll the dock receives going down `dock::EXPOSE_SWIPE` (40 px; a notch of a mouse wheel
+turned towards the user is enough), each scroll within `dock::EXPOSE_SWIPE_GAP` (250 ms) of the
+previous one, opens it once per swipe. Down is the fingers going down with natural scrolling,
+the default of the touchpad settings; with natural scrolling off, fingers going up. The
+minimized windows are left out. It needs version 4 of `sherlock_shell_v1` (`show_windows`);
+without it (another compositor, an older one), the entry is disabled and the swipe does
+nothing. A click keeps going from one window to the next (lot D-21d): the author asked for it.
 
 **A new window.** The middle button, a Ctrl+click and « Nouvelle fenêtre » start the
 application again: its « new window » action when the desktop entry declares one, otherwise its
@@ -575,7 +612,7 @@ own thread, connection included:
 | Source | When | Closes windows |
 | --- | --- | --- |
 | `Placeholder` | `DOCK_OPEN` is set: comma separated `app_id`s, `DOCK_ACTIVE` the active one | No: a click starts the application, « Quitter » stays disabled |
-| `shell::Shell` | Our compositor: its shell socket offers `sherlock_shell_v1` (ADR 0021) | Yes: `activate`, `minimize`, `close`, `set_rectangle`, through `shell::ShellControl` |
+| `shell::Shell` | Our compositor: its shell socket offers `sherlock_shell_v1` (ADR 0021) | Yes: `activate`, `minimize`, `close`, `set_rectangle`, and App Expose (`show_windows`) from version 4, through `shell::ShellControl` |
 | `Wlr` | The compositor offers `zwlr_foreign_toplevel_manager_v1` (wlroots compositors) | Yes: `activate`, `set_minimized`, `close`, through `WlrControl` |
 | None | None of them | Windows unknown: no dot, « Quitter » disabled |
 
@@ -644,7 +681,8 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
 | Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
-| Separator, then « Quitter » | The windows are known, the source can close them, and the application has one |
+| Separator, then « Afficher toutes les fenêtres » (App Expose, lot D-21c2) | The source offers App Expose, the windows can be acted on, and one is shown |
+| « Quitter » | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
 but « Retirer du Dock » is disabled.
@@ -806,6 +844,10 @@ X focus): the keyboard steps were checked in the nested KWin.
   is found by its id `evidence` and pinned first, before the file manager `mimeapps` names.
 - **Theme**: the dock fades to the light palette over the frames; captures at rest, hovered and
   of an icon's menu in the light theme (`dock-*-light-tiny-skia.png`).
+- **Fitts's law** (lot D-21f, `tests/animations.rs`): a click against the bottom edge and 2 px
+  above it starts the icon of its column, one 1 px from either icon of a gap starts the closer
+  one, the input region reaches the edge, nothing past the ends of the glass; on the left edge,
+  a click against the edge starts the icon of its row.
 - **Input region**: the bar alone at rest (the room above and at the ends lets clicks through),
   the longest magnified bar up to the label while hovered, on the bottom and right edges;
   rounding to whole pixels never shrinks it.
@@ -830,7 +872,8 @@ X focus): the keyboard steps were checked in the nested KWin.
   (titles, the active one checked, an untitled one named after the application), then the
   actions; a window of the menu comes forward alone, « Quitter » closes them all; the menu
   unfolds and folds back; the dot fades in with the first window and out with the last; the
-  captures above.
+  captures above. App Expose (D-21c2): the menu entry without the minimized ones, a swipe down once per swipe and again after a pause, nothing
+  without version 4. `tests/shell.rs`: `show_windows` reaches the compositor with the ids.
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.
