@@ -3024,14 +3024,18 @@ dependencies = [
 name = "portal"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "blocking",
  "libloading",
  "memmap2",
  "rustix 1.1.6",
  "shell-protocol",
  "thiserror 2.0.21",
  "tracing",
+ "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
+ "zbus",
 ]
 
 [[package]]

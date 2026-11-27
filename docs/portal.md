@@ -12,25 +12,30 @@ application ──D-Bus──▶ xdg-desktop-portal ──D-Bus──▶ sherloc
      └──────────── PipeWire node ◀── frames ─────────────┘  └── shell socket: ext-image-copy-capture
 ```
 
-## PipeWire (lot D-28d1)
+## Pieces
 
-The crate `desktop/portal` starts with its PipeWire part: `pipewire.rs`, a video source loaded at
-run time, and `pod.rs`, the SPA pods of the format and of the buffers, written by hand. The
-capture client, the D-Bus backend, the picker and the bar's indicator follow in lots D-28d2 to
-D-28d4.
+| File | What it does |
+| --- | --- |
+| `screencast.rs` | `org.freedesktop.impl.portal.ScreenCast` version 5 and its sessions (`org.freedesktop.impl.portal.Session`); `org.sherlockos.ScreenShare1` for the bar |
+| `picker.rs` | The request written to the picker and its answer, bounded and checked |
+| `capture.rs` | The capture client on the compositor's shell socket: screens, windows, frames |
+| `pipewire.rs` | A PipeWire video source, `libpipewire-0.3.so.0` loaded at run time |
+| `pod.rs` | The SPA pods of the format and of the buffers, written by hand |
 
-- **PipeWire.** A `Video/Source` node that drives its graph (`PW_STREAM_FLAG_DRIVER`), in its own
-  thread loop. It offers raw video in `BGRx` (blue first, as `xrgb8888`), at the source's size,
-  a variable rate up to 60 frames per second; the buffers are 2 to 8 in shared memory that
-  PipeWire allocates and maps (`MemFd` or `MemPtr`). A frame is dropped when the application
-  holds every buffer. The library is loaded with `dlopen` (ADR 0028, amended): nothing to build
-  against, no headers, no `bindgen`; without PipeWire, `Start` fails and nothing else does.
+## The calls
 
-## Capture (lot D-28d2)
+- **`CreateSession`** puts a `Session` object at the path the frontend gives; `Close` on it,
+  or the application leaving (the frontend closes the session then), stops its shares.
+- **`SelectSources`** keeps what the application asks for: screens (`MONITOR`) and windows
+  (`WINDOW`) only, there is no virtual screen; one source or several (`multiple`); the cursor
+  hidden or drawn into the frames (`cursor_mode`: `HIDDEN` or `EMBEDDED`; `METADATA` is not
+  offered and counts as drawn). `persist_mode` and `restore_data` are not kept: the picker asks
+  each time.
+- **`Start`** lists the screens and the windows from the compositor, starts the picker and
+  waits for the user, off the bus's thread. Cancelled: answer 1. Chosen: one PipeWire stream per
+  source, each answered with its node, `source_type` and `size`.
 
-`capture.rs` is the capture client on the compositor's shell socket: it lists the screens
-(`wl_output` names) and the windows (`ext_foreign_toplevel_list_v1`), takes one picture of a
-source (for the picker's thumbnails), or shares a source into PipeWire.
+## Capture and PipeWire
 
 - **Access.** The compositor offers the capture protocols to the program `sherlock-portal` alone
   (ADR 0028, `docs/compositor.md`, "Screen capture"); the picker is the same program.
@@ -42,7 +47,30 @@ source (for the picker's thumbnails), or shares a source into PipeWire.
   gives new constraints: a new buffer, and the format is offered again to PipeWire. A source
   gone (`stopped`), or PipeWire that stops reading, ends the share; within a second the session
   ends (`reap`), the frontend tells the application, and the bar's indicator goes.
-- **Bounds.** Sizes beyond 16384 pixels a side are refused.
+- **PipeWire.** A `Video/Source` node that drives its graph (`PW_STREAM_FLAG_DRIVER`), in its own
+  thread loop. It offers raw video in `BGRx` (blue first, as `xrgb8888`), at the source's size,
+  a variable rate up to 60 frames per second; the buffers are 2 to 8 in shared memory that
+  PipeWire allocates and maps (`MemFd` or `MemPtr`). A frame is dropped when the application
+  holds every buffer. The library is loaded with `dlopen` (ADR 0028, amended): nothing to build
+  against, no headers, no `bindgen`; without PipeWire, `Start` fails and nothing else does.
+- **Bounds.** Sizes beyond 16384 pixels a side are refused; the picker's answer is read up to
+  4 KiB and must name sources offered; the request's fields are cut at 512 characters, without
+  tabs nor line ends.
 
-Tests: `pod.rs`, the format laid out word by word as SPA writes it, and the buffers padded to 8
-bytes. PipeWire itself is not run in CI (no daemon there).
+## The picker and the bar (lot D-28d4)
+
+`sherlock-portal --pick` reads the request on its standard input and writes the numbers of the
+sources chosen on its standard output, nothing to cancel (`picker.rs`). Its window comes with lot
+D-28d4, as do the bar's indicator, which follows `org.sherlockos.ScreenShare1` (signal
+`Changed(as)`, methods `Sharing` and `StopAll`, at `/org/sherlockos/ScreenShare`), and the files
+that make `xdg-desktop-portal` use this backend. Until then the backend is not registered, and
+`--pick` cancels every request.
+
+## Tests
+
+- `pod.rs`: the format laid out word by word as SPA writes it; the buffers padded to 8 bytes.
+- `picker.rs`: a request reads back without tabs nor line ends; the answer chooses among what
+  is offered, one unless several are allowed.
+- `screencast.rs`: the options keep what can be shared; a stream says its kind and size.
+- Not tested in CI: PipeWire itself (no daemon there) and the bus with `xdg-desktop-portal`;
+  see the pull requests for the trial on the machine.
