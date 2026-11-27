@@ -90,6 +90,16 @@ path: a loop of symbolic links lists nothing twice.
 - Icons are not part of this crate: Evidence looks them up in hicolor and pixmaps
   (`desktop/evidence/src/icons.rs`).
 
+## Bounded reads
+
+Every file this crate reads comes from outside the program. `file::read_bounded` reads a text
+file only when it is a regular file once its links are followed, no larger than the bound given,
+and in UTF-8; anything else is an error (`NotFound` for an absent file, as with
+`read_to_string`). Desktop entries are bounded to 256 KiB (`entry::read_entry`), settings files
+to 64 KiB (`file::MAX_SETTINGS_SIZE`). The dock (its entries, `dock.conf`, `mimeapps.list`) and
+`icon-theme` (`index.theme`, 512 KiB) use the same function. `entry::desktop_files` lists the
+`.desktop` files of an `applications` folder with their ids, sub-folders included, for the dock.
+
 ## Tests
 
 `cargo test -p mime-apps`, on temporary XDG directories only: desktop entries (localised
@@ -97,5 +107,6 @@ names, hidden entries, user entries hiding system ones), `Exec` expansion with q
 field codes, type detection (patterns, case, longest pattern), parent types, merging of
 several `mimeapps.list` files, writing a default that keeps everything else, creating a missing
 file, handlers ordered with the default first, a `kde-mimeapps.list` default updated and a
-removed association lifted, a linked `mimeapps.list` written through its link, `TryExec` and
+removed association lifted, bounded reads refusing a link to `/dev/zero`, a large file and
+non UTF-8 text, a linked `mimeapps.list` written through its link, `TryExec` and
 link loops, and `Terminal=true` entries run in a terminal.
