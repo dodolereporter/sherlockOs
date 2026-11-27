@@ -340,6 +340,12 @@ pinned list apply at once, the surface takes its new size, anchor, margin and ex
 The watcher sends its first reading to the dock too, so that a change between the dock's own
 reading at startup and the watcher's start is not missed.
 
+**Writing the pinned list.** The dock never writes the configuration it holds in memory:
+`DockConfig::update` reads the file again, changes the list alone and writes it (Q-40). A file
+that cannot be read (not UTF-8, no permission), at startup or now, is never written over: the
+change is logged and the file keeps its other keys and its comments, and a change Control Room
+made since stays.
+
 **Writing.** `DockConfig::save` goes through `mime_apps::write_atomically`, the one safe
 writer of the desktop's settings files: a temporary file of its own in the same folder (process
 id and a counter: the dock and Control Room may write at the same time), created with the
