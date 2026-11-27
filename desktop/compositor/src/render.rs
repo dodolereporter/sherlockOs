@@ -79,6 +79,8 @@ pub struct Scene {
     labels: RefCell<mission_control::Labels>,
     /// Texture of the on-screen display of the media keys (lot D-35).
     osd: RefCell<osd::Texture>,
+    /// Textures of the thumbnail of a screenshot and of the loupe (lot D-35e).
+    pictures: RefCell<crate::picture::Pictures>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -141,6 +143,14 @@ pub enum Item {
         label: mission_control::Label,
         alpha: f32,
     },
+    /// A picture drawn on the processor, in `rect`: the thumbnail of a screenshot, the loupe
+    /// of the screenshot tool (lot D-35e).
+    Picture {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        picture: crate::picture::Picture,
+        alpha: f32,
+    },
     /// The on-screen display of the media keys in `rect` (lot D-35).
     Osd {
         key: Key,
@@ -191,6 +201,7 @@ impl Item {
             Item::Decoration { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
             Item::Label { label, alpha, .. } => label.hash() ^ params_hash(&[*alpha]),
             Item::Osd { look, alpha, .. } => look.hash() ^ params_hash(&[*alpha]),
+            Item::Picture { picture, alpha, .. } => picture.id ^ params_hash(&[*alpha]),
             _ => 0,
         }
     }
@@ -233,6 +244,7 @@ impl Scene {
             bars: RefCell::default(),
             labels: RefCell::default(),
             osd: RefCell::default(),
+            pictures: RefCell::default(),
         })
     }
 
@@ -451,6 +463,19 @@ impl Scene {
                     .into_iter()
                     .collect()
             }
+            Item::Picture {
+                key,
+                rect,
+                picture,
+                alpha,
+            } => {
+                let mut pictures = self.pictures.borrow_mut();
+                let element = pictures.element(renderer, key.clone(), &picture, rect, alpha);
+                element
+                    .map(|element| SceneElement::Decoration(ids.stamp(key, params, element)))
+                    .into_iter()
+                    .collect()
+            }
             Item::Thumbnail { rect, radius } => wallpaper
                 .iter()
                 .map(|(texture, alpha)| {
@@ -503,6 +528,7 @@ pub fn items(
     // The rings of the clicks shown, in front of everything (lot C-01).
     animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
     animating |= crate::screenshot_tool::push_items(&mut items, state, (output, view));
+    animating |= crate::screenshot_thumbnail::push_item(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
     // The shell's menus closing (lot UI-06), in front of their anchored surfaces.
     animating |= crate::popup_anim::push_closing(&mut items, state, (output, view), now);

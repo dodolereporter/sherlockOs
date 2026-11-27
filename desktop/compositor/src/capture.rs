@@ -50,6 +50,7 @@ use crate::{
     damage::Ids,
     output::View,
     render::Scene,
+    screenshot_thumbnail::Taken,
     screenshot_tool::{Pending, Tool},
     wallpaper, window_anim,
 };
@@ -128,6 +129,12 @@ struct Job {
     image: Image,
     destination: Destination,
     folder: Folder,
+    /// A window taken alone gets its shadow, at the scale of its screen (lot D-35e).
+    shadow: Option<f64>,
+    /// The scale of the screen its thumbnail shows on, and the thumbnail's border.
+    scale: f64,
+    border: sherlock_ui::color::Color,
+    serial: u64,
 }
 
 #[derive(Default)]
@@ -139,6 +146,12 @@ pub struct Capture {
     pub(crate) tool: Option<Tool>,
     pub(crate) options: Options,
     pub(crate) pending: Option<Pending>,
+    /// The thumbnail of the last image taken, the screen of each image on its way, and the
+    /// image carried into an application (lot D-35e).
+    pub(crate) thumbnail: Option<crate::screenshot_thumbnail::Thumbnail>,
+    pub(crate) thumbnail_outputs: std::collections::VecDeque<Option<Output>>,
+    pub(crate) dragged: Option<(Arc<[u8]>, Option<PathBuf>)>,
+    serial: u64,
     /// Pastes of a screenshot being written.
     pastes: Rc<Cell<usize>>,
 }
@@ -233,9 +246,19 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 }
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
-fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Arc<[u8]>>) {
+fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Taken>) {
     let mut bus: Option<zbus::Connection> = None;
-    while let Ok(job) = jobs.recv() {
+    while let Ok(mut job) = jobs.recv() {
+        if let Some(scale) = job.shadow {
+            let shadow = sherlock_ui::color::palette().shadow;
+            let size = (job.image.width, job.image.height);
+            let (rgba, width, height) = tool_ui::with_shadow(&job.image.rgba, size, scale, shadow);
+            job.image = Image {
+                width,
+                height,
+                rgba,
+            };
+        }
         let png = match encode(&job.image) {
             Ok(png) => png,
             Err(err) => {
@@ -243,8 +266,8 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 continue;
             }
         };
-        let (title, body) = match job.destination {
-            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY)),
+        let (title, body, path) = match job.destination {
+            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY), None),
             Destination::SaveAndCopy => {
                 let base = settings.pictures.as_deref();
                 let Some(folder) = folder_of(job.folder, base, |k| std::env::var_os(k)) else {
@@ -260,10 +283,20 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 };
                 tracing::info!(path = %path.display(), "screenshot written");
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                (ui::SAVED, ui::saved_body(&name.unwrap_or_default()))
+                (
+                    ui::SAVED,
+                    ui::saved_body(&name.unwrap_or_default()),
+                    Some(path),
+                )
             }
         };
-        if saved.send(Arc::from(png)).is_err() {
+        let taken = Taken {
+            png: Arc::from(png),
+            path,
+            size: (job.image.width, job.image.height),
+            picture: thumbnail_of(&job),
+        };
+        if saved.send(taken).is_err() {
             return;
         }
         let sent = zbus::block_on(async {
@@ -287,16 +320,37 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
     }
 }
 
+/// The thumbnail of the image of `job`, at the scale of its screen.
+fn thumbnail_of(job: &Job) -> Option<crate::picture::Picture> {
+    let screen = tool_ui::Rect::new(0.0, 0.0, 1.0e5, 1.0e5);
+    let size = (job.image.width, job.image.height);
+    let r = tool_ui::thumbnail(&screen, size, 0.0);
+    let px = |v: f64| (v * job.scale).round().max(1.0) as u32;
+    let radius = tool_ui::THUMBNAIL_RADIUS * job.scale as f32;
+    let border = (
+        job.border,
+        sherlock_ui::metrics::BORDER_WIDTH * job.scale as f32,
+    );
+    crate::picture::thumbnail(&job.image, (px(r.w), px(r.h)), radius, border, job.serial)
+}
+
 impl State {
     /// Takes the Print Screen key from now on. The real session calls it.
     pub fn enable_screenshots(&mut self, settings: Settings) {
         let (jobs, worker_jobs) = mpsc::channel();
         let (saved, pngs) = channel::channel();
-        let inserted = self.loop_handle.insert_source(pngs, |event, _, state| {
-            if let Event::Msg(png) = event {
-                state.copy_png(png);
-            }
-        });
+        let inserted = self
+            .loop_handle
+            .insert_source(pngs, |event: Event<Taken>, _, state| {
+                if let Event::Msg(taken) = event {
+                    state.copy_png(taken.png.clone());
+                    // The thumbnail, on the screen of the image (lot D-35e).
+                    let output = state.capture.thumbnail_outputs.pop_front().flatten();
+                    if let Some(output) = output.or_else(|| state.pointer_output()) {
+                        state.show_thumbnail(output, taken);
+                    }
+                }
+            });
         if let Err(err) = inserted {
             tracing::warn!("no screenshots: {err}");
             return;
@@ -340,37 +394,68 @@ impl State {
         match target {
             Some(target) => {
                 let options = Options::default();
-                self.take_with(&target, None, &options);
+                self.take_with(&target, None, &options, false);
             }
             None => tracing::info!(?kind, "screenshot: nothing to take"),
         }
     }
 
+    /// `target` drawn by the backend, without the cursor.
+    pub fn draw_target(&mut self, target: &Target) -> Option<Image> {
+        let Some(mut capturer) = self.capture.capturer.take() else {
+            tracing::warn!("screenshot: no renderer");
+            return None;
+        };
+        let image = capturer(self, target);
+        self.capture.capturer = Some(capturer);
+        image
+    }
+
     /// Draws `target`, cut to `crop`, and hands it to the worker with the choices of
-    /// `options`.
+    /// `options`; a window with its `shadow`.
     pub(crate) fn take_with(
         &mut self,
         target: &Target,
         crop: Option<Rectangle<i32, Physical>>,
         options: &Options,
+        shadow: bool,
     ) {
-        let Some(mut capturer) = self.capture.capturer.take() else {
-            tracing::warn!("screenshot: no renderer");
-            return;
+        let mut image = self.draw_target(target);
+        let output = match target {
+            Target::Screen(output) => Some(output.clone()),
+            Target::Window(window) => self.window_output(window),
         };
-        let image = capturer(self, target);
-        self.capture.capturer = Some(capturer);
+        let scale = output
+            .as_ref()
+            .map_or(1.0, |o| o.current_scale().fractional_scale());
+        // The cursor, where it is on that screen, when it is asked for (lot D-35e).
+        if let (Target::Screen(output), Some(image), true) = (target, &mut image, options.cursor)
+            && let (Some(screen), Some(pointer)) =
+                (self.space.output_geometry(output), self.seat.get_pointer())
+        {
+            let at = (pointer.current_location() - screen.loc.to_f64()).to_physical(scale);
+            let light = self.theme() == sherlock_ui::color::Theme::Light;
+            crate::picture::stamp_cursor(image, (at.x, at.y), scale, light);
+        }
         let image = match (image, crop) {
             (Some(image), Some(rect)) => image.crop(rect),
             (image, _) => image,
         };
         match (image, &self.capture.jobs) {
             (Some(image), Some(jobs)) => {
-                let _ = jobs.send(Job {
+                self.capture.serial += 1;
+                let job = Job {
                     image,
                     destination: options.destination,
                     folder: options.folder,
-                });
+                    shadow: (shadow && matches!(target, Target::Window(_))).then_some(scale),
+                    scale,
+                    border: sherlock_ui::color::palette().border,
+                    serial: self.capture.serial,
+                };
+                if jobs.send(job).is_ok() {
+                    self.capture.thumbnail_outputs.push_back(output);
+                }
             }
             (None, _) => tracing::warn!("screenshot: nothing drawn"),
             _ => {}
@@ -379,7 +464,7 @@ impl State {
 
     /// The console is left: the tool and its timer go, at once.
     pub(crate) fn cancel_area(&mut self) {
-        let open = self.capture.tool.take().is_some() || self.capture.pending.take().is_some();
+        let open = self.capture.tool.take().is_some() | self.capture.pending.take().is_some();
         if open {
             self.queue_redraw();
         }
