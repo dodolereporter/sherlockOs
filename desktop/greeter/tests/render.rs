@@ -95,8 +95,13 @@ mod tests {
         memory: Arc<FakeMemory>,
     }
 
-    /// Three users, the last one to log in being `invite`, on two screens of `size`.
+    /// Three users, the last one to log in being `invite`, on two screens of `size`; with the
+    /// pictures of the lock behind for the screenshots (slow to decode in a debug build).
     fn screen(size: (f32, f32)) -> Screen {
+        screen_with(size, false)
+    }
+
+    fn screen_with(size: (f32, f32), pictures: bool) -> Screen {
         let users = vec![
             user("dodo", Some("Dodo"), 1000),
             user("invite", Some("Invité"), 1001),
@@ -133,6 +138,19 @@ mod tests {
             hour: 8,
             minute: 12,
         });
+        if pictures {
+            show_pictures(&mut greeter, size);
+        }
+        greeter.set_now(Instant::now() + Duration::from_secs(3));
+        Screen {
+            greeter,
+            primary,
+            greetd,
+            memory: remember,
+        }
+    }
+
+    fn show_pictures(greeter: &mut Greeter, size: (f32, f32)) {
         let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/lock");
         let pixels = ((size.0 * 2.0) as u32, (size.1 * 2.0) as u32);
         let fitted = |name| lock::background::fitted(&assets.join(name), pixels).unwrap();
@@ -141,13 +159,6 @@ mod tests {
             light: fitted(lock::background::LIGHT),
         };
         let _ = greeter.update(Message::Background(pictures));
-        greeter.set_now(Instant::now() + Duration::from_secs(3));
-        Screen {
-            greeter,
-            primary,
-            greetd,
-            memory: remember,
-        }
     }
 
     fn snapshot(greeter: &Greeter, id: window::Id, size: (f32, f32), name: &str) -> PathBuf {
@@ -263,7 +274,35 @@ mod tests {
         assert!(matches!(s.greeter.phase(), Phase::Checking(_)));
     }
 
+    /// Two screenshots in the CI, whose time is counted: the rest in the dark theme at
+    /// 1920 × 1080, the error in the light one at 1366 × 768.
     #[test]
+    fn screenshots_at_rest_and_on_error() {
+        let mut s = screen_with((1920.0, 1080.0), true);
+        snapshot(
+            &s.greeter,
+            s.primary,
+            (1920.0, 1080.0),
+            "ci-rest-dark-1920x1080",
+        );
+        color::set_active(color::Theme::Light);
+        let size = (1366.0, 768.0);
+        s = screen_with(size, true);
+        let _ = s.greeter.update(Message::Typed(Secret::new("faux".into())));
+        let _ = s.greeter.update(Message::Submit);
+        let refused = Ok(Report {
+            outcome: Outcome::Refused,
+            notes: Vec::new(),
+        });
+        let _ = s.greeter.update(Message::LoggedIn(refused));
+        snapshot(&s.greeter, s.primary, size, "ci-error-light-1366x768");
+        color::set_active(color::Theme::Dark);
+    }
+
+    /// Every state, both themes, both sizes: 24 screenshots for the review, too slow for the
+    /// CI in a debug build.
+    #[test]
+    #[ignore = "screenshots for the review: cargo test -p greeter --test render -- --ignored"]
     fn screenshots_of_each_state() {
         let sizes = [(1920.0, 1080.0), (1366.0, 768.0)];
         let mut written = Vec::new();
@@ -275,7 +314,7 @@ mod tests {
             };
             for size in sizes {
                 let tag = format!("{name}-{}x{}", size.0, size.1);
-                let mut s = screen(size);
+                let mut s = screen_with(size, true);
                 written.push(snapshot(
                     &s.greeter,
                     s.primary,

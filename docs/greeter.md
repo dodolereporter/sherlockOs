@@ -131,9 +131,10 @@ forbidden names and the file replaced whole.
 selected with their session, the arrows go through the users and stay in the field once
 something is typed; the right password goes through Checking to Leaving, Sherlock happy, the
 user and session remembered; a wrong one shakes and keeps the user; greetd unreachable says so;
-« Autre… » asks for a name. It writes the screenshots to `target/tmp/greeter/`: at rest, a user
-being chosen and chosen, typing, the error, and « Autre… » with the other sessions, in the dark
-and the light theme, at 1920 × 1080 and 1366 × 768.
+« Autre… » asks for a name. It writes the screenshots to `target/tmp/greeter/`: two in the CI (at rest,
+dark, 1920 × 1080; the error, light, 1366 × 768), and with `-- --ignored` all of them: at rest,
+a user being chosen and chosen, typing, the error, and « Autre… » with the other sessions, in
+the dark and the light theme, at 1920 × 1080 and 1366 × 768.
 
 ```sh
 cargo test -p greeter
