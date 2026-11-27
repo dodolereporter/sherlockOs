@@ -2,6 +2,7 @@
 
 mod appearance;
 mod apps;
+mod clipboard;
 pub(crate) mod displays;
 mod lock;
 mod sound;

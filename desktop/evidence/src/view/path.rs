@@ -2,7 +2,7 @@
 //! place, the completion list, and the « Aller au dossier » sheet.
 
 use iced::widget::{
-    Column, Row, button, column, container, mouse_area, opaque, pin, row, scrollable, space, stack,
+    Column, Row, button, column, container, mouse_area, opaque, pin, row, space, stack,
 };
 use iced::{Alignment, Element, Length, Padding, mouse};
 
@@ -11,6 +11,7 @@ use sherlock_ui::component::{self as ui, Trailing};
 use sherlock_ui::ellipsis;
 use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::texts::evidence as t;
 use sherlock_ui::theme;
 use sherlock_ui::{color, metrics, typography};
@@ -182,8 +183,7 @@ impl App {
             }
         });
         let shown = (names.len() as f32).min(more::COMPLETION_ROWS);
-        let list =
-            scrollable(Column::with_children(rows)).height(shown * metrics::MENU_ITEM_HEIGHT);
+        let list = scroll(Column::with_children(rows)).height(shown * metrics::MENU_ITEM_HEIGHT);
         (list.into(), names.len())
     }
 
