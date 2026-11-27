@@ -598,8 +598,8 @@ mod tests {
         let w_rect = h.state.space.element_geometry(&wayland).unwrap();
         let x_rect = h.state.space.element_geometry(&x11).unwrap();
         assert!(w_rect.contains_rect(x_rect), "{w_rect:?} {x_rect:?}");
-        let beside = (w_rect.loc + (10, 10).into()).to_f64();
-        let over = (x_rect.loc + (100, 50).into()).to_f64();
+        let beside = (w_rect.loc + Point::<i32, Logical>::from((10, 10))).to_f64();
+        let over = (x_rect.loc + Point::<i32, Logical>::from((100, 50))).to_f64();
 
         // Dragged from the Wayland window onto the X11 one: it is offered the types, told the
         // position inside it, and reads the files once dropped.
@@ -772,8 +772,8 @@ mod tests {
         });
         let w_rect = h.state.space.element_geometry(&wayland).unwrap();
         let x_rect = h.state.space.element_geometry(&x11).unwrap();
-        let on_x11 = (x_rect.loc + (100, 50).into()).to_f64();
-        let on_wayland = (w_rect.loc + (10, 10).into()).to_f64();
+        let on_x11 = (x_rect.loc + Point::<i32, Logical>::from((100, 50))).to_f64();
+        let on_wayland = (w_rect.loc + Point::<i32, Logical>::from((10, 10))).to_f64();
 
         // Pressed in the X11 window, dragged out onto the Wayland one: the Wayland client is
         // offered the X11 types.
