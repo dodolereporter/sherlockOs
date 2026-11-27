@@ -1,7 +1,8 @@
 # ADR 0023: Security model of the session lock
 
 - Status: accepted (the author decided the two open questions on 2026-11-26, after the
-  security review of lot D-25a)
+  security review of lot D-25a); amended by lot D-24e (the frozen frame under the curtain,
+  proposed, waiting for the author's approval)
 - Date: 2026-11-26
 - Lot: D-25a
 
@@ -94,6 +95,37 @@ the policy to the compositor, and has two gaps for a strict use:
   `session_lock` must be read again against this ADR.
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the
   lock screen, plugging a screen in, switching console, going to sleep.
+
+## Amendment: the frozen frame under the curtain (lot D-24e, 2026-11-27, proposed)
+
+The author asked for a lock that comes like macOS's: no plain blue screen, the lock screen
+coming over the desktop. Point 1 and point 2 change as follows; nothing else does.
+
+- **When the session locks**, before anything else, the compositor draws each screen as it is
+  into a texture of its own (the frame the user sees at that moment), then locks. For
+  `CURTAIN` (400 ms, `sherlock_ui::lock`), each screen shows that frozen frame, and the curtain
+  (the picture of the lock screen, `desktop_config::lock_background`) coming down over it from
+  the top. The frozen frame is a still picture: no window, surface or buffer of a client is
+  drawn, nothing of it updates, and the input goes to the lock as before (point 3).
+- **Once the curtain is down**, the frozen frames are dropped (`refresh_curtain`): from then
+  on, a locked screen shows only its lock surface in front of the curtain, or the curtain
+  alone while the lock program has drawn nothing. A lock program slow to come, or one that
+  dies, leaves the curtain down; never the desktop, frozen or alive.
+- **`locked` is sent** only once every screen has shown a frame built with the curtain down
+  (`lock_frame_complete`): the frames of the descent do not count. The screens dark have
+  nothing to show: the curtain is down at once, nothing is frozen.
+- **Unlocked** (point 4 unchanged: only the lock that holds the session ends it), the
+  curtain goes up off the live desktop in `CURTAIN`: the desktop is drawn again only after
+  the unlock was accepted.
+
+What this costs: what was on the screens stays on them 400 ms longer, as a still picture under
+the curtain. It is what the user saw at the moment of locking, and it is never drawn again
+after the curtain is down; a screenshot taken in those 400 ms shows it too, as the screens do.
+The texture lives in the compositor's memory only, freed once the curtain is down.
+
+The tests: `tests/session_lock.rs` (the desktop frozen before the lock, the curtain only while
+it comes down, no `locked` before it is down, a slow lock program leaves it down, the desktop
+drawn again only once unlocked) and `tests/curtain.rs` (the board, drawn in software).
 
 ## What would change our mind
 

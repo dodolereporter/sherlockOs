@@ -2,8 +2,9 @@
 //! top and the dock rises from the bottom, on a spring, each from its first content, the dock
 //! `ARRIVAL_STAGGER` after the bar. The windows that open then fade in with their own
 //! opening (lot D-34). Only within `ARRIVAL_WINDOW` after the compositor started, so that a bar
-//! started again later shows at once; never on the login screen. A key or a click ends it at
-//! once. Tokens: `sherlock_ui::greeter`.
+//! started again later shows at once; never on the login screen. They wait for the curtain of the
+//! opening to be half gone (`curtain.rs`, lot D-24e). A key or a click ends it at once, the
+//! curtain with it. Tokens: `sherlock_ui::greeter`.
 
 use std::time::Duration;
 
@@ -86,6 +87,7 @@ impl State {
     /// A key or a click: everything is in place at once.
     pub(crate) fn end_arrival(&mut self) {
         self.arrival.ended = true;
+        self.end_curtain_opening();
     }
 
     /// Where the part named `namespace` stands at `now`; `None` once in place.
@@ -95,6 +97,7 @@ impl State {
             return None;
         }
         let shown = self.arrival.shown.iter().find(|s| s.0 == part)?.1;
+        let shown = shown.max(self.curtain_revealed(now));
         Some((part, progress(part, shown, now)?))
     }
 }

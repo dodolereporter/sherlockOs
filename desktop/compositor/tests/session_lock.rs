@@ -8,9 +8,11 @@
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::RefCell,
         ffi::OsString,
         fs::{File, OpenOptions},
         os::{fd::AsFd, unix::net::UnixStream},
+        rc::Rc,
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
     };
@@ -72,6 +74,7 @@ mod tests {
     const KEY_SPACE: u32 = 57 + 8;
     const KEY_TAB: u32 = 15 + 8;
     const KEY_ENTER: u32 = 28 + 8;
+    const KEY_ESC: u32 = 1 + 8;
     const BTN_LEFT: u32 = 0x110;
 
     /// What a client has received.
@@ -676,6 +679,137 @@ mod tests {
         assert!(!h.lock_surface_drawn());
     }
 
+    impl Harness {
+        /// Items of the curtain drawn now (lot D-24e): without its pictures, the tests draw it
+        /// plain.
+        fn curtain_items(&self) -> usize {
+            self.items()
+                .iter()
+                .filter(|item| {
+                    matches!(item, Item::Shape { key, .. } if matches!(key.part, Part::Curtain(_)))
+                })
+                .count()
+        }
+
+        /// Client `i` asks for the lock and a surface on the screen, without drawing it yet.
+        fn ask_lock(&mut self, i: usize) -> Locking {
+            let peer = &self.peers[i];
+            let (qh, seat) = (peer.qh(), peer.bind::<WlSeat>());
+            let _keyboard = seat.get_keyboard(&qh, ());
+            let output: WlOutput = peer.bind();
+            let _wm_base: XdgWmBase = peer.bind();
+            let manager: ExtSessionLockManagerV1 = peer.bind();
+            let lock = manager.lock(&qh, ());
+            let surface = peer.bind::<WlCompositor>().create_surface(&qh, ());
+            let _lock_surface = lock.get_lock_surface(&surface, &output, &qh, ());
+            self.run_until("the lock surface configured", |h| {
+                h.peers[i].seen.lock_size.is_some()
+            });
+            Locking { lock, surface }
+        }
+    }
+
+    /// The lock of lot D-24e (ADR 0023 amended): the last frame of the desktop is frozen while
+    /// the desktop is still drawn, then the curtain comes down over it, and nothing alive of
+    /// the desktop is drawn; the lock surface shows once the curtain is down, and `locked` is
+    /// sent only after a frame with it down.
+    #[test]
+    fn the_curtain_comes_down_over_the_frozen_desktop_then_the_lock_shows() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        // A freezer that remembers what it was asked to draw: the desktop, not locked yet.
+        let frozen = Rc::new(RefCell::new(Vec::new()));
+        let seen = frozen.clone();
+        h.state.set_freezer(Box::new(move |state, output| {
+            let (_, view) = state.views().remove(0);
+            let items = compositor::render::items(state, (output, &view), None, false, state.now());
+            let windows = items
+                .0
+                .iter()
+                .filter(|i| matches!(i, Item::Window { .. }))
+                .count();
+            seen.borrow_mut().push((state.is_locked(), windows));
+            None
+        }));
+        let locker = h.connect_program();
+        let locking = h.ask_lock(locker);
+        assert!(h.state.is_locked());
+        assert_eq!(
+            *frozen.borrow(),
+            [(false, 1)],
+            "the desktop, frozen before the lock"
+        );
+        h.peers[locker].show(&locking.surface, 800, 600);
+        h.settle();
+        let lowering = h.state.curtain_lowering(h.state.now());
+        assert!(lowering.is_some(), "the curtain still comes down");
+        // Coming down: the curtain only, over the frozen frame; no window, no lock surface.
+        assert_eq!(h.window_items(), 0);
+        assert!(h.drawn_surfaces().is_empty());
+        assert!(h.curtain_items() > 0);
+        // A frame shown now does not confirm the lock.
+        h.show_frame();
+        h.settle();
+        assert!(!h.peers[locker].seen.locked);
+        // Down: the lock surface in front of the curtain, and the frozen frame gone.
+        h.run_until("the lock surface shown", |h| h.lock_surface_drawn());
+        assert!(h.state.curtain_lowering(h.state.now()).is_none());
+        assert_eq!(h.state.frozen_frames(), 0);
+        assert!(h.curtain_items() > 0);
+        assert_eq!(h.window_items(), 0);
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+    }
+
+    /// A lock program slow to draw: the curtain stays down, alone, and nothing of the desktop
+    /// shows meanwhile.
+    #[test]
+    fn a_slow_lock_program_leaves_the_curtain_down() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let _locking = h.ask_lock(locker);
+        let end = std::time::Instant::now() + sherlock_ui::lock::CURTAIN * 3;
+        while std::time::Instant::now() < end {
+            h.settle();
+            assert_eq!(h.window_items(), 0);
+            assert!(h.drawn_surfaces().is_empty());
+            assert!(h.curtain_items() > 0);
+        }
+        assert!(h.state.curtain_lowering(h.state.now()).is_none());
+    }
+
+    /// Unlocked, the curtain goes up off the live desktop, which is drawn only once the unlock
+    /// was accepted.
+    #[test]
+    fn once_unlocked_the_curtain_goes_up_off_the_live_desktop() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        assert_eq!(h.window_items(), 0);
+        locking.lock.unlock_and_destroy();
+        h.run_until("unlocked", |h| !h.state.is_locked());
+        // Going up: the curtain in front of the desktop, drawn again.
+        assert_eq!(h.window_items(), 1);
+        let items = h.items();
+        let first = items.iter().position(
+            |i| matches!(i, Item::Shape { key, .. } if matches!(key.part, Part::Curtain(_))),
+        );
+        let window = items.iter().position(|i| matches!(i, Item::Window { .. }));
+        assert!(
+            first.unwrap() < window.unwrap(),
+            "the curtain in front of the window"
+        );
+        h.run_until("the curtain up", |h| h.curtain_items() == 0);
+        assert_eq!(h.window_items(), 1);
+    }
+
     #[test]
     fn a_killed_lock_client_leaves_the_session_locked_then_the_rescue_shows() {
         // The lock program never locks: three failures, then the rescue program, which is not
@@ -856,6 +990,10 @@ mod tests {
         for (surface, (w, h_)) in surfaces.iter().zip(h.peers[locker].seen.lock_sizes.clone()) {
             h.peers[locker].show(surface, w as i32, h_ as i32);
         }
+        // Once the curtain is down (lot D-24e).
+        h.run_until("the curtain down", |h| {
+            h.state.curtain_lowering(h.state.now()).is_none()
+        });
         h.settle();
         // Each screen draws one surface, its own, over the whole screen.
         for (output, view) in h.state.views() {
@@ -1170,6 +1308,10 @@ mod tests {
         let app = h.connect();
         h.show_window(app);
         h.chord(KEY_SUPER, KEY_L);
+        // Only a frame with the curtain down confirms the lock (lot D-24e).
+        h.run_until("the curtain down", |h| {
+            h.state.curtain_lowering(h.state.now()).is_none()
+        });
         h.show_frame();
         let pids = |mark: &std::path::Path| {
             std::fs::read_to_string(mark)
@@ -1595,7 +1737,8 @@ mod tests {
     }
 
     /// The real lock program (`LOCK_PROGRAM`, `target/debug/sherlockos-lock`), in software, on
-    /// this headless compositor: one key on the lock at rest brings the form (lot D-25g).
+    /// this headless compositor: the form comes with the lock; sent away, one key on the lock
+    /// at rest brings it back (lot D-25g).
     /// Ignored without the program: `cargo build -p lock` first.
     #[test]
     #[ignore = "needs the lock program built: LOCK_PROGRAM=target/debug/sherlockos-lock"]
@@ -1633,8 +1776,14 @@ mod tests {
             "{}",
             std::fs::read_to_string(&log).unwrap_or_default()
         );
-        // The lock at rest: its entrance played.
+        // The form came with the lock (lot D-24d): its entrance played, then Escape sends it
+        // away, and the lock is at rest.
         for _ in 0..200 {
+            frames(&mut h);
+            h.settle();
+        }
+        h.key(KEY_ESC);
+        for _ in 0..100 {
             frames(&mut h);
             h.settle();
         }

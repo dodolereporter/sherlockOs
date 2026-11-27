@@ -294,6 +294,21 @@ pub fn init(
         } = &mut *backend;
         crate::window_anim::snapshot(scene, renderer, state, window)
     }));
+    // The last frame of each screen when the session locks, frozen under the curtain (lot
+    // D-24e), drawn the same way.
+    let weak = Rc::downgrade(&backend);
+    state.set_freezer(Box::new(move |state, output| {
+        let backend = weak.upgrade()?;
+        let mut backend = backend.try_borrow_mut().ok()?;
+        let Backend {
+            scene,
+            renderer,
+            textures,
+            ..
+        } = &mut *backend;
+        let now = state.now();
+        crate::capture::screen_texture(scene, renderer, textures, state, output, now)
+    }));
     // Screenshots (lot D-35c), drawn the same way, between two frames. Not of the login
     // screen (`greeter.rs`).
     if !state.is_greeter() {
@@ -549,6 +564,8 @@ impl Backend {
                 tracing::warn!(connector = ?info.handle(), "screen not driven: {err}");
             }
         }
+        // The curtain, read once before the first frame (lot D-24e).
+        state.ensure_curtain();
         self.render_all(state);
     }
 
@@ -750,7 +767,8 @@ impl Backend {
         let started = Instant::now();
         let since = state.perf.start();
         let now = state.start_time.elapsed();
-        let locked = state.is_locked();
+        // Only a frame with the curtain down confirms the lock (lot D-24e).
+        let locked = state.lock_frame_complete();
         let preview = self.preview.frame(now, state.snap_preview());
         let screen = [(output.clone(), view)];
         let (mut screens, mut animating) = self.scene.screens(

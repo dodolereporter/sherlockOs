@@ -67,6 +67,11 @@ pub enum Part {
     ScreenOffHalo,
     /// The veil before the inactivity (lot D-38).
     IdleVeil,
+    /// The curtain (lot D-24e): its picture, light or dark, the black before and after it, and
+    /// the last frame of the desktop frozen under it while it comes down.
+    Curtain(bool),
+    CurtainBlack,
+    Frozen,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

@@ -45,6 +45,7 @@ use smithay::{
 use crate::{
     State,
     anim::Visual,
+    curtain,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
     genie, is_override_redirect, mission_control, osd,
@@ -79,6 +80,8 @@ pub struct Scene {
     labels: RefCell<mission_control::Labels>,
     /// Texture of the on-screen display of the media keys (lot D-35).
     osd: RefCell<osd::Texture>,
+    /// Textures of the curtain, the picture of the lock (lot D-24e).
+    curtain: RefCell<curtain::Textures>,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -163,7 +166,15 @@ pub enum Item {
         rect: Rectangle<i32, Physical>,
         alpha: f32,
     },
-    /// The last image of a window that closes, stretched into `rect` (lot D-34).
+    /// The picture of the lock, light or dark, covering `rect`: the curtain (lot D-24e).
+    Curtain {
+        key: Key,
+        rect: Rectangle<i32, Physical>,
+        light: bool,
+        alpha: f32,
+    },
+    /// The last image of a window that closes, stretched into `rect` (lot D-34); the last
+    /// frame of a screen, frozen under the curtain (lot D-24e).
     Snapshot {
         key: Key,
         texture: GlesTexture,
@@ -246,6 +257,7 @@ impl Scene {
             bars: RefCell::default(),
             labels: RefCell::default(),
             osd: RefCell::default(),
+            curtain: RefCell::default(),
         })
     }
 
@@ -268,6 +280,8 @@ impl Scene {
     ) -> (Vec<Vec<SceneElement>>, bool) {
         let mut animating = state.tick_theme();
         textures.update(renderer, &mut state.wallpaper);
+        state.curtain_frame(now);
+        self.curtain.borrow_mut().update(renderer, state);
         let mut screens = Vec::new();
         for (output, view) in views {
             let image = state.wallpaper.image_for(view.frame.size);
@@ -511,6 +525,26 @@ impl Scene {
                     }
                 }
             }
+            Item::Curtain {
+                key: _,
+                rect,
+                light,
+                alpha,
+            } => {
+                let textures = self.curtain.borrow();
+                let inside = View {
+                    frame: rect,
+                    ..*view
+                };
+                let cover = desktop_config::wallpaper::Mode::Cover;
+                textures
+                    .get(light)
+                    .map(|texture| {
+                        SceneElement::Wallpaper(wallpaper::element(texture, alpha, cover, &inside))
+                    })
+                    .into_iter()
+                    .collect()
+            }
             Item::Snapshot {
                 key,
                 texture,
@@ -575,10 +609,13 @@ fn screen_items(
 ) -> (Vec<Item>, bool) {
     // Locked: the lock surfaces only, or the plain background (lot D-25a).
     if state.is_locked() {
-        return crate::lock::items(state, (output, view));
+        return crate::lock::items(state, (output, view), now);
     }
     let mut items = Vec::new();
     let mut animating = preview.is_some();
+    // The curtain in front of the desktop: going up once unlocked, the opening of the session,
+    // the closing of the login screen (lot D-24e).
+    animating |= curtain::push_front(&mut items, state, view, now);
     let scale = view.scale as f32;
     // The area of a screenshot being chosen, then the on-screen display of the media keys, in
     // front of everything (lot D-35).
@@ -643,6 +680,12 @@ fn screen_items(
         (output, view),
         &[Layer::Bottom, Layer::Background],
     );
+    // The login screen shows the curtain, the picture of the lock, from its first frame: never
+    // the wallpaper of the desktop (lot D-24e).
+    if state.is_greeter() {
+        curtain::push(&mut items, state, view, 1.0, 1.0);
+        return (items, animating);
+    }
     // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
     // the frame, like the rest of the desktop.
     if wallpaper {

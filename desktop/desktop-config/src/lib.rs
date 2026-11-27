@@ -16,6 +16,10 @@ pub mod wallpaper;
 #[cfg(feature = "variants")]
 pub mod variants;
 
+/// The picture behind the lock and login screens, shared with the compositor's curtain.
+#[cfg(feature = "lock-background")]
+pub mod lock_background;
+
 /// Folder of the desktop in the XDG directories: `$XDG_CONFIG_HOME/<DIR>`,
 /// `$XDG_DATA_DIRS/<DIR>`: the name of the OS in paths (ADR 0022).
 pub const DIR: &str = "sherlockos";

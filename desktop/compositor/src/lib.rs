@@ -9,6 +9,7 @@ pub mod capture;
 pub mod card;
 pub mod clicks;
 pub mod cursor;
+pub mod curtain;
 pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
@@ -240,6 +241,8 @@ pub struct State {
     capture: capture::Capture,
     /// The session lock (lot D-25a, ADR 0023).
     lock: lock::SessionLock,
+    /// The picture of the lock between the login, the session and the lock (lot D-24e).
+    curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
     /// The screens off, like an old television (lot D-38).
@@ -388,6 +391,7 @@ impl State {
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
+            curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
             power: power::Power::new(&dh),
             loop_signal: event_loop.get_signal(),
@@ -699,6 +703,7 @@ impl State {
         self.end_minimize_effects();
         self.end_closings();
         self.end_clicks();
+        self.refresh_curtain();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;

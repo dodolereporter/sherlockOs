@@ -13,9 +13,16 @@
 //! - the screens still go off after the inactivity, after the veil (lot D-38), and the input
 //!   still has its watchdog;
 //! - the compositor stops with the greeter (`Options::stops_with_command`): greetd starts the
-//!   chosen session once its greeter has left, and starts the greeter again if it failed.
+//!   chosen session once its greeter has left, and starts the greeter again if it failed;
+//! - the background is the curtain, the picture of the lock, from the first frame; once the
+//!   greeter has left, it fades to black in `CURTAIN_BLACK`, then the compositor stops: the
+//!   session's compositor comes back from black to the same picture (`curtain.rs`, lot D-24e).
 
-use smithay::desktop::Window;
+use sherlock_ui::lock::CURTAIN_BLACK;
+use smithay::{
+    desktop::Window,
+    reexports::calloop::timer::{TimeoutAction, Timer},
+};
 
 use crate::State;
 
@@ -29,6 +36,21 @@ impl State {
         // that alone.
         self.set_idle_lock(None);
         tracing::info!("login screen: one program, fullscreen, no shortcut of the desktop");
+    }
+
+    /// The greeter has left: the curtain fades to black, then the compositor stops.
+    pub fn greeter_left(&mut self) {
+        tracing::info!("the greeter has left: fading to black, then stopping");
+        self.close_curtain();
+        let stop = self.loop_signal.clone();
+        let timer = Timer::from_duration(CURTAIN_BLACK);
+        let inserted = self.loop_handle.insert_source(timer, move |_, _, _| {
+            stop.stop();
+            TimeoutAction::Drop
+        });
+        if inserted.is_err() {
+            self.loop_signal.stop();
+        }
     }
 
     /// This compositor shows the login screen.

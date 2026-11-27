@@ -2258,6 +2258,18 @@ The compositor implements `ext-session-lock-v1` (smithay's `session_lock`, with 
 own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; colors and texts:
 `sherlock_ui::lock`.
 
+- **The curtain (lot D-24e, ADR 0023 amended, `src/curtain.rs`).** When the session locks, the
+  compositor first draws each screen as it is into a texture (the `Freezer` of the backend,
+  `capture::screen_texture`), then locks: for `CURTAIN` (400 ms) each screen shows that frozen
+  frame with the curtain, the picture of the lock screen (`desktop_config::lock_background`, the
+  one `sherlockos-lock` draws), coming down over it. Once it is down, the frozen frames are
+  dropped and the lock surface shows in front of the curtain; until the lock program has drawn,
+  the curtain alone. Only a frame built with the curtain down counts for `locked`
+  (`lock_frame_complete`). Once unlocked, the curtain goes up off the live desktop in 400 ms.
+  The pictures are read once, at start, for the largest screen; without them, the plain
+  background of the system screens. In a window (`--nested`), nothing is frozen: the curtain
+  comes down over the plain background.
+
 - **Locking.** Super + L locks the session at once, then starts the lock program,
   `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). The
   compositor opens the program's connection itself (a socket pair, one end handed over through
@@ -2429,8 +2441,15 @@ greetd starts `compositor --greeter -- sherlockos-greeter` as its `_greetd` user
   `_greetd` user's own `power.conf` (10 minutes by default), after the veil; a key, the pointer
   or a click brings them back and goes nowhere else. Super + Shift + Escape is not taken: it
   locks first, and there is nothing to lock.
-- **It stops with the greeter**, as with `--measure`: greetd starts the chosen session once its
-  greeter, this compositor, has left.
+- **The curtain is its background** (lot D-24e, `src/curtain.rs`): the picture of the lock
+  screen, from the first frame, never the wallpaper of the desktop; the greeter's own picture
+  fades in over the same one. Read for `_greetd` from the data folders
+  (`/usr/local/share/sherlockos/lock/`, installed by `just install-greeter`).
+- **It stops with the greeter**, as with `--measure`, once the curtain has faded to black
+  (`CURTAIN_BLACK`, 250 ms, `greeter_left`): greetd starts the chosen session once its greeter,
+  this compositor, has left. The screen goes black between the two compositors anyway (each
+  one holds the screens for itself, and the kernel turns them off when the first lets go), so
+  the black is reached by a fade, and left by one.
 - `--` ends the options, so that greetd's command line reads the same whatever the greeter's
   own options.
 
@@ -2440,13 +2459,16 @@ so when it asks to leave fullscreen; Super + Tab, Space, L and Right, F4 and Sup
 reach it, Mission Control does not open, nothing locks and the window is not snapped;
 `lock_session` does nothing; no shell socket is opened beside the Wayland socket; without input,
 the veil comes, then the screens go dark, nothing locks, and the key that wakes them does not
-reach the greeter.
+reach the greeter; the first frame is the curtain, without the wallpaper, and stays behind the
+greeter; once the greeter has left, it fades to black.
 
 ## Arrival of the desktop (lot D-24)
 
-Once the session opens, the bar slides down from above the screen and the dock rises from below
-it, on the spring of a window that opens, each from its first content, the dock 60 ms after the
-bar (`src/arrival.rs`, tokens in `sherlock_ui::greeter`). The movement is drawn by the
+Once the session opens, its first frame is black, as the login screen left it: the curtain, the
+picture of the lock screen, comes back from black in 250 ms, then fades out over the desktop in
+600 ms (`src/curtain.rs`, lot D-24e). Once it is half gone, the bar slides down from above the
+screen and the dock rises from below it, on the spring of a window that opens, each from its
+first content, the dock 60 ms after the bar (`src/arrival.rs`, tokens in `sherlock_ui::greeter`). The movement is drawn by the
 compositor (`push_layers`), which knows the surfaces of the shell by their layer-shell namespace
 (`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
 bar started again later shows at once, and never with `--greeter`. A key or a click puts
@@ -2455,7 +2477,9 @@ D-34). Not done yet: the wallpaper going from blurred at 1.05 to sharp at 1 (the
 no blur yet, lot D-37), and the windows of the last session reopened one by one.
 
 Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
-dock waits for its turn, and the travel of each.
+dock waits for its turn, and the travel of each. `tests/greeter.rs`: the session opens from
+black, through the curtain, to the desktop. `tests/curtain.rs` draws the boards of the opening
+(6 frames) and of the lock (8 frames) with Mesa's software renderer, in `target/tmp/curtain/`.
 
 ## Measuring
 

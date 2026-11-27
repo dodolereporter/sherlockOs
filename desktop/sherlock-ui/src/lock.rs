@@ -25,6 +25,14 @@ pub const RESCUE_GAP: f32 = 12.0;
 pub const CURTAIN: Duration = Duration::from_millis(400);
 pub const CURTAIN_EASE: Ease = Ease::OutCubic;
 
+/// Between two compositors (the login screen's, then the session's) the screen goes black: the
+/// curtain fades to black in `CURTAIN_BLACK` before the login screen's compositor stops, and
+/// comes back from black as long when the session's starts. Then it fades out over the desktop
+/// in `CURTAIN_REVEAL`, and the bar and the dock arrive (lot D-24e).
+pub const CURTAIN_BLACK: Duration = Duration::from_millis(250);
+pub const CURTAIN_REVEAL: Duration = Duration::from_millis(600);
+pub const CURTAIN_FADE_EASE: Ease = Ease::OutCubic;
+
 /// How far the curtain is down `elapsed` after it started to move, from 0 (up, out of the
 /// screen) to 1 (down, covering it): lowering when `down`, raising otherwise.
 pub fn curtain(elapsed: Duration, down: bool) -> f32 {
