@@ -1,9 +1,10 @@
-//! The icons of the dock: pinned applications with Sherlock in their middle, then, after a
-//! separator, the open applications that are not pinned.
+//! The icons of the dock: pinned applications and Sherlock, at its place among them or in their
+//! middle, then, after a separator, the open applications that are not pinned.
 
 use std::collections::HashMap;
 use std::path::Path;
 
+use dock_config::SHERLOCK;
 use iced::widget::svg;
 use sherlock_ui::app_icon::AppIcon;
 use sherlock_ui::dock;
@@ -17,7 +18,8 @@ use crate::windows::Windows;
 pub enum Kind {
     /// The button that opens the applications view (D-41), first, as on macOS.
     Applications,
-    /// Sherlock, in the middle of the pinned applications. It has no window to open yet.
+    /// Sherlock, at its place among the pinned applications (`dock_config::SHERLOCK`), or in
+    /// their middle. It has no window to open yet.
     Sherlock,
     App(Box<DesktopEntry>),
     /// Open windows whose application has no desktop entry: their `app_id`.
@@ -52,7 +54,7 @@ pub struct Item {
     pub kind: Kind,
     pub name: String,
     pub glyph: Glyph,
-    /// In the pinned list (Sherlock counts as pinned: it is always there).
+    /// In the pinned list (Sherlock and the « Applications » button count as pinned).
     pub pinned: bool,
 }
 
@@ -89,6 +91,16 @@ impl Item {
         }
     }
 
+    /// Its name in the pinned list: a desktop file id, or Sherlock's token. The « Applications »
+    /// button and the open applications have none.
+    pub fn pin_id(&self) -> Option<&str> {
+        match &self.kind {
+            Kind::App(entry) => Some(entry.id.as_str()),
+            Kind::Sherlock => Some(SHERLOCK),
+            Kind::Applications | Kind::Window(_) => None,
+        }
+    }
+
     pub fn entry(&self) -> Option<&DesktopEntry> {
         match &self.kind {
             Kind::App(entry) => Some(entry),
@@ -110,6 +122,8 @@ impl Item {
 pub struct Builder<'a> {
     /// The « Applications » button first.
     pub applications: bool,
+    /// Sherlock in the dock (`DockConfig::sherlock`).
+    pub sherlock: bool,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -118,8 +132,8 @@ pub struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    /// The « Applications » button, the icons for `pinned` with Sherlock in their middle, then
-    /// the open applications of `windows` that none of them owns,
+    /// The « Applications » button, the icons for `pinned` with Sherlock at its token, or in
+    /// their middle without one, then the open applications of `windows` that none of them owns,
     /// in the order their windows came. Returns them with the index of the first unpinned one,
     /// where the separator goes.
     pub fn build(
@@ -127,17 +141,22 @@ impl Builder<'_> {
         pinned: &[String],
         windows: Option<&Windows>,
     ) -> (Vec<Item>, Option<usize>) {
-        let mut items: Vec<Item> = pinned
-            .iter()
-            .filter_map(|id| match self.catalog.get(id) {
-                Some(entry) => Some(self.app(entry, true)),
-                None => {
-                    tracing::warn!(id, "pinned application not installed");
-                    None
-                }
-            })
-            .collect();
-        items.insert(items.len().div_ceil(2), Item::sherlock());
+        let mut sherlock = self.sherlock.then(Item::sherlock);
+        let mut items: Vec<Item> = Vec::with_capacity(pinned.len() + 1);
+        for id in pinned {
+            if id == SHERLOCK {
+                items.extend(sherlock.take());
+                continue;
+            }
+            match self.catalog.get(id) {
+                Some(entry) => items.push(self.app(entry, true)),
+                None => tracing::warn!(id, "pinned application not installed"),
+            }
+        }
+        // A list written before Sherlock could move: in the middle, as it was then.
+        if let Some(sherlock) = sherlock {
+            items.insert(items.len().div_ceil(2), sherlock);
+        }
         if self.applications {
             items.insert(0, Item::applications());
         }
@@ -186,6 +205,22 @@ impl Builder<'_> {
     }
 }
 
+/// Puts Sherlock's token in `pinned` where `shown` (the pinned icons in their order on screen,
+/// Sherlock's token among them) has it: before the application shown after it, or last. The
+/// applications that are not installed keep their places, and the order on screen does not
+/// change.
+pub fn place_sherlock(pinned: &mut Vec<String>, shown: &[&str]) {
+    pinned.retain(|p| p != SHERLOCK);
+    let next = shown
+        .iter()
+        .position(|p| *p == SHERLOCK)
+        .and_then(|at| shown.get(at + 1));
+    let at = next
+        .and_then(|next| pinned.iter().position(|p| p == next))
+        .unwrap_or(pinned.len());
+    pinned.insert(at, SHERLOCK.to_owned());
+}
+
 fn letter(name: &str) -> Glyph {
     Glyph::Letter(name.chars().next().map_or('?', |c| c.to_ascii_uppercase()))
 }
@@ -225,6 +260,7 @@ mod tests {
         let mut glyphs = HashMap::new();
         let mut builder = Builder {
             applications: true,
+            sherlock: true,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -257,7 +293,35 @@ mod tests {
         assert!(items[4..].iter().all(|i| !i.pinned));
         assert_eq!(items[5].kind, Kind::Window("mystery".to_owned()));
         assert!(matches!(items[5].glyph, Glyph::Letter('M')));
+        // At its token; out of the dock, the token is ignored.
+        let moved = ["sherlock".to_owned(), "org.example.Files".to_owned()];
+        assert_eq!(
+            names(&builder.build(&moved, None).0),
+            ["Applications", "Sherlock", "Fichiers"]
+        );
+        builder.sherlock = false;
+        assert_eq!(
+            names(&builder.build(&moved, None).0),
+            ["Applications", "Fichiers"]
+        );
+        assert_eq!(
+            names(&builder.build(&pinned, None).0),
+            ["Applications", "Fichiers", "Example Browser"]
+        );
         // Glyphs are looked up once per application.
         assert_eq!(glyphs.len(), 3);
+    }
+
+    #[test]
+    fn sherlock_is_written_where_it_is_shown() {
+        let list = |ids: &[&str]| -> Vec<String> { ids.iter().map(|i| (*i).to_owned()).collect() };
+        // `gone` is not installed: it is not shown, and stays where it is.
+        let mut pinned = list(&["a", "gone", "b", "c"]);
+        place_sherlock(&mut pinned, &["a", "sherlock", "b", "c"]);
+        assert_eq!(pinned, list(&["a", "gone", "sherlock", "b", "c"]));
+        place_sherlock(&mut pinned, &["a", "b", "c", "sherlock"]);
+        assert_eq!(pinned, list(&["a", "gone", "b", "c", "sherlock"]));
+        place_sherlock(&mut pinned, &["sherlock", "a", "b", "c"]);
+        assert_eq!(pinned, list(&["sherlock", "a", "gone", "b", "c"]));
     }
 }

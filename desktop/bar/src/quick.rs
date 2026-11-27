@@ -986,7 +986,13 @@ impl Quick {
             }
             Err(error) => {
                 tracing::error!(%error, "cannot run the session command");
-                let problem = Problem::Failed(error.to_string());
+                // logind or polkit said no: « Refusé » under the buttons.
+                let problem = match error {
+                    launcher::launch::LaunchError::Refused { .. } => {
+                        Problem::Refused(error.to_string())
+                    }
+                    _ => Problem::Failed(error.to_string()),
+                };
                 self.failure = Some((Service::Session, problem));
             }
         }
@@ -1044,14 +1050,18 @@ pub async fn changes() -> system::Result<BoxStream<'static, Service>> {
 
 /// The streams of `watch`, on `bus`.
 pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'static, Service>> {
-    let properties = |sender: &'static str| -> zbus::Result<zbus::MatchRule<'static>> {
-        Ok(zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .sender(sender)?
-            .interface("org.freedesktop.DBus.Properties")?
-            .member("PropertiesChanged")?
-            .build())
-    };
+    // The path keeps the services apart: zbus does not filter a well-known sender name on its
+    // side, and the system connection is shared (see `live::properties`).
+    let properties =
+        |sender: &'static str, namespace: &'static str| -> zbus::Result<zbus::MatchRule<'static>> {
+            Ok(zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(sender)?
+                .path_namespace(namespace)?
+                .interface("org.freedesktop.DBus.Properties")?
+                .member("PropertiesChanged")?
+                .build())
+        };
     let mut rules = vec![
         (
             zbus::MatchRule::builder()
@@ -1078,6 +1088,7 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
             zbus::MatchRule::builder()
                 .msg_type(zbus::message::Type::Signal)
                 .sender(network::SERVICE)?
+                .path_namespace(network::PATH)?
                 .interface("org.freedesktop.DBus.Properties")?
                 .member("PropertiesChanged")?
                 .arg(0, network::WIRELESS)?
@@ -1102,12 +1113,16 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
                 .build(),
             Service::Wifi,
         ),
-        (properties(bluetooth::SERVICE)?, Service::Bluetooth),
+        (
+            properties(bluetooth::SERVICE, bluetooth::PATH)?,
+            Service::Bluetooth,
+        ),
         // Devices found by a scan, and forgotten.
         (
             zbus::MatchRule::builder()
                 .msg_type(zbus::message::Type::Signal)
                 .sender(bluetooth::SERVICE)?
+                .path("/")?
                 .interface("org.freedesktop.DBus.ObjectManager")?
                 .member("InterfacesAdded")?
                 .build(),
@@ -1117,14 +1132,15 @@ pub async fn changes_on(bus: &zbus::Connection) -> system::Result<BoxStream<'sta
             zbus::MatchRule::builder()
                 .msg_type(zbus::message::Type::Signal)
                 .sender(bluetooth::SERVICE)?
+                .path("/")?
                 .interface("org.freedesktop.DBus.ObjectManager")?
                 .member("InterfacesRemoved")?
                 .build(),
             Service::Bluetooth,
         ),
     ];
-    for (name, _, _) in power::NAMES {
-        rules.push((properties(name)?, Service::Energy));
+    for (name, path, _) in power::NAMES {
+        rules.push((properties(name, path)?, Service::Energy));
     }
     // UPower tells of a change of the keyboard backlight, from a key or elsewhere.
     rules.push((

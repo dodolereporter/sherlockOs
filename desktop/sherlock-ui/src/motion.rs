@@ -254,6 +254,13 @@ pub const SPIN: Duration = Duration::from_millis(900);
 /// The positions of a turn of the loading indicator: one every 10°.
 pub const SPIN_STEPS: u32 = 36;
 
+/// Rows of a list moving to their new place, the panel holding them growing or shrinking, the
+/// selection sliding from one row to the next (lot P-02d): brisk, without overshoot, so that a
+/// row never passes its place nor the panel its height (ratio 0.97), settled in about 250 ms.
+pub const LIST_SPRING: Spring = Spring::new(520.0, 44.0);
+/// A row appearing in a list: it fades in while it slides down to its place.
+pub const LIST_APPEAR: Duration = Duration::from_millis(160);
+
 /// Scale of a window at the start of its opening.
 pub const OPEN_SCALE: f64 = 0.92;
 /// Fade of the snap preview appearing, and of hovers: the duration of a hover, in the 110 to
@@ -305,6 +312,27 @@ pub const MINIMIZE: Duration = Duration::from_millis(300);
 /// Scale of a window at the end of the minimize fallback, at the bottom of its screen.
 pub const MINIMIZE_SCALE: f64 = 0.2;
 
+/// Raise of a window that was partly hidden (lot D-19d): from the dock, the window switcher, a
+/// click, Mission Control or its application. The whole window grows from `RAISE_SCALE` to 1
+/// around its center on this spring (ratio 1.0: no visible bounce, settled in about 200 ms),
+/// and its shadow grows and softens from `RAISE_SHADOW` of its offset and blur to its own.
+pub const RAISE_SPRING: Spring = Spring::new(1000.0, 63.3);
+/// Scale of a raised window at the start of its raise.
+pub const RAISE_SCALE: f64 = 0.97;
+/// Share of the shadow's offset and blur at the start of a raise.
+pub const RAISE_SHADOW: f64 = 0.6;
+/// The windows a raised window now covers step back, then come back, over this duration: down
+/// to `RECEDE_SCALE` around their center at the middle, along `recede`.
+pub const RECEDE: Duration = Duration::from_millis(200);
+/// Scale of a window that steps back, at the middle of its step.
+pub const RECEDE_SCALE: f64 = 0.995;
+
+/// Share of the step back at the share of the time `t`, from 0 to 1: there and back, half a
+/// period of a sinusoid, level at both ends and 1 at the middle.
+pub fn recede(t: f32) -> f32 {
+    (std::f32::consts::PI * t.clamp(0.0, 1.0)).sin()
+}
+
 /// A fullscreen window covers the bar and the dock (lot D-21e). The pointer rests this long
 /// against an edge before the surfaces along it come back over the window, as on macOS: a
 /// pointer passing by, or aiming at the top of the window, does not bring them out.
@@ -324,6 +352,27 @@ pub const FRAME_RATE: u32 = 60;
 pub const GEOMETRY_PRECISION: f64 = 0.5;
 /// Precision below which an animated scale is settled.
 pub const SCALE_PRECISION: f64 = 0.001;
+
+/// The "Reduce motion" setting (UI-11): when on, what only decorates a change (a scrollbar
+/// that fades, widens or stretches at a limit) jumps to its end instead of moving. The
+/// desktop has no such setting yet: a program that reads one calls `set_reduced` at start-up
+/// and when it changes. Off by default.
+static REDUCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns "Reduce motion" on or off for the whole process.
+pub fn set_reduced(on: bool) {
+    REDUCED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether "Reduce motion" is on.
+pub fn reduced() -> bool {
+    REDUCED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `duration`, or nothing while "Reduce motion" is on.
+pub fn unless_reduced(duration: Duration) -> Duration {
+    if reduced() { Duration::ZERO } else { duration }
+}
 
 #[cfg(test)]
 mod tests {
@@ -410,6 +459,19 @@ mod tests {
         assert!(first_90 < 150, "90 % at {first_90} ms");
         let settled = values.iter().rposition(|v| (v - 1.0).abs() > 0.01).unwrap() + 1;
         assert!(settled < 300, "settled at {settled} ms");
+    }
+
+    #[test]
+    fn a_raised_window_settles_in_about_200_ms_without_a_bounce() {
+        let values = trajectory(RAISE_SPRING, 1000);
+        assert!(values.iter().all(|v| *v <= 1.0 + 1e-9), "no bounce");
+        // The scale is settled when it is within `SCALE_PRECISION` of 1.
+        let share = SCALE_PRECISION / (1.0 - RAISE_SCALE);
+        let settled = values.iter().rposition(|v| 1.0 - v > share).unwrap() + 1;
+        assert!((150..=230).contains(&settled), "settled at {settled} ms");
+        // The step back of the covered windows: there and back.
+        assert_eq!(recede(0.0), 0.0);
+        assert!(recede(1.0).abs() < 1e-6 && (recede(0.5) - 1.0).abs() < 1e-6);
     }
 
     #[test]

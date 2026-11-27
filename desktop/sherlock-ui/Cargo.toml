@@ -4,6 +4,7 @@ description = "Colors, radii, typography and components shared by the desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [features]
@@ -81,6 +82,10 @@ required-features = ["iced"]
 
 [[test]]
 name = "fade"
+required-features = ["iced"]
+
+[[test]]
+name = "scroll"
 required-features = ["iced"]
 
 # `apply` changes the process environment: one thread, so no libtest harness.

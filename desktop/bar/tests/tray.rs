@@ -169,6 +169,46 @@ mod tests {
         async fn new_status(emitter: &SignalEmitter<'_>, status: &str) -> zbus::Result<()>;
     }
 
+    /// The menu of the fake item, as libdbusmenu exports one.
+    struct FakeMenu {
+        seen: Seen,
+    }
+
+    fn entry(id: i32, label: &str) -> bar::dbusmenu::Node {
+        let properties = [(
+            String::from("label"),
+            zbus::zvariant::OwnedValue::try_from(zbus::zvariant::Value::from(label)).unwrap(),
+        )];
+        (id, properties.into_iter().collect(), Vec::new())
+    }
+
+    #[zbus::interface(name = "com.canonical.dbusmenu")]
+    impl FakeMenu {
+        fn get_layout(
+            &self,
+            _parent: i32,
+            _depth: i32,
+            _names: Vec<String>,
+        ) -> (u32, bar::dbusmenu::Node) {
+            let children = [entry(1, "Ouvrir"), entry(2, "Quitter")]
+                .into_iter()
+                .map(|c| {
+                    zbus::zvariant::OwnedValue::try_from(zbus::zvariant::Value::from(c)).unwrap()
+                })
+                .collect();
+            (3, (0, Default::default(), children))
+        }
+        fn about_to_show(&self, _id: i32) -> bool {
+            false
+        }
+        fn event(&self, id: i32, event: String, _data: zbus::zvariant::OwnedValue, _time: u32) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(format!("Event {id} {event}"));
+        }
+    }
+
     /// The fake application: its item at `/StatusNotifierItem` under a name of its own,
     /// registered with the watcher once there is one.
     struct Application {
@@ -187,6 +227,10 @@ mod tests {
             status: Arc::clone(&status),
         };
         zbus::block_on(connection.object_server().at(tray::ITEM_PATH, item)).unwrap();
+        let menu = FakeMenu {
+            seen: Arc::clone(&seen),
+        };
+        zbus::block_on(connection.object_server().at("/MenuBar", menu)).unwrap();
         let name = format!("org.kde.StatusNotifierItem-{}-{number}", std::process::id());
         zbus::block_on(connection.request_name(name.as_str())).unwrap();
         // The watcher may come a little later than the application, as at login.
@@ -291,11 +335,29 @@ mod tests {
         let wheel = iced::mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
         let scroll = Request::scroll(wheel).unwrap();
         zbus::block_on(scroll.send(&client, &service, &path)).unwrap();
-        assert_eq!(
-            app.seen.lock().unwrap()[1..],
-            [String::from("Scroll -120 vertical")]
-        );
+        assert_eq!(app.seen.lock().unwrap()[1], "Scroll -120 vertical");
         assert!(app.seen.lock().unwrap()[0].starts_with("Activate "));
+
+        // A right click opens its menu, read from the application, in the style of ours; a
+        // click on « Quitter » reaches it.
+        let _ = state.update(Message::ToggleTray);
+        let _ = state.update(Message::TrayClick(key.clone(), Click::Context));
+        let address = state.global.item.as_ref().unwrap().address.clone();
+        assert_eq!(
+            (address.service.as_str(), address.path.as_str()),
+            (app.name.as_str(), "/MenuBar")
+        );
+        let root = zbus::block_on(bar::dbusmenu::layout(&client, &address, 0)).unwrap();
+        let _ = state.update(Message::AppMenuRead(address.clone(), 0, Ok(root)));
+        assert!(state.app_menu_open());
+        let (menu, id) = state.picked(0, 1).unwrap();
+        let _ = state.update(Message::PickEntry(0, 1));
+        assert!(!state.app_menu_open() && !state.tray_open());
+        zbus::block_on(bar::dbusmenu::clicked(&client, &menu, id)).unwrap();
+        assert_eq!(
+            app.seen.lock().unwrap().last().map(String::as_str),
+            Some("Event 2 clicked")
+        );
 
         // It needs attention: heard, read again, and the chevron carries the dot.
         *app.status.lock().unwrap() = String::from("NeedsAttention");
@@ -490,10 +552,39 @@ mod tests {
                 active,
             ),
         ];
-        for item in items {
+        for mut item in items {
+            item.properties.menu = Some(String::from("/MenuBar"));
             let _ = state.update(Message::Tray(Event::Changed(Box::new(item))));
         }
+        // Sherlock kept in the bar (lot D-45a).
+        let _ = state.update(Message::Pins(vec![String::from("sherlock")]));
         state
+    }
+
+    /// The menu of the VPN, as its application would export it.
+    fn vpn_menu() -> bar::dbusmenu::Item {
+        let entry = |id: i32, label: &str| bar::dbusmenu::Item {
+            id,
+            label: label.to_owned(),
+            ..bar::dbusmenu::Item::default()
+        };
+        let children = vec![
+            bar::dbusmenu::Item {
+                toggle: bar::dbusmenu::Toggle::Check(true),
+                ..entry(1, "Connecté")
+            },
+            entry(2, "Se déconnecter"),
+            bar::dbusmenu::Item {
+                separator: true,
+                ..entry(3, "")
+            },
+            entry(4, "Réglages du VPN…"),
+            entry(5, "Quitter"),
+        ];
+        bar::dbusmenu::Item {
+            children,
+            ..entry(0, "")
+        }
     }
 
     /// Renders `view` at `size`, returns the image.
@@ -548,8 +639,22 @@ mod tests {
         let x = bar_x + state.tray_left() as i64;
         let y = bar_y + metrics::TOP_BAR_HEIGHT as i64;
         image::imageops::overlay(&mut out, &popup, x * scale, y * scale);
+        let mut bottom = y + i64::from(state.tray.size.1) + 24;
+        // An icon's menu, under its cell in the popup (software: the gap above it).
+        let anchor = state.global.item.as_ref().map(|m| m.anchor);
+        if let (Some(level), Some(bar::global_menu::Anchor::Popup(_, ax, ay))) =
+            (state.global.levels.first(), anchor)
+        {
+            let menu = render(state.view(level.popup), level.size, &format!("{name}-menu"));
+            let margins = bar::global_menu::margins(false, false);
+            let (mx, my) = (
+                x + (ax - margins.left) as i64,
+                y + (ay - margins.top) as i64,
+            );
+            image::imageops::overlay(&mut out, &menu, mx * scale, my * scale);
+            bottom = bottom.max(my + i64::from(level.size.1) + 24);
+        }
         // The right half of the screen, down to under the popup.
-        let bottom = y + i64::from(state.tray.size.1) + 24;
         let left = (i64::from(width) / 2) * scale;
         let cut = (bottom * scale).min(i64::from(out.height())) as u32;
         let out = image::imageops::crop_imm(&out, left as u32, 0, out.width() - left as u32, cut)
@@ -579,7 +684,7 @@ mod tests {
                 let _ = state.update(Message::Frame(later));
                 assert!(!state.animating());
                 // Under the chevron, within the bar.
-                let (left, popup) = (state.tray_left(), sherlock_ui::tray::width(6));
+                let (left, popup) = (state.tray_left(), sherlock_ui::tray::width(5));
                 assert!(left <= chevron.center_x() && chevron.center_x() <= left + popup);
                 assert!(left + popup <= bar_size.0 as f32);
                 let _ = state.update(Message::TrayHover(Some(String::from(
@@ -590,6 +695,15 @@ mod tests {
                     (width, height),
                     &format!("tray-{width}{suffix}"),
                 );
+                assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
+                // The VPN's menu, on a right click (lot D-45a).
+                let vpn = String::from(":1.2/StatusNotifierItem");
+                let _ = state.update(Message::TrayClick(vpn, Click::Context));
+                let address = state.global.item.as_ref().unwrap().address.clone();
+                let _ = state.update(Message::AppMenuRead(address, 0, Ok(vpn_menu())));
+                let _ = state.update(Message::HoverEntry(0, 1));
+                let name = format!("tray-menu-{width}{suffix}");
+                let path = screen(&mut state, (width, height), &name);
                 assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
             }
         }
