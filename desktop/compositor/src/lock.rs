@@ -20,6 +20,16 @@
 //! within `PING_TIMEOUT`, it is killed and started again, and after `CLIENT_ATTEMPTS` the rescue
 //! mode follows. The log is written to disk at each lock and unlock, and every `LOG_SYNC` while
 //! locked, so that its end survives a forced restart.
+//!
+//! A lock program that is slow is not a dead one (lot D-25h): under load, the program took 3 s
+//! to start and its scene stalled for 1.9 s, and the checks of D-25f and D-25g replaced it in a
+//! loop. So the times are counted on a clock of the watch that stops while the console is away
+//! and does not count the compositor's own stalls; before its first image, a program is only
+//! judged on that first image (`FIRST_IMAGE_TIMEOUT`), never on a key typed too early; after
+//! it, on its pings and, for the normal mode only, on showing what is typed, within a time that
+//! grows with its slowest answer so far. Each program replaced doubles the patience of the next
+//! one and the pause before it; the number of programs stays bounded, and the session stays
+//! locked throughout.
 
 use std::{
     ffi::OsString,
@@ -91,19 +101,35 @@ pub const CLIENT_ATTEMPTS: u32 = 3;
 pub const RESCUE_ATTEMPTS: u32 = 3;
 /// The argument of the rescue mode of the lock program.
 pub const RESCUE_ARGUMENT: &str = "--rescue";
-/// Time a lock program has to take the lock before it counts as a failure.
+/// Time a lock program has to take the lock before it counts as a failure, times its
+/// `patience`.
 pub const START_TIMEOUT: Duration = Duration::from_secs(10);
-/// Pause before starting a lock program again.
+/// Time a lock program holding the lock has to present its first image, times its `patience`
+/// (lot D-25h). Before that image, neither a key nor a ping can have it replaced.
+pub const FIRST_IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Pause before starting a lock program again, doubled at each program replaced since the lock
+/// (lot D-25h), up to `MAX_RELAUNCH_DELAY`.
 pub const RELAUNCH_DELAY: Duration = Duration::from_millis(500);
+/// The longest pause before starting a lock program again.
+pub const MAX_RELAUNCH_DELAY: Duration = Duration::from_secs(8);
+/// The patience doubles at most this many times.
+const MAX_PATIENCE_SHIFT: u32 = 3;
+/// The most a turn of the watch counts for: a longer turn is a stall of the compositor itself,
+/// during which the lock program could not be seen (lot D-25h).
+const MAX_STEP: Duration = Duration::from_millis(300);
 /// How often the lock program is checked on while the session is locked.
 const WATCH: Duration = Duration::from_millis(100);
 /// Time the lock program has to answer a ping sent after an input, before it counts as hung
-/// (lot D-25f).
+/// (lot D-25f), times its `patience`. Only once it presented its first image.
 pub const PING_TIMEOUT: Duration = Duration::from_secs(5);
 /// At most one ping in this time: input comes in bursts.
 const PING_EVERY: Duration = Duration::from_secs(1);
-/// Time the lock program has to present an image after a key that types (lot D-25g).
-pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Time the lock program has to present an image after a key that types (lot D-25g), at
+/// least: four times its slowest answer so far, times its `patience`, up to
+/// `MAX_IMAGE_TIMEOUT` (lot D-25h). Only in the normal mode, once its first image is shown.
+pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(6);
+/// The longest time the lock program has to present an image after a key.
+pub const MAX_IMAGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the log is written to disk while locked.
 pub const LOG_SYNC: Duration = Duration::from_secs(5);
 
@@ -113,6 +139,32 @@ pub struct Programs {
     pub client: Vec<OsString>,
     pub rescue: Option<Vec<OsString>>,
     pub swaylock: Option<Vec<OsString>>,
+}
+
+/// How many times more time the lock program started `attempts`-th since the lock (from 1) gets
+/// than the first one: doubled at each program replaced, up to 8 (lot D-25h).
+pub fn patience(attempts: u32) -> u32 {
+    1 << attempts.saturating_sub(1).min(MAX_PATIENCE_SHIFT)
+}
+
+/// The pause before the next lock program, once `attempts` were started since the lock: 0.5 s,
+/// then 1, 2, 4 and 8 s at most (lot D-25h).
+pub fn relaunch_delay(attempts: u32) -> Duration {
+    let shift = attempts.saturating_sub(1).min(5);
+    (RELAUNCH_DELAY * (1 << shift)).min(MAX_RELAUNCH_DELAY)
+}
+
+/// Why a lock program is replaced (lot D-25h): it is dead to the user, not merely slow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// No lock taken in time.
+    NoLock,
+    /// The lock held, and no image presented in time.
+    NoFirstImage,
+    /// A ping not answered in time: its event loop is stuck.
+    Silent,
+    /// It answers, but shows nothing long after a key that types.
+    Blind,
 }
 
 /// What shows the lock screen now.
@@ -203,7 +255,8 @@ pub(crate) struct SessionLock {
     attempts: u32,
     /// What was started last.
     stage: Stage,
-    child: Option<(Child, Instant)>,
+    /// The program started, and when, on `clock`.
+    child: Option<(Child, Duration)>,
     next_launch: Option<Instant>,
     /// Every lock program failed: the compositor draws the rescue screen.
     rescue_screen: bool,
@@ -214,15 +267,30 @@ pub(crate) struct SessionLock {
     binding: Option<ClientId>,
     /// The shell client of the lock program: what the pings go to.
     shell: Option<ShellClient>,
-    /// A ping sent and not answered yet, since then; the last ping sent.
-    ping: Option<Instant>,
+    /// A ping sent and not answered yet, since then (on `clock`); the last ping sent.
+    ping: Option<Duration>,
     pinged: Option<Instant>,
     ping_timeout: Duration,
     /// The last time the log was written to disk.
     synced: Option<Instant>,
-    /// A key that types went to the lock program, since then, and no image came after it.
-    waiting_image: Option<Instant>,
+    /// A key that types went to the lock program, since then (on `clock`), and no image came
+    /// after it.
+    waiting_image: Option<Duration>,
     image_timeout: Duration,
+    first_image_timeout: Duration,
+    /// The time counted against the lock programs since the lock (lot D-25h): the watch's
+    /// turns, each `MAX_STEP` at most, none while the console is away.
+    clock: Duration,
+    /// The last turn of the watch.
+    ticked: Option<Instant>,
+    /// The console is away: the program can neither be seen nor draw.
+    away: bool,
+    /// The lock of the program that holds the session was accepted then, on `clock`.
+    accepted: Option<Duration>,
+    /// The program holding the lock presented an image on a lock surface.
+    presented: bool,
+    /// Its slowest image after a key so far.
+    slowest: Duration,
     /// The first input while locked was logged.
     input_logged: bool,
 }
@@ -253,6 +321,13 @@ impl SessionLock {
             synced: None,
             waiting_image: None,
             image_timeout: IMAGE_TIMEOUT,
+            first_image_timeout: FIRST_IMAGE_TIMEOUT,
+            clock: Duration::ZERO,
+            ticked: None,
+            away: false,
+            accepted: None,
+            presented: false,
+            slowest: Duration::ZERO,
             input_logged: false,
         }
     }
@@ -298,6 +373,23 @@ impl State {
         self.lock.image_timeout = timeout;
     }
 
+    /// Replaces the time a lock program holding the lock has to present its first image (the
+    /// tests).
+    pub fn set_lock_first_image_timeout(&mut self, timeout: Duration) {
+        self.lock.first_image_timeout = timeout;
+    }
+
+    /// The console was left, or came back: while away, no time counts against the lock
+    /// program, which can neither be seen nor draw (lot D-25h).
+    pub fn set_lock_console_away(&mut self, away: bool) {
+        self.lock.away = away;
+    }
+
+    /// The lock program holding the lock presented an image (lot D-25h).
+    pub fn lock_program_presented(&self) -> bool {
+        self.lock.owner.is_some() && self.lock.presented
+    }
+
     /// An input while locked (lot D-25g): the keyboard goes back to the lock surface of the
     /// screen if anything took it, the first one is logged with the surface that has the
     /// keyboard, and after a key that types, the lock program must present an image.
@@ -315,22 +407,33 @@ impl State {
             let surface = self.keyboard_focus().map(|s| s.id());
             tracing::info!(?surface, "first input delivered while locked");
         }
-        if types && self.lock.owner.is_some() && self.lock.waiting_image.is_none() {
-            self.lock.waiting_image = Some(Instant::now());
+        // A key before the first image is not awaited: the program shows the form with that
+        // first image, whenever it comes (lot D-25h).
+        let lock = &mut self.lock;
+        if types && lock.owner.is_some() && lock.presented && lock.waiting_image.is_none() {
+            lock.waiting_image = Some(lock.clock);
         }
         self.ping_lock_program();
     }
 
-    /// A surface committed: a lock surface with a new image ends the wait for one.
+    /// A surface committed: a lock surface with a new image ends the wait for one; its first
+    /// image ends the start of the program.
     pub(crate) fn lock_surface_committed(&mut self, surface: &WlSurface) {
-        if self.lock.waiting_image.is_some()
-            && self
-                .lock
-                .surfaces
-                .iter()
-                .any(|s| s.surface.wl_surface() == surface)
+        let lock = &mut self.lock;
+        if !lock
+            .surfaces
+            .iter()
+            .any(|s| s.surface.wl_surface() == surface)
         {
-            self.lock.waiting_image = None;
+            return;
+        }
+        if let Some(since) = lock.waiting_image.take() {
+            lock.slowest = lock.slowest.max(lock.clock.saturating_sub(since));
+        }
+        if !lock.presented && has_content(surface) {
+            lock.presented = true;
+            let after = lock.accepted.map(|at| lock.clock.saturating_sub(at));
+            tracing::info!(?after, "the lock program presented its first image");
         }
     }
 
@@ -379,10 +482,9 @@ impl State {
         let Some(shell) = lock.shell.as_ref().filter(|s| s.alive()) else {
             return;
         };
-        let now = Instant::now();
-        lock.pinged = Some(now);
+        lock.pinged = Some(Instant::now());
         match shell.send_ping(SERIAL_COUNTER.next_serial()) {
-            Ok(()) => lock.ping = Some(now),
+            Ok(()) => lock.ping = Some(lock.clock),
             Err(err) => tracing::debug!("lock program: no ping: {err:?}"),
         }
     }
@@ -438,6 +540,7 @@ impl State {
         self.sync_log();
         (self.lock.input_logged, self.lock.waiting_image) = (false, None);
         let lock = &mut self.lock;
+        (lock.clock, lock.ticked) = (Duration::ZERO, Some(Instant::now()));
         (lock.locked, lock.rescue_screen) = (true, false);
         lock.shown.clear();
         // Nothing started before keeps the input: gestures, menus, the area of a screenshot.
@@ -542,7 +645,7 @@ impl State {
             Ok(pair) => pair,
             Err(err) => {
                 tracing::warn!("lock program: no socket: {err}");
-                self.lock_program_failed();
+                self.lock_program_failed(false);
                 return;
             }
         };
@@ -569,25 +672,31 @@ impl State {
         match spawned {
             Ok(child) => {
                 tracing::info!(program = ?program, pid = child.id(), "lock program started");
-                self.lock.child = Some((child, Instant::now()));
+                self.lock.child = Some((child, self.lock.clock));
             }
             Err(err) => {
                 tracing::warn!(program = ?program, "lock program: {err}");
-                self.lock_program_failed();
+                self.lock_program_failed(false);
             }
         }
     }
 
     /// The lock program died, gave up its lock, or did not lock in time: the next one is
-    /// started after a pause. The session stays locked.
-    fn lock_program_failed(&mut self) {
+    /// started after a pause, longer at each failure (`backoff`; not for a program that could
+    /// not even be started). The session stays locked.
+    fn lock_program_failed(&mut self, backoff: bool) {
         if let Some((mut child, _)) = self.lock.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
         self.forget_lock_program();
         if self.lock.locked && self.lock.owner.is_none() {
-            self.lock.next_launch = Some(Instant::now() + RELAUNCH_DELAY);
+            let delay = match backoff {
+                true => relaunch_delay(self.lock.attempts),
+                false => RELAUNCH_DELAY,
+            };
+            tracing::info!(?delay, attempts = self.lock.attempts, "next lock program");
+            self.lock.next_launch = Some(Instant::now() + delay);
         }
     }
 
@@ -596,6 +705,8 @@ impl State {
     fn forget_lock_program(&mut self) {
         (self.lock.shell, self.lock.ping) = (None, None);
         self.lock.waiting_image = None;
+        (self.lock.accepted, self.lock.presented) = (None, false);
+        self.lock.slowest = Duration::ZERO;
         if let Some(id) = self.lock.program.take() {
             self.display_handle
                 .backend_handle()
@@ -613,26 +724,19 @@ impl State {
         if self.lock.synced.is_none_or(|at| at.elapsed() >= LOG_SYNC) {
             self.sync_log();
         }
-        let silent = self
-            .lock
-            .ping
-            .is_some_and(|at| at.elapsed() > self.lock.ping_timeout);
-        let blind = self
-            .lock
-            .waiting_image
-            .is_some_and(|at| at.elapsed() > self.lock.image_timeout);
-        if silent || blind {
+        self.tick_lock_clock();
+        if let Some(fault) = self.lock_fault() {
             tracing::warn!(
-                silent,
-                blind,
-                "the lock program does not answer, or shows nothing after a key: killed, the \
-                 session stays locked"
+                ?fault,
+                attempts = self.lock.attempts,
+                stage = ?self.lock.stage,
+                "the lock program is dead to the user: killed, the session stays locked"
             );
             self.sync_log();
             // As if its lock went without an unlock, without waiting for the connection's end.
             (self.lock.owner, self.lock.confirm) = (None, None);
             self.lock.surfaces.clear();
-            self.lock_program_failed();
+            self.lock_program_failed(true);
             self.set_keyboard_focus(None);
             self.queue_redraw();
         }
@@ -642,16 +746,20 @@ impl State {
                 Ok(Some(status)) if !owned => {
                     tracing::warn!(%status, "lock program ended without a lock");
                     self.lock.child = None;
-                    self.lock_program_failed();
+                    self.lock_program_failed(true);
                 }
                 Ok(Some(status)) => {
                     tracing::info!(%status, "lock program ended");
                     self.lock.child = None;
                     self.forget_lock_program();
                 }
-                Ok(None) if !owned && started.elapsed() > START_TIMEOUT => {
-                    tracing::warn!("lock program: no lock after {START_TIMEOUT:?}");
-                    self.lock_program_failed();
+                Ok(None)
+                    if !owned
+                        && self.lock.clock.saturating_sub(*started)
+                            > START_TIMEOUT * patience(self.lock.attempts) =>
+                {
+                    tracing::warn!(fault = ?Fault::NoLock, "lock program: no lock in time");
+                    self.lock_program_failed(true);
                 }
                 Ok(None) => {}
                 Err(err) => tracing::warn!("lock program: {err}"),
@@ -663,6 +771,50 @@ impl State {
             self.launch_lock_program();
         }
         TimeoutAction::ToDuration(WATCH)
+    }
+
+    /// Advances the clock of the lock programs by the turn of the watch just ended, without the
+    /// compositor's own stalls nor the time the console was away (lot D-25h).
+    fn tick_lock_clock(&mut self) {
+        let lock = &mut self.lock;
+        let now = Instant::now();
+        let step = lock
+            .ticked
+            .replace(now)
+            .map_or(Duration::ZERO, |at| now - at);
+        if step > Duration::from_secs(1) {
+            tracing::info!(
+                ?step,
+                "the compositor stalled: not counted against the lock program"
+            );
+        }
+        if !lock.away {
+            lock.clock += step.min(MAX_STEP);
+        }
+    }
+
+    /// Why the lock program holding the lock is replaced, if it is dead to the user, not merely
+    /// slow (lot D-25h). Before its first image, only that first image counts; after it, its
+    /// pings, and in the normal mode what it shows after a key that types.
+    fn lock_fault(&self) -> Option<Fault> {
+        let lock = &self.lock;
+        lock.owner.as_ref()?;
+        let waited = |since: Option<Duration>| since.map(|at| lock.clock.saturating_sub(at));
+        let patience = patience(lock.attempts);
+        if !lock.presented {
+            let late =
+                waited(lock.accepted).is_some_and(|w| w > lock.first_image_timeout * patience);
+            return late.then_some(Fault::NoFirstImage);
+        }
+        if waited(lock.ping).is_some_and(|w| w > lock.ping_timeout * patience) {
+            return Some(Fault::Silent);
+        }
+        let timeout = (lock.image_timeout.max(lock.slowest * 4) * patience).min(MAX_IMAGE_TIMEOUT);
+        // The rescue mode and `swaylock` are never judged on what they show: the rescue must
+        // stay usable on a machine that crawls.
+        let blind =
+            lock.stage == Stage::Client && waited(lock.waiting_image).is_some_and(|w| w > timeout);
+        blind.then_some(Fault::Blind)
     }
 
     /// Asks for the log to be written to disk.
@@ -690,7 +842,7 @@ impl State {
         (self.lock.owner, self.lock.confirm) = (None, None);
         // Its surfaces go with it, alive or not: none is drawn nor gets the keyboard any more.
         self.lock.surfaces.clear();
-        self.lock_program_failed();
+        self.lock_program_failed(true);
         self.set_keyboard_focus(None);
         self.queue_redraw();
     }
@@ -768,6 +920,8 @@ impl State {
             self.enter_lock();
         }
         self.lock.rescue_screen = false;
+        (self.lock.accepted, self.lock.presented) = (Some(self.lock.clock), false);
+        (self.lock.waiting_image, self.lock.slowest) = (None, Duration::ZERO);
         self.lock.owner = Some(lock);
         self.lock.confirm = Some(locker);
         self.confirm_lock();
@@ -978,6 +1132,20 @@ mod tests {
         let swaylock = Programs::of(with_path).swaylock.unwrap();
         assert_eq!(swaylock[0], dir.join("swaylock").into_os_string());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn each_program_replaced_doubles_the_patience_and_the_pause_up_to_a_bound() {
+        let patience: Vec<_> = (0..9).map(patience).collect();
+        assert_eq!(patience, [1, 1, 2, 4, 8, 8, 8, 8, 8]);
+        let delays: Vec<_> = (0..9).map(|n| relaunch_delay(n).as_millis()).collect();
+        assert_eq!(delays, [500, 500, 1000, 2000, 4000, 8000, 8000, 8000, 8000]);
+        // Every program, from the first try to `swaylock`, waits in all less than a minute
+        // before the compositor's screen.
+        let total: Duration = (1..=CLIENT_ATTEMPTS + RESCUE_ATTEMPTS + 1)
+            .map(relaunch_delay)
+            .sum();
+        assert!(total < Duration::from_secs(60), "{total:?}");
     }
 
     #[test]

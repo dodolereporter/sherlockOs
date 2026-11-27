@@ -2296,9 +2296,10 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   was sent; any other is the `invalid_unlock` protocol error. A second lock is refused
   (`finished`).
 - **When the lock program dies.** The session stays locked on the background. The program is
-  started again after 500 ms, on a new connection; the dead program's is forgotten. A lock
+  started again after 500 ms, then 1, 2, 4 and 8 s at most for each program replaced since the
+  lock (lot D-25h), on a new connection; the dead program's is forgotten. A lock
   given up before `locked` takes its surfaces with it. A program that ends without locking, or
-  does not lock within 10 seconds, is a failure. After 3 failures, the same program in its
+  does not lock within 10 seconds (times its patience, below), is a failure. After 3 failures, the same program in its
   rescue mode, `sherlockos-lock --rescue` (lot D-25c: a plain password field checked by PAM, in
   software, without Sherlock nor background), started the same way, on a connection the
   compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
@@ -2306,7 +2307,7 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
 - **When the lock program hangs** (lot D-25f). A key or a click while locked pings the program
   that holds the lock (`xdg_wm_base.ping`, at most once a second): its event loop answers. Without
-  an answer within 5 s (`PING_TIMEOUT`), it is killed: its lock goes without an unlock, so the
+  an answer within 5 s (`PING_TIMEOUT`, times its patience, below), it is killed: its lock goes without an unlock, so the
   session stays locked and the next program starts, as when it dies; after 3 such failures, the
   rescue mode. The compositor knows the program's shell client from the binding of
   `xdg_wm_base` on the connection it opened. A program that never binds it (`swaylock`) is not
@@ -2321,7 +2322,27 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   to the lock surface of the screen if anything took it (logged), and the first one is logged
   with the surface that has the keyboard. After a key that types (a key of the main block or of
   the keypad, without Ctrl, Alt nor the logo key), the lock program must present an image within
-  3 s (`IMAGE_TIMEOUT`), or it is replaced like a program that does not answer its pings.
+  6 s (`IMAGE_TIMEOUT`, lot D-25h), or it is replaced like a program that does not answer its
+  pings.
+- **Slow is not dead** (lot D-25h). On 27/11 at 14:17, under load, a key came before the lock
+  program had shown anything, the program took 3 s to start and its scene stalled for 1.9 s:
+  the check above replaced it again and again, down to the plain background. Now:
+  - the times are counted on the clock of the watch (every 100 ms), which counts a turn for
+    300 ms at most (`MAX_STEP`: a longer one is a stall of the compositor itself, logged beyond
+    1 s) and stops while the console is away;
+  - before its first image on a lock surface, a program holding the lock is judged on that
+    image only: 20 s (`FIRST_IMAGE_TIMEOUT`); a key typed before it is not awaited, and an
+    unanswered ping does not count;
+  - after it, an unanswered ping (`PING_TIMEOUT`), and in the normal mode only, a key that
+    types with no image after it for 6 s or four times its slowest image so far, 30 s at most
+    (`MAX_IMAGE_TIMEOUT`). The rescue mode and `swaylock` are never judged on what they show;
+  - every time is multiplied by the program's patience: 1 for the first program since the lock,
+    then 2, 4 and 8 for each one replaced (`lock::patience`); the pause before the next program
+    doubles the same way (`lock::relaunch_delay`). The number of programs stays bounded (3, 3
+    rescue modes, `swaylock`, then the compositor's screen), and the session stays locked
+    throughout: no time limit ever unlocks or shows the desktop.
+  The log names the fault (`NoLock`, `NoFirstImage`, `Silent`, `Blind`), the program's tries and
+  its stage, and when its first image came.
 - **The input watched** (lot D-25g, `udev.rs`). Twice the screen kept drawing while no key, no
   click, not even the console switch, did anything. Every 2 s the compositor checks libinput: if
   its descriptor has events that nothing read for 5 s (`INPUT_STALL`; the loop reads a readable
@@ -2346,7 +2367,12 @@ frame is shown, then a new one is taken at wake-up; on four screens side by side
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
 scale; a lock program that answers its pings stays, one that hangs (a client that reads
 nothing any more) is killed after the time limit and another starts, the session staying locked
-and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client.
+and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client. Lot D-25h: a
+lock program that gets a key before its first image, takes 3 s to start and whose scene then
+stalls for 2 s (answering nothing, pings included) stays, with the default times; a stall of 2 s
+of the compositor itself does not count; a program frozen before its first image is replaced once
+that image is late, one frozen after it once a ping goes unanswered; the rescue mode, slow to
+start and blind to the keys, stays.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 
