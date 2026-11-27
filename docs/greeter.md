@@ -25,15 +25,16 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 - **Every screen** has an overlay surface of its own (layer-shell, one per screen, the keyboard
   taken): the picture of the lock, the date and the large time.
 - **The screen of the pointer** (the first one at start) also shows, from the top:
-  - Sherlock in 3D in his bubble, which follows the theme as on the lock screen (lot D-25d;
-    his still picture in software or without the model);
-  - **the row of users**: a glass bubble with the initial of each human user, the selected one
-    larger with a ring in the color of the text, in the middle of the screen; « Autre… » (a
-    person) last. The others are dimmed. A click or the left and right arrows (while nothing
-    is typed) choose another one: the row slides on a spring and Sherlock looks at the new user for 1.2 s. For
-    now only his eyes turn: `sherlock-3d` aims the eye bones only, and the turn of the head
-    waits for it;
+  - Sherlock in 3D in his bubble, **the only avatar** (lot D-24d, as on macOS), which follows
+    the theme as on the lock screen (lot D-25d; his still picture in software or without the
+    model). The bubble and the name are the lock screen's own pieces (`lock::view::bubble`,
+    `lock::view::name`);
   - the name of the selected user, or a pill to type one for « Autre… »;
+  - **when there are several users**, a discreet row of small pills under the name, one per
+    user (their name, « … » when too long) and « Autre… » last; the selected one is of glass,
+    the others show their glass on hover. A click or the left and right arrows (while nothing
+    is typed) choose another one: the new name fades in and Sherlock looks at the pills for
+    1.2 s. A single user: only their name, and no « Autre… »;
   - the password pill with the eye and the arrow, and the line under it;
   - **the session**: a discreet segmented control, « Bureau » (SherlockOS) and « Mode jeu »,
     grayed until the game mode exists; under it « Autres sessions » opens the list of the
@@ -44,20 +45,25 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
 
 ## Behavior
 
-- **Entrance:** the time, the bubble, the row, the pill, the session and the buttons rise and
-  fade in, 70 ms apart; the first key ends it.
+- **Background (lot D-24d):** the surfaces are transparent. The compositor shows the picture of
+  the lock from its first frame (`docs/compositor.md`), and this program's own picture, once
+  read, fades in over it: the same picture, so nothing moves. It never draws a plain color.
+- **Entrance:** from the first frame drawn, the time, the bubble, the name, the pill, the session
+  and the buttons rise and fade in, 70 ms apart; the first key ends it.
 - **Sherlock** reacts as on the lock screen: he waves, closes his eyes while the password is
   typed, peeks with one eye when it is shown, thinks while greetd checks, is sorry on a
-  refusal, happy once logged in.
+  refusal, happy once logged in. While keys come in a field, and 1.5 s after the last one, he
+  looks down at it, his head bent and his open eyes turned (`lock::form::gaze`).
 - **Enter:** the field empties at once, the pill shrinks into a circle with the spinner while
   greetd and PAM check, on a thread of their own (`login::log_in`).
 - **Refused:** the pill comes back and shakes three times, « Mot de passe incorrect », the user
   stays selected. greetd unreachable or failing: « Connexion impossible. Réessaie. », or PAM's
   own message when it gave one.
 - **Logged in:** the user and their session are remembered (`memory`), the session is started
-  through greetd, Sherlock is happy for 700 ms, then the elements leave in reverse order, the
-  bubble shrinks, the background zooms in to 1.05 and fades, and the program ends; the
-  compositor stops with it and greetd starts the session. In the session, the compositor plays
+  through greetd, Sherlock is happy for 700 ms, then the elements leave in reverse order (the
+  buttons first, the time last, 70 ms apart, `lock::screen::exit`), the bubble shrinking, and
+  the program ends; the background stays to the end. The compositor stops with it and greetd
+  starts the session, whose compositor starts from the same picture. In the session, the compositor plays
   the arrival of the desktop: the bar slides down from the top, then the dock rises from the
   bottom, on a spring, and the windows open with their own animation (see "Arrival of the
   desktop" in `docs/compositor.md`).
@@ -179,10 +185,13 @@ forbidden names and the file replaced whole.
 selected with their session, the arrows go through the users and stay in the field once
 something is typed; the right password goes through Checking to Leaving, Sherlock happy, the
 user and session remembered; a wrong one shakes and keeps the user; greetd unreachable says so;
-« Autre… » asks for a name. It writes the screenshots to `target/tmp/greeter/`: two in the CI (at rest,
+« Autre… » asks for a name; a single user is only a name; Sherlock looks at the field while
+keys come. It writes the screenshots to `target/tmp/greeter/`: two in the CI (at rest,
 dark, 1920 × 1080; the error, light, 1366 × 768), and with `-- --ignored` all of them: at rest,
 a user being chosen and chosen, typing, the error, and « Autre… » with the other sessions, in
-the dark and the light theme, at 1920 × 1080 and 1366 × 768.
+the dark and the light theme, at 1920 × 1080 and 1366 × 768. The boards of the entrance and of
+the exit, 6 frames each (`board-entrance.png`, `board-exit.png`):
+`cargo test -p greeter --test render -- --ignored boards`.
 
 ```sh
 cargo test -p greeter

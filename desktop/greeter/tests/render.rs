@@ -177,6 +177,38 @@ mod tests {
         written
     }
 
+    /// Lays `frames` side by side, `columns` per row, each reduced to a quarter of its side,
+    /// into the board `name`.
+    fn board(frames: &[PathBuf], columns: u32, name: &str) -> PathBuf {
+        let images: Vec<_> = frames
+            .iter()
+            .map(|path| image::open(path).unwrap().to_rgba8())
+            .collect();
+        let (w, h) = (images[0].width() / 4, images[0].height() / 4);
+        let rows = (images.len() as u32).div_ceil(columns);
+        let gap = 8;
+        let mut sheet = image::RgbaImage::from_pixel(
+            columns * (w + gap) + gap,
+            rows * (h + gap) + gap,
+            image::Rgba([16, 16, 16, 255]),
+        );
+        for (index, frame) in images.iter().enumerate() {
+            let small = image::imageops::resize(frame, w, h, image::imageops::FilterType::Triangle);
+            let (x, y) = (index as u32 % columns, index as u32 / columns);
+            image::imageops::overlay(
+                &mut sheet,
+                &small,
+                i64::from(gap + x * (w + gap)),
+                i64::from(gap + y * (h + gap)),
+            );
+        }
+        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("greeter")
+            .join(format!("{name}.png"));
+        sheet.save(&path).unwrap();
+        path
+    }
+
     fn later(s: &mut Screen, seconds: u64) {
         s.greeter
             .set_now(Instant::now() + Duration::from_secs(seconds));
@@ -236,6 +268,46 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(asked(), [("invite".to_owned(), "sherlockos".to_owned())]);
+    }
+
+    /// A single user: only their name under the bubble, and the arrows never reach « Autre… ».
+    #[test]
+    fn a_single_user_is_only_a_name() {
+        let users = vec![user("dodo", Some("Dodo"), 1000)];
+        let mut greeter = Greeter::new(
+            users,
+            vec![session("sherlockos", "SherlockOS")],
+            Memory::default(),
+            Arc::new(FakeGreetd::default()),
+            Arc::new(FakeMemory::default()),
+            Arc::new(FakeRunner::default()),
+        );
+        for step in [Step::Right, Step::Right, Step::Left] {
+            let _ = greeter.update(Message::Key(Some(step)));
+            assert_eq!(greeter.selected(), 0);
+        }
+        let id = window::Id::unique();
+        let _ = greeter.update(Message::Surface(id));
+        let mut ui = Simulator::with_size(lock::settings(), (1920.0, 1080.0), greeter.view(id));
+        assert!(ui.find("Dodo").is_ok());
+        assert!(ui.find(sherlock_ui::greeter::OTHER).is_err());
+    }
+
+    /// Sherlock looks down at the field while keys come in it, then ahead again.
+    #[test]
+    fn sherlock_looks_at_the_field_while_typing() {
+        let mut s = screen((1920.0, 1080.0));
+        assert!(!s.greeter.looks_at_field());
+        let _ = s.greeter.update(Message::Typed(Secret::new("ab".into())));
+        assert!(s.greeter.looks_at_field());
+        assert_eq!(s.greeter.mood(), Mood::EyesClosed);
+        s.greeter.set_now(
+            Instant::now()
+                + Duration::from_secs(3)
+                + sherlock_ui::lock::screen::TYPING_GAZE
+                + Duration::from_millis(50),
+        );
+        assert!(!s.greeter.looks_at_field());
     }
 
     #[test]
@@ -302,6 +374,40 @@ mod tests {
         let _ = s.greeter.update(Message::LoggedIn(refused));
         snapshot(&s.greeter, s.primary, size, "ci-error-light-1366x768");
         color::set_active(color::Theme::Dark);
+    }
+
+    /// The boards of the entrance and of the exit, 6 frames each, at 1920 × 1080 in the dark
+    /// theme: the background stays from the first frame to the last, the elements come one by
+    /// one (time, bubble, name, field, session, buttons) and leave in reverse order, the bubble
+    /// shrinking.
+    #[test]
+    #[ignore = "boards for the review: cargo test -p greeter --test render -- --ignored boards"]
+    fn boards_of_the_entrance_and_the_exit() {
+        let size = (1920.0, 1080.0);
+        let mut s = screen_with(size, true);
+        let mut entrance = Vec::new();
+        for ms in [0, 90, 180, 270, 400, 800] {
+            s.greeter.set_elapsed(Duration::from_millis(ms));
+            let name = format!("entrance-{ms}ms");
+            entrance.push(snapshot(&s.greeter, s.primary, size, &name));
+        }
+        s.greeter.set_elapsed(Duration::from_secs(3));
+        let _ = s.greeter.update(Message::Typed(Secret::new(FAKE.into())));
+        let _ = s.greeter.update(Message::Submit);
+        let answer = Ok(Report {
+            outcome: Outcome::Started,
+            notes: Vec::new(),
+        });
+        let _ = s.greeter.update(Message::LoggedIn(answer));
+        let leaving = Duration::from_secs(3) + sherlock_ui::greeter::SUCCESS_HOLD;
+        let mut exit = Vec::new();
+        for ms in [0, 100, 200, 300, 450, 650] {
+            s.greeter.set_elapsed(leaving + Duration::from_millis(ms));
+            let name = format!("exit-{ms}ms");
+            exit.push(snapshot(&s.greeter, s.primary, size, &name));
+        }
+        board(&entrance, 3, "board-entrance");
+        board(&exit, 3, "board-exit");
     }
 
     /// The screen at rest in both themes, at 1920 × 1080: the bubble of Sherlock follows the

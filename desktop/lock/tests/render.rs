@@ -57,8 +57,17 @@ mod tests {
         runner: Arc<FakeRunner>,
     }
 
-    /// The lock on two screens of `size`, the first one under the pointer, at rest.
+    /// The lock on two screens of `size`, the first one under the pointer, at rest: the form
+    /// that comes with the lock sent away.
     fn screen(size: (f32, f32)) -> Screen {
+        let mut s = arriving(size);
+        key(&mut s, Key::Escape, "\u{1b}");
+        assert!(!s.lock.form_shown());
+        s
+    }
+
+    /// The lock as it comes, the form with it.
+    fn arriving(size: (f32, f32)) -> Screen {
         let (pam, runner) = (
             Arc::new(FakePam::default()),
             Arc::new(FakeRunner::default()),
@@ -109,6 +118,56 @@ mod tests {
             "{name}"
         );
         written
+    }
+
+    /// Lays `frames` side by side, `columns` per row, each reduced to a quarter of its side,
+    /// into the board `name`.
+    fn board(frames: &[image::RgbaImage], columns: u32, name: &str) -> PathBuf {
+        let (w, h) = (frames[0].width() / 4, frames[0].height() / 4);
+        let rows = (frames.len() as u32).div_ceil(columns);
+        let gap = 8;
+        let mut sheet = image::RgbaImage::from_pixel(
+            columns * (w + gap) + gap,
+            rows * (h + gap) + gap,
+            image::Rgba([16, 16, 16, 255]),
+        );
+        for (index, frame) in frames.iter().enumerate() {
+            let small = image::imageops::resize(frame, w, h, image::imageops::FilterType::Triangle);
+            let (x, y) = (index as u32 % columns, index as u32 / columns);
+            image::imageops::overlay(
+                &mut sheet,
+                &small,
+                i64::from(gap + x * (w + gap)),
+                i64::from(gap + y * (h + gap)),
+            );
+        }
+        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("lock")
+            .join(format!("{name}.png"));
+        sheet.save(&path).unwrap();
+        path
+    }
+
+    /// `picture` reduced to cover `size` and cut to it, centered: how the compositor draws it.
+    fn cover(path: &std::path::Path, size: (u32, u32)) -> image::RgbaImage {
+        let picture = lock::background::fitted(path, size).unwrap();
+        let full = image::RgbaImage::from_raw(picture.width, picture.height, picture.rgba).unwrap();
+        let (x, y) = ((full.width() - size.0) / 2, (full.height() - size.1) / 2);
+        image::imageops::crop_imm(&full, x, y, size.0, size.1).to_image()
+    }
+
+    /// What the compositor shows while the curtain moves: `under`, and the curtain over it,
+    /// down by `down` of the screen (`sherlock_ui::lock::curtain`, which the compositor draws
+    /// with).
+    fn curtained(
+        under: &image::RgbaImage,
+        curtain: &image::RgbaImage,
+        down: f32,
+    ) -> image::RgbaImage {
+        let mut frame = under.clone();
+        let top = -((1.0 - down) * curtain.height() as f32).round() as i64;
+        image::imageops::overlay(&mut frame, curtain, 0, top);
+        frame
     }
 
     /// The form comes with the pointer, and its animations end.
@@ -185,6 +244,56 @@ mod tests {
             snapshot(&s.lock, s.primary, size, &format!("form-{name}"));
             snapshot(&s.lock, s.other, size, &format!("other-screen-{name}"));
         }
+    }
+
+    /// The boards of the lock and of the unlock, at 1920 × 1080 in the dark theme, composed as
+    /// the compositor shows them (lot D-24d): the last frame of the desktop, frozen, the curtain
+    /// coming down over it, then the lock screen on the same picture, its elements one after the
+    /// other (8 frames); once unlocked, the elements leaving in reverse order, then the curtain
+    /// going up off the live desktop (6 frames). The desktop is a wallpaper of the desktop.
+    #[test]
+    #[ignore = "boards for the review: cargo test -p lock --test render -- --ignored boards"]
+    fn boards_of_the_lock_and_the_unlock() {
+        use sherlock_ui::lock::{CURTAIN, curtain};
+        let size = (1920.0, 1080.0);
+        let pixels = (1920, 1080);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let desktop = cover(&root.join("wallpapers/first-clue.jpg"), pixels);
+        let lock_picture = cover(&root.join("lock").join(lock::background::DARK), pixels);
+        let mut s = arriving(size);
+        let shot = |s: &Screen, name: &str| {
+            image::open(snapshot(&s.lock, s.primary, size, name))
+                .unwrap()
+                .to_rgba8()
+        };
+        let ms = Duration::from_millis;
+        let mut lock_frames = Vec::new();
+        // The curtain comes down; the lock screen is not shown before it is down.
+        for t in [0, 130, 260] {
+            lock_frames.push(curtained(&desktop, &lock_picture, curtain(ms(t), true)));
+        }
+        for t in [400, 480, 560, 680, 1100] {
+            s.lock.set_elapsed(ms(t).max(CURTAIN));
+            lock_frames.push(shot(&s, &format!("lock-{t}ms")));
+        }
+        assert_eq!(lock_frames.len(), 8);
+        board(&lock_frames, 4, "board-lock");
+
+        s.lock.set_elapsed(Duration::from_secs(3));
+        let _ = s.lock.update(Message::Typed(Secret::new(FAKE.into())));
+        let _ = s.lock.update(Message::Submit);
+        checked(&mut s, Ok(()));
+        let leaving = Duration::from_secs(3);
+        let mut unlock_frames = Vec::new();
+        for t in [0, 120, 260, 500] {
+            s.lock.set_elapsed(leaving + ms(t));
+            unlock_frames.push(shot(&s, &format!("unlock-{t}ms")));
+        }
+        // Unlocked: the curtain goes up off the live desktop.
+        for t in [150, CURTAIN.as_millis() as u64] {
+            unlock_frames.push(curtained(&desktop, &lock_picture, curtain(ms(t), false)));
+        }
+        board(&unlock_frames, 3, "board-unlock");
     }
 
     #[test]
@@ -285,6 +394,38 @@ mod tests {
             exit - leaving < 1200,
             "the exit is in the branch of the acceptance"
         );
+    }
+
+    /// The form comes with the lock, its elements once the curtain of the compositor is down;
+    /// Sherlock waves.
+    #[test]
+    fn the_form_comes_with_the_lock() {
+        let s = arriving((1920.0, 1080.0));
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.mood(), Mood::Wave);
+    }
+
+    /// While keys come in the field, Sherlock looks down at it, eyes closed or peeking; about
+    /// 1.5 s after the last one, he looks ahead again.
+    #[test]
+    fn sherlock_looks_at_the_field_while_typing() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        assert!(!s.lock.looks_at_field());
+        let _ = s.lock.update(Message::Typed(Secret::new("ab".into())));
+        assert!(s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::EyesClosed);
+        let _ = s.lock.update(Message::ShowPassword);
+        assert!(s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::Peek);
+        s.lock.set_now(
+            Instant::now()
+                + Duration::from_secs(4)
+                + sherlock_ui::lock::screen::TYPING_GAZE
+                + Duration::from_millis(50),
+        );
+        assert!(!s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::Peek, "the mood stays");
     }
 
     #[test]

@@ -10,12 +10,12 @@ and asks PAM. If it crashes, the session stays locked and the compositor starts 
 macOS-like, as the author asked; no board draws it (the board of the login screen inspires it).
 Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
-- **At rest** (lot D-25b), every screen has a lock surface of its own, at its size and scale,
-  with only the background, the date (« jeudi 26 novembre ») and the large time at the top
-  (regular Inter: iced 0.14 draws the variable font at its default weight only, a thin weight
-  would fall back to another font). No form, as on macOS.
-- **A key, a click or the pointer** bring the form on the screen of the pointer, at the bottom
-  middle: the round bubble of Sherlock in 3D (`sherlock_3d::Sherlock3d`; the still picture
+- Every screen has a lock surface of its own, at its size and scale, with the background, the
+  date (« jeudi 26 novembre ») and the large time at the top (regular Inter: iced 0.14 draws
+  the variable font at its default weight only, a thin weight would fall back to another
+  font). **At rest** (lot D-25b), that is all, as on macOS.
+- **The form comes with the lock** (lot D-24d), and again with a key, a click or the pointer
+  once it left, on the screen of the pointer, at the bottom middle: the round bubble of Sherlock in 3D (`sherlock_3d::Sherlock3d`; the still picture
   `docs/design/images/sherlock-neutre.png` in software or without the model), the user's name, the password pill of glass with the eye (show or hide the password) and the
   arrow, the line of the error under it, then the machine buttons: « Veille », « Redémarrer »,
   « Éteindre ». The pill and the buttons move to the screen the pointer enters, or the one that
@@ -45,10 +45,15 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
 ## Behavior
 
-- **Entrance:** the time comes with the screen. The form comes on demand (`src/form.rs`): the
-  bubble grows from 60 % of its size on a spring, then the name, the pill and the buttons rise
-  and fade in, 70 ms apart. A key once the form shows ends the animations: typing is never
-  slowed down.
+- **Background (lot D-24d):** the surfaces are transparent; the compositor shows the picture
+  of the lock behind them (its curtain), and this program's own picture fades in over it once
+  read, or shows at once when read before the first frame: the same picture, so nothing
+  moves. Only the rescue mode fills its screen with the plain color.
+- **Entrance:** once the compositor's curtain is down (`sherlock_ui::lock::CURTAIN`, 400 ms
+  after the start, or from the first frame when it comes later), the time, then the bubble,
+  which grows from 60 % of its size on a spring, the name, the pill and the buttons rise and
+  fade in, 70 ms apart. Later, the form comes on demand (`src/form.rs`) the same way. A key
+  once the form shows ends the animations: typing is never slowed down.
 - **The key that brings the form is not lost:** a letter, a digit or a sign goes into the field;
   Space and Enter only bring the form (Enter sends nothing to PAM). Escape sends the form away.
 - **Leaving:** after 20 s without input (unless PAM is checking), the form leaves in reverse
@@ -60,7 +65,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   whoever opens the lid.
 - **Sherlock** follows the field: he waves (`Wave`) when the form comes, closes his eyes
   (`EyesClosed`) while something is typed, opens one eye (`Peek`) when the eye shows the
-  password, opens them and looks at the field when it is empty again, thinks (`Think`) while
+  password, opens them when it is empty again. While keys come, and 1.5 s after the last one
+  (`TYPING_GAZE`), he looks down at the field whatever his eyes do: his head bends toward it
+  (`sherlock_3d::animator::HEAD_GAZE_LIMIT`) and his open eyes turn to it. He thinks (`Think`) while
   PAM checks, is sorry (`Sorry`) for 2.5 s after a refusal, happy (`Success`) when it is
   accepted, and sleeps (`Sleep`) once « Veille » is confirmed. The model is read on a thread at
   start (`sherlock_3d::locate`); hidden, he costs nothing.
@@ -69,8 +76,10 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - **Refused:** the pill comes back, shakes three times and stays empty, with « Mot de passe
   incorrect » under it (or « Trop d'essais… » when PAM says so, or « Vérification
   impossible… »); the keyboard stays in the field.
-- **Accepted:** everything fades out in 220 ms, then the program ends the lock
-  (`unlock_and_destroy`) and leaves.
+- **Accepted:** the elements leave in reverse order, the buttons first and the time last, 70 ms
+  apart, each in 220 ms (`screen::exit`), the bubble shrinking; the picture stays. Then the
+  program ends the lock (`unlock_and_destroy`) and leaves, and the compositor raises its
+  curtain off the desktop.
 - **Machine buttons:** a first click arms the button (amber, « Reclique pour confirmer »), a
   second click at least 400 ms later runs `systemctl suspend`, `reboot` or `poweroff`; the button
   disarms after 4 seconds or when the password is typed. logind decides whether it is allowed.
@@ -139,7 +148,12 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   Screenshots in `target/tmp/lock/`, on the blurred wallpaper: rest (no form), form, typing,
   password shown (`peek`), spinner and error in both themes, the second screen, and the rest
   and the form on the four sizes above. In software, Sherlock is his still picture: the 3D
-  bubble is seen on the machine.
+  bubble is seen on the machine. The boards of the lock (the curtain over the frozen desktop,
+  then the elements one by one, 8 frames) and of the unlock (6 frames), composed as the
+  compositor shows them: `cargo test -p lock --test render -- --ignored boards`. Sherlock
+  looking down at the field is in the captures of `sherlock-3d` (`seq-frappe-*.png`).
+- `src/form.rs` and `tests/render.rs` also check that Sherlock looks at the field while keys
+  come in it, and ahead again 1.5 s after the last one.
 
 ## Manual test (rule 9)
 

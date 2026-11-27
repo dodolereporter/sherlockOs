@@ -116,8 +116,10 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         Greeter::view,
     )
     .theme(|_: &Greeter, _| Some(theme::theme()))
+    // Transparent: the compositor shows the picture of the lock behind from its first frame
+    // (lot D-24d), and this program's own fades in over it.
     .style(|_, _| iced::theme::Style {
-        background_color: color::palette().system_screen.into(),
+        background_color: iced::Color::TRANSPARENT,
         text_color: color::palette().text_primary.into(),
     })
     .subscription(Greeter::subscription)
