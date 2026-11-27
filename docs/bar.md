@@ -509,13 +509,19 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
 
   A drop changes the bar at once, then the file is read again just before it is written, the
   change applied to what it holds (another bar, an editor), its other lines kept, written to a
-  temporary file renamed over it (`tray/pins.rs`). Read when the bar starts.
+  temporary file renamed over it (`tray/pins.rs`). Read when the bar starts. An `Id` is the
+  application's own text: a `;` in it is written `\;`, as in a desktop entry, and read back
+  whole (`KeyFile::set_list` and `list`, lot D-45c); a file written before reads the same, and
+  the next drop writes it in this form.
 - **Moves during a drag.** While a button is held, Wayland gives the pointer's moves to the
   surface it was pressed in, outside it too: the popup gets them over the bar, the bar below
   itself. The bar places them in its own surface from where it put the popup. The moves are only
   asked for while an icon is pressed (`pins::on_pointer`): a pointer crossing the bar sends no
   message. The popup and the menus never leave their surfaces: what is dragged shows in the bar's
-  slot, not under the pointer.
+  slot, not under the pointer. Once the press became a drag, the surface that keeps the pointer
+  shows the closed hand (`grabbing`) wherever it goes, over the bar or not
+  (`sherlock_ui::pointer::held`, lot D-45c), and the pointer gets its usual shape back when it
+  is let go.
 
 ### The X11 tray (XEmbed)
 
