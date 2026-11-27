@@ -24,6 +24,7 @@ use lock::view::{self, Avatar, color_of, fade, rise, spinner};
 use sherlock_ui::color;
 use sherlock_ui::component;
 use sherlock_ui::ellipsis::ellipsis;
+use sherlock_ui::focus::Focusable;
 use sherlock_ui::greeter as ui;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::lock::screen::{self as screen, Colors};
@@ -62,6 +63,8 @@ pub fn name_field() -> iced::widget::Id {
 pub enum Message {
     /// An overlay surface, on one screen.
     Surface(window::Id),
+    /// A click on that surface: the field keeps the keyboard.
+    Pressed(window::Id),
     Resized(window::Id, Size),
     Rescaled(f32),
     /// The pointer or the keyboard is on that surface's screen.
@@ -87,11 +90,14 @@ pub enum Message {
     Theme(color::Theme),
 }
 
-/// An arrow key.
+/// A key the screen treats apart: the arrows choose the user, Tab moves the focus between the
+/// field and the buttons (backward with Shift), Escape empties the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Left,
     Right,
+    Tab { back: bool },
+    Escape,
 }
 
 pub struct Greeter {
@@ -131,6 +137,8 @@ pub struct Greeter {
     last_key: Option<Duration>,
     /// The first frame was drawn: the entrance starts from it.
     drawn: bool,
+    /// How many times the field was given the keyboard (the tests).
+    focus_requests: u32,
     asked: Option<(u32, u32)>,
     scale: f32,
     theme: color::ThemeFade,
@@ -183,6 +191,7 @@ impl Greeter {
             background_at: None,
             last_key: None,
             drawn: false,
+            focus_requests: 0,
             asked: None,
             scale: 1.0,
             theme: color::ThemeFade::default(),
@@ -346,7 +355,10 @@ impl Greeter {
 
     /// The field that takes the keys: the name for « Autre… » until one is typed, else the
     /// password.
-    fn focus(&self) -> Task<Message> {
+    /// Gives the keyboard to the field: whatever took it (a click elsewhere, Escape in the
+    /// field, the spinner in its place), the next key goes there.
+    fn focus(&mut self) -> Task<Message> {
+        self.focus_requests += 1;
         let id = if self.other() && self.other_name.trim().is_empty() {
             name_field()
         } else {
@@ -355,11 +367,19 @@ impl Greeter {
         iced::widget::operation::focus(id)
     }
 
+    /// How many times the field was given the keyboard (the tests).
+    pub fn focus_requests(&self) -> u32 {
+        self.focus_requests
+    }
+
     fn select(&mut self, index: usize) -> Task<Message> {
         let index = index.min(self.users.len());
         let busy = matches!(self.phase, Phase::Checking(_) | Phase::Leaving(_));
-        if index == self.selected || busy {
+        if busy {
             return Task::none();
+        }
+        if index == self.selected {
+            return self.focus();
         }
         self.selected = index;
         self.switched = Some(self.elapsed());
@@ -380,8 +400,21 @@ impl Greeter {
                 return self.focus();
             }
             Message::Resized(id, size) => {
-                self.sizes.insert(id, size);
-                return self.ask_background();
+                // The first size of the screen of the form: its widgets exist from now on, so
+                // the field takes the keyboard at once.
+                let first = self.sizes.insert(id, size).is_none();
+                let background = self.ask_background();
+                if first && self.primary == Some(id) {
+                    return Task::batch([background, self.focus()]);
+                }
+                return background;
+            }
+            Message::Pressed(id) => {
+                let here = self.update(Message::Here(id));
+                if matches!(self.phase, Phase::Typing | Phase::Refused(..)) {
+                    return Task::batch([here, self.focus()]);
+                }
+                return here;
             }
             Message::Rescaled(scale) => {
                 self.scale = self.scale.max(scale);
@@ -401,8 +434,25 @@ impl Greeter {
                     match step {
                         Some(Step::Left) => return self.select(self.selected.saturating_sub(1)),
                         Some(Step::Right) => return self.select((self.selected + 1).min(last)),
-                        None => {}
+                        _ => {}
                     }
+                }
+                match step {
+                    Some(Step::Tab { back }) => {
+                        return sherlock_ui::focus::advance(match back {
+                            true => sherlock_ui::focus::Direction::Previous,
+                            false => sherlock_ui::focus::Direction::Next,
+                        });
+                    }
+                    // Escape empties the field and keeps the keyboard in it.
+                    Some(Step::Escape)
+                        if matches!(self.phase, Phase::Typing | Phase::Refused(..)) =>
+                    {
+                        self.password = Secret::default();
+                        self.phase = Phase::Typing;
+                        return self.focus();
+                    }
+                    _ => {}
                 }
             }
             Message::Select(index) => return self.select(index),
@@ -422,7 +472,10 @@ impl Greeter {
                     self.armed.disarm();
                 }
             }
-            Message::ShowPassword => self.reveal = !self.reveal,
+            Message::ShowPassword => {
+                self.reveal = !self.reveal;
+                return self.focus();
+            }
             Message::Submit => return self.submit(),
             Message::LoggedIn(result) => return self.logged_in(result),
             Message::Session(index) => {
@@ -430,13 +483,18 @@ impl Greeter {
                     self.session_switched = Some((self.elapsed(), self.thumb()));
                     self.session = Some(index);
                 }
+                return self.focus();
             }
-            Message::Others => self.show_others = !self.show_others,
+            Message::Others => {
+                self.show_others = !self.show_others;
+                return self.focus();
+            }
             Message::Machine(machine) => {
                 if self.armed.click(machine, Instant::now()) {
                     tracing::info!(verb = machine.verb(), "machine command");
                     self.runner.run(machine);
                 }
+                return self.focus();
             }
             Message::Clock(clock) => {
                 self.clock = clock;
@@ -456,8 +514,13 @@ impl Greeter {
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Frame(now) => {
                 // The entrance starts from the first frame: it is seen whole.
-                if !std::mem::replace(&mut self.drawn, true) && !self.entered {
-                    self.start = now;
+                if !std::mem::replace(&mut self.drawn, true) {
+                    if !self.entered {
+                        self.start = now;
+                    }
+                    self.now = now;
+                    // The field takes the keyboard with the first frame, whatever came before.
+                    return self.focus();
                 }
                 self.now = now;
                 self.theme.tick(now);
@@ -848,19 +911,20 @@ impl Greeter {
     fn field_button(&self, icon: Icon, message: Message, colors: &Colors) -> Element<'_, Message> {
         let tint = fade(colors.text, self.presence(3));
         let hover = colors.button_hover;
-        button(
+        // Tab reaches it; Enter or Space presses it (`sherlock_ui::focus`).
+        let pressed = button(
             container(component::icon(icon, screen::FIELD_ICON, color_of(tint)))
                 .center(screen::FIELD_BUTTON),
         )
-        .on_press(message)
+        .on_press(message.clone())
         .padding(0)
         .style(move |_, status| button::Style {
             background: matches!(status, button::Status::Hovered | button::Status::Pressed)
                 .then(|| Background::Color(hover.into())),
             border: Border::default().rounded(screen::FIELD_BUTTON / 2.0),
             ..button::Style::default()
-        })
-        .into()
+        });
+        Focusable::new(pressed, Some(message), screen::FIELD_BUTTON / 2.0).into()
     }
 
     /// The line under the pill: why the login failed, or what PAM said.
@@ -1004,6 +1068,11 @@ impl Greeter {
                     .color(edge),
                 ..button::Style::default()
             });
+            let round = Focusable::new(
+                round,
+                Some(Message::Machine(machine)),
+                screen::MACHINE_BUTTON / 2.0,
+            );
             column![
                 round,
                 text(label)
@@ -1081,19 +1150,24 @@ fn field_style(
 
 fn on_event(event: Event, _status: iced::event::Status, id: window::Id) -> Option<Message> {
     match event {
-        Event::Mouse(mouse::Event::CursorEntered | mouse::Event::ButtonPressed(_)) => {
-            Some(Message::Here(id))
-        }
+        Event::Mouse(mouse::Event::CursorEntered) => Some(Message::Here(id)),
+        Event::Mouse(mouse::Event::ButtonPressed(_)) => Some(Message::Pressed(id)),
         Event::Window(window::Event::Focused) => Some(Message::Here(id)),
         Event::Window(window::Event::Rescaled(scale)) => Some(Message::Rescaled(scale)),
         Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
             Some(Message::Resized(id, size))
         }
-        Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => Some(Message::Key(match key {
-            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Step::Left),
-            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Step::Right),
-            _ => None,
-        })),
+        Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            Some(Message::Key(match key {
+                keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => Some(Step::Left),
+                keyboard::Key::Named(keyboard::key::Named::ArrowRight) => Some(Step::Right),
+                keyboard::Key::Named(keyboard::key::Named::Tab) => Some(Step::Tab {
+                    back: modifiers.shift(),
+                }),
+                keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Step::Escape),
+                _ => None,
+            }))
+        }
         _ => None,
     }
 }
