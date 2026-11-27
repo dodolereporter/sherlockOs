@@ -384,6 +384,9 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview sliding in or out (lot E-08), and the file that remembers it.
+    pub(crate) preview_slide: Option<Fade>,
+    prefs: Option<PathBuf>,
     pub(crate) search: String,
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
@@ -474,6 +477,8 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_slide: None,
+            prefs: None,
             search: String::new(),
             repo: None,
             preview: Preview::Info,
@@ -520,6 +525,16 @@ impl App {
             folders_generation: 0,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
+        // The preview as it was left (lot E-08): a file of a few bytes, read before the first
+        // frame so that the window opens as it was.
+        app.prefs = app
+            .config
+            .xdg
+            .as_ref()
+            .map(|dirs| crate::prefs::path(&dirs.config_home));
+        if let Some(shown) = app.prefs.as_deref().and_then(crate::prefs::read_preview) {
+            app.show_preview = shown;
+        }
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
@@ -602,6 +617,35 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Shows or hides the preview, sliding, and remembers it off the interface thread.
+    fn toggle_preview(&mut self) -> Task<Message> {
+        let from = self.preview_level();
+        self.show_preview = !self.show_preview;
+        let now = self.now();
+        let to = if self.show_preview { 1.0 } else { 0.0 };
+        self.preview_slide = Some(Fade::new(from, to, now, more::PREVIEW_SLIDE));
+        let Some(path) = self.prefs.clone() else {
+            return Task::none();
+        };
+        let shown = self.show_preview;
+        Task::perform(
+            async move {
+                if let Err(error) = crate::prefs::write_preview(&path, shown) {
+                    tracing::warn!(%error, "the preview choice is not remembered");
+                }
+            },
+            |()| Message::Inert,
+        )
+    }
+
+    /// How far the preview is in, from 0 (hidden) to 1 (shown).
+    pub(crate) fn preview_level(&self) -> f32 {
+        let rest = if self.show_preview { 1.0 } else { 0.0 };
+        self.preview_slide
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
     /// Animation time.
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
@@ -619,6 +663,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.preview_slide)
             || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
@@ -634,6 +679,7 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.preview_slide = None;
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
@@ -1033,6 +1079,9 @@ impl App {
         }
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
+        }
+        if self.preview_slide.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.preview_slide = None;
         }
         if self.path_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.path_fade = None;
@@ -1901,6 +1950,10 @@ impl App {
                 self.clear_selection();
                 Task::none()
             }
+            // As Alt+Cmd+P in the Finder (lot E-08).
+            Key::Character(c) if ctrl && modifiers.alt() && c.eq_ignore_ascii_case("p") => {
+                self.run(Command::TogglePreview)
+            }
             Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), shift) {
                 ("c", true) => self.run(Command::CopyPath),
                 ("c", false) => self.run(Command::Copy),
@@ -2003,7 +2056,7 @@ impl App {
             Command::ViewList => {}
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            Command::TogglePreview => self.show_preview = !self.show_preview,
+            Command::TogglePreview => return self.toggle_preview(),
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();

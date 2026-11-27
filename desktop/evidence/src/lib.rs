@@ -17,6 +17,7 @@ pub mod menubar;
 pub mod ops;
 pub mod pathbar;
 pub mod places;
+pub mod prefs;
 pub mod preview;
 pub mod probe;
 pub mod selection;

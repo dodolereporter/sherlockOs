@@ -92,8 +92,15 @@ impl App {
             .push(self.sidebar())
             .push(vline())
             .push(self.list(now));
-        if self.show_preview {
-            body = body.push(vline()).push(self.preview_panel(now));
+        // The preview slides in and out from the right edge (lot E-08).
+        let level = self.preview_level();
+        if level > 0.0 {
+            let width = (metrics::PREVIEW_WIDTH * level).round();
+            let panel = container(self.preview_panel(now))
+                .width(width)
+                .height(Length::Fill);
+            let panel = if level < 1.0 { panel.clip(true) } else { panel };
+            body = body.push(vline()).push(panel);
         }
         let page = column![
             self.title_bar(),
@@ -206,8 +213,17 @@ impl App {
             SEARCH,
             metrics::SEARCH_WIDTH,
         );
-        // The path bar takes the room left between the buttons and the search.
-        let line = line.push(search);
+        // The path bar takes the room left between the buttons and the search; at the right
+        // end, the button of the preview, lit while it is shown (lot E-08).
+        let mut preview = ui::toolbar_button(
+            Icon::Inspector,
+            t::PREVIEW_BUTTON,
+            Some(Message::Run(Command::TogglePreview)),
+        );
+        if self.show_preview {
+            preview = preview.status(button::Status::Pressed);
+        }
+        let line = line.push(search).push(preview);
         container(line)
             .width(Length::Fill)
             .height(metrics::TOOLBAR_HEIGHT)

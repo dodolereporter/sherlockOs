@@ -78,11 +78,13 @@ pub enum Icon {
     Touchpad,
     Grid,
     Sidebar,
+    /// A window with its right-hand pane: shows or hides the preview.
+    Inspector,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -129,6 +131,7 @@ impl Icon {
         Self::Touchpad,
         Self::Grid,
         Self::Sidebar,
+        Self::Inspector,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -228,6 +231,7 @@ impl Icon {
             Self::Grid => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
             // A window with its sidebar: shows or hides a folded sidebar.
             Self::Sidebar => "M4 5h16v14H4zM10 5v14",
+            Self::Inspector => "M4 5h16v14H4zM14 5v14",
         }
     }
 

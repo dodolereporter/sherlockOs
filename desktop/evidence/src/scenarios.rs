@@ -1800,3 +1800,22 @@ fn path_bar_captures() {
         bench.send(Message::PathCancel);
     }
 }
+
+/// Ctrl+Alt+P, like the toolbar's button, hides the preview and shows it again, sliding
+/// (lot E-08).
+#[test]
+fn the_preview_hides_and_comes_back_sliding() {
+    let mut bench = Bench::new("preview-toggle");
+    assert!(bench.app.show_preview);
+    bench.key(Key::Character("p".into()), Modifiers::CTRL | Modifiers::ALT);
+    assert!(!bench.app.show_preview);
+    let level = bench.app.preview_level();
+    assert!(level > 0.0, "still sliding out: {level}");
+    assert!(bench.app.animating(bench.app.now()));
+    bench.app.settle();
+    assert_eq!(bench.app.preview_level(), 0.0);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
+    assert!(bench.app.show_preview);
+    bench.app.settle();
+    assert_eq!(bench.app.preview_level(), 1.0);
+}
