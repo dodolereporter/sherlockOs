@@ -462,6 +462,10 @@ mod tests {
         for (name, input, typed) in inputs {
             let mut s = screen((1920.0, 1080.0));
             assert!(!s.lock.form_shown());
+            // The first frame came with the lock, long before.
+            let _ = s
+                .lock
+                .update(Message::Frame(Instant::now() + Duration::from_secs(3)));
             let at = Instant::now() + Duration::from_secs(60);
             WALL.with(|w| w.set(Some(at)));
             s.lock.set_wall(wall);
