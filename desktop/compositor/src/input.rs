@@ -127,6 +127,8 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// Super + V: the clipboard history (lot D-42).
+    ClipboardHistory,
     /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
     Applications,
     /// Escape while Mission Control is open: closes it.
@@ -198,6 +200,7 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
             _ => None,
         }
@@ -862,6 +865,10 @@ impl State {
                 self.start_applications();
                 return;
             }
+            Shortcut::ClipboardHistory => {
+                self.start_clipboard_panel();
+                return;
+            }
             Shortcut::Media(media, code) => {
                 self.press_media_key(code, media);
                 return;
@@ -1111,8 +1118,8 @@ impl State {
                 Some(
                     Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
                 ) => Some(window.clone()),
-                Some(Hit::Layer(layer, ..)) => {
-                    self.click_layer(layer);
+                Some(Hit::Layer(layer, surface, _)) => {
+                    self.click_layer(layer, surface);
                     pointer.button(self, &event);
                     pointer.frame(self);
                     return;

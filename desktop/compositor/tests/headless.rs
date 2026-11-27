@@ -1183,6 +1183,54 @@ mod tests {
         );
     }
 
+    /// Lot Q-51: a click in a panel of the bar gives the keyboard to the panel, a popup, so that
+    /// its fields (the Wi-Fi password) get the keys; a click on the bar gives it back to the bar.
+    #[test]
+    fn a_click_in_a_panel_gives_it_the_keyboard() {
+        let mut h = Harness::start();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(500, 36, 2, 2);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        popup.grab(&with.seat, 0);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, 200, 150);
+        surface.commit();
+        settle(&mut h);
+        // The panel hangs 150 high under the bar, around x = 500: its middle.
+        h.click(510.0, 46.0 + 75.0, 10);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(surface.id().protocol_id()),
+            "the panel has the keyboard"
+        );
+        h.click(100.0, 20.0, 30);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(bar.surface.id().protocol_id()),
+            "back to the bar"
+        );
+    }
+
     /// A panel of the bar closed by a click elsewhere fades out from its last image, drawn
     /// for real with Mesa's software renderer (lot UI-06): the panel's color where it was at
     /// the click, mixed with what is behind it halfway, gone after `motion::POPUP_CLOSE`.

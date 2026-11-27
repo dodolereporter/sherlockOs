@@ -345,7 +345,7 @@ impl XwmHandler for State {
     }
 
     /// An X11 client reads the selection of a Wayland client, or the compositor's own: a
-    /// screenshot, whose bytes the compositor writes itself.
+    /// screenshot or an item of the clipboard history, whose bytes the compositor writes itself.
     fn send_selection(
         &mut self,
         _xwm: XwmId,
@@ -359,10 +359,10 @@ impl XwmHandler for State {
             }
             SelectionTarget::Primary => None,
         };
-        if let Some(png) = screenshot {
+        if let Some(held) = screenshot {
             // smithay maps the text targets of X11 without looking at what is offered.
-            if mime_type == "image/png" {
-                self.paste_png(fd, png);
+            if let Some(bytes) = held.bytes(&mime_type) {
+                self.paste_png(fd, bytes);
             }
             return;
         }
