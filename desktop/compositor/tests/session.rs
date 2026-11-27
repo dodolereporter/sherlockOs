@@ -48,7 +48,7 @@ mod tests {
                      WAYLAND_DISPLAY=wayland-test \"$@\" &\nsleep 2\n"
                 ),
             );
-            for program in ["bar", "dock", "notifications"] {
+            for program in ["bar", "dock", "notifications", "sherlockos-autostart"] {
                 write(
                     &dir.join("bin").join(program),
                     &format!("#!/bin/sh\necho > '{o}/{program}'\nsleep 3\n"),
@@ -143,6 +143,7 @@ mod tests {
         assert!(log.contains(&started), "{log}");
         assert!(o.join("agent").exists(), "{log}");
         assert!(o.join("bar").exists(), "{log}");
+        assert!(o.join("sherlockos-autostart").exists(), "{log}");
         // The portals learn the name of the session and where its setting is.
         let activation = s.out("activation");
         assert!(activation.starts_with("--systemd "), "{activation}");
@@ -199,6 +200,7 @@ mod tests {
                 String::from("/nowhere/agent absent-agent"),
             ),
             ("SHERLOCKOS_XWAYLAND", String::from("0")),
+            ("SHERLOCKOS_AUTOSTART", String::from("0")),
             // No PAM service for the lock screen (lot D-25a).
             ("SHERLOCKOS_PAM_DIR", String::from("/nowhere/pam.d")),
         ]);
@@ -210,5 +212,6 @@ mod tests {
         assert!(log.contains("keyring: none"), "{log}");
         assert!(!s.out("args").contains("--xwayland"), "{}", s.out("args"));
         assert!(s.dir.join("out/bar").exists(), "{log}");
+        assert!(!s.dir.join("out/sherlockos-autostart").exists(), "{log}");
     }
 }

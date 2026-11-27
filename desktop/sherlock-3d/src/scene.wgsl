@@ -58,14 +58,14 @@ const KEY: vec3<f32> = vec3<f32>(-0.560, 0.517, 0.647);
 const FILL: vec3<f32> = vec3<f32>(0.705, 0.059, 0.705);
 const BACK: vec3<f32> = vec3<f32>(0.384, 0.512, -0.768);
 // Strengths: the light a white surface facing each one receives.
-const AMBIENT: f32 = 0.50;
-const KEY_STRENGTH: f32 = 0.70;
-const FILL_STRENGTH: f32 = 0.18;
+const AMBIENT: f32 = 0.40;
+const KEY_STRENGTH: f32 = 0.56;
+const FILL_STRENGTH: f32 = 0.14;
 const BACK_STRENGTH: f32 = 0.35;
 // The key is a large soft light: its falloff wraps past the terminator (a "wrap" Lambert).
 const KEY_WRAP: f32 = 0.45;
 // The highlight of the shiniest material (roughness 0); a matt cap keeps a faint sheen.
-const SPECULAR: f32 = 0.35;
+const SPECULAR: f32 = 0.26;
 const MATT_SHEEN: f32 = 0.02;
 
 @vertex
