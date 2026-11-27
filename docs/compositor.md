@@ -370,7 +370,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy`, `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose), `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
 | `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
@@ -391,11 +391,12 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 3. Version 2 (lot D-18d) adds `snapped` to
+- **Versions.** The global is offered at version 4. Version 2 (lot D-18d) adds `snapped` to
   the states of a screen; a client that binds version 1 never receives it: a screen with only a
   snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
-  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. A toplevel
-  has the version of its manager.
+  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. Version 4
+  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). A toplevel has the
+  version of its manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -2403,6 +2404,34 @@ surface keeps the keyboard (a lock screen).
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
+
+### App Expose
+
+Lot D-21c2: Mission Control on the windows of one application, as the macOS dock opens it.
+The dock asks for it with `show_windows` of `sherlock_shell_v1` (version 4), giving the ids of
+the windows (the `id` events): the « Afficher toutes les fenêtres » entry of its menu, and a
+swipe down over its icon. Ids rather than
+an `app_id`: one application may have Wayland windows under its desktop file id and X11 ones
+under its class, which only the dock groups (by its desktop entries, see `docs/dock.md`).
+
+- `State::show_windows` keeps the ids (`Overview::only`) and opens the view; `overview_tiles`
+  then keeps only those windows, among the ones the view shows anyway (active workspace, not
+  minimized, X11 menus aside). Unknown ids are left out; with no window to show, nothing
+  opens.
+- **No strip**: the windows take its room, under a margin of 32 like the sides
+  (`overview_strip` is empty, so no thumbnail is drawn nor hit).
+- Everything else is Mission Control: the same grid, animation, titles and highlight; a click
+  on a window chooses it, a click elsewhere, Escape or the gesture key close the view. Asked
+  while the view is open, it shows the new windows at once. Opened by its keys or the fingers
+  afterwards, the view shows every window again.
+- **Not done**: the minimized windows, which macOS shows in a row at the bottom, and windows of
+  the application on other workspaces; a window the application opens while App Expose is
+  shown does not join it.
+
+`tests/shell.rs` (`the_shell_opens_mission_control_on_the_windows_of_one_application`): unknown
+ids open nothing; two of three windows, without the strip; asked again while open, other
+windows; Escape closes it, and Mission Control opened afterwards shows the three, strip
+included.
 
 ### Dragging to another workspace
 
