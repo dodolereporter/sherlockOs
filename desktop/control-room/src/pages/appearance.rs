@@ -11,7 +11,6 @@ use sherlock_ui::{color, metrics, theme, typography, wallpapers};
 use crate::app::{App, Change, Message, hours};
 use crate::search::Setting;
 use crate::settings::File;
-use crate::thumbnails;
 
 impl App {
     pub(crate) fn appearance(&self, width: f32) -> Vec<Element<'_, Message>> {
@@ -156,7 +155,10 @@ impl App {
 
     /// The installed wallpapers, as many to a line as the card holds; the chosen one ringed.
     fn wallpapers(&self, width: f32) -> Element<'_, Message> {
-        let installed = thumbnails::installed(&self.paths.wallpaper_dirs);
+        // Found off the interface thread: never a look at the disk while drawing.
+        let Some(installed) = self.installed.clone() else {
+            return space().height(cr::WALLPAPER_TILE.1).into();
+        };
         if installed.is_empty() {
             return container(ui::description(t::NO_WALLPAPER))
                 .padding([metrics::GAP_ICON, 0.0])
