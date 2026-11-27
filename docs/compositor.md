@@ -2745,6 +2745,11 @@ The tests in `tests/headless.rs`:
   receives a configure of 776 × 36, draws, and the work area becomes (0, 46, 800, 554): the
   maximized window is configured at 800 × 554 in (0, 46). Snapped left, it takes 400 × 554 in
   (0, 46). A click on the bar gives it the keyboard (on demand).
+- **The keyboard in a panel** (Q-51). A click in a menu or a panel of an anchored surface (an
+  `xdg_popup` of the bar) gives the keyboard to that popup, not to the bar under it: the bar's
+  toolkit sends the keys to the window whose surface has the focus, and the Wi-Fi password
+  field is in the panel. Before, the focus went to the bar's surface and the field never got a
+  key. A click on the bar gives it back to the bar.
 - **Exclusive zones stacked.** Two bars at the top and a dock of 76 at the bottom: work area
   (0, 92, 800, 432), and the maximized window follows. A surface with a zone of -1 changes
   nothing. Closing the second bar gives (0, 46, 800, 478), closing them all the whole screen.
