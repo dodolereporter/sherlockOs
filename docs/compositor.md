@@ -38,6 +38,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
+| `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
@@ -690,6 +691,45 @@ limits above).
 
 The real session (lot D-14) has one output per connector with a screen, side by side in the
 order they are found, each with a frame of its own (see "Real session").
+
+### Changing the screens (ADR 0025, lot D-26b)
+
+The compositor offers `wlr-output-management-unstable-v1`, version 3 (`src/output_management.rs`):
+every screen is a head with its connector name, its EDID make, model and serial number, its
+modes (the preferred one first), and whether it is on with its mode, place, rotation and scale.
+A change of any of them is sent again, followed by `done` and a new serial. A client sends a
+whole configuration and tests or applies it; Control Room's « Écrans » page, `wlr-randr` and
+`kanshi` speak it. What a client may get wrong is a protocol error, as the protocol says: a mode
+of another head, a property set twice, a head configured twice or left out; a scale that is not
+positive. A configuration made on an older serial is cancelled.
+
+`src/displays.rs` checks the whole configuration before anything changes (`check_screens`):
+every screen known, at least one on, a mode the screen lists (a refresh of 0, or within half a
+hertz, finds the mode of that size), a rotation only where the screen can turn, a scale from 0.5
+to 4, a place within 65 536 points of the origin. `apply_screens` gives the hardware its part
+first: in the real session, `DrmCompositor::use_mode`, the rotation in the screen's
+`OutputModeSource`, or `clear` for a screen switched off; a refusal there puts back what had
+already changed and the configuration fails. The space follows: modes, scales and rotations,
+the screens at their places, windows moved with their screen, snapped and maximized ones
+refitted. A screen switched off loses its `wl_output` but stays a head, off, until it is lit
+again or unplugged. The main screen is the one at the origin.
+
+| Backend | Modes | Rotation | Off |
+| --- | --- | --- | --- |
+| Real session | Every mode of the connector | Yes | Yes |
+| `--headless`, tests | Its size, 1280 × 800, 1440 × 900, 1920 × 1080, 2560 × 1440 | Yes | Yes |
+| `--nested` | The slice of the window only | No | No |
+
+**Saved per screen.** In the real session, every screen is named by its EDID (`src/edid.rs`:
+the first block of 128 bytes, header and checksum checked; the maker's three letters, the name
+and serial descriptors, else the product code and serial number). A configuration that has held
+for `SAVE_AFTER` (20 seconds, longer than the 15 of Control Room's confirmation) is written to
+`$XDG_CONFIG_HOME/sherlockos/displays.conf` (`desktop_config::displays`), whole, off the event
+loop, through `mime_apps::write_atomically`: a session that dies while a change waits for its
+confirmation keeps the setting that worked. When a screen is plugged in, or at start, its saved
+mode, rotation, scale and place are taken again; a screen saved off is lit anyway, so that a
+machine never starts black. The file keeps the 32 screens met last; it is bounded (64 KiB, names
+of 64 characters, sizes, refresh, scale and places checked) and a wrong line is left aside.
 
 ## XWayland
 
