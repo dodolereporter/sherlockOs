@@ -743,6 +743,8 @@ impl State {
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // Locked: the lock program must answer (lot D-25f).
+        self.ping_lock_program();
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -1046,6 +1048,7 @@ impl State {
         };
         self.overview.cancel_tap();
         if self.is_locked() {
+            self.ping_lock_program();
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
             if state == ButtonState::Pressed {

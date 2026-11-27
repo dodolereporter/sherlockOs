@@ -29,6 +29,7 @@ pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod lock;
+pub mod log_sync;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -202,6 +203,8 @@ pub struct State {
     nested: bool,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
+    /// Writes the session's log to disk, while locked (lot D-25f).
+    log_sync: log_sync::LogSync,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -378,6 +381,9 @@ impl State {
             intercepted_keys: Vec::new(),
             nested: false,
             switch_vt: None,
+            log_sync: log_sync::LogSync::new(
+                std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
+            ),
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
