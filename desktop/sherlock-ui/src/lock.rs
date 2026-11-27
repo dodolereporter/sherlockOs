@@ -116,6 +116,12 @@ pub mod screen {
     /// One turn of the spinner.
     pub const SPIN: Duration = motion::SPIN;
 
+    /// The curtain (lot D-25e): the picture slides down from the top on `SPRING`, once it is
+    /// decoded (`CURTAIN_WAIT` at most without it), then the date and the time drop in,
+    /// `CURTAIN_LAG` later.
+    pub const CURTAIN_WAIT: Duration = Duration::from_millis(1500);
+    pub const CURTAIN_LAG: Duration = Duration::from_millis(140);
+
     /// The form (bubble, name, pill, machine buttons) shows only on demand, as on macOS: a key,
     /// a click or the pointer bring it, and it leaves again after `FORM_TIMEOUT` without input.
     pub const FORM_TIMEOUT: Duration = Duration::from_secs(20);
