@@ -2172,7 +2172,8 @@ gives no two finger swipe, but a device that would is passed on.
 | 3 | Up | Opens Mission Control, which follows the fingers (see "Mission Control") |
 | 3 | Down | Closes Mission Control; out of it, nothing, or minimizes the window that has the keyboard with `swipe-down = minimize` |
 | 3 | Pinch, hold | Reserved |
-| 4 and more | Any | Reserved |
+| 4 | Pinch in, out | Opens, closes the applications view (lot D-41c, `docs/apps.md`) |
+| 4 and more | Any other | Reserved |
 | 1 and 2 | Pinch, hold, swipe | To the client under the pointer |
 
 "Reserved" means taken without effect: no client receives it, so that giving it a role later
@@ -2224,6 +2225,8 @@ libinput events to `State::process_input_event`:
 - **The ends of the row.** Fingers to the right on the first workspace: the row resists, then
   springs back; at the other end, one workspace at a time up to the third.
 - **Reserved.** Four fingers, three up, three down without a window: no workspace change.
+- **Applications view.** Four fingers pinching in start `sherlockos-apps --show`, spreading out
+  `--hide`, once per pinch, past 0.75 or 1.33 of the fingers' spread (lot D-41c).
 - **To the client.** A client binds `zwp_pointer_gestures_v1` and its swipe, pinch and hold
   objects, with a window under the pointer: it receives a two finger pinch (begin, scale, end),
   a hold (cancelled) and a two finger swipe; it receives nothing of three or four finger swipes,
