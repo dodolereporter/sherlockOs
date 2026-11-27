@@ -35,7 +35,7 @@ use smithay::{
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    desktop::{PopupManager, Window, layer_map_for_output},
+    desktop::{LayerMap, LayerSurface, PopupManager, Window, layer_map_for_output},
     output::Output,
     reexports::wayland_server::{Resource as _, protocol::wl_surface::WlSurface},
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
@@ -623,12 +623,37 @@ fn screen_items(
     animating |= crate::clicks::push_rings(&mut items, state, (output, view), now);
     crate::capture::push_area(&mut items, state, (output, view));
     animating |= osd::push_item(&mut items, state, (output, view));
+    // The shell's menus closing (lot UI-06), in front of their anchored surfaces.
+    animating |= crate::popup_anim::push_closing(&mut items, state, (output, view), now);
     animating |= push_layers(
         &mut items,
         (state, now),
         (output, view),
-        &[Layer::Overlay, Layer::Top],
+        &[Layer::Overlay],
+        |_, _| Some(Point::default()),
     );
+    // A fullscreen window covers the top layer, but for the edge the pointer brought back,
+    // which slides in front (lot D-21e).
+    let fullscreen = state.fullscreen_on(output);
+    let covered = fullscreen.is_some();
+    let top = |front: bool| {
+        move |map: &LayerMap, surface: &LayerSurface| {
+            let shift = state.top_shift((output, map, covered), surface, false, now);
+            match front {
+                true => shift,
+                false => shift.is_none().then(Point::default),
+            }
+        }
+    };
+    animating |= push_layers(
+        &mut items,
+        (state, now),
+        (output, view),
+        &[Layer::Top],
+        top(true),
+    );
+    animating |= state.reveal_sliding(output, now);
+    let mut behind = covered;
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
     animating |= genie::push_effects(&mut items, state, (output, view), now);
     if let Some(preview) = preview {
@@ -673,12 +698,32 @@ fn screen_items(
         animating |= popups_appearing(window);
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
+        if behind && fullscreen.as_ref() == Some(window) {
+            animating |= push_layers(
+                &mut items,
+                (state, now),
+                (output, view),
+                &[Layer::Top],
+                top(false),
+            );
+            behind = false;
+        }
+    }
+    if behind {
+        animating |= push_layers(
+            &mut items,
+            (state, now),
+            (output, view),
+            &[Layer::Top],
+            top(false),
+        );
     }
     animating |= push_layers(
         &mut items,
         (state, now),
         (output, view),
         &[Layer::Bottom, Layer::Background],
+        |_, _| Some(Point::default()),
     );
     // The login screen shows the curtain, the picture of the lock, from its first frame: never
     // the wallpaper of the desktop (lot D-24e).
@@ -708,22 +753,25 @@ fn screen_items(
     (items, animating)
 }
 
-/// Anchored surfaces of `layers`, the front one first, each with its menus in front. The bar and
-/// the dock slide into place while the session opens (`arrival.rs`): `true` while they do.
+/// Anchored surfaces of `layers`, the front one first, each with its menus in front: those
+/// that `shift` keeps, moved by the shift it gives them. The bar and the dock slide into place
+/// while the session opens (`arrival.rs`): `true` while they do.
 fn push_layers(
     items: &mut Vec<Item>,
     (state, now): (&State, Duration),
     (output, view): (&Output, &View),
     layers: &[Layer],
+    shift: impl Fn(&LayerMap, &LayerSurface) -> Option<Point<f64, Logical>>,
 ) -> bool {
     let map = layer_map_for_output(output);
     let mut arriving = false;
     for layer in layers {
         for surface in map.layers_on(*layer).rev() {
-            let Some(geometry) = map.layer_geometry(surface) else {
+            let (Some(geometry), Some(shift)) = (map.layer_geometry(surface), shift(&map, surface))
+            else {
                 continue;
             };
-            let mut loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
+            let mut loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64() + shift;
             let mut alpha = 1.0;
             if let Some((part, progress)) = state.arrival_progress(surface.namespace(), now) {
                 let screen = Rectangle::new((0, 0).into(), view.area.size);
@@ -733,7 +781,9 @@ fn push_layers(
             }
             let at = Placement { view, loc, alpha };
             push_surface(items, surface.wl_surface(), at, true);
-            push_backdrop(items, view.rect(geometry.to_f64()));
+            let mut rect = geometry.to_f64();
+            rect.loc += shift;
+            push_backdrop(items, view.rect(rect));
         }
     }
     arriving

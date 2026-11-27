@@ -61,6 +61,13 @@ pub fn init(
         let mut backend = backend.try_borrow_mut().ok()?;
         window_anim::snapshot(&scene, backend.renderer(), state, window)
     }));
+    // The last image of a menu of the shell that closes (lot UI-06), the same way.
+    let (weak_backend, weak_scene) = (Rc::downgrade(&backend), Rc::downgrade(&scene));
+    state.set_popup_snapshotter(Box::new(move |state, surface, size, scale| {
+        let (backend, scene) = (weak_backend.upgrade()?, weak_scene.upgrade()?);
+        let mut backend = backend.try_borrow_mut().ok()?;
+        crate::popup_anim::snapshot(&scene, backend.renderer(), state, surface, size, scale)
+    }));
     let var = |key: &str| std::env::var_os(key);
     state.wallpaper = Wallpaper::start(
         &event_loop.handle(),

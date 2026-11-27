@@ -22,6 +22,7 @@ use smithay::{
     desktop::{Window, space::RenderZindex},
     reexports::{
         calloop::EventLoop,
+        rustix,
         wayland_server::{backend::DisconnectReason, protocol::wl_surface::WlSurface},
     },
     utils::{Logical, Rectangle, Size},
@@ -48,7 +49,7 @@ use smithay::{
 use crate::{
     Error, State, decorations,
     focus::KeyboardFocus,
-    handlers::{Arrangement, configure_x11},
+    handlers::{Arrangement, SelectionOrigin, configure_x11},
     layout::Edges,
     mesa, window_data,
 };
@@ -338,12 +339,13 @@ impl XwmHandler for State {
     }
 
     /// An X11 client only reads the clipboard if an X11 window has the keyboard, like a Wayland
-    /// client.
+    /// client, and never while the session is locked.
     fn allow_selection_access(&mut self, xwm: XwmId, _selection: SelectionTarget) -> bool {
-        self.x11_has_keyboard(xwm)
+        !self.is_locked() && self.x11_has_keyboard(xwm)
     }
 
-    /// An X11 client reads the selection of a Wayland client.
+    /// An X11 client reads the selection of a Wayland client, or the compositor's own: a
+    /// screenshot, whose bytes the compositor writes itself.
     fn send_selection(
         &mut self,
         _xwm: XwmId,
@@ -351,6 +353,27 @@ impl XwmHandler for State {
         mime_type: String,
         fd: OwnedFd,
     ) {
+        let screenshot = match selection {
+            SelectionTarget::Clipboard => {
+                current_data_device_selection_userdata(&self.seat).and_then(|data| data.clone())
+            }
+            SelectionTarget::Primary => None,
+        };
+        if let Some(png) = screenshot {
+            // smithay maps the text targets of X11 without looking at what is offered.
+            if mime_type == "image/png" {
+                self.paste_png(fd, png);
+            }
+            return;
+        }
+        // smithay opens its pipe non-blocking at both ends, and this end goes to the Wayland
+        // client. A client that writes plainly then stops at the first full pipe (64 KiB), and
+        // the X11 application gets a cut picture: blocking again, for the client.
+        let blocking = rustix::fs::fcntl_getfl(&fd)
+            .and_then(|flags| rustix::fs::fcntl_setfl(&fd, flags - rustix::fs::OFlags::NONBLOCK));
+        if let Err(err) = blocking {
+            tracing::debug!("selection pipe left non-blocking: {err}");
+        }
         let sent = match selection {
             SelectionTarget::Clipboard => {
                 request_data_device_client_selection(&self.seat, mime_type, fd)
@@ -370,13 +393,14 @@ impl XwmHandler for State {
     /// background X11 program cannot replace what the user pastes elsewhere. No exception
     /// for command line tools such as `xclip` run from a Wayland terminal.
     fn new_selection(&mut self, xwm: XwmId, selection: SelectionTarget, mime_types: Vec<String>) {
-        if !self.x11_has_keyboard(xwm) {
+        if self.is_locked() || !self.x11_has_keyboard(xwm) {
             tracing::debug!(
                 ?selection,
-                "X11 selection refused: no X11 window has the keyboard"
+                "X11 selection refused: no X11 window has the keyboard, or the session is locked"
             );
             return;
         }
+        self.selection_set(selection, SelectionOrigin::X11, &mime_types);
         let dh = &self.display_handle;
         match selection {
             SelectionTarget::Clipboard => {
