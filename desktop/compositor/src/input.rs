@@ -8,8 +8,8 @@
 use sherlock_ui::window as ui;
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
+        KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, Switch, SwitchState,
         SwitchToggleEvent,
     },
     desktop::{Window, WindowSurfaceType},
@@ -915,11 +915,21 @@ impl State {
                 for axis in [Axis::Horizontal, Axis::Vertical] {
                     let v120 = event.amount_v120(axis);
                     let amount = event.amount(axis).or(v120.map(|v| v * 15.0 / 120.0));
-                    if let Some(amount) = amount.filter(|a| *a != 0.0) {
-                        frame = frame.value(axis, amount);
-                        if let Some(v120) = v120 {
-                            frame = frame.v120(axis, v120 as i32);
+                    match amount {
+                        Some(amount) if amount != 0.0 => {
+                            frame = frame.value(axis, amount);
+                            if let Some(v120) = v120 {
+                                frame = frame.v120(axis, v120 as i32);
+                            }
                         }
+                        // The fingers left the touchpad: libinput says so with a zero on a
+                        // continuous source, which clients need as `axis_stop` to end the
+                        // gesture (Qt and GTK otherwise never end it, nor start kinetic
+                        // scrolling) (Q-22).
+                        Some(_) if event.source() != AxisSource::Wheel => {
+                            frame = frame.stop(axis);
+                        }
+                        _ => {}
                     }
                 }
                 pointer.axis(self, frame);
