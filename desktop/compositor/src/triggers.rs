@@ -62,6 +62,8 @@ pub struct Triggers {
     inhibitor: Option<OwnedFd>,
     /// The machine is about to sleep, since then: the inhibitor goes once the lock shows.
     sleeping: Option<Instant>,
+    /// The veil before the inactivity's lock or screens off, since then (lot D-38).
+    dimmed: Option<Instant>,
 }
 
 fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
@@ -120,6 +122,38 @@ impl State {
     /// An input happened: the inactivity starts again.
     pub(crate) fn note_input(&mut self) {
         self.triggers.last_input = Some(Instant::now());
+        // The veil lifts at once.
+        if self.triggers.dimmed.take().is_some() {
+            tracing::debug!("input: the veil lifts");
+            self.queue_redraw();
+        }
+    }
+
+    /// What is left before the inactivity locks the session or turns the screens off,
+    /// whichever comes first; `None`: neither is coming.
+    fn idle_left(&self) -> Option<Duration> {
+        let last = self.triggers.last_input?;
+        let lock = self.triggers.idle_delay().filter(|_| !self.is_locked());
+        let off = self
+            .screen_off_delay()
+            .filter(|_| self.power_phase() == crate::power::Phase::On);
+        let delay = match (lock, off) {
+            (Some(a), Some(b)) => a.min(b),
+            (a, b) => a.or(b)?,
+        };
+        Some(delay.saturating_sub(last.elapsed()))
+    }
+
+    /// The opacity of the veil over the screens, from 0 to `DIM`, and whether it still darkens.
+    pub fn dim(&self) -> (f32, bool) {
+        use sherlock_ui::screen_off as ui;
+        let Some(since) = self.triggers.dimmed else {
+            return (0.0, false);
+        };
+        let t = (since.elapsed().as_secs_f32() / ui::DIM_FADE.as_secs_f32()).min(1.0);
+        // Ease in and out.
+        let eased = t * t * (3.0 - 2.0 * t);
+        (ui::DIM * eased, t < 1.0)
     }
 
     fn check_idle(&mut self) {
@@ -131,11 +165,22 @@ impl State {
         let Some(last) = self.triggers.last_input else {
             return;
         };
+        // A few seconds before, the veil darkens the screens.
+        if self.triggers.dimmed.is_none()
+            && self
+                .idle_left()
+                .is_some_and(|left| left <= sherlock_ui::screen_off::DIM_LEAD)
+        {
+            tracing::debug!("no input: the veil darkens the screens");
+            self.triggers.dimmed = Some(Instant::now());
+            self.queue_redraw();
+        }
         if let Some(delay) = self.triggers.idle_delay()
             && !self.is_locked()
             && last.elapsed() >= delay
         {
             tracing::info!(?delay, "no input: the session locks");
+            self.triggers.dimmed = None;
             self.lock_session();
         }
         if let Some(delay) = self.screen_off_delay()
@@ -143,6 +188,7 @@ impl State {
             && last.elapsed() >= delay
         {
             tracing::info!(?delay, "no input: the screens go off");
+            self.triggers.dimmed = None;
             self.screens_off(crate::power::Then::Stay);
         }
     }

@@ -19,6 +19,7 @@ mod tests {
 
     use compositor::{
         State,
+        damage::{Key, Part},
         lock::Programs,
         power::{Phase, Then},
         render::Item,
@@ -1309,5 +1310,43 @@ mod tests {
         h.run_until("the lock and the screens off", |h| {
             h.state.is_locked() && h.state.power_phase() != Phase::On
         });
+    }
+
+    #[test]
+    fn a_veil_darkens_the_screens_before_the_idle_lock_and_any_input_lifts_it() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let handle = h.event_loop.handle();
+        h.state.watch_idle(&handle, None).unwrap();
+        // The lock comes in 5.5 s: the veil, `DIM_LEAD` (5 s) before, shows at the next check.
+        h.state.set_idle_lock(Some(Duration::from_millis(5500)));
+        let veil = |h: &Harness| {
+            h.items().iter().find_map(|i| match i {
+                Item::Shape { key, alpha, .. } if *key == Key::of(None, Part::IdleVeil) => {
+                    Some(*alpha)
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(veil(&h), None);
+        h.run_until("the veil", |h| h.state.dim().0 > 0.0);
+        assert!(!h.state.is_locked(), "the veil comes before the lock");
+        // It darkens gently, on top of everything, up to `DIM`.
+        let first = h.items();
+        assert!(
+            matches!(&first[0], Item::Shape { key, .. } if *key == Key::of(None, Part::IdleVeil)),
+            "the veil is over everything"
+        );
+        h.run_until("the veil darker", |h| {
+            h.state.dim().0 >= sherlock_ui::screen_off::DIM - 0.001
+        });
+        assert!((veil(&h).unwrap() - sherlock_ui::screen_off::DIM).abs() < 0.001);
+
+        // The slightest input lifts it at once, and the lock waits again.
+        h.key(KEY_A);
+        assert_eq!(h.state.dim().0, 0.0);
+        assert_eq!(veil(&h), None);
+        assert!(!h.state.is_locked());
     }
 }

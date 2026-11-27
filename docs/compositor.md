@@ -2354,6 +2354,11 @@ rectangle (`Item::Squashed`); the line and the dot are shapes.
   Firefox and mpv take during a video), or while logind blocks `idle` (`BlockInhibited`, read
   every 5 s), neither the inactivity lock nor the screens off for inactivity happen; the
   inactivity counts again from the end of the inhibition.
+- **The veil before.** As on macOS, 5 s before the inactivity locks the session or turns the
+  screens off (`DIM_LEAD`), a black veil of the compositor darkens the screens to 35 % (`DIM`)
+  over 1.5 s; the backlight is not touched. The slightest input (a key, the pointer, a click, a
+  gesture) lifts it at once, and the inactivity counts again. Tokens in
+  `sherlock_ui::screen_off`; test `a_veil_darkens_the_screens_before_the_idle_lock_and_any_input_lifts_it`.
 
 Tests: `tests/session_lock.rs` (the frames of the animation, from the whole picture to the
 line, its halo and black; nothing animates once dark; the waking key is not typed; Super + Shift

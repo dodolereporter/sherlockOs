@@ -65,6 +65,8 @@ pub enum Part {
     ScreenOffPicture,
     ScreenOffLine,
     ScreenOffHalo,
+    /// The veil before the inactivity (lot D-38).
+    IdleVeil,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

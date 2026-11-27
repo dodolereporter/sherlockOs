@@ -28,5 +28,13 @@ pub const fn light(palette: &Palette) -> Color {
     palette.cream
 }
 
+/// The veil before the screens go off or the session locks for inactivity, as on macOS: it
+/// shows `DIM_LEAD` before, darkens the screens to `DIM` (the opacity of its black) over
+/// `DIM_FADE`, and the slightest input lifts it at once. A veil of the compositor, not the
+/// backlight.
+pub const DIM: f32 = 0.35;
+pub const DIM_LEAD: Duration = Duration::from_secs(5);
+pub const DIM_FADE: Duration = Duration::from_millis(1500);
+
 /// What fills the screen around the picture: black, as a television off.
 pub const BLACK: Color = Color::rgb(0, 0, 0);

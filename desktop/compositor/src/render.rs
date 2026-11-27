@@ -543,7 +543,26 @@ pub fn items(
             screen_items(state, (output, local), preview, wallpaper, now)
         });
     }
-    screen_items(state, (output, view), preview, wallpaper, now)
+    let (mut items, mut animating) = screen_items(state, (output, view), preview, wallpaper, now);
+    // The veil before the inactivity, over everything (lot D-38).
+    let (dim, darkening) = state.dim();
+    if dim > 0.0 {
+        let black = sherlock_ui::screen_off::BLACK.premultiplied();
+        items.insert(
+            0,
+            Item::Shape {
+                key: Key::of(None, Part::IdleVeil),
+                rect: view.frame,
+                fill: black,
+                border: black,
+                border_width: 0.0,
+                radius: 0.0,
+                alpha: dim,
+            },
+        );
+        animating |= darkening;
+    }
+    (items, animating)
 }
 
 /// What a screen shows with the screens on.
