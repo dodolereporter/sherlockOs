@@ -328,6 +328,15 @@ pub mod text {
     pub const WIFI: &str = "Wi-Fi";
     pub const BLUETOOTH: &str = "Bluetooth";
     pub const DO_NOT_DISTURB: &str = "Ne pas déranger";
+    // Its durations (D-23e).
+    pub const DURATIONS: &str = "Durées";
+    pub const FOR_AN_HOUR: &str = "Pendant 1 heure";
+    pub const UNTIL_EVENING: &str = "Jusqu’à ce soir";
+    pub const UNTIL_TOMORROW: &str = "Jusqu’à demain matin";
+    /// The line of the tile while it holds for a time: « Jusqu’à 19:00 ».
+    pub fn until(time: &str) -> String {
+        format!("Jusqu’à {time}")
+    }
     pub const GAME_MODE: &str = "Mode jeu";
     pub const ON: &str = "Activé";
     pub const OFF: &str = "Désactivé";

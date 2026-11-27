@@ -6,7 +6,11 @@
 //! ```text
 //! [Notifications]
 //! DoNotDisturb=true
+//! DoNotDisturbUntil=1795892400
 //! ```
+//!
+//! `DoNotDisturbUntil` (D-23e) ends Do not disturb at that instant, in seconds since 1970:
+//! « Pendant 1 heure », « Jusqu'à ce soir ». Without it, it lasts until switched off.
 //!
 //! Every key is optional; an absent file gives the defaults. See `docs/notifications.md`.
 
@@ -20,31 +24,66 @@ use dock_config::KeyFile;
 
 const GROUP: &str = "Notifications";
 const DO_NOT_DISTURB: &str = "DoNotDisturb";
+const UNTIL: &str = "DoNotDisturbUntil";
 
 /// The notifications settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NotificationsConfig {
     /// Nothing shows but critical notifications; all of them still go to the history.
     pub do_not_disturb: bool,
+    /// When Do not disturb ends by itself, in seconds since 1970.
+    pub until: Option<u64>,
 }
 
 impl NotificationsConfig {
+    /// Do not disturb holds at `now` (seconds since 1970): on, and its end not reached.
+    pub fn active_at(&self, now: u64) -> bool {
+        self.do_not_disturb && self.until.is_none_or(|until| now < until)
+    }
+
+    /// `active_at` the system clock's now.
+    pub fn active_now(&self) -> bool {
+        self.active_at(epoch_now())
+    }
+
     /// Reads a text: the settings, and the value that could not be read, if any (the default
     /// is then used).
     pub fn parse(text: &str) -> (Self, Option<String>) {
         let file = KeyFile::parse(text);
+        let until = file.get(GROUP, UNTIL);
         let Some(raw) = file.get(GROUP, DO_NOT_DISTURB) else {
             return (Self::default(), None);
         };
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "true" => (
+        let on = match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return (Self::default(), Some(raw)),
+        };
+        match until.as_deref().map(str::trim) {
+            None | Some("") => (
                 Self {
-                    do_not_disturb: true,
+                    do_not_disturb: on,
+                    until: None,
                 },
                 None,
             ),
-            "false" => (Self::default(), None),
-            _ => (Self::default(), Some(raw)),
+            Some(text) => match text.parse::<u64>() {
+                Ok(at) => (
+                    Self {
+                        do_not_disturb: on,
+                        until: Some(at),
+                    },
+                    None,
+                ),
+                // An end that cannot be read: on until switched off, as without one.
+                Err(_) => (
+                    Self {
+                        do_not_disturb: on,
+                        until: None,
+                    },
+                    Some(text.to_owned()),
+                ),
+            },
         }
     }
 
@@ -68,6 +107,8 @@ impl NotificationsConfig {
         };
         let value = if self.do_not_disturb { "true" } else { "false" };
         file.set(GROUP, DO_NOT_DISTURB, value);
+        let until = self.until.map(|at| at.to_string()).unwrap_or_default();
+        file.set(GROUP, UNTIL, &until);
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir)?;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -84,6 +125,13 @@ impl NotificationsConfig {
         }
         written
     }
+}
+
+/// The system clock, in seconds since 1970.
+pub fn epoch_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Saves made by this process, for unique temporary names.
@@ -153,6 +201,7 @@ mod tests {
         );
         let on = NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         };
         assert_eq!(
             NotificationsConfig::parse("[Notifications]\nDoNotDisturb=True\n"),
@@ -166,12 +215,40 @@ mod tests {
     }
 
     #[test]
+    fn do_not_disturb_ends_at_its_time() {
+        let (config, problem) = NotificationsConfig::parse(
+            "[Notifications]\nDoNotDisturb=true\nDoNotDisturbUntil=1000\n",
+        );
+        assert_eq!((config.until, problem), (Some(1000), None));
+        assert!(config.active_at(999) && !config.active_at(1000));
+        let (config, problem) =
+            NotificationsConfig::parse("[Notifications]\nDoNotDisturb=true\nDoNotDisturbUntil=x\n");
+        assert!(config.active_at(u64::MAX) && problem.is_some());
+        assert!(!NotificationsConfig::default().active_at(0));
+        let path = temp("until");
+        let timed = NotificationsConfig {
+            do_not_disturb: true,
+            until: Some(42),
+        };
+        timed.save(&path).unwrap();
+        assert_eq!(NotificationsConfig::load(&path).unwrap().0, timed);
+        let endless = NotificationsConfig {
+            until: None,
+            ..timed
+        };
+        endless.save(&path).unwrap();
+        assert_eq!(NotificationsConfig::load(&path).unwrap().0, endless);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn saving_keeps_the_other_lines() {
         let path = temp("save");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "# mine\n[Notifications]\nOther=1\n").unwrap();
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&path)
         .unwrap();
@@ -192,6 +269,7 @@ mod tests {
         assert!(!follower.current().0.do_not_disturb);
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&path)
         .unwrap();

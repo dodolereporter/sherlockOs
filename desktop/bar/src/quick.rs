@@ -35,6 +35,9 @@ use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
 mod devices;
+mod focus;
+
+pub use focus::Span;
 
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -142,6 +145,8 @@ pub enum Page {
     Networks,
     /// The Bluetooth devices, paired and found (`devices.rs`).
     Devices,
+    /// The durations of Do not disturb (`focus.rs`).
+    Focus,
 }
 
 /// What runs the session commands: the launcher's.
@@ -258,6 +263,8 @@ pub struct Quick {
     pub keyboard: Load<KeyboardLight>,
     pub energy: Load<Power>,
     pub do_not_disturb: Option<bool>,
+    /// When Do not disturb ends by itself, while it holds (D-23e).
+    pub dnd_until: Option<u64>,
     pub page: Page,
     /// The network chosen that needs its password, and the password typed.
     pub joining: Option<Network>,
@@ -329,6 +336,12 @@ pub enum Message {
     Forget(String),
     ConfirmForget(bool),
     ToggleDoNotDisturb,
+    /// Do not disturb for a time, on until switched off, or off (D-23e).
+    DoNotDisturb(Span),
+    /// The notifications file read, or written (`true`), off the interface thread.
+    DoNotDisturbRead(Result<NotificationsConfig, Problem>, bool),
+    /// The durations of Do not disturb, or back.
+    ShowFocus(bool),
     Volume(u8),
     Mute,
     Light(u8),
@@ -422,11 +435,9 @@ impl Quick {
         self.armed = None;
         self.failure = None;
         self.held = None;
-        self.do_not_disturb = self.settings.as_deref().map(|path| {
-            NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
-        });
         Task::batch([
             stopped,
+            self.read_do_not_disturb(),
             self.read(Service::Wifi),
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
@@ -521,6 +532,7 @@ impl Quick {
                 | Message::Pairing(_)
                 | Message::DeviceDone(_)
                 | Message::Done(..)
+                | Message::DoNotDisturbRead(..)
                 | Message::Changed(_)
                 | Message::Wifi(_)
                 | Message::Bluetooth(_)
@@ -634,7 +646,19 @@ impl Quick {
                     });
                 }
             }
-            Message::ToggleDoNotDisturb => self.toggle_do_not_disturb(),
+            Message::ToggleDoNotDisturb => {
+                let span = if self.do_not_disturb == Some(true) {
+                    Span::Off
+                } else {
+                    Span::On
+                };
+                return self.set_do_not_disturb(span);
+            }
+            Message::DoNotDisturb(span) => return self.set_do_not_disturb(span),
+            Message::DoNotDisturbRead(read, written) => {
+                return self.do_not_disturb_read(read, written);
+            }
+            Message::ShowFocus(show) => self.show_focus(show),
             Message::Volume(value) => {
                 self.held = Some(Service::Sound);
                 if let Load::Ready(output) = &mut self.sound {
@@ -832,31 +856,6 @@ impl Quick {
             let password = password.as_ref().map(Secret::as_str);
             network::connect(&bus, &device, &chosen, password).await
         })
-    }
-
-    fn toggle_do_not_disturb(&mut self) {
-        let Some(path) = self.settings.clone() else {
-            return;
-        };
-        let (mut config, _) = NotificationsConfig::load(&path).unwrap_or_default();
-        config.do_not_disturb = !config.do_not_disturb;
-        match config.save(&path) {
-            Ok(()) => {
-                self.do_not_disturb = Some(config.do_not_disturb);
-                if self
-                    .failure
-                    .as_ref()
-                    .is_some_and(|(s, _)| *s == Service::DoNotDisturb)
-                {
-                    self.failure = None;
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "cannot write Do not disturb");
-                let problem = Problem::Failed(error.to_string());
-                self.failure = Some((Service::DoNotDisturb, problem));
-            }
-        }
     }
 
     /// The launcher's rules: locking runs at once; logging out, restarting and powering off
@@ -1071,6 +1070,7 @@ impl Quick {
             Page::Main => self.view_main(user, battery),
             Page::Networks => self.view_networks(),
             Page::Devices => self.view_devices(),
+            Page::Focus => self.view_focus(),
         };
         let forward = self.page_forward;
         let coming = self.page_motion.page(forward, || page(self.page));
@@ -1185,20 +1185,19 @@ impl Quick {
     }
 
     fn do_not_disturb_tile(&self) -> Element<'_, Message> {
-        let on = self.do_not_disturb == Some(true);
         let line = match self.failed(Service::DoNotDisturb) {
-            Some(failed) => failed,
-            None if on => words::ON,
-            None => words::OFF,
+            Some(failed) => failed.to_owned(),
+            None => self.do_not_disturb_line(),
         };
         let enabled = self.settings.is_some();
+        let more = enabled.then_some((words::DURATIONS, Message::ShowFocus(true)));
         panels::quick_tile(
             Glyph::Moon,
             words::DO_NOT_DISTURB,
-            line.to_owned(),
+            line,
             self.lit[2].value(self.now),
             enabled.then_some(Message::ToggleDoNotDisturb),
-            None,
+            more,
         )
     }
 
@@ -1686,32 +1685,6 @@ mod tests {
         let mut refused = Quick::default();
         let _ = refused.update(Message::Session(Command::Lock));
         assert!(matches!(refused.failure, Some((Service::Session, _))));
-    }
-
-    #[test]
-    fn do_not_disturb_is_written_to_the_notifications_file() {
-        let dir = std::env::temp_dir().join(format!("bar-dnd-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let file = dir.join("notifications").join("notifications.conf");
-        let mut quick = Quick {
-            settings: Some(file.clone()),
-            ..Quick::default()
-        };
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert_eq!(quick.do_not_disturb, Some(true));
-        let (config, _) = NotificationsConfig::load(&file).unwrap();
-        assert!(config.do_not_disturb);
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
-        // A file that cannot be written: « Échec » under the tile.
-        let mut blocked = Quick {
-            settings: Some(PathBuf::from("/proc/no/notifications.conf")),
-            ..Quick::default()
-        };
-        let _ = blocked.update(Message::ToggleDoNotDisturb);
-        assert!(matches!(blocked.failure, Some((Service::DoNotDisturb, _))));
-        assert_eq!(blocked.failed(Service::DoNotDisturb), Some(words::FAILED));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
