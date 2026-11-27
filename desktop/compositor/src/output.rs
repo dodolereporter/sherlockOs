@@ -13,7 +13,7 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::timer::{TimeoutAction, Timer},
-        wayland_server::{backend::GlobalId, protocol::wl_surface::WlSurface},
+        wayland_server::{DisplayHandle, backend::GlobalId, protocol::wl_surface::WlSurface},
     },
     utils::{Logical, Physical, Point, Rectangle, Size, Transform},
     wayland::{
@@ -22,6 +22,7 @@ use smithay::{
     },
 };
 
+use desktop_config::displays::Identity;
 use sherlock_ui::window as ui;
 
 use crate::{State, layout};
@@ -31,9 +32,41 @@ use crate::{State, layout};
 pub struct Screen {
     pub output: Output,
     pub frame: Rectangle<i32, Physical>,
-    /// The `wl_output` global, removed with the screen.
-    global: GlobalId,
+    /// The `wl_output` global, removed with the screen; none while it is switched off.
+    global: Option<GlobalId>,
+    /// What can be changed of it, and who it is (lot D-26b).
+    pub details: Details,
+    /// Its place in the space, chosen by a client or saved; `None`: right of the others.
+    pub position: Option<Point<i32, Logical>>,
 }
+
+impl Screen {
+    /// The screen without its `wl_output` global, which `unplug` removes.
+    pub(crate) fn switched_off(mut self) -> Self {
+        self.global = None;
+        self
+    }
+
+    /// Offers its `wl_output` global again.
+    pub(crate) fn relight(&mut self, display: &DisplayHandle) {
+        self.global = Some(self.output.create_global::<State>(display));
+    }
+}
+
+/// Who a screen is and what it can do: its EDID names, its modes and whether it can turn
+/// (ADR 0025).
+#[derive(Debug, Clone, Default)]
+pub struct Details {
+    pub identity: Identity,
+    /// The modes it can take, the preferred one first. Empty: only its current mode (a slice
+    /// of the host window).
+    pub modes: Vec<Mode>,
+    /// It can be rotated: never a slice of the host window.
+    pub rotates: bool,
+}
+
+/// Modes of a virtual screen without a host window (`--headless` and the tests).
+const VIRTUAL_MODES: [(i32, i32); 4] = [(1280, 800), (1440, 900), (1920, 1080), (2560, 1440)];
 
 /// Where a screen draws: its area of the space, its rectangle of the frame, its scale, and the
 /// size of the whole frame. Everything the renderer needs to turn space coordinates into frame
@@ -73,25 +106,66 @@ impl State {
             model: "virtual".into(),
         };
         let output = Output::new(name, properties);
-        self.add_screen(output.clone(), size, scale);
+        let mode = |(w, h)| Mode {
+            size: (w, h).into(),
+            refresh: 60_000,
+        };
+        // A slice of the host window has the size of the slice; other virtual screens can
+        // take any of a few modes, and turn.
+        let details = match self.nested {
+            true => Details::default(),
+            false => Details {
+                identity: Identity::new("compositor", "virtual", &self.screens.len().to_string()),
+                modes: std::iter::once(size.into())
+                    .chain(VIRTUAL_MODES)
+                    .map(mode)
+                    .fold(Vec::new(), |mut modes, m| {
+                        if !modes.contains(&m) {
+                            modes.push(m);
+                        }
+                        modes
+                    }),
+                rotates: true,
+            },
+        };
+        output.change_current_state(Some(mode(size.into())), None, None, None);
+        self.plug_screen(output.clone(), size, scale, details);
         output
     }
 
     /// Adds `output`, a screen of `size` pixels at `scale`, to the right of the existing ones.
     /// Its refresh rate is its current mode's, if it has one.
     pub fn add_screen(&mut self, output: Output, size: Size<i32, Physical>, scale: f64) {
+        self.plug_screen(output, size, scale, Details::default());
+    }
+
+    /// Adds `output`, a screen whose mode is `size` pixels, with what was saved of it: its
+    /// scale, rotation and place, or `scale` and the right of the others (ADR 0025).
+    pub fn plug_screen(
+        &mut self,
+        output: Output,
+        size: Size<i32, Physical>,
+        scale: f64,
+        details: Details,
+    ) {
         self.queue_redraw();
+        let saved = self.saved_screen(&details.identity);
+        let scale = saved.as_ref().map_or(scale, |s| s.scale);
+        let transform = saved
+            .as_ref()
+            .filter(|_| details.rotates)
+            .map_or(Transform::Normal, |s| {
+                crate::displays::transform(s.transform)
+            });
+        let position = saved.as_ref().map(|s| Point::from(s.position));
+        output.change_current_state(None, Some(transform), Some(Scale::Fractional(scale)), None);
         let global = output.create_global::<State>(&self.display_handle);
-        output.change_current_state(
-            None,
-            Some(Transform::Normal),
-            Some(Scale::Fractional(scale)),
-            None,
-        );
         self.screens.push(Screen {
             output,
-            frame: Rectangle::from_size(size),
-            global,
+            frame: Rectangle::from_size(transform.transform_size(size)),
+            global: Some(global),
+            details,
+            position,
         });
         self.place_screens();
     }
@@ -103,9 +177,17 @@ impl State {
     pub fn remove_screen(&mut self, output: &Output) {
         self.queue_redraw();
         let Some(i) = self.screens.iter().position(|s| &s.output == output) else {
+            // Unplugged while switched off.
+            self.displays.forget(output);
             return;
         };
         let screen = self.screens.remove(i);
+        self.unplug(screen);
+    }
+
+    /// Takes `screen` out of the space and of the clients' view: switched off, or unplugged.
+    pub(crate) fn unplug(&mut self, screen: Screen) {
+        let output = &screen.output;
         for layer in layer_map_for_output(output).layers() {
             layer.layer_surface().send_close();
         }
@@ -113,15 +195,17 @@ impl State {
         self.space.unmap_output(output);
         // Clients that bind the global right now must not get a protocol error: it is hidden
         // first, and destroyed a little later.
-        let display = self.display_handle.clone();
-        display.disable_global::<State>(screen.global.clone());
-        let timer = Timer::from_duration(Duration::from_secs(5));
-        let removed = self.loop_handle.insert_source(timer, move |_, _, _| {
-            display.remove_global::<State>(screen.global.clone());
-            TimeoutAction::Drop
-        });
-        if let Err(err) = removed {
-            tracing::warn!("removing the screen's global later: {err}");
+        if let Some(global) = screen.global {
+            let display = self.display_handle.clone();
+            display.disable_global::<State>(global.clone());
+            let timer = Timer::from_duration(Duration::from_secs(5));
+            let removed = self.loop_handle.insert_source(timer, move |_, _, _| {
+                display.remove_global::<State>(global.clone());
+                TimeoutAction::Drop
+            });
+            if let Err(err) = removed {
+                tracing::warn!("removing the screen's global later: {err}");
+            }
         }
         self.place_screens();
         // The pointer comes back on a screen before windows go to the one under it.
@@ -173,23 +257,43 @@ impl State {
         self.place_screens();
     }
 
-    /// Lays the screens side by side, in the frame and in the space, from their frame size.
-    /// Anchored surfaces, and windows that fill a zone of a screen, follow.
-    fn place_screens(&mut self) {
-        let (mut frame_x, mut space_x) = (0, 0);
+    /// Lays the screens side by side in the frame, from their frame size, and in the space
+    /// where they were put, the others to the right of them all. Anchored surfaces, and
+    /// windows that fill a zone of a screen, follow.
+    pub(crate) fn place_screens(&mut self) {
+        let mut frame_x = 0;
+        let mut space_x = self
+            .screens
+            .iter()
+            .filter_map(|s| {
+                let size = s.output.current_mode()?.size;
+                let size = s.output.current_transform().transform_size(size);
+                let width = size
+                    .to_f64()
+                    .to_logical(s.output.current_scale().fractional_scale());
+                Some(s.position?.x + width.w.round() as i32)
+            })
+            .max()
+            .unwrap_or(0);
         for screen in &mut self.screens {
             screen.frame.loc = (frame_x, 0).into();
             frame_x += screen.frame.size.w;
             let refresh = screen.output.current_mode().map_or(60_000, |m| m.refresh);
+            let output = &screen.output;
+            // The frame is the screen turned; its mode, the screen as it is.
             let mode = Mode {
-                size: screen.frame.size,
+                size: output.current_transform().transform_size(screen.frame.size),
                 refresh,
             };
-            let output = &screen.output;
-            output.change_current_state(Some(mode), None, None, Some((space_x, 0).into()));
-            output.set_preferred(mode);
-            self.space.map_output(output, (space_x, 0));
-            space_x += self.space.output_geometry(output).map_or(0, |g| g.size.w);
+            let at = screen.position.unwrap_or((space_x, 0).into());
+            output.change_current_state(Some(mode), None, None, Some(at));
+            if screen.details.modes.is_empty() {
+                output.set_preferred(mode);
+            }
+            self.space.map_output(output, at);
+            if screen.position.is_none() {
+                space_x += self.space.output_geometry(output).map_or(0, |g| g.size.w);
+            }
         }
         for output in self.outputs() {
             layer_map_for_output(&output).arrange();

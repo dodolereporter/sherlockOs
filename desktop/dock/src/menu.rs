@@ -1,5 +1,6 @@
 //! Menu of a dock icon (right click): its entries from the dock menu of the Menus board, the
-//! size of its surface and its keyboard navigation.
+//! size of its surface and its keyboard navigation. Also the dock's own menu, on its separator
+//! or between its icons, as the Dock options of macOS.
 
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ pub enum Entry {
     Unpin,
     /// Closes its windows. Needs a source of windows that can close them.
     Quit,
+    /// The dock's own menu: puts Sherlock back in the dock, or takes it out.
+    ShowSherlock,
 }
 
 /// An entry as the menu shows it.
@@ -63,7 +66,7 @@ pub struct Abilities {
     pub launch: bool,
     /// Open but not pinned, with a desktop entry: « Garder dans le Dock ».
     pub keep: bool,
-    /// Pinned, and not Sherlock: « Retirer du Dock ».
+    /// Pinned, Sherlock included: « Retirer du Dock ».
     pub unpin: bool,
     /// Its windows can be acted on: brought forward, closed.
     pub act: bool,
@@ -109,6 +112,15 @@ pub fn entries(can: Abilities, windows: &[Listed], actions: &[(usize, String)]) 
     lines
 }
 
+/// The entries of the dock's own menu: « Afficher Sherlock dans le Dock », checked while it is
+/// there.
+pub fn dock_entries(sherlock: bool) -> Vec<Line> {
+    vec![Line {
+        checked: sherlock,
+        ..Line::new(Entry::ShowSherlock, text::SHOW_SHERLOCK, true)
+    }]
+}
+
 /// Size of the menu surface for `lines`: width, then height.
 pub fn surface_size(lines: &[Line]) -> (u32, u32) {
     let separator = metrics::BORDER_WIDTH + 2.0 * metrics::MENU_SEPARATOR_MARGIN.0;
@@ -117,7 +129,16 @@ pub fn surface_size(lines: &[Line]) -> (u32, u32) {
         + dock::MENU_HEADER_HEIGHT
         + lines.len() as f32 * metrics::MENU_ITEM_HEIGHT
         + separators as f32 * separator;
-    (dock::MENU_WIDTH as u32, height.ceil() as u32)
+    (width(lines) as u32, height.ceil() as u32)
+}
+
+/// Width of the menu for `lines`: the board's, wider for the dock's own menu.
+pub fn width(lines: &[Line]) -> f32 {
+    if lines.iter().any(|l| l.entry == Entry::ShowSherlock) {
+        dock::OWN_MENU_WIDTH
+    } else {
+        dock::MENU_WIDTH
+    }
 }
 
 /// A key that matters to the dock or its menu.
@@ -257,21 +278,29 @@ mod tests {
                 ("Quitter", false),
             ]
         );
-        // Sherlock: everything there, nothing enabled.
+        // Sherlock: everything there, only « Retirer du Dock » enabled.
         let sherlock = Abilities {
             launch: false,
             keep: false,
-            unpin: false,
+            unpin: true,
             act: false,
         };
         assert_eq!(
             labels(&entries(sherlock, &[], &[])),
             [
                 ("Ouvrir", false),
-                ("Retirer du Dock", false),
+                ("Retirer du Dock", true),
                 ("Quitter", false)
             ]
         );
+    }
+
+    #[test]
+    fn the_dock_menu_shows_or_hides_sherlock() {
+        let shown = dock_entries(true);
+        assert_eq!(labels(&shown), [("Afficher Sherlock dans le Dock", true)]);
+        assert!(shown[0].checked && !dock_entries(false)[0].checked);
+        assert_eq!(shown[0].entry, Entry::ShowSherlock);
     }
 
     #[test]
