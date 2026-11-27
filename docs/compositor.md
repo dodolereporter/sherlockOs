@@ -39,6 +39,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
+| `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
 | `src/input.rs` | Keyboard and mouse: click to focus, gestures, snapping, shortcuts, cursor shape |
@@ -743,6 +744,38 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   therefore cannot change what the user pastes into a Wayland application. The rule is strict,
   with no exception for command line tools: `xclip -i` launched from a Konsole (Wayland) sets
   nothing on the Wayland side. The log says so at the `debug` level: `X11 selection refused`.
+- Text goes through smithay, which maps `text/plain;charset=utf-8` to `UTF8_STRING` and
+  `text/plain` to `TEXT`. The other types (`image/png`, `text/uri-list`, `text/html`) keep their
+  name as X11 atom. From Wayland to X11, smithay passes them on. From X11 to Wayland, smithay 0.7
+  looks their atom up in a property that nothing writes, and the paste failed: the compositor
+  reads them itself (`src/x11_paste.rs`), as an X11 client of XWayland, in a thread per paste
+  with its own connection, and writes what comes into the Wayland client's pipe.
+- Large contents (lot D-29, measured with 3 and 4 MB in `tests/clipboard.rs`): the X11 side goes
+  by INCR, in 64 KiB pieces, both ways, without blocking the loop. smithay opens its pipe
+  non-blocking at both ends and hands one to the Wayland client: a client that writes plainly
+  (as `wl-copy` does) stopped at the first full pipe, and X11 got the first 64 KiB of a picture.
+  The compositor makes that end blocking again before handing it over.
+- A screenshot copied by the compositor (lot D-35c) is offered to X11 too, as `image/png`.
+- **Locked session: nothing passes.** No Wayland client is offered a selection, not even the lock
+  program, which has the keyboard; an offer received before the lock gives nothing when read;
+  an X11 client neither reads nor sets one. The selections may still change (a screenshot taken
+  just before lands), and XWayland still learns of it, but no one reads them before the unlock.
+  Limit: a Wayland client that kept an offer from another Wayland client, received before the
+  lock, reads it straight from that client, without the compositor.
+- smithay 0.7 calls `focus_changed` for a new keyboard focus only. When nobody has the keyboard
+  (lock without its surface yet, `focus(None)`), the compositor takes the selections away from
+  the client that had it, which kept being offered them before lot D-29.
+- **The hook for the clipboard history (lot D-42).** Every new selection, CLIPBOARD and PRIMARY,
+  from a Wayland client, an X11 application or the compositor, passes through
+  `State::selection_set` (`handlers.rs`) with its types and its origin (`SelectionOrigin`: the
+  Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
+  manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
+  that hint does not cross from an X11 application.
+- **Drag and drop between X11 and Wayland: not done, lot D-29c.** smithay 0.7 has no XDND: the
+  window manager would have to speak it itself (`XdndAware` proxy window, `XdndEnter`,
+  `XdndPosition`, `XdndStatus`, `XdndDrop`, `XdndFinished`, the `XdndSelection` transfer) and
+  bridge it to `wl_data_device`'s drag and drop, in both directions. Between Wayland
+  applications (Evidence, Dolphin, Chrome), drag and drop works with smithay's.
 
 ## GPU buffers (linux-dmabuf)
 
@@ -2541,6 +2574,7 @@ just verify
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
+| `tests/clipboard.rs` | Clipboard and primary selection between a Wayland client and X11 clients (x11rb): text, pictures of several MB (INCR), screenshot, nothing while locked (lot D-29) |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
