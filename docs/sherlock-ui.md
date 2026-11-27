@@ -640,7 +640,8 @@ middle of a letter, small icons, and pointers that did not change.
   « … » at the last whole character that fits, never in the middle of a letter. The text is
   shaped by the renderer, the cut found by a binary search over the character boundaries
   (`ellipsis::fit`, tested with a fake measure), computed again only when the text, its font,
-  its size or its width changes. `Shrink` takes the text's width at most; `Fill` takes what its
+  its size or its width changes. The cuts found are kept for the whole program (4,096 at most):
+  a surface opened again by a resident program finds them without shaping (lot P-02). `Shrink` takes the text's width at most; `Fill` takes what its
   neighbours leave. Selectors get the whole text. Used by the menu entries (a Wi-Fi network),
   the quick tiles (the network in use), the Bluetooth devices, the name of the sound output, the
   user, the application name of the bar, and the application and title of a notification.

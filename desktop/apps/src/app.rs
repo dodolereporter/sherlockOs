@@ -1,18 +1,23 @@
 //! State of the applications view, its messages, update and view.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, key::Named};
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::{
-    Space, button, column, container, mouse_area, operation, pin, row, stack, svg, text,
+    Space, button, column, container, image, mouse_area, operation, pin, row, stack, svg, text,
 };
 use iced::window::{self, Id};
 use iced::{Alignment, Element, Event, Length, Padding, Point, Size, Subscription, Task, event};
+use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
-use launcher::app::{Spawn, icon_handle};
+use launcher::app::{Spawn, hide_other, icon_handle, view_warm_up};
+use launcher::service::{self, Inbox, Request};
 use launcher::source::Command;
+use launcher::startup;
 use sherlock_ui::animated::reveal;
 use sherlock_ui::apps::{self as look, text as texts};
 use sherlock_ui::component::{self as ui, Trailing};
@@ -22,6 +27,7 @@ use sherlock_ui::motion::Animation;
 use sherlock_ui::{color, metrics, typography};
 
 use crate::catalog::{Catalog, Tile};
+use crate::icons::{self, Rasters};
 use crate::pager::{Pager, page_count};
 
 /// Id of the search field, to give it the keyboard.
@@ -60,7 +66,24 @@ pub enum Message {
     CloseMenu,
     Scroll(ScrollDelta),
     Frame(Instant),
+    /// A request of a client of the resident service (lot P-02).
+    Service(Request),
+    /// The scale of the surface: icons are drawn for it.
+    Scale(f32),
+    /// Icons drawn on the pool.
+    Rasters(Arc<Rasters>),
+    /// The applications read again for a new opening.
+    Reloaded(Arc<Catalog>),
+    /// The theme of the appearance file changed.
+    Theme(color::Theme),
+    /// The screen a surface of the view landed on: its logical size and scale, so that the
+    /// icons are drawn before the first opening.
+    Output(Option<(Size, f32)>),
 }
+
+/// What reads the applications again at each opening of a resident view, off the interface's
+/// thread.
+pub type Reload = Arc<dyn Fn() -> Catalog + Send + Sync>;
 
 /// Desktop file id of Evidence, which « Afficher dans Evidence » starts.
 const EVIDENCE: &str = "evidence";
@@ -98,7 +121,7 @@ pub struct Menu {
 }
 
 pub struct View {
-    catalog: Catalog,
+    catalog: Arc<Catalog>,
     spawn: Spawn,
     pub query: String,
     /// The tiles shown, by their place in the catalog: all of them, or those the query finds.
@@ -121,8 +144,34 @@ pub struct View {
     pointer: Point,
     /// The menu of a tile, while it is open.
     pub menu: Option<Menu>,
-    /// Asked to close: it fades out, then the program ends.
+    /// Asked to close: it fades out, then the surface goes, or the program ends.
     pub closing: bool,
+    /// The resident service's requests; `None`: the program ends when the view closes.
+    service: Option<Inbox>,
+    reload: Option<Reload>,
+    /// The catalog was read for the opening to come.
+    fresh: bool,
+    /// The catalog is to be read again once the view is open.
+    reload_due: bool,
+    /// Scale of the surface, from the compositor.
+    scale: f32,
+    /// The icons drawn at their size on the screen, and whether more are being drawn.
+    rasters: Rasters,
+    drawing: bool,
+    /// Whether the icons are drawn once as pixels; off, iced's SVG widget draws them at every
+    /// size, as before lot P-02 (the `pages` example compares both).
+    pub rasterize: bool,
+    /// The small surface that readies the renderer as the service starts, and its frames.
+    warming: Option<(Id, u8)>,
+    /// The surface is hidden but kept (`park`).
+    parked: bool,
+    /// The screens the surfaces land on, from the runtime.
+    outputs: Option<ShellReceiver>,
+    frames: startup::Frames,
+    /// The longest time spent building the view since the last frame.
+    view_time: std::cell::Cell<Duration>,
+    /// What the frames being counted show.
+    moving: &'static str,
 }
 
 impl View {
@@ -130,10 +179,10 @@ impl View {
     pub fn new(catalog: Catalog, spawn: Spawn) -> Self {
         let (width, height) = metrics::REFERENCE_SCREEN;
         let size = Size::new(width, height);
-        let shown: Vec<usize> = (0..catalog.len()).collect();
+        let shown: Vec<usize> = Vec::new();
         let pager = Pager::new(page_count(shown.len(), per_page(size)));
         Self {
-            catalog,
+            catalog: Arc::new(Catalog::default()),
             spawn,
             query: String::new(),
             shown,
@@ -149,7 +198,70 @@ impl View {
             pointer: Point::ORIGIN,
             menu: None,
             closing: false,
+            service: None,
+            reload: None,
+            fresh: true,
+            reload_due: false,
+            scale: 1.0,
+            rasters: Rasters::default(),
+            drawing: false,
+            rasterize: true,
+            warming: None,
+            parked: false,
+            outputs: None,
+            frames: startup::Frames::default(),
+            view_time: std::cell::Cell::new(Duration::ZERO),
+            moving: "open",
         }
+        .with_catalog(catalog)
+    }
+
+    fn with_catalog(mut self, catalog: Catalog) -> Self {
+        self.catalog = Arc::new(catalog);
+        self.paginate();
+        self
+    }
+
+    /// A resident view (lot P-02): hidden at first, shown and hidden by the requests of
+    /// `inbox`, its applications read again by `reload` at each opening.
+    pub fn resident(mut self, inbox: Inbox, reload: Reload) -> Self {
+        self.service = Some(inbox);
+        self.reload = Some(reload);
+        self.closing = true;
+        self.presence = Animation::new(look::OPEN_SPRING, 0.0, 0.0, Duration::ZERO);
+        self
+    }
+
+    pub fn is_resident(&self) -> bool {
+        self.service.is_some()
+    }
+
+    /// Whether the view is shown, or opening: not hidden nor closing.
+    pub fn shown(&self) -> bool {
+        self.surface.is_some() && !self.closing && !self.parked
+    }
+
+    /// Whether the view is hidden: no surface, or its surface parked.
+    fn hidden(&self) -> bool {
+        self.surface.is_none() || self.parked
+    }
+
+    /// Follows the screens the view's surfaces land on (`ExWlSettings::shell_broadcast`).
+    pub fn with_outputs(mut self, outputs: ShellReceiver) -> Self {
+        self.outputs = Some(outputs);
+        self
+    }
+
+    /// The icons drawn at their size on the screen.
+    pub fn rasters(&self) -> &Rasters {
+        &self.rasters
+    }
+
+    /// Opens the small surface that readies the renderer (`launcher::warm_surface`).
+    pub fn warm_up(&mut self) -> Task<Message> {
+        let (id, task) = Message::layershell_open(launcher::warm_surface(crate::NAMESPACE));
+        self.warming = Some((id, 0));
+        task
     }
 
     /// The view already open, for the captures: no opening to wait for.
@@ -192,7 +304,11 @@ impl View {
 
     /// Whether something still moves: frames are asked for only that long.
     pub fn animating(&self) -> bool {
-        !self.presence.is_done(self.now, look::OPEN_PRECISION) || self.pager.moving(self.now)
+        let hidden = self.is_resident() && self.hidden();
+        self.warming.is_some()
+            || (!hidden
+                && (!self.presence.is_done(self.now, look::OPEN_PRECISION)
+                    || self.pager.moving(self.now)))
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -201,7 +317,24 @@ impl View {
         } else {
             Subscription::none()
         };
-        Subscription::batch([event::listen_with(on_event), frames])
+        let service = match &self.service {
+            Some(inbox) => {
+                Subscription::run_with(inbox.clone(), Inbox::stream).map(Message::Service)
+            }
+            None => Subscription::none(),
+        };
+        // Followed while hidden only: once shown, the surface gives its own size.
+        let outputs = match &self.outputs {
+            Some(outputs) if self.hidden() => outputs.listen().map(output),
+            _ => Subscription::none(),
+        };
+        Subscription::batch([
+            event::listen_with(on_event),
+            frames,
+            service,
+            outputs,
+            Subscription::run(launcher::appearance).map(Message::Theme),
+        ])
     }
 
     /// The time of the clock, never before the last event's.
@@ -212,13 +345,56 @@ impl View {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Surface(id) if self.warming.is_some_and(|(w, _)| w == id) => {}
             Message::Surface(id) => {
                 self.surface = Some(id);
-                return operation::focus(QUERY);
+                if !self.closing {
+                    let now = self.clock();
+                    self.presence = Animation::new(look::OPEN_SPRING, 0.0, 1.0, now);
+                }
+                // iced_exwlshell reports no size for a new surface: asked for, with its scale.
+                let scale = window::scale_factor(id).map(Message::Scale);
+                let size = window::size(id).map(Message::Resized);
+                return Task::batch([operation::focus(QUERY), size, scale]);
             }
-            Message::Resized(size) if size != self.size && size.width > 0.0 => {
+            Message::Service(Request::Toggle) if self.shown() => return self.close(),
+            Message::Service(Request::Toggle) => return self.show(),
+            Message::Service(Request::Hide) if self.shown() => return self.close(),
+            Message::Service(_) => {}
+            Message::Scale(scale) if scale > 0.0 => {
+                self.scale = scale;
+                return self.draw_icons();
+            }
+            Message::Rasters(rasters) => {
+                self.drawing = false;
+                self.rasters
+                    .merge(Arc::try_unwrap(rasters).unwrap_or_else(|r| (*r).clone()));
+                return self.draw_icons();
+            }
+            Message::Reloaded(catalog) => {
+                self.catalog = catalog;
+                self.paginate();
+                return self.draw_icons();
+            }
+            Message::Theme(theme) => color::set_active(theme),
+            // Hidden: the screen it will open on, its icons drawn meanwhile.
+            Message::Output(Some((size, scale))) if self.hidden() => {
+                tracing::debug!(?size, scale, "screen");
+                if size != self.size {
+                    self.size = size;
+                    self.paginate();
+                }
+                self.scale = scale;
+                return self.draw_icons();
+            }
+            // The surface that readies the renderer is one pixel: not the screen.
+            Message::Resized(size)
+                if size != self.size && size.width > 1.0 && size.height > 1.0 =>
+            {
+                tracing::debug!(?size, "surface size");
                 self.size = size;
                 self.paginate();
+                return self.draw_icons();
             }
             Message::Query(query) => {
                 self.menu = None;
@@ -239,9 +415,11 @@ impl View {
             Message::Page(page) => {
                 let now = self.clock();
                 self.pager.go(page, now);
+                self.moving = "page";
             }
             Message::Dismiss => return self.close(),
             Message::Scroll(delta) => {
+                self.moving = "page";
                 let now = self.clock();
                 match delta {
                     ScrollDelta::Lines { x, y } => {
@@ -257,16 +435,175 @@ impl View {
                     }
                 }
             }
-            Message::Frame(at) => {
-                self.now = self.now.max(at.saturating_duration_since(self.origin));
-                self.pager.tick(self.now, self.size.width);
-                if self.closing && self.presence.is_done(self.now, look::OPEN_PRECISION) {
-                    return iced::exit();
-                }
-            }
+            Message::Frame(at) => return self.frame(at),
             _ => {}
         }
         Task::none()
+    }
+
+    /// A frame: the time moves on; the surface goes once the view faded out.
+    fn frame(&mut self, at: Instant) -> Task<Message> {
+        self.now = self.now.max(at.saturating_duration_since(self.origin));
+        self.frames.tick(at);
+        self.frames.viewed(self.view_time.take());
+        self.pager.tick(self.now, self.size.width);
+        if let Some((id, seen)) = self.warming {
+            if seen >= 1 {
+                self.warming = None;
+                startup::step("renderer ready", Duration::ZERO);
+                return Task::done(Message::RemoveWindow(id));
+            }
+            self.warming = Some((id, seen + 1));
+        }
+        let done = self.presence.is_done(self.now, look::OPEN_PRECISION);
+        if done && !self.pager.moving(self.now) {
+            self.frames.report(self.moving);
+        }
+        if done
+            && !self.closing
+            && std::mem::take(&mut self.reload_due)
+            && let Some(reload) = self.reload.clone()
+        {
+            return Task::perform(async move { Arc::new(reload()) }, Message::Reloaded);
+        }
+        if !(self.closing && done) {
+            return Task::none();
+        }
+        if !self.is_resident() {
+            return iced::exit();
+        }
+        match self.surface {
+            Some(id) if sherlock_ui::surface::gpu_drawn() == Some(true) => self.park(id),
+            Some(id) => {
+                self.surface = None;
+                Task::done(Message::RemoveWindow(id))
+            }
+            None => Task::none(),
+        }
+    }
+
+    /// Hides the surface without removing it: one transparent pixel in a corner, under the
+    /// windows, without the keyboard. Its renderer keeps what it drew (the icons uploaded, the
+    /// glyphs, the shaped names): a new surface took 60 ms more to show its first frame. On the
+    /// GPU only, whose surfaces have alpha; in software the surface goes.
+    fn park(&mut self, id: Id) -> Task<Message> {
+        self.parked = true;
+        // The field let go: its caret would blink, and draw the surface again, while hidden.
+        let unfocus = iced::advanced::widget::operate(
+            iced::advanced::widget::operation::focusable::unfocus(),
+        );
+        Task::batch([
+            unfocus,
+            Task::done(Message::KeyboardInteractivityChange {
+                id,
+                keyboard_interactivity: KeyboardInteractivity::None,
+            }),
+            Task::done(Message::LayerChange {
+                id,
+                layer: Layer::Background,
+            }),
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: Anchor::Top | Anchor::Left,
+                size: LayerSize::px(1, 1),
+            }),
+        ])
+    }
+
+    /// Brings the parked surface back over the screen, with the keyboard.
+    fn unpark(&mut self, id: Id) -> Task<Message> {
+        self.parked = false;
+        let screen = crate::surface();
+        Task::batch([
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: screen.anchor,
+                size: screen.size,
+            }),
+            Task::done(Message::LayerChange {
+                id,
+                layer: screen.layer,
+            }),
+            Task::done(Message::KeyboardInteractivityChange {
+                id,
+                keyboard_interactivity: screen.keyboard_interactivity,
+            }),
+            operation::focus(QUERY),
+        ])
+    }
+
+    /// Shows the view again, its search empty, on its first page, as a new view would be.
+    fn show(&mut self) -> Task<Message> {
+        let now = self.clock();
+        // The frames of this opening only.
+        self.frames = startup::Frames::default();
+        self.query.clear();
+        self.menu = None;
+        self.launched = None;
+        self.closing = false;
+        self.moving = "open";
+        self.paginate();
+        self.presence.retarget(now, 1.0);
+        let mut tasks = vec![hide_other(service::LAUNCHER)];
+        // Read again once the view is open, so that the reading never delays the opening.
+        self.reload_due = !std::mem::replace(&mut self.fresh, false);
+        match self.surface {
+            Some(id) if self.parked => {
+                // The opening starts from nothing, now.
+                self.presence = Animation::new(look::OPEN_SPRING, 0.0, 1.0, now);
+                tasks.push(self.unpark(id));
+            }
+            Some(_) => tasks.push(operation::focus(QUERY)),
+            None => {
+                let (id, task) = Message::layershell_open(crate::new_surface());
+                self.surface = Some(id);
+                tasks.push(task);
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// Side of an icon on the screen, in its pixels.
+    fn icon_side(&self) -> u32 {
+        icons::side(self.layout().icon, self.scale)
+    }
+
+    /// Draws on the pool the icons not drawn yet at their size on the screen, one batch at a
+    /// time.
+    fn draw_icons(&mut self) -> Task<Message> {
+        if self.drawing || !self.rasterize {
+            return Task::none();
+        }
+        let side = self.icon_side();
+        let missing = self.catalog.tiles().iter().any(|tile| {
+            self.catalog
+                .icon(tile)
+                .is_some_and(|path| self.rasters.get(&path, side).is_none())
+        });
+        if !missing {
+            return Task::none();
+        }
+        self.drawing = true;
+        let catalog = Arc::clone(&self.catalog);
+        let done = if self.rasters.side == side {
+            self.rasters.clone()
+        } else {
+            Rasters::default()
+        };
+        Task::perform(
+            async move {
+                let started = Instant::now();
+                let rasters = icons::draw(&catalog, side, &done);
+                tracing::info!(
+                    icons = rasters.icons.len(),
+                    side,
+                    took_ms = startup::millis(started.elapsed()),
+                    "icons drawn"
+                );
+                Arc::new(rasters)
+            },
+            Message::Rasters,
+        )
     }
 
     /// The tiles of the query, from the first page.
@@ -402,12 +739,12 @@ impl View {
                 }
                 Task::none()
             }
-            Entry::Show => self.show(menu.place),
+            Entry::Show => self.show_in_evidence(menu.place),
         }
     }
 
     /// Opens Evidence on the folder of the desktop file of tile `place`, then fades out.
-    fn show(&mut self, place: usize) -> Task<Message> {
+    fn show_in_evidence(&mut self, place: usize) -> Task<Message> {
         let folder = self
             .tile_at(place)
             .and_then(|t| t.entry.path.parent())
@@ -435,18 +772,26 @@ impl View {
         }
     }
 
-    /// Fades the view out; the program ends at the last frame.
+    /// Fades the view out; at the last frame, the surface goes, or the program ends.
     fn close(&mut self) -> Task<Message> {
         if !self.closing {
             self.closing = true;
+            self.moving = "close";
             let now = self.clock();
             self.presence.retarget(now, 0.0);
         }
         Task::none()
     }
 
-    pub fn view(&self, _: Id) -> Element<'_, Message> {
-        self.view_screen()
+    pub fn view(&self, id: Id) -> Element<'_, Message> {
+        if self.warming.is_some_and(|(w, _)| w == id) {
+            return view_warm_up();
+        }
+        let started = Instant::now();
+        let view = self.view_screen();
+        self.view_time
+            .set(self.view_time.get().max(started.elapsed()));
+        view
     }
 
     /// The whole screen: the veil, the field, the pages, their dots.
@@ -570,12 +915,22 @@ impl View {
         let Some(tile) = self.catalog.tiles().get(index) else {
             return Space::new().into();
         };
+        let side = self.icon_side();
         let icon: Element<'_, Message> = match self.catalog.icon(tile) {
-            Some(path) => svg(icon_handle(&path))
-                .width(layout.icon)
-                .height(layout.icon)
-                .opacity(opacity)
-                .into(),
+            Some(path) => match self.rasters.get(&path, side) {
+                // Drawn once at its size on the screen: the GPU only scales it.
+                Some(drawn) => image(drawn.clone())
+                    .width(layout.icon)
+                    .height(layout.icon)
+                    .opacity(opacity)
+                    .into(),
+                // Until then, the SVG renderer draws it.
+                None => svg(icon_handle(&path))
+                    .width(layout.icon)
+                    .height(layout.icon)
+                    .opacity(opacity)
+                    .into(),
+            },
             None => {
                 let initial = tile
                     .name()
@@ -658,6 +1013,26 @@ impl View {
             .center_x(Length::Fill)
             .into()
     }
+}
+
+/// The logical size and scale of the screen a surface landed on.
+fn output(event: ShellEvent) -> Message {
+    let output = match event {
+        ShellEvent::WindowOutputChanged {
+            output: Some(output),
+            ..
+        }
+        | ShellEvent::OutputAdded(output)
+        | ShellEvent::OutputUpdated(output) => output,
+        _ => return Message::Output(None),
+    };
+    let found = output.logical_size.filter(|(w, h)| *w > 0 && *h > 0);
+    Message::Output(found.map(|(w, h)| {
+        (
+            Size::new(w as f32, h as f32),
+            output.scale_factor.max(1) as f32,
+        )
+    }))
 }
 
 /// Applications on a page of a screen of `size`.
