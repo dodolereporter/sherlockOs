@@ -13,14 +13,12 @@ use portal::{
 use tracing_subscriber::EnvFilter;
 
 fn main() -> std::process::ExitCode {
+    // Before anything else: the picker's renderer is chosen through the environment (ADR 0018).
+    // The service draws nothing, but the picker it starts inherits the choice.
+    let renderer = sherlock_ui::gpu::Choice::detect();
+    // SAFETY: first statements of `main`, no other thread exists yet.
+    unsafe { renderer.apply() };
     let pick = std::env::args().nth(1).as_deref() == Some("--pick");
-    if pick {
-        // Before anything else: the picker's renderer is chosen through the environment
-        // (ADR 0018).
-        let renderer = sherlock_ui::gpu::Choice::detect();
-        // SAFETY: first statements of `main`, no other thread exists yet.
-        unsafe { renderer.apply() };
-    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .with_writer(std::io::stderr)
