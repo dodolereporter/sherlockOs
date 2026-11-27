@@ -430,6 +430,9 @@ impl Launcher {
             Space::new().width(Length::Fill)
         ]
         .spacing(look::GAP)
+        // The whole height of the row, so that a result without a second line has its tile and
+        // its title in the middle of the row, not at its top (Q-21).
+        .height(Length::Fill)
         .align_y(Alignment::Center);
         if let Some((_, pinned)) = self.menu.filter(|(at, _)| *at == index) {
             // The menu, inside the row on its right: it never leaves the panel.
