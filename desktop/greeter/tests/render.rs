@@ -103,7 +103,7 @@ mod tests {
 
     fn screen_with(size: (f32, f32), pictures: bool) -> Screen {
         let users = vec![
-            user("dodo", Some("Dodo"), 1000),
+            user("alex", Some("Alex"), 1000),
             user("invite", Some("Invité"), 1001),
             user("camille", None, 1002),
         ];
@@ -112,7 +112,7 @@ mod tests {
             session("plasma", "Plasma (Wayland)"),
         ];
         let mut memory = Memory::default();
-        memory.logged_in("dodo", "plasma");
+        memory.logged_in("alex", "plasma");
         memory.logged_in("invite", "sherlockos");
         let (greetd, remember) = (
             Arc::new(FakeGreetd::default()),
@@ -273,7 +273,7 @@ mod tests {
     /// A single user: only their name under the bubble, and the arrows never reach « Autre… ».
     #[test]
     fn a_single_user_is_only_a_name() {
-        let users = vec![user("dodo", Some("Dodo"), 1000)];
+        let users = vec![user("alex", Some("Alex"), 1000)];
         let mut greeter = Greeter::new(
             users,
             vec![session("sherlockos", "SherlockOS")],
@@ -289,7 +289,7 @@ mod tests {
         let id = window::Id::unique();
         let _ = greeter.update(Message::Surface(id));
         let mut ui = Simulator::with_size(lock::settings(), (1920.0, 1080.0), greeter.view(id));
-        assert!(ui.find("Dodo").is_ok());
+        assert!(ui.find("Alex").is_ok());
         assert!(ui.find(sherlock_ui::greeter::OTHER).is_err());
     }
 
