@@ -11,7 +11,8 @@
 # SHERLOCKOS_SESSION_BUS chooses the D-Bus session bus, SHERLOCKOS_DATA the
 # folder of the application icons and of the portal setting (see below), SHERLOCKOS_WALLPAPERS
 # the folder of the wallpapers (see below), SHERLOCKOS_POLKIT_AGENTS
-# the polkit agents to try (see "Everyday services" in docs/compositor.md). The log of the session goes to
+# the polkit agents to try (see "Everyday services" in docs/compositor.md), SHERLOCKOS_AUTOSTART=0
+# leaves out the applications of the autostart folders (docs/autostart.md). The log of the session goes to
 # $XDG_STATE_HOME/sherlockos/session.log (~/.local/state/sherlockos/session.log): beyond 5 MiB it moves
 # to session.log.old and starts again. Ctrl + Alt + Backspace stops the compositor, and the
 # session with it.
@@ -261,6 +262,10 @@ keep "$0/sherlockos-apps" --resident &
 	(sleep 1 && keep "$SHERLOCKOS_XEMBED_PROXY") &
 # Switches the GTK theme and the Qt palette with the appearance file.
 [ -n "${SHERLOCKOS_THEMES:-}" ] && keep "$SHERLOCKOS_THEMES/toolkit-theme" follow &
+# The applications of the autostart folders, once (lot D-44, docs/autostart.md):
+# SHERLOCKOS_AUTOSTART=0 leaves them out.
+[ "${SHERLOCKOS_AUTOSTART:-1}" != 0 ] && [ -x "$0/sherlockos-autostart" ] &&
+	"$0/sherlockos-autostart" &
 wait
 '
 xwayland=--xwayland

@@ -432,8 +432,10 @@ gets its own process group (a Ctrl+C on the dock's group spares it), no death si
 thread reaps it. A test checks that `;` in a command is not run by a shell. `gtk-launch` was not
 used: our OS will not ship GTK for it.
 
-Sherlock has no window to open yet: a click on it is logged, like the entries of the bar's
-Sherlock menu.
+Sherlock has no window to open yet (A-19): a click on it opens the launcher, as Super + Space
+does, where the question is asked to Sherlock (lot D-21m). The dock starts `launcher` beside the
+session's programs (`SHERLOCKOS_BIN`) or in the `PATH`, as the compositor does; started again
+while open, the launcher closes.
 
 **The « Applications » button** (D-41) comes first, on the left as on macOS: nine squares on a
 slate tile, drawn by `sherlock_ui::dock::applications_icon` in the style of the application

@@ -55,7 +55,7 @@ where
 }
 
 /// Waits `gap` on a thread of its own: the bar has no timer of an async runtime.
-async fn pause(gap: Duration) {
+pub(crate) async fn pause(gap: Duration) {
     let (sender, receiver) = iced::futures::channel::oneshot::channel();
     let spawned = std::thread::Builder::new()
         .name(String::from("bar-signals"))
