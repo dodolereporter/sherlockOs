@@ -78,6 +78,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
     // Shared with the screenshot tool (lot D-35e), which draws between two frames: nested,
     // Super + Shift + S is Alt + Shift + S, and Print Screen stays with the host session.
     let textures = Rc::new(RefCell::new(Textures::default()));
