@@ -50,6 +50,41 @@ pub fn fit<'a>(content: &'a str, max: f32, mut measure: impl FnMut(&str) -> f32)
     }
 }
 
+/// `content` with « … » in its middle when it does not fit `max`: its start and its end stay,
+/// as Finder shows a long folder name in its path bar (lot E-04). The start keeps one more
+/// character than the end when they cannot be even.
+pub fn fit_middle<'a>(
+    content: &'a str,
+    max: f32,
+    mut measure: impl FnMut(&str) -> f32,
+) -> Cow<'a, str> {
+    let max = max + TOLERANCE;
+    if measure(content) <= max {
+        return Cow::Borrowed(content);
+    }
+    let chars: Vec<char> = content.chars().collect();
+    let cut = |kept: usize| {
+        let tail = kept / 2;
+        let head: String = chars[..kept - tail].iter().collect();
+        let end: String = chars[chars.len() - tail..].iter().collect();
+        format!("{}{MARK}{}", head.trim_end(), end.trim_start())
+    };
+    // The widths grow with the characters kept: a binary search finds the most that fit.
+    let (mut low, mut high) = (0, chars.len().saturating_sub(1));
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if measure(&cut(middle)) <= max {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    match low {
+        0 => Cow::Borrowed(MARK),
+        n => Cow::Owned(cut(n)),
+    }
+}
+
 /// Width of `content` on one line, in `font` at `size`, shaped by the renderer as `Ellipsis`
 /// shapes it: what a row of labels needs, to decide what fits before laying it out (the global
 /// menu of the bar, lot D-36).
@@ -301,6 +336,15 @@ mod tests {
         // A fraction of a pixel too wide still shows whole.
         assert_eq!(fit("Maison", 41.5, width), "Maison");
         assert!(matches!(fit("Maison", 100.0, width), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_long_name_keeps_its_start_and_its_end() {
+        assert_eq!(fit_middle("Projets", 49.0, width), "Projets");
+        let cut = fit_middle("rapport-annuel-version-finale", 77.0, width);
+        assert_eq!(cut, "rappo…inale");
+        assert!(width(&cut) <= 78.0);
+        assert_eq!(fit_middle("abcdef", 3.0, width), MARK);
     }
 
     #[test]

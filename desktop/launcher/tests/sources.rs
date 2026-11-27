@@ -161,6 +161,12 @@ mod tests {
         launcher.hits().map(|h| h.title.clone()).collect()
     }
 
+    /// Lets the rows and the panel reach their place (lot P-02d).
+    fn settled(launcher: &mut Launcher) {
+        let later = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let _ = launcher.update(Message::Frame(later));
+    }
+
     fn enter(launcher: &mut Launcher) {
         let _ = launcher.update(Message::Key(app::Key::Enter));
     }
@@ -273,6 +279,7 @@ mod tests {
             // Too soon: a bounce or a quick second press confirms nothing.
             enter(&mut launcher);
             assert!(record.session.lock().expect("record").is_empty(), "{query}");
+            settled(&mut launcher);
             let mut ui = Simulator::with_size(
                 launcher::settings(),
                 (look::WIDTH, launcher.height()),
@@ -441,6 +448,7 @@ mod tests {
         assert_eq!(launcher.copied, Some(0));
         assert!(!launcher.closing);
         assert!(record.started.lock().expect("record").is_empty());
+        settled(&mut launcher);
         let mut ui = Simulator::with_size(
             launcher::settings(),
             (look::WIDTH, launcher.height()),
@@ -586,6 +594,7 @@ mod tests {
             ("kit", "launcher-icon"),
         ] {
             let _ = launcher.update(Message::Query(query.into()));
+            settled(&mut launcher);
             let size = (look::WIDTH, launcher.height());
             let mut ui = Simulator::with_size(launcher::settings(), size, launcher.view_panel());
             let snapshot = ui.snapshot(&theme::theme()).expect("rendered");

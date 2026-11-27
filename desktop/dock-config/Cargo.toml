@@ -4,6 +4,7 @@ description = "The dock's configuration file, shared by the dock and the setting
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
