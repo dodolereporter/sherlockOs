@@ -39,6 +39,9 @@ tracing = "=0.1.44"
 [dev-dependencies]
 # The choice of the GPU (ADR 0018) and the palettes, for the tests and the viewer.
 sherlock-ui = { path = "../sherlock-ui" }
+# Draws the still picture with tiny-skia, headless, for its test (lot Q-33). The version
+# sherlock-ui's tests already use.
+iced_test = "=0.14.0"
 
 # Changes the process environment to pick the Vulkan driver: one thread, so no libtest harness.
 [[test]]

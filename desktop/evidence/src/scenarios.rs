@@ -1673,3 +1673,130 @@ fn a_folder_under_a_drop_opens_after_a_rest() {
         Location::Folder(bench.path("projet/src"))
     );
 }
+
+fn path_text(bench: &Bench) -> Option<String> {
+    bench.app.path_edit.as_ref().map(|e| e.text.clone())
+}
+
+/// The path bar as a field (lot E-04): Ctrl+L shows the folder, Tab completes the folders,
+/// Enter opens, a path that leads nowhere keeps the field open and shakes it, Escape and a
+/// click elsewhere give the breadcrumb back.
+#[test]
+fn the_path_field_completes_opens_and_says_no() {
+    let mut bench = Bench::new("path-field");
+    fs::create_dir_all(bench.path("projet/src/deep")).expect("folders");
+    fs::create_dir_all(bench.path("projet/srv")).expect("folders");
+    bench.ctrl("l");
+    let shown = format!("{}/", bench.path("projet").display());
+    assert_eq!(path_text(&bench), Some(shown));
+
+    bench.send(Message::PathInput("~/pro".into()));
+    let edit = bench.app.path_edit.clone().expect("field open");
+    assert_eq!(edit.suggestions, ["projet"]);
+    bench.press(Named::Tab);
+    assert_eq!(path_text(&bench).as_deref(), Some("~/projet/"));
+    // Two folders start with « sr »: Tab goes as far as they agree, then the arrows pick.
+    bench.send(Message::PathInput("~/projet/s".into()));
+    bench.press(Named::Tab);
+    assert_eq!(path_text(&bench).as_deref(), Some("~/projet/sr"));
+    bench.press(Named::Tab);
+    bench.press(Named::ArrowDown);
+    let edit = bench.app.path_edit.clone().expect("field open");
+    assert_eq!(
+        (edit.suggestions.as_slice(), edit.highlight),
+        (&["src".to_owned(), "srv".to_owned()][..], Some(1))
+    );
+    bench.press(Named::ArrowUp);
+    bench.send(Message::PathSubmit);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+    assert!(bench.app.path_edit.is_none(), "the breadcrumb is back");
+
+    // A relative path, typed from the listing.
+    bench.key(Key::Character("~".into()), Modifiers::empty());
+    assert_eq!(path_text(&bench).as_deref(), Some("~"));
+    bench.send(Message::PathInput("deep".into()));
+    bench.send(Message::PathSubmit);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src/deep"))
+    );
+
+    // Nowhere: the field stays, shakes, and says so.
+    bench.key(Key::Character("/".into()), Modifiers::empty());
+    bench.send(Message::PathInput("/nulle/part/ici".into()));
+    bench.send(Message::PathSubmit);
+    let edit = bench.app.path_edit.clone().expect("still open");
+    assert!(edit.shake.is_some());
+    assert!(bench.app.notice.as_ref().is_some_and(|n| n.error));
+    bench.send(Message::Escaped);
+    assert!(bench.app.path_edit.is_none() && bench.app.path_leaving.is_some());
+
+    // A click on the listing closes it too; Maj+Ctrl+G opens the sheet.
+    bench.ctrl("l");
+    bench.send(Message::Blank);
+    assert!(bench.app.path_edit.is_none());
+    bench.key(
+        Key::Character("G".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    assert!(bench.app.path_edit.as_ref().is_some_and(|e| e.sheet));
+    bench.send(Message::PathInput("~".into()));
+    bench.send(Message::PathSubmit);
+    assert_eq!(bench.app.location, Location::Folder(bench.path("")));
+
+    // The history and the parent folder.
+    bench.key(Key::Named(Named::ArrowLeft), Modifiers::ALT);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src/deep"))
+    );
+    bench.key(Key::Named(Named::ArrowUp), Modifiers::ALT);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+    bench.send(Message::Back);
+    bench.send(Message::Forward);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}
+
+/// Captures of the path bar in a deep folder with a long name, at 1920 × 1080 and in the
+/// smallest window: the breadcrumb, the field with its completion, the sheet.
+#[test]
+fn path_bar_captures() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = Bench::new("path-capture");
+    let deep = "projet/rapports-annuels-de-la-societe-version-definitive/2026/novembre/semaine-48";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    for name in ["notes", "photos", "plans", "presentations"] {
+        fs::create_dir_all(bench.path(&format!("projet/{name}"))).expect("folders");
+    }
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    for (size, tag) in [
+        ((1920.0, 1080.0), "1080p"),
+        (sherlock_ui::evidence::MIN_WINDOW, "small"),
+    ] {
+        bench.send(Message::Resized(iced::Size::new(size.0, size.1)));
+        bench.app.settle();
+        capture_at(&bench.app, &format!("evidence-path-crumbs-{tag}"), size);
+        bench.ctrl("l");
+        bench.send(Message::PathInput("~/projet/p".into()));
+        bench.app.settle();
+        capture_at(&bench.app, &format!("evidence-path-field-{tag}"), size);
+        bench.send(Message::Escaped);
+        bench.key(
+            Key::Character("g".into()),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        );
+        bench.send(Message::PathInput("~/projet/".into()));
+        bench.app.settle();
+        capture_at(&bench.app, &format!("evidence-path-sheet-{tag}"), size);
+        bench.send(Message::PathCancel);
+    }
+}
