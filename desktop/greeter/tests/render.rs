@@ -304,6 +304,25 @@ mod tests {
         color::set_active(color::Theme::Dark);
     }
 
+    /// The screen at rest in both themes, at 1920 × 1080: the bubble of Sherlock follows the
+    /// theme (lot D-25d).
+    #[test]
+    #[ignore = "screenshots for the review: cargo test -p greeter --test render -- --ignored rest"]
+    fn rest_in_both_themes() {
+        let size = (1920.0, 1080.0);
+        for (theme_now, name) in [(color::Theme::Dark, "dark"), (color::Theme::Light, "light")] {
+            color::set_active(theme_now);
+            let s = screen_with(size, true);
+            snapshot(
+                &s.greeter,
+                s.primary,
+                size,
+                &format!("rest-{name}-1920x1080"),
+            );
+        }
+        color::set_active(color::Theme::Dark);
+    }
+
     /// Every state, both themes, both sizes: 24 screenshots for the review, too slow for the
     /// CI in a debug build.
     #[test]
