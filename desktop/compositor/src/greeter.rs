@@ -32,6 +32,8 @@ impl State {
     pub fn enter_greeter_mode(&mut self) {
         self.greeter = true;
         self.stop_shell_socket();
+        // The greeter is the one client, trusted: it may anchor surfaces (lot D-46).
+        self.share_layer_shell();
         // Nothing to lock: the inactivity only turns the screens off, and its veil comes before
         // that alone.
         self.set_idle_lock(None);
