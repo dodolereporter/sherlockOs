@@ -461,11 +461,11 @@ impl Launcher {
 fn tile<'a>(tile: &Tile, title: &str) -> Element<'a, Message> {
     match tile {
         // In a box of the tile's size, as every other tile: icons centred, titles aligned (UI-03).
-        Tile::App(Some(path)) => container(
-            svg(icon_handle(path))
-                .width(look::APP_ICON)
-                .height(look::APP_ICON),
-        )
+        // Smooth edges on the GPU (UI-05).
+        Tile::App(Some(path)) => container(sherlock_ui::raster::icon(
+            &icon_handle(path),
+            look::APP_ICON,
+        ))
         .center(look::TILE)
         .into(),
         Tile::App(None) => {
