@@ -423,6 +423,7 @@ fn captures_of_the_pages_in_both_themes() {
             (Page::Appearance, "appearance"),
             (Page::Touchpad, "touchpad"),
             (Page::Lock, "lock"),
+            (Page::Clipboard, "clipboard"),
             (Page::DefaultApps, "default-apps"),
         ] {
             let (tmp, mut app) = bench("capture", dirs.clone());
@@ -436,7 +437,7 @@ fn captures_of_the_pages_in_both_themes() {
             app.settle();
             // Sound and lock, short pages, in the wide window only: the captures take time.
             let sizes = match page {
-                Page::Sound | Page::Lock => &SIZES[..1],
+                Page::Sound | Page::Lock | Page::Clipboard => &SIZES[..1],
                 _ => &SIZES[..],
             };
             for &(size, size_name) in sizes {

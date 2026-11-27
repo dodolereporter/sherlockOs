@@ -4,18 +4,21 @@
 //! `cursor`, `metrics`, `motion`, `strings`, `texts`, `typography`, `icon`, `app_icon`, `logo`,
 //! `window`, `decorations`, `mission_control`, `click`, `osd`, `evidence`, `lock`,
 //! `control_room`) depend on nothing, and neither does `gpu`, the choice of the renderer. The
-//! theme and the iced components sit behind the `iced` feature, on by default; `panels`,
+//! theme and the iced components sit behind the `iced` feature, on by default (among them
+//! `scroll`, the one scroll area); `panels`,
 //! `launcher` and `apps` hold both, their components behind that feature. The gallery lives in `examples/gallery`. See
 //! `docs/sherlock-ui.md`.
 
 pub mod app_icon;
 pub mod apps;
 pub mod click;
+pub mod clipboard;
 pub mod color;
 pub mod control_room;
 pub mod cursor;
 pub mod decorations;
 pub mod dock;
+pub mod drag;
 pub mod evidence;
 pub mod gpu;
 pub mod icon;
@@ -51,6 +54,8 @@ pub mod focus;
 pub mod pointer;
 #[cfg(feature = "iced")]
 pub mod raster;
+#[cfg(feature = "iced")]
+pub mod scroll;
 #[cfg(feature = "iced")]
 pub mod surface;
 #[cfg(feature = "iced")]
