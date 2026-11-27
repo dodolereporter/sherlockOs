@@ -511,14 +511,13 @@ Checked on the reference laptop:
 - **Discord** is not installed there. Electron applications speak `StatusNotifierItem`; not
   checked with Discord itself.
 
-So XEmbed is needed, for AnyDesk at least: lot **D-45b**, to come, either a proxy from XEmbed to
-`StatusNotifierItem` started with the session, as KDE's `xembedsniproxy`, or the same inside the
-compositor, which runs XWayland: own `_NET_SYSTEM_TRAY_S0`, embed each icon in a hidden window,
-send its image as an item and its clicks back. Meanwhile, `xembedsniproxy` itself is the fallback:
-on Debian 13 it comes with the `plasma-workspace` package (no package of its own), and it is on
-the reference laptop (`/usr/bin/xembedsniproxy`). Started in the session with `DISPLAY` set to
-XWayland, it gives each X11 tray icon to the bar's watcher. Not tried in this lot: it needs
-XWayland, which wakes the NVIDIA card on the reference laptop.
+So XEmbed is needed, for AnyDesk at least. The old X11 tray icons go through KDE's
+`xembedsniproxy`, which the session starts when it is installed (lot D-45b, see "Everyday
+services" in `docs/compositor.md`): on Debian 13 it comes with the `plasma-workspace` package (no
+package of its own), and it is on the reference laptop (`/usr/bin/xembedsniproxy`). It owns the
+X11 tray of XWayland and gives each icon to the bar's watcher as a `StatusNotifierItem`, so they
+show in the popup like the others. A proxy of our own, or the same inside the compositor, may
+come later if needed.
 
 ## Attached to the top edge
 
