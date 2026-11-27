@@ -22,6 +22,9 @@ mod tests {
     };
 
     use compositor::{State, lock::Programs};
+    use shell_protocol::clipboard::client::sherlock_clipboard_history_v1::{
+        self as history, SherlockClipboardHistoryV1,
+    };
     use smithay::{
         desktop::Window,
         reexports::calloop::EventLoop,
@@ -956,6 +959,104 @@ mod tests {
         h.state.shutdown();
     }
 
+    /// What a panel of the shell sees of the clipboard history protocol.
+    #[derive(Default)]
+    struct Panel {
+        globals: Vec<(u32, String, u32)>,
+        /// id, kind and preview of each item, by id.
+        items: HashMap<u32, (u32, String)>,
+        thumbnails: HashMap<u32, Vec<u8>>,
+        enabled: Option<bool>,
+        batches: usize,
+    }
+
+    impl Dispatch<wl_registry::WlRegistry, ()> for Panel {
+        fn event(
+            panel: &mut Self,
+            _: &wl_registry::WlRegistry,
+            event: wl_registry::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } = event
+            {
+                panel.globals.push((name, interface, version));
+            }
+        }
+    }
+
+    impl Dispatch<SherlockClipboardHistoryV1, ()> for Panel {
+        fn event(
+            panel: &mut Self,
+            _: &SherlockClipboardHistoryV1,
+            event: history::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            match event {
+                history::Event::State { enabled } => panel.enabled = Some(enabled != 0),
+                history::Event::Item {
+                    id, kind, preview, ..
+                } => {
+                    let kind = match kind {
+                        wayland_client::WEnum::Value(kind) => kind as u32,
+                        wayland_client::WEnum::Unknown(value) => value,
+                    };
+                    panel.items.insert(id, (kind, preview));
+                }
+                history::Event::Thumbnail { id, fd, size } => {
+                    let mut png = vec![0; size as usize];
+                    std::os::unix::fs::FileExt::read_exact_at(&File::from(fd), &mut png, 0)
+                        .unwrap();
+                    panel.thumbnails.insert(id, png);
+                }
+                history::Event::Removed { id } => {
+                    panel.items.remove(&id);
+                }
+                history::Event::Done => panel.batches += 1,
+                _ => {}
+            }
+        }
+    }
+
+    /// The globals a client of `socket` sees, and its queue, once the compositor answered.
+    fn connect_panel(h: &mut Harness, shell: bool) -> (Connection, EventQueue<Panel>, Panel) {
+        let (server_side, client_side) = UnixStream::pair().unwrap();
+        if shell {
+            h.state.insert_shell_client(server_side);
+        } else {
+            h.state.insert_client(server_side);
+        }
+        let conn = Connection::from_socket(client_side).unwrap();
+        let mut queue = conn.new_event_queue();
+        let _registry = conn.display().get_registry(&queue.handle(), ());
+        let mut panel = Panel::default();
+        pump_panel(h, &conn, &mut queue, &mut panel);
+        (conn, queue, panel)
+    }
+
+    fn pump_panel(
+        h: &mut Harness,
+        conn: &Connection,
+        queue: &mut EventQueue<Panel>,
+        panel: &mut Panel,
+    ) {
+        for _ in 0..10 {
+            let _ = conn.flush();
+            h.pump();
+            if let Some(guard) = queue.prepare_read() {
+                let _ = guard.read();
+            }
+            queue.dispatch_pending(panel).unwrap();
+        }
+    }
+
     /// The clipboard history (lot D-42) between Wayland clients: copies kept, a copy already
     /// there moved to the top, pictures with a thumbnail, no secret, an item put back, nothing
     /// once the history is off.
@@ -1020,18 +1121,48 @@ mod tests {
         );
         assert!(entry.content.thumbnail.is_some());
 
+        // Only a client of the shell socket sees the history.
+        const GLOBAL: &str = "sherlock_clipboard_history_v1";
+        let (_, _, app) = connect_panel(&mut h, false);
+        assert!(app.globals.iter().all(|g| g.1 != GLOBAL));
+        let (conn, mut queue, mut panel) = connect_panel(&mut h, true);
+        let (name, _, _) = panel
+            .globals
+            .iter()
+            .find(|g| g.1 == GLOBAL)
+            .cloned()
+            .unwrap();
+        let registry = conn.display().get_registry(&queue.handle(), ());
+        let manager: SherlockClipboardHistoryV1 = registry.bind(name, 1, &queue.handle(), ());
+        pump_panel(&mut h, &conn, &mut queue, &mut panel);
+        assert_eq!(panel.enabled, Some(true));
+        assert_eq!(panel.items.len(), 3);
+        let picture = entry.id;
+        assert_eq!(panel.items[&picture], (3, "64 × 32".to_owned()));
+        let thumbnail = image::load_from_memory(&panel.thumbnails[&picture]).unwrap();
+        assert_eq!(thumbnail.width(), 64);
+        // Removed from the panel: gone from the history, and the panel told.
+        manager.remove(picture);
+        pump_panel(&mut h, &conn, &mut queue, &mut panel);
+        assert!(h.state.clipboard_history().get(picture).is_none());
+        assert_eq!(panel.items.len(), 2);
+
         // An item put back is offered again, and goes to the top without being read twice.
-        let second = h.state.clipboard_history().entries()[2].id;
+        let second = h.state.clipboard_history().entries()[1].id;
         let before = h.seen.selections;
-        h.state.put_back(second);
+        manager.paste(second);
+        pump_panel(&mut h, &conn, &mut queue, &mut panel);
         h.wl_offered(false, before, TEXT);
         assert_eq!(h.wl_paste(false, TEXT), b"second");
         assert_eq!(top(&h.state).as_deref(), Some("second"));
-        assert_eq!(h.state.clipboard_history().entries().len(), 3);
+        assert_eq!(h.state.clipboard_history().entries().len(), 2);
         // Pinned, it stays when the rest is cleared.
-        h.state.pin_clipboard_item(second, true);
-        h.state.clear_clipboard_history();
+        manager.set_pinned(second, 1);
+        manager.clear();
+        pump_panel(&mut h, &conn, &mut queue, &mut panel);
         assert_eq!(h.state.clipboard_history().entries().len(), 1);
+        assert_eq!(panel.items.len(), 1);
+        assert!(panel.items.contains_key(&second));
 
         // Kept on disk, for the user alone, and the file goes when the setting is off.
         let file = std::env::temp_dir().join(format!("clipboard-history-{}", std::process::id()));
@@ -1055,6 +1186,9 @@ mod tests {
         settings.history = false;
         h.state.set_clipboard_settings(settings);
         assert!(h.state.clipboard_history().entries().is_empty());
+        pump_panel(&mut h, &conn, &mut queue, &mut panel);
+        assert_eq!(panel.enabled, Some(false));
+        assert!(panel.items.is_empty());
         h.wl_copy(false, &[(TEXT, &Arc::new(b"off".to_vec()))]);
         h.idle(Duration::from_millis(300));
         assert!(h.state.clipboard_history().entries().is_empty());

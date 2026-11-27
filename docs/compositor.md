@@ -854,7 +854,7 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
 ## Clipboard history
 
 Lot D-42, `src/clipboard_history/`. What is copied, in Wayland and X11 applications, is kept for
-the Super + V panel of the shell (ADR 0029 for pasting).
+the Super + V panel of the shell (ADR 0030 for pasting).
 
 - **What is read.** Every new CLIPBOARD selection passes through `State::selection_set`. Once
   it is in place, the compositor reads the one type worth keeping, the way a client pastes it:
@@ -890,6 +890,10 @@ the Super + V panel of the shell (ADR 0029 for pasting).
   included, in `$XDG_STATE_HOME/sherlockos/clipboard-history` (mode 0600), written by a thread
   of its own after each change (the last state only), through a file renamed over it; read back
   in a thread when the setting is on, with the history's limits. Turned off, the file goes.
+- **For the shell** (`shell/clipboard.rs`): `sherlock_clipboard_history_v1`, only on the shell
+  socket (ADR 0021), lists the items (their thumbnail in a memfd), and takes `paste`,
+  `set_pinned`, `remove` and `clear` from the Super + V panel. Super + V (Alt + V nested) starts
+  `sherlockos-clipboard` as Super + Space starts the launcher; pasting follows ADR 0030.
 
 ## GPU buffers (linux-dmabuf)
 

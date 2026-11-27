@@ -75,6 +75,8 @@ pub(crate) struct ClipboardHistory {
     reads: Arc<AtomicUsize>,
     /// The next selection is the history's own: an item put back.
     putting_back: bool,
+    /// Whether the history is on, as the panels were last told.
+    told_enabled: Option<bool>,
 }
 
 fn now() -> u64 {
@@ -183,12 +185,20 @@ impl State {
         }
     }
 
-    /// After each change of the history or of its setting: the disk follows.
+    /// After each change of the history or of its setting: the disk and the panels follow.
     pub(crate) fn clipboard_changed(&mut self) {
         let changes = self.clipboard.history.take_changes();
         if !changes.updated.is_empty() || !changes.removed.is_empty() {
             self.save_clipboard();
         }
+        self.tell_clipboard_clients(changes);
+    }
+
+    /// The history's state, if the panels have not been told it yet.
+    pub(crate) fn clipboard_state_changed(&mut self) -> Option<bool> {
+        let enabled = self.clipboard.config.history;
+        let told = self.clipboard.told_enabled.replace(enabled);
+        (told.is_some() && told != Some(enabled)).then_some(enabled)
     }
 
     /// Pins item `id`, or unpins it.
@@ -386,7 +396,7 @@ impl State {
     }
 
     /// Puts item `id` back on the clipboard, and moves it to the top. Only the shell's panel
-    /// will ask for it, through the shell protocol.
+    /// asks for it (lot D-42, the shell protocol).
     pub fn put_back(&mut self, id: u32) {
         if self.is_locked() {
             return;
