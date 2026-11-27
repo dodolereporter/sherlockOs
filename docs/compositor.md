@@ -1183,14 +1183,20 @@ shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
 
 ### Blur behind glass (lot D-37, ADR 0027)
 
-A client asks for the blur behind its surface with `ext_background_effect_v1`: a region in the
-surface's coordinates, applied at its commit, cut to its size. Our shell asks by itself: the
-`glass` of sherlock-ui (feature `layer-shell`) gives its rounded shape to iced_exwlshell, which
-sends it. The dock's bar, the top bar and the bar's panels use it.
+A client asks for the blur behind its surface with `ext_background_effect_v1`, or with KDE's
+`org_kde_kwin_blur` (Qt applications, lot D-37b): a region in the surface's coordinates,
+applied at its commit, cut to its size. KDE's null region is the whole surface; its `unset`
+takes the blur away at the next commit, its `release` keeps it, as with KWin. Our shell asks
+by itself: the `glass` of sherlock-ui (feature `layer-shell`) and every menu or panel over its
+shadow (`surface::shadowed`) give their rounded shape to iced_exwlshell, which sends it. The
+dock and its menu, the top bar, its panels and menus, the notifications, the launcher and the
+menus of the applications view use it.
 
 - **Where.** `push_surface` puts an `Item::Blur` just behind every surface it draws that has a
-  region: anchored surfaces, their menus, the menus of windows. Not while the session is locked:
-  the lock draws its own scene.
+  region: anchored surfaces, their menus, the menus of windows. `push_window` puts one behind a
+  window that asks, cut to its rounded corners (lot D-37b). The on-screen display of the media
+  keys, drawn by the compositor, has one behind its pill, at its opacity. Not while the session
+  is locked: the lock draws its own scene.
 - **How.** The element is never opaque, so what is behind is drawn first. When it must compute,
   it copies its area of the frame at half size (`glBlitFramebuffer`), halves it
   `sherlock_ui::blur::PASSES` times then doubles it back with the dual Kawase programs
@@ -1203,25 +1209,35 @@ sends it. The dock's bar, the top bar and the bar's panels use it.
   damage tracker redraws what is behind. Otherwise it draws its textures again where the frame
   is redrawn (the clock of the bar), and at rest nothing is drawn at all.
 - **Without blur.** On the software renderer, without GLES 3 or after a GL error, a veil of the
-  desktop color at `VEIL_OPACITY` takes its place: the glass reads denser.
+  desktop color at `VEIL_OPACITY` takes its place: the glass reads denser. Also when the chip is
+  too slow (lot D-37b): after each blur computed, a GL fence; once it is `LATE_AFTER` old (16
+  ms), the next blur asks whether the chip is done. `LATE_IN_A_ROW` (8) late blurs in a row,
+  and the veil takes over for the session, with a warning in the journal. Smithay's GL bindings
+  have no timer queries: the fence only says "not done after a frame".
+- **Trials.** `SHERLOCKOS_BLUR=blur`, `veil` or `off` chooses what glass gets behind it,
+  whatever the renderer: to see the blur in a nested session on the software renderer.
 - **Limits.** The blur samples inside its area only: a little lighter near its edges. A region
   is made of rectangles: the corners are steps of one logical pixel, smoothed by the glass drawn
   over them.
 
-Tests: `cargo test -p compositor --test headless -- blur frame_with_blur`. On Mesa's software
+Tests: `cargo test -p compositor --test headless -- blur osd`. On Mesa's software
 renderer, stripes behind a glass rounded by 22 are blurred behind it and sharp around it, its
 corners show them as they are, a frame at rest draws nothing, a change behind computes the blur
 again, the veil has its color, and a frame that computes the blur costs less than 25 ms more
-than one with the veil (2.7 against 1.7 ms at 800 × 600 on the author's machine). The board,
-with Konsole, the real bar and dock, without then with the blur, dark then light:
-`cargo build -p bar -p dock && cargo test -p compositor --test headless -- --ignored blur_board`
-writes `screenshots/blur-board.png`.
+than one with the veil (2.7 against 1.7 ms at 800 × 600 on the author's machine). A window
+that asks with KDE's protocol gets the blur behind it, inside its rounded corners, until it
+unsets it; the on-screen display gets it behind its pill. The boards, with text drawn by the
+test, the real bar with its calendar, the real dock and the on-screen display, without then with
+the blur: `cargo build -p bar -p dock && cargo test -p compositor --test headless -- --ignored
+blur_board` writes `screenshots/blur-board.png` (dark then light, 1440 × 900),
+`blur-board-1920x1080.png` and `blur-board-2560x1600.png` (scale 1.5).
 
 ### What rendering does not do yet
 
-- **Blur** for Qt applications (`org_kde_kwin_blur`), the notifications, the OSD and the glass
-  windows of our applications, the "Reduce transparency" setting, and the veil when the GPU
-  takes too long: lot D-37b.
+- **Blur**: the "Reduce transparency" setting of Control Room; the glass windows of our
+  applications (Evidence and Control Room draw opaque windows with winit, which cannot send a
+  region yet: the compositor is ready for them); a panel that unfolds asks for its blur at its
+  size at rest, not at its scale of the moment.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 

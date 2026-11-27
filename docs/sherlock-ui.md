@@ -776,8 +776,13 @@ of the tile, enlarged four times:
   rectangles of a Wayland region: one band per row in the corners.
 - **Component** (`glass`, feature `layer-shell`): `glass(content, radius)` draws its content as
   is and gives its rounded bounds to iced_exwlshell as the blur region of the surface
-  (`ext_background_effect_v1`). The dock's bar, the top bar and its panels are wrapped in it.
-  The tint and the border stay the content's style. See "Blur behind glass" in
+  (`ext_background_effect_v1`). The dock and its menu, the top bar, the notification bubbles and
+  the launcher's panel are wrapped in it. The tint and the border stay the content's style.
+- **Automatic** (lot D-37b): with `layer-shell`, `surface::shadowed` with the `Menu` or
+  `Panel` elevation asks for the blur over its rounded bounds by itself: every menu, submenu,
+  floating menu and panel of the shell. `Flat` does not: it only learns the renderer.
+- **Too slow** (lot D-37b): `LATE_AFTER` and `LATE_IN_A_ROW` say when the compositor gives up
+  the blur for the veil. See "Blur behind glass" in
   `docs/compositor.md` and ADR 0027.
 
 ## What the lot does not do

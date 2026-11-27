@@ -30,7 +30,7 @@ capability). The region a surface gives, in its own coordinates and clipped to i
 double-buffered: it applies at the surface's commit. A region is made of rectangles only: our
 components send their rounded shape as a band per row in the corners (`sherlock_ui::blur::
 rounded_region`); the glass drawn over it smooths the edge. KDE's `org_kde_kwin_blur` follows
-in lot D-37b, for Qt applications, into the same state.
+in lot D-37b, for Qt applications, into the same state: its null region is the whole surface.
 
 **Drawing.** Behind each surface with a region, the compositor puts a blur element:
 
@@ -58,9 +58,10 @@ no blur is drawn.
   each frame of it: a few passes on textures of a quarter of the area or less.
 - The blur samples only inside its area: near its edges it is a little lighter than in the
   middle, which the glass hides.
-- The "Reduce transparency" setting of Control Room, and the switch to the veil when a frame
-  with blur takes too long on the GPU (it needs timer queries, which Smithay's GL bindings do not
-  load), are left to lot D-37b.
+- When the GPU is too slow, the veil takes over (lot D-37b): Smithay's GL bindings do not load
+  timer queries, so a GL fence set after each blur tells whether the chip finished it within a
+  frame (`LATE_AFTER`); `LATE_IN_A_ROW` late blurs in a row switch to the veil for the session.
+- The "Reduce transparency" setting of Control Room is left to a later lot.
 
 ## What would change the decision
 
