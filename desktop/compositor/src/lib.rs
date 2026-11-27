@@ -16,6 +16,7 @@ pub mod genie;
 pub mod gestures;
 mod handlers;
 pub mod headless;
+pub mod inhibit;
 mod input;
 pub mod keyboard;
 pub mod launcher;
@@ -32,6 +33,7 @@ pub mod pacing;
 pub mod perf;
 pub mod popup_anim;
 pub mod render;
+mod screensaver;
 mod shell;
 pub mod stats;
 pub mod theme;
@@ -235,6 +237,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
+    inhibitors: inhibit::Inhibitors,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -376,6 +380,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            inhibitors: inhibit::Inhibitors::new(&dh),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),

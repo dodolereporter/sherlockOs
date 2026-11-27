@@ -121,6 +121,12 @@ impl State {
     }
 
     fn check_idle(&mut self) {
+        // A visible video, a cookie on the bus, logind: the inactivity waits, and starts again
+        // when the last one goes (lot D-43).
+        if self.idle_inhibited() {
+            self.note_input();
+            return;
+        }
         let (Some(delay), Some(last)) = (self.triggers.idle_delay(), self.triggers.last_input)
         else {
             return;

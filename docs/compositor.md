@@ -38,6 +38,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
+| `src/inhibit.rs`, `src/screensaver.rs` | What keeps the session awake: idle inhibitors, `org.freedesktop.ScreenSaver`, logind (lot D-43) |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
 | `src/dmabuf.rs` | GPU buffers (`zwp_linux_dmabuf_v1`): global with its default feedback, import through the renderer, refusal of a buffer it cannot draw, size check before smithay's (lot D-06) |
 | `src/focus.rs` | Keyboard target: Wayland surface or X11 window |
@@ -2283,8 +2284,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **Triggers (lot D-25a3, `src/triggers.rs`).** The session also locks:
   - after a delay without input (keyboard, pointer, touchpad), set in
     `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
-    within a second when it changes; `desktop_config::lock`, which Control Room will write);
-    no application can hold it off yet (no `idle-inhibit` protocol);
+    within a second when it changes; `desktop_config::lock`, which Control Room will write),
+    unless something keeps the session awake (lot D-43, see "Keeping awake" below);
   - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
     the launcher and the bar);
   - before the sleep: the compositor holds a `delay` inhibitor of logind; on
@@ -2295,6 +2296,28 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   logind's `Unlock` signal is ignored: only the lock screen ends the lock. logind is read on
   a thread of its own, in the real session only; without it, the log says so and the other
   triggers remain.
+- **Keeping awake (lot D-43, `src/inhibit.rs`, `src/screensaver.rs`).** The inactivity does
+  not lock while one of these holds, and its delay starts again when the last one goes:
+  - a **visible** surface with an idle inhibitor (`zwp_idle_inhibit_manager_v1`, version 1:
+    Firefox, mpv, Chrome in Wayland). Visible means in a window shown, on the active workspace,
+    not minimized, or in an anchored surface. A video minimized or on another workspace does not
+    count, as the protocol says. A window covered by another still counts;
+  - a cookie of `org.freedesktop.ScreenSaver` (at `/org/freedesktop/ScreenSaver` and
+    `/ScreenSaver`) or of `org.freedesktop.PowerManagement.Inhibit` (at
+    `/org/freedesktop/PowerManagement/Inhibit`, names `org.freedesktop.PowerManagement` and
+    `org.freedesktop.PowerManagement.Inhibit`) on the session bus: Chrome and Electron in X11,
+    VLC, older players. `Inhibit(application, reason)` gives a cookie, `UnInhibit(cookie)` gives
+    it back, only from the program that took it. A program that leaves the bus
+    (`NameOwnerChanged`) gives back all of its own: a player that crashes keeps nothing awake.
+    The log says who took one, at the `info` level;
+  - logind blocking `idle` (`systemd-inhibit --what=idle`, a presentation tool): its
+    `BlockInhibited` property, read every 5 s, uncached since logind announces no change of it.
+  None of them stops Super + L, the lid, logind's `Lock` (the Lock button) nor the sleep: those
+  lock without looking at inactivity. The bus services run on threads of their own; if the
+  names are taken (another desktop's service on a shared bus), the log says so and the Wayland
+  inhibitors remain. With lot D-38, the veil, the screens off and the sleep on inactivity wait
+  on the same `State::idle_inhibited`. Tests: `tests/idle_inhibit.rs` (a visible video, a
+  minimized one, Super + L, a cookie whose holder leaves, a fake logind, on a private bus).
 - **What is drawn.** Each screen shows its lock surface, in front of the background of the
   system screens (`#0A1424` in the dark theme), or that background alone. Nothing else, except
   the on-screen display of the volume and brightness keys: no window, bar, dock, menu, Mission
@@ -2516,6 +2539,7 @@ just verify
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
+| `tests/idle_inhibit.rs` | What keeps the session awake, see "Session lock" (lot D-43) |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |
 
