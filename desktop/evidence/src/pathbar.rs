@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn a_typed_path_expands_the_home_and_starts_from_the_folder() {
         let (cwd, home) = (Path::new("/srv/data"), Path::new("/home/ada"));
-        let at = |s| resolve(s, cwd, home);
+        let at = |s: &str| resolve(s, cwd, home);
         assert_eq!(at("~"), Some(PathBuf::from("/home/ada")));
         assert_eq!(
             at("~/Documents/"),
