@@ -67,7 +67,7 @@ cursor-board output="docs/cursor/board.png":
 
 # Builds the session (compositor, bar, dock) and the cursor themes, then prints the sudo commands that install them for the login screen, without running them
 install-session: cursors
-    cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock -p apps -p control-room -p portal
+    cargo build --release -p compositor -p bar -p dock -p launcher -p clipboard-panel -p notifications -p evidence -p lock -p apps -p control-room -p autostart -p portal
     desktop/compositor/session/install.sh "$PWD"
 
 # Installs Evidence for the user, without root: its binary in ~/.local/bin, its desktop entry, which the dock pins and the launcher lists, and its icon

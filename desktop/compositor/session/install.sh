@@ -10,7 +10,7 @@ applications=/usr/local/share/applications
 # The application icons, a hicolor theme that only the session sees (sherlockos-session puts
 # this folder first in XDG_DATA_DIRS).
 data=/usr/local/share/sherlockos
-programs="compositor bar dock launcher sherlockos-apps notifications evidence sherlockos-lock control-room sherlock-portal"
+programs="compositor bar dock launcher sherlockos-apps sherlockos-clipboard notifications evidence sherlockos-lock control-room sherlockos-autostart sherlock-portal"
 
 icons=/usr/local/share/icons
 themes="sherlockos sherlockos-light"
