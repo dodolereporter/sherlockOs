@@ -371,7 +371,7 @@ mod tests {
         let slow = Arc::new(Slow(Duration::from_secs(30)));
         let receiver = check_in_background(
             slow,
-            "dodo".into(),
+            "sam".into(),
             Secret::new("x".into()),
             Duration::from_millis(200),
         );
@@ -385,7 +385,7 @@ mod tests {
         let quick = Arc::new(Slow(Duration::from_millis(10)));
         let receiver = check_in_background(
             quick,
-            "dodo".into(),
+            "sam".into(),
             Secret::new("x".into()),
             Duration::from_secs(5),
         );

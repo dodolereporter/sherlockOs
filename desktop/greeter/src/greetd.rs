@@ -305,10 +305,10 @@ mod tests {
     #[test]
     fn requests_are_the_json_of_greetd_ipc() {
         let mut create = Request::new("create_session");
-        create.field("username", "dodo");
+        create.field("username", "alex");
         assert_eq!(
             body(&create),
-            serde_json::json!({"type": "create_session", "username": "dodo"})
+            serde_json::json!({"type": "create_session", "username": "alex"})
         );
         let mut start = Request::new("start_session");
         start.list("cmd", &["sherlockos-session".into(), "--x".into()]);

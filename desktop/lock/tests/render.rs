@@ -72,7 +72,7 @@ mod tests {
             Arc::new(FakePam::default()),
             Arc::new(FakeRunner::default()),
         );
-        let mut lock = Lock::new("dodo".into(), pam.clone(), runner.clone());
+        let mut lock = Lock::new("sam".into(), pam.clone(), runner.clone());
         let (primary, other) = (window::Id::unique(), window::Id::unique());
         for id in [primary, other] {
             let _ = lock.update(Message::Surface(id));
@@ -192,7 +192,7 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(*s.pam.0.lock().unwrap(), ["dodo"]);
+        assert_eq!(*s.pam.0.lock().unwrap(), ["sam"]);
         let _ = s.lock.update(Message::Checked(expected));
     }
 
@@ -545,7 +545,7 @@ mod tests {
             Arc::new(FakePam::default()),
             Arc::new(FakeRunner::default()),
         );
-        let mut lock = Lock::new("dodo".into(), pam.clone(), runner.clone()).rescue();
+        let mut lock = Lock::new("sam".into(), pam.clone(), runner.clone()).rescue();
         let id = window::Id::unique();
         let _ = lock.update(Message::Surface(id));
         let _ = lock.update(Message::Resized(id, Size::new(1366.0, 768.0)));

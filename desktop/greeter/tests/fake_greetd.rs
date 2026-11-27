@@ -127,7 +127,7 @@ mod tests {
     fn the_right_password_starts_the_session() {
         let fake = Fake::start(pam);
         let mut greetd = fake.connect();
-        let report = log_in(&mut greetd, "dodo", Secret::new(GOOD.into()), &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch()).unwrap();
         assert_eq!(report.outcome, Outcome::Started);
         assert!(report.notes.is_empty());
         drop(greetd);
@@ -140,7 +140,7 @@ mod tests {
                 "start_session"
             ]
         );
-        assert_eq!(requests[0]["username"], "dodo");
+        assert_eq!(requests[0]["username"], "alex");
         assert_eq!(requests[1]["response"], GOOD);
         assert_eq!(
             requests[2]["cmd"],
@@ -157,10 +157,10 @@ mod tests {
         let fake = Fake::start(pam);
         let mut greetd = fake.connect();
         let wrong = Secret::new("pas-le-bon".into());
-        let report = log_in(&mut greetd, "dodo", wrong, &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", wrong, &launch()).unwrap();
         assert_eq!(report.outcome, Outcome::Refused);
         // The next attempt goes through on the same connection.
-        let report = log_in(&mut greetd, "dodo", Secret::new(GOOD.into()), &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch()).unwrap();
         assert_eq!(report.outcome, Outcome::Started);
         drop(greetd);
         let requests = fake.requests();
@@ -197,7 +197,7 @@ mod tests {
         }
         let fake = Fake::start(script);
         let mut greetd = fake.connect();
-        let report = log_in(&mut greetd, "dodo", Secret::new(GOOD.into()), &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch()).unwrap();
         assert_eq!(report.outcome, Outcome::Started);
         assert_eq!(
             report.notes,
@@ -263,7 +263,7 @@ mod tests {
         }
         let fake = Fake::start(script);
         let mut greetd = fake.connect();
-        let report = log_in(&mut greetd, "dodo", Secret::new(GOOD.into()), &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch()).unwrap();
         assert_eq!(report.outcome, Outcome::Failed("no such command".into()));
         drop(greetd);
         assert_eq!(types(&fake.requests()).last(), Some(&"cancel_session"));
@@ -284,7 +284,7 @@ mod tests {
         }
         let fake = Fake::start(script);
         let mut greetd = fake.connect();
-        let report = log_in(&mut greetd, "dodo", Secret::new(GOOD.into()), &launch()).unwrap();
+        let report = log_in(&mut greetd, "alex", Secret::new(GOOD.into()), &launch()).unwrap();
         assert_eq!(
             report.outcome,
             Outcome::Unsupported("New password: ".into())
@@ -301,7 +301,7 @@ mod tests {
     fn a_greeter_that_leaves_mid_login_cancels_the_session() {
         let fake = Fake::start(pam);
         let mut greetd = fake.connect();
-        let reply = greetd.create_session("dodo").unwrap();
+        let reply = greetd.create_session("alex").unwrap();
         assert_eq!(
             reply,
             Reply::AuthMessage(Prompt::Secret, "Password: ".into())
