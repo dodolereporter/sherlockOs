@@ -312,6 +312,13 @@ pub const MINIMIZE: Duration = Duration::from_millis(300);
 /// Scale of a window at the end of the minimize fallback, at the bottom of its screen.
 pub const MINIMIZE_SCALE: f64 = 0.2;
 
+/// A fullscreen window covers the bar and the dock (lot D-21e). The pointer rests this long
+/// against an edge before the surfaces along it come back over the window, as on macOS: a
+/// pointer passing by, or aiming at the top of the window, does not bring them out.
+pub const EDGE_REVEAL_DELAY: Duration = Duration::from_millis(150);
+/// Their slide in, and out once the pointer has left them, on `Ease::OutCubic`.
+pub const EDGE_REVEAL: Duration = Duration::from_millis(250);
+
 /// Fade of the whole desktop from one theme to the other (`color::ThemeFade`). A choice of
 /// D-05b: the 0.25 s of the cross-fades between two animations of Sherlock
 /// (`docs/contexte.md`), longer than a hover, since every surface changes at once.

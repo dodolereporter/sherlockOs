@@ -199,16 +199,17 @@ pub fn brightness(
     let path = notified(&light);
     let file = File::open(&path)?;
     let mut events = inotify(&path);
+    let read = |file: &File| {
+        let mut bytes = [0u8; 32];
+        let n = file.read_at(&mut bytes, 0).unwrap_or(0);
+        bytes[..n].to_vec()
+    };
+    // Read once, so that sysfs knows what was seen; here rather than on the thread, which may
+    // start late: a change made meanwhile would be taken for the first value (lot Q-18b).
+    let mut last = read(&file);
     let thread = std::thread::Builder::new()
         .name(String::from("watch-brightness"))
         .spawn(move || {
-            let read = |file: &File| {
-                let mut bytes = [0u8; 32];
-                let n = file.read_at(&mut bytes, 0).unwrap_or(0);
-                bytes[..n].to_vec()
-            };
-            // Read once, so that sysfs knows what was seen.
-            let mut last = read(&file);
             let timeout = i32::try_from(CHECK.as_millis()).unwrap_or(1000);
             loop {
                 let mut fds = [
@@ -334,11 +335,20 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
-        std::fs::write(light.join("actual_brightness"), "128").unwrap();
+        // As the kernel changes it: in one write. `std::fs::write` truncates first, and the
+        // watcher could read the empty file in between, a change of its own (lot Q-18b).
+        let set = |value: &str| {
+            use std::os::unix::fs::FileExt as _;
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(light.join("actual_brightness"))
+                .unwrap();
+            file.write_all_at(value.as_bytes(), 0).unwrap();
+        };
+        set("128");
         assert!(reaches(&count, 1));
         // The same value written again is no change.
-        std::fs::write(light.join("actual_brightness"), "128").unwrap();
+        set("128");
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(count.load(Ordering::SeqCst), 1);
         wanted.store(false, Ordering::SeqCst);
