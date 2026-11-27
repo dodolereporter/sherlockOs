@@ -768,6 +768,18 @@ of the tile, enlarged four times:
 - **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
   and `Sidebar`, drawn on the same grid and stroke.
 
+## Blur behind glass (D-37)
+
+- **Tokens** (`blur`): `PASSES` and `OFFSET` set how much the compositor blurs, `SATURATION`
+  how much livelier the blurred colors are, `VEIL_OPACITY` the veil of the desktop color laid
+  behind glass where there is no blur. `rounded_region` cuts a rounded rectangle into the
+  rectangles of a Wayland region: one band per row in the corners.
+- **Component** (`glass`, feature `layer-shell`): `glass(content, radius)` draws its content as
+  is and gives its rounded bounds to iced_exwlshell as the blur region of the surface
+  (`ext_background_effect_v1`). The dock's bar, the top bar and its panels are wrapped in it.
+  The tint and the border stay the content's style. See "Blur behind glass" in
+  `docs/compositor.md` and ADR 0027.
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like

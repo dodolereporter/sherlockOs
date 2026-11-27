@@ -67,6 +67,8 @@ pub enum Part {
     ScreenOffHalo,
     /// The veil before the inactivity (lot D-38).
     IdleVeil,
+    /// The blur behind a glass surface (lot D-37).
+    Blur,
 }
 
 /// Identity of an element drawn by the compositor: its part, and the window it belongs to, by

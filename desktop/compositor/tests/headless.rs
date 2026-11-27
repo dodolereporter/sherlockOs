@@ -14,9 +14,20 @@ mod tests {
 
     use std::io::Write as _;
 
+    use compositor::blur::Mode;
     use compositor::{State, render::Item};
     use sherlock_ui::color::{Color, Palette};
+    use smithay::backend::{
+        allocator::Fourcc,
+        egl::{EGLContext, EGLDevice, EGLDisplay},
+        renderer::{
+            Bind as _, ExportMem as _, Offscreen as _, Texture as _, TextureMapping as _,
+            damage::OutputDamageTracker,
+            gles::{GlesRenderer, GlesTexture},
+        },
+    };
     use smithay::reexports::wayland_server::Resource as _;
+    use smithay::utils::Transform;
     use smithay::{
         backend::input::{ButtonState, KeyState},
         desktop::Window,
@@ -29,6 +40,7 @@ mod tests {
         reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface,
         wayland::{seat::WaylandFocus as _, shell::wlr_layer::Layer as ServerLayer},
     };
+    use wayland_client::protocol::wl_region::WlRegion;
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, WEnum, delegate_noop,
         protocol::{
@@ -43,6 +55,10 @@ mod tests {
             wl_shm_pool::WlShmPool,
             wl_surface::WlSurface,
         },
+    };
+    use wayland_protocols::ext::background_effect::v1::client::{
+        ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+        ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
     };
     use wayland_protocols::wp::cursor_shape::v1::client::{
         wp_cursor_shape_device_v1::{Shape as CursorShape, WpCursorShapeDeviceV1},
@@ -3540,5 +3556,465 @@ mod tests {
             "dragging an icon"
         );
         h.state.pointer_button(BTN_LEFT, ButtonState::Released, 8);
+    }
+
+    delegate_noop!(Client: ignore ExtBackgroundEffectManagerV1);
+    delegate_noop!(Client: ExtBackgroundEffectSurfaceV1);
+    delegate_noop!(Client: WlRegion);
+
+    /// The scene drawn as the real session draws it, with Mesa's software renderer, into the
+    /// same texture from frame to frame, through a damage tracker that lives as long: what is
+    /// drawn again is only what changed (lot D-37).
+    struct Drawing {
+        renderer: GlesRenderer,
+        scene: compositor::render::Scene,
+        ids: compositor::damage::Ids,
+        textures: compositor::wallpaper::Textures,
+        target: GlesTexture,
+        tracker: OutputDamageTracker,
+        age: usize,
+        /// Time added to the compositor's: a second more at each frame.
+        clock: Duration,
+    }
+
+    impl Drawing {
+        /// On Mesa's software device, blur on; none without Mesa's EGL, except on the CI.
+        fn new(size: (i32, i32)) -> Option<Self> {
+            let Some(device) = EGLDevice::enumerate().unwrap().find(EGLDevice::is_software) else {
+                assert!(std::env::var_os("CI").is_none(), "the CI has Mesa's EGL");
+                return None;
+            };
+            // SAFETY: the display lives as long as the renderer, in this test only.
+            let display = unsafe { EGLDisplay::new(device) }.unwrap();
+            let context = EGLContext::new(&display).unwrap();
+            // SAFETY: the context was just made and is used by this renderer alone.
+            let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
+            let scene = compositor::render::Scene::new(&mut renderer).unwrap();
+            // The software renderer gets the veil in a session: here it blurs.
+            scene.blur.set_mode(Mode::Blur);
+            let target = renderer
+                .create_buffer(Fourcc::Abgr8888, size.into())
+                .unwrap();
+            Some(Self {
+                renderer,
+                scene,
+                ids: Default::default(),
+                textures: Default::default(),
+                target,
+                tracker: OutputDamageTracker::new(size, 1.0, Transform::Normal),
+                age: 0,
+                clock: Duration::ZERO,
+            })
+        }
+
+        /// A frame a second after the last one; whether anything was drawn, and the pixels,
+        /// top row first. The time it took, the GPU's work included.
+        fn frame(&mut self, h: &mut Harness) -> (bool, Vec<u8>, Duration) {
+            self.clock += Duration::from_secs(1);
+            let now = h.state.now() + self.clock;
+            let views = h.state.views();
+            let size = self.target.size();
+            let start = std::time::Instant::now();
+            let (scene, ids, textures) = (&self.scene, &mut self.ids, &mut self.textures);
+            let (screens, _) = scene.screens(
+                &mut self.renderer,
+                ids,
+                &mut h.state,
+                textures,
+                &views,
+                None,
+                now,
+            );
+            let elements = screens.into_iter().next().unwrap();
+            let mut target = self.renderer.bind(&mut self.target).unwrap();
+            let clear = sherlock_ui::color::palette().desktop.premultiplied();
+            let result = self
+                .tracker
+                .render_output(&mut self.renderer, &mut target, self.age, &elements, clear)
+                .unwrap();
+            let drawn = result.damage.is_some_and(|d| !d.is_empty());
+            result.sync.wait().unwrap();
+            let took = start.elapsed();
+            self.age = 1;
+            let mapping = self
+                .renderer
+                .copy_framebuffer(
+                    &target,
+                    Rectangle::from_size((size.w, size.h).into()),
+                    Fourcc::Abgr8888,
+                )
+                .unwrap();
+            let pixels = self.renderer.map_texture(&mapping).unwrap().to_vec();
+            let row = size.w as usize * 4;
+            let pixels = match mapping.flipped() {
+                true => pixels,
+                false => pixels.chunks(row).rev().flatten().copied().collect(),
+            };
+            (drawn, pixels, took)
+        }
+    }
+
+    impl Drawing {
+        /// The last of a few frames, once the window has opened.
+        fn settled(&mut self, h: &mut Harness) -> (bool, Vec<u8>, Duration) {
+            (0..3).map(|_| self.frame(h)).last().unwrap()
+        }
+    }
+
+    const WHITE: [u8; 3] = [0xEE, 0xF2, 0xF7];
+    const DARK: [u8; 3] = [0x0B, 0x12, 0x20];
+
+    /// Fills the window of `shown`, 400 × 300, with stripes two pixels wide, starting with white,
+    /// or with dark if `shifted`: the sharpest text there is.
+    fn stripes(h: &mut Harness, shown: &Shown, shifted: bool) -> File {
+        let qh = h.queue.handle();
+        let mut file = shm_file(400 * 300 * 4);
+        let pixels: Vec<u8> = (0..300 * 400)
+            .flat_map(|i| {
+                let [r, g, b] = if ((i % 400) / 2 % 2 == 0) != shifted {
+                    WHITE
+                } else {
+                    DARK
+                };
+                [b, g, r, 255]
+            })
+            .collect();
+        file.write_all(&pixels).unwrap();
+        let pool = shown.shm.create_pool(file.as_fd(), 400 * 300 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 400, 300, 1600, Format::Argb8888, &qh, ());
+        shown.surface.attach(Some(&buffer), 0, 0);
+        shown.surface.damage(0, 0, 400, 300);
+        shown.surface.commit();
+        settle(h);
+        file
+    }
+
+    /// A glass surface without a tint, 300 × 76 over the window (from (250, 364)), that asks
+    /// for the blur over its shape rounded by 22, as sherlock-ui's glass does.
+    fn glass(h: &mut Harness) -> (Anchored, ExtBackgroundEffectSurfaceV1) {
+        let spec = Spec {
+            layer: Layer::Top,
+            anchor: Anchor::Bottom,
+            size: (300, 76),
+            zone: 0,
+            margin: (0, 0, 160, 0),
+            keyboard: KeyboardInteractivity::None,
+        };
+        let glass = anchor(h, spec);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        settle(h);
+        let compositor: WlCompositor = h.bind(&registry);
+        let manager: ExtBackgroundEffectManagerV1 = h.bind(&registry);
+        let effect = manager.get_background_effect(&glass.surface, &qh, ());
+        let region = compositor.create_region(&qh, ());
+        for [x, y, w, ht] in sherlock_ui::blur::rounded_region(0, 0, 300, 76, 22.0) {
+            region.add(x, y, w, ht);
+        }
+        effect.set_blur_region(Some(&region));
+        region.destroy();
+        glass.surface.commit();
+        settle(h);
+        (glass, effect)
+    }
+
+    fn rgb(pixels: &[u8], x: usize, y: usize) -> [u8; 3] {
+        let i = (y * 800 + x) * 4;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    }
+
+    /// How much neighbours differ along the row `y`, from `x0` to `x1`: about 110 on the
+    /// stripes, near 0 once blurred.
+    fn sharpness(pixels: &[u8], y: usize, (x0, x1): (usize, usize)) -> f64 {
+        let step = |x: usize| {
+            let (a, b) = (rgb(pixels, x, y), rgb(pixels, x + 1, y));
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| f64::from(a.abs_diff(b)))
+                .sum::<f64>()
+                / 3.0
+        };
+        (x0..x1).map(step).sum::<f64>() / (x1 - x0) as f64
+    }
+
+    #[test]
+    fn the_text_behind_glass_is_blurred_and_nothing_else() {
+        let Some(mut drawing) = Drawing::new((800, 600)) else {
+            return;
+        };
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let _file = stripes(&mut h, &shown, false);
+        let (_glass, _effect) = glass(&mut h);
+        let (_, pixels, _) = drawing.settled(&mut h);
+        let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("blur-stripes.png");
+        image::save_buffer(&path, &pixels, 800, 600, image::ColorType::Rgba8).unwrap();
+        // Above the glass, the stripes stay sharp; behind it they are blurred.
+        let (sharp, blurred) = (
+            sharpness(&pixels, 340, (280, 520)),
+            sharpness(&pixels, 402, (280, 520)),
+        );
+        assert!(sharp > 90.0, "{sharp}");
+        assert!(blurred < 15.0, "{blurred}");
+        // The rounded corners: past the curve the stripes show as they are, inside it a grey.
+        let corner = rgb(&pixels, 251, 365);
+        assert!(corner == WHITE || corner == DARK, "{corner:?}");
+        let inside = rgb(&pixels, 400, 402);
+        assert!(inside.iter().all(|c| (60..200).contains(c)), "{inside:?}");
+
+        // At rest, nothing is drawn, nor computed.
+        assert!(!drawing.frame(&mut h).0, "a frame at rest");
+        // The text behind changes: drawn again, the blur with it, then at rest again.
+        let _file = stripes(&mut h, &shown, true);
+        let (drawn, again, _) = drawing.frame(&mut h);
+        assert!(drawn);
+        assert!(sharpness(&again, 402, (280, 520)) < 15.0);
+        assert!(!drawing.frame(&mut h).0, "a frame at rest");
+
+        // Without blur, a veil of the desktop color at its opacity over the stripes.
+        drawing.scene.blur.set_mode(Mode::Veil);
+        let _file = stripes(&mut h, &shown, false);
+        let (_, veiled, _) = drawing.frame(&mut h);
+        let veil = sherlock_ui::color::palette().desktop;
+        let keep = 1.0 - sherlock_ui::blur::VEIL_OPACITY;
+        let veil = [veil.r, veil.g, veil.b];
+        let want = veil
+            .iter()
+            .zip(WHITE)
+            .map(|(v, w)| (f32::from(*v) * (1.0 - keep) + f32::from(w) * keep).round() as u8);
+        let got = rgb(&veiled, 400, 402);
+        for (got, want) in got.iter().zip(want) {
+            assert!(got.abs_diff(want) <= 2, "{got} {want}");
+        }
+        h.state.shutdown();
+    }
+
+    /// The cost of a frame where the blur is computed again, on the CI's software renderer: the
+    /// window behind the glass changes at every frame. Printed with `--nocapture`.
+    #[test]
+    fn a_frame_with_blur_stays_cheap_on_the_software_renderer() {
+        let Some(mut drawing) = Drawing::new((800, 600)) else {
+            return;
+        };
+        let mut h = Harness::start();
+        let (shown, _decoration) = h.show_decorated();
+        let _first = stripes(&mut h, &shown, false);
+        let (_glass, _effect) = glass(&mut h);
+        drawing.settled(&mut h);
+        let time = |drawing: &mut Drawing, h: &mut Harness| {
+            let mut total = Duration::ZERO;
+            for i in 0..20 {
+                let _file = stripes(h, &shown, i % 2 == 0);
+                total += drawing.frame(h).2;
+            }
+            total / 20
+        };
+        let blur = time(&mut drawing, &mut h);
+        drawing.scene.blur.set_mode(Mode::Veil);
+        let veil = time(&mut drawing, &mut h);
+        eprintln!("frame with the blur computed again: {blur:?}, with the veil: {veil:?}");
+        // Measured on the author's machine: see docs/compositor.md. A large margin for the CI.
+        assert!(
+            blur < veil + Duration::from_millis(25),
+            "{blur:?} against {veil:?}"
+        );
+        h.state.shutdown();
+    }
+
+    impl Harness {
+        /// One screen of `size` pixels at scale 1.
+        fn start_screen(size: (i32, i32)) -> Self {
+            let event_loop = EventLoop::try_new().unwrap();
+            let mut state = State::new(&event_loop).unwrap();
+            state.add_output(size.into(), 1.0);
+            let (server_side, client_side) = UnixStream::pair().unwrap();
+            state.insert_client(server_side);
+            let conn = Connection::from_socket(client_side).unwrap();
+            let queue = conn.new_event_queue();
+            Self {
+                event_loop,
+                state,
+                conn,
+                queue,
+                client: Client::default(),
+            }
+        }
+    }
+
+    /// One row of the blur board: a Konsole full of text over nearly the whole screen, the real
+    /// bar with its calendar open and the real dock, in `theme`; drawn without the blur, then
+    /// with it.
+    fn blur_board_row(theme: &str, size: (i32, i32)) -> (Vec<u8>, Vec<u8>) {
+        use compositor::{theme as follow, wallpaper};
+        use smithay::desktop::layer_map_for_output;
+        use std::{path::PathBuf, process::Command};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("blur-board-{theme}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = dir.join("config");
+        std::fs::create_dir_all(config.join("appearance")).unwrap();
+        std::fs::create_dir_all(config.join("dock")).unwrap();
+        let appearance = config.join("appearance/appearance.conf");
+        std::fs::write(&appearance, format!("[Appearance]\nTheme={theme}\n")).unwrap();
+        // The dock stays over the maximized window.
+        std::fs::write(config.join("dock/dock.conf"), "[Dock]\nAutoHide=never\n").unwrap();
+        let data = dir.join("data");
+        let vulkan = data.join("vulkan/icd.d");
+        std::fs::create_dir_all(&vulkan).unwrap();
+        // Lavapipe under the name the shell keeps on a machine with an AMD chip (ADR 0018), so
+        // that its glass is translucent as on the machine.
+        let lavapipe = vulkan.join("radeon_icd.json");
+        std::fs::copy("/usr/share/vulkan/icd.d/lvp_icd.json", &lavapipe).unwrap();
+        let id = if theme == "dark" {
+            "first-clue"
+        } else {
+            "first-clue-light"
+        };
+        let picture = image::open(root.join(format!("assets/wallpapers/{id}.jpg")))
+            .unwrap()
+            .resize_to_fill(
+                size.0 as u32,
+                size.1 as u32,
+                image::imageops::FilterType::Triangle,
+            );
+        let folder = data.join("wallpapers").join(id);
+        std::fs::create_dir_all(&folder).unwrap();
+        let name = format!("{}x{}.png", picture.width(), picture.height());
+        picture.to_rgb8().save(folder.join(name)).unwrap();
+
+        let mut drawing = Drawing::new(size).expect("Mesa's software EGL device");
+        let mut h = Harness::start_screen(size);
+        let handle = h.event_loop.handle();
+        follow::follow_at(&handle, &mut h.state, appearance);
+        h.state.wallpaper =
+            wallpaper::Wallpaper::start(&handle, None, vec![data.join("wallpapers")]).unwrap();
+        h.state
+            .listen_at(dir.join("wayland-blur"), &h.event_loop)
+            .unwrap();
+        // The shell finds lavapipe in its data folder only; Konsole its own data in the system's.
+        let spawn = |program: &str, args: &[&str], data_dirs: &std::path::Path| {
+            Command::new(program)
+                .args(args)
+                .env_clear()
+                .env("XDG_DATA_DIRS", data_dirs)
+                // No system bus: none of the machine's network, Bluetooth or power is read.
+                .env("DBUS_SYSTEM_BUS_ADDRESS", format!("unix:path={}", dir.join("system-bus").display()))
+                .env("XDG_RUNTIME_DIR", &dir)
+                .env("WAYLAND_DISPLAY", "wayland-blur")
+                .env("XDG_CONFIG_HOME", &config)
+                .env("XDG_DATA_HOME", dir.join("data-home"))
+                .env("HOME", &dir)
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("RUST_LOG", "warn")
+                .env("QT_QPA_PLATFORM", "wayland")
+                .env("ICED_BACKEND", "wgpu")
+                .env("VK_DRIVER_FILES", &lavapipe)
+                .spawn()
+                .unwrap()
+        };
+        // Text over the whole width, written again once the window is maximized.
+        let text = "while true; do clear; ls -C -w \"$(tput cols)\" /usr/bin \\
+            | head -n \"$(($(tput lines) - 1))\"; sleep 2; done";
+        let system = std::path::Path::new("/usr/local/share:/usr/share");
+        // The programs of this build, next to the test's temporary folder.
+        let built = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("../debug");
+        let mut children = vec![
+            spawn(
+                "konsole",
+                &["--separate", "--hide-menubar", "-e", "sh", "-c", text],
+                system,
+            ),
+            spawn(built.join("bar").to_str().unwrap(), &[], &data),
+            spawn(built.join("dock").to_str().unwrap(), &[], &data),
+        ];
+        let run = |h: &mut Harness, drawing: &mut Drawing, ms: u64| {
+            let end = std::time::Instant::now() + Duration::from_millis(ms);
+            while std::time::Instant::now() < end {
+                h.conn.flush().unwrap();
+                h.event_loop
+                    .dispatch(Some(Duration::from_millis(16)), &mut h.state)
+                    .unwrap();
+                h.state.refresh();
+                drawing.frame(h);
+                let output = h.state.space.outputs().next().unwrap().clone();
+                let time = h.state.now();
+                for window in h.state.space.elements().cloned().collect::<Vec<_>>() {
+                    h.state.send_window_frame(&window, &output, time);
+                }
+                for layer in layer_map_for_output(&output).layers() {
+                    layer.send_frame(&output, time, Some(Duration::ZERO), |_, _| {
+                        Some(output.clone())
+                    });
+                }
+            }
+        };
+        let started = std::time::Instant::now();
+        while h.state.space.elements().next().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "Konsole shows no window"
+            );
+            run(&mut h, &mut drawing, 200);
+        }
+        run(&mut h, &mut drawing, 2000);
+        // Nearly the whole screen, under the panel and behind the dock: a maximized
+        // window would stop above the dock.
+        let window = h.state.space.elements().next().unwrap().clone();
+        let toplevel = window.toplevel().unwrap();
+        toplevel.with_pending_state(|state| state.size = Some((size.0 - 40, size.1 - 50).into()));
+        toplevel.send_configure();
+        run(&mut h, &mut drawing, 2000);
+        h.state.space.map_element(window, (20, 40), true);
+        run(&mut h, &mut drawing, 4000);
+        // The calendar, a panel of the bar on the same glass as the control centre: a click on the
+        // clock. The control centre would show the machine's network and Bluetooth, and without
+        // the system bus it has no indicators to open it.
+        let at = (f64::from(size.0) - 45.0, 28.0);
+        h.click(at.0, at.1, 10);
+        run(&mut h, &mut drawing, 3000);
+        drawing.scene.blur.set_mode(Mode::Off);
+        let before = drawing.settled(&mut h).1;
+        drawing.scene.blur.set_mode(Mode::Blur);
+        let after = drawing.settled(&mut h).1;
+        for child in &mut children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        h.state.shutdown();
+        (before, after)
+    }
+
+    /// The board of lot D-37: the right half of the screen, Konsole's text behind the dock and a
+    /// panel of the bar, without then with the blur (columns), dark then light (rows):
+    /// `screenshots/blur-board.png`.
+    #[test]
+    #[ignore = "needs Mesa's EGL, lavapipe, Konsole and `cargo build -p bar -p dock`"]
+    fn blur_board_with_konsole_the_dock_and_a_panel() {
+        let size = (1440, 900);
+        let (x0, width) = (560u32, 880u32);
+        let mut board = image::RgbaImage::new(2 * width, 2 * size.1 as u32);
+        for (row, theme) in ["dark", "light"].into_iter().enumerate() {
+            sherlock_ui::color::set_active(if theme == "dark" {
+                sherlock_ui::color::Theme::Dark
+            } else {
+                sherlock_ui::color::Theme::Light
+            });
+            let (before, after) = blur_board_row(theme, size);
+            for (column, pixels) in [before, after].into_iter().enumerate() {
+                let full =
+                    image::RgbaImage::from_raw(size.0 as u32, size.1 as u32, pixels).unwrap();
+                let cut = image::imageops::crop_imm(&full, x0, 0, width, size.1 as u32).to_image();
+                let (x, y) = (
+                    column as i64 * i64::from(width),
+                    row as i64 * i64::from(size.1),
+                );
+                image::imageops::overlay(&mut board, &cut, x, y);
+            }
+        }
+        sherlock_ui::color::set_active(sherlock_ui::color::Theme::Dark);
+        let path = format!("{}/screenshots/blur-board.png", env!("CARGO_MANIFEST_DIR"));
+        board.save(&path).unwrap();
+        eprintln!("board: {path}");
     }
 }

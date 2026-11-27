@@ -56,6 +56,8 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/background_effect.rs` | `ext_background_effect_v1` (lot D-37, ADR 0027): the blur region of each surface, applied at its commit |
+| `src/blur.rs` | The blur behind glass (lot D-37): its element, the dual Kawase passes and their cache, the veil without blur |
 | `src/decorations/` | Server-side decorations (lot D-08): who gets one (`protocol.rs`), the frame and its bar, the pointer on the bar and its buttons, the bar drawn into a texture (`raster.rs`) |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
@@ -1272,13 +1274,47 @@ rest. No board draws it: the values are choices of the lot, to review on the mac
 **Manual test.** Two overlapping windows: click the one behind, or pick it in the dock or in
 Mission Control; it grows into place and the other steps back. A window already fully visible comes
 to the front without animation.
+### Blur behind glass (lot D-37, ADR 0027)
+
+A client asks for the blur behind its surface with `ext_background_effect_v1`: a region in the
+surface's coordinates, applied at its commit, cut to its size. Our shell asks by itself: the
+`glass` of sherlock-ui (feature `layer-shell`) gives its rounded shape to iced_exwlshell, which
+sends it. The dock's bar, the top bar and the bar's panels use it.
+
+- **Where.** `push_surface` puts an `Item::Blur` just behind every surface it draws that has a
+  region: anchored surfaces, their menus, the menus of windows. Not while the session is locked:
+  the lock draws its own scene.
+- **How.** The element is never opaque, so what is behind is drawn first. When it must compute,
+  it copies its area of the frame at half size (`glBlitFramebuffer`), halves it
+  `sherlock_ui::blur::PASSES` times then doubles it back with the dual Kawase programs
+  (`shaders/blur_*.frag`, `OFFSET` between samples), into textures of its own; then it draws the
+  result over its region with `SATURATION` (`shaders/blur.frag`, a Smithay texture program that
+  reads at `gl_FragCoord`, whatever the frame transform).
+- **Only when needed.** After the elements of a screen are built, `blur::track` looks at those
+  behind each blur: one that appears, goes, moves, fades, or whose damage since the last frame
+  reaches the area, makes it compute again, and its element is then damaged whole so that the
+  damage tracker redraws what is behind. Otherwise it draws its textures again where the frame
+  is redrawn (the clock of the bar), and at rest nothing is drawn at all.
+- **Without blur.** On the software renderer, without GLES 3 or after a GL error, a veil of the
+  desktop color at `VEIL_OPACITY` takes its place: the glass reads denser.
+- **Limits.** The blur samples inside its area only: a little lighter near its edges. A region
+  is made of rectangles: the corners are steps of one logical pixel, smoothed by the glass drawn
+  over them.
+
+Tests: `cargo test -p compositor --test headless -- blur frame_with_blur`. On Mesa's software
+renderer, stripes behind a glass rounded by 22 are blurred behind it and sharp around it, its
+corners show them as they are, a frame at rest draws nothing, a change behind computes the blur
+again, the veil has its color, and a frame that computes the blur costs less than 25 ms more
+than one with the veil (2.7 against 1.7 ms at 800 × 600 on the author's machine). The board,
+with Konsole, the real bar and dock, without then with the blur, dark then light:
+`cargo build -p bar -p dock && cargo test -p compositor --test headless -- --ignored blur_board`
+writes `screenshots/blur-board.png`.
 
 ### What rendering does not do yet
 
-- **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
-  was already over its size. Its place for anchored surfaces is ready (`Scene::push_backdrop`,
-  lot D-12). It needs an offscreen render of what is behind the surface, at reduced
-  resolution, then blur passes; the snap preview would be its first client.
+- **Blur** for Qt applications (`org_kde_kwin_blur`), the notifications, the OSD and the glass
+  windows of our applications, the "Reduce transparency" setting, and the veil when the GPU
+  takes too long: lot D-37b.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 

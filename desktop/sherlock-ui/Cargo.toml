@@ -11,6 +11,9 @@ publish.workspace = true
 # only reads the tokens, goes without it with `default-features = false`.
 default = ["iced"]
 iced = ["dep:iced", "dep:iced_renderer", "dep:wgpu", "dep:resvg"]
+# The glass components ask the compositor for the blur behind them through iced_exwlshell's
+# surface regions (lot D-37, ADR 0027): only the programs on layer-shell turn it on.
+layer-shell = ["iced", "dep:iced_exwlshell"]
 
 [dependencies]
 # Shell toolkit (ADR 0014). Two renderers (ADR 0018): wgpu on the AMD chip, chosen by
@@ -49,6 +52,9 @@ wgpu = { version = "=27.0.1", optional = true, default-features = false, feature
 # `image-without-codecs` feature above, which draws them from their pixels without decoding any
 # format, is the one Evidence, the lock screen and the notifications already enable.
 resvg = { version = "=0.45.1", optional = true, default-features = false }
+# The surface regions of the toolkit of the shell, the version the bar and the dock pin: its
+# `BlurRegions` carries the blur region of the glass (lot D-37). Nothing new is compiled.
+iced_exwlshell = { version = "=0.21.4", optional = true, default-features = false }
 
 [dev-dependencies]
 # Headless rendering of the gallery, for the snapshot test and the mouse test.
