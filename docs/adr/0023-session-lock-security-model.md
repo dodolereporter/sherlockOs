@@ -2,7 +2,7 @@
 
 - Status: accepted (the author decided the two open questions on 2026-11-26, after the
   security review of lot D-25a); amended by lot D-24e (the frozen frame under the curtain,
-  proposed, waiting for the author's approval)
+  accepted: approved by the author on 2026-11-27)
 - Date: 2026-11-26
 - Lot: D-25a
 
@@ -96,7 +96,7 @@ the policy to the compositor, and has two gaps for a strict use:
 - The author tries the lock on the reference laptop before the merge (rule 9): killing the
   lock screen, plugging a screen in, switching console, going to sleep.
 
-## Amendment: the frozen frame under the curtain (lot D-24e, 2026-11-27, proposed)
+## Amendment: the frozen frame under the curtain (lot D-24e, 2026-11-27, accepted)
 
 The author asked for a lock that comes like macOS's: no plain blue screen, the lock screen
 coming over the desktop. Point 1 and point 2 change as follows; nothing else does.
