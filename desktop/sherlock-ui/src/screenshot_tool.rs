@@ -251,7 +251,8 @@ pub struct Colors {
 impl Colors {
     pub const fn of(palette: &Palette) -> Self {
         Self {
-            dim: palette.scrim,
+            // The scrim's color, opaque: `DIM` alone says how much of the screen it hides.
+            dim: Color::rgba(palette.scrim.r, palette.scrim.g, palette.scrim.b, 1.0),
             glass: palette.menu_glass,
             border: palette.menu_border,
             divider: palette.divider,
