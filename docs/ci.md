@@ -88,8 +88,8 @@ A pull request is green only if `verify` and `test-boot` both are.
   error, the next run with `No space left on device`). The CI builds with
   `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, which keeps file and line in backtraces, and
   `CARGO_INCREMENTAL=0`.
-- **Maximum duration.** 30 minutes per job. Beyond that, the run is stopped and counts as a
-  failure.
+- **Maximum duration.** 30 minutes per job (15 for the single job before Q-24). Beyond that, the
+  run is stopped and counts as a failure.
 
 ## Running it locally
 
