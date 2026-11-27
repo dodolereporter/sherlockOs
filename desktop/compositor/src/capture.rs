@@ -26,8 +26,10 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind as _, ExportMem as _, Texture as _, TextureMapping as _,
-            gles::{GlesRenderer, GlesTexture},
+            Bind as _, ExportMem as _, Frame as _, Renderer as _, Texture as _,
+            TextureMapping as _,
+            element::{Element as _, RenderElement as _},
+            gles::{GlesError, GlesRenderer, GlesTexture},
         },
     },
     desktop::Window,
@@ -41,12 +43,13 @@ use smithay::{
         },
         rustix,
     },
-    utils::{Physical, Rectangle, Size},
+    utils::{Physical, Rectangle, Scale, Size, Transform},
     wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
     State,
+    cursor::Cursors,
     damage::Ids,
     output::View,
     render::Scene,
@@ -110,8 +113,10 @@ impl Image {
     }
 }
 
-/// Draws a target into an image: given by the backend, which has the renderer.
-pub type Capturer = Box<dyn FnMut(&mut State, &Target) -> Option<Image>>;
+/// Draws a target into an image, with the cursor or without: given by the backend, which has
+/// the renderer and the cursor images. Screenshots never show the cursor; a screen share asks
+/// for it (lot D-28c).
+pub type Capturer = Box<dyn FnMut(&mut State, &Target, bool) -> Option<Image>>;
 
 /// Where the screenshots go and how they are confirmed. The tests give folders and a bus of
 /// their own.
@@ -315,11 +320,11 @@ impl State {
         self.capture.capturer = Some(capturer);
     }
 
-    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b). `None`
-    /// without a renderer.
-    pub(crate) fn draw_capture(&mut self, target: &Target) -> Option<Image> {
+    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b), the cursor
+    /// over it if `cursor` (lot D-28c). `None` without a renderer.
+    pub(crate) fn draw_capture(&mut self, target: &Target, cursor: bool) -> Option<Image> {
         let mut capturer = self.capture.capturer.take()?;
-        let image = capturer(self, target);
+        let image = capturer(self, target, cursor);
         self.capture.capturer = Some(capturer);
         image
     }
@@ -367,7 +372,7 @@ impl State {
             tracing::warn!("screenshot: no renderer");
             return;
         };
-        let image = capturer(self, target);
+        let image = capturer(self, target, false);
         self.capture.capturer = Some(capturer);
         let image = match (image, crop) {
             (Some(image), Some(rect)) => image.crop(rect),
@@ -489,16 +494,34 @@ fn read(renderer: &mut GlesRenderer, mut texture: GlesTexture) -> Option<Image> 
     })
 }
 
-/// Draws `target`: a screen as it shows now, without the cursor; a window as at rest, its title
-/// bar, border and corners included. The backends call it from their `Capturer`.
+/// The size in pixels of the picture of `target`: a screen's frame, or a window as at rest with
+/// its title bar (`window_anim::snapshot`). `None` for a screen or a window gone.
+pub fn target_size(state: &State, target: &Target) -> Option<Size<i32, Physical>> {
+    match target {
+        Target::Screen(output) => {
+            let views = state.views();
+            let (_, view) = views.iter().find(|(o, _)| o == output)?;
+            Some(view.frame.size)
+        }
+        Target::Window(window) => {
+            let (_, _, size) = window_anim::snapshot_place(state, window)?;
+            (!size.is_empty()).then_some(size)
+        }
+    }
+}
+
+/// Draws `target`: a screen as it shows now; a window as at rest, its title bar, border and
+/// corners included. With `cursors`, the cursor goes over it where the pointer is, if it is on
+/// the target (a screen share, lot D-28c). The backends call it from their `Capturer`.
 pub fn image(
     scene: &Scene,
     renderer: &mut GlesRenderer,
     textures: &mut wallpaper::Textures,
     state: &mut State,
     target: &Target,
+    cursors: Option<&mut Cursors>,
 ) -> Option<Image> {
-    let texture = match target {
+    let mut texture = match target {
         Target::Window(window) => window_anim::snapshot(scene, renderer, state, window)?,
         Target::Screen(output) => {
             let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
@@ -520,7 +543,60 @@ pub fn image(
                 .ok()?
         }
     };
+    if let Some(cursors) = cursors
+        && let Err(err) = draw_cursor(renderer, &mut texture, cursors, state, target)
+    {
+        tracing::warn!("screen share: drawing the cursor: {err}");
+    }
     read(renderer, texture)
+}
+
+/// Draws the cursor over `texture`, the picture of `target`, if the pointer is on it.
+fn draw_cursor(
+    renderer: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    cursors: &mut Cursors,
+    state: &State,
+    target: &Target,
+) -> Result<(), GlesError> {
+    let (Some(icon), Some(pointer)) = (
+        state.cursor_shape(),
+        state.seat.get_pointer().map(|p| p.current_location()),
+    ) else {
+        return Ok(());
+    };
+    // The tip in the texture's pixels, and the scale of the picture.
+    let place = match target {
+        Target::Screen(output) => state
+            .space
+            .output_under(pointer)
+            .any(|o| o == output)
+            .then(|| state.views().into_iter().find(|(o, _)| o == output))
+            .flatten()
+            .map(|(_, view)| {
+                let frame = view.frame.loc.to_f64();
+                (view.point(pointer) - frame, view.scale)
+            }),
+        Target::Window(window) => window_anim::snapshot_place(state, window)
+            .filter(|(whole, _, _)| whole.to_f64().contains(pointer))
+            .map(|(whole, scale, _)| ((pointer - whole.loc.to_f64()).to_physical(scale), scale)),
+    };
+    let Some((at, scale)) = place else {
+        return Ok(());
+    };
+    let Some((element, _)) = cursors.element(renderer, icon, at, (scale, 1.0), state.now()) else {
+        return Ok(());
+    };
+    let size = texture.size();
+    let size = Size::<i32, Physical>::from((size.w, size.h));
+    let mut target = renderer.bind(texture)?;
+    let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
+    let dst = element.geometry(Scale::from(1.0));
+    let damage = [Rectangle::from_size(dst.size)];
+    element.draw(&mut frame, element.src(), dst, &damage, &[])?;
+    // Read next in the same GL context, which keeps the order: nothing to wait for.
+    let _ = frame.finish()?;
+    Ok(())
 }
 
 #[cfg(test)]

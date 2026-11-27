@@ -378,7 +378,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
-            screencast: screencast::Screencast::default(),
+            screencast: screencast::Screencast::new(&dh),
 
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
@@ -411,10 +411,7 @@ impl State {
             applications_program: None,
             xwayland: None,
             listener: None,
-            shell: {
-                screencast::create_globals(&dh);
-                shell::Shell::new(&dh)
-            },
+            shell: shell::Shell::new(&dh),
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -778,6 +775,8 @@ pub struct ClientState {
     compositor_state: CompositorClientState,
     /// Connected through the shell socket: sees the globals of the shell (ADR 0021).
     shell: bool,
+    /// Sees the capture globals: the portal backend, on the shell socket (ADR 0028).
+    capture: bool,
 }
 
 impl ClientData for ClientState {
