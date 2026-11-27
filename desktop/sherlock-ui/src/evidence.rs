@@ -60,6 +60,10 @@ pub const CHOOSER_CHROME: f32 = typography::CARD_TITLE_SIZE * 1.3
 pub const CHOOSER_MARGIN: f32 = 24.0;
 pub const CHOOSER_MIN_ROWS: f32 = 4.0;
 
+/// The path bar (lot E-04). A segment of the breadcrumb is never wider than this: a longer
+/// name keeps its start and its end around « … ».
+pub const CRUMB_MAX_WIDTH: f32 = 180.0;
+
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";
 pub const PROPERTIES: &str = "Propriétés";
