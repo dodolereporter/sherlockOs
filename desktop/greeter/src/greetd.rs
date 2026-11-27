@@ -15,7 +15,8 @@
 //! so that a word is never split again nor read by the shell.
 
 use std::io::{Read, Write};
-use std::os::unix::net::{Shutdown, UnixStream};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 

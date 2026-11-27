@@ -141,9 +141,20 @@ mod tests {
     fn a_program_built_from_another_checkout_is_refused() {
         let dir = fake_repo("other", true);
         let other = dir.join("other repo");
-        // The sources the dep-info names are no longer in the repository given.
+        // The dep-info files name the sources of another checkout, as in a shared target.
         std::fs::create_dir_all(&other).unwrap();
         std::fs::rename(dir.join("my repo/desktop"), other.join("desktop")).unwrap();
+        let release = dir.join("my repo/target/release");
+        for program in ["compositor", "sherlockos-greeter"] {
+            let info = release.join(format!("{program}.d"));
+            let text = std::fs::read_to_string(&info).unwrap();
+            let (binary, sources) = text.split_once(": ").unwrap();
+            std::fs::write(
+                &info,
+                format!("{binary}: {}", sources.replace("my\\ repo", "other\\ repo")),
+            )
+            .unwrap();
+        }
         let output = run(&dir);
         assert!(!output.status.success());
         let said = String::from_utf8(output.stderr).unwrap();
