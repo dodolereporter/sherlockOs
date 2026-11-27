@@ -14,8 +14,8 @@ mod tests {
 
     use std::io::Write as _;
 
-    use compositor::State;
     use compositor::blur::Mode;
+    use compositor::{State, render::Item};
     use sherlock_ui::color::{Color, Palette};
     use smithay::backend::{
         allocator::Fourcc,
@@ -32,7 +32,12 @@ mod tests {
         backend::input::{ButtonState, KeyState},
         input::{keyboard::Keycode, pointer::CursorIcon},
         reexports::calloop::EventLoop,
-        utils::{Logical, Point, Rectangle},
+        utils::{Logical, Physical, Point, Rectangle},
+    };
+    use smithay::{
+        desktop::layer_map_for_output,
+        reexports::wayland_server::protocol::wl_surface::WlSurface as ServerSurface,
+        wayland::{seat::WaylandFocus as _, shell::wlr_layer::Layer as ServerLayer},
     };
     use wayland_client::protocol::wl_region::WlRegion;
     use wayland_client::{
@@ -53,6 +58,10 @@ mod tests {
     use wayland_protocols::ext::background_effect::v1::client::{
         ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
         ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+    };
+    use wayland_protocols::wp::cursor_shape::v1::client::{
+        wp_cursor_shape_device_v1::{Shape as CursorShape, WpCursorShapeDeviceV1},
+        wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
     };
     use wayland_protocols::wp::fractional_scale::v1::client::{
         wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
@@ -88,6 +97,9 @@ mod tests {
         configures: Vec<(i32, i32, Vec<XdgState>)>,
         /// Serial of the last button press received.
         button_serial: Option<u32>,
+        /// Serial of the last `wl_pointer.enter`: what `wp_cursor_shape_device_v1.set_shape`
+        /// must give.
+        enter_serial: Option<u32>,
         /// Keys received: evdev code, pressed or released.
         keys: Vec<(u32, bool)>,
         /// The compositor has answered the last `wl_display.sync`.
@@ -220,8 +232,10 @@ mod tests {
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            if let wl_pointer::Event::Button { serial, .. } = event {
-                client.button_serial = Some(serial);
+            match event {
+                wl_pointer::Event::Button { serial, .. } => client.button_serial = Some(serial),
+                wl_pointer::Event::Enter { serial, .. } => client.enter_serial = Some(serial),
+                _ => {}
             }
         }
     }
@@ -345,6 +359,8 @@ mod tests {
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
     delegate_noop!(Client: WpFractionalScaleManagerV1);
+    delegate_noop!(Client: WpCursorShapeManagerV1);
+    delegate_noop!(Client: WpCursorShapeDeviceV1);
     delegate_noop!(Client: XdgPositioner);
 
     /// Shared memory for a buffer of `size` bytes, without a file left on disk.
@@ -1813,6 +1829,43 @@ mod tests {
         keyboard: KeyboardInteractivity::OnDemand,
     };
 
+    /// Lot D-21g: as on macOS, a dock that hides by itself reserves no room. A maximized window,
+    /// then the dock hidden as the real one is (no zone, all but 2 of its 76 below the edge),
+    /// brought back by the pointer (its margin back to 0) and hidden again: the window gets no
+    /// new configure, and keeps its size.
+    #[test]
+    fn a_dock_revealed_then_hidden_does_not_resize_a_maximized_window() {
+        let mut h = Harness::start();
+        let _shown = h.show_window_with(true);
+        h.wait_size("maximized", 800, 600);
+        let hidden = Spec {
+            zone: -1,
+            margin: (0, 0, 2 - 76, 0),
+            ..DOCK
+        };
+        let dock = anchor(&mut h, hidden);
+        settle(&mut h);
+        let window = h.state.space.elements().next().unwrap().clone();
+        let size = h.state.space.element_geometry(&window).map(|g| g.size);
+        let configures = h.client.configures.len();
+        // Revealed, then hidden again, a few steps of its slide each way.
+        for bottom in [-50, -20, 0, -20, -50, 2 - 76] {
+            dock.layer.set_margin(0, 0, bottom, 0);
+            dock.surface.commit();
+            settle(&mut h);
+            assert_eq!(
+                h.state.output_area(),
+                Some(rect(0, 0, 800, 600)),
+                "{bottom}"
+            );
+        }
+        assert_eq!(h.client.configures.len(), configures, "no new configure");
+        assert_eq!(
+            h.state.space.element_geometry(&window).map(|g| g.size),
+            size
+        );
+    }
+
     /// Lot D-18d: a maximized or snapped window pulled by its title bar comes off under the
     /// pointer at its previous size and stays where it is dropped, also when the dock comes
     /// back and the work area shrinks.
@@ -2341,6 +2394,217 @@ mod tests {
         h.state
             .keyboard_key(Keycode::new(KEY_SUPER), KeyState::Released, 6);
         assert_eq!(h.state.space.element_geometry(&window), before);
+        drop(file);
+    }
+
+    /// Lot D-21e: the front-to-back rank of what draws `surface` at `at`, and where: its
+    /// origin, or the corner of its window.
+    fn drawn_at(
+        s: &State,
+        surface: &ServerSurface,
+        at: Duration,
+    ) -> Option<(usize, Point<i32, Physical>)> {
+        let output = s.space.outputs().next().unwrap().clone();
+        let view = s.views()[0].1;
+        let (items, _) = compositor::render::items(s, (&output, &view), None, false, at);
+        items.iter().enumerate().find_map(|(i, item)| match item {
+            Item::Surface {
+                surface: drawn,
+                origin,
+                ..
+            } if drawn == surface => Some((i, *origin)),
+            Item::Window {
+                surface: drawn,
+                rect,
+                ..
+            } if drawn == surface => Some((i, rect.loc)),
+            _ => None,
+        })
+    }
+
+    /// `front` is drawn in front of `back` at `at`.
+    fn in_front(s: &State, front: &ServerSurface, back: &ServerSurface, at: Duration) -> bool {
+        match (drawn_at(s, front, at), drawn_at(s, back, at)) {
+            (Some((front, _)), Some((back, _))) => front < back,
+            _ => false,
+        }
+    }
+
+    /// The surface that has the pointer at (`x`, `y`).
+    fn pointed(h: &mut Harness, x: f64, y: f64, time: u32) -> Option<ServerSurface> {
+        h.state.pointer_motion((x, y).into(), time);
+        h.state.seat.get_pointer().unwrap().current_focus()
+    }
+
+    /// The bar, then a window made fullscreen and drawn at the size of the screen: the bar and
+    /// the window as the compositor knows them.
+    fn fullscreen_under_bar(h: &mut Harness) -> (Anchored, Shown, ServerSurface, ServerSurface) {
+        let shown = h.show_window();
+        let bar = show_bar(h);
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let bar_surface = layer_map_for_output(&output)
+            .layers()
+            .next()
+            .unwrap()
+            .wl_surface()
+            .clone();
+        let window = h.state.space.elements().next().unwrap().clone();
+        let window = window.wl_surface().unwrap().into_owned();
+        // Not fullscreen yet: the bar has the pointer over its row, and is drawn in front.
+        assert_eq!(pointed(h, 400.0, 20.0, 1), Some(bar_surface.clone()));
+        assert!(in_front(&h.state, &bar_surface, &window, h.state.now()));
+        shown.toplevel.set_fullscreen(None);
+        h.wait_size("fullscreen", 800, 600);
+        h.redraw(&shown, 800, 600);
+        (bar, shown, bar_surface, window)
+    }
+
+    /// Lot D-21e: a fullscreen window covers the bar, which is on the top layer, as on macOS;
+    /// the overlay layer (on-screen displays, the lock screen) stays in front of it.
+    #[test]
+    fn a_fullscreen_window_covers_the_bar_but_not_the_overlay() {
+        let mut h = Harness::start();
+        let (_bar, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let _osd = anchor(
+            &mut h,
+            Spec {
+                layer: Layer::Overlay,
+                anchor: Anchor::Bottom,
+                size: (200, 60),
+                zone: 0,
+                margin: (0, 0, 40, 0),
+                keyboard: KeyboardInteractivity::None,
+            },
+        );
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let osd = layer_map_for_output(&output)
+            .layers_on(ServerLayer::Overlay)
+            .next()
+            .unwrap()
+            .wl_surface()
+            .clone();
+        let now = h.state.now();
+        assert!(
+            in_front(&h.state, &window, &bar, now),
+            "the window over the bar"
+        );
+        assert!(
+            in_front(&h.state, &osd, &window, now),
+            "the overlay over the window"
+        );
+        // The row of the bar belongs to the window, the pointer passing by it too.
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 2), Some(window.clone()));
+        assert_eq!(pointed(&mut h, 400.0, 0.0, 3), Some(window.clone()));
+        settle(&mut h);
+        assert!(in_front(&h.state, &window, &bar, h.state.now()));
+        // Out of fullscreen, the bar is in front again.
+        let shown = &_shown;
+        shown.toplevel.unset_fullscreen();
+        h.run_until("out of fullscreen", |c, _| {
+            !c.configures
+                .last()
+                .unwrap()
+                .2
+                .contains(&XdgState::Fullscreen)
+        });
+        assert!(in_front(&h.state, &bar, &window, h.state.now()));
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 4), Some(bar));
+    }
+
+    /// Lot D-21e: the pointer resting against the top edge for 150 ms brings the bar down over
+    /// the fullscreen window, sliding in from above; it then has the pointer.
+    #[test]
+    fn the_bar_comes_over_a_fullscreen_window_after_a_rest_at_the_top() {
+        let mut h = Harness::start();
+        let (_bar, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let rest = h.state.now();
+        assert_eq!(pointed(&mut h, 400.0, 0.0, 2), Some(window.clone()));
+        settle(&mut h);
+        assert!(
+            in_front(&h.state, &window, &bar, h.state.now()),
+            "not at once"
+        );
+        h.run_until("the bar revealed", |_, s| {
+            in_front(s, &bar, &window, s.now())
+        });
+        assert!(h.state.now() >= rest + Duration::from_millis(150));
+        // It slides down from above the screen to its place, 10 below the edge.
+        let now = h.state.now();
+        let (_, start) = drawn_at(&h.state, &bar, now).unwrap();
+        assert!(start.y < 10, "{start:?}");
+        assert!(animating(&h, now));
+        let (_, end) = drawn_at(&h.state, &bar, now + Duration::from_millis(300)).unwrap();
+        assert_eq!((end.x, end.y), (12, 10));
+        // Down from the edge, the pointer reaches it, and it stays.
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 3), Some(bar.clone()));
+        settle(&mut h);
+        assert!(in_front(&h.state, &bar, &window, h.state.now()));
+    }
+
+    /// Lot D-21e: the bar goes back up once the pointer leaves it, but not while one of its
+    /// panels is open: that panel takes the pointer, over the fullscreen window.
+    #[test]
+    fn the_bar_goes_back_behind_once_the_pointer_leaves_it_and_its_panels() {
+        let mut h = Harness::start();
+        let (bar_client, _shown, bar, window) = fullscreen_under_bar(&mut h);
+        let reveal = |h: &mut Harness, time: u32| {
+            pointed(h, 400.0, 0.0, time);
+            h.run_until("the bar revealed", |_, s| {
+                in_front(s, &bar, &window, s.now())
+            });
+        };
+        reveal(&mut h, 2);
+        // Below the bar: it slides back up, then is behind the window again.
+        assert_eq!(pointed(&mut h, 400.0, 300.0, 3), Some(window.clone()));
+        settle(&mut h);
+        let now = h.state.now();
+        assert!(animating(&h, now), "it slides out");
+        h.run_until("the bar behind the window", |_, s| {
+            in_front(s, &window, &bar, s.now())
+        });
+        assert_eq!(pointed(&mut h, 400.0, 20.0, 4), Some(window.clone()));
+
+        // Revealed again, it opens a panel of 200 × 150 below its right end.
+        reveal(&mut h, 5);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(560, 0, 2, 36);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar_client.layer.get_popup(&popup);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar_client
+            .shm
+            .create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.commit();
+        settle(&mut h);
+        // The pointer on the panel, then away from both: the bar stays.
+        let panel = pointed(&mut h, 580.0, 150.0, 6);
+        assert!(panel.is_some() && panel != Some(window.clone()) && panel != Some(bar.clone()));
+        pointed(&mut h, 300.0, 400.0, 7);
+        settle(&mut h);
+        assert!(
+            in_front(&h.state, &bar, &window, h.state.now()),
+            "a panel is open"
+        );
+        // The panel closed, the bar goes.
+        popup.destroy();
+        surface.destroy();
+        settle(&mut h);
+        h.run_until("the bar behind the window", |_, s| {
+            in_front(s, &window, &bar, s.now())
+        });
         drop(file);
     }
 
@@ -3498,5 +3762,78 @@ mod tests {
         let path = format!("{}/screenshots/blur-board.png", env!("CARGO_MANIFEST_DIR"));
         board.save(&path).unwrap();
         eprintln!("board: {path}");
+    }
+
+    /// Lot UI-07: a client names its cursor the way iced_exwlshell does (a cursor shape device
+    /// made for the request, the serial of the pointer's entry, the device destroyed at once),
+    /// and the compositor shows it: the hand that points over a button, the open hand over a
+    /// slider, the closed hand while the slider is held. A shape named with another serial is
+    /// refused, as the protocol says. Over the dock, the arrow.
+    #[test]
+    fn the_compositor_shows_the_cursor_a_client_names() {
+        let mut h = Harness::start();
+        let shown = h.show_window();
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals
+                .iter()
+                .any(|g| g.1 == "wp_cursor_shape_manager_v1")
+        });
+        let manager: WpCursorShapeManagerV1 = h.bind(&registry);
+        let pointer = shown.seat.get_pointer(&qh, ());
+        h.run_until("the pointer", |_, _| true);
+        h.client.enter_serial = None;
+        h.state.pointer_motion((400.0, 300.0).into(), 1);
+        h.run_until("the entry", |c, _| c.enter_serial.is_some());
+        let serial = h.client.enter_serial.unwrap();
+        let name = |h: &mut Harness, shape: CursorShape, serial: u32| {
+            let device = manager.get_pointer(&pointer, &h.queue.handle(), ());
+            device.set_shape(serial, shape);
+            device.destroy();
+            h.run_until("the shape", |_, _| true);
+            h.run_until("the shape", |_, _| true);
+        };
+        // Over a button.
+        name(&mut h, CursorShape::Pointer, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Pointer));
+        // The pointer moves on the button: the shape stays.
+        h.state.pointer_motion((410.0, 305.0).into(), 2);
+        h.run_until("the motion", |_, _| true);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Pointer));
+        // Over a slider, then pressed on it.
+        name(&mut h, CursorShape::Grab, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grab));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 3);
+        name(&mut h, CursorShape::Grabbing, serial);
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 4);
+        // A stale serial changes nothing.
+        name(&mut h, CursorShape::Text, serial.wrapping_sub(1));
+        assert_eq!(h.state.cursor_icon(), Some(CursorIcon::Grabbing));
+
+        // The dock keeps the arrow, as on macOS: over an icon, pressed and dragged. Its icons
+        // name no shape (`mouse_area` without `interaction`), which iced_exwlshell sends as
+        // the default one at the pointer's entry.
+        let _dock = anchor(&mut h, DOCK);
+        h.client.enter_serial = None;
+        h.state.pointer_motion((400.0, 560.0).into(), 5);
+        h.run_until("the entry on the dock", |c, _| c.enter_serial.is_some());
+        let serial = h.client.enter_serial.unwrap();
+        name(&mut h, CursorShape::Default, serial);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "over an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 6);
+        h.state.pointer_motion((440.0, 556.0).into(), 7);
+        h.run_until("the drag", |_, _| true);
+        assert_eq!(
+            h.state.cursor_icon(),
+            Some(CursorIcon::Default),
+            "dragging an icon"
+        );
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 8);
     }
 }

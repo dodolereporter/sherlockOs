@@ -14,9 +14,12 @@ pub mod damage;
 pub mod decorations;
 pub mod dmabuf;
 pub mod focus;
+pub mod fullscreen;
 pub mod genie;
 pub mod gestures;
 mod handlers;
+// The hook of the selections, for the clipboard history (lot D-42).
+pub use handlers::{SECRET_HINT, SelectionOrigin, is_secret};
 pub mod headless;
 mod input;
 pub mod keyboard;
@@ -43,6 +46,7 @@ pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
+mod x11_paste;
 mod xwayland;
 
 use std::{
@@ -167,6 +171,9 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// The edges of fullscreen screens where the pointer brings the bar or the dock back
+    /// (lot D-21e).
+    reveals: fullscreen::Reveals,
     /// Anchored surfaces unmapped by a null buffer, with their screen: their next commit maps
     /// them again.
     unmapped_layers: Vec<(smithay::desktop::LayerSurface, smithay::output::Output)>,
@@ -345,6 +352,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
             gesture: None,
@@ -549,17 +557,21 @@ impl State {
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
-        if self.is_locked() {
-            let target = self.lock_focus();
-            keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
-            return;
-        }
-        let target = target.filter(|_| !self.overview.is_open());
-        let target = self
-            .exclusive_layer()
-            .map(KeyboardFocus::Wayland)
-            .or(target);
+        let target = if self.is_locked() {
+            self.lock_focus()
+        } else {
+            let target = target.filter(|_| !self.overview.is_open());
+            self.exclusive_layer()
+                .map(KeyboardFocus::Wayland)
+                .or(target)
+        };
+        let unset = target.is_none();
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
+        if unset {
+            // smithay calls `focus_changed` for a new focus only: the client that had the
+            // keyboard would otherwise keep being offered the selections (lot D-29).
+            self.unset_selection_focus();
+        }
     }
 
     /// Surface that has the keyboard.
@@ -670,6 +682,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {
             self.popup_grab = None;
