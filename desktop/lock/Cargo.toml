@@ -4,6 +4,7 @@ description = "Lock screen of the session, on ext-session-lock-v1, checked by PA
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [[bin]]

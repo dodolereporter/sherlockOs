@@ -22,6 +22,23 @@ pub const INTERFACE: &str = "com.canonical.dbusmenu";
 /// Longest wait for an application's answer.
 pub const TIMEOUT: Duration = Duration::from_millis(1500);
 
+// What a layout may hold (Q-38): any application on the session bus can send one, and the bar
+// lays it out on its interface thread. Beyond, entries are left out and labels cut.
+
+/// Entries kept from one `GetLayout`, all levels together.
+pub const MAX_ENTRIES: usize = 200;
+/// Levels of submenus kept under the node asked for.
+pub const MAX_DEPTH: usize = 8;
+/// Characters kept of a label.
+pub const MAX_LABEL_CHARS: usize = 256;
+/// Key combinations of a shortcut, keys of a combination, and characters of a key name.
+pub const MAX_COMBINATIONS: usize = 4;
+pub const MAX_KEYS: usize = 4;
+pub const MAX_KEY_CHARS: usize = 32;
+
+/// The entries a layout may still bring.
+struct Budget(usize);
+
 /// The connection of the menus: the session bus, with `TIMEOUT` on every call.
 pub async fn bus() -> zbus::Result<Connection> {
     static BUS: OnceLock<Connection> = OnceLock::new();
@@ -129,10 +146,18 @@ pub fn strip_mnemonic(label: &str) -> String {
     out
 }
 
-/// Reads one node of a layout: `(ia{sv}av)`, or a variant that holds one.
+/// Reads one node of a layout: `(ia{sv}av)`, or a variant that holds one, within `MAX_ENTRIES`
+/// and `MAX_DEPTH`.
 pub fn decode(value: &Value<'_>) -> Option<Item> {
+    decode_within(value, &mut Budget(MAX_ENTRIES), 0)
+}
+
+fn decode_within(value: &Value<'_>, budget: &mut Budget, depth: usize) -> Option<Item> {
     if let Value::Value(inner) = value {
-        return decode(inner);
+        return decode_within(inner, budget, depth);
+    }
+    if budget.0 == 0 || depth > MAX_DEPTH {
+        return None;
     }
     let Value::Structure(structure) = value else {
         return None;
@@ -143,14 +168,21 @@ pub fn decode(value: &Value<'_>) -> Option<Item> {
     let Value::I32(id) = id else { return None };
     let properties: HashMap<String, OwnedValue> = properties.try_clone().ok()?.try_into().ok()?;
     let children: Vec<OwnedValue> = children.try_clone().ok()?.try_into().ok()?;
-    Some(item(*id, &properties, &children))
+    Some(item(*id, &properties, &children, budget, depth))
 }
 
 /// A node of a layout: `(ia{sv}av)`, as `GetLayout` returns it.
 pub type Node = (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>);
 
 /// The entry of a node, its children read with `decode`.
-fn item(id: i32, properties: &HashMap<String, OwnedValue>, children: &[OwnedValue]) -> Item {
+fn item(
+    id: i32,
+    properties: &HashMap<String, OwnedValue>,
+    children: &[OwnedValue],
+    budget: &mut Budget,
+    depth: usize,
+) -> Item {
+    budget.0 = budget.0.saturating_sub(1);
     let mut item = Item {
         id,
         ..Item::default()
@@ -158,7 +190,11 @@ fn item(id: i32, properties: &HashMap<String, OwnedValue>, children: &[OwnedValu
     for (name, value) in properties {
         apply(&mut item, name, value);
     }
-    item.children = children.iter().filter_map(|c| decode(c)).collect();
+    item.children = children
+        .iter()
+        .map_while(|c| (budget.0 > 0).then(|| decode_within(c, budget, depth + 1)))
+        .flatten()
+        .collect();
     item
 }
 
@@ -169,7 +205,14 @@ fn apply(item: &mut Item, name: &str, value: &Value<'_>) {
         _ => None,
     };
     match (name, value) {
-        ("label", _) => item.label = strip_mnemonic(&text().unwrap_or_default()),
+        ("label", _) => {
+            let label: String = text()
+                .unwrap_or_default()
+                .chars()
+                .take(MAX_LABEL_CHARS)
+                .collect();
+            item.label = strip_mnemonic(&label);
+        }
         ("type", _) => item.separator = text().as_deref() == Some("separator"),
         ("enabled", Value::Bool(on)) => item.enabled = *on,
         ("visible", Value::Bool(on)) => item.visible = *on,
@@ -205,7 +248,15 @@ fn shortcut(value: &Value<'_>) -> Vec<Vec<String>> {
     let Ok(value) = value.try_clone() else {
         return Vec::new();
     };
-    Vec::<Vec<String>>::try_from(value).unwrap_or_default()
+    let mut combinations = Vec::<Vec<String>>::try_from(value).unwrap_or_default();
+    combinations.truncate(MAX_COMBINATIONS);
+    for keys in &mut combinations {
+        keys.truncate(MAX_KEYS);
+        for key in keys.iter_mut() {
+            *key = key.chars().take(MAX_KEY_CHARS).collect();
+        }
+    }
+    combinations
 }
 
 /// The tree under `parent`, all levels: the revision of the layout, and the node.
@@ -221,7 +272,13 @@ pub async fn layout(bus: &Connection, menu: &AppMenu, parent: i32) -> zbus::Resu
         )
         .await?;
     let (_revision, (id, properties, children)): (u32, Node) = reply.body().deserialize()?;
-    Ok(item(id, &properties, &children))
+    Ok(item(
+        id,
+        &properties,
+        &children,
+        &mut Budget(MAX_ENTRIES),
+        0,
+    ))
 }
 
 /// Tells the application the menu `id` is about to open. `true` when it changed it.
@@ -384,5 +441,45 @@ mod tests {
         assert_eq!(wrap.toggle, Toggle::Radio(true));
         assert!(!wrap.enabled);
         assert_eq!(decode(&Value::from(3i32)), None);
+    }
+
+    #[test]
+    fn a_layout_too_large_is_cut_to_its_bounds() {
+        // Ten thousand entries in one menu: the first ones only.
+        let entries: Vec<Value<'static>> = (1..=10_000)
+            .map(|i| node(i, vec![("label", Value::from("x"))], vec![]))
+            .collect();
+        let root = decode(&node(0, vec![], entries)).unwrap();
+        assert_eq!(root.children.len(), MAX_ENTRIES - 1);
+        // A chain of submenus deeper than the bound.
+        let mut chain = node(100, vec![], vec![]);
+        for id in (0..100).rev() {
+            chain = node(id, vec![], vec![chain]);
+        }
+        let mut depth = 0;
+        let mut at = &decode(&chain).unwrap();
+        while let Some(next) = at.children.first() {
+            depth += 1;
+            at = next;
+        }
+        assert_eq!(depth, MAX_DEPTH);
+        // A label of a megabyte, a shortcut of a hundred combinations.
+        let long = "é".repeat(1 << 19);
+        let keys: Vec<Vec<String>> = vec![vec!["Control".repeat(20); 50]; 100];
+        let big = node(
+            1,
+            vec![
+                ("label", Value::from(long)),
+                ("shortcut", Value::from(keys)),
+            ],
+            vec![],
+        );
+        let item = decode(&big).unwrap();
+        assert_eq!(item.label.chars().count(), MAX_LABEL_CHARS);
+        let combinations = shortcut(&Value::from(vec![vec!["Control".repeat(20); 50]; 100]));
+        assert_eq!(combinations.len(), MAX_COMBINATIONS);
+        assert!(combinations.iter().all(|k| k.len() == MAX_KEYS));
+        assert!(combinations[0][0].chars().count() == MAX_KEY_CHARS);
+        assert!(item.keys.is_some_and(|k| k.chars().count() < 1000));
     }
 }

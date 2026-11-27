@@ -983,6 +983,16 @@ pub fn live_icon<'a, Message: 'a>(frames: Vec<String>, tint: Color) -> Element<'
     crate::animated::glyph_fade(frames, metrics::STATUS_ICON, tint).into()
 }
 
+/// A live icon of the bar at `size`: `metrics::STATUS_ICON_WIDE` for the wide and low drawings
+/// (Wi-Fi, battery), so that they look as large as the others.
+pub fn live_icon_sized<'a, Message: 'a>(
+    frames: Vec<String>,
+    size: f32,
+    tint: Color,
+) -> Element<'a, Message> {
+    crate::animated::glyph_fade(frames, size, tint).into()
+}
+
 /// The battery of the bar, filled to `percent` with its mark (`icon::battery_svg`), and its
 /// value, in `tint`. A new level fades in over the last one.
 pub fn battery<'a, Message: 'a>(
@@ -991,7 +1001,11 @@ pub fn battery<'a, Message: 'a>(
     value: Option<String>,
     tint: Color,
 ) -> Element<'a, Message> {
-    let gauge = live_icon(vec![crate::icon::battery_svg(percent, mark)], tint);
+    let gauge = live_icon_sized(
+        vec![crate::icon::battery_svg(percent, mark)],
+        metrics::STATUS_ICON_WIDE,
+        tint,
+    );
     let mut line = row![gauge]
         .spacing(metrics::STATUS_ICON_GAP)
         .align_y(Alignment::Center);
@@ -1061,7 +1075,8 @@ fn choice<'a, Message: Clone + 'a>(
     label: &'a str,
     on_press: Option<Message>,
 ) -> Control<'a, Message> {
-    let line = row![mark, body(label)]
+    // A long name (a sound output's) is cut with « … » on its one line.
+    let line = row![mark, ellipsis(label)]
         .spacing(metrics::CHOICE_GAP)
         .align_y(Alignment::Center)
         .height(Length::Fill);
