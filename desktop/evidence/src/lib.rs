@@ -7,6 +7,8 @@
 pub mod app;
 pub mod clock;
 pub mod devices;
+pub mod dnd;
+pub mod drag_image;
 pub mod git;
 pub mod icons;
 pub mod listing;
@@ -18,6 +20,7 @@ pub mod preview;
 pub mod probe;
 pub mod selection;
 pub mod startup;
+pub mod transfer;
 pub mod trash;
 pub mod udisks;
 mod view;

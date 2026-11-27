@@ -1594,3 +1594,82 @@ fn many_applications_and_long_names_stay_readable() {
     capture(&bench.app, "evidence-chooser-long-light");
     color::set_active(Theme::Dark);
 }
+
+/// The middle of the row `index` of the listing, in window coordinates.
+fn row_point(index: usize) -> (f32, f32) {
+    let x = metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING + 40.0;
+    let y = metrics::TITLE_BAR_HEIGHT
+        + metrics::TOOLBAR_HEIGHT
+        + metrics::LIST_HEADER_HEIGHT
+        + 3.0 * metrics::BORDER_WIDTH
+        + metrics::LIST_TOP_GAP
+        + metrics::LIST_ROW_HEIGHT * (index as f32 + 0.5);
+    (x, y)
+}
+
+#[test]
+fn files_dropped_go_into_the_folder_under_the_pointer_or_the_one_shown() {
+    use crate::dnd::{Action, Event};
+    let mut bench = Bench::new("drop");
+    let (one, two) = (bench.path("one.txt"), bench.path("two.txt"));
+    fs::write(&one, "1").expect("write");
+    fs::write(&two, "2").expect("write");
+    assert_eq!(bench.names(), ["src", "a.txt"]);
+
+    // Over the folder `src`: it lights up; dropped with Ctrl, the file is copied into it.
+    let (x, y) = row_point(0);
+    bench.send(Message::Dnd(Event::Over(x, y)));
+    assert_eq!(bench.app.drop_light().map(|l| l.0), Some(Some(0)));
+    bench.send(Message::Dnd(Event::Dropped(
+        x,
+        y,
+        Action::Copy,
+        vec![one.clone()],
+    )));
+    assert_eq!(read(&bench.path("projet/src/one.txt")), "1");
+    assert!(one.exists());
+    assert!(bench.app.drop_light().is_none());
+
+    // Over a file: the folder shown lights up, and takes the drop, moved.
+    let (x, y) = row_point(1);
+    bench.send(Message::Dnd(Event::Over(x, y)));
+    assert_eq!(bench.app.drop_light().map(|l| l.0), Some(None));
+    bench.send(Message::Dnd(Event::Dropped(
+        x,
+        y,
+        Action::Move,
+        vec![two.clone()],
+    )));
+    assert_eq!(read(&bench.path("projet/two.txt")), "2");
+    assert!(!two.exists());
+
+    // Left: nothing lights up any more.
+    bench.send(Message::Dnd(Event::Over(x, y)));
+    bench.send(Message::Dnd(Event::Left));
+    assert!(bench.app.drop_light().is_none());
+
+    // Files cut in another application, pasted: moved here.
+    fs::write(&one, "1 again").expect("write");
+    let cut = Some((crate::transfer::Mode::Cut, vec![one.clone()]));
+    bench.send(Message::Dnd(Event::Pasted(cut)));
+    assert!(!one.exists());
+    assert_eq!(read(&bench.path("projet/one.txt")), "1 again");
+}
+
+#[test]
+fn a_folder_under_a_drop_opens_after_a_rest() {
+    use crate::dnd::Event;
+    let mut bench = Bench::new("spring");
+    let (x, y) = row_point(0);
+    bench.send(Message::Dnd(Event::Over(x, y)));
+    assert!(
+        bench.app.animating(Duration::ZERO),
+        "the frames tick for the spring"
+    );
+    std::thread::sleep(sherlock_ui::drag::SPRING_DELAY + Duration::from_millis(20));
+    bench.send(Message::Frame(std::time::Instant::now()));
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/src"))
+    );
+}

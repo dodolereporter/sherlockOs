@@ -16,6 +16,7 @@ pub mod control_room;
 pub mod cursor;
 pub mod decorations;
 pub mod dock;
+pub mod drag;
 pub mod evidence;
 pub mod gpu;
 pub mod icon;

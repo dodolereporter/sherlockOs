@@ -29,6 +29,15 @@ appearance-config = { path = "../appearance-config" }
 # libdbus. Only its default pair of features is kept, named explicitly: the blocking API (the
 # watcher runs on its own thread) and its own small async-io executor (no tokio).
 zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# Drag and drop and the clipboard of files with the other applications (lot E-03), on the
+# window's own Wayland connection (`src/dnd.rs`): winit neither starts a drag nor takes a drop
+# on Wayland, and iced's clipboard only knows text. The versions and features winit and
+# smithay-clipboard already pull (`client_system`, `dlopen`): nothing new is built.
+wayland-backend = { version = "=0.3.17", default-features = false, features = [
+    "client_system",
+    "dlopen",
+] }
+wayland-client = "=0.31.15"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",

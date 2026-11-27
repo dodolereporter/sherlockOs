@@ -156,6 +156,40 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   filesystem; blocks without a drive (loop devices, zram). LUKS volumes show locked. Eject is
   refused when no drive can be found for the volume.
 
+## Drag and drop and the clipboard of files (lot E-03)
+
+winit, under iced, neither starts a drag nor receives a drop on Wayland, and iced's clipboard
+only knows text. Evidence speaks `wl_data_device` itself (`src/dnd.rs`), on the window's own
+Wayland connection (`Backend::from_foreign_display`, from the window's raw handles), with an
+event queue of its own in a thread: its own `wl_seat`, `wl_pointer` (the serial of the press
+that starts a drag), `wl_keyboard` (the serial of the key that copies) and data device. The
+interface sends it commands and gets events back (`app/drag.rs`). Under X11 (the author's Plasma
+session), none of this starts: Evidence keeps its own clipboard.
+
+- **Dragging out.** A press on the name of a selected row, moved by more than
+  `drag::THRESHOLD` (6 px), becomes a drag of the whole selection (a plain press on a multiple
+  selection keeps it until the release, as in the Finder). It offers
+  `x-special/gnome-copied-files`, `text/uri-list` and the paths as text, to copy or move. The
+  picture under the pointer (`src/drag_image.rs`) stacks the cards of the first three files,
+  fanned and turned, the front one showing its icon or the thumbnail of a photo (PNG or JPEG of
+  24 MB at most), with the count in a pill past one file; drawn at scale 2 by resvg, in the drag
+  thread. The compositor draws it under the pointer and, if the drop is refused or cancelled
+  (Escape), glides it back (lot D-29c): Evidence keeps the picture `drag::RETURN` for that.
+  Discord and the other X11 applications receive it through the compositor's XDND bridge.
+- **Dropping in.** Files dragged over the window light up the folder row under the pointer, or
+  the whole listing for the folder shown (`drag::target`). A drop moves the files there, or
+  copies them with Ctrl held (`Prefer`), off the interface thread (`ops::move_into`,
+  `ops::copy_into`). A folder that keeps the pointer `drag::SPRING_DELAY` (0.8 s) blinks twice,
+  then opens, as the Finder's spring-loaded folders. Refused: the trash, a folder dragged onto
+  itself, files dropped back where they are.
+- **The clipboard.** Ctrl + C and Ctrl + X also put the files on the session's clipboard
+  (`copy` or `cut` in `x-special/gnome-copied-files`, `text/uri-list`, the paths as text).
+  Ctrl + V reads the session's clipboard first: files copied in Dolphin, Nautilus or another
+  Evidence are pasted, and cut ones moved. With no files there, Evidence's own clipboard.
+- **Security.** What comes from another application is read off the interface thread, 4 MiB
+  and 10,000 files at most, each piece awaited 5 s at most; only local `file://` addresses are
+  kept, absolute and without `..` (`src/transfer.rs`).
+
 ## Keyboard
 
 Everything works from the keyboard. Arrow keys and shortcuts act on the list unless a text
