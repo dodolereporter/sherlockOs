@@ -631,6 +631,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "control-room"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "desktop-config",
+ "dock-config",
+ "iced",
+ "iced_test",
+ "image",
+ "mime-apps",
+ "sherlock-ui",
+ "system-services",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,6 +912,7 @@ dependencies = [
 name = "dock-config"
 version = "0.0.0"
 dependencies = [
+ "mime-apps",
  "sherlock-ui",
 ]
 

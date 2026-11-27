@@ -754,6 +754,19 @@ of the tile, enlarged four times:
 ![Edges before and after, dark](sherlock-ui/icon-edges.png)
 ![Edges before and after, light](sherlock-ui/icon-edges-light.png)
 
+## Additions of D-26a (Control Room)
+
+- **`control_room`**: sizes, motions and French texts of Control Room (`docs/control-room.md`).
+- **Dropdown menu** (`component::dropdown`): iced's `pick_list`, drawn as a secondary button with
+  its arrow in tertiary text, its choices in a menu's glass, the one under the pointer on the
+  selection's blue (`theme::dropdown`, `theme::dropdown_menu`). Its texts are in the contrast
+  test, on every surface and in its list over a window and a card. Its list opens inside the
+  window; it is not in the gallery yet.
+- **Picture to choose** (`component::picture_choice`, `theme::picture_ring`): a wallpaper of the
+  picker, veiled on hover, ringed in green when chosen.
+- **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
+  and `Sidebar`, drawn on the same grid and stroke.
+
 ## What the lot does not do
 
 - The menu that opens as an `xdg_popup`: the gallery lays the submenu next to the menu, like
