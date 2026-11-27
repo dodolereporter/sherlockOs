@@ -12,7 +12,7 @@
 
 use std::{
     ffi::OsString,
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -91,7 +91,7 @@ impl Config {
 
     /// Reads the settings file. A missing file is the default setting.
     pub fn read(path: &Path) -> Result<Self, Error> {
-        match fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Self::parse(&text),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(source) => Err(Error::Read {

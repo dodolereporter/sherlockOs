@@ -267,13 +267,25 @@ impl State {
         })
     }
 
-    /// A click on an anchored surface: it gets the keyboard if it accepts it, unless another
-    /// one keeps it.
-    pub(crate) fn click_layer(&mut self, surface: &WlSurface) {
+    /// A click on an anchored surface, `hit` being the surface under the pointer: it gets the
+    /// keyboard if it accepts it, unless another one keeps it. A click in one of its menus
+    /// gives the keyboard to that menu (lot Q-51): a client such as the bar reads the keys of
+    /// the surface that has the focus, and the Wi-Fi password field is in its panel, a popup.
+    pub(crate) fn click_layer(&mut self, surface: &WlSurface, hit: &WlSurface) {
         if !self.layer_wants_keyboard(surface) || self.exclusive_layer().is_some() {
             return;
         }
-        self.set_keyboard_focus(Some(KeyboardFocus::Wayland(surface.clone())));
+        let target = self.popup_of(hit).unwrap_or_else(|| surface.clone());
+        self.set_keyboard_focus(Some(KeyboardFocus::Wayland(target)));
+    }
+
+    /// The popup `hit` belongs to (itself, or the popup its subsurface hangs from), if any.
+    fn popup_of(&self, hit: &WlSurface) -> Option<WlSurface> {
+        let mut root = hit.clone();
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        self.popups.find_popup(&root).map(|_| root)
     }
 
     /// Anchored surface of `layers` under `pos`, with the surface hit and its origin.

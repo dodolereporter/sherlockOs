@@ -78,6 +78,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
+    )?;
     // What is copied, for Super + V, and its setting (lot D-42).
     state.watch_clipboard_settings(
         &event_loop.handle(),
