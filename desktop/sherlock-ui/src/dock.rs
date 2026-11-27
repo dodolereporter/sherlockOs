@@ -44,6 +44,8 @@ pub const ICON_SCALE: u32 = 2;
 /// Dock menu (Menus board): width, gap above the bar, height of the header with the
 /// application name.
 pub const MENU_WIDTH: f32 = 240.0;
+/// The dock's own menu, wider for « Afficher Sherlock dans le Dock » and its check mark.
+pub const OWN_MENU_WIDTH: f32 = 290.0;
 pub const MENU_GAP: f32 = 12.0;
 pub const MENU_HEADER_HEIGHT: f32 = 28.0;
 
@@ -153,6 +155,10 @@ pub mod text {
     /// The button that opens the applications view (D-41), in its label and menu.
     pub const APPLICATIONS: &str = "Applications";
     pub const QUIT: &str = "Quitter";
+    /// Title of the dock's own menu: a right click on its separator or between its icons.
+    pub const DOCK: &str = "Dock";
+    /// The entry of the dock's own menu that puts Sherlock back, or takes it out (checked).
+    pub const SHOW_SHERLOCK: &str = "Afficher Sherlock dans le Dock";
 
     /// Number of open windows, at the top right of the menu, like « 3 en marche » on the board.
     pub fn windows(count: usize) -> String {
