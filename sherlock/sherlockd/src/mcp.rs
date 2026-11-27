@@ -31,6 +31,14 @@ pub const MAX_TOOL_PAGES: usize = 16;
 /// Maximum number of tools of one server. Beyond it, the list is refused.
 pub const MAX_TOOLS_PER_SERVER: usize = 256;
 
+/// Longest tool description handed to the model, in bytes: what is past it is cut. A server's
+/// description goes to the model as it is, so a long one is room for instructions (tool
+/// poisoning), even for a tool that never runs.
+pub const MAX_TOOL_DESCRIPTION: usize = 1024;
+
+/// Longest input schema of a tool, serialized, in bytes. Beyond it, the list is refused.
+pub const MAX_TOOL_SCHEMA: usize = 16 * 1024;
+
 /// Time left to the server to stop on its own, input closed, before `SIGKILL`.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
 
@@ -93,10 +101,23 @@ impl Level {
     /// `readOnlyHint: true` gives read, `destructiveHint: false` action. Everything else is
     /// destructive: no annotations, a value that is not a boolean, or a contradiction
     /// (`readOnlyHint` and `destructiveHint` both true).
+    ///
+    /// A read that reaches outside the machine (`openWorldHint: true`: a web search, a page
+    /// read) is an action (S-11, rule of A-11 in `docs/sherlockd.md`): its arguments come from
+    /// the model, and an injection read in a file or a page could send out what Sherlock read.
     pub fn from_annotations(annotations: Option<&Value>) -> Self {
         // `None`: absent; `Some(None)`: present but not a boolean.
         let hint = |name| annotations.and_then(|a| a.get(name)).map(Value::as_bool);
+        let open_world = hint("openWorldHint");
         match (hint("readOnlyHint"), hint("destructiveHint")) {
+            (Some(Some(true)), None | Some(Some(false))) if open_world == Some(Some(true)) => {
+                Self::Action
+            }
+            (Some(Some(true)), None | Some(Some(false)))
+                if open_world.is_some_and(|o| o.is_none()) =>
+            {
+                Self::Destructive
+            }
             (Some(Some(true)), None | Some(Some(false))) => Self::Read,
             (None | Some(Some(false)), Some(Some(false))) => Self::Action,
             _ => Self::Destructive,
@@ -303,7 +324,8 @@ impl McpClient {
             server: config.name.clone(),
             source,
         };
-        let mut child = Command::new(&config.program)
+        let mut command = Command::new(&config.program);
+        command
             .args(&config.args)
             // A server receives no key and no token from the session.
             .env_clear()
@@ -311,9 +333,10 @@ impl McpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Safety net if the client goes away without `shutdown`.
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(spawn_err)?;
+            .kill_on_drop(true);
+        // And if the process goes away: the server dies with it.
+        crate::process::die_with_parent(&mut command);
+        let mut child = command.spawn().map_err(spawn_err)?;
         let missing = || std::io::Error::other("tube standard absent");
         let stdin = child.stdin.take().ok_or_else(missing).map_err(spawn_err)?;
         let stdout = child.stdout.take().ok_or_else(missing).map_err(spawn_err)?;
@@ -384,9 +407,16 @@ impl McpClient {
                     Trust::Ours => Level::from_annotations(tool.annotations.as_ref()),
                     Trust::ThirdParty => Level::Destructive,
                 };
+                if tool.input_schema.to_string().len() > MAX_TOOL_SCHEMA {
+                    let detail = format!(
+                        "schéma de {} de plus de {MAX_TOOL_SCHEMA} octets",
+                        tool.name
+                    );
+                    return Err(self.protocol(detail));
+                }
                 tools.push(ToolSpec {
                     name: tool.name,
-                    description: tool.description,
+                    description: cut(tool.description, MAX_TOOL_DESCRIPTION),
                     input_schema: tool.input_schema,
                     level,
                 });
@@ -647,9 +677,38 @@ impl ToolHost for McpServers {
     }
 }
 
+/// `text` cut to `max` bytes at most, on a character boundary, with « … » when it was cut.
+fn cut(mut text: String, max: usize) -> String {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max - '…'.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push('…');
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptions_are_cut_and_outside_reads_are_actions() {
+        let long = "é".repeat(MAX_TOOL_DESCRIPTION);
+        let kept = cut(long, MAX_TOOL_DESCRIPTION);
+        assert!(kept.len() <= MAX_TOOL_DESCRIPTION && kept.ends_with('…'));
+        assert_eq!(cut(String::from("court"), MAX_TOOL_DESCRIPTION), "court");
+        let level = |v: Value| Level::from_annotations(Some(&v));
+        let web = json!({ "readOnlyHint": true, "openWorldHint": true });
+        assert_eq!(level(web), Level::Action);
+        let local = json!({ "readOnlyHint": true, "openWorldHint": false });
+        assert_eq!(level(local), Level::Read);
+        let doubt = json!({ "readOnlyHint": true, "openWorldHint": "peut-être" });
+        assert_eq!(level(doubt), Level::Destructive);
+    }
 
     #[test]
     fn level_read_from_annotations() {
