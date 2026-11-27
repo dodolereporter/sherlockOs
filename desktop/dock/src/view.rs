@@ -177,10 +177,13 @@ impl Dock {
         let opacity = menu.unfold.opacity(self.now);
         // Built inside the fade, for the colors its texts take when they are built.
         let panel = color::with_opacity(opacity, || {
-            let index = self.index_of(&menu.target);
-            let name = index
-                .and_then(|i| self.items.get(i))
-                .map_or("", |i| i.name.as_str());
+            let index = menu.target.as_ref().and_then(|t| self.index_of(t));
+            let name = match &menu.target {
+                Some(_) => index
+                    .and_then(|i| self.items.get(i))
+                    .map_or("", |i| i.name.as_str()),
+                None => dock::text::DOCK,
+            };
             let mut header = row![
                 ui::body(name).font(typography::UI_SEMIBOLD),
                 space::horizontal()
@@ -214,7 +217,7 @@ impl Dock {
                 }
                 entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
             }
-            ui::menu(entries, dock::MENU_WIDTH).height(Length::Fill)
+            ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill)
         });
         // It unfolds from its icon: from the side facing the dock.
         let origin = match self.geometry.position {

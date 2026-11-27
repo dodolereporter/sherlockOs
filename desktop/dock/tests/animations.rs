@@ -210,15 +210,16 @@ fn dragging_a_pinned_icon_reorders_and_writes_the_file() {
     let files = middle(&rest, 0);
     press(&mut dock, files);
     assert!(dock.held().is_none(), "not dragged before the threshold");
-    // Past the browser, at the right end: the files take the last place.
+    // Past the browser, at the right end: the files take the last place. Sherlock is one of
+    // the pinned icons: it moves aside like the others.
     let end = Point::new(rest.icons[4].x + rest.icons[4].width + 6.0, files.y);
     drag_to(&mut dock, files, end);
     assert_eq!(
         names(&dock),
         [
             "Terminal d'exemple",
-            "Éditeur",
             "Sherlock",
+            "Éditeur",
             "Example Browser",
             "Fichiers"
         ]
@@ -235,11 +236,12 @@ fn dragging_a_pinned_icon_reorders_and_writes_the_file() {
     );
     let _ = dock.update(Message::Gesture(Gesture::Released));
     assert!(dock.held().is_none());
-    // Written once let go, atomically by dock-config, the comment kept.
+    // Written once let go, atomically by dock-config, the comment kept, Sherlock's place too.
     let written = std::fs::read_to_string(&path).expect("file read");
     let (read, _) = DockConfig::parse(&written);
     let order = [
         "org.example.Terminal",
+        "sherlock",
         "example-editor",
         "example-browser",
         "org.example.Files",
@@ -307,9 +309,15 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
     assert_eq!(dock.held(), Some((0, false)));
     drag_to(&mut dock, files, out);
     let _ = dock.update(Message::Gesture(Gesture::Released));
+    // Sherlock keeps its place, written in the list, rather than going back to the middle.
     assert_eq!(
         dock.pinned,
-        ["org.example.Terminal", "example-editor", "example-browser"]
+        [
+            "org.example.Terminal",
+            "sherlock",
+            "example-editor",
+            "example-browser"
+        ]
     );
     let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("written"));
     assert_eq!(read.pinned.as_deref(), Some(&dock.pinned[..]));
@@ -423,15 +431,13 @@ fn only_pinned_applications_can_be_dragged_out() {
     let t = settle(&mut dock);
     assert_eq!(dock.separator, Some(5));
     let rest = dock.layout(t);
-    // Neither Sherlock nor an open application that is not pinned follows the pointer.
-    for index in [2, 5] {
-        let icon = middle(&rest, index);
-        press(&mut dock, icon);
-        drag_to(&mut dock, icon, Point::new(icon.x, 2.0));
-        assert!(dock.held().is_none(), "icon {index} dragged");
-        let _ = dock.update(Message::Gesture(Gesture::Released));
-        assert_eq!(dock.items.len(), 6);
-    }
+    // An open application that is not pinned does not follow the pointer.
+    let mystery = middle(&rest, 5);
+    press(&mut dock, mystery);
+    drag_to(&mut dock, mystery, Point::new(mystery.x, 2.0));
+    assert!(dock.held().is_none(), "dragged");
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert_eq!(dock.items.len(), 6);
     // A pinned application that is open moves after the separator, without vanishing.
     let terminal = middle(&rest, 1);
     press(&mut dock, terminal);
@@ -442,8 +448,8 @@ fn only_pinned_applications_can_be_dragged_out() {
         names(&dock),
         [
             "Fichiers",
-            "Éditeur",
             "Sherlock",
+            "Éditeur",
             "Example Browser",
             "Terminal d'exemple",
             "mystery"
