@@ -939,10 +939,12 @@ impl View {
         .width(Length::Fill)
         .height(Length::Fill);
         let backdrop: Element<'_, Message> = match &self.backdrop {
+            // An image takes its own opacity: `reveal` fades quads and texts.
             Some((_, picture)) => image(picture.clone())
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .content_fit(ContentFit::Cover)
+                .opacity(opacity)
                 .into(),
             None => container(Space::new())
                 .width(Length::Fill)
