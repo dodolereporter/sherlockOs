@@ -35,7 +35,7 @@ use smithay::{
         },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    desktop::{PopupManager, Window, layer_map_for_output},
+    desktop::{LayerMap, LayerSurface, PopupManager, Window, layer_map_for_output},
     output::Output,
     reexports::wayland_server::{Resource as _, protocol::wl_surface::WlSurface},
     utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform},
@@ -524,7 +524,25 @@ pub fn items(
     animating |= osd::push_item(&mut items, state, (output, view));
     // The shell's menus closing (lot UI-06), in front of their anchored surfaces.
     animating |= crate::popup_anim::push_closing(&mut items, state, (output, view), now);
-    push_layers(&mut items, output, view, &[Layer::Overlay, Layer::Top]);
+    push_layers(&mut items, (output, view), &[Layer::Overlay], |_, _| {
+        Some(Point::default())
+    });
+    // A fullscreen window covers the top layer, but for the edge the pointer brought back,
+    // which slides in front (lot D-21e).
+    let fullscreen = state.fullscreen_on(output);
+    let covered = fullscreen.is_some();
+    let top = |front: bool| {
+        move |map: &LayerMap, surface: &LayerSurface| {
+            let shift = state.top_shift((output, map, covered), surface, false, now);
+            match front {
+                true => shift,
+                false => shift.is_none().then(Point::default),
+            }
+        }
+    };
+    push_layers(&mut items, (output, view), &[Layer::Top], top(true));
+    animating |= state.reveal_sliding(output, now);
+    let mut behind = covered;
     // A window minimized or restored goes under the dock, into its icon (lots D-19, Q-14).
     animating |= genie::push_effects(&mut items, state, (output, view), now);
     if let Some(preview) = preview {
@@ -569,12 +587,19 @@ pub fn items(
         animating |= popups_appearing(window);
         let bar = state.decoration_bar_at(window, now);
         push_window(&mut items, (window, bar), visual, view, own);
+        if behind && fullscreen.as_ref() == Some(window) {
+            push_layers(&mut items, (output, view), &[Layer::Top], top(false));
+            behind = false;
+        }
+    }
+    if behind {
+        push_layers(&mut items, (output, view), &[Layer::Top], top(false));
     }
     push_layers(
         &mut items,
-        output,
-        view,
+        (output, view),
         &[Layer::Bottom, Layer::Background],
+        |_, _| Some(Point::default()),
     );
     // Last, so drawn first: what the blur behind glass surfaces (lot D-37) reads from the
     // frame, like the rest of the desktop.
@@ -598,15 +623,22 @@ pub fn items(
     (items, animating)
 }
 
-/// Anchored surfaces of `layers`, the front one first, each with its menus in front.
-fn push_layers(items: &mut Vec<Item>, output: &Output, view: &View, layers: &[Layer]) {
+/// Anchored surfaces of `layers`, the front one first, each with its menus in front: those
+/// that `shift` keeps, moved by the shift it gives them.
+fn push_layers(
+    items: &mut Vec<Item>,
+    (output, view): (&Output, &View),
+    layers: &[Layer],
+    shift: impl Fn(&LayerMap, &LayerSurface) -> Option<Point<f64, Logical>>,
+) {
     let map = layer_map_for_output(output);
     for layer in layers {
         for surface in map.layers_on(*layer).rev() {
-            let Some(geometry) = map.layer_geometry(surface) else {
+            let (Some(geometry), Some(shift)) = (map.layer_geometry(surface), shift(&map, surface))
+            else {
                 continue;
             };
-            let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64();
+            let loc = (geometry.loc - surface.bbox().loc + view.area.loc).to_f64() + shift;
             let at = Placement {
                 view,
                 loc,

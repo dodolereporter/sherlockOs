@@ -66,6 +66,10 @@ pub struct Bar {
     pub menu_margins: Padding,
     /// Menu entry highlighted by the keyboard or the pointer.
     pub cursor: Option<usize>,
+    /// The entry of the Sherlock menu waiting for its second click, and since when (D-36d).
+    pub armed: Option<(Action, Instant)>,
+    /// What the Sherlock menu starts: Control Room.
+    pub programs: crate::programs::Programs,
     /// Bar button that has the keyboard focus, as an index in `targets()`. The bar keeps it in
     /// its own state, like the menu cursor: the ring is drawn from the same value that Enter
     /// activates, in the same update. (iced's focus operations are applied after the redraw
@@ -210,6 +214,7 @@ impl Bar {
         let session = launcher::system::Systemd::from_env();
         let bar = Self {
             user: user::current(),
+            programs: crate::programs::Programs(std::sync::Arc::new(crate::programs::Spawn)),
             shell_events: Some(shell_events),
             quick: Quick::new(std::sync::Arc::new(session)),
             ..Self::default()
@@ -434,12 +439,12 @@ impl Bar {
             }
             Message::MenuKey(menu::Key::Close) => self.focus = None,
             Message::MenuKey(_) => {}
-            Message::Hover(index) => self.cursor = Some(index),
-            Message::Activate(action) => {
-                // Nothing exists behind these entries yet: say so, never pretend.
-                tracing::info!(?action, "Sherlock menu entry not available yet");
-                return self.close_menu();
+            // An entry that does nothing yet takes no highlight.
+            Message::Hover(index) => {
+                let usable = Action::ALL.get(index).is_some_and(|a| a.enabled());
+                self.cursor = usable.then_some(index);
             }
+            Message::Activate(action) => return self.activate(action),
             Message::SelectWorkspace(index) => match self.to_activate(index) {
                 Some(id) => shell::switch_to(id),
                 None if self.desktop.as_ref().is_some_and(|d| !d.live) => {
@@ -815,7 +820,52 @@ impl Bar {
 
     /// Closes the menu: it folds back first where it unfolds, and its popup closes once it has
     /// faded out (`Message::Frame`).
+    /// Runs an entry of the Sherlock menu (D-36d). Logging out and powering off want a second
+    /// click, at least `CONFIRM_DELAY` later, the entry reading « Reclique pour confirmer »
+    /// meanwhile: the menu stays open for it, as a Mac asks before it powers off.
+    pub fn activate(&mut self, action: Action) -> Task<Message> {
+        use launcher::source::Power;
+        if !action.enabled() {
+            return Task::none();
+        }
+        if action.needs_confirmation() {
+            let delay = sherlock_ui::launcher::CONFIRM_DELAY;
+            match self.armed {
+                Some((armed, at)) if armed == action && at.elapsed() >= delay => {}
+                // A double click only arms.
+                Some((armed, _)) if armed == action => return Task::none(),
+                _ => {
+                    self.armed = Some((action, Instant::now()));
+                    return Task::none();
+                }
+            }
+        }
+        self.armed = None;
+        let ran = match action {
+            Action::About | Action::Settings => {
+                // Control Room has no « À propos » page yet: both open its first page.
+                self.programs.start(crate::programs::CONTROL_ROOM);
+                Task::none()
+            }
+            Action::Lock => self
+                .quick
+                .update(quick::Message::Session(Power::Lock))
+                .map(Message::Quick),
+            Action::LogOut => {
+                self.quick.run_now(Power::LogOut);
+                Task::none()
+            }
+            Action::PowerOff => {
+                self.quick.run_now(Power::PowerOff);
+                Task::none()
+            }
+            Action::Updates | Action::GameMode => Task::none(),
+        };
+        ran.chain(self.close_menu())
+    }
+
     fn close_menu(&mut self) -> Task<Message> {
+        self.armed = None;
         self.cursor = None;
         if self.menu.is_some() && self.animates() {
             self.menu_unfold.fold(animated::clock(), false);
@@ -826,6 +876,7 @@ impl Bar {
 
     /// Closes the popup of the menu at once.
     fn drop_menu(&mut self) -> Task<Message> {
+        self.armed = None;
         self.cursor = None;
         self.menu_unfold = Unfold::default();
         match self.menu.take() {
@@ -1090,12 +1141,15 @@ impl Bar {
                 if action.starts_group() {
                     entries.push(ui::menu_separator());
                 }
-                let mut item = ui::menu_item(
-                    action.label(),
-                    action.trailing(),
-                    Some(Message::Activate(action)),
-                );
-                if self.cursor == Some(i) {
+                let armed = self.armed.is_some_and(|(a, _)| a == action);
+                let label = if armed {
+                    panels::text::CONFIRM
+                } else {
+                    action.label()
+                };
+                let press = action.enabled().then_some(Message::Activate(action));
+                let mut item = ui::menu_item(label, action.trailing(), press);
+                if self.cursor == Some(i) || armed {
                     item = ui::open(item);
                 }
                 entries.push(mouse_area(item).on_enter(Message::Hover(i)).into());
@@ -1260,6 +1314,97 @@ mod tests {
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert!(!bar.menu_open());
         assert_eq!(bar.cursor, None);
+    }
+
+    /// What the menu ran: programs started and session commands.
+    #[derive(Default)]
+    struct Ran(std::sync::Mutex<Vec<String>>);
+
+    impl crate::programs::Start for Ran {
+        fn start(&self, program: &str) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(program.to_owned());
+            Ok(())
+        }
+    }
+
+    impl launcher::system::Session for Ran {
+        fn run(&self, power: launcher::source::Power) -> Result<(), launcher::launch::LaunchError> {
+            self.0.lock().unwrap().push(format!("{power:?}"));
+            Ok(())
+        }
+    }
+
+    /// The menu open, its programs and session commands recorded instead of run.
+    fn recorded() -> (Bar, std::sync::Arc<Ran>) {
+        let ran = std::sync::Arc::new(Ran::default());
+        let (mut bar, _) = with_menu();
+        bar.programs = crate::programs::Programs(ran.clone());
+        bar.quick = Quick::new(ran.clone());
+        (bar, ran)
+    }
+
+    fn ran(record: &Ran) -> Vec<String> {
+        record.0.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn settings_and_about_start_control_room() {
+        for action in [Action::Settings, Action::About] {
+            let (mut bar, record) = recorded();
+            let _ = bar.update(Message::Activate(action));
+            assert_eq!(ran(&record), ["control-room"]);
+            assert!(!bar.menu_open(), "the menu closes");
+        }
+    }
+
+    #[test]
+    fn lock_runs_at_once() {
+        let (mut bar, record) = recorded();
+        let _ = bar.update(Message::Activate(Action::Lock));
+        assert_eq!(ran(&record), ["Lock"]);
+        assert!(!bar.menu_open());
+    }
+
+    #[test]
+    fn logging_out_and_powering_off_ask_a_second_click() {
+        for (action, command) in [(Action::LogOut, "LogOut"), (Action::PowerOff, "PowerOff")] {
+            let (mut bar, record) = recorded();
+            // The first click arms the entry, which then asks to click again; the menu stays.
+            let _ = bar.update(Message::Activate(action));
+            assert!(ran(&record).is_empty() && bar.menu_open());
+            assert_eq!(bar.armed.map(|(a, _)| a), Some(action));
+            // A double click only arms.
+            let _ = bar.update(Message::Activate(action));
+            assert!(ran(&record).is_empty());
+            // Clicked again later: it runs, once, and the menu closes.
+            let earlier = Instant::now() - sherlock_ui::launcher::CONFIRM_DELAY;
+            bar.armed = Some((action, earlier));
+            let _ = bar.update(Message::Activate(action));
+            assert_eq!(ran(&record), [command]);
+            assert!(!bar.menu_open() && bar.armed.is_none());
+        }
+        // Another entry, or Escape, cancels.
+        let (mut bar, record) = recorded();
+        let _ = bar.update(Message::Activate(Action::PowerOff));
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        assert!(bar.armed.is_none() && ran(&record).is_empty());
+    }
+
+    #[test]
+    fn updates_and_game_mode_are_not_there_yet() {
+        for action in [Action::Updates, Action::GameMode] {
+            let (mut bar, record) = recorded();
+            assert!(!action.enabled());
+            assert_eq!(
+                action.trailing(),
+                sherlock_ui::component::Trailing::Shortcut("Bientôt")
+            );
+            let _ = bar.update(Message::Activate(action));
+            assert!(ran(&record).is_empty() && bar.menu_open());
+            let index = Action::ALL.iter().position(|a| *a == action).unwrap();
+            let _ = bar.update(Message::Hover(index));
+            assert_eq!(bar.cursor, None);
+        }
     }
 
     #[test]
