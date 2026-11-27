@@ -1,8 +1,10 @@
-//! Minimize and restore effect (lot D-19). Minimized, a window is sucked into its dock icon,
-//! the rectangle the dock gives with `set_rectangle` (`State::icon_rectangle`): its sides bend
-//! toward the icon, then it slides into it, squeezed. Activated, it comes back the same way,
-//! backwards. Without an icon, it shrinks and fades toward the bottom of its screen. `Effect`
-//! chooses between the two, or nothing.
+//! Minimize and restore effect (lots D-19, D-19b). Minimized, a window is sucked into its dock
+//! icon, the rectangle the dock gives with `set_rectangle` (`State::icon_rectangle`), as by
+//! macOS's genie: its edge nearest the dock is pulled first, the sides close in a funnel with
+//! curved sides, and the rest of the window flows after it, faster and faster, into the icon.
+//! It goes behind the dock: what has crossed the edge of the dock's glass is hidden. Activated,
+//! it comes back the same way, backwards. Without an icon, it shrinks and fades toward the
+//! bottom of its screen. `Effect` chooses between the two, or nothing.
 //!
 //! The deformation is a fragment shader (`shaders/genie.frag`), not a mesh. The window is first
 //! drawn as at rest into a texture of its size, corners and border included; then a single
@@ -16,7 +18,7 @@
 
 use std::{cell::RefCell, str::FromStr, time::Duration};
 
-use sherlock_ui::{decorations as ui_decorations, motion};
+use sherlock_ui::{decorations as ui_decorations, dock, metrics, motion};
 use smithay::{
     backend::allocator::Fourcc,
     backend::renderer::{
@@ -76,15 +78,42 @@ impl FromStr for Effect {
     }
 }
 
-/// Share of the genie spent bending the sides toward the icon, before the window slides in.
+/// Share of the way by which the window's far edge leaves after its edge nearest the dock: the
+/// near edge is pulled first, the rest of the window flows after it. `genie.frag` has the same.
+const DELAY: f64 = 0.4;
+/// Share of the way over which the sides bend into their funnel.
 const BEND: f64 = 0.4;
-/// From this share on, the window fades into the icon it covers at the end.
-const FADE_FROM: f64 = 0.85;
+/// Share of the way over which the shadow fades out.
+const SHADOW_FADE: f64 = 0.3;
+/// Share of the way over which the hidden part of a window that reaches into the dock's glass
+/// at rest grows up to the edge of the glass.
+const SWEEP: f64 = 0.25;
+/// From this share on, what is left of the window fades out.
+const FADE_FROM: f64 = 0.9;
+
+/// Distance from an icon of the dock to the edge of its glass toward the screen's middle, in
+/// logical pixels: the bar's padding on that side, less its border, which is inside the bar
+/// (see `Geometry::bar_thickness` in the dock). The same for any icon size.
+pub const GLASS_MARGIN: f64 = (dock::PADDING.1 - metrics::BORDER_WIDTH) as f64;
 
 /// Slow start, slow landing (smoothstep), on `x` clamped to 0..1.
 fn ease(x: f64) -> f64 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
+}
+
+/// Slow start, then faster and faster, on `x` clamped to 0..1: each row of the window speeds
+/// up toward the icon. `genie.frag` has the same.
+fn ease_in(x: f64) -> f64 {
+    let x = x.clamp(0.0, 1.0);
+    x * x
+}
+
+/// The side of the funnel, from 0 at its mouth to 1 at its end: half a period of a sinusoid,
+/// level at both ends. `genie.frag` has the same.
+fn sine(x: f64) -> f64 {
+    let x = x.clamp(0.0, 1.0);
+    (1.0 - (std::f64::consts::PI * x).cos()) / 2.0
 }
 
 fn mix(a: f64, b: f64, t: f64) -> f64 {
@@ -142,81 +171,220 @@ impl Progress {
 /// A rectangle in frame pixels, unrounded.
 pub type FrameRect = Rectangle<f64, Physical>;
 
+/// Edge of the screen the dock is on: the window goes toward it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
+impl Side {
+    /// The edge of `screen` nearest to `icon`.
+    pub fn of<K>(icon: Rectangle<f64, K>, screen: Rectangle<f64, K>) -> Self {
+        let distances = [
+            (
+                Self::Bottom,
+                screen.loc.y + screen.size.h - icon.loc.y - icon.size.h,
+            ),
+            (Self::Top, icon.loc.y - screen.loc.y),
+            (Self::Left, icon.loc.x - screen.loc.x),
+            (
+                Self::Right,
+                screen.loc.x + screen.size.w - icon.loc.x - icon.size.w,
+            ),
+        ];
+        distances
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or(Self::Bottom, |(side, _)| side)
+    }
+
+    /// The dock is on the left or right edge: the window goes sideways.
+    fn sideways(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    /// Toward the dock is toward lower coordinates.
+    fn backwards(self) -> bool {
+        matches!(self, Self::Top | Self::Left)
+    }
+
+    /// A point of the frame as (along, across): `along` grows toward the dock.
+    fn orient(self, (x, y): (f64, f64)) -> (f64, f64) {
+        let (along, across) = if self.sideways() { (x, y) } else { (y, x) };
+        (if self.backwards() { -along } else { along }, across)
+    }
+
+    /// The point of the frame at (`along`, `across`): `orient` undone.
+    fn unorient(self, (along, across): (f64, f64)) -> (f64, f64) {
+        let along = if self.backwards() { -along } else { along };
+        if self.sideways() {
+            (along, across)
+        } else {
+            (across, along)
+        }
+    }
+
+    /// `rect` seen along the way: its ends along, the far one first, then across.
+    fn span(self, rect: FrameRect) -> Span {
+        let a = self.orient((rect.loc.x, rect.loc.y));
+        let b = self.orient((rect.loc.x + rect.size.w, rect.loc.y + rect.size.h));
+        Span {
+            along: (a.0.min(b.0), a.0.max(b.0)),
+            across: (a.1.min(b.1), a.1.max(b.1)),
+        }
+    }
+}
+
+/// A rectangle seen along the way to the dock.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Span {
+    along: (f64, f64),
+    across: (f64, f64),
+}
+
 /// The genie at `progress`, between `window` and `icon`, in frame pixels. `genie.frag` does the
 /// same computation, backwards.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Genie {
     pub window: FrameRect,
     pub icon: FrameRect,
+    /// The screen edge of the dock.
+    pub side: Side,
+    /// Distance from the icon to the edge of the dock's glass on the window's side, in frame
+    /// pixels: what of the window has crossed that edge is hidden behind the dock.
+    pub glass: f64,
     pub progress: f64,
 }
 
-impl Genie {
-    /// The icon is below the window: it goes down. Otherwise everything is mirrored.
-    fn down(&self) -> bool {
-        let center = |r: FrameRect| r.loc.y + r.size.h / 2.0;
-        center(self.icon) >= center(self.window)
-    }
+/// The genie's shape at its progress, seen along the way.
+#[derive(Debug, Clone, Copy)]
+struct Shape {
+    window: Span,
+    icon: Span,
+    /// Where the funnel starts, the window's far edge at rest, and where it ends, the edge of
+    /// the glass: there the sides have the icon's width.
+    funnel: (f64, f64),
+    /// How far the sides are bent into the funnel, from 0 to 1.
+    bend: f64,
+    /// Nothing past this shows: the edge of the glass, once a window that reached into the
+    /// glass at rest has left it.
+    clip: f64,
+    progress: f64,
+}
 
-    /// Window and icon as the computation sees them: mirrored when going up, so that the window
-    /// always goes down.
-    fn oriented(&self) -> (FrameRect, FrameRect) {
-        let mirror = |r: FrameRect| Rectangle::new((r.loc.x, -r.loc.y - r.size.h).into(), r.size);
-        if self.down() {
-            (self.window, self.icon)
-        } else {
-            (mirror(self.window), mirror(self.icon))
-        }
-    }
-
-    /// Where row `v` of the window (0 its top, 1 its bottom) is drawn: its height, then its left
-    /// and right ends. The sides bend first, the window then slides into the icon: what is
-    /// under the window's top keeps its width, what reaches the icon's top takes the icon's.
-    pub fn row(&self, v: f64) -> (f64, f64, f64) {
-        let (w, i) = self.oriented();
-        let slide = ease((self.progress - BEND) / (1.0 - BEND));
-        let top = mix(w.loc.y, i.loc.y, slide);
-        let bottom = mix(w.loc.y + w.size.h, i.loc.y + i.size.h, slide);
-        let down = self.down();
-        let y = mix(top, bottom, if down { v } else { 1.0 - v });
-        let bend = ease(self.progress / BEND);
-        let reach = ease((y - w.loc.y) / (i.loc.y - w.loc.y).max(1.0));
-        let f = bend * reach;
-        let left = mix(w.loc.x, i.loc.x, f);
-        let right = mix(w.loc.x + w.size.w, i.loc.x + i.size.w, f);
-        (if down { y } else { -y }, left, right)
-    }
-
-    /// Area the deformed window covers, one pixel more around for the smoothing of its edges.
-    /// The ends of each side move monotonically with the height: the first and last rows hold
-    /// the extremes.
-    pub fn bounds(&self) -> Rectangle<i32, Physical> {
-        let (y0, l0, r0) = self.row(0.0);
-        let (y1, l1, r1) = self.row(1.0);
-        let (x0, x1) = (l0.min(l1).floor() - 1.0, r0.max(r1).ceil() + 1.0);
-        let (top, bottom) = (y0.min(y1).floor() - 1.0, y0.max(y1).ceil() + 1.0);
-        Rectangle::new(
-            (x0 as i32, top as i32).into(),
-            ((x1 - x0) as i32, (bottom - top) as i32).into(),
+impl Shape {
+    /// Where row `r` of the window is along, 0 its far edge, 1 its edge nearest the dock: from
+    /// its place at rest to the same row of the icon, the near rows leaving first.
+    fn along(&self, r: f64) -> f64 {
+        let rest = mix(self.window.along.0, self.window.along.1, r);
+        let end = mix(self.icon.along.0, self.icon.along.1, r);
+        mix(
+            rest,
+            end,
+            ease_in((self.progress - (1.0 - r) * DELAY) / (1.0 - DELAY)),
         )
     }
 
-    /// Opacity: the window fades into its icon at the end.
+    /// The two ends, across, of what is drawn at `along`.
+    fn across(&self, along: f64) -> (f64, f64) {
+        let (start, end) = self.funnel;
+        let f = self.bend * sine((along - start) / (end - start));
+        (
+            mix(self.window.across.0, self.icon.across.0, f),
+            mix(self.window.across.1, self.icon.across.1, f),
+        )
+    }
+
+    /// The part of the way that shows: from the far edge to the near one or the clip.
+    fn shown(&self) -> Option<(f64, f64)> {
+        let (far, near) = (self.along(0.0), self.along(1.0).min(self.clip));
+        (far < near).then_some((far, near))
+    }
+}
+
+impl Genie {
+    fn shape(&self) -> Shape {
+        let window = self.side.span(self.window);
+        let icon = self.side.span(self.icon);
+        let edge = icon.along.0 - self.glass;
+        let funnel = (window.along.0, edge.max(window.along.0 + 1.0));
+        // A window that reaches behind the glass at rest is not cut at once.
+        let overlap = (window.along.1 + 1.0 - edge).max(0.0);
+        Shape {
+            window,
+            icon,
+            funnel,
+            bend: ease(self.progress / BEND),
+            clip: edge + overlap * (1.0 - ease(self.progress / SWEEP)),
+            progress: self.progress,
+        }
+    }
+
+    /// Where the point (`u`, `v`) of the window, 0 to 1 across its width and height, is drawn,
+    /// in frame pixels; `None` once it is hidden behind the dock's glass.
+    pub fn point(&self, (u, v): (f64, f64)) -> Option<(f64, f64)> {
+        let shape = self.shape();
+        let rest = (
+            self.window.loc.x + u * self.window.size.w,
+            self.window.loc.y + v * self.window.size.h,
+        );
+        let (along, across) = self.side.orient(rest);
+        let share = |x: f64, (a, b): (f64, f64)| (x - a) / (b - a).max(f64::EPSILON);
+        let along = shape.along(share(along, shape.window.along));
+        if along > shape.clip {
+            return None;
+        }
+        let ends = shape.across(along);
+        let across = mix(ends.0, ends.1, share(across, shape.window.across));
+        Some(self.side.unorient((along, across)))
+    }
+
+    /// Area the deformed window covers, one pixel more around for the smoothing of its edges;
+    /// `None` when all of it is behind the glass. The ends of each side move monotonically
+    /// along the way: the first and last rows shown hold the extremes.
+    pub fn bounds(&self) -> Option<Rectangle<i32, Physical>> {
+        let shape = self.shape();
+        let (far, near) = shape.shown()?;
+        let (a, b) = (shape.across(far), shape.across(near));
+        let corners = [
+            self.side.unorient((far, a.0.min(b.0))),
+            self.side.unorient((near, a.1.max(b.1))),
+        ];
+        let x0 = (corners[0].0.min(corners[1].0)).floor() - 1.0;
+        let x1 = (corners[0].0.max(corners[1].0)).ceil() + 1.0;
+        let y0 = (corners[0].1.min(corners[1].1)).floor() - 1.0;
+        let y1 = (corners[0].1.max(corners[1].1)).ceil() + 1.0;
+        Some(Rectangle::new(
+            (x0 as i32, y0 as i32).into(),
+            ((x1 - x0) as i32, (y1 - y0) as i32).into(),
+        ))
+    }
+
+    /// Opacity: what is left of the window fades at the very end.
     pub fn alpha(&self) -> f32 {
         (1.0 - ease((self.progress - FADE_FROM) / (1.0 - FADE_FROM))) as f32
     }
 
     /// Uniforms of `genie.frag` for the element covering `area`.
     fn uniforms(&self, area: Rectangle<i32, Physical>) -> Vec<Uniform<'static>> {
-        let (w, i) = self.oriented();
+        let shape = self.shape();
+        let span = |s: Span| [s.along.0, s.along.1, s.across.0, s.across.1].map(|v| v as f32);
         let rect = |r: FrameRect| [r.loc.x, r.loc.y, r.size.w, r.size.h].map(|v| v as f32);
         let area = [area.loc.x, area.loc.y, area.size.w, area.size.h].map(|v| v as f32);
+        let funnel = [shape.funnel.0, shape.funnel.1, shape.bend, shape.clip].map(|v| v as f32);
+        let sideways = if self.side.sideways() { 1.0 } else { 0.0 };
+        let sign = if self.side.backwards() { -1.0 } else { 1.0 };
         vec![
-            Uniform::new("window_rect", rect(w)),
-            Uniform::new("icon_rect", rect(i)),
+            Uniform::new("window_rect", rect(self.window)),
+            Uniform::new("window_span", span(shape.window)),
+            Uniform::new("icon_span", span(shape.icon)),
+            Uniform::new("funnel", funnel),
             Uniform::new("area", area),
+            Uniform::new("axis", [sideways, sign]),
             Uniform::new("progress", self.progress as f32),
-            Uniform::new("mirror", if self.down() { 1.0f32 } else { -1.0 }),
         ]
     }
 }
@@ -241,18 +409,19 @@ pub fn scale_visual(window: RectF, screen: RectF, progress: f64, decoration: f32
     }
 }
 
+/// The effect chosen for a window when it starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Shape {
+enum Way {
     Genie,
     Scale,
 }
 
 /// The effect running on a window, kept in its user data, and the last icon rectangle seen,
-/// in the space: the dock may forget it on the way.
+/// in the space, with the screen edge of its dock: the dock may forget it on the way.
 #[derive(Default)]
 struct Track {
-    running: std::cell::Cell<Option<(Progress, Shape)>>,
-    icon: std::cell::Cell<Option<Rectangle<i32, Logical>>>,
+    running: std::cell::Cell<Option<(Progress, Way)>>,
+    icon: std::cell::Cell<Option<(Rectangle<i32, Logical>, Side)>>,
 }
 
 fn track(window: &Window) -> &Track {
@@ -272,17 +441,17 @@ impl State {
         let track = track(window);
         let running = track.running.get().filter(|(p, _)| !p.is_done(now));
         let started = match (running, self.minimize_effect) {
-            (Some((mut progress, shape)), _) => {
+            (Some((mut progress, way)), _) => {
                 progress.turn(now, minimizing);
-                Some((progress, shape))
+                Some((progress, way))
             }
             (None, Effect::None) => None,
             (None, effect) => {
                 let icon = self.icon_in_space(window);
                 track.icon.set(icon);
                 let genie = effect == Effect::Genie && icon.is_some();
-                let shape = if genie { Shape::Genie } else { Shape::Scale };
-                Some((Progress::new(now, minimizing), shape))
+                let way = if genie { Way::Genie } else { Way::Scale };
+                Some((Progress::new(now, minimizing), way))
             }
         };
         track.running.set(started);
@@ -314,12 +483,14 @@ impl State {
         }
     }
 
-    /// The icon rectangle of `window` in the space.
-    fn icon_in_space(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
+    /// The icon rectangle of `window` in the space, and the edge of its screen the dock is on:
+    /// the nearest one.
+    fn icon_in_space(&self, window: &Window) -> Option<(Rectangle<i32, Logical>, Side)> {
         let (name, rect) = self.icon_rectangle(window)?;
         let output = self.space.outputs().find(|o| o.name() == name)?;
-        let origin = self.space.output_geometry(output)?.loc;
-        Some(Rectangle::new(rect.loc + origin, rect.size))
+        let screen = self.space.output_geometry(output)?;
+        let icon = Rectangle::new(rect.loc + screen.loc, rect.size);
+        Some((icon, Side::of(icon.to_f64(), screen.to_f64())))
     }
 }
 
@@ -336,7 +507,7 @@ pub(crate) fn push_effects(
     let active = state.workspaces().active();
     for window in state.space.elements().rev() {
         let track = track(window);
-        let Some((progress, shape)) = track.running.get() else {
+        let Some((progress, way)) = track.running.get() else {
             continue;
         };
         // Over: `end_minimize_effects` forgets it and gives the pointer back.
@@ -362,8 +533,8 @@ pub(crate) fn push_effects(
         track.icon.set(icon);
         let screen = state.window_output(window);
         let bar = state.decoration_bar(window);
-        match (shape, icon) {
-            (Shape::Genie, Some(icon)) => {
+        match (way, icon) {
+            (Way::Genie, Some(icon)) => {
                 let window = (window, bar);
                 push_genie(items, window, (geometry, icon), value, decoration, view);
             }
@@ -385,7 +556,7 @@ pub(crate) fn push_effects(
 fn push_genie(
     items: &mut Vec<Item>,
     (window, bar): (&Window, Option<Bar>),
-    (content_geometry, icon): (Rectangle<i32, Logical>, Rectangle<i32, Logical>),
+    (content_geometry, (icon, side)): (Rectangle<i32, Logical>, (Rectangle<i32, Logical>, Side)),
     progress: f64,
     decoration: f32,
     view: &View,
@@ -403,12 +574,24 @@ fn push_genie(
     let genie = Genie {
         window: rect.to_f64(),
         icon: view.rect(icon.to_f64()).to_f64(),
+        side,
+        glass: GLASS_MARGIN * view.scale,
         progress,
     };
-    let area = genie.bounds();
-    if !area.overlaps(view.frame) {
+    let owner = Some(surface.id());
+    let fade = (1.0 - ease(progress / SHADOW_FADE)) as f32 * decoration;
+    let shadow = (fade > 0.0).then(|| Item::Shadow {
+        key: Key::of(owner.clone(), Part::Shadow),
+        shadow: Shadow::of(rect, view.scale),
+        color: sherlock_ui::color::palette().shadow.premultiplied(),
+        radius: render::corner_radius(geometry.size) * view.scale as f32 * decoration,
+        alpha: fade,
+    });
+    // All of it behind the dock's glass: nothing to draw but what is left of its shadow.
+    let Some(area) = genie.bounds().filter(|a| a.overlaps(view.frame)) else {
+        items.extend(shadow);
         return;
-    }
+    };
     // The window as at rest, drawn into a texture of its size in pixels.
     let size = geometry
         .size
@@ -430,9 +613,8 @@ fn push_genie(
         &offscreen(geometry, size, view.scale),
         false,
     );
-    let owner = Some(surface.id());
     items.push(Item::Genie(Frame {
-        key: Key::of(owner.clone(), Part::Genie),
+        key: Key::of(owner, Part::Genie),
         content,
         size,
         scale: view.scale,
@@ -440,17 +622,7 @@ fn push_genie(
         genie,
         alpha: genie.alpha(),
     }));
-    let fade = (1.0 - ease(progress / BEND)) as f32 * decoration;
-    if fade > 0.0 {
-        let radius = render::corner_radius(geometry.size) * view.scale as f32 * decoration;
-        items.push(Item::Shadow {
-            key: Key::of(owner, Part::Shadow),
-            shadow: Shadow::of(rect, view.scale),
-            color: sherlock_ui::color::palette().shadow.premultiplied(),
-            radius,
-            alpha: fade,
-        });
-    }
+    items.extend(shadow);
 }
 
 /// The view of a texture of `size` pixels showing `area` of the space at `scale`.
@@ -486,10 +658,11 @@ impl Frame {
     pub fn params(&self) -> u64 {
         let g = self.genie;
         let rects = [g.window, g.icon].map(|r| [r.loc.x, r.loc.y, r.size.w, r.size.h]);
+        let side = g.side as u8;
         let values = [
             rects[0],
             rects[1],
-            [g.progress, f64::from(self.alpha), 0.0, 0.0],
+            [g.progress, f64::from(self.alpha), g.glass, f64::from(side)],
         ];
         let values: Vec<f32> = values.concat().into_iter().map(|v| v as f32).collect();
         params_hash(&values)
@@ -513,10 +686,12 @@ impl Program {
             include_str!("shaders/genie.frag"),
             &[
                 uniform("window_rect", UniformType::_4f),
-                uniform("icon_rect", UniformType::_4f),
+                uniform("window_span", UniformType::_4f),
+                uniform("icon_span", UniformType::_4f),
+                uniform("funnel", UniformType::_4f),
                 uniform("area", UniformType::_4f),
+                uniform("axis", UniformType::_2f),
                 uniform("progress", UniformType::_1f),
-                uniform("mirror", UniformType::_1f),
             ],
         )?;
         Ok(Self(program))
@@ -554,7 +729,8 @@ impl Painter {
                 return None;
             }
         };
-        let element = GenieElement::new(&self.program, texture, &frame.genie, frame.alpha);
+        let genie = (&frame.genie, frame.area);
+        let element = GenieElement::new(&self.program, texture, genie, frame.alpha);
         Some(ids.stamp(frame.key.clone(), frame.params(), element))
     }
 
@@ -621,9 +797,14 @@ pub struct GenieElement {
 }
 
 impl GenieElement {
-    /// `texture`, the window as at rest, at the step `genie`, with the opacity `alpha`.
-    pub fn new(program: &Program, texture: GlesTexture, genie: &Genie, alpha: f32) -> Self {
-        let area = genie.bounds();
+    /// `texture`, the window as at rest, at the step `genie`, with the opacity `alpha`, over
+    /// `area` (`Genie::bounds`).
+    pub fn new(
+        program: &Program,
+        texture: GlesTexture,
+        (genie, area): (&Genie, Rectangle<i32, Physical>),
+        alpha: f32,
+    ) -> Self {
         Self {
             id: Id::new(),
             program: program.0.clone(),
@@ -696,11 +877,14 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    /// A window of 800 × 600 at (320, 100), its icon of 52 × 52 in the dock at the bottom.
+    /// A window of 800 × 600 at (320, 100), its icon of 52 × 52 in the dock at the bottom of a
+    /// screen of 900, the glass 11 above it.
     fn genie(progress: f64) -> Genie {
         Genie {
             window: rect(320.0, 100.0, 800.0, 600.0),
-            icon: rect(900.0, 830.0, 52.0, 52.0),
+            icon: rect(900.0, 816.0, 52.0, 52.0),
+            side: Side::Bottom,
+            glass: 11.0,
             progress,
         }
     }
@@ -709,59 +893,189 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
+    /// Points of the window, 0 to 1 across its width and height.
+    fn grid() -> impl Iterator<Item = (f64, f64)> {
+        (0..=10).flat_map(|i| (0..=10).map(move |j| (f64::from(i) / 10.0, f64::from(j) / 10.0)))
+    }
+
+    /// The progress values of 120 frames.
+    fn steps() -> impl Iterator<Item = f64> {
+        (0..=120).map(|i| f64::from(i) / 120.0)
+    }
+
     #[test]
-    fn the_genie_leaves_the_window_and_ends_in_the_icon() {
-        // At 0: the window, every row at full width.
-        for v in [0.0, 0.5, 1.0] {
-            let (y, left, right) = genie(0.0).row(v);
-            assert!(close(y, 100.0 + 600.0 * v), "{v}");
-            assert!(close(left, 320.0) && close(right, 1120.0), "{v}");
-        }
-        assert_eq!(genie(0.0).alpha(), 1.0);
-        // At 1: exactly the icon's rectangle.
-        for v in [0.0, 0.5, 1.0] {
-            let (y, left, right) = genie(1.0).row(v);
-            assert!(close(y, 830.0 + 52.0 * v), "{v}");
-            assert!(close(left, 900.0) && close(right, 952.0), "{v}");
+    fn the_genie_leaves_the_window_and_ends_behind_the_glass() {
+        // At 0: the window as it is.
+        let rest = genie(0.0);
+        for (u, v) in grid() {
+            let (x, y) = rest.point((u, v)).unwrap();
+            assert!(
+                close(x, 320.0 + 800.0 * u) && close(y, 100.0 + 600.0 * v),
+                "{u} {v}"
+            );
         }
         assert_eq!(
-            genie(1.0).bounds(),
-            Rectangle::new((899, 829).into(), (54, 54).into())
+            rest.bounds(),
+            Some(Rectangle::new((319, 99).into(), (802, 602).into()))
         );
-        // At 0.5: the window slides down, its bottom already narrower than its top, and both
-        // within the way from the window to the icon.
+        assert_eq!(rest.alpha(), 1.0);
+        // At 1: all of it in the icon, behind the glass.
+        assert!(grid().all(|p| genie(1.0).point(p).is_none()));
+        assert_eq!(genie(1.0).bounds(), None);
+        // Halfway: the bottom has gone in first, the top still shows, narrower than the window,
+        // and moved toward the icon.
         let half = genie(0.5);
-        let (top, l0, r0) = half.row(0.0);
-        let (bottom, l1, r1) = half.row(1.0);
-        assert!(top > 100.0 && top < 830.0 && bottom > 700.0 && bottom < 882.0);
-        assert!(r1 - l1 < r0 - l0, "the bottom is narrower");
-        assert!(l1 > 320.0 && l1 < 900.0 && r1 > 952.0 && r1 < 1120.0);
-        // The rows stay in order: the window is never turned over.
-        let rows: Vec<f64> = (0..=10).map(|i| half.row(f64::from(i) / 10.0).0).collect();
-        assert!(rows.windows(2).all(|r| r[0] < r[1]));
-        let area = half.bounds();
         assert!(
-            area.contains((l0 as i32, top as i32)) && area.contains((r1 as i32, bottom as i32))
+            half.point((0.5, 1.0)).is_none(),
+            "the bottom is behind the glass"
+        );
+        let (top_left, top_right) = (
+            half.point((0.0, 0.0)).unwrap(),
+            half.point((1.0, 0.0)).unwrap(),
+        );
+        assert!(top_left.1 > 100.0 && top_left.1 < 805.0);
+        assert!(top_right.0 - top_left.0 < 800.0);
+        assert!(top_left.0 > 320.0 && top_right.0 < 1120.0);
+        // The rows stay in order: the window is never turned over.
+        let rows: Vec<f64> = (0..=10)
+            .filter_map(|j| half.point((0.5, f64::from(j) / 10.0)))
+            .map(|p| p.1)
+            .collect();
+        assert!(rows.len() > 2 && rows.windows(2).all(|r| r[0] < r[1]));
+        // Every point shown is in its area.
+        let area = half.bounds().unwrap();
+        for (x, y) in grid().filter_map(|p| half.point(p)) {
+            assert!(area.contains((x as i32, y as i32)), "{x} {y}");
+        }
+    }
+
+    #[test]
+    fn nothing_shows_past_the_edge_of_the_glass_nor_beside_the_icon() {
+        let edge = 816.0 - 11.0;
+        for progress in steps() {
+            let genie = genie(progress);
+            for (x, y) in grid().filter_map(|p| genie.point(p)) {
+                assert!(y <= edge + 1e-9, "{progress}: ({x}, {y}) past the glass");
+                // Within the way from the window to the icon, across.
+                assert!(
+                    (320.0 - 1e-9..=1120.0 + 1e-9).contains(&x),
+                    "{progress}: {x}"
+                );
+            }
+            if let Some(area) = genie.bounds() {
+                assert!(
+                    area.loc.y + area.size.h <= edge as i32 + 2,
+                    "{progress}: {area:?}"
+                );
+            }
+        }
+        // Where it enters the glass, the window is as wide as the icon: it goes into it.
+        let late = genie(0.7);
+        let row = (0..=1000)
+            .rev()
+            .map(|j| f64::from(j) / 1000.0)
+            .find_map(|v| Some((late.point((0.0, v))?, late.point((1.0, v))?)))
+            .unwrap();
+        let ((left, y), (right, _)) = row;
+        assert!(y > edge - 3.0, "{y}");
+        assert!(
+            (left - 900.0).abs() < 3.0 && (right - 952.0).abs() < 3.0,
+            "{left} {right}"
         );
     }
 
     #[test]
-    fn a_dock_above_the_window_mirrors_the_genie() {
-        let up = Genie {
-            window: rect(320.0, 200.0, 800.0, 600.0),
-            icon: rect(900.0, 10.0, 52.0, 52.0),
-            progress: 1.0,
+    fn each_point_moves_toward_the_icon_without_a_jump() {
+        for (u, v) in grid() {
+            let mut last = genie(0.0).point((u, v)).unwrap();
+            for progress in steps().skip(1) {
+                let Some(now) = genie(progress).point((u, v)) else {
+                    break;
+                };
+                assert!(now.1 >= last.1 - 1e-9, "{u} {v} {progress}: goes back up");
+                // 120 frames for at most about 900 pixels, faster at the end.
+                let step = ((now.0 - last.0).powi(2) + (now.1 - last.1).powi(2)).sqrt();
+                assert!(step < 30.0, "{u} {v} {progress}: jumps {step}");
+                last = now;
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_behind_the_glass_at_rest_is_not_cut_at_once() {
+        // Maximized under a dock that does not reserve its room: its bottom behind the glass.
+        let tall = Genie {
+            window: rect(0.0, 36.0, 1440.0, 864.0),
+            ..genie(0.0)
         };
-        // The window's top lands on the icon's top, its bottom on the icon's bottom.
-        let (top, left, right) = up.row(0.0);
-        assert!(close(top, 10.0) && close(left, 900.0) && close(right, 952.0));
-        assert!(close(up.row(1.0).0, 62.0));
-        // At 0 it is the window, the right way up.
-        let rest = Genie {
-            progress: 0.0,
-            ..up
+        assert!(tall.point((0.5, 1.0)).is_some());
+        assert_eq!(tall.bounds().map(|a| a.loc.y + a.size.h), Some(901));
+        // Soon cut at the glass, as the others.
+        let later = Genie {
+            progress: SWEEP,
+            ..tall
         };
-        assert!(close(rest.row(0.0).0, 200.0) && close(rest.row(1.0).0, 800.0));
+        assert!(later.point((0.5, 1.0)).is_none());
+        let shown = grid().filter_map(|p| later.point(p));
+        assert!(shown.into_iter().all(|(_, y)| y <= 805.0 + 1e-9));
+    }
+
+    #[test]
+    fn the_dock_on_any_edge_gives_the_same_genie_turned() {
+        // The bottom case turned a quarter: a dock on the right of a screen of 1440 × 900.
+        let screen = rect(0.0, 0.0, 1440.0, 900.0);
+        let icon = rect(1380.0, 424.0, 52.0, 52.0);
+        assert_eq!(Side::of(icon, screen), Side::Right);
+        assert_eq!(Side::of(rect(8.0, 424.0, 52.0, 52.0), screen), Side::Left);
+        assert_eq!(Side::of(rect(700.0, 8.0, 52.0, 52.0), screen), Side::Top);
+        assert_eq!(
+            Side::of(rect(700.0, 840.0, 52.0, 52.0), screen),
+            Side::Bottom
+        );
+        let bottom = genie(0.6);
+        let turn = |side: Side, (x, y): (f64, f64)| match side {
+            Side::Bottom => (x, y),
+            Side::Right => (y, x),
+            Side::Top => (x, -y),
+            Side::Left => (-y, x),
+        };
+        let rect_of = |side: Side, r: FrameRect| {
+            let a = turn(side, (r.loc.x, r.loc.y));
+            let b = turn(side, (r.loc.x + r.size.w, r.loc.y + r.size.h));
+            rect(
+                a.0.min(b.0),
+                a.1.min(b.1),
+                (a.0 - b.0).abs(),
+                (a.1 - b.1).abs(),
+            )
+        };
+        for side in [Side::Right, Side::Top, Side::Left] {
+            let turned = Genie {
+                window: rect_of(side, bottom.window),
+                icon: rect_of(side, bottom.icon),
+                side,
+                ..bottom
+            };
+            for (u, v) in grid() {
+                // The same point of the window, its coordinates turned with it.
+                let (x, y) = (320.0 + 800.0 * u, 100.0 + 600.0 * v);
+                let (tx, ty) = turn(side, (x, y));
+                let w = turned.window;
+                let at = ((tx - w.loc.x) / w.size.w, (ty - w.loc.y) / w.size.h);
+                let expected = bottom.point((u, v)).map(|p| turn(side, p));
+                let got = turned.point(at);
+                match (expected, got) {
+                    (None, None) => {}
+                    (Some(e), Some(g)) => {
+                        assert!(
+                            (e.0 - g.0).abs() < 1e-6 && (e.1 - g.1).abs() < 1e-6,
+                            "{side:?}"
+                        )
+                    }
+                    _ => panic!("{side:?} {u} {v}: {expected:?} {got:?}"),
+                }
+            }
+        }
     }
 
     #[test]
