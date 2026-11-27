@@ -3139,6 +3139,17 @@ as the compositor orders them (lot Q-14): at every step, the glass and what is u
 pixel for pixel as without the window. Without Mesa's EGL (`libegl-mesa0`) the test says it
 has nothing to draw with, and fails on the CI, which installs it.
 
+**Board with the real dock** (lot D-19b, ignored: it needs `cargo build -p dock`, Mesa's EGL and
+lavapipe). `cargo test -p compositor --test headless -- --ignored genie_board` runs the real
+dock against the test compositor, on its own folders, with a decorated window whose
+application has an icon in it, minimizes it and draws eight steps of the way with Mesa's
+software renderer. The dock draws with wgpu on lavapipe (Mesa's software Vulkan), so that its
+glass is translucent as on the machine: the test hands lavapipe's manifest under the name the
+dock keeps on a machine with an AMD chip (ADR 0018) and through `VK_DRIVER_FILES` elsewhere.
+In `target/tmp`: `genie-board.png` (bottom of 1920 × 1080, dark then light), `genie-left.png`
+and `genie-right.png` (1280 × 800), `genie-small.png` (800 × 600) and `genie-hover.png` (the
+pointer on the icon, magnified).
+
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):
 

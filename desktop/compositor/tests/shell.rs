@@ -1459,6 +1459,50 @@ mod tests {
         );
     }
 
+    /// Lot D-21d: the band a hidden dock keeps at the bottom of the screen takes the pointer
+    /// over a fullscreen window, which has the pointer until then: anchored surfaces of the
+    /// top layer come before every window, fullscreen ones included. A button held in the
+    /// window keeps the pointer there (the implicit grab of a drag), as for any surface.
+    #[test]
+    fn a_hidden_dock_takes_the_pointer_at_the_edge_over_a_fullscreen_window() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Film");
+        let window = h.titled("Film");
+        toplevel.set_fullscreen(None);
+        surface.commit();
+        h.run_until("fullscreen", |_| pending(&window) == Some((800, 600)));
+        h.app.draw(&surface, 800, 600);
+        h.run_until("drawn fullscreen", |h| {
+            h.state.space.element_geometry(&window).map(|g| g.size) == Some((800, 600).into())
+        });
+        // The dock hides as the real one does: no zone, all but 2 of its 76 below the edge.
+        let (dock_surface, dock) = h.dock();
+        dock.set_exclusive_zone(-1);
+        dock.set_margin(0, 0, 2 - 76, 0);
+        dock_surface.commit();
+        for _ in 0..10 {
+            h.turn();
+        }
+        let pointer = h.state.seat.get_pointer().unwrap();
+        let film = window.wl_surface().map(|s| s.into_owned());
+        // Only the window and the dock are there: a focus that is not the window is the dock.
+        let on_dock = |focus: Option<_>| focus.is_some() && focus != film;
+        // Above the band: the fullscreen window.
+        h.state.pointer_motion((400.0, 590.0).into(), 1);
+        assert_eq!(pointer.current_focus(), film);
+        // The last row of the screen, where the pointer stops: the dock.
+        h.state.pointer_motion((400.0, 599.0).into(), 2);
+        assert!(on_dock(pointer.current_focus()), "the band of the dock");
+        // A button held in the window: it keeps the pointer down to the edge.
+        h.state.pointer_motion((400.0, 590.0).into(), 3);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+        h.state.pointer_motion((400.0, 599.0).into(), 5);
+        assert_eq!(pointer.current_focus(), film);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+        h.state.pointer_motion((401.0, 599.0).into(), 7);
+        assert!(on_dock(pointer.current_focus()), "released, the dock again");
+    }
+
     /// Lot D-18d: a snapped window covers its screen for the dock (version 2), which then gives
     /// up its zone: the window takes the whole height, still 8 from the edges. A client of
     /// version 1 (the bar) is not told.

@@ -66,9 +66,13 @@ fn windows(covered: &[&str]) -> Message {
     Message::Windows(windows)
 }
 
+/// Lets everything end: a wait that ends (the pointer resting on the band, lot D-21d) may
+/// start a slide, which the next tick lets end.
 fn settle(dock: &mut Dock) {
-    let end = dock.now() + Duration::from_secs(3);
-    let _ = dock.tick(end);
+    for _ in 0..2 {
+        let end = dock.now() + Duration::from_secs(3);
+        let _ = dock.tick(end);
+    }
     assert!(!dock.animating(), "at rest");
 }
 
@@ -273,9 +277,33 @@ fn each_window_gets_the_rectangle_of_its_icon_on_the_screen() {
     settle(&mut dock);
     assert_eq!(recorder.places().len(), count, "nothing sent again");
 
-    // The pointer leaves, a window covers the screen, the dock hides: each icon is laid flat
-    // in the band along the edge, where the genie then goes (lot D-19e).
+    // Lot D-21d: a click minimizes the terminal under the pointer: the compositor first gets
+    // the icons as drawn, the terminal magnified, so that the genie lands on it.
+    let Placeholder(mut open) = Placeholder::new("terminal", Some("terminal"));
+    open.controllable = true;
+    let _ = dock.update(Message::Windows(open));
+    let _ = dock.update(Message::Pointer(Pointer::Moved(icon.center())));
+    dock.frame(dock.now() + Duration::from_secs(2));
+    let before = recorder.places().len();
+    let magnified = dock.layout(dock.now()).icons[2];
+    assert!(magnified.width > 80.0, "magnified under the pointer");
+    dock.click(2);
+    let places = recorder.places();
+    assert_eq!(
+        places.len(),
+        before + 1,
+        "sent as drawn, before the request"
+    );
+    let sent = places[before][2].rectangle;
+    assert!(sent.2 > 80 && sent.3 > 80, "{sent:?}: the magnified icon");
+    // The pointer leaves: back at rest.
     let _ = dock.update(Message::Pointer(Pointer::Left));
+    let places = recorder.places();
+    assert_eq!(places.len(), before + 2);
+    assert_eq!(places[before + 1][2].rectangle.2, 52);
+
+    // A window covers the screen, the dock hides: each icon is laid flat in the band along the
+    // edge, where the genie then goes (lot D-19e).
     let _ = dock.update(windows(&[SCREEN]));
     settle(&mut dock);
     assert!(dock.hide.hidden());
