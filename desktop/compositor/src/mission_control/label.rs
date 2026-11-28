@@ -36,15 +36,15 @@ pub struct Label {
     pub scale: f32,
     pub background: Color,
     pub color: Color,
-    /// The « × » of a window under the pointer (lot D-33c): a disc and the close icon of the
-    /// title bars, no text.
-    pub close: bool,
+    /// A round button instead of a pill of text (lot D-33c): a disc and this icon, an SVG path
+    /// on the grid of the title bars' icons (the « × » of a window, the « + » of the strip).
+    pub icon: Option<&'static str>,
 }
 
 impl Label {
     pub fn hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        (&self.text, self.size, self.scale.to_bits(), self.close).hash(&mut hasher);
+        (&self.text, self.size, self.scale.to_bits(), self.icon).hash(&mut hasher);
         for c in [self.background, self.color] {
             (c.r, c.g, c.b, c.a.to_bits()).hash(&mut hasher);
         }
@@ -76,11 +76,10 @@ pub fn draw(label: &Label) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(w, h)?;
     let (wf, hf, s) = (w as f32, h as f32, label.scale);
     let radius = (mc::LABEL_RADIUS * s).min(hf / 2.0);
-    if label.close {
+    if let Some(icon) = label.icon {
         let side = wf.min(hf);
         let disc = raster::rounded((0.0, 0.0, side, side), side / 2.0, side / 2.0);
         raster::fill(&mut pixmap, disc, label.background);
-        let icon = ui::Button::Close.icon(false);
         raster::stroke_icon(
             &mut pixmap,
             icon,
@@ -169,7 +168,11 @@ impl Labels {
         self.textures.retain(|(key, _), _| {
             !matches!(
                 key.part,
-                Part::Label | Part::CloseButton | Part::ThumbnailLabel(_)
+                Part::Label
+                    | Part::CloseButton
+                    | Part::ThumbnailLabel(_)
+                    | Part::ThumbnailClose(_)
+                    | Part::AddWorkspace
             )
         });
     }
@@ -201,7 +204,7 @@ mod tests {
             scale: 1.0,
             background: Color::rgb(0, 0, 0),
             color: Color::rgb(255, 255, 255),
-            close: false,
+            icon: None,
         };
         let pixmap = draw(&label).unwrap();
         // Some white of the text in the middle of the black pill.

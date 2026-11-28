@@ -2627,6 +2627,14 @@ released after it. A window without content gets no miniature in a thumbnail.
   workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
   workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
   over. The strip comes down from above the screen as the view opens.
+- **Adding and removing workspaces** (lot D-33c). A « + » of 32 (`ADD_SIZE`) follows the
+  thumbnails, 16 after the last one, while there are fewer than 9: a click adds a workspace at
+  the end, whose thumbnail fades in over 250 ms (`ARRIVAL`). The thumbnail under the pointer
+  shows a « × » on its top left corner while another workspace remains: a click removes that
+  workspace (`State::remove_workspace`). Its windows go to the workspace before it (after it
+  for the first one), the next ones take its place and its number, and the active one stays
+  (or becomes the one the windows went to). The bar follows through `ext-workspace-v1`. The
+  number is the session's until it ends: the session's `--workspaces` is not rewritten.
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
