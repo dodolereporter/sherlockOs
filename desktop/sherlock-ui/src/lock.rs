@@ -127,6 +127,23 @@ pub mod screen {
         fit(height, 0.07, 24.0, 96.0)
     }
 
+    /// The discreet line of the bottom corner (lot D-25i): the network, the keyboard layout
+    /// and the battery, its icons, its text, the gap between them and the margin from the
+    /// corner of the screen.
+    pub const STATUS_ICON: f32 = 16.0;
+    pub const STATUS_TEXT_SIZE: f32 = 12.0;
+    pub const STATUS_GAP: f32 = 16.0;
+    pub const STATUS_MARGIN: f32 = 24.0;
+
+    /// Towards a restart or a power off (lot D-25i): Sherlock waves for `DEPART_WAVE`, then
+    /// the screen fades to black over `DEPART_FADE` and the command runs. Still there
+    /// `DEPART_GIVE_UP` later (logind refused, an inhibitor), the screen comes back.
+    pub const DEPART_WAVE: Duration = Duration::from_millis(1400);
+    pub const DEPART_FADE: Duration = Duration::from_millis(600);
+    pub const DEPART_GIVE_UP: Duration = Duration::from_secs(12);
+    /// The black the screen fades to, as a screen switched off.
+    pub const DEPART_BLACK: Color = Color::rgb(0, 0, 0);
+
     /// Entrance: each element rises by `RISE` and fades in, `STAGGER` after the one before,
     /// on the spring of a window that opens. The first key ends every animation at once.
     pub const RISE: f32 = 16.0;
