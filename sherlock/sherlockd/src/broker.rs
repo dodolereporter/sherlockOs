@@ -198,9 +198,11 @@ impl Broker {
         })
     }
 
-    /// Writes the outcome of the call of request `id`.
-    pub fn outcome(&mut self, id: u64, tool: &str, outcome: &str) {
-        if let Err(error) = self.journal.outcome(id, tool, outcome) {
+    /// Writes the outcome of the call of request `id`, with the tool's error when it failed
+    /// (a refused path, A-13), cut to 512 characters.
+    pub fn outcome(&mut self, id: u64, tool: &str, outcome: &str, error: Option<&str>) {
+        let error = error.map(|e| crate::own_server::cut(e, 512));
+        if let Err(error) = self.journal.outcome(id, tool, outcome, error.as_deref()) {
             tracing::error!(%error, tool, "consent journal not written");
         }
     }
@@ -271,8 +273,18 @@ impl Journal {
         }))
     }
 
-    fn outcome(&mut self, id: u64, tool: &str, outcome: &str) -> io::Result<()> {
-        self.write(json!({ "time": seconds(), "id": id, "tool": tool, "outcome": outcome }))
+    fn outcome(
+        &mut self,
+        id: u64,
+        tool: &str,
+        outcome: &str,
+        error: Option<&str>,
+    ) -> io::Result<()> {
+        let mut line = json!({ "time": seconds(), "id": id, "tool": tool, "outcome": outcome });
+        if let Some(error) = error {
+            line["error"] = Value::String(error.to_owned());
+        }
+        self.write(line)
     }
 
     /// One line, written at once: `serde_json` escapes every line break of the values, so
@@ -354,7 +366,7 @@ mod tests {
         assert!(permit.allows("ranger", Level::Action, &args));
         assert!(!permit.allows("ranger", Level::Action, &json!({ "path": "/" })));
         assert!(!permit.allows("vider", Level::Action, &args));
-        broker.outcome(permit.id(), "ranger", "ok");
+        broker.outcome(permit.id(), "ranger", "ok", None);
         // Refused, or nobody to ask: no permit.
         for decision in [Decision::Denied, Decision::Unavailable] {
             let refused = broker.authorize("vider", Level::Destructive, &args).await;

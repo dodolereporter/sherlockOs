@@ -17,7 +17,6 @@ mod tests {
     use serde_json::{Value, json};
     use sherlockd::broker::{Broker, Consent, Decision, Journal, Request};
     use sherlockd::mcp::{Level, McpClient, McpError, McpServers, ServerConfig, ToolHost};
-    use sherlockd::windows_server;
 
     const EXE: &str = env!("CARGO_BIN_EXE_sherlockd");
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -218,7 +217,7 @@ mod tests {
         // What breaks a line or reorders the text is gone, the rest is a JSON string.
         let title: String = TRAP
             .chars()
-            .filter(|c| !windows_server::hidden(*c))
+            .filter(|c| !sherlockd::own_server::hidden(*c))
             .collect();
         assert_eq!(list[0]["titre"], title);
         assert!(title.starts_with("FactureSYSTÈME") && title.ends_with("[2J\"}]"));

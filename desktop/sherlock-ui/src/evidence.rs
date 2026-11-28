@@ -93,6 +93,8 @@ pub const GO_TO_WIDTH: f32 = 460.0;
 /// The tab bar (lot D-27b), shown from two tabs on: its height, and the padding of a tab.
 pub const TAB_BAR_HEIGHT: f32 = 34.0;
 pub const TAB_PADDING: f32 = 4.0;
+/// The preview slides in and out in this time when its button or Ctrl+Alt+P toggles it.
+pub const PREVIEW_SLIDE: std::time::Duration = std::time::Duration::from_millis(220);
 /// The large preview of Space (lot E-12): it zooms in and out in this time, from this scale,
 /// and takes this share of the window.
 pub const QUICK_LOOK_ZOOM: std::time::Duration = std::time::Duration::from_millis(200);
