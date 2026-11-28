@@ -79,6 +79,12 @@ pub const LABEL_FADE_MS: u64 = 120;
 // Motion of lot D-21c, after macOS: the dot of an application that opens or closes its last
 // window fades, and the menu of an icon unfolds from the icon like the menus of the bar.
 
+/// A swipe down over an icon opens App Expose once the scroll it sends goes this far down
+/// (logical pixels; a notch of a mouse wheel is enough), each scroll coming within
+/// `EXPOSE_SWIPE_GAP` of the previous one. A choice of D-21c2, to review on the machine.
+pub const EXPOSE_SWIPE: f32 = 40.0;
+pub const EXPOSE_SWIPE_GAP: Duration = Duration::from_millis(250);
+
 /// The dot under an icon appearing or going: the fade of an icon arriving.
 pub const DOT_FADE: Duration = ICON_FADE;
 /// The menu of an icon opening and closing: the spring, fade and scale of the bar's panels.
@@ -111,10 +117,25 @@ pub const DRAG_THRESHOLD: f32 = 4.0;
 /// Opacity of an icon dragged out of the dock, where letting it go removes it.
 pub const DRAG_OUT_OPACITY: f32 = 0.5;
 
+/// A pinned application let go out of the dock goes up in a puff of smoke, as on macOS (lot
+/// D-21d): its duration, its puffs set around the icon, how far they drift and how big they
+/// grow, as shares of the icon side. Choices of D-21d, to review with the design.
+pub const POOF_DURATION: Duration = Duration::from_millis(400);
+pub const POOF_PUFFS: usize = 5;
+pub const POOF_DRIFT: (f32, f32) = (0.10, 0.42);
+pub const POOF_RADIUS: (f32, f32) = (0.20, 0.34);
+/// An open application dragged across the separator changes side once the pointer is this
+/// share of an icon past it: it does not flap back and forth on the line.
+pub const CROSS_MARGIN: f32 = 0.25;
+
 // Hiding (batch D-18c2): `AutoHide`, `docs/dock.md`.
 
 /// Band along the screen edge where a hidden dock still takes the pointer, to come back.
 pub const HIDE_STRIP: f32 = 2.0;
+/// How long the pointer rests against that band before the dock comes back (lot D-21d): as on
+/// macOS, a short wait, so that a pointer passing by the edge, or aiming at the bottom of a
+/// fullscreen window, does not bring it out by mistake.
+pub const REVEAL_DELAY: Duration = Duration::from_millis(150);
 /// A dock that came back over a maximized window hides again this long after the pointer left
 /// it.
 pub const HIDE_DELAY: Duration = Duration::from_millis(300);
@@ -140,6 +161,8 @@ pub mod text {
     /// The button that opens the applications view (D-41), in its label and menu.
     pub const APPLICATIONS: &str = "Applications";
     pub const QUIT: &str = "Quitter";
+    /// App Expose (lot D-21c2): Mission Control on the windows of one application.
+    pub const SHOW_ALL: &str = "Afficher toutes les fenêtres";
     /// Title of the dock's own menu: a right click on its separator or between its icons.
     pub const DOCK: &str = "Dock";
     /// The entry of the dock's own menu that puts Sherlock back, or takes it out (checked).
@@ -263,6 +286,19 @@ mod styles {
                 ..tint
             };
             fill(tint, border::rounded(DOT / 2.0))
+        }
+    }
+
+    /// A puff of the smoke of an unpinned application, at `opacity`: the secondary text color,
+    /// light in the dark theme and dark in the light one, like a cloud over the desktop.
+    pub fn poof(radius: f32, opacity: f32) -> impl Fn(&Theme) -> container::Style {
+        move |theme| {
+            let tint = palette(theme).text_secondary;
+            let tint = Color {
+                a: tint.a * opacity.clamp(0.0, 1.0),
+                ..tint
+            };
+            fill(tint, border::rounded(radius))
         }
     }
 

@@ -17,8 +17,8 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 use crate::State;
 
 /// Version of the global. Version 2 adds the `snapped` state of a screen, version 3 the global
-/// menu.
-const VERSION: u32 = 3;
+/// menu, version 4 `show_windows` for App Expose.
+const VERSION: u32 = 4;
 
 /// First version with the global menu.
 const APP_MENU_SINCE: u32 = 3;
@@ -229,6 +229,12 @@ impl Dispatch<SherlockShellManagerV1, ()> for State {
             }),
             Request::UnregisterAppMenu { service, path } => {
                 state.unregister_app_menu(&service, &path);
+            }
+            Request::ShowWindows { windows } => {
+                let (ids, _) = windows.as_chunks::<4>();
+                let ids: Vec<u32> = ids.iter().map(|c| u32::from_ne_bytes(*c)).collect();
+                tracing::debug!(?ids, "app expose asked by the shell");
+                state.show_windows(ids);
             }
             _ => {}
         }

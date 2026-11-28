@@ -20,7 +20,7 @@ use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::motion::Fade;
 
-use crate::anim::{Launch, Leaving, Track};
+use crate::anim::{Launch, Leaving, Poof, Track};
 use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::hide::{self, Hide};
@@ -29,7 +29,6 @@ use crate::items::{self, Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
-use crate::pins;
 use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
 /// The menu of an icon, or the dock's own, while it is open.
@@ -68,15 +67,21 @@ pub enum Message {
     Gesture(Gesture),
     /// The configuration file changed.
     Config(Box<DockConfig>),
+    /// The icons looked up again, off the interface thread, for the icon theme of the file.
+    Icons(Option<String>, Box<IconLookup>),
     Key(Key),
     /// The modifiers held: Ctrl with a click asks for a new window.
     Modifiers(keyboard::Modifiers),
+    /// A scroll over the dock: a swipe down over an icon opens App Expose.
+    Scroll(mouse::ScrollDelta),
     Focus(Direction),
     MenuHover(usize),
     MenuPick(Entry),
     Closed(Id),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
+    /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
+    IconDrawn,
 }
 
 /// A screen, as the dock needs it.
@@ -142,6 +147,8 @@ pub struct Dock {
     pub launches: Vec<Launch>,
     /// The icon let go out of the dock, which vanishes where it is.
     dropping: Option<Target>,
+    /// The puffs of smoke of the applications unpinned by a drag out of the dock.
+    pub poofs: Vec<Poof>,
     /// The left button held on an icon: a click, or a drag.
     pub(crate) press: Option<Press>,
     /// Opacity of the label, and the icon it names.
@@ -159,6 +166,9 @@ pub struct Dock {
     pub(crate) menu: Option<OpenMenu>,
     /// The modifiers held, as the keyboard last told the dock.
     modifiers: keyboard::Modifiers,
+    /// The swipe down in progress: its icon, how far down it went (`NEG_INFINITY` once it
+    /// opened App Expose), when its last scroll came.
+    swipe: Option<(Target, f32, Duration)>,
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
@@ -172,6 +182,8 @@ pub struct Dock {
     sent: Sent,
     /// The icons last placed on their screen (`Control::place`).
     placed: Vec<IconPlace>,
+    /// Writes the pinned list on a thread of its own.
+    saver: crate::save::Saver,
 }
 
 impl Dock {
@@ -192,6 +204,7 @@ impl Dock {
             leaving: Vec::new(),
             launches: Vec::new(),
             dropping: None,
+            poofs: Vec::new(),
             press: None,
             // Hidden, and already still: no frame for it at startup.
             label: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
@@ -204,6 +217,7 @@ impl Dock {
             focus: None,
             menu: None,
             modifiers: keyboard::Modifiers::empty(),
+            swipe: None,
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
@@ -212,6 +226,7 @@ impl Dock {
             screens: None,
             sent: Sent::default(),
             placed: Vec::new(),
+            saver: crate::save::Saver::default(),
         };
         dock.rebuild(false);
         dock
@@ -313,12 +328,27 @@ impl Dock {
     /// dock is hidden, each icon is laid flat along the edge (lot D-19e): a window minimized
     /// then goes into the edge, where the dock hides, not to an empty place above it.
     fn place_icons(&mut self) {
+        let sizes = self.geometry.targets(None, self.items.len());
+        let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
+        self.place_icons_as(&rest);
+    }
+
+    /// Tells the compositor where the icons are drawn now, magnified under the pointer, before
+    /// a window is minimized into one of them (lot D-21d): the genie lands on the icon as it
+    /// is seen, not a few pixels beside it where it rests. Sent once, as the request goes; the
+    /// icons at rest are sent again when the pointer leaves the dock.
+    fn place_drawn_icons(&mut self) {
+        let drawn = self.layout(self.now);
+        self.place_icons_as(&drawn);
+    }
+
+    /// Tells the control where the icons of `layout` are on their screen, when that changed.
+    fn place_icons_as(&mut self, layout: &Layout) {
         let Some((name, size)) = self.screen().and_then(|s| Some((s.name.clone()?, s.size?)))
         else {
             return;
         };
-        let sizes = self.geometry.targets(None, self.items.len());
-        let rest = Layout::new(self.geometry, self.surface_size, &sizes, self.separator);
+        let rest = layout;
         let distance = 0;
         let hidden = self.hide.hidden();
         let placed: Vec<_> = self
@@ -504,6 +534,7 @@ impl Dock {
             || !self.label.is_done(self.now)
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
+            || !self.poofs.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
             || self.hide.running(self.busy())
     }
@@ -545,6 +576,7 @@ impl Dock {
             keyboard::listen().filter_map(on_key),
             config,
             frames,
+            sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
     }
 
@@ -633,6 +665,7 @@ impl Dock {
                 return self.tick(instant.saturating_duration_since(self.origin));
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::IconDrawn => {}
             Message::Windows(windows) => {
                 self.clock();
                 // The first list is the dock at startup: in place at once.
@@ -644,8 +677,20 @@ impl Dock {
             }
             Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
+            Message::Icons(theme, lookup) => {
+                // A lookup for a theme the file no longer names came late: the newer one comes.
+                if theme == self.sources.config.icon_theme {
+                    self.sources.lookup = *lookup;
+                    self.glyphs.clear();
+                    return self.refresh(self.geometry);
+                }
+            }
             Message::Key(key) => return self.key(key),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Scroll(delta) => {
+                let now = self.clock();
+                self.scroll(delta, now);
+            }
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
                     Direction::Next => Key::Next,
@@ -680,17 +725,11 @@ impl Dock {
     /// Applies a configuration read from the file: settings, icon theme, pinned list.
     pub fn configure(&mut self, config: DockConfig) -> Task<Message> {
         let previous = self.geometry;
+        let mut icons = Task::none();
         if config.icon_theme != self.sources.config.icon_theme {
-            let theme = config
-                .icon_theme
-                .clone()
-                .or_else(|| self.sources.gtk_theme.clone());
-            self.sources.lookup = IconLookup::new(
-                &self.sources.data_dirs,
-                self.sources.home.as_deref(),
-                theme.as_deref(),
-            );
-            self.glyphs.clear();
+            // Reading the themes' folders takes as long as the disk wants: on a thread of its
+            // own, the icons of the old theme shown meanwhile.
+            icons = self.look_up_icons(config.icon_theme.clone());
         }
         if let Some(pinned) = &config.pinned {
             self.pinned.clone_from(pinned);
@@ -701,7 +740,31 @@ impl Dock {
         self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
         let refreshed = self.refresh(previous);
-        Task::batch([refreshed, self.follow_windows()])
+        Task::batch([refreshed, self.follow_windows(), icons])
+    }
+
+    /// Looks the icons up for the icon theme `named` by the file (the GTK one without), on a
+    /// thread of its own; `Message::Icons` brings them back.
+    fn look_up_icons(&self, named: Option<String>) -> Task<Message> {
+        let theme = named.clone().or_else(|| self.sources.gtk_theme.clone());
+        let dirs = self.sources.data_dirs.clone();
+        let home = self.sources.home.clone();
+        let (sender, receiver) = iced::futures::channel::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name(String::from("dock-icons"))
+            .spawn(move || {
+                let lookup = IconLookup::new(&dirs, home.as_deref(), theme.as_deref());
+                let _ = sender.send(lookup);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "cannot start the thread that looks the icons up");
+            return Task::none();
+        }
+        Task::future(async move {
+            let lookup = receiver.await.ok()?;
+            Some(Message::Icons(named, Box::new(lookup)))
+        })
+        .and_then(Task::done)
     }
 
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
@@ -846,6 +909,7 @@ impl Dock {
             launch.bounce.time_out(now);
         }
         self.launches.retain(|l| !l.bounce.is_done(now));
+        self.poofs.retain(|p| !p.is_done(now));
         let count = self.leaving.len();
         self.leaving.retain(|l| !l.track.is_gone(now));
         if self.leaving.len() == count {
@@ -887,10 +951,12 @@ impl Dock {
                 press.pointer = point;
                 if !press.dragging && press.past_threshold() {
                     let target = press.target.clone();
+                    // A pinned application, or an open one that a drop among the pinned ones
+                    // pins (lot D-21d).
                     let draggable = self
                         .index_of(&target)
                         .and_then(|i| self.items.get(i))
-                        .is_some_and(|i| i.pinned && i.pin_id().is_some());
+                        .is_some_and(|i| i.entry().is_some() || (i.pinned && i.pin_id().is_some()));
                     if let Some(press) = self.press.as_mut() {
                         press.dragging = draggable;
                     }
@@ -923,9 +989,16 @@ impl Dock {
         if out {
             return Task::none();
         }
+        if let Some(crossed) = self.cross(index, &layout, press.pointer) {
+            return crossed;
+        }
         // Among the orders the pinned icons can take, the one that puts the icon nearest the
         // pointer.
         let pinned = self.separator.unwrap_or(self.items.len());
+        if index >= pinned {
+            // An open application on its side of the separator: it only follows the pointer.
+            return Task::none();
+        }
         let sides: Vec<f32> = self
             .tracks
             .iter()
@@ -976,6 +1049,46 @@ impl Dock {
         Task::none()
     }
 
+    /// The held icon of `index` crossed the separator (lot D-21d): an open application dragged
+    /// among the pinned ones is pinned there, at the end of them, the next moves putting it in
+    /// its place; a pinned application that is open, dragged after the separator, is unpinned.
+    /// The others make room as the icons are built again. `None` when it did not cross.
+    fn cross(&mut self, index: usize, layout: &Layout, pointer: Point) -> Option<Task<Message>> {
+        let item = self.items.get(index)?;
+        let id = item.entry()?.id.clone();
+        let along = layout.along(pointer);
+        let side = self.geometry.icon;
+        // Where the two sides meet: the separator, or past the last other icon without one.
+        let border = match layout.separator {
+            Some(separator) => layout.along(separator.center()),
+            None => {
+                (0..self.items.len())
+                    .filter(|&i| i != index)
+                    .filter_map(|i| layout.middle(i))
+                    .fold(f32::NEG_INFINITY, f32::max)
+                    + side / 2.0
+            }
+        };
+        let margin = side * dock::CROSS_MARGIN;
+        let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        let pins = !item.pinned && along < border - margin;
+        let unpins = item.pinned && open && along > border + margin;
+        if pins || unpins {
+            // Sherlock keeps the place it is shown at (lot D-21h), whatever the list becomes.
+            self.list_sherlock();
+        }
+        if pins {
+            tracing::info!(app = id, "pinned by a drag");
+            self.pinned.push(id);
+        } else if unpins {
+            tracing::info!(app = id, "unpinned by a drag");
+            self.pinned.retain(|p| *p != id);
+        } else {
+            return None;
+        }
+        Some(self.refresh(self.geometry))
+    }
+
     /// The button came up: a click when the icon was not dragged; otherwise the icon flies to
     /// its place and the new order is written, or, out of the dock, it is unpinned.
     fn release(&mut self, now: Duration) -> Task<Message> {
@@ -988,7 +1101,7 @@ impl Dock {
             return Task::none();
         };
         if !press.dragging {
-            if held.icon_at(press.pointer) != Some(index) {
+            if held.icon_for(press.pointer) != Some(index) {
                 return Task::none();
             }
             // Ctrl+click: a new window, as a click of the middle button.
@@ -1006,6 +1119,16 @@ impl Dock {
         let (from, to) = (held.offset(*drawn), free.offset(*place));
         let by = (from.0 - to.0, from.1 - to.1);
         let open = self.open_windows(index).is_some_and(|(n, _)| n > 0);
+        // A pinned application let go out of the dock goes up in smoke, as on macOS; an open
+        // one comes back after the separator, out of the smoke.
+        if press.out && self.items[index].pinned {
+            let center = drawn.center();
+            self.poofs.push(Poof {
+                at: (center.x, center.y),
+                side: self.geometry.icon,
+                start: now,
+            });
+        }
         if press.out && !open {
             // It stays where it was let go, and vanishes there.
             let current = self.tracks[index].slot(now).shift;
@@ -1069,6 +1192,11 @@ impl Dock {
                 }
                 let hide = self.apply_hide();
                 if self.hover(point, now) {
+                    if !self.hovering {
+                        // The icons are back at rest: so are their rectangles, if the drawn
+                        // ones were sent for a minimize.
+                        self.place_icons();
+                    }
                     return Task::batch([hide, self.input_region()]);
                 }
                 return hide;
@@ -1076,7 +1204,16 @@ impl Dock {
             Pointer::Pressed(button) => {
                 // Like `:focus-visible`: the mouse removes the keyboard ring.
                 self.focus = None;
-                let target = self.pointer.and_then(|p| self.layout(now).icon_at(p));
+                let layout = self.layout(now);
+                let target = self.pointer.and_then(|p| {
+                    // A right click on the bar between two icons or on the separator opens the
+                    // dock's own menu (lot D-21h); elsewhere a space goes to the nearest icon
+                    // (lot D-21f).
+                    let own = button == mouse::Button::Right
+                        && layout.bar.contains(p)
+                        && layout.icon_at(p).is_none();
+                    if own { None } else { layout.icon_for(p) }
+                });
                 match (button, target, self.pointer) {
                     (mouse::Button::Left, Some(index), Some(point)) => {
                         let target = self.items[index].target();
@@ -1119,7 +1256,7 @@ impl Dock {
     }
 
     /// Where the surface takes the pointer: the band of a hidden dock, otherwise
-    /// `Geometry::input_region`.
+    /// `Geometry::input_region` stretched to the screen edge.
     pub fn input_area(&self) -> iced::Rectangle {
         if self.hide.hidden() {
             return self.geometry.strip(self.surface_size);
@@ -1130,13 +1267,10 @@ impl Dock {
             self.separator,
             self.hovering,
         );
-        if self.hide.hides() {
-            // Brought back over a window: up to the screen edge, gap included, so that the
-            // pointer between the bar and the edge keeps it.
-            self.geometry.to_edge(region, self.surface_size)
-        } else {
-            region
-        }
+        // Up to the screen edge, gap included (lot D-21f): a click pushed against the edge
+        // reaches the icon of its column, and a dock brought back over a window keeps the
+        // pointer there.
+        self.geometry.to_edge(region, self.surface_size)
     }
 
     fn key(&mut self, key: Key) -> Task<Message> {
@@ -1200,6 +1334,56 @@ impl Dock {
             unpin: pinned && item.and_then(Item::pin_id).is_some(),
             act: item.is_some_and(|i| i.entry().is_some() || matches!(i.kind, Kind::Window(_)))
                 && self.controllable(),
+            expose: self.windows.as_ref().is_some_and(|w| w.expose)
+                && self.windows_of(index).iter().any(|w| !w.minimized),
+        }
+    }
+
+    /// App Expose on the windows of icon `index` that are not minimized.
+    pub fn expose(&mut self, index: usize) {
+        let ids: Vec<u64> = self
+            .windows_of(index)
+            .iter()
+            .filter(|w| !w.minimized)
+            .map(|w| w.id)
+            .collect();
+        if !ids.is_empty() && self.windows.as_ref().is_some_and(|w| w.expose) {
+            self.sources.control.show_windows(&ids);
+        }
+    }
+
+    /// A scroll over the dock at `now`. Down over an icon with windows, past
+    /// `dock::EXPOSE_SWIPE`, opens App Expose once; the swipe starts again after a pause of
+    /// `dock::EXPOSE_SWIPE_GAP` or over another icon. Down is the fingers going down on a
+    /// touchpad with natural scrolling (the default of the desktop settings), or a mouse wheel
+    /// turned towards the user.
+    fn scroll(&mut self, delta: mouse::ScrollDelta, now: Duration) {
+        let down = match delta {
+            mouse::ScrollDelta::Pixels { y, .. } => y,
+            mouse::ScrollDelta::Lines { y, .. } => -y * dock::EXPOSE_SWIPE,
+        };
+        let Some(index) = self.pointer.and_then(|p| self.layout(now).icon_at(p)) else {
+            self.swipe = None;
+            return;
+        };
+        let target = self.items[index].target();
+        let gone = match &self.swipe {
+            Some((t, _, last)) => {
+                *t != target || now.saturating_sub(*last) > dock::EXPOSE_SWIPE_GAP
+            }
+            None => true,
+        };
+        let far = if gone {
+            0.0
+        } else {
+            self.swipe.as_ref().map_or(0.0, |s| s.1)
+        };
+        let far = (far + down).max(0.0);
+        if far >= dock::EXPOSE_SWIPE {
+            self.expose(index);
+            self.swipe = Some((target, f32::NEG_INFINITY, now));
+        } else {
+            self.swipe = Some((target, far, now));
         }
     }
 
@@ -1302,7 +1486,10 @@ impl Dock {
                     }
                 }
             }
-            Click::Minimize => self.request(index, Request::Minimize),
+            Click::Minimize => {
+                self.place_drawn_icons();
+                self.request(index, Request::Minimize);
+            }
         }
     }
 
@@ -1535,6 +1722,10 @@ impl Dock {
                 self.activate(index, What::Action(action));
                 Task::none()
             }
+            Entry::ShowAll => {
+                self.expose(index);
+                Task::none()
+            }
             Entry::Keep => self.keep(index),
             Entry::Unpin => self.unpin(index),
             Entry::Quit => {
@@ -1604,15 +1795,16 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration, read again just before (`pins::write`),
-    /// and rebuilds the dock.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The writing is done
+    /// off the interface thread (`save::Saver`); the file is read again first and only its list
+    /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
+    /// so a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
-        if let Some(path) = &self.sources.config_path
-            && let Err(error) = pins::write(path, &self.pinned, self.sherlock)
-        {
-            tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
+        if let Some(path) = &self.sources.config_path {
+            self.saver
+                .save(path.clone(), self.pinned.clone(), self.sherlock);
         }
         self.refresh(self.geometry)
     }
