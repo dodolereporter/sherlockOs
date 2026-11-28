@@ -27,11 +27,6 @@ use crate::mcp::Level;
 
 /// How long the user has to answer. Past it, the call is refused.
 pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(60);
-/// Refusals of the user (or requests left unanswered) in one session, after which nothing more
-/// is asked: the calls beyond read are refused at once (`Decision::Stopped`). A model obeying a
-/// hidden instruction may ask again and again until a tired user grants (consent fatigue);
-/// each session is one request of Claude Code's (one proxy) or one agent.
-pub const MAX_REFUSALS: usize = 3;
 /// Bytes of the arguments shown in the window and written to the journal.
 pub const MAX_SUMMARY: usize = 2048;
 
@@ -130,6 +125,12 @@ pub struct Refusal {
     pub level: Level,
     pub decision: Decision,
 }
+
+/// Refusals of the user (or requests left unanswered) in one session, after which nothing more
+/// is asked: the calls beyond read are refused at once (`Decision::Stopped`). A model obeying a
+/// hidden instruction may ask again and again until a tired user grants (consent fatigue);
+/// each session is one request of Claude Code's (one proxy) or one agent.
+pub const MAX_REFUSALS: usize = 3;
 
 /// The broker of a session: who to ask, the journal, the number of the next request.
 pub struct Broker {

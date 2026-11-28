@@ -466,13 +466,13 @@ server's `tools/call`:
   appended to only, never through a symbolic link, one JSON object per line (the decision of
   each request, then the outcome of each call that ran, under the same id, with the tool's
   error when it failed, cut to 512 characters), the arguments cut to 2 KiB, every line break of a value escaped by JSON;
+- `agent::execute` keeps refusing everything but read for a tool host without a broker
+  (`ToolHost::consents`), as defence in depth.
 - consent fatigue (lot A-20): after 3 refusals or unanswered requests in one session
   (`broker::MAX_REFUSALS`; a session is one proxy, so one request of Claude Code's, or one
   agent), nothing more is asked: every call beyond read is refused at once, journaled
   `stopped`, and the model is told not to insist (`McpError::StoppedAsking`). A model obeying a
-  hidden instruction cannot ask again and again until a tired user grants;
-- `agent::execute` keeps refusing everything but read for a tool host without a broker
-  (`ToolHost::consents`), as defence in depth.
+  hidden instruction cannot ask again and again until a tired user grants.
 
 **Who asks: the compositor's window** (`window::CompositorWindow`, lot A-11c). One connection per
 request to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-consent`, the compositor's consent socket
