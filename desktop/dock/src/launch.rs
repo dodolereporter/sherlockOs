@@ -95,7 +95,7 @@ pub fn show_in_evidence(folder: &Path) -> Result<u32, LaunchError> {
         .map(|dir| Path::new(&dir).join(EVIDENCE))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| EVIDENCE.into());
-    spawn(&program, &[folder.display().to_string()], None)
+    spawn(&program, &[folder.display().to_string()], None, None)
 }
 
 /// Program of the launcher, Super + Space (`docs/launcher.md`).
