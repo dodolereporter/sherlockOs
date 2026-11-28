@@ -10,7 +10,7 @@ applications=/usr/local/share/applications
 # The application icons, a hicolor theme that only the session sees (sherlockos-session puts
 # this folder first in XDG_DATA_DIRS).
 data=/usr/local/share/sherlockos
-programs="compositor bar dock launcher sherlockos-apps sherlockos-clipboard notifications evidence sherlockos-lock control-room sherlockos-autostart"
+programs="compositor bar dock launcher sherlockos-apps sherlockos-clipboard notifications evidence sherlockos-lock control-room sherlockos-autostart sherlock-portal"
 
 icons=/usr/local/share/icons
 themes="sherlockos sherlockos-light"
@@ -63,6 +63,10 @@ sudo install -m 644 $q/distro/sysctl.d/60-sherlockos-ptrace.conf /etc/sysctl.d/
 sudo sysctl -p /etc/sysctl.d/60-sherlockos-ptrace.conf
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
 sudo install -D -m 644 $q/desktop/compositor/session/sherlockos-portals.conf $data/xdg-desktop-portal/sherlockos-portals.conf
+# Our portal backend, for screen sharing (lot D-28d): where xdg-desktop-portal finds it, and how
+# the bus starts it.
+sudo install -D -m 644 $q/desktop/portal/session/sherlockos.portal /usr/share/xdg-desktop-portal/portals/sherlockos.portal
+sudo install -D -m 644 $q/desktop/portal/session/org.freedesktop.impl.portal.desktop.sherlockos.service /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.sherlockos.service
 # The cursor themes, their aliases kept as links:
 sudo install -d $icons
 sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
@@ -70,6 +74,7 @@ sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done
 
 # To remove it:
 #   sudo rm -r $dest $data $sessions/sherlockos.desktop /usr/local/bin/evidence $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock /etc/sysctl.d/60-sherlockos-ptrace.conf
+#   sudo rm /usr/share/xdg-desktop-portal/portals/sherlockos.portal /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.sherlockos.service
 #   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 
@@ -94,6 +99,8 @@ have() {
 }
 have xdg-desktop-portal /usr/libexec/xdg-desktop-portal || missing="$missing xdg-desktop-portal"
 have xdg-desktop-portal-gtk /usr/libexec/xdg-desktop-portal-gtk || missing="$missing xdg-desktop-portal-gtk"
+# Screen sharing: PipeWire, whose library sherlock-portal loads when an application shares.
+have pipewire /usr/bin/pipewire || missing="$missing pipewire"
 have gnome-keyring-daemon /usr/bin/gnome-keyring-daemon || missing="$missing gnome-keyring"
 have polkit-kde-authentication-agent-1 /usr/lib/x86_64-linux-gnu/libexec/polkit-kde-authentication-agent-1 ||
 	missing="$missing polkit-kde-agent-1"
