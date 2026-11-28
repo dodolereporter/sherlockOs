@@ -44,7 +44,7 @@ mod tests {
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
-        xdg_toplevel::XdgToplevel,
+        xdg_toplevel::{self, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
     };
 
@@ -59,6 +59,8 @@ mod tests {
         /// The pointer, then the keyboard, is on one of its surfaces.
         pointer_in: bool,
         keyboard_in: bool,
+        /// The compositor asked a window to close.
+        closes: usize,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -151,7 +153,20 @@ mod tests {
         }
     }
 
-    delegate_noop!(Client: ignore XdgToplevel);
+    impl Dispatch<XdgToplevel, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &XdgToplevel,
+            event: xdg_toplevel::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let xdg_toplevel::Event::Close = event {
+                client.closes += 1;
+            }
+        }
+    }
     delegate_noop!(Client: ignore ZxdgToplevelDecorationV1);
     delegate_noop!(Client: ZxdgDecorationManagerV1);
     delegate_noop!(Client: WlCompositor);
@@ -511,6 +526,54 @@ mod tests {
         assert!(!h.state.overview_open());
     }
 
+    /// Lot D-33c: a window's title, and its « × », only under the pointer, fading; a click on
+    /// the « × » asks the window to close, and the view stays open.
+    #[test]
+    fn the_title_and_the_close_button_show_on_hover_and_the_button_closes_the_window() {
+        let (mut h, _shown) = two_windows();
+        h.state.open_overview();
+        let back = h.slot("Back");
+        h.state.pointer_motion(back, 20);
+        let window = h.window("Back");
+        assert_eq!(
+            h.state.overview_selected(),
+            Some(&Target::Window(window.clone()))
+        );
+        // Its « × » sits on its top left corner.
+        let outputs: Vec<_> = h.state.space.outputs().cloned().collect();
+        let slot = outputs
+            .iter()
+            .flat_map(|o| h.state.overview_tiles(o, None))
+            .find(|t| t.window == window)
+            .unwrap()
+            .slot;
+        let corner: Point<f64, Logical> = (slot.loc.x + 2.0, slot.loc.y + 2.0).into();
+        assert_eq!(
+            h.state.overview_target(corner),
+            Some(Target::Close(window.clone()))
+        );
+        // The other window has no « × » while the pointer is not on it.
+        let front = h.window("Front");
+        let other = outputs
+            .iter()
+            .flat_map(|o| h.state.overview_tiles(o, None))
+            .find(|t| t.window == front)
+            .unwrap()
+            .slot;
+        let other_corner: Point<f64, Logical> = (other.loc.x + 2.0, other.loc.y + 2.0).into();
+        assert_ne!(
+            h.state.overview_target(other_corner),
+            Some(Target::Close(front))
+        );
+        let closes = h.client.closes;
+        h.click(corner);
+        h.sync();
+        assert_eq!(h.client.closes, closes + 1, "the window is asked to close");
+        assert!(h.state.overview_open(), "the view stays open");
+        // The titles fade: a frame is due while they do, none once done.
+        assert!(h.state.overview_shown(h.state.now()));
+    }
+
     #[test]
     fn the_view_follows_three_fingers_up_and_down() {
         let (mut h, _shown) = two_windows();
@@ -742,8 +805,12 @@ mod tests {
         // SAFETY: the context was just made and is used by this renderer alone.
         let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
         let scene = Scene::new(&mut renderer).unwrap();
-        let (w, h) = (1440, 900);
-        for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let cases = [
+            ((1440, 900), Theme::Dark, "dark"),
+            ((1440, 900), Theme::Light, "light"),
+            ((1920, 1080), Theme::Dark, "1920-dark"),
+        ];
+        for ((w, h), theme, name) in cases {
             color::set_active(theme);
             let p = theme.palette();
             let mut harness = Harness::start(&[(w, h)]);
