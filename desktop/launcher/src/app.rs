@@ -90,8 +90,10 @@ impl std::fmt::Debug for Reloaded {
     }
 }
 
-/// What starts a program: `launch::spawn`, or a recorder in tests.
-pub type Spawn = Arc<dyn Fn(&Command) -> Result<u32, crate::launch::LaunchError> + Send + Sync>;
+/// What starts a program, given the activation token of the click when one came:
+/// `launch::spawn_with`, or a recorder in tests.
+pub type Spawn =
+    Arc<dyn Fn(&Command, Option<&str>) -> Result<u32, crate::launch::LaunchError> + Send + Sync>;
 
 /// How the calculator's result is copied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -804,17 +806,26 @@ impl Launcher {
         }
     }
 
+    /// Starts `command` once the compositor gave the activation token of the click (lot Q-52):
+    /// an application already open that gets the launch brings its window forward with it.
+    /// The launcher closes meanwhile; a start that fails is only logged.
     fn start(&mut self, command: &Command) -> Task<Message> {
-        match (self.spawn)(command) {
-            Ok(pid) => {
-                tracing::info!(program = ?command.program, pid, "started");
-                self.close()
-            }
-            Err(error) => {
-                tracing::error!(%error, "cannot start the result");
+        let (spawn, command) = (Arc::clone(&self.spawn), command.clone());
+        let start = move |token: Option<String>| match spawn(&command, token.as_deref()) {
+            Ok(pid) => tracing::info!(program = ?command.program, pid, "started"),
+            Err(error) => tracing::error!(%error, "cannot start the result"),
+        };
+        let ask = match self.surface {
+            Some(id) => Task::done(Message::RequestActivationToken {
+                id,
+                sink: crate::launch::after_token(start),
+            }),
+            None => {
+                start(None);
                 Task::none()
             }
-        }
+        };
+        ask.chain(self.close())
     }
 
     /// Tells the compositor the new height of the surface, when it is the panel alone.

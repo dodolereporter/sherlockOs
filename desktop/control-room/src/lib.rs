@@ -10,6 +10,7 @@ pub mod apps;
 pub mod arrangement;
 pub mod bluetooth;
 pub mod displays;
+pub mod follow;
 pub mod instance;
 pub mod network;
 mod pages;
