@@ -77,6 +77,10 @@ x11rb = "=0.13.2"
 # wayland and calloop).
 rustix = { version = "=1.1.6", default-features = false, features = ["std", "process"] }
 thiserror = "=2.0.21"
+# The requests of Sherlock's consent window, one JSON object per line on its socket (lot
+# A-11b): the versions sherlockd already pins.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [

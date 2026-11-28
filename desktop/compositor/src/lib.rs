@@ -11,6 +11,7 @@ pub mod blur;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+pub mod consent;
 // The clipboard history of Super + V (lot D-42).
 pub mod clipboard_history;
 pub mod cursor;
@@ -56,6 +57,7 @@ mod screensaver;
 pub mod screenshot_thumbnail;
 pub mod screenshot_tool;
 mod shell;
+pub mod sherlock_api;
 pub mod stats;
 pub mod theme;
 pub mod touchpad;
@@ -302,6 +304,10 @@ pub struct State {
     curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// Sherlock's consent window, its socket and the requests waiting (lot A-11b).
+    consent: consent::Consents,
+    /// The windows socket of Sherlock's windows server (lot A-12).
+    sherlock_api: sherlock_api::SherlockApi,
     /// Applications that bring their window forward, and the windows that ask for attention
     /// (lot Q-52).
     activation: activation::Activation,
@@ -481,6 +487,8 @@ impl State {
             lock: lock::SessionLock::new(&dh),
             curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
+            consent: consent::Consents::default(),
+            sherlock_api: sherlock_api::SherlockApi::default(),
             activation: activation::Activation::new(
                 smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh),
             ),
@@ -525,6 +533,15 @@ impl State {
         self.socket_name = Some(path.clone().into_os_string());
         if !self.greeter {
             self.listen_shell_next_to(&path, event_loop);
+            let peers = consent::Peers::Sherlockd;
+            if let Err(err) = self.listen_consent_next_to(&path, peers, event_loop) {
+                // Without it Sherlock has nobody to ask: it refuses every action.
+                tracing::warn!("no consent socket: {err}");
+            }
+            if let Err(err) = self.listen_sherlock_next_to(&path, peers, event_loop) {
+                // Without it Sherlock's windows server lists nothing and moves nothing.
+                tracing::warn!("no windows socket for Sherlock: {err}");
+            }
         }
         Ok(())
     }
@@ -556,6 +573,8 @@ impl State {
     pub fn shutdown(&mut self) {
         self.stop_xwayland();
         self.stop_shell_socket();
+        self.stop_consent_socket();
+        self.stop_sherlock_socket();
         if let Some(token) = self.listener.take() {
             self.loop_handle.remove(token);
         }
@@ -667,9 +686,12 @@ impl State {
             self.lock_focus()
         } else {
             let target = target.filter(|_| !self.overview.is_open());
-            self.exclusive_layer()
+            // Sherlock's consent window keeps every key: not even an exclusive layer has it
+            // (lot A-11b).
+            let exclusive = self.exclusive_layer().filter(|_| !self.consent_shown());
+            exclusive
                 .map(KeyboardFocus::Wayland)
-                .or(target)
+                .or(target.filter(|_| !self.consent_shown()))
         };
         let unset = target.is_none();
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());

@@ -2,7 +2,8 @@
 
 - Status: accepted (the author decided the two open questions on 2026-11-26, after the
   security review of lot D-25a); amended by lot D-24e (the frozen frame under the curtain,
-  accepted: approved by the author on 2026-11-27)
+  accepted: approved by the author on 2026-11-27) and by lot D-25j (Ctrl + Alt + Backspace
+  ignored while locked, accepted: approved by the author on 2026-11-28)
 - Date: 2026-11-26
 - Lot: D-25a
 
@@ -138,7 +139,7 @@ The tests: `tests/session_lock.rs` (the desktop frozen before the lock, the curt
 it comes down, no `locked` before it is down, a slow lock program leaves it down, the desktop
 drawn again only once unlocked) and `tests/curtain.rs` (the board, drawn in software).
 
-## Amendment of lot D-25j (2026-11-27, proposed: the author approves it in pull request)
+## Amendment of lot D-25j (2026-11-27, accepted: the author approved it on 2026-11-28)
 
 The security audit of 27/11 (point 1) found that Ctrl + Alt + Backspace while locked, kept by
 the decision of 2026-11-26, does not only close the session: started from a text console (the
