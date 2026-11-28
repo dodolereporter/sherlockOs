@@ -305,6 +305,41 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
   files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
   failed leaves nothing half-written behind.
+- Views (lot E-13a), as in the Finder: four buttons of icons in the toolbar, after back and
+  forward (« Icônes », « Liste », « Colonnes », « Galerie », a thumb sliding to the one
+  shown), the « Vue » submenu, and Ctrl+1 to Ctrl+4 choose how the folder shows. The grid of
+  icons lays out tiles (the icon over its name, cut with « … ») as many on a line as the
+  listing's width holds, at the size of the slider above it (« Taille des icônes », 32 to 128
+  pixels), where the list has its column headers; only the lines in sight are built. In the
+  grid the arrows go from tile to tile and a line up or down, the lasso selects the tiles it
+  crosses, a right click or a drop hits the tile under the pointer. A new view fades in. The
+  view is remembered for each folder, the most recent 512, and the icons' size once, in
+  `$XDG_CONFIG_HOME/evidence/views` (`views`): read with a bound before the first frame,
+  written atomically off the interface thread; a folder whose name holds a tab or a line break
+  is not remembered. The trash always shows the list.
+  The columns (lot E-13b) show, from the left, the folders above the one shown, as many as
+  fit, each with the way down lit, then the folder shown, then what its item selected alone
+  holds: a folder's content, or the file's preview (the preview's pane slides away, its
+  content is in the last column). A click in a column above opens a folder there, or shows a
+  file selected in its folder; Right opens the folder selected, Left goes up. Every column but
+  the folder shown is read off the interface thread, its first 500 items. While browsing in
+  the columns, a folder without a view of its own keeps them.
+  The gallery (lot E-13c) shows the item selected large (an image fitted, a text's first
+  lines, else its icon), its name and kind under it, over a strip of every item that scrolls
+  sideways (the wheel, the arrows; no bar, as the Finder's), of which only the tiles in sight
+  are built. It always shows an item: the first when none is selected. Left and Right go from
+  item to item; a click on a tile shows it; the lasso does nothing there. The preview's pane
+  slides away, as in the columns.
+  In the list (lot E-13d), a folder has a triangle before its icon: pressed, the folder
+  unfolds, its items show under it a step to the right, read off the interface thread (its
+  first 2000, 16 levels at most), and pressed again it folds, its unfolded subfolders with it.
+  Right unfolds the folder selected alone, Left folds it, or goes up to the folder an item is
+  in. The items unfolded are items like the others: selected, opened, copied, dragged. They
+  show in the list only, not while searching, and fold when another folder opens; a refresh
+  reads them again. Captures:
+  `the_grid_renders_headless`, `the_columns_render_headless`,
+  `the_gallery_renders_headless` and `the_unfolded_list_renders_headless`, at 1366 × 768 and
+  720 × 460.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

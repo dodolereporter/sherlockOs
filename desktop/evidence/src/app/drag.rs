@@ -156,7 +156,7 @@ impl App {
         if x < 0.0 || y < top || at.y < self.list_origin().y {
             return None;
         }
-        let index = ((y - top) / sherlock_ui::metrics::LIST_ROW_HEIGHT) as usize;
+        let index = self.item_at(x, y)?;
         let entry = self.entries.get(index)?;
         let dragged = self
             .dnd

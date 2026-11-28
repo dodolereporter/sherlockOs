@@ -1166,6 +1166,46 @@ pub fn segmented<'a, Message: Clone + 'a>(
         .into()
 }
 
+/// A segmented control of icons, as wide as `icon_segmented_width`: each choice with its
+/// icon, its label (a tooltip), whether it is the one chosen, and what choosing it does. The
+/// views of Evidence's toolbar (lot E-13). The thumb slides as in `segmented`.
+pub fn icon_segmented<'a, Message: Clone + 'a>(
+    choices: Vec<(Icon, &'a str, bool, Option<Message>)>,
+) -> Element<'a, Message> {
+    use crate::panels::{SEGMENT_GAP, SEGMENT_RADIUS, SEGMENTED_PADDING};
+    let count = choices.len();
+    let chosen = choices.iter().position(|(_, _, active, _)| *active);
+    let side = metrics::ICON_BUTTON - 2.0 * SEGMENTED_PADDING;
+    let segments = choices.into_iter().map(|(glyph, label, active, on_press)| {
+        // As the labels of `theme::segment`: dark on the cream thumb.
+        let p = color::palette();
+        let tint = match (active, on_press.is_some()) {
+            (true, _) => p.text_on_cream,
+            (false, true) => p.text_secondary,
+            (false, false) => p.text_tertiary,
+        };
+        let content = container(icon(glyph, metrics::ICON_SIZE, tint)).center(Length::Fill);
+        let mut control = Control::new(content, theme::segment(active), on_press, SEGMENT_RADIUS);
+        control.button = control.button.width(side).height(side).padding(0);
+        control.label = Some(label);
+        control.into()
+    });
+    let row = iced::widget::Row::with_children(segments).spacing(SEGMENT_GAP);
+    let layers = iced::widget::stack![crate::controls::thumb(chosen, count), row];
+    container(layers)
+        .padding(SEGMENTED_PADDING)
+        .width(icon_segmented_width(count))
+        .style(theme::segmented_track)
+        .into()
+}
+
+/// Width of an `icon_segmented` of `count` choices.
+pub fn icon_segmented_width(count: usize) -> f32 {
+    use crate::panels::{SEGMENT_GAP, SEGMENTED_PADDING};
+    let side = metrics::ICON_BUTTON - 2.0 * SEGMENTED_PADDING;
+    count as f32 * side + count.saturating_sub(1) as f32 * SEGMENT_GAP + 2.0 * SEGMENTED_PADDING
+}
+
 /// A picture among others to choose from (D-26a: a wallpaper): `content` veiled on hover like
 /// a menu entry, with the focus ring and the pointing hand.
 pub fn picture_choice<'a, Message: Clone + 'a>(
