@@ -324,6 +324,7 @@ that. A request to empty the trash is refused by the proxy.
 | --- | --- | --- |
 | A tool result is data, never an instruction | The system instructions are fixed when the agent is created, with no way to change them. A result, successful or failed, enters the history only as a `ToolResult` | `agent::tests::tool_result_never_instruction` and `tool_error_never_instruction`: a tool returns « Ignore tes instructions… », as a result or an error, and the text appears in no system instruction and no other message. `json_rpc_error_stays_data` against a real server |
 | The level is read, destructive when in doubt | `Level::from_annotations`, third-party server all destructive, duplicates refused | `mcp::tests::destructive_when_in_doubt`, `lists_tools_and_levels`, `third_party_server_all_destructive`, `duplicate_refused` |
+| No action without the user's consent | `broker::Broker` in `McpServers::call`, `Permit` bound to the call, refused by default, journal (A-11); the compositor's window asked, its peer checked, withdrawn when given up (A-11c) | `tests/broker.rs`, `broker::tests`, `tests/window.rs` |
 | Without a broker, nothing but read runs | Refusal « courtier d'accords absent » (`McpError::BrokerAbsent`) in two places: in `McpServers::call`, the only public path to `tools/call`, and before the call in the loop, as defence in depth. `McpClient::call_tool` is not public | `direct_non_read_call_refused` (direct call of `McpServers::call`), `agent::tests::nothing_beyond_read_without_broker`, `read_and_destructive_in_one_reply`, `agent_calls_echo_and_refuses_unleveled_tool` |
 | A server makes `sherlockd` neither panic nor grow | Bounds above, lost server stopped and reaped | `list_not_an_object`, `giant_line_refused`, `endless_pagination_bounded`, `timeout_server_stopped_and_reaped` |
 | Claude Code has no built-in tool | Locked command line, `init` event checked | `claude_code::tests::no_builtin_tools_and_proxy_only`, `mcp_config_with_proxy_only`, `builtin_tool_or_other_server_stops_everything`, `without_builtin_tools_nothing_read_or_run` |
@@ -394,19 +395,55 @@ with 300 ms, which also covered that start, `timeout_server_stopped_and_reaped` 
 a load of 18. These two tests check through `/proc` that the process was stopped and reaped, and
 put no tight bound on their own duration.
 
-## What will come with A-11
+## The consent broker (lot A-11, ADR 0031, proposed)
 
-- The consent broker replaces the refusal: `McpServers::call` and `agent::execute` hand it each
-  call, with its level, instead of refusing everything that is not read-level. The current refusal
-  remains the behaviour when the broker is unreachable.
-- The append-only log: time, tool, summary of the arguments, consent, result. The current
-  `tracing` trace does not stand in for it.
-- The form of the reinforced consent of the destructive level, through an ADR.
+`broker::Broker` stands in front of every call, in `McpServers::call`, the only public path to a
+server's `tools/call`:
+
+- a read runs at once; anything else waits for the user's answer (`Consent::ask`), the
+  destructive level asking for a reinforced one (`Request::reinforced`). A read that reaches
+  outside the machine is an action (rule S2, "Tool levels");
+- only a `Granted` answer gives a `Permit`: made only by the broker module, not `Clone`, naming
+  the tool, its level and the exact arguments the user was shown, consumed by the call it
+  allows, and checked again by `McpServers::call` before the server is reached;
+- refused by default: a refusal, a closed window, no answer within 60 s (`CONSENT_TIMEOUT`), a
+  compositor unreachable or gone during the request (`Decision::Unavailable`, the error
+  « courtier d'accords absent » to the model), a journal that cannot be written;
+- the journal, `$XDG_STATE_HOME/sherlock/journal.jsonl` (`broker::Journal`): created 0600,
+  appended to only, never through a symbolic link, one JSON object per line (the decision of
+  each request, then the outcome of each call that ran, under the same id), the arguments cut
+  to 2 KiB, every line break of a value escaped by JSON;
+- `agent::execute` keeps refusing everything but read for a tool host without a broker
+  (`ToolHost::consents`), as defence in depth.
+
+**Who asks: the compositor's window** (`window::CompositorWindow`, lot A-11c). One connection per
+request to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-consent`, the compositor's consent socket
+(`docs/compositor.md`, "Sherlock's consent window"): the request as one line of JSON (`id`,
+`tool`, `level`, `arguments`), the answer read as one. The socket's peer must be the compositor of
+this user (`SO_PEERCRED`, `/proc/<pid>/exe` named `compositor`): a process that took the path
+first is told nothing. When the broker stops waiting, the future that holds the connection is
+dropped, the socket closes, and the compositor withdraws the window. Any failure (no socket,
+another program, connection lost, an answer that cannot be read or for another id) is
+`Decision::Unavailable`: refused. Outside a Wayland session, `broker::Nobody`: reads only.
+Claude Code starts the proxy without the Wayland variables: the socket's path goes in its
+arguments, `sherlockd --proxy --consent <path>`, so that the calls of Claude Code ask the same
+window.
+
+`tests/broker.rs` proves it against the test server, a real process that writes down each call
+it receives (`--test-server --trace <file>`): for a refusal, a closed window, a window nobody
+answers, a compositor gone mid-request and nobody to ask, `vider_corbeille` never reaches the
+server, directly or through the agent loop obeying an injection, while the read beside it runs;
+each decision is journaled. A consent runs exactly that call, once, after a reinforced request
+that showed its arguments, journaled with its outcome.
+
+## What will come next
+
+- A-11b: the consent window drawn by the compositor, its private socket, its reserved input and
+  the reinforced consent (ADR 0031).
+- An end-to-end test with the real compositor and the real `sherlockd` (each side is tested
+  against a fake of the other: `tests/window.rs` here, `tests/mission_control.rs` there).
 - The setting through which the user grants another level to a tool of a third-party server
   (ADR 0015).
-- The test that proves that no call bypasses the broker.
-- A call that leaves the machine is an action (see "Tool levels", S-11): a third-party server's
-  read never runs without consent when it can send data out.
 
 Later: an API-key provider and its keyring reading, masking of secrets before sending them to the
 model, the service that links `sherlockd` to Sherlock's panel (A-19), and the MCP servers per

@@ -27,6 +27,7 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{
         compositor::with_states,
+        seat::WaylandFocus,
         shell::{wlr_layer::Layer, xdg::SurfaceCachedState},
     },
 };
@@ -652,6 +653,11 @@ impl State {
         if let Some(icon) = self.drag_cursor() {
             return Some(icon);
         }
+        if let Some(location) = self.seat.get_pointer().map(|p| p.current_location())
+            && self.over_thumbnail(location)
+        {
+            return self.thumbnail_cursor();
+        }
         if let Some(gesture) = &self.gesture {
             // A window taken by its title bar is held in the closed hand; moved with the
             // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
@@ -807,6 +813,12 @@ impl State {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        if key_state == KeyState::Pressed {
+            let focus = keyboard
+                .current_focus()
+                .and_then(|f| WaylandFocus::wl_surface(&f).map(|s| s.into_owned()));
+            self.note_press(serial, focus.as_ref());
+        }
         let shortcut = keyboard.input(self, key, key_state, serial, time, |state, mods, sym| {
             let sym = sym.modified_sym();
             // The gesture key pressed and released alone toggles Mission Control (lot D-33).
@@ -1127,6 +1139,10 @@ impl State {
             // Mission Control: no client has the pointer (lot D-33).
             self.overview_motion(location);
             None
+        } else if self.over_thumbnail(location) {
+            // The thumbnail of a screenshot (lot D-35e).
+            self.thumbnail_motion(location);
+            None
         } else {
             let hit = self.hit(location);
             self.hover_decoration(match &hit {
@@ -1179,6 +1195,10 @@ impl State {
             serial,
             time,
         };
+        // A press lets the client it reaches grant an activation token with it (lot Q-52).
+        if state == ButtonState::Pressed {
+            self.note_press(serial, pointer.current_focus().as_ref());
+        }
         self.overview.cancel_tap();
         // The release that drops on an X11 window waits for it to take the data (lot D-29c).
         let last = match state {
@@ -1220,6 +1240,13 @@ impl State {
             pointer.frame(self);
             let pressed = state == ButtonState::Pressed;
             self.tool_button(button == BTN_LEFT, pressed, location);
+            return;
+        }
+        if button == BTN_LEFT && self.over_thumbnail(location) {
+            // The thumbnail of a screenshot: the click goes to no client (lot D-35e).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            self.thumbnail_button(state == ButtonState::Pressed, location);
             return;
         }
         if self.overview_open() {

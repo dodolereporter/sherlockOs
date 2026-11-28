@@ -33,6 +33,7 @@ mod tests {
             wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
             wl_output::WlOutput,
+            wl_pointer::{self, WlPointer},
             wl_registry,
             wl_seat::WlSeat,
             wl_shm::{Format, WlShm},
@@ -44,6 +45,10 @@ mod tests {
         ext_workspace_group_handle_v1::{self, ExtWorkspaceGroupHandleV1},
         ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
         ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
+    };
+    use wayland_protocols::xdg::activation::v1::client::{
+        xdg_activation_token_v1::{self, XdgActivationTokenV1},
+        xdg_activation_v1::XdgActivationV1,
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_popup::XdgPopup,
@@ -122,6 +127,9 @@ mod tests {
         workspaces_done: usize,
         /// Frame callbacks done.
         frames: usize,
+        /// Serial of the last button press it got, and the last activation token it got.
+        pressed: Option<u32>,
+        token: Option<String>,
     }
 
     fn values(bytes: &[u8]) -> Vec<u32> {
@@ -409,6 +417,39 @@ mod tests {
     delegate_noop!(Client: XdgPositioner);
     delegate_noop!(Client: OrgKdeKwinAppmenuManager);
     delegate_noop!(Client: OrgKdeKwinAppmenu);
+    delegate_noop!(Client: XdgActivationV1);
+
+    impl Dispatch<WlPointer, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlPointer,
+            event: wl_pointer::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_pointer::Event::Button { serial, state, .. } = event
+                && state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed)
+            {
+                client.pressed = Some(serial);
+            }
+        }
+    }
+
+    impl Dispatch<XdgActivationTokenV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &XdgActivationTokenV1,
+            event: xdg_activation_token_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let xdg_activation_token_v1::Event::Done { token } = event {
+                client.token = Some(token);
+            }
+        }
+    }
 
     /// A connection, its queue and what it received.
     struct Side {
@@ -1263,6 +1304,93 @@ mod tests {
         assert!(h.shell.conn.protocol_error().is_none());
     }
 
+    /// The id the shell client knows the window titled `title` by.
+    fn id_of(h: &Harness, title: &str) -> u32 {
+        let seen = h.shell.client.toplevels.iter().find(|t| t.1.title == title);
+        seen.and_then(|t| t.1.id).unwrap()
+    }
+
+    /// The shell client asks for a token, with `serial` when given, and gets it.
+    fn token(h: &mut Harness, shell: bool, serial: Option<(u32, &WlSeat)>) -> String {
+        let side = if shell { &mut h.shell } else { &mut h.app };
+        side.client.token = None;
+        let activation: XdgActivationV1 = side.bind();
+        let token = activation.get_activation_token(&side.queue.handle(), ());
+        if let Some((serial, seat)) = serial {
+            token.set_serial(serial, seat);
+        }
+        token.commit();
+        h.run_until("the token", |h| {
+            let side = if shell { &h.shell } else { &h.app };
+            side.client.token.is_some()
+        });
+        let side = if shell { &h.shell } else { &h.app };
+        side.client.token.clone().unwrap()
+    }
+
+    #[test]
+    fn an_application_brings_its_window_forward_with_a_token_from_a_click_or_asks_for_attention() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let (_one, one_surface) = h.open_window("One");
+        let one = h.titled("One");
+        // The bar, or the dock, of the shell client: a click on it.
+        h.dock();
+        let seat: WlSeat = h.shell.bind();
+        let _pointer = seat.get_pointer(&h.shell.queue.handle(), ());
+        // "One" minimized on workspace 1, "Two" opened on workspace 2 has the keyboard.
+        h.state.minimize(&one);
+        h.keys(&[KEY_SUPER], KEY_2);
+        let (_two, two_surface) = h.open_window("Two");
+        h.run_until("both listed", |h| {
+            let ids = h.shell.client.toplevels.iter().filter(|t| t.1.id.is_some());
+            ids.count() == 2
+        });
+        h.state.pointer_motion((400.0, 570.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 3);
+        h.run_until("the click on the dock", |h| {
+            h.shell.client.pressed.is_some()
+        });
+        let serial = h.shell.client.pressed.unwrap();
+
+        // A token of the shell client with the serial of that click, handed to the application:
+        // "One" comes out of its minimized state, on its workspace, with the keyboard.
+        let granted = token(&mut h, true, Some((serial, &seat)));
+        let activation: XdgActivationV1 = h.app.bind();
+        activation.activate(granted.clone(), &one_surface);
+        h.run_until("One activated", |h| {
+            h.focused_title().as_deref() == Some("One")
+        });
+        assert!(!h.state.is_minimized(&one));
+        assert_eq!(h.state.workspace_of(&one), h.state.workspaces().active());
+        // A token is used once: used again, it does nothing.
+        activation.activate(granted, &two_surface);
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+        h.keys(&[KEY_SUPER], KEY_2);
+        assert_eq!(h.focused_title().as_deref(), Some("Two"));
+        // Without a serial, or with one the asking client never got: no keyboard stolen, the
+        // window asks for attention, seen by the shell, until it gets the keyboard.
+        let one_id = id_of(&h, "One");
+        let two = h.titled("Two");
+        let app_seat: WlSeat = h.app.bind();
+        for serial in [None, Some((serial, &app_seat))] {
+            let refused = token(&mut h, false, serial);
+            activation.activate(refused, &one_surface);
+            h.run_until("One asks for attention", |h| {
+                h.shell.client.has(one_id, Flag::Attention)
+            });
+            assert_eq!(h.focused_title().as_deref(), Some("Two"));
+            h.state.focus(Some(one.clone()));
+            h.next_done("One given the keyboard");
+            assert!(!h.shell.client.has(one_id, Flag::Attention));
+            h.state.focus(Some(two.clone()));
+        }
+    }
+
     /// App Expose (lot D-21c2): the shell opens Mission Control on some windows only.
     #[test]
     fn the_shell_opens_mission_control_on_the_windows_of_one_application() {
@@ -1729,7 +1857,7 @@ mod tests {
         let mut h = Harness::start();
         let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
         let (id, _, version) = name.unwrap().clone();
-        assert_eq!(version, 4, "version 4: App Expose");
+        assert_eq!(version, 5, "version 4: App Expose, 5: attention");
         let _manager: SherlockShellManagerV1 =
             h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
         let done = h.shell.client.done;

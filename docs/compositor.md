@@ -408,7 +408,9 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   window's center), the target of an animation rather than its steps. A minimized window
   keeps the screen and the geometry it had. Without any screen, a window stays listed with an
   empty screen name and its place in the space.
-- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`.
+- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`,
+  and from version 5 `attention` (lot Q-52, see "Activation" below); a client bound at an
+  older version never receives it.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
@@ -907,6 +909,33 @@ the window itself and answers (`consent.rs`):
   refuse; a destructive tool refuses Enter and a click, and is granted by a hold; an asker gone
   withdraws its request; a malformed request closes the connection; a process that is not
   `sherlockd` cannot ask.
+
+## Activation (lot Q-52)
+
+An application brings its window forward: a click on its icon in the bar's notification area,
+a notification, a second launch. `State::request_activation` (`activation.rs`) decides.
+
+- **Granted:** out of its minimized state, its workspace shown, raised with the animation of
+  D-19d and given the keyboard (`State::activate`, as the dock does).
+- **Refused:** no keyboard stolen. The window asks for attention: the `attention` state of
+  `sherlock_shell_v1` (version 5; version 4 is App Expose), for the dock to show, until it gets the keyboard.
+- **Wayland, `xdg-activation-v1`.** A token is granted when it carries the serial of a press
+  (button or key, the last 32 remembered, within 10 s) that the compositor gave to the very
+  client that asks for it: the bar, after a click on an icon, asks for one and hands it to the
+  application, which activates its window with it. A token is used once and lives 10 s; one
+  without a serial, or with a serial its client never got, is refused.
+- **X11, `_NET_ACTIVE_WINDOW`.** smithay 0.7's window manager does not read it: the compositor
+  hears it as an X11 client of XWayland watching the root window's substructure
+  (`x11_activation.rs`, read in the loop, 64 requests a turn at most). `WM_CHANGE_STATE` to
+  `NormalState` (smithay's `unminimize_request`) is handled the same. A pager (source 2) is
+  obeyed; an application (source 1) when a token was granted within the last 10 s and not used
+  by another X11 request (an X11 application cannot hand the token back: the click on its tray
+  icon granted one), or when its process already has the keyboard.
+- **Tests.** `tests/shell.rs`: a token from a click on the dock brings a minimized window of
+  another workspace back; used again it does nothing; without a serial, or with another
+  client's, the window asks for attention, until it gets the keyboard. `tests/xwayland.rs`:
+  `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` from the application ask for attention, a pager's
+  activates.
 
 ## Drag and drop (lot D-29c)
 
@@ -3026,11 +3055,28 @@ compositor (`push_layers`), which knows the surfaces of the shell by their layer
 (`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
 bar started again later shows at once, and never with `--greeter`. A key or a click puts
 everything in place at once. The windows that open then fade in with their own opening (lot
-D-34). Not done yet: the wallpaper going from blurred at 1.05 to sharp at 1 (the compositor has
-no blur yet, lot D-37), and the windows of the last session reopened one by one.
+D-34).
+
+**The desktop revealed** (lot D-24g, `reveal_desktop`), as the curtain comes back from black at
+the opening, and as it goes up at each unlock:
+- the wallpaper comes back from a zoom of 1.05 to its size over 700 ms (`wallpaper::zoomed`,
+  grown around the center of the screen, cut by its edges), while the curtain, the blurred
+  picture of the lock, leaves it: from blurred and larger to sharp;
+- the windows shown reappear one after another, the front one first, 40 ms apart, each fading
+  in and growing as a window opens, over 250 ms; the last ones start together 500 ms after the
+  reveal at the latest, so that all is done within 800 ms (`arrival::reappear_delay`,
+  `WindowMotion::reappear`). Windows not drawn yet keep their own opening; minimized ones stay
+  in the dock; with window animations off, nothing moves.
+- A key or a click puts the windows in place at once (`end_arrival`).
+
+The blur itself is the curtain's picture fading out, not a blur radius that shrinks: the blur
+behind glass (lot D-37) applies to the surfaces that ask for it, not to the wallpaper. Not done
+yet: the windows of the last session reopened.
 
 Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
-dock waits for its turn, and the travel of each. `tests/greeter.rs`: the session opens from
+dock waits for its turn, and the travel of each. The windows' turns and the zoom (lot D-24g); in `src/anim.rs`, a
+window hidden until its turn, then fading in, and a key ending it; `tests/session_lock.rs`, once
+unlocked, the window reappearing and the wallpaper zoomed, both done 800 ms later. `tests/greeter.rs`: the session opens from
 black, through the curtain, to the desktop. `tests/curtain.rs` draws the boards of the opening
 (6 frames) and of the lock (8 frames) with Mesa's software renderer, in `target/tmp/curtain/`.
 
