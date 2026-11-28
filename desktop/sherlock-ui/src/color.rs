@@ -447,6 +447,21 @@ pub fn active() -> Theme {
 /// The renderer's buffers have no alpha (tiny-skia presents through softbuffer, whose
 /// Wayland buffers are `XRGB8888`): the glass is drawn opaque (lot UI-09).
 static OPAQUE_GLASS: AtomicBool = AtomicBool::new(false);
+/// « Réduire la transparence » and « Augmenter le contraste » of Control Room's Accessibility
+/// page (lot D-26p).
+static REDUCED_TRANSPARENCY: AtomicBool = AtomicBool::new(false);
+static INCREASED_CONTRAST: AtomicBool = AtomicBool::new(false);
+
+/// « Réduire la transparence »: every glass opaque, a veil of its color over the desktop.
+pub fn set_reduced_transparency(on: bool) {
+    REDUCED_TRANSPARENCY.store(on, Ordering::Relaxed);
+}
+
+/// « Augmenter le contraste »: opaque glass, firmer borders, secondary texts as the primary
+/// ones (`Palette::contrasted`).
+pub fn set_increased_contrast(on: bool) {
+    INCREASED_CONTRAST.store(on, Ordering::Relaxed);
+}
 
 /// Tells whether the program's buffers keep their alpha (`false` with tiny-skia): without it,
 /// every glass of the palette is laid over the theme's desktop color first, so that the bar,
@@ -460,7 +475,11 @@ pub fn set_opaque_glass(opaque: bool) {
 /// glass when the renderer has no alpha (`set_opaque_glass`).
 pub fn palette() -> &'static Palette {
     let step = mix_step();
-    if OPAQUE_GLASS.load(Ordering::Relaxed) {
+    let opaque =
+        OPAQUE_GLASS.load(Ordering::Relaxed) || REDUCED_TRANSPARENCY.load(Ordering::Relaxed);
+    if INCREASED_CONTRAST.load(Ordering::Relaxed) {
+        Palette::contrasted_at_step(step)
+    } else if opaque {
         Palette::opaque_at_step(step)
     } else {
         Palette::at_step(step)
@@ -816,6 +835,40 @@ impl Palette {
         }
     }
 
+    /// This palette with more contrast (lot D-26p): opaque glass, the borders and dividers two
+    /// and a half times as present, the secondary texts as the primary ones and the tertiary
+    /// ones as the secondary.
+    pub fn contrasted(&self) -> Self {
+        let firm = |c: Color| Color {
+            a: (c.a * 2.5).min(1.0),
+            ..c
+        };
+        let opaque = self.opaque();
+        Self {
+            border: firm(self.border),
+            menu_border: firm(self.menu_border),
+            card_border: firm(self.card_border),
+            top_bar_border: firm(self.top_bar_border),
+            dock_border: firm(self.dock_border),
+            secondary_border: firm(self.secondary_border),
+            divider: firm(self.divider),
+            text_secondary: self.text_primary,
+            text_tertiary: self.text_secondary,
+            ..opaque
+        }
+    }
+
+    /// `at_step`, with more contrast.
+    pub fn contrasted_at_step(step: u8) -> &'static Self {
+        static STEPS: OnceLock<Vec<Palette>> = OnceLock::new();
+        let steps = STEPS.get_or_init(|| {
+            (0..=MIX_STEPS)
+                .map(|s| Self::at_step(s).contrasted())
+                .collect()
+        });
+        &steps[usize::from(step.min(MIX_STEPS))]
+    }
+
     /// `at_step`, with opaque glass.
     pub fn opaque_at_step(step: u8) -> &'static Self {
         static STEPS: OnceLock<Vec<Palette>> = OnceLock::new();
@@ -911,6 +964,22 @@ impl Palette {
 
 #[cfg(test)]
 mod tests {
+
+    /// Lot D-26p: « Augmenter le contraste » makes the glass opaque, the borders firmer and
+    /// the secondary texts as the primary ones, which then read at 7 to 1 on every glass.
+    #[test]
+    fn increased_contrast_firms_up_the_palette() {
+        for p in [&Palette::DARK, &Palette::LIGHT] {
+            let c = p.contrasted();
+            assert_eq!(c.text_secondary, p.text_primary);
+            assert!(c.border.a > p.border.a && c.divider.a > p.divider.a);
+            for glass in [c.top_bar_glass, c.glass, c.menu_glass, c.dock_glass] {
+                assert!(glass.a >= 1.0);
+                assert!(c.text_secondary.contrast(glass) >= 7.0, "{glass:?}");
+            }
+        }
+        assert_eq!(Palette::contrasted_at_step(0), &Palette::DARK.contrasted());
+    }
 
     /// Lot UI-09: the texts of the bar, the dock's menu and the bubbles read at 4.5 to 1 on
     /// their glass as each renderer draws it: translucent over the desktop and its discs (the

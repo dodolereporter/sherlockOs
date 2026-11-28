@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.sherlockos
+Exec=/usr/local/libexec/sherlockos/sherlock-portal

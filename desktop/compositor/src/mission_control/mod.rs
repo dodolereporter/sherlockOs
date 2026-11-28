@@ -1206,7 +1206,10 @@ fn push_strip(
                 && !is_override_redirect(w)
                 && state.window_output(w).as_ref() == Some(output)
         });
-        for window in windows {
+        // The live windows in the thumbnails, but in the light mode and without effects
+        // (« Effets visuels », lot D-26p): the wallpaper alone then.
+        let live = sherlock_ui::motion::effects() == sherlock_ui::motion::Effects::Full;
+        for window in windows.filter(|_| live) {
             push_miniature(items, state, window, (thumb, screen, k), view, fade);
         }
         items.push(Item::Thumbnail {

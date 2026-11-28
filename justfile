@@ -80,7 +80,7 @@ cursor-board output="docs/cursor/board.png":
 
 # Builds the session (compositor, bar, dock) and the cursor themes, then prints the sudo commands that install them for the login screen, without running them
 install-session: cursors
-    cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock -p apps -p control-room -p autostart
+    cargo build --release -p compositor -p bar -p dock -p launcher -p clipboard-panel -p notifications -p evidence -p lock -p apps -p control-room -p autostart -p portal
     desktop/compositor/session/install.sh "$PWD"
 
 # Builds the compositor and the login screen, then prints the sudo commands that make it the display manager (greetd, ADR 0026) and those that go back to SDDM, without running them

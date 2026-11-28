@@ -69,8 +69,10 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 resvg = { version = "=0.45.1", default-features = false }
 # X11 client of XWayland: the compositor reads the non-text selections of X11 applications
 # itself (lot D-29, `x11_paste.rs`), and the XWayland tests use it as their X11 client. The
-# version smithay already pulls for its X11 window manager: nothing new is built.
-x11rb = "=0.13.2"
+# version smithay already pulls for its X11 window manager. `xtest` (lot D-29c): an X11 drag
+# carried to a Wayland client ends with its button released inside XWayland; a small module of
+# x11rb's own.
+x11rb = { version = "=0.13.2", features = ["xtest"] }
 # PR_SET_DUMPABLE (lot D-25k, ADR 0023): no other process of the user may trace this one or
 # read its memory, and no core dump is written; and kill(2) to force an application to quit (lot
 # D-21i). Safe calls instead of libc's; the version the workspace already builds (through

@@ -53,6 +53,10 @@ pub(crate) const LIMIT: usize = 64 << 20;
 const PATIENCE: Duration = Duration::from_secs(5);
 /// Size of each piece of an INCR transfer.
 const CHUNK: usize = 256 << 10;
+/// Longest wait for the `TARGETS` of an X11 drag that has no `XdndTypeList`.
+const ASK_PATIENCE: Duration = Duration::from_millis(300);
+/// Most types taken from an X11 drag.
+const MAX_TYPES: usize = 64;
 
 x11rb::atom_manager! {
     pub(crate) Atoms: AtomsCookie {
@@ -166,6 +170,8 @@ pub(crate) struct Xdnd {
     types: Vec<(String, Atom)>,
     over: Option<Over>,
     transfers: Vec<Incr>,
+    /// Events read while waiting for an answer, handled by `events`.
+    backlog: Vec<Event>,
     /// The connection to XWayland still works.
     alive: bool,
 }
@@ -202,6 +208,7 @@ impl Xdnd {
             types: Vec::new(),
             over: None,
             transfers: Vec::new(),
+            backlog: Vec::new(),
             alive: true,
         })
     }
@@ -417,6 +424,11 @@ impl Xdnd {
     /// answer are refused here.
     pub(crate) fn events(&mut self) -> Vec<Note> {
         let mut notes = Vec::new();
+        for event in std::mem::take(&mut self.backlog) {
+            if let Err(err) = self.event(event, &mut notes) {
+                tracing::debug!("XDND: {err}");
+            }
+        }
         loop {
             let event = match self.conn.poll_for_event() {
                 Ok(Some(event)) => event,
@@ -524,6 +536,90 @@ impl Xdnd {
         };
         self.conn
             .send_event(false, requestor, EventMask::NO_EVENT, notify)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    /// The types of the drag of an X11 application, as Wayland types, if an X11 client owns
+    /// `XdndSelection`: from its `XdndTypeList`, else from the selection's `TARGETS` (asked, and
+    /// awaited `ASK_PATIENCE` at most). At most `MAX_TYPES`.
+    pub(crate) fn foreign_drag(&mut self) -> Result<Option<Vec<String>>, Error> {
+        let selection = self.atoms.XdndSelection;
+        let owner = self.conn.get_selection_owner(selection)?.reply()?.owner;
+        if owner == NONE || owner == self.window {
+            return Ok(None);
+        }
+        let list = self
+            .conn
+            .get_property(
+                false,
+                owner,
+                self.atoms.XdndTypeList,
+                AtomEnum::ATOM,
+                0,
+                256,
+            )?
+            .reply()?;
+        let mut atoms: Vec<Atom> = list.value32().map(Iterator::collect).unwrap_or_default();
+        if atoms.is_empty() {
+            atoms = self.ask_targets()?;
+        }
+        let mut types = Vec::new();
+        for atom in atoms.into_iter().take(MAX_TYPES) {
+            let name = self.conn.get_atom_name(atom)?.reply()?.name;
+            let name = String::from_utf8_lossy(&name).into_owned();
+            let mime = match name.as_str() {
+                "UTF8_STRING" => "text/plain;charset=utf-8".to_string(),
+                n if n.contains('/') => name,
+                _ => continue,
+            };
+            if !types.contains(&mime) {
+                types.push(mime);
+            }
+        }
+        Ok(Some(types))
+    }
+
+    /// The `TARGETS` of `XdndSelection`, asked to its owner. The other events that come
+    /// meanwhile are kept for `events`.
+    fn ask_targets(&mut self) -> Result<Vec<Atom>, Error> {
+        let (selection, property) = (self.atoms.XdndSelection, self.atoms._SHERLOCKOS_DND);
+        self.conn.convert_selection(
+            self.window,
+            selection,
+            self.atoms.TARGETS,
+            property,
+            CURRENT_TIME,
+        )?;
+        self.conn.flush()?;
+        let deadline = std::time::Instant::now() + ASK_PATIENCE;
+        loop {
+            match self.conn.poll_for_event()? {
+                Some(Event::SelectionNotify(n)) if n.selection == selection => {
+                    if n.property == NONE {
+                        return Ok(Vec::new());
+                    }
+                    let reply = self
+                        .conn
+                        .get_property(true, self.window, property, AtomEnum::ATOM, 0, 256)?
+                        .reply()?;
+                    let targets = reply.value32().map(Iterator::collect).unwrap_or_default();
+                    return Ok(targets);
+                }
+                Some(other) => self.backlog.push(other),
+                None if std::time::Instant::now() > deadline => return Ok(Vec::new()),
+                None => thread::sleep(Duration::from_millis(1)),
+            }
+        }
+    }
+
+    /// The X11 application that dragged gets its button released (XTEST, inside XWayland): it
+    /// ends its drag.
+    pub(crate) fn release_button(&self, button: u8) -> Result<(), Error> {
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        const BUTTON_RELEASE: u8 = 5;
+        self.conn
+            .xtest_fake_input(BUTTON_RELEASE, button, CURRENT_TIME, NONE, 0, 0, 0)?;
         self.conn.flush()?;
         Ok(())
     }

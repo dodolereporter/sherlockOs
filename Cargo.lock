@@ -3060,12 +3060,16 @@ dependencies = [
 name = "portal"
 version = "0.0.0"
 dependencies = [
+ "appearance-config",
  "async-io",
  "blocking",
+ "iced",
+ "iced_exwlshell",
  "libloading",
  "memmap2",
  "rustix 1.1.6",
  "shell-protocol",
+ "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
