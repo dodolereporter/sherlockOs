@@ -649,7 +649,7 @@ A window that asks for attention (`attention`, version 5 of the shell protocol, 
 compositor refused it the keyboard because no click let it come forward) makes the icon of its
 application bounce `ATTENTION_HOPS` hops (3), the launch bounce's, then rest; a window that keeps
 asking bounces once, and again only after it stopped asking. The dock binds the shell manager
-up to version 5 (4 for App Expose).
+up to version 6 (4 for App Expose, 6 for « Forcer à quitter »).
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is
@@ -777,12 +777,22 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Each window, in the order they came: its title, « … » when too long, the application's name when it has none; the active one checked. A click brings it forward alone | The source can act on its windows |
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
-| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
+| Separator, then « Options » (lot D-21i): the title of the group, as macOS's submenu, never an action | |
+| « Garder dans le Dock », checked while it is pinned: a click pins an open application, or unpins a pinned one | Open with a desktop entry, or pinned, Sherlock included |
+| « Ouvrir à l’ouverture de session », checked while its desktop file is in `$XDG_CONFIG_HOME/autostart` without `Hidden=true` (read by the session, lot D-44): a click copies its desktop file there (bounded to 256 KiB, atomic write), or takes it out | It has a desktop entry |
+| « Afficher dans Evidence »: Evidence opens on the folder of its desktop file | It has a desktop entry |
 | Separator, then « Afficher toutes les fenêtres » (App Expose, lot D-21c2) | The source offers App Expose, the windows can be acted on, and one is shown |
-| « Quitter » | The windows are known, the source can close them, and the application has one |
+| « Masquer »: its windows are minimized, as macOS hides an application | The windows are known, the source can act on them, and the application has one |
+| « Quitter » | The same |
+| « Forcer à quitter »: the compositor kills the process of its windows (`kill`, version 6 of `sherlock_shell_v1`, offered on the shell socket only): SIGKILL to the pid its connection gives (SO_PEERCRED), never to the compositor nor to process 1; an X11 window, whose `_NET_WM_PID` could name any process, is only asked to close | The same, and the compositor offers version 6 |
+
+![The menu of an icon with its options](../desktop/dock/screenshots/menu-options.png)
+
+The autostart folder is read once the dock's surface exists, and again after each change, on a
+thread of its own (`autostart.rs`): the menu never touches the disk.
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
-but « Retirer du Dock » is disabled.
+but « Garder dans le Dock » (checked: a click takes it out) is disabled.
 
 **The dock's own menu** (D-21h). A right click on the bar outside the icons, on the separator
 or between two icons, opens the dock's menu, as the Dock options of macOS, from the pointer:

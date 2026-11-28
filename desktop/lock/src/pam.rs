@@ -65,8 +65,9 @@ pub enum AuthError {
     /// The password is wrong (or PAM refused it).
     #[error("authentication refused")]
     Refused,
-    /// Too many tries: PAM says so (`PAM_MAXTRIES`). The lock screen runs as the user, who cannot
-    /// write the counters of pam_faillock: only the delay of pam_faildelay slows the tries.
+    /// Too many tries: PAM says so (`PAM_MAXTRIES`), or the lock's own count of wrong
+    /// passwords makes this try wait (`throttle.rs`, lot D-25n): pam_faillock cannot count
+    /// them, its counters being root's.
     #[error("too many tries")]
     TooManyTries,
     /// PAM itself could not run: no library, no service, an error of the system.
