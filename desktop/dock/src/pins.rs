@@ -70,10 +70,17 @@ pub fn set_with(
 /// Writes the pinned list and whether Sherlock is shown to the file at `path`, read again
 /// just before: what another program changed in it since the dock last read it (a setting
 /// of Control Room, a comment) is kept. The dock's list wins: it is the order on screen.
-pub fn write(path: &Path, pinned: &[String], sherlock: bool) -> io::Result<()> {
+pub fn write(
+    path: &Path,
+    pinned: &[String],
+    sherlock: bool,
+    stack: dock_config::stack::Stack,
+) -> io::Result<()> {
     DockConfig::update(path, |config| {
         config.pinned = Some(pinned.to_vec());
         config.sherlock = sherlock;
+        // The settings of the downloads stack, from its menu (lot D-21k2).
+        config.stack = stack;
     })
     .map(|_| ())
 }
@@ -134,12 +141,18 @@ mod tests {
         std::fs::create_dir_all(dir.join("dock")).unwrap();
         // Another program changed the size since the dock read the file.
         std::fs::write(&path, "[Dock]\n# mine\nPinned=a;b;\nIconSize=64\n").unwrap();
-        write(&path, &list(&["b", "sherlock", "a"]), true).unwrap();
+        write(
+            &path,
+            &list(&["b", "sherlock", "a"]),
+            true,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "[Dock]\n# mine\nPinned=b;sherlock;a;\nIconSize=64\n"
         );
-        write(&path, &list(&["b", "a"]), false).unwrap();
+        write(&path, &list(&["b", "a"]), false, Default::default()).unwrap();
         let (config, _) = DockConfig::load(&path).unwrap();
         assert_eq!((config.icon_size, config.sherlock), (64.0, false));
         let _ = std::fs::remove_dir_all(&dir);

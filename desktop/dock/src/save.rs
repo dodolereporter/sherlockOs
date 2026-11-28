@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use crate::pins;
 
 /// A change to write: the file, the pinned list and whether Sherlock is shown.
-type Change = (PathBuf, Vec<String>, bool);
+type Change = (PathBuf, Vec<String>, bool, dock_config::stack::Stack);
 
 /// The writer of the pinned list into `dock.conf`.
 #[derive(Debug, Default)]
@@ -21,8 +21,14 @@ impl Saver {
     /// Writes `pinned` and whether Sherlock is shown into the file at `path`, later and on the
     /// writer's thread, started at the first change. The file is read again first and only
     /// these change (`pins::write`): a file that cannot be read is never written over.
-    pub fn save(&mut self, path: PathBuf, pinned: Vec<String>, sherlock: bool) {
-        let mut change = (path, pinned, sherlock);
+    pub fn save(
+        &mut self,
+        path: PathBuf,
+        pinned: Vec<String>,
+        sherlock: bool,
+        stack: dock_config::stack::Stack,
+    ) {
+        let mut change = (path, pinned, sherlock, stack);
         if let Some(sender) = &self.sender {
             match sender.send(change) {
                 Ok(()) => return,
@@ -51,8 +57,8 @@ fn write_all(receiver: &mpsc::Receiver<Change>) {
         while let Ok(newer) = receiver.try_recv() {
             change = newer;
         }
-        let (path, pinned, sherlock) = change;
-        if let Err(error) = pins::write(&path, &pinned, sherlock) {
+        let (path, pinned, sherlock, stack) = change;
+        if let Err(error) = pins::write(&path, &pinned, sherlock, stack) {
             tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
         }
     }
@@ -71,7 +77,12 @@ mod tests {
         let path = dir.join("dock.conf");
         let mut saver = Saver::default();
         for last in ["a", "b", "c"] {
-            saver.save(path.clone(), vec![String::from(last)], true);
+            saver.save(
+                path.clone(),
+                vec![String::from(last)],
+                true,
+                Default::default(),
+            );
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         let read = || DockConfig::load(&path).ok().and_then(|(c, _)| c.pinned);
