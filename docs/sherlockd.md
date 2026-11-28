@@ -302,11 +302,22 @@ read from Claude Code's stream (`ClaudeCode::ask_with`):
 | Event | Fields | When |
 | --- | --- | --- |
 | `started` | | The request is taken |
+| `plan` | `steps`: `title`, `description`, `tool` | The plan announced before acting (lot A-19e), once |
 | `text` | `text` | A text of Sherlock |
-| `step` | `id`, `tool`, `summary` (160 bytes), `state`: `waiting` | A call of a tool: a step of his plan |
+| `step` | `id`, `tool`, `summary` (160 bytes), `state`: `waiting`, `plan`: the step of the plan it takes, or `null` | A call of a tool |
 | `state` | `id`, `state`, `level` (with a decision) | `granted` or `refused` by the broker, then `done` or `failed` |
 | `answer` | `text` | The final answer |
 | `failed` | `reason`, `message` | No answer: `not-installed`, `not-logged-in`, `offline`, `failed` |
+
+**The plan first** (lot A-19e). The system instructions of `--ask` ask the model to announce
+its plan before calling any tool, once, in a `<plan>…</plan>` block holding only a JSON list of
+steps `{"titre", "description", "outil"}` (`shell::PLAN_INSTRUCTIONS`, in French: the model
+reads it). The first readable block of a request becomes the `plan` event, 12 steps at most,
+titles of 120 bytes and descriptions of 300 at most; the rest of the text stays a `text`. A
+block that is not such a list stays text. Each call then takes the first step of the plan for
+its tool not taken yet (`plan` in its `step` event), so that the panel shows the plan as on the
+board and the steps follow the broker; a call outside the plan has `plan: null`. The model may
+not announce a plan, or may not follow it: the panel shows what it gets.
 
 The state of a step follows the consent broker: the proxy writes each decision to the journal,
 and `--ask` follows the journal from its length when the request started (every 150 ms, lines of
