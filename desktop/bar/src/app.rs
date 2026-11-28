@@ -454,6 +454,15 @@ impl Bar {
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
             }
+            Message::Quick(quick::Message::OpenSettings(page)) => {
+                // Control Room on that page, in its window if it is open (D-20f).
+                let program = crate::programs::CONTROL_ROOM;
+                match page {
+                    Some(page) => self.programs.start_with(program, &["--page", page]),
+                    None => self.programs.start(program),
+                }
+                return self.close_panel();
+            }
             Message::Quick(quick::Message::OpenNetworkSettings) => {
                 // Control Room's network page, in its window if it is open (lot D-26n).
                 let (program, args) =
@@ -959,7 +968,6 @@ impl Bar {
                 self.quick.run_now(Power::PowerOff);
                 Task::none()
             }
-            Action::Updates | Action::GameMode => Task::none(),
         };
         ran.chain(self.close_menu())
     }
@@ -1437,7 +1445,8 @@ mod tests {
     #[test]
     fn enter_activates_the_highlighted_entry_and_closes_the_menu() {
         let (mut bar, _) = with_menu();
-        let _ = bar.update(Message::Hover(4));
+        // « Verrouiller »: it runs at once.
+        let _ = bar.update(Message::Hover(2));
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert!(!bar.menu_open());
         assert_eq!(bar.cursor, None);
@@ -1491,6 +1500,15 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_links_open_control_room() {
+        for page in [Some("network"), Some("sound"), Some("bluetooth"), None] {
+            let (mut bar, record) = recorded();
+            let _ = bar.update(Message::Quick(quick::Message::OpenSettings(page)));
+            assert_eq!(ran(&record), ["control-room"]);
+        }
+    }
+
+    #[test]
     fn a_network_joined_from_the_settings_opens_its_page() {
         let (mut bar, record) = recorded();
         let _ = bar.update(Message::Quick(quick::Message::OpenNetworkSettings));
@@ -1528,23 +1546,6 @@ mod tests {
         let _ = bar.update(Message::Activate(Action::PowerOff));
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert!(bar.armed.is_none() && ran(&record).is_empty());
-    }
-
-    #[test]
-    fn updates_and_game_mode_are_not_there_yet() {
-        for action in [Action::Updates, Action::GameMode] {
-            let (mut bar, record) = recorded();
-            assert!(!action.enabled());
-            assert_eq!(
-                action.trailing(),
-                sherlock_ui::component::Trailing::Shortcut("Bientôt")
-            );
-            let _ = bar.update(Message::Activate(action));
-            assert!(ran(&record).is_empty() && bar.menu_open());
-            let index = Action::ALL.iter().position(|a| *a == action).unwrap();
-            let _ = bar.update(Message::Hover(index));
-            assert_eq!(bar.cursor, None);
-        }
     }
 
     #[test]

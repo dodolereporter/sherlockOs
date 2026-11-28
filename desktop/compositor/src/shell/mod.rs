@@ -526,6 +526,8 @@ impl State {
                     ),
                     (ToplevelState::Minimized, minimized),
                     (ToplevelState::Activated, !minimized && is_activated(window)),
+                    // Refused the keyboard, it asks for attention (lot Q-52).
+                    (ToplevelState::Attention, self.needs_attention(window)),
                 ];
                 states.extend(flags.iter().filter(|f| f.1).map(|f| f.0 as u32));
                 let snapshot = toplevels::Snapshot {
