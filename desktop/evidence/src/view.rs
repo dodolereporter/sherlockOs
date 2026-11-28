@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use sherlock_ui::animated::{hoverable, reveal};
 use sherlock_ui::component::{self as ui, Trailing};
+use sherlock_ui::ellipsis::ellipsis;
 use sherlock_ui::evidence as more;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::scroll::scroll;
@@ -24,7 +25,8 @@ use crate::devices::Volume;
 use crate::git::GitStatus;
 use crate::icons::AppIcon;
 use crate::listing::{Column as SortColumn, Entry, Kind};
-use crate::preview::Preview;
+use crate::pathbar::visible;
+use crate::preview::{Preview, Real};
 
 mod path;
 
@@ -34,15 +36,6 @@ fn vline<'a>() -> Element<'a, Message> {
         .width(metrics::BORDER_WIDTH)
         .height(Length::Fill)
         .style(theme::divider)
-        .into()
-}
-
-/// Secondary text of a cell, with a fixed width.
-fn cell<'a>(content: String, width: f32) -> Element<'a, Message> {
-    ui::body(content)
-        .color(color::palette().text_secondary)
-        .wrapping(text::Wrapping::None)
-        .width(width)
         .into()
 }
 
@@ -84,16 +77,33 @@ fn git_badge(status: GitStatus) -> (&'static str, Tone) {
     }
 }
 
+/// Where the menu of « … » starts, in the window: just under the path bar.
+pub(crate) fn folded_top() -> f32 {
+    metrics::TITLE_BAR_HEIGHT
+        + metrics::BORDER_WIDTH
+        + (metrics::TOOLBAR_HEIGHT + metrics::BREADCRUMB_HEIGHT) / 2.0
+        + metrics::MENU_PADDING
+}
+
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         crate::startup::first(&crate::app::FIRST_VIEW, "first view");
         let now = self.now();
-        let mut body = Row::new()
-            .push(self.sidebar())
-            .push(vline())
-            .push(self.list(now));
-        if self.show_preview {
-            body = body.push(vline()).push(self.preview_panel(now));
+        let panes = self.panes();
+        let mut body = Row::new();
+        if panes.sidebar {
+            body = body.push(self.sidebar()).push(vline());
+        }
+        body = body.push(self.list(now, panes.columns));
+        // The preview slides in and out from the right edge (lot E-08).
+        let level = self.preview_level();
+        if level > 0.0 {
+            let width = (metrics::PREVIEW_WIDTH * level).round();
+            let panel = container(self.preview_panel(now))
+                .width(width)
+                .height(Length::Fill);
+            let panel = if level < 1.0 { panel.clip(true) } else { panel };
+            body = body.push(vline()).push(panel);
         }
         let page = column![
             self.title_bar(),
@@ -125,14 +135,23 @@ impl App {
             let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
             layers.push(self.context_menu(menu, items, sub, false));
         }
+        if let Some(folded) = self.folded_layer() {
+            layers.push(folded);
+        }
         if let Some(suggestions) = self.path_suggestions() {
             layers.push(suggestions);
         }
         if let Some(sheet) = self.go_to_sheet() {
             layers.push(sheet);
         }
+        if let Some(look) = self.quick_look_layer() {
+            layers.push(look);
+        }
         if self.confirm_empty {
             layers.push(self.dialog());
+        }
+        if let Some((_, _, _, names)) = &self.pending_paste {
+            layers.push(self.taken_dialog(names));
         }
         if let Some(search) = &self.chooser {
             layers.push(self.chooser(search));
@@ -201,15 +220,28 @@ impl App {
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             line = line.push(ui::branch_chip(t::branch(branch)));
         }
-        let search = ui::search_field(
-            &t::search_placeholder(&self.location_name()),
-            &self.search,
-            Some(Message::Search),
-            SEARCH,
-            metrics::SEARCH_WIDTH,
+        let search: Element<'_, Message> = if self.search_folded() {
+            ui::toolbar_button(Icon::Search, t::SEARCH, Some(Message::OpenSearch)).into()
+        } else {
+            ui::search_field(
+                &t::search_placeholder(&self.location_name()),
+                &self.search,
+                Some(Message::Search),
+                SEARCH,
+                metrics::SEARCH_WIDTH,
+            )
+        };
+        // The path bar takes the room left between the buttons and the search; at the right
+        // end, the button of the preview, lit while it is shown (lot E-08).
+        let mut preview = ui::toolbar_button(
+            Icon::Inspector,
+            t::PREVIEW_BUTTON,
+            Some(Message::Run(Command::TogglePreview)),
         );
-        // The path bar takes the room left between the buttons and the search.
-        let line = line.push(search);
+        if self.show_preview {
+            preview = preview.status(button::Status::Pressed);
+        }
+        let line = line.push(search).push(preview);
         container(line)
             .width(Length::Fill)
             .height(metrics::TOOLBAR_HEIGHT)
@@ -257,6 +289,39 @@ impl App {
             nav = nav.push(ui::nav_section(t::DEVICES));
             for volume in &self.volumes {
                 nav = nav.push(self.device_item(volume));
+            }
+        }
+        // The file servers of the network (lot E-07): a click connects, the eject button
+        // disconnects.
+        if !self.servers.is_empty() {
+            nav = nav.push(ui::nav_section(t::NETWORK));
+            for server in &self.servers {
+                let folder = self.mounted.get(&server.host);
+                let active = match (folder, &self.location) {
+                    (Some(folder), Location::Folder(dir)) => dir.starts_with(folder),
+                    _ => false,
+                };
+                let item = ui::nav_item_owned(
+                    Icon::Network,
+                    server.name.clone(),
+                    None,
+                    active,
+                    Some(Message::OpenServer(server.host.clone())),
+                );
+                let line: Element<'_, Message> = match folder {
+                    Some(_) => row![
+                        container(item).width(Length::Fill),
+                        ui::icon_button(
+                            Icon::Eject,
+                            t::EJECT,
+                            Some(Message::EjectServer(server.host.clone())),
+                        )
+                    ]
+                    .align_y(Alignment::Center)
+                    .into(),
+                    None => item.into(),
+                };
+                nav = nav.push(line);
             }
         }
         let root = std::path::PathBuf::from("/");
@@ -343,7 +408,8 @@ impl App {
             .into()
     }
 
-    fn list(&self, now: Duration) -> Element<'_, Message> {
+    /// The listing, with the columns its width leaves room for (`layout`).
+    fn list(&self, now: Duration, shown: [bool; 4]) -> Element<'_, Message> {
         let in_trash = self.location == Location::Trash;
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let header = |label: &str, column: SortColumn, sortable: bool| {
@@ -355,15 +421,23 @@ impl App {
         } else {
             (t::COLUMN_MODIFIED, t::COLUMN_GIT)
         };
-        let headers = row![
-            container(header(t::COLUMN_NAME, SortColumn::Name, true)).width(Length::Fill),
+        let columns = [
             container(header(date_label, SortColumn::Modified, true)).width(w_date),
             container(header(t::COLUMN_SIZE, SortColumn::Size, true)).width(w_size),
             container(header(t::COLUMN_KIND, SortColumn::Kind, true)).width(w_kind),
             container(header(last_label, SortColumn::Git, !in_trash)).width(w_last),
-        ]
-        .spacing(metrics::LIST_COLUMN_GAP)
-        .align_y(Alignment::Center);
+        ];
+        let headers = Row::new()
+            .push(container(header(t::COLUMN_NAME, SortColumn::Name, true)).width(Length::Fill))
+            .extend(
+                columns
+                    .into_iter()
+                    .zip(shown)
+                    .filter(|(_, on)| *on)
+                    .map(|(c, _)| c.into()),
+            )
+            .spacing(metrics::LIST_COLUMN_GAP)
+            .align_y(Alignment::Center);
         let headers = container(headers)
             .height(metrics::LIST_HEADER_HEIGHT)
             .padding([0.0, metrics::LIST_ROW_PADDING])
@@ -383,7 +457,7 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE))
+            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE, shown))
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
@@ -412,7 +486,7 @@ impl App {
 
     /// Only the visible rows, between two spacers that hold the place of the others: a
     /// listing of 5,000 files lays out only a few dozen widgets.
-    fn rows(&self, now: Duration, slide: f32) -> Element<'_, Message> {
+    fn rows(&self, now: Duration, slide: f32, shown: [bool; 4]) -> Element<'_, Message> {
         let row_height = metrics::LIST_ROW_HEIGHT;
         let total = self.entries.len();
         let (offset, _) = self.scroll;
@@ -427,10 +501,9 @@ impl App {
         let last = last.min(total);
         let before = metrics::LIST_TOP_GAP + first as f32 * row_height + slide;
         let after = (total - last) as f32 * row_height;
-        let name_chars = self.name_chars();
         let rows = Column::new()
             .push(space().height(before))
-            .extend((first..last).map(|i| self.row(i, &self.entries[i], name_chars)))
+            .extend((first..last).map(|i| self.row(i, &self.entries[i], shown)))
             .push(space().height(after))
             .width(Length::Fill);
         // The selection is drawn under the rows, in the first layer of the stack, which sets
@@ -505,26 +578,7 @@ impl App {
         layer.into()
     }
 
-    /// Characters of a name that fit in the name column, estimated from the window width:
-    /// a longer name is cut with an ellipsis rather than clipped, which would cost a mask.
-    fn name_chars(&self) -> usize {
-        let preview = if self.show_preview {
-            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
-        } else {
-            0.0
-        };
-        let fixed: f32 = metrics::LIST_COLUMNS.iter().sum::<f32>()
-            + 4.0 * metrics::LIST_COLUMN_GAP
-            + 2.0 * (metrics::LIST_PADDING + metrics::LIST_ROW_PADDING)
-            + metrics::LIST_ICON
-            + metrics::GAP_ICON
-            + metrics::SIDEBAR_WIDTH
-            + metrics::BORDER_WIDTH
-            + preview;
-        ((self.size.width - fixed) / typography::UI_CHAR_WIDTH).max(4.0) as usize
-    }
-
-    fn row<'a>(&'a self, i: usize, entry: &'a Entry, name_chars: usize) -> Element<'a, Message> {
+    fn row<'a>(&'a self, i: usize, entry: &'a Entry, shown: [bool; 4]) -> Element<'a, Message> {
         // The selection is drawn under the rows (`selection_layer`).
         let selected = self.selection.contains(i);
         let tint = match entry.kind {
@@ -538,9 +592,10 @@ impl App {
                     .on_submit(Message::RenameSubmit)
                     .into()
             }
-            _ => ui::body(elide(&crate::pathbar::visible(&entry.name), name_chars).into_owned())
+            // Cut with « … » where the shaped text stops fitting (lot E-05).
+            _ => ellipsis(crate::pathbar::visible(&entry.name))
                 .font(typography::UI_MEDIUM)
-                .wrapping(text::Wrapping::None)
+                .width(Length::Fill)
                 .into(),
         };
         let name = row![ui::icon(entry.icon(), metrics::LIST_ICON, tint), name]
@@ -549,13 +604,10 @@ impl App {
             .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
-            (Some(origin), _) => {
-                let chars = (w_last / typography::UI_CHAR_WIDTH) as usize;
-                cell(
-                    elide(&self.origin_label(origin), chars).into_owned(),
-                    w_last,
-                )
-            }
+            (Some(origin), _) => ellipsis(self.origin_label(origin))
+                .color(color::palette().text_secondary)
+                .width(w_last)
+                .into(),
             (None, Some(status)) => {
                 let (label, tone) = git_badge(status);
                 container(ui::badge(label, tone, selected))
@@ -564,15 +616,23 @@ impl App {
             }
             (None, None) => space().width(w_last).into(),
         };
-        let line = row![
-            name,
+        let cells = [
             cell_ref(&entry.labels.date, w_date),
             cell_ref(&entry.labels.size, w_size),
             cell_ref(&entry.labels.kind, w_kind),
             last,
-        ]
-        .spacing(metrics::LIST_COLUMN_GAP)
-        .align_y(Alignment::Center);
+        ];
+        let line = Row::new()
+            .push(name)
+            .extend(
+                cells
+                    .into_iter()
+                    .zip(shown)
+                    .filter(|(_, on)| *on)
+                    .map(|(c, _)| c),
+            )
+            .spacing(metrics::LIST_COLUMN_GAP)
+            .align_y(Alignment::Center);
         let line = container(line)
             .width(Length::Fill)
             .height(metrics::LIST_ROW_HEIGHT)
@@ -611,23 +671,43 @@ impl App {
                     Some(status) => t::in_git(&entry.labels.size, git_badge(status).0),
                     None => entry.labels.size.clone(),
                 };
-                // Names are cut rather than clipped: a clip costs the renderer a mask.
+                // Names are cut where the shaped text stops fitting, never clipped (lot E-05).
                 let room = metrics::PREVIEW_WIDTH
                     - 2.0 * metrics::PREVIEW_PADDING
                     - metrics::PREVIEW_TILE
                     - metrics::PREVIEW_GAP;
-                let scale = typography::CARD_TITLE_SIZE / typography::UI_SIZE;
-                let chars = (room / (typography::UI_CHAR_WIDTH * scale)) as usize;
                 let title = column![
-                    ui::body(elide(&crate::pathbar::visible(&entry.name), chars).into_owned())
+                    ellipsis(crate::pathbar::visible(&entry.name))
                         .font(typography::UI_SEMIBOLD)
                         .size(typography::CARD_TITLE_SIZE)
-                        .wrapping(text::Wrapping::None),
-                    ui::body(subtitle).color(color::palette().text_secondary),
+                        .width(room),
+                    ellipsis(subtitle)
+                        .color(color::palette().text_secondary)
+                        .width(room),
                 ];
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
                     .align_y(Alignment::Center);
+                // A name that hides what the file is: said before anything else (audit I-3).
+                let header: Element<'_, Message> = match (self.disguise, entry.extension()) {
+                    (Some(real), Some(extension)) => {
+                        let real = match real {
+                            Real::Program => t::REAL_PROGRAM,
+                            Real::Png => t::REAL_PNG,
+                            Real::Jpeg => t::REAL_JPEG,
+                            Real::Gif => t::REAL_GIF,
+                            Real::Pdf => t::REAL_PDF,
+                            Real::Zip => t::REAL_ZIP,
+                        };
+                        let warning = ui::body(t::disguised(&visible(&extension), real))
+                            .font(typography::UI_SEMIBOLD)
+                            .color(color::palette().salmon_text);
+                        column![header, warning]
+                            .spacing(metrics::PREVIEW_GAP)
+                            .into()
+                    }
+                    _ => header.into(),
+                };
                 let body: Element<'_, Message> = match &self.preview {
                     Preview::Text(lines) => ui::code_block(lines).into(),
                     Preview::Image(handle) => image(handle.clone()).width(Length::Fill).into(),
@@ -708,12 +788,27 @@ impl App {
                 .color(tint)
                 .wrapping(text::Wrapping::None)
         };
-        let line = row![
-            small(left, tint),
-            space::horizontal(),
-            small(t::HINT.into(), color::palette().text_tertiary),
-        ]
-        .align_y(Alignment::Center);
+        // A copy or a move under way: its bar and its stop button (lot E-11).
+        let right: Element<'_, Message> = match &self.progress {
+            Some(progress) => {
+                let fraction = progress.fraction();
+                row![
+                    small(
+                        format!("{} %", (fraction * 100.0).round()),
+                        color::palette().text_tertiary
+                    ),
+                    iced::widget::progress_bar(0.0..=1.0, fraction)
+                        .length(metrics::SEARCH_WIDTH)
+                        .girth(metrics::BORDER_WIDTH * 4.0),
+                    ui::secondary_button(t::STOP, Some(Message::StopTransfer)),
+                ]
+                .spacing(metrics::GAP_ICON)
+                .align_y(Alignment::Center)
+                .into()
+            }
+            None => small(t::HINT.into(), color::palette().text_tertiary).into(),
+        };
+        let line = row![small(left, tint), space::horizontal(), right].align_y(Alignment::Center);
         container(line)
             .width(Length::Fill)
             .height(metrics::STATUS_BAR_HEIGHT)
@@ -750,6 +845,91 @@ impl App {
         } else {
             menu.map(|_| Message::Inert)
         }
+    }
+
+    /// The large preview of Space, after the Finder's Quick Look (lot E-12): the item's name,
+    /// its content as large as the window allows, on glass, zooming in and out.
+    fn quick_look_layer(&self) -> Option<Element<'_, Message>> {
+        let level = self.look_level();
+        if level <= 0.0 {
+            return None;
+        }
+        let entry = self.single()?;
+        let width = (self.size.width * more::QUICK_LOOK_SHARE).round();
+        let height = (self.size.height * more::QUICK_LOOK_SHARE).round();
+        let body: Element<'_, Message> = match &self.preview {
+            Preview::Text(lines) => scroll(ui::code_block(lines)).height(Length::Fill).into(),
+            Preview::Image(handle) => container(
+                image(handle.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .center(Length::Fill)
+            .into(),
+            Preview::Info => self.info(entry),
+        };
+        let card = column![
+            ui::body(
+                elide(
+                    &crate::pathbar::visible(&entry.name),
+                    (width / typography::UI_CHAR_WIDTH) as usize
+                )
+                .into_owned()
+            )
+            .font(typography::UI_SEMIBOLD)
+            .size(typography::CARD_TITLE_SIZE)
+            .wrapping(text::Wrapping::None),
+            container(body).height(Length::Fill),
+        ]
+        .spacing(metrics::PREVIEW_GAP)
+        .height(height - 2.0 * metrics::PANEL_PADDING);
+        let panel = ui::floating_panel(card, width);
+        let scale = more::QUICK_LOOK_FROM + (1.0 - more::QUICK_LOOK_FROM) * level;
+        let panel = reveal(panel).opacity(level).scale(scale, (0.5, 0.5));
+        let panel = if self.looking {
+            Element::from(panel)
+        } else {
+            Element::from(panel).map(|_| Message::Inert)
+        };
+        // The window dims behind it, with it; a click outside closes it.
+        let scrim = container(space())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::scrim);
+        let catcher =
+            mouse_area(reveal(scrim).opacity(level)).on_press(Message::Run(Command::QuickLook));
+        Some(stack![opaque(catcher), container(panel).center(Length::Fill)].into())
+    }
+
+    /// The names a paste would take: replace, keep both, skip, for all of them (lot E-11).
+    fn taken_dialog(&self, names: &[String]) -> Element<'_, Message> {
+        use crate::transfer_job::Taken;
+        let first = names.first().map(String::as_str).unwrap_or_default();
+        let actions = row![
+            ui::secondary_button(t::CANCEL, Some(Message::TakenChoice(None))),
+            space::horizontal(),
+            ui::secondary_button(t::SKIP, Some(Message::TakenChoice(Some(Taken::Skip)))),
+            ui::secondary_button(
+                t::KEEP_BOTH,
+                Some(Message::TakenChoice(Some(Taken::KeepBoth)))
+            ),
+            ui::primary_button(t::REPLACE, Some(Message::TakenChoice(Some(Taken::Replace)))),
+        ]
+        .spacing(metrics::BUTTON_STACK_GAP);
+        let card = column![
+            ui::body(t::taken_question(
+                names.len(),
+                &crate::pathbar::visible(first)
+            ))
+            .font(typography::UI_SEMIBOLD)
+            .size(typography::CARD_TITLE_SIZE),
+            ui::description(t::TAKEN_DETAIL),
+            actions,
+        ]
+        .spacing(metrics::PREVIEW_GAP);
+        let panel = ui::floating_panel(card, metrics::DIALOG_WIDTH * 1.4);
+        opaque(container(panel).center(Length::Fill).style(theme::scrim))
     }
 
     /// The menu itself, unfolding or folding back from its top left corner (lot E-01).

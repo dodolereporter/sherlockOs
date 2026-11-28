@@ -262,6 +262,8 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
         ..c
     };
     match glyph {
+        // The hole of an application dragged over the dock: room, nothing drawn (D-41d).
+        Glyph::None => space().width(side).height(side).into(),
         // Smooth edges on the GPU, at rest and magnified, rasterized once per step (UI-05).
         Glyph::File(handle) => sherlock_ui::raster::icon(handle, side)
             .opacity(opacity)

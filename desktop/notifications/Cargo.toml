@@ -8,6 +8,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Its connection to the shell socket, the only one that offers anchored surfaces (workspace
+# crate, lot D-46).
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
 # The theme of the appearance file, followed live (workspace crate).
 appearance-config = { path = "../appearance-config" }
 # The same as the bar and the dock (docs/bar.md). `image-without-codecs`, as Evidence: the

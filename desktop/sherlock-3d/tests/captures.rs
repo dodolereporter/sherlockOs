@@ -1,5 +1,6 @@
 //! Captures of the moods the lock screen uses, in the round bubble, dark and light, at two
-//! sizes, and two sequences of 8 frames, eyes closing and peeking at the field below. They go
+//! sizes, and three sequences of 8 frames: eyes closing, eyes closing while the head bends
+//! toward the field below as a key is typed, and peeking at the field. They go
 //! to `target/tmp/sherlock-3d/captures/`, never into the repository.
 //!
 //! Picking the Vulkan driver changes the environment, which needs a single thread: this test
@@ -120,15 +121,17 @@ fn main() -> Result {
     // The sequences, dark, at the larger size.
     let palette = Palette::DARK;
     let side = SIDES[1];
-    for (mood, name) in [
-        (Mood::EyesClosed, "seq-yeux-fermes"),
-        (Mood::Peek, "seq-peek"),
+    // While typing (lot D-24d), his head bends toward the field, eyes closed or peeking.
+    for (mood, gaze, name) in [
+        (Mood::EyesClosed, false, "seq-yeux-fermes"),
+        (Mood::EyesClosed, true, "seq-frappe"),
+        (Mood::Peek, true, "seq-peek"),
     ] {
         let mut animator = Animator::new(model.clone());
         for _ in 0..15 {
             animator.advance(1.0 / 30.0);
         }
-        if mood == Mood::Peek {
+        if gaze {
             let field = Camera::UPPER_BODY.unproject(FIELD, 1.0, 4.0);
             animator.look_at(Some(field));
         }
