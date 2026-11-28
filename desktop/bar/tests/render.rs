@@ -493,6 +493,31 @@ fn the_panels_render_in_both_themes() {
     }
 }
 
+/// Do not disturb for a time (D-23e): the moon among the indicators (`bar-do-not-disturb`), the
+/// tile saying until when and its durations page (`do-not-disturb-durations`).
+#[test]
+fn do_not_disturb_shows_in_the_bar_and_its_durations() {
+    let mut state = sample();
+    state.do_not_disturb = true;
+    let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+    assert_written(capture(ui, "bar-do-not-disturb"));
+    state.panel_margins = panel::margins(false);
+    board_quick(&mut state);
+    state.quick.do_not_disturb = Some(true);
+    state.quick.dnd_until = Some(notifications_config::epoch_now() + 3600);
+    let size = panel_size(&state, Panel::Control);
+    {
+        let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+        assert!(ui.find("Ne pas déranger").is_ok());
+    }
+    let _ = state.quick.update(quick::Message::ShowFocus(true));
+    state.quick.tick(state.quick.now + Duration::from_secs(5));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+    assert!(ui.find("Pendant 1 heure").is_ok());
+    assert!(ui.find("Jusqu’à demain matin").is_ok());
+    assert_written(capture(ui, "do-not-disturb-durations"));
+}
+
 /// The outputs and the inputs of the sound (D-20g): the speakers in use, HDMI and a
 /// Bluetooth headset, two inputs and the microphone's slider. `sound-devices`, both themes.
 #[test]
