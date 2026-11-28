@@ -395,6 +395,12 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Undo and redo (lot E-10).
+    pub const UNDO: &str = "Annuler";
+    pub const REDO: &str = "Rétablir";
+    pub const UNDONE: &str = "C'est annulé.";
+    pub const REDONE: &str = "C'est rétabli.";
+    pub const NOTHING_TO_UNDO: &str = "Il n'y a rien à annuler.";
     /// Copies and moves: stopped, and the question on taken names (lot E-11).
     pub const STOPPED: &str = "Arrêté. Ce qui était en cours d'écriture a été retiré.";
     pub const STOP: &str = "Arrêter";
