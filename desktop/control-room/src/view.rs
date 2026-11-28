@@ -269,6 +269,7 @@ impl App {
                 Page::Appearance => self.appearance(inner),
                 Page::Keyboard => self.keyboard(inner),
                 Page::Touchpad => self.touchpad(inner),
+                Page::Accessibility => self.accessibility(inner),
                 Page::Lock => self.lock(inner),
                 Page::Clipboard => self.clipboard(inner),
                 Page::DefaultApps => self.default_apps(inner),
