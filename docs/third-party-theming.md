@@ -81,7 +81,11 @@ stops). It sets the theme of the appearance file at start, then at every change:
   read Plasma's (Breeze) from the user's database. Same database, same refusal outside the
   session.
 - the `color_scheme_path` line of `qt5ct.conf` and `qt6ct.conf` names the palette of the theme.
-  The file is replaced through a rename, and every other line is kept. A settings file that
+  The file is replaced through a rename (`mime_apps::write_bytes_atomically`: flushed, its
+  permissions and its link kept), and every other line is kept. A file the user saved from
+  qt5ct or qt6ct without that line gets it added at the top of `[Appearance]` (with
+  `custom_palette=true` unless the group says otherwise), never written again in full; the file
+  as it was is kept beside it as `qt5ct.conf.bak` or `qt6ct.conf.bak`. A settings file that
   `install` did not write is left alone.
 
 `toolkit-theme apply [dark|light]` does the same once.

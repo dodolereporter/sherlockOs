@@ -16,7 +16,7 @@ use shell_protocol::client::sherlock_shell_toplevel_v1::{
 };
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_registry::WlRegistry;
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, event_created_child};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, event_created_child};
 
 use crate::windows::{Control, Owns, Place, Request, Source, SourceError, Stamps, Window, Windows};
 
@@ -51,12 +51,15 @@ impl Shell {
     /// Binds the manager on `connection` and reads the windows already open.
     pub fn with_connection(connection: Connection) -> Result<Self, SourceError> {
         let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
-        let manager = globals
-            .bind(&queue.handle(), 1..=4, ())
+        let manager: SherlockShellManagerV1 = globals
+            .bind(&queue.handle(), 1..=5, ())
             .map_err(SourceError::NoShellProtocol)?;
+        // App Expose came with version 4, the attention state with version 5.
+        let expose = (manager.version() >= 4).then(|| manager.clone());
         let control = ShellControl {
             connection,
             shared: Arc::new(Mutex::new(Shared::default())),
+            manager: expose,
         };
         let mut toplevels = Toplevels {
             control: Some(control.clone()),
@@ -123,6 +126,7 @@ impl Source for Shell {
             list,
             controllable: true,
             covered,
+            expose: self.control.manager.is_some(),
         })
     }
 
@@ -145,6 +149,8 @@ impl Source for Shell {
 pub struct ShellControl {
     connection: Connection,
     shared: Arc<Mutex<Shared>>,
+    /// The manager, when it offers `show_windows` (version 4).
+    manager: Option<SherlockShellManagerV1>,
 }
 
 /// What the requests need, kept by the watching thread at each `done`.
@@ -234,6 +240,21 @@ impl Control for ShellControl {
         tracing::info!(?request, id = window.id, "window asked");
     }
 
+    fn show_windows(&self, ids: &[u64]) {
+        let Some(manager) = &self.manager else {
+            tracing::info!("the compositor has no App Expose (sherlock_shell_v1 version 4)");
+            return;
+        };
+        let bytes: Vec<u8> = ids
+            .iter()
+            .filter_map(|id| u32::try_from(*id).ok())
+            .flat_map(u32::to_ne_bytes)
+            .collect();
+        manager.show_windows(bytes);
+        self.flush();
+        tracing::info!(?ids, "app expose asked");
+    }
+
     fn place(&self, places: Vec<Place>) {
         let mut shared = lock(&self.shared);
         shared.places = places;
@@ -266,7 +287,7 @@ struct Toplevel {
     title: String,
     activated: bool,
     minimized: bool,
-    /// Asks for attention (version 4, lot Q-52).
+    /// Asks for attention (version 5, lot Q-52).
     attention: bool,
     recency: u64,
     pending_app_id: Option<String>,

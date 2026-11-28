@@ -32,7 +32,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
 | `src/cursor.rs` | Cursor of the real session: the house theme or the user's, size and scale, the turn of the waiting cursors, the fade of a new shape, shake to find (lot D-07, see `docs/cursor.md`) |
-| `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
+| `src/keyboard.rs` | Keyboard layout and repeat: `keyboard.conf`, `XKB_DEFAULT_*`, the system setting, or French AZERTY |
 | `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
 | `src/lib.rs` | `State`: Wayland display, protocols, seat, `Space` of the windows. Socket, screen, focus |
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
@@ -90,10 +90,10 @@ Behavior:
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
 - Windows that ask for it get their title bar from the compositor (lot D-08, see
   "Server-side decorations"); the others draw their own.
-- The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
-  `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
-  `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
-  `/etc/default/keyboard` (Debian).
+- The keyboard is French AZERTY, unless the keyboard setting names a layout (see "Keyboard"),
+  `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the `XKB_DEFAULT_*` variables), or the
+  system sets a layout: `XKBLAYOUT`, `XKBVARIANT`, `XKBOPTIONS` and `XKBMODEL` in
+  `/etc/vconsole.conf` (written by `localectl`) or else in `/etc/default/keyboard` (Debian).
 
 Moving and resizing:
 
@@ -164,6 +164,10 @@ Snapping:
 - F4 alone opens the applications view, and closes it when pressed again (lot D-41, see
   `docs/apps.md`): `$SHERLOCKOS_BIN/sherlockos-apps`, or `sherlockos-apps` in the `PATH`. F4 with
   a modifier (Alt + F4) still goes to the client.
+- Super + comma (Alt + comma nested) opens Control Room, as Cmd + , opens the settings on macOS
+  (lot Q-31): `$SHERLOCKOS_BIN/control-room`, or `control-room` in the `PATH`, the program
+  « Réglages » of the bar's Sherlock menu starts too. The menu shows the shortcut beside the
+  entry, and Super+L beside « Verrouiller ».
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -370,7 +374,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy`, `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose), `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
 | `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
@@ -384,7 +388,8 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   keeps the screen and the geometry it had. Without any screen, a window stays listed with an
   empty screen name and its place in the space.
 - **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`,
-  and from version 4 `attention` (lot Q-52, see "Activation" below).
+  and from version 5 `attention` (lot Q-52, see "Activation" below); a client bound at an
+  older version never receives it.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
@@ -392,11 +397,12 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 3. Version 2 (lot D-18d) adds `snapped` to
+- **Versions.** The global is offered at version 4. Version 2 (lot D-18d) adds `snapped` to
   the states of a screen; a client that binds version 1 never receives it: a screen with only a
   snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
-  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. A toplevel
-  has the version of its manager.
+  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. Version 4
+  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). A toplevel has the
+  version of its manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -854,7 +860,7 @@ a notification, a second launch. `State::request_activation` (`activation.rs`) d
 - **Granted:** out of its minimized state, its workspace shown, raised with the animation of
   D-19d and given the keyboard (`State::activate`, as the dock does).
 - **Refused:** no keyboard stolen. The window asks for attention: the `attention` state of
-  `sherlock_shell_v1` (version 4), for the dock to show, until it gets the keyboard.
+  `sherlock_shell_v1` (version 5; version 4 is App Expose), for the dock to show, until it gets the keyboard.
 - **Wayland, `xdg-activation-v1`.** A token is granted when it carries the serial of a press
   (button or key, the last 32 remembered, within 10 s) that the compositor gave to the very
   client that asks for it: the bar, after a click on an icon, asks for one and hands it to the
@@ -1665,8 +1671,8 @@ mode = cover
   pixel, centered.
 - The file is checked every 2 seconds (one `stat`, modification time and length): when it
   changes, it is read again and the wallpaper changes, without restarting.
-- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number, and the
-  default setting applies. A missing image, a wallpaper that is not installed, a folder without
+- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number and left
+  out; the other lines still count (Q-40). A missing image, a wallpaper that is not installed, a folder without
   variants or an image that does not decode is logged, and the background of the board shows:
   color and discs. Never a crash.
 
@@ -2155,10 +2161,10 @@ installed. Each choice is written in the session log (`~/.local/state/sherlockos
   and `XDG_DATA_DIRS`, with `--systemd` on the user's shared bus (the portals are systemd user
   services there). The setting is never written into the home folder. Reading it from
   `XDG_DATA_DIRS` needs xdg-desktop-portal 1.18 or later (Debian 13 has 1.20).
-- **Screen sharing and screenshots** through the portals are not there yet: the
-  `xdg-desktop-portal-wlr` backend needs the `wlr-screencopy` protocol (or
-  `ext-image-copy-capture`), which Smithay 0.7 does not provide, and which this lot leaves to a
-  lot of its own. The screenshots of the compositor itself (Print Screen) come with lot D-35c.
+- **Screen sharing and screenshots** through the portals are not there yet. Since lot D-28b
+  the compositor offers a capture protocol to the shell socket (see "Screen capture"); the
+  portal backend that uses it comes with lot D-28d (ADR 0028). The screenshots of the
+  compositor itself (Print Screen) come with lot D-35c.
 
 Debian packages to install for all of it (the author installs them; `just install-session`
 prints the line for those missing): `xdg-desktop-portal`, `xdg-desktop-portal-gtk`,
@@ -2206,8 +2212,8 @@ theme. Each console switch logs `session paused` and `session active again`.
   handle having no screen).
 - The author's test of Xwayland in the real session, now on by default (lot D-35b): does it keep
   off the NVIDIA card with the dmabuf feedback?
-- Screen sharing and screenshots through the portals: the compositor offers no capture
-  protocol yet (see "Everyday services").
+- Screen sharing and screenshots through the portals: the capture protocol is there (lot
+  D-28b), the portal backend not yet (lot D-28d, see "Screen capture").
 - `DmabufBlocker` in the real session (see "GPU buffers").
 
 ### Frames of the real session (lot P-01)
@@ -2242,6 +2248,29 @@ times a second on the reference laptop's screen. Now:
 - **Frame callbacks.** Clients get theirs when their frame goes to the screen, or at the
   estimated blank when nothing was shown; hidden windows once a second, by a timer of their own.
 
+## Keyboard
+
+Lot D-26c: the layout and the repeat of held keys, set in Control Room's Keyboard page.
+`$XDG_CONFIG_HOME/sherlockos/keyboard.conf`, read by `desktop_config::keyboard`, in the same
+`key = value` form as `touchpad.conf`. Every key is optional.
+
+| Key | Default | Values | Effect |
+| --- | --- | --- | --- |
+| `layout` | none | an xkb layout (`fr`, `us`, `us,fr`…); empty: none | The layout; without one, the environment or the system's, as above |
+| `variant` | empty | an xkb variant (`bepo`, `intl`…) | The variant of that layout |
+| `repeat-delay` | `200` | `150` to `1000` | Milliseconds before a held key repeats |
+| `repeat-rate` | `25` | `2` to `50` | Repeats per second |
+
+A layout or variant name holds only letters, digits, `_`, `-` and the `,` of a list, 64
+characters at most: nothing xkbcommon could take as a path. The model and the options stay the
+system's. The file is read at startup, in nested mode and in the real session, and again within
+2 seconds of a change (modification time and length, as `touchpad.conf`). It is read leniently:
+a wrong line goes to the log and the others count; a file over 64 KiB is left aside. A new
+layout is compiled by xkb (`KeyboardHandle::set_xkb_config`) only when it changes; a layout xkb
+refuses keeps the one in use, with a warning, so the keyboard never stops answering. The repeat
+goes to the clients (`change_repeat_info`), and the media keys repeat at the same pace
+(`State::key_repeat`). `State::set_keyboard` applies a setting directly, for the tests.
+
 ## Touchpad
 
 Lot D-31 makes the touchpad behave like a Mac's: its setting in a file that Control Room's
@@ -2268,7 +2297,8 @@ optional; without the file, the defaults below apply.
 Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
 when they are plugged in, and again within 2 seconds of a change of the file (modification time
 and length looked at every 2 seconds, as `wallpaper.conf`). A wrong line, an unknown key or a
-speed out of range gives the defaults, with a warning naming the line in the log. What a
+speed out of range is left out, with a warning naming the line in the log, and the other lines
+still count (Q-40): one typo never turns the whole file back to the defaults. What a
 touchpad does not support is skipped (`debug` level): a touchpad without a physical button has
 no button areas. `State::set_touchpad` applies a setting directly, for the tests and for
 Control Room later.
@@ -2364,6 +2394,59 @@ libinput events to `State::process_input_event`:
    `~/.config/sherlockos/touchpad.conf`: within 2 seconds the log shows the new setting, and the
    gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
 
+## Screen capture (lot D-28b)
+
+Screen sharing (Discord, Meet in Chrome, Teams) goes through `xdg-desktop-portal`, whose
+`ScreenCast` backend takes the frames from the compositor and pushes them into PipeWire. ADR 0028
+sets the path: the compositor speaks the standard capture protocols, a portal backend of our own
+(lot D-28d) asks the user and feeds PipeWire, and the compositor holds the policy (indicator,
+stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
+
+- **Protocols.** `ext_image_copy_capture_manager_v1` and
+  `ext_output_image_capture_source_manager_v1`, version 1, written against `wayland-protocols`
+  0.32 since Smithay 0.7 has no helper for them. A window as a source
+  (`ext-foreign-toplevel-image-capture-source-v1`), the cursor painted into the frames and the
+  cursor sessions come with lot D-28c: until then `paint_cursors` is accepted and the frames
+  show no cursor, and a cursor session's capture session stops at once.
+- **Only the shell socket** sees these globals (`can_view`, as `sherlock_shell_v1`, ADR 0021):
+  they show every pixel of the session, so an ordinary application, a Flatpak one or XWayland
+  cannot capture anything, and has to go through the portal.
+- **Session.** On a screen, it gives the buffer it needs: the size of the screen's frame in
+  pixels, and two shared memory formats, `xrgb8888` and `argb8888`, the two every compositor
+  offers (`wl_shm` has no other here), blue first in memory: the copy swaps red and blue, which
+  the renderer reads first. A screen that goes away, or
+  changes size, stops its sessions (`stopped`, and the frame fails with `stopped`). Dmabuf
+  buffers come later.
+- **Frames.** One at a time per session. Once its capture is asked for, the frame waits for the
+  screen to show a new picture since the session's previous frame: the real session reports
+  each frame with damage it queues (`screen_changed`), so a frame comes at most once per
+  vertical blank, and never while the screen shows nothing new. The redraw counter could not
+  serve: every client request moves it, the capture's own included. Then the compositor draws
+  the screen offscreen as
+  it shows, without the cursor, with the screenshots' `Capturer` (lot D-35c), once per screen
+  for all its sessions. It copies the drawing row by row into the client's buffer, which may
+  have padded rows and start anywhere in its pool, then sends `transform` (normal), the damage
+  (the whole frame), the time (`CLOCK_MONOTONIC`) and `ready`. A buffer of another size fails
+  the frame with `buffer_constraints`, without a renderer (nested mode, tests
+  without one) with `unknown`; the session goes on. Protocol errors as the protocol says:
+  `duplicate_frame`, `no_buffer`, `already_captured`, `invalid_buffer_damage`,
+  `invalid_option`.
+- **Locked.** While the session is locked the screen is never drawn for a capture: every frame
+  is black and opaque, the session goes on. The lock screen itself is not shared either.
+- **Cost.** Each frame is a render of the screen offscreen, a read back and a copy, in the
+  compositor's thread: the price to measure at 1080p before lot D-28d, and the reason for the
+  dmabuf buffers that follow.
+- **Tests** (`tests/screencast.rs`, with a capturer of the test that draws a pattern): only the
+  shell client sees the globals; the session asks for 800 × 600 in `xrgb8888`; a frame into a
+  buffer with padded rows from 64 bytes into its pool is the pattern, the padding untouched;
+  the next frame waits while the screen shows nothing new and comes once a new picture is
+  reported; while locked the
+  frame is black and the screen never drawn (the test's lock programs leave at once: the
+  compositor's own lock screen); a buffer of another size fails the frame, and a buffer that
+  fits then gets one. With Mesa's software renderer
+  (`--ignored`): a red window in the middle of the screen is red in the captured frame, the
+  desktop around it is not.
+
 ## Mission Control
 
 Lots D-33a and D-33b: every window of the active workspace side by side, under the strip of the
@@ -2431,6 +2514,34 @@ surface keeps the keyboard (a lock screen).
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
+
+### App Expose
+
+Lot D-21c2: Mission Control on the windows of one application, as the macOS dock opens it.
+The dock asks for it with `show_windows` of `sherlock_shell_v1` (version 4), giving the ids of
+the windows (the `id` events): the « Afficher toutes les fenêtres » entry of its menu, and a
+swipe down over its icon. Ids rather than
+an `app_id`: one application may have Wayland windows under its desktop file id and X11 ones
+under its class, which only the dock groups (by its desktop entries, see `docs/dock.md`).
+
+- `State::show_windows` keeps the ids (`Overview::only`) and opens the view; `overview_tiles`
+  then keeps only those windows, among the ones the view shows anyway (active workspace, not
+  minimized, X11 menus aside). Unknown ids are left out; with no window to show, nothing
+  opens.
+- **No strip**: the windows take its room, under a margin of 32 like the sides
+  (`overview_strip` is empty, so no thumbnail is drawn nor hit).
+- Everything else is Mission Control: the same grid, animation, titles and highlight; a click
+  on a window chooses it, a click elsewhere, Escape or the gesture key close the view. Asked
+  while the view is open, it shows the new windows at once. Opened by its keys or the fingers
+  afterwards, the view shows every window again.
+- **Not done**: the minimized windows, which macOS shows in a row at the bottom, and windows of
+  the application on other workspaces; a window the application opens while App Expose is
+  shown does not join it.
+
+`tests/shell.rs` (`the_shell_opens_mission_control_on_the_windows_of_one_application`): unknown
+ids open nothing; two of three windows, without the strip; asked again while open, other
+windows; Escape closes it, and Mission Control opened afterwards shows the three, strip
+included.
 
 ### Dragging to another workspace
 
@@ -2544,7 +2655,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **Triggers (lot D-25a3, `src/triggers.rs`).** The session also locks:
   - after a delay without input (keyboard, pointer, touchpad), set in
     `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
-    within a second when it changes; `desktop_config::lock`, which Control Room will write);
+    within a second when it changes; `desktop_config::lock`, which Control Room writes); a wrong
+    line is logged and left out, the others still count, so « Jamais » stays never (Q-40);
     no application can hold it off yet (no `idle-inhibit` protocol);
   - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
     the launcher and the bar);
@@ -2830,6 +2942,11 @@ The tests in `tests/headless.rs`:
   receives a configure of 776 × 36, draws, and the work area becomes (0, 46, 800, 554): the
   maximized window is configured at 800 × 554 in (0, 46). Snapped left, it takes 400 × 554 in
   (0, 46). A click on the bar gives it the keyboard (on demand).
+- **The keyboard in a panel** (Q-51). A click in a menu or a panel of an anchored surface (an
+  `xdg_popup` of the bar) gives the keyboard to that popup, not to the bar under it: the bar's
+  toolkit sends the keys to the window whose surface has the focus, and the Wi-Fi password
+  field is in the panel. Before, the focus went to the bar's surface and the field never got a
+  key. A click on the bar gives it back to the bar.
 - **Exclusive zones stacked.** Two bars at the top and a dock of 76 at the bottom: work area
   (0, 92, 800, 432), and the maximized window follows. A surface with a zone of -1 changes
   nothing. Closing the second bar gives (0, 46, 800, 478), closing them all the whole screen.
