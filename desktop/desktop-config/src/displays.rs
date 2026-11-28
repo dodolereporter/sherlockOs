@@ -15,6 +15,9 @@
 //! transform = normal
 //! enabled = true
 //! ```
+//!
+//! A second screen also keeps how it was last projected on (lot D-39, Super + P), taken again
+//! when it is plugged in: `projection = laptop`, `duplicate`, `extend` or `second`.
 
 use std::{
     ffi::OsString,
@@ -163,6 +166,38 @@ pub struct Screen {
     pub position: (i32, i32),
     pub transform: Transform,
     pub enabled: bool,
+    /// How this screen was last projected on with Super + P (lot D-39).
+    pub projection: Option<Projection>,
+}
+
+/// The four ways of projecting (lot D-39).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Projection {
+    /// The laptop's screen alone.
+    Laptop,
+    /// Both screens show the same.
+    Duplicate,
+    /// The second screen to the right of the laptop's.
+    Extend,
+    /// The second screen alone.
+    Second,
+}
+
+impl Projection {
+    pub const ALL: [Self; 4] = [Self::Laptop, Self::Duplicate, Self::Extend, Self::Second];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Laptop => "laptop",
+            Self::Duplicate => "duplicate",
+            Self::Extend => "extend",
+            Self::Second => "second",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == text)
+    }
 }
 
 impl Screen {
@@ -174,6 +209,7 @@ impl Screen {
             position: (0, 0),
             transform: Transform::Normal,
             enabled: true,
+            projection: None,
         }
     }
 }
@@ -284,6 +320,9 @@ impl Config {
                 s.transform.as_str(),
                 s.enabled
             );
+            if let Some(projection) = s.projection {
+                let _ = writeln!(text, "projection = {}", projection.as_str());
+            }
         }
         text
     }
@@ -324,6 +363,12 @@ fn read_key(screen: &mut Screen, key: &str, value: &str) -> Result<(), String> {
         "enabled" => {
             screen.enabled = value.parse().map_err(|_| wrong("true or false"))?;
         }
+        "projection" => {
+            screen.projection = Some(
+                Projection::parse(value)
+                    .ok_or_else(|| wrong("laptop, duplicate, extend or second"))?,
+            );
+        }
         _ => return Err(format!("unknown key {key:?}")),
     }
     Ok(())
@@ -350,6 +395,7 @@ mod tests {
             position: (-1504, 120),
             transform: Transform::Rotate90,
             enabled: true,
+            projection: None,
         }
     }
 
@@ -359,6 +405,7 @@ mod tests {
         config.put(laptop());
         let mut other = Screen::new(Identity::new("DEL", "U2720Q", "ABC 123"));
         other.enabled = false;
+        other.projection = Some(Projection::Duplicate);
         config.put(other);
         let (read, problems) = Config::parse_lenient(&config.to_text());
         assert!(problems.is_empty(), "{problems:?}");

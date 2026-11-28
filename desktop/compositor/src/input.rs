@@ -126,6 +126,10 @@ enum Shortcut {
     Restore,
     /// Tab: opens or closes Mission Control (lot D-33).
     ToggleOverview,
+    /// Super + P: the projection chooser, or its next choice (lot D-39).
+    Projection,
+    /// A key while the projection chooser is open (lot D-39).
+    ProjectionKey(Keysym),
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
     /// Comma: opens Control Room, as Cmd + , opens the settings on macOS (lot Q-31).
@@ -244,6 +248,7 @@ impl Shortcut {
             Keysym::comma => Some(Self::Settings),
             Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
+            Keysym::p => Some(Self::Projection),
             _ => None,
         }
     }
@@ -916,6 +921,25 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
+            // The projection chooser keeps the arrows, Enter, Space, Escape and P (lot D-39).
+            if state.projection_open()
+                && matches!(
+                    sym,
+                    Keysym::Left
+                        | Keysym::Right
+                        | Keysym::Up
+                        | Keysym::Down
+                        | Keysym::Return
+                        | Keysym::KP_Enter
+                        | Keysym::space
+                        | Keysym::Escape
+                        | Keysym::p
+                        | Keysym::P
+                )
+            {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(Shortcut::ProjectionKey(sym)));
+            }
             if let Some(shortcut) =
                 Shortcut::in_overview(mods, sym).filter(|_| state.overview_open())
             {
@@ -986,6 +1010,14 @@ impl State {
             }
             Shortcut::NeighborWorkspace(steps) => {
                 self.activate_workspace_by(steps);
+                return;
+            }
+            Shortcut::Projection => {
+                self.toggle_projection();
+                return;
+            }
+            Shortcut::ProjectionKey(sym) => {
+                self.projection_key(sym);
                 return;
             }
             Shortcut::ToggleOverview => {
@@ -1281,6 +1313,15 @@ impl State {
             pointer.frame(self);
             if button == BTN_LEFT {
                 self.consent_button(state == ButtonState::Pressed, location);
+            }
+            return;
+        }
+        if self.projection_open() {
+            // The projection chooser: the click goes to no client (lot D-39).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            if button == BTN_LEFT && state == ButtonState::Pressed {
+                self.projection_click(location);
             }
             return;
         }

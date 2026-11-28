@@ -667,6 +667,8 @@ fn screen_items(
     let scale = view.scale as f32;
     // Sherlock's consent window, in front of everything (lot A-11b, ADR 0031).
     animating |= crate::consent::push_items(&mut items, state, (output, view));
+    // The projection chooser, Super + P (lot D-39).
+    animating |= crate::projection::push_items(&mut items, state, (output, view), now);
     // The area of a screenshot being chosen, then the on-screen display of the media keys, in
     // front of everything (lot D-35).
     // The rings of the clicks shown, in front of everything (lot C-01).
