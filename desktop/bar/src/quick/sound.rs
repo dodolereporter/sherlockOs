@@ -200,6 +200,10 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(super::settings_link(
+            words::SOUND_SETTINGS,
+            Some(super::SOUND_PAGE),
+        ));
         page.into()
     }
 }

@@ -20,7 +20,7 @@ use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::motion::Fade;
 
-use crate::anim::{Launch, Leaving, Poof, Track};
+use crate::anim::{Bounce, Launch, Leaving, Poof, Track};
 use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::hide::{self, Hide};
@@ -136,6 +136,8 @@ pub struct Dock {
     pub(crate) sources: Sources,
     glyphs: HashMap<String, Glyph>,
     pub geometry: Geometry,
+    /// The geometry of the settings, before it is fitted to the screen (`Geometry::fitted`).
+    pub base: Geometry,
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
@@ -145,6 +147,10 @@ pub struct Dock {
     pub leaving: Vec<Leaving>,
     /// Applications started from the dock, bouncing until their first window.
     pub launches: Vec<Launch>,
+    /// Applications whose window asks for attention, bouncing a few hops (lot Q-52), and the
+    /// windows that asked at the last list: a window that keeps asking bounces once.
+    pub calls: Vec<(Target, Bounce)>,
+    calling: Vec<u64>,
     /// The icon let go out of the dock, which vanishes where it is.
     dropping: Option<Target>,
     /// The puffs of smoke of the applications unpinned by a drag out of the dock.
@@ -198,11 +204,14 @@ impl Dock {
             sources,
             glyphs: HashMap::new(),
             geometry,
+            base: geometry,
             surface_size: Size::ZERO,
             surface: None,
             tracks: Vec::new(),
             leaving: Vec::new(),
             launches: Vec::new(),
+            calls: Vec::new(),
+            calling: Vec::new(),
             dropping: None,
             poofs: Vec::new(),
             press: None,
@@ -266,6 +275,20 @@ impl Dock {
         } else {
             -1
         }
+    }
+
+    /// The settings' geometry fitted to the screen's length for `count` icons; as it is while
+    /// the screen is not known.
+    fn fit(&self, count: usize, separator: bool) -> Geometry {
+        let Some((width, height)) = self.screen().and_then(|s| s.size) else {
+            return self.base;
+        };
+        let room = if self.base.position.is_vertical() {
+            height
+        } else {
+            width
+        };
+        self.base.fitted(room as f32, count, separator)
     }
 
     /// The screen of the dock's surface, once known.
@@ -407,6 +430,8 @@ impl Dock {
             glyphs: &mut self.glyphs,
         };
         let (items, separator) = builder.build(&self.pinned, self.windows.as_ref());
+        // As many icons as there are now, in the length of the screen (lot D-21l).
+        self.geometry = self.fit(items.len(), separator.is_some());
         let old = std::mem::take(&mut self.items);
         let old_separator = self.separator;
         let mut old_tracks: Vec<Option<Track>> = std::mem::take(&mut self.tracks)
@@ -534,6 +559,7 @@ impl Dock {
             || !self.label.is_done(self.now)
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
+            || !self.calls.is_empty()
             || !self.poofs.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
             || self.hide.running(self.busy())
@@ -633,10 +659,11 @@ impl Dock {
             return 0.0;
         };
         let target = item.target();
-        self.launches
-            .iter()
-            .find(|l| l.target == target)
-            .map_or(0.0, |l| l.bounce.lift(now, track.size.value(now) as f32))
+        let side = track.size.value(now) as f32;
+        let launch = self.launches.iter().find(|l| l.target == target);
+        let call = self.calls.iter().find(|c| c.0 == target);
+        let launched = launch.map_or(0.0, |l| l.bounce.lift(now, side));
+        launched.max(call.map_or(0.0, |c| c.1.lift(now, side)))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -654,7 +681,10 @@ impl Dock {
             Message::Screen(id, screen) => {
                 self.outputs.insert(id, screen);
                 self.clock();
-                return self.follow_windows();
+                // Another screen, another length: the icons fit it.
+                let previous = self.geometry;
+                let refreshed = self.refresh(previous);
+                return Task::batch([refreshed, self.follow_windows()]);
             }
             Message::Pointer(event) => {
                 let now = self.clock();
@@ -735,7 +765,8 @@ impl Dock {
             self.pinned.clone_from(pinned);
         }
         self.sherlock = config.sherlock;
-        self.geometry = Geometry::from_config(&config);
+        self.base = Geometry::from_config(&config);
+        self.geometry = self.base;
         let now = self.clock();
         self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
@@ -909,6 +940,7 @@ impl Dock {
             launch.bounce.time_out(now);
         }
         self.launches.retain(|l| !l.bounce.is_done(now));
+        self.calls.retain(|c| !c.1.is_done(now));
         self.poofs.retain(|p| !p.is_done(now));
         let count = self.leaving.len();
         self.leaving.retain(|l| !l.track.is_gone(now));
@@ -928,6 +960,23 @@ impl Dock {
         let Some(windows) = self.windows.as_ref() else {
             return;
         };
+        // A window that starts asking for attention: its icon bounces a few hops (lot Q-52).
+        let asking: Vec<&crate::windows::Window> =
+            windows.list.iter().filter(|w| w.attention).collect();
+        for window in &asking {
+            if self.calling.contains(&window.id) {
+                continue;
+            }
+            let item = self.items.iter().find(|i| i.owns(&window.app_id));
+            if let Some(target) = item.map(|i| i.target())
+                && !self.calls.iter().any(|c| c.0 == target)
+            {
+                tracing::info!(app = window.app_id, "a window asks for attention");
+                self.calls
+                    .push((target, Bounce::hops(now, dock::ATTENTION_HOPS)));
+            }
+        }
+        self.calling = asking.iter().map(|w| w.id).collect();
         for launch in &mut self.launches {
             let Some(item) = self.items.iter().find(|i| i.target() == launch.target) else {
                 continue;

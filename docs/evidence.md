@@ -244,6 +244,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   without F5. Changes closer than 100 ms are one, and the folder is read again at most every
   400 ms, so that a build or a download never floods the interface. The selection is kept; while
   a menu, a rename or a lasso is under way, the reading waits for it to end.
+- Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
+  thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
+  « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
+  (« nom (copie) »), « Ignorer », or « Annuler ». While it runs, the status bar shows its share
+  done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
+  files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
+  failed leaves nothing half-written behind.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

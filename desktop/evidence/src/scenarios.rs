@@ -226,18 +226,22 @@ fn copy_paste_then_cut_paste_with_the_keyboard() {
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
     // The pasted copy is selected.
     assert_eq!(bench.selected(), ["a.txt"]);
-    // Pasting a second time in the same place does not touch the first file.
+    // Pasting a second time in the same place asks (lot E-11); keeping both does not touch
+    // the first file.
     bench.ctrl("v");
+    assert!(bench.app.pending_paste.is_some());
+    bench.send(Message::TakenChoice(Some(
+        crate::transfer_job::Taken::KeepBoth,
+    )));
     assert_eq!(bench.names(), ["a (copie).txt", "a.txt"]);
 
-    // Cutting into a folder that already has this name: refused, nothing is overwritten.
+    // Cutting into a folder that already has this name, skipped: nothing is overwritten.
     bench.select("a.txt");
     fs::write(bench.path("projet/src/a.txt"), "modifié").expect("write");
     bench.ctrl("x");
     bench.press(Named::Backspace);
     bench.ctrl("v");
-    let notice = bench.app.notice.clone().expect("error message");
-    assert!(notice.error, "{notice:?}");
+    bench.send(Message::TakenChoice(Some(crate::transfer_job::Taken::Skip)));
     assert_eq!(read(&bench.path("projet/src/a.txt")), "modifié");
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
 
@@ -1820,6 +1824,31 @@ fn a_change_made_elsewhere_shows_without_f5() {
     fs::write(bench.path("projet/c.txt"), "c").expect("write");
     bench.send(Message::FolderChanged(bench.path("ailleurs")));
     assert!(!bench.names().contains(&"c.txt"));
+}
+
+/// A paste onto names already taken asks first: replace (the old one to the trash), keep both,
+/// skip, or call it off (lot E-11).
+#[test]
+fn a_paste_onto_taken_names_asks_first() {
+    use crate::transfer_job::Taken;
+    let mut bench = Bench::new("taken");
+    fs::create_dir_all(bench.path("autre")).expect("folder");
+    fs::write(bench.path("autre/a.txt"), "autre").expect("write");
+    bench.select("a.txt");
+    bench.ctrl("c");
+    bench.send(Message::Go(Location::Folder(bench.path("autre"))));
+    bench.ctrl("v");
+    assert!(bench.app.pending_paste.is_some(), "the choice is asked");
+    bench.send(Message::TakenChoice(None));
+    assert!(bench.app.pending_paste.is_none());
+    assert_eq!(read(&bench.path("autre/a.txt")), "autre");
+    bench.ctrl("v");
+    bench.send(Message::TakenChoice(Some(Taken::Replace)));
+    assert_eq!(read(&bench.path("autre/a.txt")), "contenu de a");
+    assert!(bench.app.progress.is_none(), "done: the bar goes");
+    bench.ctrl("v");
+    bench.send(Message::TakenChoice(Some(Taken::KeepBoth)));
+    assert_eq!(bench.names().len(), 2);
 }
 
 /// The window at the widths of a small laptop, half a 1080p screen, a 1366 laptop and a 1080p
