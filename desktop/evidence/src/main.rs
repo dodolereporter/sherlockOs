@@ -1,13 +1,13 @@
-//! Evidence: `cargo run -p evidence [folder]`.
+//! Evidence: `cargo run -p evidence [folder]`. On Wayland it runs on `iced_exwlshell` (ADR
+//! 0029, `evidence::shell`); under X11, on iced's own runtime.
 
 use evidence::app::{App, Config};
 use evidence::startup;
 use sherlock_ui::{metrics, theme, typography};
 
-/// Desktop identifier of the application.
-const APP_ID: &str = "evidence";
+use evidence::shell::{self, APP_ID};
 
-fn main() -> iced::Result {
+fn main() -> std::process::ExitCode {
     // Before anything else: the renderer is chosen through the environment (ADR 0018).
     let renderer = sherlock_ui::gpu::Choice::detect();
     // SAFETY: first statement of `main`, no other thread exists yet.
@@ -27,6 +27,26 @@ fn main() -> iced::Result {
     });
     // Its menus go to the bar of the session (lot D-36c).
     evidence::menubar::enable();
+    if shell::on_wayland() {
+        return match shell::run(|| startup::timed("configuration read", Config::from_env)) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                tracing::error!(%error, "Evidence stopped");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    match run_winit() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(%error, "Evidence stopped");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Under X11 (or without a compositor named), iced's own runtime on winit.
+fn run_winit() -> iced::Result {
     let (width, height) = metrics::REFERENCE_WINDOW;
     let app = iced::application(
         || App::new(startup::timed("configuration read", Config::from_env)),
