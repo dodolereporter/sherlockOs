@@ -36,6 +36,19 @@ pub const THUMBNAIL_RADIUS: f32 = 8.0;
 /// active workspace and for the one a dragged window is over.
 pub const THUMBNAIL_BORDER: f32 = metrics::BORDER_WIDTH;
 pub const THUMBNAIL_ACTIVE_BORDER: f32 = 2.0;
+/// The « × » that closes the window under the pointer (lot D-33c): its diameter, its center
+/// this far inside the top left corner of the window (most of it outside, as on macOS), and
+/// how long the title and it take to fade in or out.
+pub const CLOSE_SIZE: f32 = 24.0;
+pub const CLOSE_INSET: f32 = 2.0;
+pub const HOVER_FADE: std::time::Duration = std::time::Duration::from_millis(150);
+/// The « + » after the thumbnails, which adds a workspace (lot D-33c): its diameter, its gap
+/// to the last thumbnail, its icon on the 24 grid of the title bars' icons, and how long a new
+/// thumbnail takes to fade in.
+pub const ADD_SIZE: f32 = 32.0;
+pub const ADD_GAP: f32 = 16.0;
+pub const ADD_ICON: &str = "M12 6v12M6 12h12";
+pub const ARRIVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// The colors of the view in a palette.
 #[derive(Debug, Clone, Copy, PartialEq)]

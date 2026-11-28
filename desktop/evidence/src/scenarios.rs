@@ -1826,6 +1826,31 @@ fn a_change_made_elsewhere_shows_without_f5() {
     assert!(!bench.names().contains(&"c.txt"));
 }
 
+/// Space opens the large preview of the item, the arrows go to the next one, Space or Escape
+/// close it (lot E-12); the panel of the preview stays where it was.
+#[test]
+fn space_opens_the_large_preview() {
+    let mut bench = Bench::new("quick-look");
+    let shown = bench.app.show_preview;
+    bench.press(Named::Space);
+    assert!(!bench.app.looking, "nothing selected: nothing to look at");
+    bench.select("src");
+    bench.press(Named::Space);
+    assert!(bench.app.looking);
+    assert_eq!(bench.app.show_preview, shown);
+    bench.press(Named::ArrowDown);
+    assert!(bench.app.looking);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.app.settle();
+    capture(&bench.app, "evidence-quick-look");
+    bench.press(Named::Escape);
+    assert!(!bench.app.looking);
+    assert!(bench.app.look_level() > 0.0, "it zooms out");
+    bench.press(Named::Space);
+    bench.press(Named::Space);
+    assert!(!bench.app.looking);
+}
+
 /// A paste onto names already taken asks first: replace (the old one to the trash), keep both,
 /// skip, or call it off (lot E-11).
 #[test]
@@ -1885,11 +1910,12 @@ fn the_names_stay_at_every_width() {
             (width, height),
         );
     }
-    // Space brings back a preview the width had folded; again, it goes.
+    // « Aperçu » brings back a preview the width had folded; again, it goes. (Space opens the
+    // large preview since E-12.)
     bench.send(Message::Resized(iced::Size::new(944.0, 1048.0)));
-    bench.press(Named::Space);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
     assert!(bench.app.panes().preview);
-    bench.press(Named::Space);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
     assert!(!bench.app.panes().preview);
 }
 

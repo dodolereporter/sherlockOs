@@ -213,12 +213,7 @@ pub fn tree(state: &State) -> Node {
                 state.show_hidden,
             ),
             checked(
-                entry(
-                    41,
-                    texts::SHOW_PREVIEW,
-                    run(Command::TogglePreview),
-                    &["space"],
-                ),
+                entry(41, texts::SHOW_PREVIEW, run(Command::TogglePreview), &[]),
                 state.show_preview,
             ),
             separator(42),

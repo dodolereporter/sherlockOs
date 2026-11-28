@@ -651,6 +651,7 @@ impl Painter<'_> {
                 scale: (self.view.scale * k) as f32,
                 background,
                 color,
+                icon: None,
             },
             alpha: self.alpha,
         });

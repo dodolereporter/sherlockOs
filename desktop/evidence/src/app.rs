@@ -173,6 +173,8 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// The large preview of the item under the cursor, opened or closed (lot E-12).
+    QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
     ViewList,
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
@@ -426,6 +428,9 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The large preview is open, and its zoom in or out (lot E-12).
+    pub(crate) looking: bool,
+    pub(crate) look_fade: Option<Fade>,
     /// The preview was asked for while the width had folded it: it stays, the columns fold.
     pub(crate) preview_pinned: bool,
     pub(crate) search: String,
@@ -537,6 +542,8 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            looking: false,
+            look_fade: None,
             preview_pinned: false,
             search: String::new(),
             repo: None,
@@ -727,6 +734,26 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Opens or closes the large preview, zooming in or out. It opens on one item only.
+    fn quick_look(&mut self, open: bool) {
+        if open && self.single().is_none() {
+            return;
+        }
+        let now = self.now();
+        let from = self.look_level();
+        self.looking = open;
+        let to = if open { 1.0 } else { 0.0 };
+        self.look_fade = Some(Fade::new(from, to, now, more::QUICK_LOOK_ZOOM));
+    }
+
+    /// How far the large preview has come in, from 0 to 1.
+    pub(crate) fn look_level(&self) -> f32 {
+        let rest = if self.looking { 1.0 } else { 0.0 };
+        self.look_fade
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
     /// Animation time.
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
@@ -744,6 +771,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.look_fade)
             || self.progress.is_some()
             || self.dnd_waiting()
             || fade(&self.path_fade)
@@ -761,6 +789,7 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.look_fade = None;
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
@@ -2063,6 +2092,25 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(&key);
         }
+        // The large preview: Space or Escape close it, the arrows go to the next item and it
+        // follows (lot E-12).
+        if self.looking {
+            match key.as_ref() {
+                Key::Named(Named::Space | Named::Escape) => {
+                    self.quick_look(false);
+                    return Task::none();
+                }
+                Key::Named(Named::ArrowDown | Named::ArrowRight) => {
+                    let to = self.selection.cursor().map_or(0, |c| c + 1);
+                    return self.move_cursor(to.min(self.entries.len().saturating_sub(1)), false);
+                }
+                Key::Named(Named::ArrowUp | Named::ArrowLeft) => {
+                    let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
+                    return self.move_cursor(to, false);
+                }
+                _ => return Task::none(),
+            }
+        }
         if self.path_edit.is_some() {
             return self.path_key(&key, modifiers);
         }
@@ -2097,7 +2145,8 @@ impl App {
             Key::Named(Named::F2) => self.run(Command::Rename),
             Key::Named(Named::F5) => self.run(Command::Refresh),
             Key::Named(Named::Delete) => self.run(Command::Trash),
-            Key::Named(Named::Space) => self.run(Command::TogglePreview),
+            // Space opens the large preview, as Quick Look in the Finder (lot E-12).
+            Key::Named(Named::Space) => self.run(Command::QuickLook),
             Key::Named(Named::ContextMenu) => {
                 self.open_menu_at_cursor();
                 Task::none()
@@ -2218,6 +2267,7 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
             // Space shows a preview the width had folded, rather than hiding a hidden one.
