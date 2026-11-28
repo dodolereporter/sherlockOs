@@ -1226,10 +1226,13 @@ fn the_background_menu_sorts_and_shows_the_views() {
     assert_eq!(checked(&bench), Some(2));
     // Folders first, then the smallest file first.
     assert_eq!(bench.names(), ["src", "f01.txt", "a.txt", "f00.txt"]);
-    // The view: the list, checked; the grid and the columns do not exist yet.
+    // The views (lot E-13), as the toolbar's buttons.
     bench.send(Message::RightClick(None));
     bench.send(Message::Submenu(Some(Sub::View)));
-    assert_eq!(open_menu(&bench), ["Liste", "-Grille", "-Colonnes"]);
+    assert_eq!(
+        open_menu(&bench),
+        ["Icônes", "Liste", "Colonnes", "Galerie"]
+    );
 }
 
 #[test]
@@ -2309,6 +2312,372 @@ fn the_completion_list_and_tooltips_are_popups_without_a_grab() {
     assert!(!planned.settings.grab);
     bench.send(Message::Hover(None));
     assert!(bench.app.unfocused.tooltip.is_none());
+}
+
+/// A bench on a folder of `count` files, with its configuration folder, to remember views.
+fn views_bench(name: &str, count: usize) -> Bench {
+    let tmp = TempDir::new(name);
+    let project = tmp.path().join("projet");
+    fs::create_dir_all(project.join("dossier")).expect("folder");
+    for i in 0..count {
+        fs::write(project.join(format!("fichier-{i:02}.txt")), "x").expect("write");
+    }
+    let config = Config {
+        home: tmp.path().to_path_buf(),
+        start: project,
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: Some(mime_apps::Dirs {
+            config_home: tmp.path().join("xdg/config"),
+            config_dirs: Vec::new(),
+            data_home: tmp.path().join("xdg/data"),
+            data_dirs: Vec::new(),
+        }),
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    };
+    let (app, task) = App::new(config);
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench
+}
+
+/// Lot E-13: Ctrl+1 shows the grid of icons, remembered for this folder only, and again at
+/// the next start; the arrows go from tile to tile and a line down; the « Vue » submenu
+/// offers the views.
+#[test]
+fn the_view_is_chosen_and_remembered_for_each_folder() {
+    use crate::app::{Command, MenuItem, Sub, ViewMode};
+    let mut bench = views_bench("views", 20);
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    assert_eq!(bench.app.view_mode, ViewMode::List);
+    bench.ctrl("1");
+    assert_eq!(bench.app.view_mode, ViewMode::Icons);
+    assert!(bench.app.content_fade.is_some(), "the new view fades in");
+    let _ = bench.app.view();
+    // Into a subfolder: the list, its own view; back: the grid again.
+    bench.send(Message::Go(Location::Folder(bench.path("projet/dossier"))));
+    assert_eq!(bench.app.view_mode, ViewMode::List);
+    bench.send(Message::Back);
+    assert_eq!(bench.app.view_mode, ViewMode::Icons);
+    // The arrows in the grid.
+    let columns = bench.app.grid_columns();
+    assert!(columns > 2, "several tiles on a line: {columns}");
+    bench.press(Named::ArrowRight);
+    bench.press(Named::ArrowRight);
+    assert_eq!(bench.app.selection.cursor(), Some(1));
+    bench.press(Named::ArrowDown);
+    assert_eq!(bench.app.selection.cursor(), Some(1 + columns));
+    bench.press(Named::ArrowLeft);
+    assert_eq!(bench.app.selection.cursor(), Some(columns));
+    // A point of the second tile is that tile; the gap between two tiles is none.
+    let (width, height) = bench.app.tile_size();
+    let top = metrics::LIST_TOP_GAP;
+    let gap = sherlock_ui::evidence::GRID_GAP;
+    assert_eq!(bench.app.item_at(width + gap + 5.0, top + 5.0), Some(1));
+    assert_eq!(bench.app.item_at(width + gap / 2.0, top + 5.0), None);
+    assert_eq!(
+        bench
+            .app
+            .tiles_in((0.0, top + height / 2.0, width + gap + 1.0, 1.0)),
+        vec![0, 1]
+    );
+    // The submenu: the views there are, the one shown checked; the others greyed for now.
+    let items = bench.app.submenu_items(Sub::View);
+    assert!(items.iter().any(|i| matches!(
+        i,
+        MenuItem::Action {
+            command: Command::View(ViewMode::Icons),
+            checked: true,
+            ..
+        }
+    )));
+    // The size of the icons follows the slider, and is kept with the views.
+    bench.send(Message::IconSize(100));
+    bench.send(Message::IconSizeDone);
+    assert_eq!(
+        bench.app.view_memory.icon_size,
+        sherlock_ui::evidence::GRID_ICON_MAX
+    );
+    assert!(
+        bench.app.grid_columns() < columns,
+        "larger tiles, fewer on a line"
+    );
+    // The next start reads them.
+    let file = crate::views::path(&bench.path("xdg/config"));
+    let kept = crate::views::read(&file);
+    assert_eq!(kept.get(&bench.path("projet")), Some(ViewMode::Icons));
+    assert_eq!(kept.icon_size, sherlock_ui::evidence::GRID_ICON_MAX);
+    bench.ctrl("2");
+    assert_eq!(bench.app.view_mode, ViewMode::List);
+}
+
+/// Lot E-13: captures of the grid of icons at two sizes of window, in the system's temporary
+/// folder (`evidence-captures/grid-*.png`).
+#[test]
+fn the_grid_renders_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let (tmp, dir) = mockup_folder();
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: dir,
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.ctrl("1");
+    bench.send(Message::Click(1));
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let dir = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&dir).expect("captures folder");
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = dir.join(format!("grid-{width}.png"));
+        let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+        let _ = fs::remove_file(dir.join(format!("grid-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+}
+
+/// Lot E-13b: the columns view shows the folders above, lit on the way down, and the content
+/// of the folder selected on the right; a click in a column above opens there; left goes up,
+/// right opens the folder selected.
+#[test]
+fn the_columns_show_the_way_down_and_what_is_selected() {
+    use crate::app::ViewMode;
+    let mut bench = views_bench("columns", 3);
+    fs::create_dir_all(bench.path("projet/dossier/sous/fond")).expect("folders");
+    fs::write(bench.path("projet/dossier/sous/note.txt"), "x").expect("write");
+    bench.send(Message::Resized(iced::Size::new(1920.0, 1080.0)));
+    bench.send(Message::Go(Location::Folder(bench.path("projet/dossier"))));
+    bench.ctrl("3");
+    assert_eq!(bench.app.view_mode, ViewMode::Columns);
+    let above: Vec<PathBuf> = bench
+        .app
+        .column_dirs
+        .iter()
+        .map(|c| c.dir.clone())
+        .collect();
+    assert_eq!(above.last(), Some(&bench.path("projet")));
+    assert!(above.len() <= bench.app.ancestor_room());
+    // The folder selected: its content on the right.
+    bench.press(Named::ArrowDown);
+    assert_eq!(bench.selected(), ["sous"]);
+    let peek = bench.app.peek.clone().expect("the column on the right");
+    let names: Vec<&str> = peek.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["fond", "note.txt"]);
+    let _ = bench.app.view();
+    // Only the column of the folder shown holds its items.
+    let left = bench.app.shown_column_left();
+    let y = metrics::LIST_TOP_GAP + 1.0;
+    assert_eq!(bench.app.item_at(left + 10.0, y), Some(0));
+    assert_eq!(bench.app.item_at(left - 10.0, y), None);
+    // Right opens it, left goes back up with it selected.
+    bench.press(Named::ArrowRight);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier/sous"))
+    );
+    bench.press(Named::ArrowLeft);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier"))
+    );
+    assert_eq!(bench.selected(), ["sous"]);
+    // A click on a file in the column on the right shows it in its folder.
+    bench.send(Message::PeekClick(1));
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier/sous"))
+    );
+    assert_eq!(bench.selected(), ["note.txt"]);
+    // A click on a folder of a column above opens it.
+    let projet = bench.path("projet");
+    let depth = bench
+        .app
+        .column_dirs
+        .iter()
+        .position(|c| c.dir == projet)
+        .expect("projet above");
+    let index = bench.app.column_dirs[depth]
+        .entries
+        .iter()
+        .position(|e| e.name == "dossier")
+        .expect("dossier listed");
+    bench.send(Message::ColumnClick(depth, index));
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier"))
+    );
+}
+
+/// Lot E-13b: captures of the columns at two sizes of window (`evidence-captures/columns-*`).
+#[test]
+fn the_columns_render_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let (tmp, dir) = mockup_folder();
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: dir.join("src"),
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let dir = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        // From the list each time: the folders above are read for this width.
+        bench.ctrl("2");
+        bench.ctrl("3");
+        if bench.app.selection.is_empty() {
+            bench.send(Message::Click(0));
+        }
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = dir.join(format!("columns-{width}.png"));
+        let _ = fs::remove_file(dir.join(format!("columns-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+}
+
+/// Lot E-13c: the gallery shows an item large, the first when none is selected, over a strip
+/// that follows the arrows; a click on a tile of the strip shows it.
+#[test]
+fn the_gallery_shows_an_item_large_over_its_strip() {
+    use crate::app::ViewMode;
+    let mut bench = views_bench("gallery", 40);
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    bench.ctrl("4");
+    assert_eq!(bench.app.view_mode, ViewMode::Gallery);
+    assert_eq!(bench.selected(), ["dossier"], "the first item, large");
+    assert!(
+        !bench.app.panes().preview,
+        "no pane beside: the gallery shows it"
+    );
+    bench.press(Named::ArrowRight);
+    bench.press(Named::ArrowRight);
+    assert_eq!(bench.selected(), ["fichier-01.txt"]);
+    bench.press(Named::ArrowLeft);
+    assert_eq!(bench.selected(), ["fichier-00.txt"]);
+    // Far along the strip: only the tiles in sight are built, and it scrolled there.
+    bench.press(Named::End);
+    let (first, last) = bench.app.strip_range();
+    assert!(first > 0 && last == 41, "{first}..{last}");
+    let _ = bench.app.view();
+    // A tile of the strip, under the pointer, is that item.
+    bench.press(Named::Home);
+    let step = sherlock_ui::evidence::GALLERY_TILE + sherlock_ui::evidence::GRID_GAP;
+    let y = bench.app.list_height() - sherlock_ui::evidence::GALLERY_STRIP
+        + sherlock_ui::evidence::GALLERY_STRIP_PADDING
+        + 5.0;
+    let x = sherlock_ui::evidence::GRID_GAP + 2.0 * step + 5.0;
+    assert_eq!(bench.app.item_at(x, y), Some(2));
+    assert_eq!(
+        bench.app.item_at(x, 10.0),
+        None,
+        "the item shown large is no tile"
+    );
+    // Through the list and back: the selection is kept.
+    bench.press(Named::ArrowRight);
+    bench.ctrl("2");
+    bench.ctrl("4");
+    assert_eq!(
+        bench.selected(),
+        ["fichier-00.txt"],
+        "the selection is kept"
+    );
+}
+
+/// Lot E-13c: captures of the gallery at two sizes of window (`evidence-captures/gallery-*`).
+#[test]
+fn the_gallery_renders_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let (tmp, dir) = mockup_folder();
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: dir,
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.ctrl("4");
+    let docker = bench
+        .app
+        .entries
+        .iter()
+        .position(|e| e.name == "Dockerfile")
+        .expect("Dockerfile listed");
+    bench.send(Message::Click(docker));
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let dir = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = dir.join(format!("gallery-{width}.png"));
+        let _ = fs::remove_file(dir.join(format!("gallery-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
 }
 
 /// Lot Q-56: « Se connecter en tant que… », from the server's right-click menu or from its

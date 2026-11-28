@@ -18,7 +18,8 @@ use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 
 use crate::app::{
-    App, Command, HintTarget, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, WindowAction,
+    App, Command, HintTarget, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, ViewMode,
+    WindowAction, view_label,
 };
 use crate::clock;
 use crate::devices::Volume;
@@ -28,6 +29,9 @@ use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::pathbar::visible;
 use crate::preview::{Preview, Real};
 
+mod columns;
+mod gallery;
+mod grid;
 mod path;
 
 /// Vertical rule between two panels.
@@ -222,8 +226,24 @@ impl App {
             self.can_go_forward().then_some(Message::Forward),
         );
         let forward = self.hinted(forward, HintTarget::Forward);
+        // The views, as the Finder's four buttons (lot E-13).
+        let views = ui::icon_segmented(
+            ViewMode::ALL
+                .into_iter()
+                .map(|mode| {
+                    let glyph = match mode {
+                        ViewMode::Icons => Icon::Grid,
+                        ViewMode::List => Icon::Rows,
+                        ViewMode::Columns => Icon::Columns,
+                        ViewMode::Gallery => Icon::Gallery,
+                    };
+                    let on = self.view_available(mode).then_some(Message::SetView(mode));
+                    (glyph, view_label(mode), self.view_mode == mode, on)
+                })
+                .collect(),
+        );
         let trail = self.path_bar();
-        let mut line = row![back, forward, trail]
+        let mut line = row![back, forward, views, trail]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center);
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
@@ -474,16 +494,28 @@ impl App {
             )
             .spacing(metrics::LIST_COLUMN_GAP)
             .align_y(Alignment::Center);
-        let headers = container(headers)
-            .height(metrics::LIST_HEADER_HEIGHT)
-            .padding([0.0, metrics::LIST_ROW_PADDING])
-            .align_y(Alignment::Center);
+        let headers: Element<'_, Message> = match self.view_mode {
+            ViewMode::Icons => self.grid_header(),
+            ViewMode::Columns => self.columns_header(),
+            // The gallery names its item under it: nothing above, at the headers' height.
+            ViewMode::Gallery => space().height(metrics::LIST_HEADER_HEIGHT).into(),
+            _ => container(headers)
+                .height(metrics::LIST_HEADER_HEIGHT)
+                .padding([0.0, metrics::LIST_ROW_PADDING])
+                .align_y(Alignment::Center)
+                .into(),
+        };
 
         // The content of a folder that opens rises a few pixels while fading in. With no
         // group opacity in iced, the fade is a veil of the window background laid on top,
         // which fades away.
         let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
-        let content: Element<'_, Message> = if self.entries.is_empty() {
+        let content: Element<'_, Message> = if self.view_mode == ViewMode::Gallery {
+            self.gallery_view()
+        } else if self.view_mode == ViewMode::Columns {
+            // The columns keep the folders above an empty one (lot E-13b).
+            self.columns_view(now, (1.0 - reveal) * metrics::LIST_SLIDE)
+        } else if self.entries.is_empty() {
             let empty = match (in_trash, self.search.is_empty()) {
                 (_, false) => t::NO_MATCH,
                 (true, true) => t::EMPTY_TRASH_VIEW,
@@ -493,7 +525,12 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE, shown))
+            let slide = (1.0 - reveal) * metrics::LIST_SLIDE;
+            let content = match self.view_mode {
+                ViewMode::Icons => self.tiles(slide),
+                _ => self.rows(now, slide, shown),
+            };
+            scroll(content)
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
