@@ -105,7 +105,9 @@ impl App {
                 .height(Length::Fill)
                 .into(),
         ];
-        if let Some(menu) = &self.menu {
+        // On Wayland the menu is in popups of its own (`popup`); drawn here under winit only.
+        if self.menus_in_popups() {
+        } else if let Some(menu) = &self.menu {
             let catcher = mouse_area(space().width(Length::Fill).height(Length::Fill))
                 .on_press(Message::CloseMenu)
                 .on_right_press(Message::Reopen);
@@ -257,6 +259,39 @@ impl App {
             nav = nav.push(ui::nav_section(t::DEVICES));
             for volume in &self.volumes {
                 nav = nav.push(self.device_item(volume));
+            }
+        }
+        // The file servers of the network (lot E-07): a click connects, the eject button
+        // disconnects.
+        if !self.servers.is_empty() {
+            nav = nav.push(ui::nav_section(t::NETWORK));
+            for server in &self.servers {
+                let folder = self.mounted.get(&server.host);
+                let active = match (folder, &self.location) {
+                    (Some(folder), Location::Folder(dir)) => dir.starts_with(folder),
+                    _ => false,
+                };
+                let item = ui::nav_item_owned(
+                    Icon::Network,
+                    server.name.clone(),
+                    None,
+                    active,
+                    Some(Message::OpenServer(server.host.clone())),
+                );
+                let line: Element<'_, Message> = match folder {
+                    Some(_) => row![
+                        container(item).width(Length::Fill),
+                        ui::icon_button(
+                            Icon::Eject,
+                            t::EJECT,
+                            Some(Message::EjectServer(server.host.clone())),
+                        )
+                    ]
+                    .align_y(Alignment::Center)
+                    .into(),
+                    None => item.into(),
+                };
+                nav = nav.push(line);
             }
         }
         let root = std::path::PathBuf::from("/");
@@ -746,30 +781,16 @@ impl App {
         sub: &[MenuItem],
         live: bool,
     ) -> Element<'_, Message> {
-        let now = self.now();
-        let (opacity, scale) = (self.menu_motion.opacity(now), self.menu_motion.scale(now));
-        // Colors taken while the menu is built fade with it too.
-        let layers = color::with_opacity(opacity, || {
-            let entries = items.iter().enumerate().map(|(i, item)| {
-                let lit = menu.submenu.is_none() && menu.highlight == Some(i);
-                self.menu_entry(*item, lit, menu.submenu, true)
-            });
-            let main = ui::floating_menu(entries, metrics::CONTEXT_MENU_WIDTH);
-            let main = reveal(main).opacity(opacity).scale(scale, (0.0, 0.0));
-            let mut layers: Vec<Element<'_, Message>> =
-                vec![pin(main).x(menu.at.x).y(menu.at.y).into()];
-            if menu.submenu.is_some() {
-                let at = crate::menu::submenu_at(menu, items, sub, self.size);
-                let entries = sub.iter().enumerate().map(|(i, item)| {
-                    self.menu_entry(*item, menu.highlight == Some(i), None, false)
-                });
-                let width = crate::menu::submenu_width(menu.submenu);
-                let panel = ui::floating_menu(entries, width);
-                let panel = reveal(panel).opacity(opacity).scale(scale, (0.0, 0.0));
-                layers.push(pin(panel).x(at.x).y(at.y).into());
-            }
-            layers
-        });
+        let mut layers: Vec<Element<'_, Message>> = vec![
+            pin(self.menu_panel(menu, items))
+                .x(menu.at.x)
+                .y(menu.at.y)
+                .into(),
+        ];
+        if menu.submenu.is_some() {
+            let at = crate::menu::submenu_at(menu, items, sub, self.size);
+            layers.push(pin(self.submenu_panel(menu, sub)).x(at.x).y(at.y).into());
+        }
         let menu: Element<'_, Message> = stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -779,6 +800,50 @@ impl App {
         } else {
             menu.map(|_| Message::Inert)
         }
+    }
+
+    /// The menu itself, unfolding or folding back from its top left corner (lot E-01).
+    pub(crate) fn menu_panel<'a>(
+        &'a self,
+        menu: &Menu,
+        items: &[MenuItem],
+    ) -> Element<'a, Message> {
+        let now = self.now();
+        let (opacity, scale) = (self.menu_motion.opacity(now), self.menu_motion.scale(now));
+        // Colors taken while the menu is built fade with it too.
+        color::with_opacity(opacity, || {
+            let entries = items.iter().enumerate().map(|(i, item)| {
+                let lit = menu.submenu.is_none() && menu.highlight == Some(i);
+                self.menu_entry(*item, lit, menu.submenu, true)
+            });
+            let main = ui::floating_menu(entries, metrics::CONTEXT_MENU_WIDTH);
+            reveal(main)
+                .opacity(opacity)
+                .scale(scale, (0.0, 0.0))
+                .into()
+        })
+    }
+
+    /// The open submenu, with the same motion as its menu.
+    pub(crate) fn submenu_panel<'a>(
+        &'a self,
+        menu: &Menu,
+        sub: &[MenuItem],
+    ) -> Element<'a, Message> {
+        let now = self.now();
+        let (opacity, scale) = (self.menu_motion.opacity(now), self.menu_motion.scale(now));
+        color::with_opacity(opacity, || {
+            let entries = sub
+                .iter()
+                .enumerate()
+                .map(|(i, item)| self.menu_entry(*item, menu.highlight == Some(i), None, false));
+            let width = crate::menu::submenu_width(menu.submenu);
+            let panel = ui::floating_menu(entries, width);
+            reveal(panel)
+                .opacity(opacity)
+                .scale(scale, (0.0, 0.0))
+                .into()
+        })
     }
 
     fn dialog(&self) -> Element<'_, Message> {

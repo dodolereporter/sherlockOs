@@ -14,6 +14,37 @@ Use `--release`: in a debug build, iced and tiny-skia are not optimised and the 
 renderer is several times slower (see Performance). Evidence logs the renderer it chose at start
 (ADR 0018); `ICED_BACKEND=tiny-skia` forces software rendering.
 
+## Runtime (ADR 0029, lot E-02a)
+
+On Wayland (`WAYLAND_DISPLAY` set), Evidence runs on `iced_exwlshell`, like the shell programs.
+Its window is an `xdg_toplevel` made with `NewBaseWindow` (app id `evidence`, client-side
+decorations, title « Evidence »), and its daemon starts in `StartMode::Background`, without any
+layer surface. This is what lets its menus be real `xdg_popup`s.
+
+The right-click menu and its submenu are popups of their own (lot E-02b), so they leave the
+window, as on macOS. The menu's popup is larger than the menu by the room of its shadow, its input
+region the menu only. Its anchor rectangle is chosen so that the menu's corner lands on the
+clicked point both ways: below right, or above left when the compositor flips it at the
+screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child popup anchored
+beside its entry, which the compositor flips to the left the same way. The popups grab the
+pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
+outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
+once it has faded out. Under winit, both are still drawn inside the window. The completion list,
+the drop-down lists and the tooltips follow in E-02c. Under X11, it keeps iced's own runtime on winit. The title
+bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
+closing the window, from its button or from the compositor, ends the program.
+
+Before choosing, Evidence reads the compositor's globals: `iced_exwlshell` needs `xdg_wm_base` 2
+at least, and an older compositor (WSLg's Weston offers version 1) gets the winit runtime
+instead, rather than a crash at start.
+
+In SherlockOS's compositor (nested, software rendering): ![](evidence/exwlshell-nested.png)
+
+Differences with winit, found while moving (the ADR's spike): `iced_exwlshell` 0.21.4 sets no
+smallest size on the window (`xdg_toplevel.set_min_size`), so `MIN_WINDOW` holds only under
+X11, and it has no resize from the edges of a client-side decorated window
+(`xdg_toplevel.resize`); winit had none either for a window without decorations.
+
 ## Architecture
 
 | Module | Role | iced |
@@ -214,6 +245,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
+  network, found without any tool installed (`network`): a multicast DNS question for
+  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
+  WS-Discovery probe (Windows computers, Samba with wsdd). Each listening lasts 2.5 s, on a
+  thread of its own, again every 2 minutes; at most 256 answers of 9000 bytes are read and 64
+  servers kept; a compression loop or a cut packet names nothing; names are shown safely. A
+  click mounts the server as a guest through gvfs (`gio mount --anonymous smb://host/`, `smb`),
+  without root, off the interface thread with a 30 s limit, then opens the folder gvfs shows it
+  in (`gio info`, « local path »); an eject button beside it unmounts it. Without gvfs, the
+  status bar says so. Servers that want a name and a password say so for now: the sheet that
+  asks for them, and the Secret Service keyring, come in E-07b.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

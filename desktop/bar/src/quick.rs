@@ -24,7 +24,7 @@ use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, typography};
 
 use crate::source::battery::{Battery, Charge};
-use crate::system::audio::{Output, Pactl};
+use crate::system::audio::{Device, Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
 use crate::system::keyboard::{self, KeyboardLight};
@@ -35,6 +35,9 @@ use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
 mod devices;
+mod sound;
+
+pub use sound::{Devices, read as read_devices};
 
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,18 +76,20 @@ pub enum Service {
     Session,
     /// The keyboard backlight, when the machine has one.
     Keyboard,
+    /// The outputs, the inputs and the microphone (D-20g).
+    Microphone,
 }
 
 /// One read of a service at a time: one asked meanwhile runs once the first ends, however
 /// many were asked. A burst of signals never stacks reads on the bus.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Reads {
-    reading: u8,
-    again: u8,
+    reading: u16,
+    again: u16,
 }
 
 impl Reads {
-    fn bit(service: Service) -> u8 {
+    fn bit(service: Service) -> u16 {
         1 << service as u8
     }
 
@@ -142,6 +147,8 @@ pub enum Page {
     Networks,
     /// The Bluetooth devices, paired and found (`devices.rs`).
     Devices,
+    /// The outputs and the inputs of the sound (`sound.rs`).
+    Sound,
 }
 
 /// What runs the session commands: the launcher's.
@@ -254,6 +261,8 @@ pub struct Quick {
     pub wifi: Load<Wifi>,
     pub bluetooth: Load<Bluetooth>,
     pub sound: Load<Output>,
+    /// The outputs, the inputs and the microphone, read while their page is open (D-20g).
+    pub audio: Load<Devices>,
     pub brightness: Load<Backlight>,
     pub keyboard: Load<KeyboardLight>,
     pub energy: Load<Power>,
@@ -288,6 +297,7 @@ pub struct Quick {
     sound_calls: SoundQueue,
     light: Throttle,
     keyboard_calls: Throttle,
+    microphone_calls: Throttle,
     /// The slider held under the pointer: a change made elsewhere does not move it.
     pub held: Option<Service>,
     pub reads: Reads,
@@ -317,12 +327,21 @@ pub enum Message {
     Wifi(Load<Wifi>),
     Bluetooth(Load<Bluetooth>),
     Sound(Load<Output>),
+    Audio(Load<Devices>),
+    /// The outputs and the inputs, or back (D-20g).
+    ShowSound(bool),
+    ChooseOutput(String),
+    ChooseInput(String),
+    MicrophoneVolume(u8),
+    MuteMicrophone,
     Brightness(Load<Backlight>),
     Keyboard(Load<KeyboardLight>),
     Energy(Load<Power>),
     ToggleWifi,
     ShowNetworks(bool),
     Join(Network),
+    /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
+    OpenNetworkSettings,
     Password(Secret),
     SubmitPassword,
     /// The join of a network ended: joined, its password refused, failed or too long.
@@ -525,6 +544,7 @@ impl Quick {
                     |r| Message::Keyboard(Load::from_result(r)),
                 )
             }
+            Service::Microphone => self.read_devices(),
             Service::DoNotDisturb | Service::Session => Task::none(),
         }
     }
@@ -580,6 +600,7 @@ impl Quick {
                 | Message::Wifi(_)
                 | Message::Bluetooth(_)
                 | Message::Sound(_)
+                | Message::Audio(_)
                 | Message::Brightness(_)
                 | Message::Keyboard(_)
                 | Message::Energy(_)
@@ -669,6 +690,8 @@ impl Quick {
                 }
             }
             Message::Join(chosen) => return self.join(chosen),
+            // Started by the bar, which has the programs (`app.rs`).
+            Message::OpenNetworkSettings => {}
             Message::Password(typed) => self.password = typed,
             Message::SubmitPassword => return self.submit(),
             Message::Joined(network, result) => return self.joined(network, result),
@@ -777,7 +800,18 @@ impl Quick {
             Message::ConfirmForget(yes) => return self.forget(yes),
             Message::Session(command) => self.session(command),
             Message::Done(service, done) => return self.done(service, done),
+            Message::Changed(Service::Sound) if self.page == Page::Sound => {
+                // Another output chosen elsewhere, a headset plugged in: the page follows.
+                let sound = self.read(Service::Sound);
+                return Task::batch([sound, self.read(Service::Microphone)]);
+            }
             Message::Changed(service) => return self.read(service),
+            Message::Audio(read) => return self.devices_read(read),
+            Message::ShowSound(show) => return self.show_sound(show),
+            Message::ChooseOutput(name) => return self.choose(Device::Output, name),
+            Message::ChooseInput(name) => return self.choose(Device::Microphone, name),
+            Message::MicrophoneVolume(value) => return self.microphone_volume(value),
+            Message::MuteMicrophone => return self.mute_microphone(),
         }
         Task::none()
     }
@@ -812,6 +846,10 @@ impl Quick {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
             Service::Keyboard => self.keyboard_calls.done().map(|v| self.send_keyboard(v)),
+            Service::Microphone => self
+                .microphone_calls
+                .done()
+                .map(|v| self.send_microphone(v)),
             _ => None,
         };
         match next {
@@ -848,6 +886,7 @@ impl Quick {
                 Service::Sound => self.sound_calls.busy(),
                 Service::Brightness => self.light.busy(),
                 Service::Keyboard => self.keyboard_calls.busy(),
+                Service::Microphone => self.microphone_calls.busy(),
                 _ => false,
             }
     }
@@ -1201,6 +1240,7 @@ impl Quick {
             Page::Main => self.view_main(user, battery),
             Page::Networks => self.view_networks(),
             Page::Devices => self.view_devices(),
+            Page::Sound => self.view_sound(),
         };
         let forward = self.page_forward;
         let coming = self.page_motion.page(forward, || page(self.page));
@@ -1352,12 +1392,21 @@ impl Quick {
         };
         let mute = volume.map(|_| Message::Mute);
         let on_change: Option<fn(u8) -> Message> = volume.map(|_| Message::Volume as fn(u8) -> _);
-        let control = panels::held_slider_row(
+        let slider = panels::held_slider_row(
             panels::glyph_button(glyph, label, mute),
             volume.unwrap_or(0),
             on_change,
             Some(Message::Release(Service::Sound)),
         );
+        // The chevron on its right opens the outputs and the inputs (D-20g).
+        let more = ui::icon_button(
+            Icon::Chevron,
+            words::SOUND_DEVICES,
+            volume.map(|_| Message::ShowSound(true)),
+        );
+        let control = row![slider, more]
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(Alignment::Center);
         let caption = ui::ellipsis(line)
             .size(typography::SMALL_SIZE)
             .style(panels::secondary_text);
@@ -1566,7 +1615,10 @@ impl Quick {
             return item;
         }
         if network.security == Security::Other {
-            let line = ui::description(words::ENTERPRISE);
+            let open =
+                ui::secondary_button(words::OPEN_SETTINGS, Some(Message::OpenNetworkSettings));
+            let line =
+                column![ui::description(words::ENTERPRISE), open].spacing(metrics::GAP_TIGHT);
             return column![item, container(line).padding(inset)].into();
         }
         column![item, self.password_row()].into()
