@@ -101,6 +101,8 @@ pub fn run() -> Result<Outcome, Error> {
         .subscription(Notifications::subscription)
         .settings(settings())
         .wl_settings(ExWlSettings {
+            // On the shell socket, the only one that offers anchored surfaces (lot D-46).
+            with_connection: Some(shell_protocol::connect.into()),
             layer_settings: LayerShellSettings {
                 start_mode: StartMode::Background,
                 ..LayerShellSettings::default()

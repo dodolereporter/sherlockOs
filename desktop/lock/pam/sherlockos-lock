@@ -1,8 +1,10 @@
 #%PAM-1.0
-# The lock screen of SherlockOS (sherlockos-lock): the password of the session's user, checked
-# as the console login checks it, like swaylock's service. The delay of pam_faildelay (3 s in
-# Debian's login) slows the tries; failures are not counted, since the lock screen runs as the
-# user and cannot write the counters of pam_faillock. Installed in /etc/pam.d/ by the author:
-# `just install-session` prints the command.
-auth     include  login
-account  include  login
+# The lock screen of SherlockOS (sherlockos-lock): the password of the session's user, and
+# nothing else (lot D-25l). Not `login`'s stack: its pam_nologin refuses every password once
+# /run/nologin exists (five minutes before a `shutdown +N`), and its account checks have nothing
+# to say to a user already logged in. The program only calls pam_authenticate, as swaylock does.
+# pam_faildelay waits 3 s after a wrong password: failures are not counted, since the lock
+# screen runs as the user and cannot write the counters of pam_faillock. Installed in
+# /etc/pam.d/ by the author: `just install-session` prints the command.
+auth     optional  pam_faildelay.so delay=3000000
+auth     include   common-auth
