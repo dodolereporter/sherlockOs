@@ -35,8 +35,10 @@ use sherlock_ui::motion::{self, Animation, Fade};
 
 mod network;
 pub use network::{Field, Login};
+mod hint;
 mod path;
 mod popup;
+pub use hint::HintTarget;
 mod tabs;
 pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
@@ -418,6 +420,8 @@ pub enum Message {
     PathResolved(PathBuf, crate::pathbar::Found),
     /// A window closed: the main one, or a menu's popup (`popup_done`).
     WindowClosed(window::Id),
+    /// The pointer came onto a toolbar button whose tooltip is a popup, or left it (E-02c).
+    Hover(Option<HintTarget>),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
     /// The menu of the folders folded behind « … », opened or closed.
@@ -450,6 +454,10 @@ pub struct App {
     main: Option<window::Id>,
     /// The popups of the menu and its submenu, on Wayland (`popup`).
     pub(crate) popups: Popups,
+    /// The completion list and the tooltip, popups without a grab (lot E-02c), and the button
+    /// the pointer rests on.
+    pub(crate) unfocused: hint::Unfocused,
+    pub(crate) hover: Option<hint::Hover>,
     /// The menus exported to the bar, once served (lot D-36c).
     menubar: Option<crate::menubar::MenuBar>,
     pub(crate) config: Config,
@@ -582,6 +590,8 @@ impl App {
         let mut app = Self {
             main: None,
             popups: Popups::default(),
+            unfocused: hint::Unfocused::default(),
+            hover: None,
             menubar: None,
             config,
             location: start,
@@ -772,7 +782,9 @@ impl App {
 
     /// The view of a window of the Wayland daemon: Evidence has only its main window.
     pub fn view_window(&self, window: window::Id) -> iced::Element<'_, Message> {
-        self.popup_view(window).unwrap_or_else(|| self.view())
+        self.unfocused_view(window)
+            .or_else(|| self.popup_view(window))
+            .unwrap_or_else(|| self.view())
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -877,6 +889,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || self.hint_pending()
             || fade(&self.tabs.fade)
             || fade(&self.login_fade)
             || fade(&self.preview_slide)
@@ -904,6 +917,9 @@ impl App {
         self.path_leaving = None;
         self.suggest_fade = None;
         self.folded.fade = None;
+        if let Some(hover) = &mut self.hover {
+            hover.settled = true;
+        }
         if let Some(edit) = &mut self.path_edit {
             edit.shake = None;
         }
@@ -1342,6 +1358,7 @@ impl App {
                 self.folded_menu(false);
             }
             Message::Folded(open) => self.folded_menu(open),
+            Message::Hover(target) => self.hover(target),
             Message::PathScrolled(offset) => self.suggest_offset = offset,
             Message::PathRecent(index) => return self.path_recent(index),
             Message::OpenSearch => {

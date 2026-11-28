@@ -2259,3 +2259,54 @@ fn the_menu_popup_is_clear_around_the_menu() {
     );
     assert!(middle.0[3] > 200, "the menu itself is painted: {middle:?}");
 }
+
+/// On Wayland the completion list and the toolbar's tooltips are popups that take no grab
+/// (lot E-02c): the field keeps the keyboard while the list follows what is typed, and a
+/// tooltip shows after a rest on its button, then goes when the pointer leaves.
+#[test]
+fn the_completion_list_and_tooltips_are_popups_without_a_grab() {
+    use crate::app::HintTarget;
+    let mut bench = Bench::new("unfocused-popups");
+    fs::create_dir_all(bench.path("projet/src")).expect("folders");
+    fs::create_dir_all(bench.path("projet/srv")).expect("folders");
+    fs::create_dir_all(bench.path("projet/sql")).expect("folders");
+    let main = bench.app.pretend_wayland();
+    bench.ctrl("l");
+    bench.send(Message::PathInput("~/projet/s".into()));
+    let (list, rows, _) = bench.app.unfocused.suggestions.expect("a popup");
+    assert_eq!(rows, 3);
+    let planned = bench.app.suggestions_popup(main, rows).expect("settings");
+    assert!(!planned.settings.grab, "the field keeps the keyboard");
+    // The popup draws the list; the window no longer does.
+    assert!(bench.app.unfocused_view(list).is_some());
+    assert!(bench.app.unfocused_view(main).is_none());
+    // Typing on: the same rows keep the popup, fewer make it again at their size.
+    bench.send(Message::PathInput("~/projet/".into()));
+    assert_eq!(
+        bench.app.unfocused.suggestions.map(|(id, ..)| id),
+        Some(list)
+    );
+    bench.send(Message::PathInput("~/projet/sr".into()));
+    let (again, rows, _) = bench.app.unfocused.suggestions.expect("a popup");
+    assert!(again != list && rows == 2);
+    bench.press(Named::Escape);
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(
+        bench.app.unfocused.suggestions.is_none(),
+        "gone with the field"
+    );
+
+    // A tooltip waits under the pointer, then shows without a grab.
+    bench.send(Message::Hover(Some(HintTarget::Back)));
+    assert!(bench.app.unfocused.tooltip.is_none(), "not at once");
+    bench.app.settle();
+    bench.send(Message::Inert);
+    let (tip, target) = bench.app.unfocused.tooltip.expect("a tooltip");
+    assert_eq!(target, HintTarget::Back);
+    assert!(bench.app.unfocused_view(tip).is_some());
+    let planned = bench.app.tooltip_popup(main, target).expect("settings");
+    assert!(!planned.settings.grab);
+    bench.send(Message::Hover(None));
+    assert!(bench.app.unfocused.tooltip.is_none());
+}
