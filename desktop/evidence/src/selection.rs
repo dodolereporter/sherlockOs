@@ -210,6 +210,22 @@ impl Lasso {
     }
 }
 
+impl Lasso {
+    /// The selection with the items `crossed` (in order) added: a grid's tiles under the
+    /// lasso (lot E-13). The cursor goes to the end the lasso is dragged towards.
+    pub fn selection_with(&self, crossed: &[usize]) -> Selection {
+        let mut selection = self.base.clone();
+        let (Some(&first), Some(&last)) = (crossed.first(), crossed.last()) else {
+            return selection;
+        };
+        selection.items.extend(crossed.iter().copied());
+        let up = self.end.1 < self.start.1;
+        selection.cursor = Some(if up { first } else { last });
+        selection.anchor = selection.anchor.or(Some(if up { last } else { first }));
+        selection
+    }
+}
+
 /// How fast a lasso held near an edge of the listing scrolls it, in pixels per second: from 0
 /// at `margin` pixels from the edge to `max` beyond it, negative upwards. `y` is the pointer
 /// in the visible part, `height` that part's height.

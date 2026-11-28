@@ -130,6 +130,31 @@ pub mod evidence {
     pub const LOGIN_PASSWORD: &str = "Mot de passe";
     pub const LOGIN_REMEMBER: &str = "Retenir dans le trousseau";
     pub const LOGIN_CONNECT: &str = "Se connecter";
+    /// The search's tokens (lot E-15): their names, their choices, where it looks.
+    pub const FILTER_KIND: &str = "Type";
+    pub const FILTER_DATE: &str = "Date";
+    pub const FILTER_SIZE: &str = "Taille";
+    pub const FILTER_ANY: &str = "Tous";
+    pub const FILTER_IMAGES: &str = "Images";
+    pub const FILTER_DOCUMENTS: &str = "Documents";
+    pub const FILTER_VIDEOS: &str = "Vidéos";
+    pub const FILTER_AUDIO: &str = "Audio";
+    pub const FILTER_ARCHIVES: &str = "Archives";
+    pub const FILTER_FOLDERS: &str = "Dossiers";
+    pub const FILTER_TODAY: &str = "Aujourd'hui";
+    pub const FILTER_WEEK: &str = "7 derniers jours";
+    pub const FILTER_MONTH: &str = "30 derniers jours";
+    pub const FILTER_YEAR: &str = "12 derniers mois";
+    pub const FILTER_SMALL: &str = "Moins de 1 Mo";
+    pub const FILTER_MEDIUM: &str = "De 1 à 100 Mo";
+    pub const FILTER_LARGE: &str = "Plus de 100 Mo";
+    pub const SCOPE_FOLDER: &str = "Ce dossier";
+    pub const SCOPE_SUBFOLDERS: &str = "Sous-dossiers aussi";
+    pub const FILTER_CLEAR: &str = "Effacer";
+    /// A token and what it keeps: « Type : Images, Vidéos ».
+    pub fn token(name: &str, chosen: &str) -> String {
+        format!("{name} : {chosen}")
+    }
     /// On a server of the « Réseau » section: choose the name and the password, even when
     /// the guest gets in (lot Q-56).
     pub const LOGIN_AS: &str = "Se connecter en tant que…";

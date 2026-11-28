@@ -11,7 +11,7 @@ publish.workspace = true
 # Shell toolkit (ADR 0014). The rendering functions come from sherlock-ui; `thread-pool` is
 # named here because copies and git status run off the interface thread.
 # `image-without-codecs` enables the image widget of the preview, without the dozens of formats
-# pulled by the `image` feature: only PNG and JPEG are decoded (`image` dependency below).
+# pulled by the `image` feature: only the formats of the `image` dependency below are decoded.
 iced = { version = "=0.14.0", default-features = false, features = [
     "image-without-codecs",
     "thread-pool",
@@ -19,8 +19,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
 # Wayland runtime (ADR 0029): an `xdg_toplevel` window, and soon its menus as `xdg_popup`s.
 # Same version and features as the bar, the dock and the launcher; already in the lock.
 iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
-# Image preview decoders, PNG and JPEG only. Version pulled by iced 0.14.
-image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
+# Image decoders of the preview and the thumbnails (lot E-14): PNG, JPEG, WebP, GIF, pure
+# Rust (`image-webp`, `gif`). Version pulled by iced 0.14.
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 # Local time (localtime_r) for the dates of the listing and the trash. Already pulled by iced
 # and winit: only the declaration is new.
 libc = "=0.2.191"
