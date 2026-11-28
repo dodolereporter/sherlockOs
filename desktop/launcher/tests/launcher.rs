@@ -221,7 +221,12 @@ fn every_application_starts_with_two_letters_and_enter() {
 
 #[test]
 fn only_the_launcher_keys_are_taken() {
-    assert!(key(keyboard::key::Named::Tab).is_none());
+    assert!(key(keyboard::key::Named::Home).is_none());
+    // Tab hands the query over to Sherlock (A-19).
+    assert!(matches!(
+        key(keyboard::key::Named::Tab),
+        Some(Message::Key(app::Key::Tab))
+    ));
     assert!(matches!(
         key(keyboard::key::Named::Escape),
         Some(Message::Key(app::Key::Escape))
@@ -576,4 +581,63 @@ fn the_typing_board() {
     }
     color::set_active(Theme::Dark);
     board.save(tmp.join("launcher-board.png")).expect("board");
+}
+
+/// Lot A-19: Tab hands the query over to Sherlock; his panel shows the request, his texts, the
+/// plan with the state of each step, and the answer, as `sherlockd --ask` tells them (injected
+/// here: never the real sherlockd, nor Claude Code). `launcher-sherlock` on the reference
+/// screen, `launcher-sherlock-1366` on 1366 × 768.
+#[test]
+fn tab_opens_sherlocks_panel_with_the_plan_and_its_states() {
+    use serde_json::json;
+    for (name, screen) in [
+        ("launcher-sherlock", (1920.0, 1080.0)),
+        ("launcher-sherlock-1366", (1366.0, 768.0)),
+    ] {
+        let (launcher, _) = recorded();
+        let mut launcher = launcher
+            .with_screen(screen)
+            .with_sherlockd("/nonexistent/sherlockd".into());
+        let _ = launcher.update(Message::Query("Relance front-next".into()));
+        let _ = launcher.update(Message::Key(app::Key::Tab));
+        assert!(launcher.sherlock);
+        // The service is not there: said at once; then a request that runs, told by events.
+        assert!(launcher.conversation.exchanges[0].failure.is_some());
+        launcher.conversation.exchanges.clear();
+        launcher
+            .conversation
+            .exchanges
+            .push(launcher::sherlock::Exchange {
+                request: "Relance front-next".into(),
+                ..Default::default()
+            });
+        for event in [
+            json!({"event": "text", "text": "Je regarde l'état du conteneur avant de le relancer."}),
+            json!({"event": "step", "id": "a", "tool": "containers_list", "summary": "{}", "state": "waiting"}),
+            json!({"event": "state", "id": "a", "state": "granted", "level": "lecture"}),
+            json!({"event": "state", "id": "a", "state": "done"}),
+            json!({"event": "step", "id": "b", "tool": "container_restart", "summary": "{\"name\":\"front-next\"}", "state": "waiting"}),
+        ] {
+            let _ = launcher.update(Message::Sherlock(event));
+        }
+        settled(&mut launcher);
+        {
+            let mut ui = Simulator::with_size(
+                launcher::settings(),
+                (look::WIDTH, launcher.height()),
+                launcher.view_panel(),
+            );
+            assert!(ui.find("Attend ton accord").is_ok());
+            assert!(ui.find("Libre · fait").is_ok());
+        }
+        assert!(capture(&launcher, name).expect("screenshot written") > 2_000);
+        let _ = launcher.update(Message::Sherlock(
+            json!({"event": "state", "id": "b", "state": "granted", "level": "action"}),
+        ));
+        let _ = launcher.update(Message::Sherlock(
+            json!({"event": "answer", "text": "front-next tourne de nouveau."}),
+        ));
+        assert!(!launcher.conversation.running());
+        assert_eq!(launcher.conversation.exchanges[0].steps[1].state, "granted");
+    }
 }

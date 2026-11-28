@@ -352,6 +352,30 @@ mod styles {
         Colors::of(theme::palette(theme))
     }
 
+    /// A request of the user in the panel « Demande à Sherlock » (lot A-19): the soft accent.
+    pub fn request(theme: &Theme) -> container::Style {
+        let p = theme::palette(theme);
+        let edge = border::width(metrics::BORDER_WIDTH)
+            .color(p.accent_border)
+            .rounded(sherlock::STEP_RADIUS);
+        container::Style {
+            text_color: Some(p.text_primary.into()),
+            ..fill(p.accent_soft, edge)
+        }
+    }
+
+    /// A step of Sherlock's plan: a card, its border amber while it waits for the consent.
+    pub fn step(waiting: bool) -> impl Fn(&Theme) -> container::Style {
+        move |theme| {
+            let p = theme::palette(theme);
+            let tint = if waiting { p.amber_soft } else { p.card };
+            let edge = border::width(metrics::BORDER_WIDTH)
+                .color(p.card_border)
+                .rounded(sherlock::STEP_RADIUS);
+            fill(tint, edge)
+        }
+    }
+
     /// The panel: dense glass, light border, radius 20. Blur and shadow are the compositor's
     /// job, as for the dock.
     pub fn panel(theme: &Theme) -> container::Style {
@@ -559,5 +583,70 @@ mod tests {
     /// Room between the launcher's top and the dock on the reference screen.
     fn metrics_room() -> f32 {
         crate::metrics::REFERENCE_SCREEN.1 - TOP - crate::metrics::DOCK_HEIGHT
+    }
+}
+
+/// The panel « Demande à Sherlock » (lot A-19), in the launcher, after the Sherlock board
+/// (`docs/design/planches/Sherlock.dc.html`): Sherlock in his bubble, the conversation, the plan
+/// of each request and the state of its steps, the field of the next request.
+pub mod sherlock {
+    use std::time::Duration;
+
+    /// Height of the panel, at most: less on a short screen (`fit`).
+    pub const HEIGHT: f32 = 560.0;
+    /// Sherlock's bubble in the header, and the header's height.
+    pub const BUBBLE: f32 = 44.0;
+    pub const HEADER_HEIGHT: f32 = 64.0;
+    /// Padding of the conversation, gap between its parts, between the steps.
+    pub const PADDING: f32 = 12.0;
+    pub const GAP: f32 = 10.0;
+    pub const STEP_GAP: f32 = 6.0;
+    /// A step: its number's disc, the radius of its card, its padding.
+    pub const STEP_NUMBER: f32 = 22.0;
+    pub const STEP_RADIUS: f32 = 10.0;
+    pub const STEP_PADDING: f32 = 10.0;
+    /// Text sizes: Sherlock's texts and the request, the lines of a step.
+    pub const TEXT_SIZE: f32 = 14.0;
+    pub const SMALL_SIZE: f32 = 12.0;
+    /// How long Sherlock is happy, or sorry, before he rests again.
+    pub const MOOD_HOLD: Duration = Duration::from_millis(2500);
+    /// A new part of the conversation fades in and rises by this much.
+    pub const APPEAR: Duration = Duration::from_millis(220);
+    pub const APPEAR_OFFSET: f32 = 8.0;
+
+    /// The texts of the panel, in French.
+    pub mod text {
+        pub const TITLE: &str = "Demande à Sherlock";
+        pub const SUBTITLE: &str = "Il agit sur le système par ses serveurs MCP, et il te demande avant de modifier quoi \
+             que ce soit.";
+        pub const FIELD: &str = "Ta demande";
+        pub const EMPTY: &str = "Pose ta question à Sherlock. Échap pour revenir.";
+        pub const THINKING: &str = "Sherlock réfléchit…";
+        pub const PLAN: &str = "Le plan de Sherlock";
+        /// The states of a step, as the board says them.
+        pub const WAITING: &str = "Attend ton accord";
+        pub const FREE: &str = "Libre";
+        pub const CONSENTED: &str = "Avec ton accord";
+        pub const REFUSED: &str = "Refusée";
+        pub const DONE: &str = "fait";
+        pub const FAILED: &str = "Erreur";
+        /// No answer.
+        pub const OFFLINE: &str = "Pas de connexion à Internet : Sherlock en a besoin pour réfléchir. Réessaie une fois \
+             connecté.";
+        pub const NO_SHERLOCKD: &str =
+            "Sherlock ne répond pas : son service (sherlockd) est introuvable.";
+        pub const FAILED_ANSWER: &str = "Sherlock n'a pas pu répondre.";
+    }
+
+    /// The line of a step's state: the level it ran at, and whether it is done.
+    pub fn state_line(state: &str, read: bool) -> String {
+        let level = if read { text::FREE } else { text::CONSENTED };
+        match state {
+            "waiting" => text::WAITING.to_owned(),
+            "granted" => level.to_owned(),
+            "refused" => text::REFUSED.to_owned(),
+            "done" => format!("{level} · {}", text::DONE),
+            _ => text::FAILED.to_owned(),
+        }
     }
 }
