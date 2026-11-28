@@ -87,12 +87,16 @@ FRENCH_WORDS = {
 
 # Names that the user or the model sees, so French on purpose, quoted in English text:
 # a tool of the sherlockd test server and the keys of its recap, the tools of the windows
-# server and their arguments (A-12).
+# and files servers and their arguments (A-12, A-13).
 INTERFACE_NAMES = {
     "vider_corbeille", "demande", "reponse",
     "lister_fenetres", "activer_fenetre", "agrandir_fenetre", "reduire_fenetre",
     "caler_fenetre", "deplacer_vers_bureau", "deplacer_vers_ecran", "ranger_fenetres",
     "fermer_fenetre", "fenetre", "ecran", "droite",
+    "dossiers_autorises", "lister_dossier", "lire_fichier", "chercher_fichiers",
+    "creer_dossier", "creer_fichier", "ecrire_fichier", "renommer", "deplacer", "copier",
+    "mettre_a_la_corbeille", "supprimer_definitivement", "chemin", "contenu", "motif",
+    "nouveau_nom",
 }
 
 # Marker for a French name kept on purpose in a script or configuration file, such as a former
