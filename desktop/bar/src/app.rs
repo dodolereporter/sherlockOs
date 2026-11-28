@@ -1457,6 +1457,12 @@ mod tests {
             assert_eq!(ran(&record), ["control-room"]);
             assert!(!bar.menu_open(), "the menu closes");
         }
+        // The compositor's Super + comma starts the same program (lot Q-31).
+        assert_eq!(crate::programs::CONTROL_ROOM, "control-room");
+        assert_eq!(
+            Action::Settings.trailing(),
+            sherlock_ui::component::Trailing::Shortcut("Super+,")
+        );
     }
 
     #[test]

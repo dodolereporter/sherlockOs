@@ -579,8 +579,8 @@ that is neither the old one nor the new one.
 ## Sherlock menu
 
 It has the entries of the Menus board: a header with the user name and « Session ouverte »,
-then « À propos de cet ordinateur », « Réglages », « Verrouiller » (with Super+L on its right,
-the compositor's shortcut), « Fermer la session », « Éteindre ». Since D-36d they act. The
+then « À propos de cet ordinateur », « Réglages » (Super+, on its right), « Verrouiller »
+(Super+L), the compositor's shortcuts, « Fermer la session », « Éteindre ». Since D-36d they act. The
 board's « Mises à jour » and « Passer en mode jeu » are not shown since D-20f: nothing is behind
 them yet, and an entry that does nothing misleads.
 
@@ -611,8 +611,7 @@ ring is drawn from that value and Enter activates that value, in the same update
 operations were tried first: under `iced_exwlshell` they are applied after the redraw, so the
 ring stayed one Tab behind the real focus and Enter activated the next button.
 
-The board also shows the shortcuts Super+, and Super+G in the menu. Nothing binds them yet, so the
-menu shows Super+L only.
+The board also shows Super+G in the menu, which goes with the game mode, not there yet.
 
 ## Panels (D-20b, D-20c)
 
@@ -1192,8 +1191,8 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
 - **User name**: the board shows a sample name. The bar reads the user's GECOS, otherwise the login.
-- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Only Super+L is bound
-  (the lock, D-25a): the menu shows it alone.
+- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Super+, (Q-31) and
+  Super+L (D-25a) are bound and shown; Super+G goes with the game mode.
 - **Not there yet** (D-20f): the board's « Mises à jour » and « Passer en mode jeu » in the menu,
   « Mode jeu » and « Carte graphique » in the control centre. Nothing is behind them; they come
   back with what they control.

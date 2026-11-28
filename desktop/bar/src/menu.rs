@@ -37,11 +37,12 @@ impl Action {
         }
     }
 
-    /// The shortcut the compositor binds for it, shown on its right as on macOS (D-20f): only
-    /// Super+L, which locks; the board's Super+, is bound by nothing yet.
+    /// The shortcuts the compositor binds, shown on their right as on macOS: Super+, and Super+L
+    /// (lot Q-31). The board's Super+G goes with the game mode, not there yet.
     pub fn trailing(self) -> Trailing<'static> {
         match self {
-            Self::Lock => Trailing::Shortcut(text::LOCK_SHORTCUT),
+            Self::Settings => Trailing::Shortcut(text::SETTINGS_KEYS),
+            Self::Lock => Trailing::Shortcut(text::LOCK_KEYS),
             _ => Trailing::None,
         }
     }
@@ -192,10 +193,7 @@ mod tests {
         let labels: Vec<_> = Action::ALL.iter().map(|a| a.label()).collect();
         assert_eq!(labels[0], "À propos de cet ordinateur");
         assert_eq!(labels[4], "Éteindre");
-        assert_eq!(
-            Action::Lock.trailing(),
-            Trailing::Shortcut(text::LOCK_SHORTCUT)
-        );
+        assert_eq!(Action::Lock.trailing(), Trailing::Shortcut(text::LOCK_KEYS));
         // Menus board: 256 wide; header of 54, two separators of 9, five entries of 30 (the
         // board's seven but the two not there yet), padding of 6, plus the gap of 6 below the
         // bar.
