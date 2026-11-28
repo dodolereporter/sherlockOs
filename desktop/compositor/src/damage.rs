@@ -58,6 +58,9 @@ pub enum Part {
     /// Sherlock's consent window (lot A-11b): its shapes and its texts, by their order.
     Consent(usize),
     ConsentLabel(usize),
+    /// The projection chooser (lot D-39): its shapes and its texts, by their order.
+    Projection(usize),
+    ProjectionLabel(usize),
     /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
     /// buttons) and its texts, by their order.
     CaptureShape(usize),

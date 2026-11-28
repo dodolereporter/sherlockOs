@@ -433,6 +433,8 @@ pub fn init(
     }));
     // The screens' saved settings, and the hardware's part of a configuration (ADR 0025).
     state.remember_screens(desktop_config::displays::config_file(var));
+    // Do not disturb for the time of a projection, Super + P (lot D-39).
+    state.set_projection_notifications(notifications_config::path());
     let weak = Rc::downgrade(&backend);
     state.set_screen_driver(Box::new(move |output, wanted| {
         let backend = weak.upgrade().ok_or("the session is closed")?;

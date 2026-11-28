@@ -369,6 +369,34 @@ impl State {
         }
     }
 
+    /// How the screen `output` was last projected on (lot D-39), if it was.
+    pub(crate) fn saved_projection(&self, output: &Output) -> Option<file::Projection> {
+        let (screen, _) = self
+            .heads()
+            .into_iter()
+            .find(|(s, _)| s.output == *output)?;
+        self.saved_screen(&screen.details.identity)?.projection
+    }
+
+    /// Keeps how `output` is projected on, saved with the screens.
+    pub(crate) fn remember_projection(&mut self, output: &Output, choice: file::Projection) {
+        let Some(identity) = self
+            .heads()
+            .into_iter()
+            .find(|(s, _)| s.output == *output)
+            .map(|(s, _)| s.details.identity.clone())
+            .filter(|i| *i != Identity::default())
+        else {
+            return;
+        };
+        let mut record = self
+            .saved_screen(&identity)
+            .unwrap_or_else(|| file::Screen::new(identity));
+        record.projection = Some(choice);
+        self.displays.saved.put(record);
+        self.save_screens_later();
+    }
+
     /// Writes every screen with EDID names to `displays.conf`, off the event loop.
     pub fn save_screens(&mut self) {
         let Some(path) = self.displays.file.clone() else {

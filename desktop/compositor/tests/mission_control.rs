@@ -446,15 +446,16 @@ mod tests {
     fn answers(h: &mut Harness, stream: &mut UnixStream) -> String {
         use std::io::Read as _;
         h.sync();
-        let mut text = String::new();
+        // Bytes first: a character may be cut between two reads.
+        let mut bytes = Vec::new();
         let mut chunk = [0u8; 256];
         while let Ok(n) = stream.read(&mut chunk) {
             if n == 0 {
                 break;
             }
-            text.push_str(std::str::from_utf8(&chunk[..n]).unwrap());
+            bytes.extend_from_slice(&chunk[..n]);
         }
-        text
+        String::from_utf8(bytes).unwrap()
     }
 
     /// The middle of a button of the window.
