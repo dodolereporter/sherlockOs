@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
+mod drag;
+
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
@@ -335,6 +337,10 @@ pub enum Message {
     EjectDevice(String),
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
+    /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
+    DndReady(Option<crate::dnd::Handles>),
+    /// Drag and drop and the clipboard of files, from the Wayland side.
+    Dnd(crate::dnd::Event),
     /// The path field: typed, Enter, a suggestion clicked, closed.
     PathInput(String),
     PathSubmit,
@@ -450,6 +456,8 @@ pub struct App {
     pub(crate) icons: Arc<HashMap<String, AppIcon>>,
     /// The theme of the appearance file, shown with a fade.
     pub(crate) theme: ThemeFade,
+    /// Drag and drop and the clipboard of files with the other applications (lot E-03).
+    pub(crate) dnd: drag::Dnd,
     /// The path field, open or fading out, and how far it has come in.
     pub(crate) path_edit: Option<PathEdit>,
     pub(crate) path_leaving: Option<PathEdit>,
@@ -525,6 +533,7 @@ impl App {
             chooser: None,
             icons: Arc::default(),
             theme: ThemeFade::default(),
+            dnd: drag::Dnd::default(),
             path_edit: None,
             path_leaving: None,
             path_fade: None,
@@ -642,6 +651,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
             || fade(&self.folded.fade)
@@ -821,7 +831,11 @@ impl App {
                 self.renaming = None;
                 let base = self.lasso_base();
                 let how = Click::new(self.modifiers.command(), self.modifiers.shift());
-                self.selection.click(index, how);
+                // A press on the selection may become a drag out of the window (lot E-03).
+                let on_name = !self.beside_name(index);
+                if self.dnd_press(index, how == Click::Only, on_name) {
+                    self.selection.click(index, how);
+                }
                 // Beside the name, a press may start a lasso too, as in Dolphin: a long
                 // listing has no background left to start one from.
                 if self.beside_name(index) {
@@ -880,17 +894,29 @@ impl App {
                 self.lasso = Some(Lasso::new(at, base));
             }
             Message::Released => {
+                self.dnd_release();
                 self.lasso = None;
                 self.lasso_frame = None;
             }
             Message::Key(event) => return self.key(event),
-            Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
+                self.dnd_modifiers();
+            }
             Message::Cursor(position) => {
                 self.pointer = position;
+                self.dnd_moved();
                 self.drag_lasso();
             }
             Message::Resized(size) => self.size = size,
-            Message::Opened => crate::startup::first(&OPENED, "window opened"),
+            Message::Opened => {
+                crate::startup::first(&OPENED, "window opened");
+                return window::latest().and_then(|id| {
+                    window::run(id, |window| crate::dnd::handles(window)).map(Message::DndReady)
+                });
+            }
+            Message::DndReady(handles) => return self.dnd_ready(handles),
+            Message::Dnd(event) => return self.dnd_event(event),
             Message::Scrolled(offset, height) => {
                 self.scroll = (offset, height);
                 self.drag_lasso();
@@ -931,7 +957,8 @@ impl App {
             }
             Message::Frame(now) => {
                 self.theme.tick(now);
-                return self.frame(now);
+                let spring = self.dnd_spring();
+                return Task::batch([spring, self.frame(now)]);
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Devices(volumes) => {
@@ -1989,11 +2016,15 @@ impl App {
                 return iced::clipboard::write(paths.join("\n"));
             }
             Command::Copy if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Copy, &selected);
                 self.clipboard = Some((Clip::Copy, selected));
             }
             Command::Cut if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Cut, &selected);
                 self.clipboard = Some((Clip::Cut, selected));
             }
+            // The session's clipboard first: it may hold files of another application.
+            Command::Paste if self.dnd_paste() => {}
             Command::Paste => return self.paste(),
             Command::NewFolder => return self.new_folder(),
             Command::ToggleHidden => {
