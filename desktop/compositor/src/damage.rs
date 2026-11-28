@@ -49,6 +49,9 @@ pub enum Part {
     ThumbnailLabel(usize),
     /// The on-screen display of the media keys (lot D-35).
     Osd,
+    /// Sherlock's consent window (lot A-11b): its shapes and its texts, by their order.
+    Consent(usize),
+    ConsentLabel(usize),
     /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
     /// buttons) and its texts, by their order.
     CaptureShape(usize),

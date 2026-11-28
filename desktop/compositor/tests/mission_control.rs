@@ -389,6 +389,162 @@ mod tests {
         (h, vec![back, front])
     }
 
+    // Sherlock's consent window (lot A-11b, ADR 0031) shares this harness: a client with
+    // windows, and a fake sherlockd on the consent socket.
+
+    const KEY_RETURN: u32 = 36;
+
+    /// The consent socket of `h`, open to this test's process, and a connection to it.
+    fn consent(h: &mut Harness) -> (std::path::PathBuf, UnixStream) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("consent-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wayland = dir.join("wayland-test");
+        let peers = compositor::consent::Peers::SameUser;
+        h.state
+            .listen_consent_next_to(&wayland, peers, &h.event_loop)
+            .unwrap();
+        let path = compositor::consent::socket_path(&wayland);
+        let stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        (dir, stream)
+    }
+
+    fn ask(h: &mut Harness, stream: &mut UnixStream, id: u64, level: &str) {
+        let line = format!(
+            "{{\"id\":{id},\"tool\":\"vider_corbeille\",\"level\":\"{level}\",\"arguments\":\"{{}}\"}}\n"
+        );
+        stream.write_all(line.as_bytes()).unwrap();
+        h.run_until("the consent window", |_, s| s.consent_shown());
+    }
+
+    /// The answers read on `stream` so far.
+    fn answers(h: &mut Harness, stream: &mut UnixStream) -> String {
+        use std::io::Read as _;
+        h.sync();
+        let mut text = String::new();
+        let mut chunk = [0u8; 256];
+        while let Ok(n) = stream.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            text.push_str(std::str::from_utf8(&chunk[..n]).unwrap());
+        }
+        text
+    }
+
+    /// The middle of a button of the window.
+    fn button_at(h: &Harness, allow: bool) -> Point<f64, Logical> {
+        let layout = h.state.consent_layout(&h.output(0)).unwrap();
+        let rect = if allow { layout.allow } else { layout.deny };
+        rect.loc + rect.size.downscale(2.0).to_point()
+    }
+
+    #[test]
+    fn the_consent_window_keeps_every_input_and_grants_an_action_only_once_armed() {
+        let (mut h, _shown) = two_windows();
+        let (dir, mut stream) = consent(&mut h);
+        ask(&mut h, &mut stream, 1, "action");
+        // In front of everything that is drawn.
+        let (items, _) = render::items(
+            &h.state,
+            (&h.output(0), &h.state.views()[0].1),
+            None,
+            false,
+            h.state.now(),
+        );
+        assert!(format!("{:?}", items[0]).contains("ConsentLabel"));
+        // No client gets the keyboard, a key or a click meanwhile.
+        assert!(h.state.focused_window().is_none());
+        let (buttons, keys) = (h.client.buttons, h.client.keys.len());
+        h.click((900.0, 450.0).into());
+        h.tap(KEY_A);
+        h.sync();
+        assert_eq!((h.client.buttons, h.client.keys.len()), (buttons, keys));
+        // Enter at once grants nothing: the window just appeared.
+        h.tap(KEY_RETURN);
+        assert!(h.state.consent_shown());
+        std::thread::sleep(sherlock_ui::consent::ARMING);
+        h.tap(KEY_RETURN);
+        assert!(!h.state.consent_shown());
+        assert_eq!(
+            answers(&mut h, &mut stream),
+            "{\"decision\":\"granted\",\"id\":1}\n"
+        );
+        // The window gone, the keyboard goes back.
+        assert_eq!(h.focused_title().as_deref(), Some("Front"));
+        // Escape refuses, and so does « Refuser ».
+        ask(&mut h, &mut stream, 2, "action");
+        std::thread::sleep(sherlock_ui::consent::ARMING);
+        h.tap(KEY_ESCAPE);
+        ask(&mut h, &mut stream, 3, "action");
+        std::thread::sleep(sherlock_ui::consent::ARMING);
+        let deny = button_at(&h, false);
+        h.click(deny);
+        let text = answers(&mut h, &mut stream);
+        assert!(text.contains("\"id\":2") && text.contains("\"id\":3"));
+        assert_eq!(text.matches("denied").count(), 2, "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_destructive_tool_asks_for_a_hold_and_a_gone_asker_withdraws_its_request() {
+        let (mut h, _shown) = two_windows();
+        let (dir, mut stream) = consent(&mut h);
+        ask(&mut h, &mut stream, 7, "destructive");
+        std::thread::sleep(sherlock_ui::consent::ARMING);
+        // Neither Enter nor a click grants it.
+        h.tap(KEY_RETURN);
+        let allow = button_at(&h, true);
+        h.click(allow);
+        assert!(h.state.consent_shown());
+        // Held long enough, it does.
+        h.state.pointer_motion(allow, 30);
+        h.button(true);
+        std::thread::sleep(sherlock_ui::consent::HOLD);
+        h.button(false);
+        assert!(!h.state.consent_shown());
+        assert!(answers(&mut h, &mut stream).contains("granted"));
+        // The asker goes away with a request open: the window goes, nothing is granted.
+        ask(&mut h, &mut stream, 8, "destructive");
+        drop(stream);
+        h.run_until("the request withdrawn", |_, s| !s.consent_shown());
+        assert_eq!(h.focused_title().as_deref(), Some("Front"));
+        // A malformed request closes the connection.
+        let (_dir2, mut other) = consent(&mut h);
+        other
+            .write_all(b"{\"id\":1,\"tool\":\"x\",\"level\":\"read\",\"arguments\":\"\"}\n")
+            .unwrap();
+        h.sync();
+        assert!(!h.state.consent_shown());
+        assert_eq!(answers(&mut h, &mut other), "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_sherlockd_may_ask() {
+        let (mut h, _shown) = two_windows();
+        let dir = std::env::temp_dir().join(format!("consent-only-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wayland = dir.join("wayland-test");
+        let peers = compositor::consent::Peers::Sherlockd;
+        h.state
+            .listen_consent_next_to(&wayland, peers, &h.event_loop)
+            .unwrap();
+        let mut stream = UnixStream::connect(compositor::consent::socket_path(&wayland)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let line = b"{\"id\":1,\"tool\":\"x\",\"level\":\"action\",\"arguments\":\"\"}\n";
+        let _ = stream.write_all(line);
+        h.sync();
+        assert!(!h.state.consent_shown(), "this test is not sherlockd");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn the_gesture_key_alone_tab_and_escape_open_and_close_the_view() {
         let (mut h, _shown) = two_windows();

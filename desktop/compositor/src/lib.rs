@@ -9,6 +9,7 @@ pub mod blur;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+pub mod consent;
 // The clipboard history of Super + V (lot D-42).
 pub mod clipboard_history;
 pub mod cursor;
@@ -271,6 +272,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// Sherlock's consent window, its socket and the requests waiting (lot A-11b).
+    consent: consent::Consents,
     /// What was copied, for Super + V (lot D-42).
     clipboard: clipboard_history::ClipboardHistory,
 }
@@ -432,6 +435,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            consent: consent::Consents::default(),
             clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
@@ -469,6 +473,11 @@ impl State {
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(path.clone().into_os_string());
         self.listen_shell_next_to(&path, event_loop);
+        if let Err(err) = self.listen_consent_next_to(&path, consent::Peers::Sherlockd, event_loop)
+        {
+            // Without it Sherlock has nobody to ask: it refuses every action.
+            tracing::warn!("no consent socket: {err}");
+        }
         Ok(())
     }
 
@@ -499,6 +508,7 @@ impl State {
     pub fn shutdown(&mut self) {
         self.stop_xwayland();
         self.stop_shell_socket();
+        self.stop_consent_socket();
         if let Some(token) = self.listener.take() {
             self.loop_handle.remove(token);
         }
@@ -608,9 +618,12 @@ impl State {
             self.lock_focus()
         } else {
             let target = target.filter(|_| !self.overview.is_open());
-            self.exclusive_layer()
+            // Sherlock's consent window keeps every key: not even an exclusive layer has it
+            // (lot A-11b).
+            let exclusive = self.exclusive_layer().filter(|_| !self.consent_shown());
+            exclusive
                 .map(KeyboardFocus::Wayland)
-                .or(target)
+                .or(target.filter(|_| !self.consent_shown()))
         };
         let unset = target.is_none();
         keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());

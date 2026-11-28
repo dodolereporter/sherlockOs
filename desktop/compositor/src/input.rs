@@ -135,6 +135,8 @@ enum Shortcut {
     Applications,
     /// Escape while Mission Control is open: closes it.
     CloseOverview,
+    /// A key while Sherlock's consent window is shown (lot A-11b).
+    ConsentKey(Keysym),
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
     SwitchVt(i32),
     /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
@@ -791,6 +793,13 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
             }
+            // Sherlock's consent window keeps every key but the console switch (lot A-11b).
+            if state.consent_shown() {
+                let shortcut = Shortcut::for_session(state.nested, mods, sym)
+                    .unwrap_or(Shortcut::ConsentKey(sym));
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             if state.screenshot_tool_open() {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::ToolKey(sym)));
@@ -869,6 +878,10 @@ impl State {
             }
             Shortcut::CloseOverview => {
                 self.close_overview();
+                return;
+            }
+            Shortcut::ConsentKey(sym) => {
+                self.consent_key(sym);
                 return;
             }
             Shortcut::Launcher => {
@@ -1017,6 +1030,10 @@ impl State {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
+        } else if self.consent_shown() {
+            // Sherlock's consent window: no client has the pointer (lot A-11b).
+            self.consent_motion(location);
+            None
         } else if self.picking_area() {
             // The area of a screenshot: no client has the pointer (lot D-35c).
             self.tool_motion(location);
@@ -1094,6 +1111,15 @@ impl State {
         if state == ButtonState::Pressed {
             // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
             self.click_at(location);
+        }
+        if self.consent_shown() {
+            // Sherlock's consent window: the click goes to no client (lot A-11b).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            if button == BTN_LEFT {
+                self.consent_button(state == ButtonState::Pressed, location);
+            }
+            return;
         }
         if self.picking_area() {
             // The area of a screenshot: the click goes to no client (lot D-35c).

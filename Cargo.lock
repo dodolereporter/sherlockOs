@@ -640,6 +640,8 @@ dependencies = [
  "image",
  "mime-apps",
  "resvg",
+ "serde",
+ "serde_json",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
