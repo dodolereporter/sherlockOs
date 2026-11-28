@@ -33,6 +33,7 @@ use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod network;
+pub use network::{Field, Login};
 mod path;
 mod popup;
 pub use path::{FoldedMenu, PathEdit};
@@ -351,6 +352,8 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// The folder shown changed, by another program (lot E-09).
+    FolderChanged(PathBuf),
     /// The file servers of the network, found now (lot E-07).
     Servers(Vec<crate::network::Server>),
     /// A click on a server: connect to it, or open it when it is.
@@ -360,6 +363,11 @@ pub enum Message {
     /// A server connected (its folder), or not; disconnected, or not.
     ServerMounted(String, Result<PathBuf, crate::smb::Error>),
     ServerUnmounted(String, Result<(), crate::smb::Error>),
+    /// The sheet of a server's name and password: typed, the keyring switch, sent, closed.
+    LoginInput(Field, String),
+    LoginRemember(bool),
+    LoginSubmit,
+    LoginCancel,
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
     /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
@@ -476,12 +484,19 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
+    /// rename, a lasso).
+    folder_changed: bool,
     /// The copy or move under way, and the paste waiting for a choice on taken names.
     pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
     pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
     /// The servers of the network, and the folders of those connected, by host.
     pub(crate) servers: Vec<crate::network::Server>,
     pub(crate) mounted: HashMap<String, PathBuf>,
+    /// The sheet that asks a server's name and password, its fade, and the last name typed.
+    pub(crate) login: Option<Login>,
+    pub(crate) login_fade: Option<Fade>,
+    login_user: String,
     device_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
@@ -573,10 +588,14 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            folder_changed: false,
             progress: None,
             pending_paste: None,
             servers: Vec::new(),
             mounted: HashMap::new(),
+            login: None,
+            login_fade: None,
+            login_user: String::new(),
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
@@ -648,6 +667,15 @@ impl App {
             // The compositor closed the window (Wayland daemon): the program ends with it.
             _ => None,
         });
+        // The folder shown, watched for the changes of other programs (lot E-09); only with
+        // the live sources, never in the tests.
+        let folder = match &self.location {
+            Location::Folder(dir) if self.config.watch_devices => {
+                Subscription::run_with(crate::watch::Watched(dir.clone()), crate::watch::changes)
+                    .map(Message::FolderChanged)
+            }
+            _ => Subscription::none(),
+        };
         // A window closed: the main one ends the program, a menu's popup closes its menu.
         let closed = window::close_events().map(Message::WindowClosed);
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
@@ -675,7 +703,7 @@ impl App {
             Subscription::none()
         };
         Subscription::batch([
-            closed, events, frames, devices, network, appearance, menubar,
+            closed, events, frames, folder, devices, appearance, menubar, network,
         ])
     }
 
@@ -802,6 +830,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.login_fade)
             || fade(&self.preview_slide)
             || fade(&self.look_fade)
             || self.progress.is_some()
@@ -897,8 +926,18 @@ impl App {
                 self.always = false;
             }
         }
+        let reread = if self.folder_changed
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.lasso.is_none()
+        {
+            self.folder_changed = false;
+            self.load(&[])
+        } else {
+            Task::none()
+        };
         let popups = self.sync_popups();
-        Task::batch([task, self.preview_task(), popups])
+        Task::batch([task, self.preview_task(), reread, popups])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1204,6 +1243,10 @@ impl App {
             Message::EjectServer(host) => return self.eject_server(&host),
             Message::ServerMounted(host, result) => return self.server_mounted(host, result),
             Message::ServerUnmounted(host, result) => self.server_unmounted(&host, result),
+            Message::LoginInput(field, value) => self.login_input(field, value),
+            Message::LoginRemember(on) => self.login_remember(on),
+            Message::LoginSubmit => return self.login_submit(),
+            Message::LoginCancel => self.login = None,
             Message::PathInput(text) => return self.path_input(text),
             Message::PathSubmit => return self.path_submit(),
             Message::PathPick(index) => return self.path_pick(index),
@@ -1214,6 +1257,7 @@ impl App {
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
             Message::Escaped => {
                 self.close_path_edit();
+                self.login = None;
                 self.folded_menu(false);
             }
             Message::Folded(open) => self.folded_menu(open),
@@ -1222,6 +1266,11 @@ impl App {
             Message::OpenSearch => {
                 self.search_open = true;
                 return operation::focus(SEARCH);
+            }
+            Message::FolderChanged(dir) => {
+                if self.location == Location::Folder(dir) {
+                    self.folder_changed = true;
+                }
             }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");

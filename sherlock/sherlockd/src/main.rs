@@ -10,7 +10,6 @@ use serde_json::json;
 use sherlockd::agent::{Agent, AgentConfig};
 use sherlockd::broker::{Broker, Consent, Journal, Nobody};
 use sherlockd::claude_code::{ClaudeCode, ClaudeCodeConfig};
-use sherlockd::files_server;
 use sherlockd::mcp::{McpClient, McpServers, ServerConfig, ToolHost};
 use sherlockd::model::{Message, ModelReply, ModelRequest, ToolCall};
 use sherlockd::proxy;
@@ -18,10 +17,12 @@ use sherlockd::scripted::ScriptedProvider;
 use sherlockd::test_server::{self, Mode};
 use sherlockd::window::CompositorWindow;
 use sherlockd::windows_server::{self, Compositor};
+use sherlockd::{containers_server, files_server};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case] \
-     | --windows-server <socket> | --files-server [--settings <file>]";
+const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --ask < request | --proxy \
+     | --test-server [case] | --windows-server <socket> | --files-server [--settings <file>] \
+     | --containers-server [--socket <path>]";
 
 /// The longest request read on standard input.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
@@ -47,7 +48,9 @@ fn main() -> anyhow::Result<()> {
         ["--demo"] => demo(),
         // Never in the arguments: every local account reads them (`ps`, `/proc/*/cmdline`).
         ["--claude-code"] => claude_code(&read_request(std::io::stdin().lock())?),
-        ["--claude-code", _] => {
+        // The shell's panel (A-19): the request on standard input, the events as JSON lines.
+        ["--ask"] => ask(&read_input(std::io::stdin().lock())?),
+        ["--claude-code", _] | ["--ask", _] => {
             bail!("the request is read on standard input, never in the arguments")
         }
         ["--proxy"] => serve_proxy(CompositorWindow::of_session()),
@@ -80,6 +83,11 @@ fn main() -> anyhow::Result<()> {
         ["--files-server", "--settings", settings] => {
             files_server::run(Some(std::path::Path::new(settings))).context("files server")
         }
+        // Started by sherlockd itself, on the session's Docker or Podman daemon (A-14).
+        ["--containers-server"] => containers_server::run(None).context("containers server"),
+        ["--containers-server", "--socket", socket] => {
+            containers_server::run(Some(std::path::Path::new(socket))).context("containers server")
+        }
         _ => bail!("{USAGE}"),
     }
 }
@@ -99,8 +107,8 @@ fn exe() -> anyhow::Result<String> {
     Ok(exe.to_owned())
 }
 
-/// Sherlock's MCP servers: the test server, the files server (A-13) and, in a Wayland session,
-/// the windows server (A-12), all ours: their annotations are trusted (ADR 0015).
+/// Sherlock's MCP servers: the test server, the files (A-13) and containers (A-14) servers and,
+/// in a Wayland session, the windows server (A-12), all ours: their annotations are trusted (ADR 0015).
 async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers> {
     let exe = exe()?;
     // The windows of the session (A-12), through the compositor's windows socket.
@@ -134,6 +142,14 @@ async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers>
         Ok(client) => servers.add(client).await.context("files tools")?,
         Err(error) => tracing::warn!(%error, "no files server"),
     }
+    // The containers of the Docker or Podman daemon (A-14).
+    let config = ServerConfig::new("containers", &exe, &["--containers-server"])
+        .timeout(Duration::from_secs(60))
+        .ours();
+    match McpClient::spawn(&config).await {
+        Ok(client) => servers.add(client).await.context("containers tools")?,
+        Err(error) => tracing::warn!(%error, "no containers server"),
+    }
     if let Some(socket) = windows.as_deref().and_then(std::path::Path::to_str) {
         let config = ServerConfig::new("windows", &exe, &["--windows-server", socket])
             .timeout(Duration::from_secs(10))
@@ -163,6 +179,86 @@ fn read_request(input: impl std::io::Read) -> anyhow::Result<String> {
         bail!("empty request on standard input");
     }
     Ok(request.to_owned())
+}
+
+/// The shell's input on `input`: `shell::MAX_INPUT_BYTES` at most.
+fn read_input(input: impl std::io::Read) -> anyhow::Result<sherlockd::shell::Input> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    let max = sherlockd::shell::MAX_INPUT_BYTES as u64;
+    input
+        .take(max + 1)
+        .read_to_end(&mut bytes)
+        .context("reading the request")?;
+    sherlockd::shell::Input::parse(&bytes).context("empty, too long or not UTF-8 request")
+}
+
+/// Writes `events` as JSON lines, at once: the lock of standard output keeps lines whole.
+fn emit(events: Vec<serde_json::Value>) {
+    let mut stdout = std::io::stdout().lock();
+    for event in events {
+        let _ = writeln!(stdout, "{event}");
+    }
+    let _ = stdout.flush();
+}
+
+/// The shell's request (A-19): the conversation as JSON lines, as it happens, the steps
+/// following the consent journal, then the answer or why there is none.
+fn ask(input: &sherlockd::shell::Input) -> anyhow::Result<()> {
+    use sherlockd::shell::{Events, Follower, reason};
+    use std::sync::{Arc, Mutex, PoisonError};
+    runtime()?.block_on(async {
+        // The plan announced first, for the shell's panel (lot A-19e).
+        let system = format!("{SYSTEM} {}", sherlockd::shell::PLAN_INSTRUCTIONS);
+        let mut config = ClaudeCodeConfig::new(&exe()?, &system);
+        if let Some(path) =
+            CompositorWindow::of_session().and_then(|w| w.path().to_str().map(String::from))
+        {
+            config.proxy_args = vec!["--proxy".into(), "--consent".into(), path];
+        }
+        let mut claude = ClaudeCode::new(config);
+        for (request, answer) in &input.history {
+            claude.remember(request, answer);
+        }
+        let events = Arc::new(Mutex::new(Events::default()));
+        let mut follower = Follower::new(Journal::default_path());
+        let journal = {
+            let events = events.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    for line in follower.lines() {
+                        let shown = events
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .journal(&line);
+                        emit(shown);
+                    }
+                }
+            })
+        };
+        emit(vec![json!({ "event": "started" })]);
+        let shown = events.clone();
+        let answer = claude
+            .ask_with(&input.request, &mut |message| {
+                let lines = shown
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .message(message);
+                emit(lines);
+            })
+            .await;
+        journal.abort();
+        let last = match answer {
+            Ok(text) => json!({ "event": "answer", "text": text }),
+            Err(error) => {
+                tracing::warn!(%error, "no answer");
+                json!({ "event": "failed", "reason": reason(&error), "message": error.to_string() })
+            }
+        };
+        emit(vec![last]);
+        Ok(())
+    })
 }
 
 /// Serves the proxy on standard input and output, for Claude Code.

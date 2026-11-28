@@ -338,8 +338,12 @@ minus its renderer choice (`sherlock_ui::gpu::for_child`, ADR 0018), in its own 
 with no standard streams, in the entry's `Path` when it has one. `Terminal=true` entries run
 in the terminal `mime-apps` picks (`$TERMINAL`, then the usual ones). The launcher closes
 right after, and ignores any further Enter or click meanwhile, so a repeated key starts nothing
-twice. If the start fails, it stays open and logs the error; a `Path` that is not a folder is
-logged as such, apart from a missing program.
+twice. The program starts once the compositor gave the `xdg-activation-v1` token of the click
+or key (lot Q-52), in `XDG_ACTIVATION_TOKEN` and, for X11 programs, `DESKTOP_STARTUP_ID`: an
+application already open that gets the launch brings its window forward with it. Without a
+token (none given, the request dropped), it starts all the same. The launcher closes
+meanwhile: a start that fails is only logged; a `Path` that is not a folder is logged as such,
+apart from a missing program.
 
 ### Resident service
 

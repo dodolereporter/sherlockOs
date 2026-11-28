@@ -11,6 +11,7 @@ pub mod dnd;
 pub mod drag_image;
 pub mod git;
 pub mod icons;
+pub mod keyring;
 pub mod layout;
 pub mod listing;
 pub mod menu;
@@ -31,6 +32,7 @@ pub mod transfer_job;
 pub mod trash;
 pub mod udisks;
 mod view;
+pub mod watch;
 
 #[cfg(test)]
 mod scenarios;

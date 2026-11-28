@@ -1805,6 +1805,75 @@ fn path_bar_captures() {
     }
 }
 
+/// A change made by another program shows without F5 (lot E-09): the listing is read again,
+/// the selection kept, but not while a menu is open.
+#[test]
+fn a_change_made_elsewhere_shows_without_f5() {
+    let mut bench = Bench::new("watched");
+    bench.select("a.txt");
+    fs::write(bench.path("projet/b.txt"), "b").expect("write");
+    bench.send(Message::RightClick(None));
+    bench.send(Message::FolderChanged(bench.path("projet")));
+    assert!(
+        !bench.names().contains(&"b.txt"),
+        "not while the menu is open"
+    );
+    bench.press(Named::Escape);
+    assert!(bench.names().contains(&"b.txt"));
+    // A change of another folder is not this one's.
+    fs::write(bench.path("projet/c.txt"), "c").expect("write");
+    bench.send(Message::FolderChanged(bench.path("ailleurs")));
+    assert!(!bench.names().contains(&"c.txt"));
+}
+
+/// A server that wants a name and a password opens the sheet that asks for them (lot E-07b);
+/// Escape or « Annuler » close it.
+#[test]
+fn a_server_that_wants_a_password_asks_for_it() {
+    use crate::app::Field;
+    use crate::network::Server;
+    let mut bench = Bench::new("login");
+    let host = String::from("nas.local");
+    bench.send(Message::Servers(vec![Server {
+        name: "NAS du salon".into(),
+        host: host.clone(),
+    }]));
+    bench.send(Message::ServerMounted(
+        host.clone(),
+        Err(crate::smb::Error::Credentials),
+    ));
+    let login = bench.app.login.clone().expect("sheet open");
+    assert_eq!(
+        (login.server.as_str(), login.remember),
+        ("NAS du salon", true)
+    );
+    bench.send(Message::LoginInput(Field::User, "ada".into()));
+    bench.send(Message::LoginInput(Field::Password, "secret".into()));
+    let login = bench.app.login.clone().expect("sheet open");
+    assert_eq!(
+        (login.user.as_str(), login.password.as_str()),
+        ("ada", "secret")
+    );
+    bench.send(Message::Escaped);
+    assert!(bench.app.login.is_none());
+    // A refused try opens it again; the window draws it.
+    bench.send(Message::ServerMounted(
+        host,
+        Err(crate::smb::Error::Credentials),
+    ));
+    assert!(bench.app.login.is_some());
+    let _ = bench.app.view();
+    bench.send(Message::LoginCancel);
+    assert!(bench.app.login.is_none());
+    // Other failures only say so.
+    bench.send(Message::ServerMounted(
+        "nas.local".into(),
+        Err(crate::smb::Error::NoGio),
+    ));
+    assert!(bench.app.login.is_none());
+    assert!(bench.app.notice.as_ref().is_some_and(|n| n.error));
+}
+
 /// Ctrl+Alt+P, like the toolbar's button, hides the preview and shows it again, sliding
 /// (lot E-08).
 #[test]

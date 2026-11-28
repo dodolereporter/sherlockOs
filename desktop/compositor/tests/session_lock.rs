@@ -966,7 +966,7 @@ mod tests {
         h.peers[app].seen.keys.clear();
         h.key(KEY_A);
         h.settle();
-        assert_eq!(h.peers[app].seen.keys, []);
+        assert!(h.peers[app].seen.keys.is_empty());
     }
 
     /// The screens of the brief: a small laptop, the author's screen, a 2560 × 1600 at 1.5 and a

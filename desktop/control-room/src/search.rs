@@ -13,6 +13,7 @@ use crate::settings::File;
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
+    Displays,
     Sound,
     Bluetooth,
     Network,
@@ -25,7 +26,8 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
+        Self::Displays,
         Self::Sound,
         Self::Bluetooth,
         Self::Network,
@@ -39,6 +41,7 @@ impl Page {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS,
             Self::Sound => t::SOUND,
             Self::Bluetooth => t::BLUETOOTH,
             Self::Network => t::NETWORK,
@@ -54,6 +57,7 @@ impl Page {
     /// The sentence under its title.
     pub fn about(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS_ABOUT,
             Self::Sound => t::SOUND_ABOUT,
             Self::Bluetooth => t::BLUETOOTH_ABOUT,
             Self::Network => t::NETWORK_ABOUT,
@@ -69,6 +73,7 @@ impl Page {
     /// Its name on the command line (`control-room --page network`), and back.
     pub fn id(self) -> &'static str {
         match self {
+            Self::Displays => "displays",
             Self::Sound => "sound",
             Self::Bluetooth => "bluetooth",
             Self::Network => "network",
@@ -87,6 +92,7 @@ impl Page {
 
     pub fn icon(self) -> Icon {
         match self {
+            Self::Displays => Icon::Desktop,
             Self::Sound => Icon::Sound,
             Self::Bluetooth => Icon::Bluetooth,
             Self::Network => Icon::Network,
@@ -103,6 +109,13 @@ impl Page {
 /// A setting, as the search finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
+    Arrangement,
+    Resolution,
+    Refresh,
+    Scale,
+    Rotation,
+    MainDisplay,
+    DisplayOn,
     Wifi,
     Networks,
     OtherNetwork,
@@ -141,7 +154,14 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 49] = [
+        Self::Arrangement,
+        Self::Resolution,
+        Self::Refresh,
+        Self::Scale,
+        Self::Rotation,
+        Self::MainDisplay,
+        Self::DisplayOn,
         Self::Wifi,
         Self::Networks,
         Self::OtherNetwork,
@@ -190,6 +210,13 @@ impl Setting {
     pub fn entry(self) -> (Page, &'static str, &'static str) {
         use Page::*;
         match self {
+            Self::Arrangement => (Displays, t::ARRANGEMENT, t::DISPLAY_WORDS),
+            Self::Resolution => (Displays, t::RESOLUTION, t::DISPLAY_WORDS),
+            Self::Refresh => (Displays, t::REFRESH, t::DISPLAY_WORDS),
+            Self::Scale => (Displays, t::SCALE, t::DISPLAY_WORDS),
+            Self::Rotation => (Displays, t::ROTATION, t::DISPLAY_WORDS),
+            Self::MainDisplay => (Displays, t::MAIN_DISPLAY, t::DISPLAY_WORDS),
+            Self::DisplayOn => (Displays, t::DISPLAY_ON, t::DISPLAY_WORDS),
             Self::Wifi => (Network, t::WIFI, t::NETWORK_WORDS),
             Self::Networks => (Network, t::NETWORKS, t::NETWORK_WORDS),
             Self::OtherNetwork => (Network, t::OTHER_NETWORK_SEARCH, t::NETWORK_WORDS),
@@ -232,8 +259,8 @@ impl Setting {
         self.entry().0
     }
 
-    /// The settings file that holds it; none for the sound and the default applications,
-    /// which go through `pactl` and `mime-apps`.
+    /// The settings file that holds it; none for the screens, the sound and the default
+    /// applications, which go through the compositor, `pactl` and `mime-apps`.
     pub fn file(self) -> Option<File> {
         let file = match self.page() {
             Page::Appearance => match self {
@@ -251,7 +278,9 @@ impl Setting {
             },
             Page::Lock => File::Lock,
             Page::Clipboard => File::Clipboard,
-            Page::Sound | Page::Bluetooth | Page::Network | Page::DefaultApps => return None,
+            Page::Displays | Page::Sound | Page::Bluetooth | Page::Network | Page::DefaultApps => {
+                return None;
+            }
         };
         Some(file)
     }
@@ -282,10 +311,12 @@ pub fn search(query: &str) -> Vec<Hit> {
                 return None;
             }
             let marks: Vec<Range<usize>> = words.iter().filter_map(|w| find(name, w)).collect();
+            // The name itself first: two pages may name a setting alike (« Disposition »).
             let rank = match fold(name) {
-                n if n.starts_with(&whole) => 0,
-                n if n.contains(&whole) || !marks.is_empty() => 1,
-                _ => 2,
+                n if n == whole => 0,
+                n if n.starts_with(&whole) => 1,
+                n if n.contains(&whole) || !marks.is_empty() => 2,
+                _ => 3,
             };
             Some((rank, Hit { setting, marks }))
         })
