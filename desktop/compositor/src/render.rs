@@ -233,6 +233,7 @@ impl Scene {
             &[
                 uniform("clip_rect", UniformType::_4f),
                 uniform("radius", UniformType::_1f),
+                uniform("minify", UniformType::_1f),
             ],
         )?;
         Ok(Self {
@@ -286,6 +287,9 @@ impl Scene {
         self.blur.sweep();
         self.genie.sweep();
         self.bars.borrow_mut().sweep();
+        if !state.overview_shown(now) {
+            self.labels.borrow_mut().forget_view();
+        }
         self.labels.borrow_mut().sweep();
         let all = state.views();
         let used: Vec<_> = all
@@ -1019,11 +1023,15 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for RoundedSurf
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
         let clip = clip_in_frame(self.clip, frame.transformation(), self.frame_size);
+        // Texels per pixel drawn, on the axis shrunk most (lot D-33c).
+        let shrink = |texels: f64, pixels: i32| texels / f64::from(pixels.max(1));
+        let minify = shrink(src.size.w, dst.size.w).max(shrink(src.size.h, dst.size.h));
         frame.override_default_tex_program(
             self.program.clone(),
             vec![
                 Uniform::new("clip_rect", clip),
                 Uniform::new("radius", self.radius),
+                Uniform::new("minify", minify as f32),
             ],
         );
         let drawn = self.inner.draw(frame, src, dst, damage, opaque_regions);
