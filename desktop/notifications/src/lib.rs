@@ -85,12 +85,16 @@ pub fn run() -> Result<Outcome, Error> {
     tracing::info!(name = server::NAME, "serving");
     // No text field: no need to start the clipboard thread.
     iced_exwlshell::disable_clipboard();
+    // iced_exwlshell reports there the screen the stack is on.
+    let (broadcast, shell_events) = iced_exwlshell::shell::channel();
+    let fresh = move || {
+        Notifications::new(core.clone(), inbox.clone()).with_shell_events(shell_events.clone())
+    };
     // The daemon wants a boot function it may call again: the state is handed over once.
-    let first = Mutex::new(Some(Notifications::new(core.clone(), inbox.clone())));
+    let first = Mutex::new(Some(fresh()));
     let boot = move || {
         let state = first.lock().ok().and_then(|mut s| s.take());
-        let state = state.unwrap_or_else(|| Notifications::new(core.clone(), inbox.clone()));
-        (state, iced::Task::none())
+        (state.unwrap_or_else(&fresh), iced::Task::none())
     };
     iced_exwlshell::daemon(boot, namespace, Notifications::update, Notifications::view)
         .theme(|_: &Notifications, _| Some(theme::theme()))
@@ -107,6 +111,7 @@ pub fn run() -> Result<Outcome, Error> {
                 start_mode: StartMode::Background,
                 ..LayerShellSettings::default()
             },
+            shell_broadcast: broadcast,
             ..ExWlSettings::default()
         })
         .run()?;
