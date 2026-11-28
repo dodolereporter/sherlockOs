@@ -10,10 +10,9 @@
 //!
 //! Every key is optional; an absent file gives the defaults. See `docs/notifications.md`.
 
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use dock_config::KeyFile;
@@ -50,7 +49,7 @@ impl NotificationsConfig {
 
     /// Reads the file at `path`; an absent file gives the defaults.
     pub fn load(path: &Path) -> io::Result<(Self, Option<String>)> {
-        match std::fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Ok(Self::parse(&text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((Self::default(), None)),
             Err(error) => Err(error),
@@ -58,36 +57,20 @@ impl NotificationsConfig {
     }
 
     /// Writes the settings into the file at `path`, creating its directory and keeping its
-    /// other lines. The text goes to a temporary file of its own, renamed over the old one: a
-    /// reader never sees half a file, and two writers never mix.
+    /// other lines, with `mime_apps::write_atomically`: a reader never sees half a file, two
+    /// writers never mix, a linked file (dotfiles) is written where it lives and keeps its
+    /// permissions. A file that cannot be read is not written over.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let mut file = match std::fs::read_to_string(path) {
+        let mut file = match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => KeyFile::parse(&text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => KeyFile::default(),
             Err(error) => return Err(error),
         };
         let value = if self.do_not_disturb { "true" } else { "false" };
         file.set(GROUP, DO_NOT_DISTURB, value);
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)?;
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let count = SAVES.fetch_add(1, Ordering::Relaxed);
-        let temporary = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
-        let written = (|| {
-            let mut out = std::fs::File::create(&temporary)?;
-            out.write_all(file.to_text().as_bytes())?;
-            out.sync_all()?;
-            std::fs::rename(&temporary, path)
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written
+        mime_apps::write_atomically(path, &file.to_text())
     }
 }
-
-/// Saves made by this process, for unique temporary names.
-static SAVES: AtomicU64 = AtomicU64::new(0);
 
 /// Path of the file: `$XDG_CONFIG_HOME/notifications/notifications.conf`.
 pub fn path() -> Option<PathBuf> {
@@ -182,6 +165,26 @@ mod tests {
         );
         let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1);
+        // A linked file (dotfiles) stays a link, and a private one stays private.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = path.parent().unwrap();
+        let target = dir.join("dotfiles.conf");
+        std::fs::rename(&path, &target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink("dotfiles.conf", &path).unwrap();
+        NotificationsConfig {
+            do_not_disturb: false,
+        }
+        .save(&path)
+        .unwrap();
+        assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("DoNotDisturb=false")
+        );
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 

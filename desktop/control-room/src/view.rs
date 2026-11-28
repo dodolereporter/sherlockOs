@@ -264,6 +264,7 @@ impl App {
             let cards = match page {
                 Page::Sound => self.sound(inner),
                 Page::Appearance => self.appearance(inner),
+                Page::Keyboard => self.keyboard(inner),
                 Page::Touchpad => self.touchpad(inner),
                 Page::Lock => self.lock(inner),
                 Page::Clipboard => self.clipboard(inner),
