@@ -32,7 +32,7 @@ use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod path;
-pub use path::PathEdit;
+pub use path::{FoldedMenu, PathEdit};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -63,6 +63,7 @@ pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
 pub const PATH: &str = "path";
+pub const SUGGESTIONS: &str = "path-suggestions";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
@@ -351,6 +352,14 @@ pub enum Message {
     PathResolved(PathBuf, crate::pathbar::Found),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
+    /// The menu of the folders folded behind « … », opened or closed.
+    Folded(bool),
+    /// The completion list scrolled to this offset.
+    PathScrolled(f32),
+    /// A recent folder clicked in the « Aller au dossier » sheet.
+    PathRecent(usize),
+    /// The search, folded to its icon in a narrow window, opens.
+    OpenSearch,
 }
 
 /// What was asked of a device.
@@ -459,6 +468,12 @@ pub struct App {
     /// The folder the completion last read, and the number of the last read asked.
     folders: Option<crate::pathbar::Folders>,
     folders_generation: u64,
+    /// The menu of the folded folders, the completion list's scroll, the folders last
+    /// reached by the field (with their labels), and the search opened from its icon.
+    pub(crate) folded: FoldedMenu,
+    suggest_offset: f32,
+    pub(crate) recent: Vec<(PathBuf, String)>,
+    pub(crate) search_open: bool,
 }
 
 impl App {
@@ -526,6 +541,10 @@ impl App {
             suggest_fade: None,
             folders: None,
             folders_generation: 0,
+            folded: FoldedMenu::default(),
+            suggest_offset: 0.0,
+            recent: Vec::new(),
+            search_open: false,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -635,6 +654,7 @@ impl App {
             || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
+            || fade(&self.folded.fade)
             || self
                 .path_edit
                 .as_ref()
@@ -650,6 +670,7 @@ impl App {
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
+        self.folded.fade = None;
         if let Some(edit) = &mut self.path_edit {
             edit.shake = None;
         }
@@ -683,6 +704,9 @@ impl App {
         );
         if elsewhere && self.path_edit.as_ref().is_some_and(|e| !e.sheet) {
             self.close_path_edit();
+        }
+        if elsewhere {
+            self.folded_menu(false);
         }
         let task = self.handle(message);
         self.sync_menubar();
@@ -998,7 +1022,17 @@ impl App {
                 return self.path_folders(generation, folders);
             }
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
-            Message::Escaped => self.close_path_edit(),
+            Message::Escaped => {
+                self.close_path_edit();
+                self.folded_menu(false);
+            }
+            Message::Folded(open) => self.folded_menu(open),
+            Message::PathScrolled(offset) => self.suggest_offset = offset,
+            Message::PathRecent(index) => return self.path_recent(index),
+            Message::OpenSearch => {
+                self.search_open = true;
+                return operation::focus(SEARCH);
+            }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
@@ -1060,6 +1094,9 @@ impl App {
         }
         if self.suggest_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.suggest_fade = None;
+        }
+        if self.folded.fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.folded.fade = None;
         }
         let Some(probe) = &mut self.probe else {
             return scroll;
@@ -1203,6 +1240,7 @@ impl App {
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.search.clear();
+        self.search_open = false;
         self.clear_selection();
         self.repo = None;
         self.notice = None;
@@ -1910,6 +1948,8 @@ impl App {
                 Task::none()
             }
             Key::Named(Named::Escape) => {
+                self.search_open = false;
+                self.folded_menu(false);
                 self.search.clear();
                 self.notice = None;
                 self.refilter();
@@ -1925,7 +1965,10 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
-                ("f", _) => operation::focus(SEARCH),
+                ("f", _) => {
+                    self.search_open = true;
+                    operation::focus(SEARCH)
+                }
                 ("r", _) => self.run(Command::Refresh),
                 ("l", _) => self.run(Command::EditPath),
                 ("g", true) => self.run(Command::GoToFolder),
