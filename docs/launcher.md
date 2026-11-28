@@ -267,9 +267,11 @@ grows to its height (560 at most, less on a short screen), the query is the firs
   line cut by the start of the reading left out), 60 entries at most, newest first, again when a
   request ends: the time, then « A lu : tool », « tool, avec ton accord », « tool : refusé »
   (« pas de réponse », « personne pour donner l'accord »), « (erreur) » after a failed outcome.
-  Each outcome goes to the last decision of its call (the numbers start again with each
-  session). « Cette conversation » shows those since its first request, « Tout » all of them;
-  « Conversation » comes back.
+  Each outcome goes to the last decision of its call in its session (the numbers start again
+  with each). A conversation has a session of its own (lot A-20e), handed to `sherlockd --ask`
+  with each request, which hands it to the proxy that writes the journal: « Cette
+  conversation » shows the lines of that session, even when two conversations run at once
+  (older lines, without one, by their time), « Tout » all of them; « Conversation » comes back.
 
 Each request runs `sherlockd --ask` (beside the session's programs, `$SHERLOCKOS_BIN`, or in
 the `PATH`), without a shell: the request and the exchanges answered so far (20 at most) go on

@@ -53,12 +53,20 @@ fn main() -> anyhow::Result<()> {
         ["--claude-code", _] | ["--ask", _] => {
             bail!("the request is read on standard input, never in the arguments")
         }
-        ["--proxy"] => serve_proxy(CompositorWindow::of_session()),
+        ["--proxy"] => serve_proxy(CompositorWindow::of_session(), None),
         // Claude Code starts the proxy without the Wayland variables: the socket of the
-        // consent window is given to it (A-11c).
+        // consent window is given to it (A-11c), and the session of the panel's conversation
+        // its journal lines carry (A-20e).
         ["--proxy", "--consent", path] => {
-            serve_proxy(Some(CompositorWindow::at(std::path::Path::new(path))))
+            serve_proxy(Some(CompositorWindow::at(std::path::Path::new(path))), None)
         }
+        ["--proxy", "--session", session] => {
+            serve_proxy(CompositorWindow::of_session(), Some(session))
+        }
+        ["--proxy", "--consent", path, "--session", session] => serve_proxy(
+            Some(CompositorWindow::at(std::path::Path::new(path))),
+            Some(session),
+        ),
         ["--test-server"] => test_server::run(Mode::Normal).context("test server"),
         ["--test-server", "--trace", trace] => {
             test_server::run_traced(Mode::Normal, Some(std::path::Path::new(trace)))
@@ -152,7 +160,10 @@ fn exe() -> anyhow::Result<String> {
 /// Sherlock's MCP servers: the test server, the files (A-13), containers (A-14), services (A-16)
 /// and settings (A-17) servers and, in a Wayland session, the windows server (A-12), all ours: their
 /// annotations are trusted (ADR 0015).
-async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers> {
+async fn servers(
+    window: Option<CompositorWindow>,
+    session: Option<&str>,
+) -> anyhow::Result<McpServers> {
     let exe = exe()?;
     // The windows of the session (A-12), through the compositor's windows socket.
     let windows = window.as_ref().and_then(CompositorWindow::windows_socket);
@@ -170,6 +181,10 @@ async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers>
             Journal::none()
         }
         None => Journal::none(),
+    };
+    let journal = match session {
+        Some(session) => journal.for_session(session),
+        None => journal,
     };
     let consent: Box<dyn Consent> = match window {
         Some(window) => Box::new(window),
@@ -275,11 +290,20 @@ fn ask(input: &sherlockd::shell::Input) -> anyhow::Result<()> {
         {
             config.proxy_args = vec!["--proxy".into(), "--consent".into(), path];
         }
+        // The conversation's session, the panel's, or one of this request's own: the proxy
+        // writes it on each journal line, and only those lines count here (A-20e).
+        let session = input
+            .session
+            .clone()
+            .unwrap_or_else(sherlockd::broker::new_session);
+        config
+            .proxy_args
+            .extend(["--session".into(), session.clone()]);
         let mut claude = ClaudeCode::new(config);
         for (request, answer) in &input.history {
             claude.remember(request, answer);
         }
-        let events = Arc::new(Mutex::new(Events::default()));
+        let events = Arc::new(Mutex::new(Events::default().for_session(&session)));
         let mut follower = Follower::new(Journal::default_path());
         let journal = {
             let events = events.clone();
@@ -321,11 +345,11 @@ fn ask(input: &sherlockd::shell::Input) -> anyhow::Result<()> {
 }
 
 /// Serves the proxy on standard input and output, for Claude Code.
-fn serve_proxy(window: Option<CompositorWindow>) -> anyhow::Result<()> {
+fn serve_proxy(window: Option<CompositorWindow>, session: Option<&str>) -> anyhow::Result<()> {
     // Started by Claude Code: never outlives it, even killed.
     sherlockd::process::die_with_own_parent().context("tying the proxy to Claude Code")?;
     runtime()?.block_on(async {
-        let mut servers = servers(window).await?;
+        let mut servers = servers(window, session).await?;
         let input = tokio::io::BufReader::new(tokio::io::stdin());
         let served = proxy::serve(input, tokio::io::stdout(), &mut servers).await;
         servers.shutdown().await;
@@ -355,7 +379,7 @@ fn claude_code(request: &str) -> anyhow::Result<()> {
 /// Runs a fake model script against the test server and prints the conversation.
 fn demo() -> anyhow::Result<()> {
     runtime()?.block_on(async {
-        let servers = servers(CompositorWindow::of_session()).await?;
+        let servers = servers(CompositorWindow::of_session(), None).await?;
         let mut out = std::io::stdout().lock();
         // The conversation is the command's output, not a log: it goes to stdout.
         writeln!(out, "Outils du serveur de test :")?;

@@ -23,7 +23,8 @@ mod tests {
     }
 
     /// The fake `claude`: logged in; reads the request; writes the init and the tool call, then
-    /// the broker's decision in the journal as the proxy would, then the rest of the transcript.
+    /// the broker's decision in the journal as the proxy would, with the session given to the
+    /// proxy (A-20e), after a line of another session, then the rest of the transcript.
     fn fake_claude(dir: &Path) {
         fake_claude_with(dir, ECHO, 2);
     }
@@ -34,7 +35,9 @@ mod tests {
         let journal = dir.join("state/sherlock/journal.jsonl");
         let script = format!(
             "#!/bin/sh\n[ \"$1\" = auth ] && exit 0\ncat > /dev/null\nhead -n {head} '{t}'\n\
-             printf '%s\\n' '{{\"id\":1,\"tool\":\"echo\",\"level\":\"lecture\",\"decision\":\"granted\"}}' >> '{j}'\n\
+             s=$(printf '%s' \"$*\" | sed -n 's/.*\"--session\",\"\\([A-Za-z0-9-]*\\)\".*/\\1/p')\n\
+             printf '%s\\n' '{{\"id\":1,\"tool\":\"echo\",\"decision\":\"denied\",\"session\":\"another\"}}' >> '{j}'\n\
+             printf '%s\\n' \"{{\\\"id\\\":1,\\\"tool\\\":\\\"echo\\\",\\\"level\\\":\\\"lecture\\\",\\\"decision\\\":\\\"granted\\\",\\\"session\\\":\\\"$s\\\"}}\" >> '{j}'\n\
              sleep 1\ntail -n +{next} '{t}'\n",
             next = head + 1,
             t = transcript.display(),
