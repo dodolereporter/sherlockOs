@@ -840,8 +840,17 @@ mod tests {
             first.unwrap() < window.unwrap(),
             "the curtain in front of the window"
         );
+        // The desktop revealed (D-24g): the window reappears, the wallpaper zooms back.
+        let now = h.state.now();
+        let shown = h.state.space.elements().next().unwrap().clone();
+        let visual = h.state.window_visual(&shown, now).unwrap();
+        assert!(visual.opacity < 1.0, "{}", visual.opacity);
+        assert!(h.state.wallpaper_zoom(now).is_some_and(|z| z > 1.0));
         h.run_until("the curtain up", |h| h.curtain_items() == 0);
         assert_eq!(h.window_items(), 1);
+        let later = h.state.now() + std::time::Duration::from_millis(800);
+        assert_eq!(h.state.window_visual(&shown, later).unwrap().opacity, 1.0);
+        assert_eq!(h.state.wallpaper_zoom(later), None);
     }
 
     #[test]

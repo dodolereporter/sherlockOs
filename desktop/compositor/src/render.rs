@@ -132,7 +132,8 @@ pub enum Item {
         alpha: f32,
     },
     /// The wallpaper of the screen.
-    Wallpaper,
+    /// Zoomed in by its factor while the desktop is revealed (lot D-24g), 1 at rest.
+    Wallpaper(f64),
     /// A window minimized into its dock icon or coming back from it (lot D-19).
     Genie(genie::Frame),
     /// The title bar the compositor draws above a window, in `rect` (lot D-08).
@@ -450,10 +451,11 @@ impl Scene {
                 );
                 vec![SceneElement::Shape(ids.stamp(key, params, element))]
             }
-            Item::Wallpaper => wallpaper
+            Item::Wallpaper(zoom) => wallpaper
                 .iter()
                 .map(|(texture, alpha)| {
-                    SceneElement::Wallpaper(wallpaper::element(texture, *alpha, mode, view))
+                    let element = wallpaper::zoomed(texture, *alpha, mode, view, zoom);
+                    SceneElement::Wallpaper(element)
                 })
                 .collect(),
             Item::Genie(mut frame) => {
@@ -779,7 +781,9 @@ fn screen_items(
     // Last, so drawn first: what the blur behind glass surfaces (lot D-37) reads from the
     // frame, like the rest of the desktop.
     if wallpaper {
-        items.push(Item::Wallpaper);
+        let zoom = state.wallpaper_zoom(now);
+        animating |= zoom.is_some();
+        items.push(Item::Wallpaper(zoom.unwrap_or(1.0)));
         return (items, animating);
     }
     let discs = desktop_discs(view.area.size);

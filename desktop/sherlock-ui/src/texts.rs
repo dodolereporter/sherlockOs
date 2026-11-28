@@ -161,6 +161,8 @@ pub mod evidence {
     pub const GO_TO_FOLDER_MENU: &str = "Aller au dossier…";
     pub const EDIT_PATH: &str = "Saisir un chemin";
     pub const GO: &str = "Aller";
+    pub const RECENT_FOLDERS: &str = "Récents";
+    pub const SEARCH: &str = "Rechercher";
     /// A file whose name hides what it is (lot E-06): « malgré son nom en .pdf, ce fichier est
     /// un programme ».
     pub fn disguised(extension: &str, real: &str) -> String {
