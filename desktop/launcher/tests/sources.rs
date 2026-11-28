@@ -145,9 +145,10 @@ mod tests {
             }
             Ok(1)
         });
-        let ask = Ask::new(Some(vec!["test-terminal".into(), "-e".into()]), None);
-        let sources = launcher::arrange(apps(), Files::ready(home.to_path_buf(), catalog()), ask);
+        let sources = launcher::arrange(apps(), Files::ready(home.to_path_buf(), catalog()), Ask);
+        // Never the session's sherlockd: one that is not there.
         let launcher = Launcher::new(sources, spawn)
+            .with_sherlockd("/nonexistent/sherlockd".into())
             .with_session(Arc::new(SessionOf(Arc::clone(&record))))
             .with_clipboard(clipboard);
         (launcher, record)
@@ -192,14 +193,25 @@ mod tests {
         let _ = launcher.update(Message::Query("2 + 2".into()));
         assert_eq!(sections(&launcher), [texts::CALCULATOR, texts::SHERLOCK]);
         assert_eq!(titles(&launcher)[0], "4");
-        // Nothing matches: Sherlock alone, disabled, « Bientôt ».
+        // Nothing matches: Sherlock alone, who takes the query; Enter opens his panel (A-19),
+        // which says when his service is not there, and Escape comes back.
         let _ = launcher.update(Message::Query("zzzz".into()));
         let hits: Vec<_> = launcher.hits().cloned().collect();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].subtitle.as_deref(), Some(texts::SOON));
-        assert_eq!(hits[0].action, Action::Disabled);
+        assert_eq!(hits[0].subtitle.as_deref(), Some(texts::ASK_LINE));
+        assert_eq!(hits[0].action, Action::Ask("zzzz".into()));
         enter(&mut launcher);
-        assert!(!launcher.closing, "a disabled entry does nothing");
+        assert!(launcher.sherlock && !launcher.closing);
+        let said = launcher.conversation.exchanges[0].failure.as_deref();
+        assert_eq!(
+            said,
+            Some(sherlock_ui::launcher::sherlock::text::NO_SHERLOCKD)
+        );
+        let _ = launcher.update(Message::Key(app::Key::Escape));
+        assert!(
+            !launcher.sherlock && !launcher.closing,
+            "back to the search"
+        );
         // An empty query shows nothing at all.
         for empty in ["", "   "] {
             let _ = launcher.update(Message::Query(empty.into()));
@@ -609,7 +621,7 @@ mod tests {
                     > 2_000
             );
         }
-        // The keys the launcher acts on stay the same.
+        // Tab hands the query over to Sherlock (A-19).
         let tab = iced::Event::Keyboard(keyboard::Event::KeyPressed {
             key: keyboard::Key::Named(keyboard::key::Named::Tab),
             modified_key: keyboard::Key::Named(keyboard::key::Named::Tab),
@@ -621,13 +633,11 @@ mod tests {
             text: None,
             repeat: false,
         });
-        assert!(
-            app::on_event(
-                tab,
-                iced::event::Status::Ignored,
-                iced::window::Id::unique()
-            )
-            .is_none()
+        let taken = app::on_event(
+            tab,
+            iced::event::Status::Ignored,
+            iced::window::Id::unique(),
         );
+        assert!(matches!(taken, Some(Message::Key(app::Key::Tab))));
     }
 }

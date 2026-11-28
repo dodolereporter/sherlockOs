@@ -38,7 +38,7 @@ macOS's Maccy or Raycast.
 | Escape | Close |
 
 Enter never pastes by itself: the keyboard goes back to the window that had it, and the user
-pastes there (ADR 0030, proposed).
+pastes there (ADR 0030).
 
 ## Screen sizes
 
