@@ -1,6 +1,6 @@
 # ADR 0029: application menus as Wayland popups
 
-- Status: proposed
+- Status: accepted (the author approved it on 2026-11-28)
 - Date: 2026-11-27
 - Lot: E-02
 
