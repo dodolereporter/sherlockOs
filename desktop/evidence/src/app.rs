@@ -428,6 +428,9 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview sliding in or out (lot E-08), and the file that remembers it.
+    pub(crate) preview_slide: Option<Fade>,
+    prefs: Option<PathBuf>,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -542,6 +545,8 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_slide: None,
+            prefs: None,
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -601,6 +606,16 @@ impl App {
             search_open: false,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
+        // The preview as it was left (lot E-08): a file of a few bytes, read before the first
+        // frame so that the window opens as it was.
+        app.prefs = app
+            .config
+            .xdg
+            .as_ref()
+            .map(|dirs| crate::prefs::path(&dirs.config_home));
+        if let Some(shown) = app.prefs.as_deref().and_then(crate::prefs::read_preview) {
+            app.show_preview = shown;
+        }
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
@@ -734,6 +749,37 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Shows or hides the preview, sliding, and remembers it off the interface thread.
+    fn toggle_preview(&mut self) -> Task<Message> {
+        let from = self.preview_level();
+        self.show_preview = !self.show_preview;
+        self.preview_pinned = false;
+        let now = self.now();
+        let to = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide = Some(Fade::new(from, to, now, more::PREVIEW_SLIDE));
+        let Some(path) = self.prefs.clone() else {
+            return Task::none();
+        };
+        let shown = self.show_preview;
+        Task::perform(
+            async move {
+                if let Err(error) = crate::prefs::write_preview(&path, shown) {
+                    tracing::warn!(%error, "the preview choice is not remembered");
+                }
+            },
+            |()| Message::Inert,
+        )
+    }
+
+    /// How far the preview is in, from 0 (hidden) to 1 (shown).
+    pub(crate) fn preview_level(&self) -> f32 {
+        // What the width leaves room for (E-05), at rest.
+        let rest = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
     /// Opens or closes the large preview, zooming in or out. It opens on one item only.
     fn quick_look(&mut self, open: bool) {
         if open && self.single().is_none() {
@@ -771,6 +817,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.preview_slide)
             || fade(&self.look_fade)
             || self.progress.is_some()
             || self.dnd_waiting()
@@ -789,6 +836,7 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.preview_slide = None;
         self.look_fade = None;
         self.path_fade = None;
         self.path_leaving = None;
@@ -1270,6 +1318,9 @@ impl App {
         }
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
+        }
+        if self.preview_slide.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.preview_slide = None;
         }
         if self.path_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.path_fade = None;
@@ -2164,6 +2215,10 @@ impl App {
                 self.clear_selection();
                 Task::none()
             }
+            // As Alt+Cmd+P in the Finder (lot E-08).
+            Key::Character(c) if ctrl && modifiers.alt() && c.eq_ignore_ascii_case("p") => {
+                self.run(Command::TogglePreview)
+            }
             Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), shift) {
                 ("c", true) => self.run(Command::CopyPath),
                 ("c", false) => self.run(Command::Copy),
@@ -2270,14 +2325,15 @@ impl App {
             Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            // Space shows a preview the width had folded, rather than hiding a hidden one.
+            // A preview the width had folded comes back, pinned, rather than a hidden one
+            // being hidden (E-05); it slides in (E-08).
             Command::TogglePreview if self.show_preview && !self.panes().preview => {
+                let from = self.preview_level();
                 self.preview_pinned = true;
+                let now = self.now();
+                self.preview_slide = Some(Fade::new(from, 1.0, now, more::PREVIEW_SLIDE));
             }
-            Command::TogglePreview => {
-                self.show_preview = !self.show_preview;
-                self.preview_pinned = false;
-            }
+            Command::TogglePreview => return self.toggle_preview(),
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();

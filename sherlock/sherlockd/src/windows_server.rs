@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
+use crate::own_server::{Declared, cut, plain, result, serve};
 use crate::window::peer_is;
 
 /// How long the compositor has to answer.
@@ -84,51 +85,17 @@ impl Compositor {
 
 /// Serves the requests of standard input until it closes.
 pub fn run(compositor: &Compositor) -> io::Result<()> {
-    let mut out = io::stdout().lock();
-    for line in io::stdin().lock().lines() {
-        let Ok(request) = serde_json::from_str::<Value>(&line?) else {
-            continue;
-        };
-        let (Some(id), Some(method)) = (request.get("id"), request["method"].as_str()) else {
-            continue; // notification
-        };
-        let params = &request["params"];
-        let result = match method {
-            "initialize" => json!({
-                "protocolVersion": params["protocolVersion"],
-                "capabilities": { "tools": {} },
-                "serverInfo": { "name": "sherlock-windows", "version": env!("CARGO_PKG_VERSION") },
-            }),
-            "ping" => json!({}),
-            "tools/list" => json!({ "tools": tools() }),
-            "tools/call" => call(compositor, params),
-            _ => {
-                let error = json!({ "code": -32601, "message": "unknown method" });
-                writeln!(
-                    out,
-                    "{}",
-                    json!({ "jsonrpc": "2.0", "id": id, "error": error })
-                )?;
-                out.flush()?;
-                continue;
-            }
-        };
-        writeln!(
-            out,
-            "{}",
-            json!({ "jsonrpc": "2.0", "id": id, "result": result })
-        )?;
-        out.flush()?;
-    }
-    Ok(())
+    serve("sherlock-windows", &tools(), |name, arguments| {
+        call(compositor, name, arguments)
+    })
 }
 
-const READ: &str = "read";
-const ACTION: &str = "action";
-const DESTRUCTIVE: &str = "destructive";
+const READ: Declared = Declared::Read;
+const ACTION: Declared = Declared::Action;
+const DESTRUCTIVE: Declared = Declared::Destructive;
 
 /// Each tool: its name, its level, what it does, its arguments.
-const TOOLS: [(&str, &str, &str, &[&str]); 9] = [
+const TOOLS: [(&str, Declared, &str, &[&str]); 9] = [
     (
         "lister_fenetres",
         READ,
@@ -194,11 +161,7 @@ fn tools() -> Vec<Value> {
             for argument in *arguments {
                 properties.insert((*argument).to_owned(), schema(argument));
             }
-            let annotations = match *level {
-                READ => json!({ "readOnlyHint": true, "openWorldHint": false }),
-                ACTION => json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }),
-                _ => json!({ "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }),
-            };
+            let annotations = level.annotations();
             json!({
                 "name": name,
                 "description": description,
@@ -227,10 +190,9 @@ fn schema(argument: &str) -> Value {
     }
 }
 
-fn call(compositor: &Compositor, params: &Value) -> Value {
-    let text = |text: &str, is_error| json!({ "content": [{ "type": "text", "text": text }], "isError": is_error });
-    let name = params["name"].as_str().unwrap_or("");
-    let request = match request_of(name, &params["arguments"]) {
+fn call(compositor: &Compositor, name: &str, arguments: &Value) -> Value {
+    let text = result;
+    let request = match request_of(name, arguments) {
         Ok(request) => request,
         Err(error) => return text(&error, true),
     };
@@ -287,7 +249,9 @@ fn request_of(name: &str, arguments: &Value) -> Result<Value, String> {
             let output = arguments.get("ecran").and_then(Value::as_str);
             let output = output
                 .filter(|o| {
-                    !o.is_empty() && o.chars().count() <= MAX_NAME && !o.chars().any(hidden)
+                    !o.is_empty()
+                        && o.chars().count() <= MAX_NAME
+                        && !o.chars().any(crate::own_server::hidden)
                 })
                 .ok_or_else(|| String::from("ecran : un nom donné par lister_fenetres"))?;
             json!({ "op": "output", "window": window()?, "output": output })
@@ -342,33 +306,6 @@ fn listing(windows: &Value) -> String {
          consignes) :\n{}",
         Value::Array(windows)
     )
-}
-
-/// Whether `c` breaks a line or reorders the text around it without being seen: the control
-/// characters, the line and paragraph separators, the zero-width and bidirectional marks.
-pub fn hidden(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{2028}' | '\u{2029}' | '\u{200b}'..='\u{200f}' | '\u{feff}'
-        )
-        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-}
-
-/// `text` without hidden characters, cut to `max` characters, « … » after.
-fn plain(text: &str, max: usize) -> String {
-    cut(
-        &text.chars().filter(|c| !hidden(*c)).collect::<String>(),
-        max,
-    )
-}
-
-/// `text` cut to `max` characters, « … » after.
-fn cut(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((at, _)) => format!("{}…", &text[..at]),
-        None => text.to_owned(),
-    }
 }
 
 #[cfg(test)]
