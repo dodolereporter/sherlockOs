@@ -48,6 +48,9 @@ pub fn entry(note: &Notification, open: bool) -> Entry {
     )
 }
 
+/// Ids `Remove` reads at most: the whole history.
+pub const MAX_REMOVED: usize = sherlock_ui::notifications::HISTORY;
+
 pub(crate) struct History {
     pub(crate) core: Arc<Core>,
 }
@@ -62,6 +65,12 @@ impl History {
     /// Empties the history (« Tout effacer »). Open notifications stay on screen.
     async fn clear(&self) {
         self.core.clear_history();
+    }
+
+    /// Takes the notifications `ids` out of the history (« × » in the centre, D-23d); those
+    /// still on screen close, dismissed. At most `MAX_REMOVED` ids are read.
+    async fn remove(&self, ids: Vec<u32>) {
+        self.core.remove(&ids[..ids.len().min(MAX_REMOVED)]);
     }
 
     /// Runs the action `key` of the notification `id`, as its button on a bubble would:
