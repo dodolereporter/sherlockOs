@@ -43,14 +43,33 @@ pub struct Exchange {
     pub answer: Option<String>,
     /// No answer: what to say.
     pub failure: Option<String>,
-    /// When it ended, on the clock of the panel: Sherlock's mood follows it.
+    /// When it ended, on the clock of the panel: Sherlock's mood follows it, and the answer
+    /// fades in from then.
     pub ended: Option<Duration>,
+    /// When the request, each text and each step came: each fades in and rises (lot A-19c).
+    pub born: Duration,
+    pub texts_at: Vec<Duration>,
+    pub steps_at: Vec<Duration>,
 }
 
 impl Exchange {
     pub fn running(&self) -> bool {
         self.ended.is_none()
     }
+
+    /// Every moment a part of it came.
+    fn moments(&self) -> impl Iterator<Item = Duration> + '_ {
+        std::iter::once(self.born)
+            .chain(self.texts_at.iter().copied())
+            .chain(self.steps_at.iter().copied())
+            .chain(self.ended)
+    }
+}
+
+/// How far a part that came at `born` has appeared at `now`, from 0 to 1.
+pub fn shown(born: Duration, now: Duration) -> f32 {
+    let t = now.saturating_sub(born).as_secs_f32() / tokens::APPEAR.as_secs_f32();
+    sherlock_ui::motion::Ease::OutCubic.apply(t.clamp(0.0, 1.0))
 }
 
 /// The conversation: the exchanges, the last one running or not.
@@ -63,6 +82,14 @@ pub struct Conversation {
 impl Conversation {
     pub fn running(&self) -> bool {
         self.exchanges.last().is_some_and(Exchange::running)
+    }
+
+    /// A part still appearing at `now`: the panel asks for frames.
+    pub fn appearing(&self, now: Duration) -> bool {
+        self.exchanges
+            .iter()
+            .flat_map(Exchange::moments)
+            .any(|born| now < born + tokens::APPEAR)
     }
 
     /// What sherlockd is handed for `request`: it, and the exchanges answered so far.
@@ -86,6 +113,7 @@ impl Conversation {
         let input = self.input(request);
         self.exchanges.push(Exchange {
             request: request.to_owned(),
+            born: now,
             ..Exchange::default()
         });
         let skip = self.exchanges.len().saturating_sub(MAX_EXCHANGES);
@@ -111,7 +139,14 @@ impl Conversation {
         };
         let field = |name: &str| event.get(name).and_then(Value::as_str).unwrap_or_default();
         match field("event") {
-            "text" => exchange.texts.push(field("text").to_owned()),
+            "text" => {
+                exchange.texts.push(field("text").to_owned());
+                exchange.texts_at.push(now);
+            }
+            "step" => exchange.steps_at.push(now),
+            _ => {}
+        }
+        match field("event") {
             "step" => exchange.steps.push(Step {
                 id: field("id").to_owned(),
                 tool: field("tool").to_owned(),
@@ -243,6 +278,14 @@ pub fn view<'a, M: Clone + 'a>(
             .color(tint)
             .wrapping(text::Wrapping::WordOrGlyph)
     };
+    // Each part fades in and rises as it comes (lot A-19c).
+    let appear = |element: iced::Element<'a, M>, born: Duration| -> iced::Element<'a, M> {
+        let t = shown(born, now);
+        sherlock_ui::animated::reveal(element)
+            .opacity(t)
+            .offset(0.0, tokens::APPEAR_OFFSET * (1.0 - t))
+            .into()
+    };
     let mut body = column![].spacing(tokens::GAP).padding(tokens::PADDING);
     if conversation.exchanges.is_empty() {
         body = body.push(words(tokens::text::EMPTY, p.text_secondary));
@@ -251,14 +294,15 @@ pub fn view<'a, M: Clone + 'a>(
         let asked = container(words(&exchange.request, p.text_primary))
             .padding(tokens::STEP_PADDING)
             .style(look::request);
-        body = body.push(container(asked).align_right(Length::Fill));
-        for said in &exchange.texts {
-            body = body.push(words(said, p.text_primary));
+        let asked = container(asked).align_right(Length::Fill);
+        body = body.push(appear(asked.into(), exchange.born));
+        for (said, born) in exchange.texts.iter().zip(&exchange.texts_at) {
+            body = body.push(appear(words(said, p.text_primary).into(), *born));
         }
         if !exchange.steps.is_empty() {
             body = body.push(ui::section_label(tokens::text::PLAN));
         }
-        for (place, step) in exchange.steps.iter().enumerate() {
+        for ((place, step), born) in exchange.steps.iter().enumerate().zip(&exchange.steps_at) {
             let number = container(text((place + 1).to_string()).size(tokens::SMALL_SIZE))
                 .center(tokens::STEP_NUMBER)
                 .style(look::key(false));
@@ -276,18 +320,18 @@ pub fn view<'a, M: Clone + 'a>(
                 .spacing(look::GAP)
                 .align_y(Alignment::Center);
             let waiting = step.state == "waiting";
-            body = body.push(
-                container(card)
-                    .padding(tokens::STEP_PADDING)
-                    .width(Length::Fill)
-                    .style(look::step(waiting)),
-            );
+            let card = container(card)
+                .padding(tokens::STEP_PADDING)
+                .width(Length::Fill)
+                .style(look::step(waiting));
+            body = body.push(appear(card.into(), *born));
         }
+        let ended = exchange.ended.unwrap_or(now);
         if let Some(answer) = &exchange.answer {
-            body = body.push(words(answer, p.text_primary));
+            body = body.push(appear(words(answer, p.text_primary).into(), ended));
         }
         if let Some(failure) = &exchange.failure {
-            body = body.push(words(failure, p.text_secondary));
+            body = body.push(appear(words(failure, p.text_secondary).into(), ended));
         }
         if exchange.running() {
             body = body.push(words(tokens::text::THINKING, p.text_tertiary));
@@ -407,6 +451,14 @@ mod tests {
         c.apply(&json!({"event": "answer", "text": "C'est fait."}), at(4));
         let e = &c.exchanges[0];
         assert_eq!(e.texts, ["Je regarde."]);
+        // Each part came at its moment, and fades in from then.
+        assert_eq!(
+            (e.texts_at.clone(), e.steps_at.clone()),
+            (vec![at(1)], vec![at(1)])
+        );
+        assert!(c.appearing(at(4)) && !c.appearing(at(5)));
+        assert_eq!(shown(at(1), at(1)), 0.0);
+        assert_eq!(shown(at(1), at(2)), 1.0);
         assert_eq!(
             (e.steps[0].state.as_str(), e.steps[0].read),
             ("done", false)
