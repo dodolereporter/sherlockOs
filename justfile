@@ -7,8 +7,8 @@ default:
 # Format, language, clippy and tests: what the CI requires
 verify: checks test
 
-# Format, language and clippy: the CI's first job
-checks: fmt-check check-language lint
+# Format, language, clippy, and sherlock-ui without iced: the CI's first job
+checks: fmt-check check-language lint check-tokens
 
 # Checks the format without changing anything
 fmt-check:
@@ -21,6 +21,11 @@ fmt:
 # Clippy on the whole workspace, warnings refused
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# sherlock-ui as the compositor and the configuration crates take it, without its `iced`
+# feature: `lint` builds it with every feature, and missed a token that needed one (lot Q-53)
+check-tokens:
+    cargo check -p sherlock-ui --no-default-features --lib
 
 # Runs every test of the workspace
 test:
