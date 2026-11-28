@@ -109,10 +109,52 @@ pub fn with_palette(settings: &str, palette: &Path) -> Option<String> {
         out.push('\n');
     }
     if !found {
-        // No key: the settings are not ours to complete. Written again in full.
-        return Some(qtct_settings(palette));
+        // No key: it is added to the `[Appearance]` group, made if there is none; every other
+        // line (the fonts, the icons, the style the user chose) stays.
+        return Some(with_key(settings, &wanted));
     }
     (out != settings).then_some(out)
+}
+
+/// Whether `settings` names a palette: without one, `with_palette` adds the key instead of
+/// changing it.
+pub fn has_palette(settings: &str) -> bool {
+    settings.lines().any(|line| line.starts_with(SCHEME_KEY))
+}
+
+/// `settings` with `line` first in its `[Appearance]` group, and `custom_palette=true` after it
+/// when the group does not say otherwise; a group made at the end when there is none.
+fn with_key(settings: &str, line: &str) -> String {
+    let lines: Vec<&str> = settings.lines().collect();
+    let header = lines.iter().position(|l| l.trim() == "[Appearance]");
+    let mut out: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+    match header {
+        Some(at) => {
+            let end = lines[at + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with('['))
+                .map_or(lines.len(), |i| at + 1 + i);
+            let custom = lines[at + 1..end]
+                .iter()
+                .any(|l| l.starts_with("custom_palette="));
+            let mut added = vec![line.to_owned()];
+            if !custom {
+                added.push(String::from("custom_palette=true"));
+            }
+            out.splice(at + 1..at + 1, added);
+        }
+        None => {
+            if out.last().is_some_and(|l| !l.trim().is_empty()) {
+                out.push(String::new());
+            }
+            out.extend([
+                String::from("[Appearance]"),
+                line.to_owned(),
+                String::from("custom_palette=true"),
+            ]);
+        }
+    }
+    out.join("\n") + "\n"
 }
 
 /// File name of a KDE color scheme.

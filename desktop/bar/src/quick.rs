@@ -5,7 +5,7 @@
 //! lot D-35d), but for a slider held under the pointer.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,7 @@ use crate::system::audio::{Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
 use crate::system::keyboard::{self, KeyboardLight};
-use crate::system::network::{self, Network, Security, Wifi};
+use crate::system::network::{self, Network, Outcome, Security, Wifi};
 use crate::system::power::{self, Power, Profile};
 use crate::system::watch;
 use crate::system::{self, Problem};
@@ -262,8 +262,19 @@ pub struct Quick {
     /// The network chosen that needs its password, and the password typed.
     pub joining: Option<Network>,
     pub password: Secret,
-    /// The network being joined, until NetworkManager reports it.
+    /// The network being joined, until its activation ends (`network::ACTIVATION_LIMIT` at
+    /// most).
     pub connecting: Option<String>,
+    /// The network whose last join ended badly, and how: said on its line and on the tile.
+    pub refused: Option<(String, Outcome)>,
+    /// When the password field started shaking: the password was wrong.
+    pub shaken: Option<Duration>,
+    /// The password typed shows in clear (the eye of the field).
+    pub reveal: bool,
+    /// « Autre réseau… » open: the name and the protection of a hidden network.
+    pub other: Option<(String, Security)>,
+    /// A saved network whose « Oublier ce réseau » waits for its confirmation.
+    pub forgetting_network: Option<String>,
     /// A session command waiting for its second click, and when it was armed.
     pub armed: Option<(Command, Instant)>,
     /// The last action that failed.
@@ -312,10 +323,19 @@ pub enum Message {
     ToggleWifi,
     ShowNetworks(bool),
     Join(Network),
-    /// The network chosen has no saved connection: its password is asked for.
-    AskPassword,
     Password(Secret),
     SubmitPassword,
+    /// The join of a network ended: joined, its password refused, failed or too long.
+    Joined(Network, Result<Outcome, Problem>),
+    /// The eye of the password field.
+    Reveal,
+    /// « Autre réseau… » opened or closed, its name typed, its protection chosen.
+    OtherNetwork(bool),
+    OtherName(String),
+    OtherSecurity(Security),
+    /// « Oublier ce réseau », then its confirmation.
+    ForgetNetwork(String),
+    ConfirmForgetNetwork(bool),
     ToggleBluetooth,
     ShowDevices(bool),
     /// A device of the list: connected or disconnected when paired, else paired.
@@ -329,6 +349,8 @@ pub enum Message {
     Forget(String),
     ConfirmForget(bool),
     ToggleDoNotDisturb,
+    /// « Ne pas déranger » as the file says, read or written off the interface thread.
+    DoNotDisturb(Result<bool, Problem>),
     Volume(u8),
     Mute,
     Light(u8),
@@ -378,6 +400,27 @@ where
     )
 }
 
+/// Whether the notifications file at `path` says « Ne pas déranger »; a file that cannot be
+/// read says no.
+fn read_do_not_disturb(path: &Path) -> bool {
+    NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
+}
+
+/// Turns « Ne pas déranger » over in the file at `path` and returns the new state. Two
+/// toggles at once are made one after the other: neither is lost.
+fn toggle_do_not_disturb(path: &Path) -> system::Result<bool> {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut config, _) = NotificationsConfig::load(path).unwrap_or_default();
+    config.do_not_disturb = !config.do_not_disturb;
+    config
+        .save(path)
+        .map_err(|error| Problem::Failed(error.to_string()))?;
+    Ok(config.do_not_disturb)
+}
+
 /// Runs blocking `work` (a command, a file) on a thread of its own, never on iced's pool: a
 /// sound server that hangs holds that thread only, for `pactl`'s time limit at most.
 fn blocking<T: Send + 'static>(
@@ -421,12 +464,19 @@ impl Quick {
         self.page = Page::Main;
         self.armed = None;
         self.failure = None;
+        self.refused = None;
         self.held = None;
-        self.do_not_disturb = self.settings.as_deref().map(|path| {
-            NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
-        });
+        // The file is read off the interface thread: the tile shows its last state meanwhile.
+        let do_not_disturb = match self.settings.clone() {
+            Some(path) => blocking(
+                move || Ok(read_do_not_disturb(&path)),
+                Message::DoNotDisturb,
+            ),
+            None => Task::none(),
+        };
         Task::batch([
             stopped,
+            do_not_disturb,
             self.read(Service::Wifi),
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
@@ -481,7 +531,11 @@ impl Quick {
 
     /// Frames are needed: a tile or a page moves.
     pub fn running(&self) -> bool {
-        self.page_motion.running() || self.lit.iter().any(|lit| lit.running(self.now))
+        self.page_motion.running()
+            || self.lit.iter().any(|lit| lit.running(self.now))
+            || self
+                .shaken
+                .is_some_and(|at| self.now.saturating_sub(at) < sherlock_ui::lock::screen::SHAKE)
     }
 
     pub fn tick(&mut self, now: Duration) {
@@ -521,6 +575,7 @@ impl Quick {
                 | Message::Pairing(_)
                 | Message::DeviceDone(_)
                 | Message::Done(..)
+                | Message::Joined(..)
                 | Message::Changed(_)
                 | Message::Wifi(_)
                 | Message::Bluetooth(_)
@@ -599,8 +654,7 @@ impl Quick {
             Message::ShowNetworks(show) => {
                 let page = if show { Page::Networks } else { Page::Main };
                 self.turn_page(page, show);
-                self.joining = None;
-                self.password.wipe();
+                self.forget_typed();
                 let device = self.wifi.ready().and_then(|w| w.device.clone());
                 if let (true, Some(device)) = (show, device) {
                     // The networks found come later, with the signals of the device
@@ -615,16 +669,39 @@ impl Quick {
                 }
             }
             Message::Join(chosen) => return self.join(chosen),
-            Message::AskPassword => {}
             Message::Password(typed) => self.password = typed,
-            Message::SubmitPassword => {
-                if let Some(chosen) = self.joining.clone()
-                    && !self.password.is_empty()
-                {
-                    // Moved out: the field empties, the secret is wiped once sent.
-                    let password = std::mem::take(&mut self.password);
-                    return self.connect(chosen, Some(password));
+            Message::SubmitPassword => return self.submit(),
+            Message::Joined(network, result) => return self.joined(network, result),
+            Message::Reveal => self.reveal = !self.reveal,
+            Message::OtherNetwork(open) => {
+                self.forget_typed();
+                self.other = open.then(|| (String::new(), Security::Psk));
+            }
+            Message::OtherName(name) => {
+                if let Some((typed, _)) = &mut self.other {
+                    // A name has 32 bytes at most: the field takes no more.
+                    *typed = name;
+                    while typed.len() > network::MAX_SSID {
+                        typed.pop();
+                    }
                 }
+            }
+            Message::OtherSecurity(security) => {
+                if let Some((_, chosen)) = &mut self.other {
+                    *chosen = security;
+                }
+            }
+            Message::ForgetNetwork(ssid) => self.forgetting_network = Some(ssid),
+            Message::ConfirmForgetNetwork(yes) => {
+                if let (true, Some(ssid)) = (yes, self.forgetting_network.take()) {
+                    if self.refused.as_ref().is_some_and(|(name, _)| *name == ssid) {
+                        self.refused = None;
+                    }
+                    return act(Service::Wifi, move |bus| async move {
+                        network::forget(&bus, &ssid).await
+                    });
+                }
+                self.forgetting_network = None;
             }
             Message::ToggleBluetooth => {
                 if let Some(read) = self.bluetooth.ready() {
@@ -634,7 +711,12 @@ impl Quick {
                     });
                 }
             }
-            Message::ToggleDoNotDisturb => self.toggle_do_not_disturb(),
+            Message::ToggleDoNotDisturb => {
+                if let Some(path) = self.settings.clone() {
+                    return blocking(move || toggle_do_not_disturb(&path), Message::DoNotDisturb);
+                }
+            }
+            Message::DoNotDisturb(done) => self.do_not_disturb_done(done),
             Message::Volume(value) => {
                 self.held = Some(Service::Sound);
                 if let Load::Ready(output) = &mut self.sound {
@@ -753,8 +835,7 @@ impl Quick {
     /// The panel closed, whichever way: the password typed is wiped, the network chosen
     /// forgotten, a scan for Bluetooth devices stopped, a question of the agent cancelled.
     pub fn close(&mut self) -> Task<Message> {
-        self.password.wipe();
-        self.joining = None;
+        self.forget_typed();
         self.forgetting = None;
         self.stop_pairing();
         self.stop_scan()
@@ -789,60 +870,110 @@ impl Quick {
         })
     }
 
+    /// What was typed for a network goes: its password (wiped), a hidden network's form, a
+    /// pending « Oublier ce réseau ».
+    fn forget_typed(&mut self) {
+        self.password.wipe();
+        self.joining = None;
+        self.other = None;
+        self.reveal = false;
+        self.shaken = None;
+        self.forgetting_network = None;
+    }
+
     /// A network of the list: joined at once when it is open or saved; else its password is
     /// asked for below it.
     fn join(&mut self, chosen: Network) -> Task<Message> {
-        if chosen.active {
+        if chosen.active || self.connecting.is_some() {
             return Task::none();
         }
-        if chosen.security == Security::Open {
+        if chosen.security == Security::Open || chosen.saved {
             return self.connect(chosen, None);
         }
-        self.password.wipe();
-        self.joining = Some(chosen.clone());
-        if chosen.security == Security::Other {
-            return Task::none();
-        }
-        let Some(device) = self.wifi.ready().and_then(|w| w.device.clone()) else {
-            return Task::none();
-        };
-        on_system(
-            move |bus| async move {
-                if network::saved(&bus, &chosen.ssid).await?.is_none() {
-                    return Ok(false);
-                }
-                network::connect(&bus, &device, &chosen, None).await?;
-                Ok(true)
-            },
-            |r| match r {
-                Ok(true) => Message::Done(Service::Wifi, Ok(())),
-                Ok(false) => Message::AskPassword,
-                Err(problem) => Message::Done(Service::Wifi, Err(problem)),
-            },
-        )
+        self.forget_typed();
+        self.joining = Some(chosen);
+        Task::none()
     }
 
+    /// « Rejoindre », or Enter in a password field: the network asked for, or the hidden one.
+    fn submit(&mut self) -> Task<Message> {
+        if let Some(chosen) = self.joining.clone()
+            && !self.password.is_empty()
+        {
+            // Moved out: the field empties, the secret is wiped once sent.
+            let password = std::mem::take(&mut self.password);
+            return self.connect(chosen, Some(password));
+        }
+        if let Some((name, security)) = self.other.clone()
+            && !name.is_empty()
+            && (security == Security::Open || !self.password.is_empty())
+        {
+            let password = (security != Security::Open).then(|| std::mem::take(&mut self.password));
+            return self.connect(Network::hidden(&name, security), password);
+        }
+        Task::none()
+    }
+
+    /// Joins `chosen` through the bus for actions (polkit may ask for a password, for
+    /// `ACTION_TIMEOUT`), and follows the activation to its end.
     fn connect(&mut self, chosen: Network, password: Option<Secret>) -> Task<Message> {
         let Some(device) = self.wifi.ready().and_then(|w| w.device.clone()) else {
             return Task::none();
         };
-        self.joining = None;
+        self.forget_typed();
+        self.refused = None;
+        if self
+            .failure
+            .as_ref()
+            .is_some_and(|(s, _)| *s == Service::Wifi)
+        {
+            self.failure = None;
+        }
         self.connecting = Some(chosen.ssid.clone());
-        act(Service::Wifi, move |bus| async move {
-            let password = password.as_ref().map(Secret::as_str);
-            network::connect(&bus, &device, &chosen, password).await
-        })
+        let network = chosen.clone();
+        Task::perform(
+            async move {
+                let bus = system::system_for_actions().await?;
+                let password = password.as_ref().map(Secret::as_str);
+                network::join(&bus, &device, &chosen, password).await
+            },
+            move |result| Message::Joined(network.clone(), result),
+        )
     }
 
-    fn toggle_do_not_disturb(&mut self) {
-        let Some(path) = self.settings.clone() else {
-            return;
-        };
-        let (mut config, _) = NotificationsConfig::load(&path).unwrap_or_default();
-        config.do_not_disturb = !config.do_not_disturb;
-        match config.save(&path) {
-            Ok(()) => {
-                self.do_not_disturb = Some(config.do_not_disturb);
+    /// A join ended. A wrong password is asked again under its network's line (or in the
+    /// hidden network's form), the field shaking.
+    fn joined(&mut self, network: Network, result: Result<Outcome, Problem>) -> Task<Message> {
+        if self.connecting.as_deref() == Some(network.ssid.as_str()) {
+            self.connecting = None;
+        }
+        match result {
+            Ok(Outcome::Joined) => {}
+            Ok(Outcome::WrongPassword) if network.security != Security::Open => {
+                tracing::info!("the Wi-Fi password was refused");
+                self.forget_typed();
+                if network.path == network::ANY_POINT {
+                    self.other = Some((network.ssid.clone(), network.security));
+                } else {
+                    self.joining = Some(network.clone());
+                }
+                self.shaken = Some(self.now);
+                self.refused = Some((network.ssid, Outcome::WrongPassword));
+            }
+            Ok(outcome) => {
+                tracing::warn!(?outcome, "the Wi-Fi network was not joined");
+                self.refused = Some((network.ssid, outcome));
+            }
+            Err(problem) => return self.done(Service::Wifi, Err(problem)),
+        }
+        self.read(Service::Wifi)
+    }
+
+    /// « Ne pas déranger » read or written: the tile follows, or « Échec » under it.
+    fn do_not_disturb_done(&mut self, done: Result<bool, Problem>) {
+        match done {
+            Ok(on) => {
+                self.do_not_disturb = Some(on);
                 if self
                     .failure
                     .as_ref()
@@ -851,9 +982,8 @@ impl Quick {
                     self.failure = None;
                 }
             }
-            Err(error) => {
-                tracing::warn!(%error, "cannot write Do not disturb");
-                let problem = Problem::Failed(error.to_string());
+            Err(problem) => {
+                tracing::warn!(%problem, "cannot write Do not disturb");
                 self.failure = Some((Service::DoNotDisturb, problem));
             }
         }
@@ -1143,11 +1273,13 @@ impl Quick {
             }
             Load::Ready(wifi) if wifi.hardware_off => (false, words::BLOCKED.to_owned(), false),
             Load::Ready(wifi) => {
-                let line = match (wifi.enabled, &self.connecting, wifi.connected()) {
-                    (false, _, _) => words::OFF.to_owned(),
-                    (true, Some(_), _) => words::CONNECTING.to_owned(),
-                    (true, None, Some(network)) => network.ssid.clone(),
-                    (true, None, None) => words::NOT_CONNECTED.to_owned(),
+                let refused = self.refused.as_ref().map(|(_, outcome)| refusal(*outcome));
+                let line = match (wifi.enabled, &self.connecting, wifi.connected(), refused) {
+                    (false, _, _, _) => words::OFF.to_owned(),
+                    (true, Some(_), _, _) => words::CONNECTING.to_owned(),
+                    (true, None, Some(network), _) => network.ssid.clone(),
+                    (true, None, None, Some(refused)) => refused.to_owned(),
+                    (true, None, None, None) => words::NOT_CONNECTED.to_owned(),
                 };
                 (wifi.enabled, line, true)
             }
@@ -1359,13 +1491,17 @@ impl Quick {
         .spacing(metrics::GAP_ICON)
         .align_y(Alignment::Center);
         let body: Element<'_, Message> = match wifi {
-            Some(wifi) if wifi.enabled && !wifi.networks.is_empty() => {
-                let rows = wifi.networks.iter().map(|n| self.network_row(n));
+            Some(wifi) if wifi.enabled => {
+                let mut rows: Vec<Element<'_, Message>> =
+                    wifi.networks.iter().map(|n| self.network_row(n)).collect();
+                if wifi.networks.is_empty() {
+                    rows.push(ui::description(words::NO_NETWORK).into());
+                }
+                rows.push(self.other_network());
                 scroll(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
                     .height(Length::Fill)
                     .into()
             }
-            Some(wifi) if wifi.enabled => notice(words::NO_NETWORK),
             _ => notice(words::WIFI_OFF_LINE),
         };
         let mut page = column![head, body]
@@ -1383,41 +1519,145 @@ impl Quick {
     }
 
     fn network_row<'a>(&'a self, network: &'a Network) -> Element<'a, Message> {
-        let p = color::palette();
-        let glyph = if network.security == Security::Open {
-            Glyph::Wifi
-        } else {
-            Glyph::Padlock
-        };
-        let leading = panels::glyph(glyph, p.text_secondary).into();
-        let trailing = if network.active {
-            Trailing::Checked
-        } else {
-            Trailing::None
-        };
-        let join = Some(Message::Join(network.clone()));
-        let item = ui::menu_item_with(Some(leading), network.ssid.as_str(), trailing, join);
+        let connecting = self.connecting.as_deref() == Some(network.ssid.as_str());
+        let refused = self
+            .refused
+            .as_ref()
+            .filter(|(name, _)| *name == network.ssid)
+            .map(|(_, outcome)| refusal(*outcome));
         let joining = self
             .joining
             .as_ref()
             .is_some_and(|j| j.path == network.path);
-        if !joining {
-            return item.into();
-        }
+        // Under a password asked again, the refusal is said once, under the field.
+        let line = if connecting {
+            Some(words::CONNECTING)
+        } else {
+            refused.filter(|_| !joining)
+        };
+        let forget = (network.saved || network.active).then(|| {
+            let ask = Message::ForgetNetwork(network.ssid.clone());
+            ui::icon_button(Icon::Trash, words::FORGET_NETWORK, Some(ask)).into()
+        });
+        let item = panels::network_row(
+            sherlock_ui::icon::wifi_level(network.strength),
+            network.security != Security::Open,
+            network.active,
+            network.ssid.as_str(),
+            line,
+            Some(Message::Join(network.clone())),
+            forget,
+        );
         let inset = Padding::from([metrics::GAP_TIGHT * 2.0, metrics::MENU_ITEM_PADDING]);
+        if self.forgetting_network.as_deref() == Some(network.ssid.as_str()) {
+            let buttons = row![
+                ui::danger_button(words::FORGET, Some(Message::ConfirmForgetNetwork(true))),
+                ui::secondary_button(words::CANCEL, Some(Message::ConfirmForgetNetwork(false))),
+            ]
+            .spacing(metrics::GAP_INLINE / 2.0);
+            let ask = column![
+                ui::description(words::forget_network_question(&network.ssid)),
+                buttons
+            ]
+            .spacing(metrics::GAP_TIGHT * 2.0);
+            return column![item, container(ask).padding(inset)].into();
+        }
+        if !joining {
+            return item;
+        }
         if network.security == Security::Other {
             let line = ui::description(words::ENTERPRISE);
             return column![item, container(line).padding(inset)].into();
         }
+        column![item, self.password_row()].into()
+    }
+
+    /// The password field, its eye and « Rejoindre », shaking after a wrong password.
+    fn password_row(&self) -> Element<'_, Message> {
         let field = ui::text_field(words::PASSWORD, self.password.as_str(), Some(typed))
-            .secure(true)
+            .secure(!self.reveal)
             .on_submit(Message::SubmitPassword)
             .width(Length::Fill);
+        let (eye, label) = if self.reveal {
+            (Icon::EyeOff, words::HIDE_PASSWORD)
+        } else {
+            (Icon::Eye, words::SHOW_PASSWORD)
+        };
+        let eye = ui::icon_button(eye, label, Some(Message::Reveal));
         let ready = (!self.password.is_empty()).then_some(Message::SubmitPassword);
-        let ask = row![field, ui::primary_button(words::JOIN, ready)]
+        let ask = row![field, eye, ui::primary_button(words::JOIN, ready)]
             .spacing(metrics::GAP_INLINE / 2.0)
             .align_y(Alignment::Center);
-        column![item, container(ask).padding(inset)].into()
+        let dx = self
+            .shaken
+            .map_or(0.0, |at| panels::shake(self.now.saturating_sub(at)));
+        let mut lines = column![ask].spacing(metrics::GAP_TIGHT * 2.0);
+        if self
+            .refused
+            .as_ref()
+            .is_some_and(|(_, o)| *o == Outcome::WrongPassword)
+        {
+            lines = lines.push(
+                text(words::WRONG_PASSWORD)
+                    .font(typography::UI)
+                    .size(typography::SMALL_SIZE)
+                    .style(panels::error_text),
+            );
+        }
+        container(lines)
+            .padding(Padding {
+                top: metrics::GAP_TIGHT * 2.0,
+                bottom: metrics::GAP_TIGHT * 2.0,
+                left: metrics::MENU_ITEM_PADDING + dx,
+                right: metrics::MENU_ITEM_PADDING - dx,
+            })
+            .into()
+    }
+
+    /// « Autre réseau… » at the end of the list, and once open the form of a hidden network:
+    /// its name, its protection, its password.
+    fn other_network(&self) -> Element<'_, Message> {
+        let Some((name, security)) = &self.other else {
+            let open = Some(Message::OtherNetwork(true));
+            return ui::menu_item_with(None, words::OTHER_NETWORK, Trailing::None, open).into();
+        };
+        let close = Some(Message::OtherNetwork(false));
+        let head = ui::menu_item_with(None, words::OTHER_NETWORK, Trailing::None, close);
+        let field = ui::text_field(words::NETWORK_NAME, name, Some(Message::OtherName))
+            .on_submit(Message::SubmitPassword)
+            .width(Length::Fill);
+        let choices = [Security::Open, Security::Psk, Security::Sae]
+            .into_iter()
+            .zip(words::SECURITY_CHOICES)
+            .map(|(choice, label)| {
+                (
+                    label,
+                    *security == choice,
+                    Some(Message::OtherSecurity(choice)),
+                )
+            })
+            .collect();
+        let mut form = column![
+            field,
+            group(words::SECURITY, None, panels::segmented(choices))
+        ]
+        .spacing(metrics::GAP_INLINE / 2.0);
+        let inset = Padding::from([metrics::GAP_TIGHT * 2.0, metrics::MENU_ITEM_PADDING]);
+        if *security == Security::Open {
+            let ready = (!name.is_empty()).then_some(Message::SubmitPassword);
+            form = form.push(ui::primary_button(words::JOIN, ready));
+            return column![head, container(form).padding(inset)].into();
+        }
+        column![head, container(form).padding(inset), self.password_row()].into()
+    }
+}
+
+/// What a line says after a join that ended badly.
+fn refusal(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::WrongPassword => words::WRONG_PASSWORD,
+        Outcome::TimedOut => words::JOIN_TIMED_OUT,
+        Outcome::Joined | Outcome::Failed(_) => words::JOIN_FAILED,
     }
 }
 
@@ -1605,6 +1845,7 @@ mod tests {
             strength: 50,
             security: Security::Psk,
             active: false,
+            saved: false,
             path: String::from("/ap/3"),
         };
         quick.joining = Some(network);
@@ -1620,6 +1861,98 @@ mod tests {
         let mut secret = Secret::new(typed.to_owned());
         secret.wipe();
         assert_eq!(secret, Secret::default());
+    }
+
+    fn wifi_with(networks: Vec<Network>) -> Quick {
+        Quick {
+            wifi: Load::Ready(Wifi {
+                enabled: true,
+                hardware_off: false,
+                device: Some(String::from("/dev/1")),
+                networks,
+            }),
+            ..Quick::default()
+        }
+    }
+
+    fn neighbour(saved: bool) -> Network {
+        Network {
+            ssid: String::from("Voisin"),
+            strength: 50,
+            security: Security::Psk,
+            active: false,
+            saved,
+            path: String::from("/ap/3"),
+        }
+    }
+
+    #[test]
+    fn a_wrong_password_is_asked_again_and_the_tile_says_so() {
+        let mut quick = wifi_with(vec![neighbour(false)]);
+        // A new protected network asks for its password; a saved one connects at once.
+        let _ = quick.update(Message::Join(neighbour(false)));
+        assert!(quick.joining.is_some() && quick.connecting.is_none());
+        let _ = quick.update(Message::Password(Secret::new(String::from("faux"))));
+        let _ = quick.update(Message::SubmitPassword);
+        assert_eq!(quick.connecting.as_deref(), Some("Voisin"));
+        assert!(quick.joining.is_none() && quick.password.is_empty());
+        // A second click while it connects does nothing.
+        let _ = quick.update(Message::Join(neighbour(true)));
+        assert!(quick.joining.is_none());
+
+        quick.now = Duration::from_secs(10);
+        let wrong = Ok(Outcome::WrongPassword);
+        let _ = quick.update(Message::Joined(neighbour(false), wrong));
+        assert!(quick.connecting.is_none(), "« Connexion… » ends");
+        assert_eq!(
+            quick.joining.as_ref().map(|n| n.ssid.as_str()),
+            Some("Voisin")
+        );
+        assert_eq!(quick.shaken, Some(Duration::from_secs(10)));
+        assert!(quick.running(), "the field shakes");
+        quick.tick(Duration::from_secs(11));
+        assert!(!quick.running());
+        assert_eq!(refusal(Outcome::WrongPassword), words::WRONG_PASSWORD);
+
+        // Another failure says so without asking anything.
+        let _ = quick.update(Message::Joined(neighbour(true), Ok(Outcome::TimedOut)));
+        assert_eq!(
+            quick.refused,
+            Some((String::from("Voisin"), Outcome::TimedOut))
+        );
+        // Reopened, the panel starts clean.
+        let _ = quick.open();
+        assert!(quick.refused.is_none() && quick.joining.is_none());
+
+        // A saved network shows « Connexion… » too.
+        let _ = quick.update(Message::Join(neighbour(true)));
+        assert_eq!(quick.connecting.as_deref(), Some("Voisin"));
+    }
+
+    #[test]
+    fn a_hidden_network_needs_a_name_and_its_password() {
+        let mut quick = wifi_with(Vec::new());
+        let _ = quick.update(Message::OtherNetwork(true));
+        let _ = quick.update(Message::SubmitPassword);
+        assert!(quick.connecting.is_none());
+        let _ = quick.update(Message::OtherName("x".repeat(40)));
+        assert_eq!(quick.other.as_ref().map(|(n, _)| n.len()), Some(32));
+        let _ = quick.update(Message::OtherName(String::from("Cachette")));
+        let _ = quick.update(Message::SubmitPassword);
+        assert!(
+            quick.connecting.is_none(),
+            "a WPA network wants its password"
+        );
+        let _ = quick.update(Message::Reveal);
+        assert!(quick.reveal);
+        let _ = quick.update(Message::Password(Secret::new(String::from("s3cret"))));
+        let _ = quick.update(Message::SubmitPassword);
+        assert_eq!(quick.connecting.as_deref(), Some("Cachette"));
+        assert!(quick.other.is_none() && !quick.reveal);
+        // Its password refused, the form comes back with its name.
+        let hidden = Network::hidden("Cachette", Security::Psk);
+        let _ = quick.update(Message::Joined(hidden, Ok(Outcome::WrongPassword)));
+        assert_eq!(quick.other, Some((String::from("Cachette"), Security::Psk)));
     }
 
     #[test]
@@ -1697,18 +2030,27 @@ mod tests {
             settings: Some(file.clone()),
             ..Quick::default()
         };
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert_eq!(quick.do_not_disturb, Some(true));
-        let (config, _) = NotificationsConfig::load(&file).unwrap();
-        assert!(config.do_not_disturb);
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
-        // A file that cannot be written: « Échec » under the tile.
-        let mut blocked = Quick {
-            settings: Some(PathBuf::from("/proc/no/notifications.conf")),
+        // The tile asks for a task: nothing is read or written on the interface thread. (Its
+        // thread writes a file of its own, apart from the one checked below.)
+        let mut asking = Quick {
+            settings: Some(dir.join("other").join("notifications.conf")),
             ..Quick::default()
         };
-        let _ = blocked.update(Message::ToggleDoNotDisturb);
+        assert!(asking.update(Message::ToggleDoNotDisturb).units() > 0);
+        assert!(asking.do_not_disturb.is_none());
+        let done = toggle_do_not_disturb(&file);
+        assert_eq!(done, Ok(true));
+        let _ = quick.update(Message::DoNotDisturb(done));
+        assert_eq!(quick.do_not_disturb, Some(true));
+        let (config, _) = NotificationsConfig::load(&file).unwrap();
+        assert!(config.do_not_disturb && read_do_not_disturb(&file));
+        assert_eq!(toggle_do_not_disturb(&file), Ok(false));
+        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
+        // A file that cannot be written: « Échec » under the tile.
+        let mut blocked = Quick::default();
+        let done = toggle_do_not_disturb(Path::new("/proc/no/notifications.conf"));
+        assert!(done.is_err());
+        let _ = blocked.update(Message::DoNotDisturb(done));
         assert!(matches!(blocked.failure, Some((Service::DoNotDisturb, _))));
         assert_eq!(blocked.failed(Service::DoNotDisturb), Some(words::FAILED));
         let _ = std::fs::remove_dir_all(&dir);

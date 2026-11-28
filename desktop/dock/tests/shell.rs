@@ -116,14 +116,27 @@ impl GlobalDispatch<SherlockShellManagerV1, ()> for Compositor {
 
 impl Dispatch<SherlockShellManagerV1, ()> for Compositor {
     fn request(
-        _: &mut Self,
+        state: &mut Self,
         _: &Client,
         _: &SherlockShellManagerV1,
-        _: manager::Request,
+        request: manager::Request,
         _: &(),
         _: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
+        if let manager::Request::ShowWindows { windows } = request {
+            let (ids, _) = windows.as_chunks::<4>();
+            let ids: Vec<String> = ids
+                .iter()
+                .map(|c| u32::from_ne_bytes(*c).to_string())
+                .collect();
+            let asked = format!("show {}", ids.join(" "));
+            state
+                .asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(("manager", asked));
+        }
     }
 }
 
@@ -185,7 +198,7 @@ impl Fake {
         let mut display = Display::<Compositor>::new()?;
         let mut handle = display.handle();
         if with_protocol {
-            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(2, ());
+            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(4, ());
         }
         let (ours, theirs) = UnixStream::pair()?;
         handle.insert_client(theirs, Arc::new(NoData))?;
@@ -414,4 +427,26 @@ fn the_covered_screens_are_read() {
         assert!(shell.wait());
         assert!(shell.read().expect("read").covered.is_empty());
     }
+}
+
+/// App Expose (lot D-21c2): asked on the manager, by the ids of the windows, once the
+/// compositor offers version 4.
+#[test]
+fn app_expose_is_asked_on_the_manager() {
+    let mut fake = Fake::start(
+        &[
+            ("org.example.terminal", true),
+            ("org.example.terminal", false),
+        ],
+        true,
+    )
+    .expect("fake compositor");
+    let connection = fake.connection.take().expect("connection");
+    let mut shell = Shell::with_connection(connection).expect("manager bound");
+    let windows = shell.read().expect("read");
+    assert!(windows.expose, "version 4 offers it");
+    let ids: Vec<u64> = windows.list.iter().map(|w| w.id).collect();
+    assert_eq!(ids, [1, 2]);
+    shell.control().show_windows(&ids);
+    assert_eq!(fake.asked(1), [("manager", String::from("show 1 2"))]);
 }

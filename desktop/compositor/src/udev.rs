@@ -255,6 +255,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
+    )?;
     // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
     state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
     // What is copied, for Super + V, and its setting (lot D-42).
@@ -834,6 +839,8 @@ impl Backend {
                 Ok(()) => {
                     head.pacing.drawn(epoch, true, animating);
                     head.lock_queued = locked;
+                    // A new picture: the screen captures waiting for one are due (lot D-28b).
+                    state.screen_changed(&head.output);
                     None
                 }
                 Err(err) => Some(format!("DRM: {err}")),
