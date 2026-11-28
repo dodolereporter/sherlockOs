@@ -2418,45 +2418,59 @@ libinput events to `State::process_input_event`:
    `~/.config/sherlockos/touchpad.conf`: within 2 seconds the log shows the new setting, and the
    gesture minimizes the window. `natural-scroll = false`: the scrolling turns around.
 
-## Screen capture (lot D-28b)
+## Screen capture (lots D-28b and D-28c)
 
 Screen sharing (Discord, Meet in Chrome, Teams) goes through `xdg-desktop-portal`, whose
 `ScreenCast` backend takes the frames from the compositor and pushes them into PipeWire. ADR 0028
 sets the path: the compositor speaks the standard capture protocols, a portal backend of our own
-(lot D-28d) asks the user and feeds PipeWire, and the compositor holds the policy (indicator,
-stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
+(lot D-28d) asks the user and feeds PipeWire, and the compositor holds the policy (who may
+capture, lock). D-28b brought the capture of a whole screen (`screencast.rs`), D-28c the capture
+of a window, the cursor and the access reserved to the portal.
 
-- **Protocols.** `ext_image_copy_capture_manager_v1` and
-  `ext_output_image_capture_source_manager_v1`, version 1, written against `wayland-protocols`
-  0.32 since Smithay 0.7 has no helper for them. A window as a source
-  (`ext-foreign-toplevel-image-capture-source-v1`), the cursor painted into the frames and the
-  cursor sessions come with lot D-28c: until then `paint_cursors` is accepted and the frames
-  show no cursor, and a cursor session's capture session stops at once.
-- **Only the shell socket** sees these globals (`can_view`, as `sherlock_shell_v1`, ADR 0021):
-  they show every pixel of the session, so an ordinary application, a Flatpak one or XWayland
-  cannot capture anything, and has to go through the portal.
-- **Session.** On a screen, it gives the buffer it needs: the size of the screen's frame in
-  pixels, and two shared memory formats, `xrgb8888` and `argb8888`, the two every compositor
-  offers (`wl_shm` has no other here), blue first in memory: the copy swaps red and blue, which
-  the renderer reads first. A screen that goes away, or
-  changes size, stops its sessions (`stopped`, and the frame fails with `stopped`). Dmabuf
-  buffers come later.
+- **Protocols.** `ext_image_copy_capture_manager_v1`,
+  `ext_output_image_capture_source_manager_v1` and
+  `ext_foreign_toplevel_image_capture_source_manager_v1`, version 1, written against
+  `wayland-protocols` 0.32 since Smithay 0.7 has no helper for them; the windows are listed by
+  `ext_foreign_toplevel_list_v1` (Smithay's helper), refreshed with the shell's data: a handle
+  per window shown, with its title and application, `closed` when it goes.
+- **Only the portal** sees these globals (`can_view`): they show every pixel of the session.
+  They are offered on the shell socket only (ADR 0021), so an ordinary application, a Flatpak
+  one or XWayland never sees them; and on that socket, only to the program `sherlock-portal`,
+  recognised when it connects by the executable of the process at the other end
+  (`SO_PEERCRED`, then `/proc/<pid>/exe`; a program updated on disk while it runs still counts).
+  The bar, the dock and the other shell programs cannot capture. Every application goes through
+  the portal, which asks the user. The tests let every shell client capture
+  (`State::set_capture_access`).
+- **Session.** On a screen or a window, it gives the buffer it needs: the size of the screen's
+  frame in pixels, or of the window as at rest with its title bar, border and corners at the
+  scale of its screen (as the closing animation draws it); and two shared memory formats,
+  `xrgb8888` and `argb8888`, the two every compositor offers (`wl_shm` has no other here), blue
+  first in memory: the copy swaps red and blue, which the renderer reads first. A source that
+  changes size gives its new constraints and fails the frame asked for with
+  `buffer_constraints`, as the protocol wants: the client takes a new buffer and goes on. A
+  screen or a window that goes away stops its sessions (`stopped`, and the frame fails with
+  `stopped`). Dmabuf buffers come next (lot D-28c2).
+- **Cursor.** With `paint_cursors`, the cursor is drawn over the frame where the pointer is, if
+  it is on the source: the same image and size as on the screen (lot D-07), for a window at
+  its place in the window. Without it, no cursor. Cursor sessions (the cursor as metadata) are
+  not offered: their capture session stops at once, and the portal offers « hidden » and
+  « embedded » only. In nested mode the host draws the pointer: no cursor in the frames.
 - **Frames.** One at a time per session. Once its capture is asked for, the frame waits for the
   screen to show a new picture since the session's previous frame: the real session reports
   each frame with damage it queues (`screen_changed`), so a frame comes at most once per
   vertical blank, and never while the screen shows nothing new. The redraw counter could not
-  serve: every client request moves it, the capture's own included. Then the compositor draws
-  the screen offscreen as
-  it shows, without the cursor, with the screenshots' `Capturer` (lot D-35c), once per screen
-  for all its sessions. It copies the drawing row by row into the client's buffer, which may
+  serve: every client request moves it, the capture's own included. A window waits for a new
+  picture on any screen, since it may be anywhere, or hidden. Then the compositor draws the
+  source offscreen with the screenshots' `Capturer` (lot D-35c), once per source and cursor
+  choice for all its sessions; in nested mode too, each host frame counting as a new picture. It copies the drawing row by row into the client's buffer, which may
   have padded rows and start anywhere in its pool, then sends `transform` (normal), the damage
   (the whole frame), the time (`CLOCK_MONOTONIC`) and `ready`. A buffer of another size fails
-  the frame with `buffer_constraints`, without a renderer (nested mode, tests
-  without one) with `unknown`; the session goes on. Protocol errors as the protocol says:
+  the frame with `buffer_constraints`, without a renderer (tests without one) with `unknown`;
+  the session goes on. Protocol errors as the protocol says:
   `duplicate_frame`, `no_buffer`, `already_captured`, `invalid_buffer_damage`,
   `invalid_option`.
-- **Locked.** While the session is locked the screen is never drawn for a capture: every frame
-  is black and opaque, the session goes on. The lock screen itself is not shared either.
+- **Locked.** While the session is locked no screen nor window is drawn for a capture: every
+  frame is black and opaque, the session goes on. The lock screen itself is not shared either.
 - **Cost.** Each frame is a render of the screen offscreen, a read back and a copy, in the
   compositor's thread: the price to measure at 1080p before lot D-28d, and the reason for the
   dmabuf buffers that follow.
@@ -2467,7 +2481,10 @@ stop, lock). This lot brings the capture of a whole screen (`screencast.rs`).
   reported; while locked the
   frame is black and the screen never drawn (the test's lock programs leave at once: the
   compositor's own lock screen); a buffer of another size fails the frame, and a buffer that
-  fits then gets one. With Mesa's software renderer
+  fits then gets one; a program on the shell socket that is not the portal sees none of the
+  capture globals; a window is listed with its title, captured at its size with the cursor
+  asked for, gives its new size and fails the frame asked for when it grows, and stops its
+  session when it closes, the list saying `closed`. With Mesa's software renderer
   (`--ignored`): a red window in the middle of the screen is red in the captured frame, the
   desktop around it is not.
 

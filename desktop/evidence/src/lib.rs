@@ -20,6 +20,7 @@ pub mod places;
 pub mod preview;
 pub mod probe;
 pub mod selection;
+pub mod shell;
 pub mod startup;
 pub mod transfer;
 pub mod transfer_job;
