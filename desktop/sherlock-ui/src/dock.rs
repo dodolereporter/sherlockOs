@@ -274,6 +274,67 @@ pub fn stack_icon() -> String {
     stroked_tile(folder, &arrow)
 }
 
+/// A card of the stack of the downloads, as macOS draws a stack (lot D-21k2): a picture's PNG,
+/// or the glyph of its kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PileCard {
+    Png(Vec<u8>),
+    Glyph(crate::icon::Icon),
+}
+
+/// The stack of the downloads as its newest items, up to three cards, the newest in front, the
+/// others behind it, turned a little and shifted as a stack of photos.
+pub fn stack_pile(cards: &[PileCard]) -> String {
+    // Back to front: the oldest of the three first.
+    const PLACES: [(f32, f32, f32); 3] = [(-9.0, -1.2, 0.6), (7.0, 1.2, -0.2), (0.0, 0.0, 0.0)];
+    let shown = &cards[..cards.len().min(3)];
+    let start = PLACES.len() - shown.len();
+    let mut body = String::new();
+    for (card, (angle, dx, dy)) in shown.iter().rev().zip(&PLACES[start..]) {
+        let inner = match card {
+            PileCard::Png(bytes) => format!(
+                "<image x=\"4.6\" y=\"4.6\" width=\"14.8\" height=\"14.8\" \
+                 preserveAspectRatio=\"xMidYMid slice\" href=\"data:image/png;base64,{}\"/>",
+                base64(bytes)
+            ),
+            PileCard::Glyph(icon) => format!(
+                "<g transform=\"translate(6.6 6.6) scale(.45)\" fill=\"none\" stroke=\"{}\" \
+                 stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\
+                 <path d=\"{}\"/></g>",
+                hex(crate::color::TILE_APPLICATIONS),
+                icon.path()
+            ),
+        };
+        body.push_str(&format!(
+            "<g transform=\"translate({dx} {dy}) rotate({angle} 12 12)\"><rect x=\"4\" y=\"4\" \
+             width=\"16\" height=\"16\" rx=\"2\" fill=\"{paper}\" stroke=\"black\" \
+             stroke-opacity=\".18\" stroke-width=\".3\"/>{inner}</g>",
+            paper = hex(crate::color::CREAM),
+        ));
+    }
+    format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">{body}</svg>")
+}
+
+/// Standard base64 of `bytes`, for a picture written in a document.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(TABLE[(n >> (18 - 6 * i) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// A dock tile with `path` stroked in cream over it, then `extra` (lots D-21j, D-21k).
 fn stroked_tile(path: &str, extra: &str) -> String {
     format!(
@@ -455,6 +516,18 @@ mod styles {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_picture_goes_in_base64_and_the_pile_has_three_cards_at_most() {
+        assert_eq!(super::base64(b"Man"), "TWFu");
+        assert_eq!(super::base64(b"Ma"), "TWE=");
+        assert_eq!(super::base64(b"M"), "TQ==");
+        let glyph = super::PileCard::Glyph(crate::icon::Icon::Document);
+        let pile = super::stack_pile(&[glyph.clone(), glyph.clone(), glyph.clone(), glyph]);
+        assert_eq!(pile.matches("<rect").count(), 3);
+        let png = super::PileCard::Png(b"abc".to_vec());
+        assert!(super::stack_pile(&[png]).contains("base64,YWJj"));
+    }
+
     use super::*;
     use crate::motion::Animation;
     use std::time::Duration;
