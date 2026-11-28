@@ -42,6 +42,15 @@ pub enum Entry {
     ShowSherlock,
     /// The trash's menu (lot D-21j): deletes what it holds, after a second click.
     EmptyTrash,
+    /// The title of a group of the stack's menu: not an action (lot D-21k2).
+    Heading,
+    /// The stack's menu: its order, its icon, how it opens, out of the dock.
+    StackSort(dock_config::stack::Sort),
+    StackDisplay(dock_config::stack::Display),
+    StackView(dock_config::stack::View),
+    RemoveStack,
+    /// The dock's own menu: the stack back in the dock, or out of it.
+    ShowStack,
 }
 
 /// An entry as the menu shows it.
@@ -164,11 +173,17 @@ pub fn entries(can: Abilities, windows: &[Listed], actions: &[(usize, String)]) 
 
 /// The entries of the dock's own menu: « Afficher Sherlock dans le Dock », checked while it is
 /// there.
-pub fn dock_entries(sherlock: bool) -> Vec<Line> {
-    vec![Line {
-        checked: sherlock,
-        ..Line::new(Entry::ShowSherlock, text::SHOW_SHERLOCK, true)
-    }]
+pub fn dock_entries(sherlock: bool, stack: bool) -> Vec<Line> {
+    vec![
+        Line {
+            checked: sherlock,
+            ..Line::new(Entry::ShowSherlock, text::SHOW_SHERLOCK, true)
+        },
+        Line {
+            checked: stack,
+            ..Line::new(Entry::ShowStack, text::SHOW_DOWNLOADS, true)
+        },
+    ]
 }
 
 /// The entries of the trash's menu: « Ouvrir », then « Vider la corbeille » while it holds
@@ -186,8 +201,48 @@ pub fn trash_entries(full: bool, armed: bool) -> Vec<Line> {
 }
 
 /// The menu of a stack (lot D-21k): its folder opened in Evidence.
-pub fn stack_entries() -> Vec<Line> {
-    vec![Line::new(Entry::Open, text::OPEN_IN_EVIDENCE, true)]
+pub fn stack_entries(settings: &dock_config::stack::Stack, folder: &str) -> Vec<Line> {
+    use dock_config::stack::{Display, Sort, View};
+    let choice = |entry, label: &str, checked| Line {
+        checked,
+        ..Line::new(entry, label, true)
+    };
+    let mut lines = vec![Line::new(Entry::Heading, text::SORT_BY, false)];
+    lines.extend(Sort::ALL.map(|sort| {
+        let label = match sort {
+            Sort::Name => text::SORT_NAME,
+            Sort::Added => text::SORT_ADDED,
+            Sort::Modified => text::SORT_MODIFIED,
+            Sort::Created => text::SORT_CREATED,
+            Sort::Kind => text::SORT_KIND,
+        };
+        choice(Entry::StackSort(sort), label, settings.sort == sort)
+    }));
+    lines.push(Line::new(Entry::Heading, text::DISPLAY_AS, false).group());
+    lines.extend(Display::ALL.map(|display| {
+        let label = match display {
+            Display::Folder => text::DISPLAY_FOLDER,
+            Display::Stack => text::DISPLAY_STACK,
+        };
+        choice(
+            Entry::StackDisplay(display),
+            label,
+            settings.display == display,
+        )
+    }));
+    lines.push(Line::new(Entry::Heading, text::VIEW_AS, false).group());
+    lines.extend(View::ALL.map(|view| {
+        let label = match view {
+            View::Fan => text::VIEW_FAN,
+            View::Grid => text::VIEW_GRID,
+            View::List => text::VIEW_LIST,
+            View::Automatic => text::VIEW_AUTOMATIC,
+        };
+        choice(Entry::StackView(view), label, settings.view == view)
+    }));
+    lines.push(Line::new(Entry::Open, text::open_folder(folder), true).group());
+    lines.push(Line::new(Entry::RemoveStack, text::REMOVE_FROM_DOCK, true));
+    lines
 }
 
 /// Size of the menu surface for `lines`: width, then height.
@@ -203,7 +258,8 @@ pub fn surface_size(lines: &[Line]) -> (u32, u32) {
 
 /// Width of the menu for `lines`: the board's, wider for the dock's own menu.
 pub fn width(lines: &[Line]) -> f32 {
-    if lines.iter().any(|l| l.entry == Entry::ShowSherlock) {
+    let wide = |l: &Line| matches!(l.entry, Entry::ShowSherlock | Entry::Heading);
+    if lines.iter().any(wide) {
         dock::OWN_MENU_WIDTH
     } else {
         dock::MENU_WIDTH
@@ -379,9 +435,16 @@ mod tests {
 
     #[test]
     fn the_dock_menu_shows_or_hides_sherlock() {
-        let shown = dock_entries(true);
-        assert_eq!(labels(&shown), [("Afficher Sherlock dans le Dock", true)]);
-        assert!(shown[0].checked && !dock_entries(false)[0].checked);
+        let shown = dock_entries(true, true);
+        assert_eq!(
+            labels(&shown),
+            [
+                ("Afficher Sherlock dans le Dock", true),
+                ("Afficher les téléchargements dans le Dock", true)
+            ]
+        );
+        assert!(shown[0].checked && !dock_entries(false, true)[0].checked);
+        assert!(shown[1].checked && !dock_entries(true, false)[1].checked);
         assert_eq!(shown[0].entry, Entry::ShowSherlock);
     }
 

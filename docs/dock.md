@@ -342,6 +342,10 @@ Position=bottom
 | `AutoHide` | `never`, `always`, `smart` (see Hiding) | `smart` |
 | `Position` | `bottom`, `top`, `left`, `right` | `bottom` |
 | `ShowSherlock` | `true`, `false`: Sherlock in the dock | `true` |
+| `Stack` | `true`, `false`: the downloads stack in the dock (D-21k2) | `true` |
+| `StackSort` | `name`, `added`, `modified`, `created`, `kind` | `added` |
+| `StackDisplay` | `stack`, `folder`: its icon | `stack` |
+| `StackView` | `fan`, `grid`, `list`, `automatic`: how it opens | `automatic` |
 
 Words are read without regard to case. A value that cannot be read or is out of its bounds is
 ignored with a warning in the log (`IconSize=9999 ignored, expected a number from 32 to 96`)
@@ -729,13 +733,22 @@ changes, not its content.
   Evidence's picture for its kind and its name, which ends with « … » when too long; a hover
   veil and a press on each. A click opens the item with its default application (`mime-apps`,
   on a thread), a folder in Evidence; « Ouvrir dans Evidence » opens the downloads folder.
-- A right click gives its menu: « Ouvrir dans Evidence ».
+- A right click gives its menu, as macOS's (lot D-21k2): « Trier par » (name, date added (the
+  status change: when it came into the folder), modified, created, kind: the folders, then by
+  extension), « Afficher comme » (« Dossier », « Pile »), « Présenter le contenu comme »
+  (« Éventail », « Grille », « Liste », « Automatique »), « Ouvrir « Téléchargements » » and
+  « Retirer du Dock ». The choice is checked, kept in `dock.conf` with the pinned list (one
+  atomic write, off the interface thread), and the folder is read again in the new order. Out
+  of the dock, the dock's own menu brings it back (« Afficher les téléchargements dans le
+  Dock »). For now the icon is the folder's and the content opens as the grid, whatever is
+  chosen: the stack of thumbnails, the fan and the list follow.
 
 The fan of macOS is not drawn: the grid is shown on every edge.
 
 ![The stack before the trash](../desktop/dock/screenshots/stack.png)
 ![Its grid](../desktop/dock/screenshots/stack-grid.png)
 ![Its grid, full](../desktop/dock/screenshots/stack-grid-full.png)
+![Its menu](../desktop/dock/screenshots/stack-menu.png)
 
 While an icon is dragged, the pointer is the closed hand, over the dock or past it
 (`pointer::held`).

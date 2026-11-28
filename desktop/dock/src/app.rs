@@ -461,9 +461,11 @@ impl Dock {
             applications: self.sources.applications,
             sherlock: self.sherlock,
             trash: self.trash,
+            // Out of the dock by « Retirer du Dock » (lot D-21k2).
             stack: self
                 .stack
                 .as_ref()
+                .filter(|_| self.sources.config.stack.shown)
                 .map(|s| (s.folder.as_path(), s.name.as_str())),
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
@@ -625,8 +627,10 @@ impl Dock {
         };
         let stack = match (std::env::home_dir(), config_home()) {
             (Some(home), Some(config)) => {
-                Subscription::run_with((home, config), |(home, config)| {
-                    crate::stack::watch(home.clone(), config.clone())
+                // Read again in the order chosen (lot D-21k2).
+                let sort = self.sources.config.stack.sort;
+                Subscription::run_with((home, config, sort), |(home, config, sort)| {
+                    crate::stack::watch(home.clone(), config.clone(), *sort)
                 })
                 .map(Message::Stack)
             }
@@ -1592,7 +1596,8 @@ impl Dock {
     /// macOS, an untitled one under the application's name, then its actions.
     pub fn menu_lines(&self, index: usize) -> Vec<Line> {
         if let Some(Kind::Stack(_)) = self.items.get(index).map(|i| &i.kind) {
-            return menu::stack_entries();
+            let name = self.stack.as_ref().map_or("", |s| s.name.as_str());
+            return menu::stack_entries(&self.sources.config.stack, name);
         }
         if let Some(Kind::Trash(full)) = self.items.get(index).map(|i| &i.kind) {
             return menu::trash_entries(*full, self.trash_armed.is_some());
@@ -1801,7 +1806,8 @@ impl Dock {
         } else {
             iced::Rectangle::new(Point::new(point.x, bar.y), Size::new(0.0, bar.height))
         };
-        self.show_menu(None, menu::dock_entries(self.sherlock), at, None)
+        let entries = menu::dock_entries(self.sherlock, self.sources.config.stack.shown);
+        self.show_menu(None, entries, at, None)
     }
 
     /// Opens the menu of `target` with `entries`, against `icon` on the side away from the
@@ -1935,10 +1941,23 @@ impl Dock {
             return close;
         }
         if target == Some(crate::items::Target::Stack) {
-            if entry == Entry::Open {
-                self.open_stack_folder();
+            let close = self.close_menu();
+            let mut settings = self.sources.config.stack;
+            match entry {
+                Entry::Open => self.open_stack_folder(),
+                Entry::StackSort(sort) => settings.sort = sort,
+                Entry::StackDisplay(display) => settings.display = display,
+                Entry::StackView(view) => settings.view = view,
+                Entry::RemoveStack => settings.shown = false,
+                _ => {}
             }
-            return self.close_menu();
+            return Task::batch([close, self.set_stack(settings)]);
+        }
+        if entry == Entry::ShowStack {
+            let mut settings = self.sources.config.stack;
+            settings.shown = !settings.shown;
+            let close = self.close_menu();
+            return Task::batch([close, self.set_stack(settings)]);
         }
         let close = self.close_menu();
         if entry == Entry::ShowSherlock {
@@ -2012,7 +2031,15 @@ impl Dock {
                 }
                 Task::none()
             }
-            Entry::Options | Entry::ShowSherlock | Entry::EmptyTrash => Task::none(),
+            Entry::Options
+            | Entry::ShowSherlock
+            | Entry::EmptyTrash
+            | Entry::Heading
+            | Entry::StackSort(_)
+            | Entry::StackDisplay(_)
+            | Entry::StackView(_)
+            | Entry::RemoveStack
+            | Entry::ShowStack => Task::none(),
         };
         Task::batch([close, task])
     }
@@ -2242,14 +2269,33 @@ impl Dock {
     /// off the interface thread (`save::Saver`); the file is read again first and only its list
     /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
     /// so a file it could not read at startup is not replaced by one with the pinned list alone.
+    /// The settings of the downloads stack (lot D-21k2).
+    pub fn stack_settings(&self) -> dock_config::stack::Stack {
+        self.sources.config.stack
+    }
+
+    /// The settings of the downloads stack changed from its menu (lot D-21k2): kept, written
+    /// with the pinned list, and the dock rebuilt (the stack in or out of it).
+    pub fn set_stack(&mut self, settings: dock_config::stack::Stack) -> Task<Message> {
+        if settings == self.sources.config.stack {
+            return Task::none();
+        }
+        self.sources.config.stack = settings;
+        self.save_pinned()
+    }
+
     fn save_pinned(&mut self) -> Task<Message> {
         // The hole of a drag in progress is never written.
         self.pinned.retain(|p| p != items::HOLE);
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
         if let Some(path) = &self.sources.config_path {
-            self.saver
-                .save(path.clone(), self.pinned.clone(), self.sherlock);
+            self.saver.save(
+                path.clone(),
+                self.pinned.clone(),
+                self.sherlock,
+                self.sources.config.stack,
+            );
         }
         self.refresh(self.geometry)
     }
