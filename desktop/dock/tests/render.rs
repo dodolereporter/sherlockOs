@@ -576,3 +576,39 @@ fn the_applications_button_comes_first() {
     let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
     assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
 }
+
+/// Lot D-21l: on a screen too narrow for its icons, the dock shrinks them and its surface stays
+/// inside the screen, 8 from each end; on 1920 it keeps its size. `dock-fitted-1920`,
+/// `dock-fitted-520`.
+#[test]
+fn the_dock_shrinks_to_fit_a_narrow_screen() {
+    use dock::app::Screen;
+    use iced::window::Id;
+    for width in [1920, 520] {
+        let mut dock = sample();
+        let id = Id::unique();
+        let _ = dock.update(Message::Surface(id));
+        let _ = dock.update(Message::Screen(
+            id,
+            Some(Screen {
+                name: Some(String::from("eDP-1")),
+                size: Some((width, 800)),
+            }),
+        ));
+        let _ = dock.tick(Duration::from_secs(5));
+        let room = width as f32 - 2.0 * sherlock_ui::dock::SCREEN_ROOM;
+        assert!(
+            dock.surface_size.width <= room,
+            "{width}: {:?}",
+            dock.surface_size
+        );
+        if width == 1920 {
+            assert_eq!(dock.geometry, dock.base);
+        } else {
+            assert!(dock.geometry.icon < dock.base.icon);
+        }
+        let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+        let written = capture(ui, &format!("dock-fitted-{width}")).expect("capture");
+        assert!(written > 1_000);
+    }
+}
