@@ -170,8 +170,9 @@ work area followed the dock's state. A maximized window was also resized twice o
 first above the dock, then over its room once the dock gave it up.
 
 Whether a maximized, fullscreen or snapped (half or quarter, lot D-18d) window is on the dock's
-screen comes from the `output` event of `sherlock_shell_v1`, bound at version 2 for `snapped`
-(only the windows of the active workspace count), matched by name with the screen
+screen comes from the `output` event of `sherlock_shell_v1`, bound at version 4 (2 brings
+`snapped`, 4 App Expose) (only the windows of the active workspace count), matched by name with
+the screen
 iced_exwlshell reports for the dock's surface. A window on another screen changes
 nothing; a screen not known yet counts as uncovered.
 
@@ -289,6 +290,13 @@ A scalable icon is then drawn at the size and scale of the screen. An absolute `
 as it is. Without an icon, the initial of the name on a blue tile. Our applications' icons are
 in the hicolor theme of sherlock-ui (`docs/sherlock-ui.md`, Application icons).
 
+The initial is at least a pixel high (lot Q-32). An icon that arrives grows from a side of 0,
+and text of size 0 has a line height of 0, on which cosmic-text panics (`buffer.rs`: « line
+height cannot be 0 »): the dock died at the start of a session without screen, where no icon
+theme is found and every application shows its initial. sherlock-ui's text sizes taken from a
+caller (`ellipsis`, `glyph_fade`, the applications view's initial) go through
+`ellipsis::at_least_a_pixel` for the same reason.
+
 SVG and PNG both go through tiny-skia's SVG renderer: a PNG is drawn through a small SVG that
 embeds it by path. iced's `image` feature would add the `image` crate and its decoders; resvg
 already reads PNG. The handles are built once at startup; the renderer keeps the parsed trees
@@ -338,6 +346,15 @@ made again, is read again 50 ms after the last event: icon size, magnification, 
 pinned list apply at once, the surface takes its new size, anchor, margin and exclusive zone.
 The watcher sends its first reading to the dock too, so that a change between the dock's own
 reading at startup and the watcher's start is not missed.
+
+**Writing the pinned list.** The dock never writes the configuration it holds in memory:
+`DockConfig::update` reads the file again, changes the list alone and writes it (Q-40). It does
+so on a thread of its own (`save::Saver`, Q-42): reading, writing and flushing take what the disk
+wants, the dock keeps drawing meanwhile, and of several changes waiting only the last is written.
+The icons of a new icon theme are looked up on a thread too, the old ones shown meanwhile. A file
+that cannot be read (not UTF-8, no permission), at startup or now, is never written over: the
+change is logged and the file keeps its other keys and its comments, and a change Control Room
+made since stays.
 
 **Writing.** `DockConfig::save` goes through `mime_apps::write_atomically`, the one safe
 writer of the desktop's settings files: a temporary file of its own in the same folder (process
@@ -427,6 +444,17 @@ Lot D-21c had set aside going from one window to the next on a click, which the 
 does not do; the author found the dock « did not handle several windows » without it, and lot
 D-21d adds it: a click on the application in front goes to its next window. The menu lists the
 windows too (see Menu of an icon).
+
+**App Expose** (lot D-21c2). « Afficher toutes les fenêtres » in the menu of an icon, and a
+swipe down over the icon, open Mission Control on the application's windows only (see "App
+Expose" in `docs/compositor.md`), to pick one, as macOS does from its dock. The swipe: the
+scroll the dock receives going down `dock::EXPOSE_SWIPE` (40 px; a notch of a mouse wheel
+turned towards the user is enough), each scroll within `dock::EXPOSE_SWIPE_GAP` (250 ms) of the
+previous one, opens it once per swipe. Down is the fingers going down with natural scrolling,
+the default of the touchpad settings; with natural scrolling off, fingers going up. The
+minimized windows are left out. It needs version 4 of `sherlock_shell_v1` (`show_windows`);
+without it (another compositor, an older one), the entry is disabled and the swipe does
+nothing. A click keeps going from one window to the next (lot D-21d): the author asked for it.
 
 **A new window.** The middle button, a Ctrl+click and « Nouvelle fenêtre » start the
 application again: its « new window » action when the desktop entry declares one, otherwise its
@@ -597,18 +625,18 @@ own thread, connection included:
 | Source | When | Closes windows |
 | --- | --- | --- |
 | `Placeholder` | `DOCK_OPEN` is set: comma separated `app_id`s, `DOCK_ACTIVE` the active one | No: a click starts the application, « Quitter » stays disabled |
-| `shell::Shell` | Our compositor: its shell socket offers `sherlock_shell_v1` (ADR 0021) | Yes: `activate`, `minimize`, `close`, `set_rectangle`, through `shell::ShellControl` |
+| `shell::Shell` | Our compositor: its shell socket offers `sherlock_shell_v1` (ADR 0021) | Yes: `activate`, `minimize`, `close`, `set_rectangle`, and App Expose (`show_windows`) from version 4, through `shell::ShellControl` |
 | `Wlr` | The compositor offers `zwlr_foreign_toplevel_manager_v1` (wlroots compositors) | Yes: `activate`, `set_minimized`, `close`, through `WlrControl` |
 | None | None of them | Windows unknown: no dot, « Quitter » disabled |
 
 They are tried in this order. `windows::Auto`, the control of the running dock, acts through
 the shell protocol while its source runs, through the wlroots one otherwise.
 
-A window that asks for attention (`attention`, version 4 of the shell protocol, lot Q-52: the
+A window that asks for attention (`attention`, version 5 of the shell protocol, lot Q-52: the
 compositor refused it the keyboard because no click let it come forward) makes the icon of its
 application bounce `ATTENTION_HOPS` hops (3), the launch bounce's, then rest; a window that keeps
 asking bounces once, and again only after it stopped asking. The dock binds the shell manager
-up to version 4.
+up to version 5 (4 for App Expose).
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is
@@ -672,7 +700,8 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
 | Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
-| Separator, then « Quitter » | The windows are known, the source can close them, and the application has one |
+| Separator, then « Afficher toutes les fenêtres » (App Expose, lot D-21c2) | The source offers App Expose, the windows can be acted on, and one is shown |
+| « Quitter » | The windows are known, the source can close them, and the application has one |
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
 but « Retirer du Dock » is disabled.
@@ -862,7 +891,8 @@ X focus): the keyboard steps were checked in the nested KWin.
   (titles, the active one checked, an untitled one named after the application), then the
   actions; a window of the menu comes forward alone, « Quitter » closes them all; the menu
   unfolds and folds back; the dot fades in with the first window and out with the last; the
-  captures above.
+  captures above. App Expose (D-21c2): the menu entry without the minimized ones, a swipe down once per swipe and again after a pause, nothing
+  without version 4. `tests/shell.rs`: `show_windows` reaches the compositor with the ids.
 - **Menu**: entries by ability, keyboard walk over enabled entries only, surface size.
 - **Windows** (`tests/windows.rs`): the `Wlr` source against a fake compositor; a compositor
   without the protocol is reported.

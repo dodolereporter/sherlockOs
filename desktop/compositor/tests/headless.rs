@@ -1188,6 +1188,54 @@ mod tests {
         );
     }
 
+    /// Lot Q-51: a click in a panel of the bar gives the keyboard to the panel, a popup, so that
+    /// its fields (the Wi-Fi password) get the keys; a click on the bar gives it back to the bar.
+    #[test]
+    fn a_click_in_a_panel_gives_it_the_keyboard() {
+        let mut h = Harness::start();
+        let bar = show_bar(&mut h);
+        let with = panels(&mut h);
+        let qh = h.queue.handle();
+        let positioner = with.wm_base.create_positioner(&qh, ());
+        positioner.set_size(200, 150);
+        positioner.set_anchor_rect(500, 36, 2, 2);
+        positioner.set_anchor(xdg_positioner::Anchor::Bottom);
+        positioner.set_gravity(xdg_positioner::Gravity::Bottom);
+        let surface = with.compositor.create_surface(&qh, ());
+        let popup =
+            with.wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_popup(None, &positioner, &qh, ());
+        bar.layer.get_popup(&popup);
+        popup.grab(&with.seat, 0);
+        surface.commit();
+        settle(&mut h);
+        let file = shm_file(200 * 150 * 4);
+        let pool = bar.shm.create_pool(file.as_fd(), 200 * 150 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 200, 150, 800, Format::Argb8888, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, 200, 150);
+        surface.commit();
+        settle(&mut h);
+        // The panel hangs 150 high under the bar, around x = 500: its middle.
+        h.click(510.0, 46.0 + 75.0, 10);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(surface.id().protocol_id()),
+            "the panel has the keyboard"
+        );
+        h.click(100.0, 20.0, 30);
+        settle(&mut h);
+        let focus = h.state.keyboard_focus().map(|s| s.id().protocol_id());
+        assert_eq!(
+            focus,
+            Some(bar.surface.id().protocol_id()),
+            "back to the bar"
+        );
+    }
+
     /// A panel of the bar closed by a click elsewhere fades out from its last image, drawn
     /// for real with Mesa's software renderer (lot UI-06): the panel's color where it was at
     /// the click, mixed with what is behind it halfway, gone after `motion::POPUP_CLOSE`.
@@ -2653,6 +2701,69 @@ mod tests {
             .keyboard_key(Keycode::new(KEY_SPACE), KeyState::Released, 10);
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(started(2), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The xkb code of the key that types a comma in the layout of the harness, the machine's:
+    /// its own key in US (59), the key right of N in AZERTY (58).
+    fn comma_key() -> u32 {
+        use smithay::input::keyboard::xkb;
+        let layout = compositor::keyboard::Layout::system();
+        let names = layout.xkb();
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            names.rules,
+            names.model,
+            names.layout,
+            names.variant,
+            names.options.clone(),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        )
+        .expect("the keymap of the machine");
+        (8..256)
+            .find(|&code| {
+                keymap
+                    .key_get_syms_by_level(xkb::Keycode::new(code), 0, 0)
+                    .contains(&xkb::Keysym::comma)
+            })
+            .expect("a key that types a comma")
+    }
+
+    /// The gesture key and comma start Control Room, as « Réglages » in the bar's Sherlock menu
+    /// does; comma alone goes to the client (lot Q-31).
+    #[test]
+    fn the_gesture_key_and_comma_start_control_room() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut h = Harness::start();
+        let dir = std::env::temp_dir().join(format!("settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("started");
+        let program = dir.join("control-room");
+        let script = format!("#!/bin/sh\necho started >> '{}'\n", marker.display());
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        h.state.set_settings_program(program);
+        let started = |n: usize| {
+            for _ in 0..500 {
+                let lines = std::fs::read_to_string(&marker).map_or(0, |t| t.lines().count());
+                if lines >= n {
+                    return lines;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            0
+        };
+        let comma = comma_key();
+        h.shortcut(comma);
+        assert_eq!(started(1), 1, "Control Room is started");
+        assert!(!h.state.overview_open(), "the gesture key was not alone");
+        h.state
+            .keyboard_key(Keycode::new(comma), KeyState::Pressed, 9);
+        h.state
+            .keyboard_key(Keycode::new(comma), KeyState::Released, 10);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(started(1), 1, "comma alone starts nothing");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
