@@ -242,6 +242,7 @@ same well-known name, `org.freedesktop.Notifications`, at `/org/sherlockos/Notif
 | --- | --- |
 | `List() → a(usssa(ss)bxb)` | The history, newest first: id, application, title, body as plain text (markup spans joined), actions as key and label, whether it is still open, the time it came (seconds since 1970), whether it is critical |
 | `Clear()` | Empties the history (« Tout effacer »). Open notifications stay on screen |
+| `Remove(au ids)` | Takes these notifications out of the history (« × » in the centre, D-23d); those still on screen close, dismissed (reason 2). 100 ids read at most |
 | `InvokeAction(u id, s key)` | Runs the action of a notification still open, as its button would: `ActionInvoked`, then it closes (reason 2) unless it is resident. An id no longer open, or a key it does not have, gets `org.freedesktop.DBus.Error.Failed` |
 | `Changed` (signal) | The history changed: a notification came or was replaced, closed, or the history was emptied. A listener reads `List` again |
 

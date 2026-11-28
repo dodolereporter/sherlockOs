@@ -738,6 +738,50 @@ fn the_centre_runs_an_action_and_clears() {
     ));
 }
 
+/// D-23d: a card of five notifications shows three and « 2 autres notifications », which opens
+/// it; a click on a notification opens it (`Message::OpenNotification`). `centre-group`, then
+/// `centre-group-open`.
+#[test]
+fn a_card_of_the_centre_opens_and_its_notifications_answer() {
+    let mut state = sample();
+    state.panel_margins = panel::margins(false);
+    let entries = (1..=5)
+        .map(|i| {
+            entry(
+                10 + i,
+                "Courrier",
+                &format!("Message {i}"),
+                "Un message de démonstration.",
+                "21:00",
+                &[],
+            )
+        })
+        .collect();
+    state.history = History::Ready(vec![Group {
+        app: String::from("Courrier"),
+        entries,
+    }]);
+    let size = panel_size(&state, Panel::Calendar);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert!(ui.find("Message 4").is_err(), "beyond the first three");
+    let _ = ui.click("Message 1");
+    let _ = ui.click("2 autres notifications");
+    assert_written(capture(ui, "centre-group"));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    let _ = ui.click("Message 1");
+    let _ = ui.click("2 autres notifications");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(
+        matches!(&messages[..], [Message::OpenNotification(11), Message::ExpandGroup(app, true)] if app == "Courrier"),
+        "{messages:?}"
+    );
+    let _ = state.update(Message::ExpandGroup(String::from("Courrier"), true));
+    let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert_written(capture(ui, "centre-group-open"));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert!(ui.find("Message 5").is_ok());
+}
+
 /// The bar with the control centre open: the indicators, one button, keep one veil and the
 /// green mark under the whole group (UI-02). `bar-open`, then `bar-open-light`.
 #[test]
