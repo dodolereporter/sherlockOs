@@ -7,8 +7,8 @@ default:
 # Format, language, clippy and tests: what the CI requires
 verify: checks test
 
-# Format, language and clippy: the CI's first job
-checks: fmt-check check-language lint
+# Format, language, clippy, and sherlock-ui without iced: the CI's first job
+checks: fmt-check check-language lint check-tokens
 
 # Checks the format without changing anything
 fmt-check:
@@ -21,6 +21,11 @@ fmt:
 # Clippy on the whole workspace, warnings refused
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# sherlock-ui as the compositor and the configuration crates take it, without its `iced`
+# feature: `lint` builds it with every feature, and missed a token that needed one (lot Q-53)
+check-tokens:
+    cargo check -p sherlock-ui --no-default-features --lib
 
 # Runs every test of the workspace
 test:
@@ -77,6 +82,11 @@ cursor-board output="docs/cursor/board.png":
 install-session: cursors
     cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock -p apps -p control-room -p autostart
     desktop/compositor/session/install.sh "$PWD"
+
+# Builds the compositor and the login screen, then prints the sudo commands that make it the display manager (greetd, ADR 0026) and those that go back to SDDM, without running them
+install-greeter:
+    cargo build --release -p compositor -p greeter
+    desktop/greeter/install.sh "$PWD"
 
 # Installs Evidence for the user, without root: its binary in ~/.local/bin, its desktop entry, which the dock pins and the launcher lists, and its icon
 install-evidence:

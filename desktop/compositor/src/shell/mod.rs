@@ -145,6 +145,7 @@ impl State {
     pub fn insert_shell_client(&mut self, stream: UnixStream) {
         let data = Arc::new(ClientState {
             shell: true,
+            capture: self.capture_allowed(&stream),
             ..ClientState::default()
         });
         if let Err(err) = self.display_handle.insert_client(stream, data) {
@@ -155,6 +156,15 @@ impl State {
     /// Whether `client` sees the globals of the shell: it connected through the shell socket.
     pub fn is_shell_client(client: &Client) -> bool {
         is_shell_client(client)
+    }
+
+    /// Shows `zwlr_layer_shell_v1` to every client, not only to those of the shell socket. For
+    /// a compositor without a shell, whose clients are all trusted, such as the login screen's
+    /// (its one client is the greeter). Call it before the clients connect: a registry already
+    /// listed is not told again.
+    pub fn share_layer_shell(&mut self) {
+        self.layer_shell_shared
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Rectangle of the dock icon that the shell gave for `window`: screen name and rectangle
@@ -473,6 +483,14 @@ impl State {
                 manager.update(&dh, &outputs, &self.shell.workspace_model);
             }
         }
+        // The windows a screen share may show (lot D-28c), as the shell sees them.
+        let windows: Vec<_> = self
+            .space
+            .elements()
+            .filter(|w| !is_override_redirect(w) && window_data(w).shown.get())
+            .map(|w| (window_id(w), State::title(w).unwrap_or_default(), app_id(w)))
+            .collect();
+        self.refresh_toplevel_list(&windows);
     }
 
     /// Name and origin of a screen. Without any screen, an empty name and the origin of the
@@ -508,6 +526,8 @@ impl State {
                     ),
                     (ToplevelState::Minimized, minimized),
                     (ToplevelState::Activated, !minimized && is_activated(window)),
+                    // Refused the keyboard, it asks for attention (lot Q-52).
+                    (ToplevelState::Attention, self.needs_attention(window)),
                 ];
                 states.extend(flags.iter().filter(|f| f.1).map(|f| f.0 as u32));
                 let snapshot = toplevels::Snapshot {

@@ -61,6 +61,13 @@ impl Mode {
 
 /// Serves the requests of standard input until it closes.
 pub fn run(mode: Mode) -> io::Result<()> {
+    run_traced(mode, None)
+}
+
+/// `run`, and with `trace`, the name of each tool called appended to that file, one per line,
+/// before it runs: what the tests of the consent broker read to prove a call never reached the
+/// server (A-11).
+pub fn run_traced(mode: Mode, trace: Option<&std::path::Path>) -> io::Result<()> {
     let mut out = io::stdout().lock();
     for line in io::stdin().lock().lines() {
         let request: Value = match serde_json::from_str(&line?) {
@@ -94,7 +101,16 @@ pub fn run(mode: Mode) -> io::Result<()> {
                 json!({ "jsonrpc": "2.0", "id": id, "result": result })
             }
             ("ping", _) => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
-            ("tools/call", _) => json!({ "jsonrpc": "2.0", "id": id, "result": call(params) }),
+            ("tools/call", _) => {
+                if let Some(trace) = trace {
+                    let mut file = std::fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(trace)?;
+                    writeln!(file, "{}", params["name"].as_str().unwrap_or(""))?;
+                }
+                json!({ "jsonrpc": "2.0", "id": id, "result": call(params) })
+            }
             _ => {
                 let error = json!({ "code": -32601, "message": "unknown method" });
                 json!({ "jsonrpc": "2.0", "id": id, "error": error })

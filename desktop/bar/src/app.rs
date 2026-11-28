@@ -9,7 +9,9 @@ use iced::widget::{container, mouse_area, opaque, row};
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Subscription, Task, keyboard, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{Margin, PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{
+    Margin, PixelSize, PopupAnchor, PopupConstraintAdjustment, PopupGravity, Position,
+};
 use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::animated;
@@ -17,6 +19,7 @@ use sherlock_ui::color::{self, Theme, ThemeFade};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::icon::{self, BatteryMark, Radio, WifiMark};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::surface::{self, Elevation};
 use sherlock_ui::{metrics, panels, strings, typography};
 
@@ -356,12 +359,17 @@ impl Bar {
             }
             Message::TraySent(_, Ok(())) => {}
             Message::TrayPinnedRow(bounds) => self.tray.pinned_row = Some(bounds),
-            Message::TrayPointer(id, event) => return self.tray_pointer(id, event),
+            Message::TrayPointer(id, event) => {
+                let task = self.tray_pointer(id, event);
+                self.follow_chevron();
+                return task;
+            }
             Message::PinsNotSaved(error) => {
                 tracing::warn!(%error, "the icons kept in the bar are not saved");
             }
             Message::Pins(pins) => {
                 self.tray.pins = pins;
+                self.follow_chevron();
                 return self.resize_tray();
             }
             // Escape closes the popup of the notification area, once its menu is closed.
@@ -445,6 +453,22 @@ impl Bar {
                     async move { history::invoke(&bus::session().await?, id, &key).await },
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
+            }
+            Message::Quick(quick::Message::OpenSettings(page)) => {
+                // Control Room on that page, in its window if it is open (D-20f).
+                let program = crate::programs::CONTROL_ROOM;
+                match page {
+                    Some(page) => self.programs.start_with(program, &["--page", page]),
+                    None => self.programs.start(program),
+                }
+                return self.close_panel();
+            }
+            Message::Quick(quick::Message::OpenNetworkSettings) => {
+                // Control Room's network page, in its window if it is open (lot D-26n).
+                let (program, args) =
+                    (crate::programs::CONTROL_ROOM, crate::programs::NETWORK_PAGE);
+                self.programs.start_with(program, &args);
+                return self.close_panel();
             }
             Message::Quick(message) => {
                 self.quick.now = animated::clock();
@@ -659,7 +683,7 @@ impl Bar {
         std::iter::once(Target::Sherlock)
             .chain(app_menus.into_iter().map(Target::AppMenu))
             .chain((0..workspaces).map(Target::Workspace))
-            .chain(self.tray.in_popup().next().map(|_| Target::Tray))
+            .chain(self.tray.has_icons().then_some(Target::Tray))
             .chain(status.then_some(Target::Status))
             .chain(self.clock.is_some().then_some(Target::Clock))
             .collect()
@@ -715,8 +739,10 @@ impl Bar {
             return closed;
         };
         self.panel_margins = panel::margins(surface::gpu_drawn() == Some(true));
-        // Room for the keyboard backlight only on a machine that has one (UI-04).
+        // Room for the keyboard backlight only on a machine that has one (UI-04), and a height
+        // within the screen (UI-08).
         panel::reserve_keyboard(self.quick.has_keyboard());
+        panel::reserve_screen(self.screen_height());
         self.panel_shared = self.animates();
         self.swap = None;
         let shared = self.panel_shared;
@@ -729,7 +755,10 @@ impl Bar {
             PixelSize::px(anchor_width, anchor_height),
         )
         .anchor(PopupAnchor::Bottom)
-        .gravity(PopupGravity::Bottom);
+        .gravity(PopupGravity::Bottom)
+        // Kept on the screen by the compositor, sliding along its edges; never flipped above
+        // the bar (UI-08).
+        .constraint_adjustment(PopupConstraintAdjustment::SlideX | PopupConstraintAdjustment::SlideY);
         let id = Id::unique();
         self.panel = Some((which, id));
         self.unfold = if self.animates() {
@@ -939,7 +968,6 @@ impl Bar {
                 self.quick.run_now(Power::PowerOff);
                 Task::none()
             }
-            Action::Updates | Action::GameMode => Task::none(),
         };
         ran.chain(self.close_menu())
     }
@@ -1034,7 +1062,14 @@ impl Bar {
                 let battery = self.battery.flatten();
                 let quick = self.quick.view(&self.user, battery).map(Message::Quick);
                 let (width, height) = which.size();
-                panel::glass(quick, width, height)
+                let (_, full) = which.content_size();
+                if full <= height {
+                    return panel::glass(quick, width, height);
+                }
+                // A screen too short for it: the settings keep their height and scroll (UI-08).
+                let inset = 2.0 * (panels::PADDING + metrics::BORDER_WIDTH);
+                let quick = container(quick).height(full - inset);
+                panel::glass(scroll(quick).height(Length::Fill), width, height)
             }
             Panel::Calendar => {
                 let today = panel::today(self.clock.as_ref());
@@ -1044,12 +1079,17 @@ impl Bar {
                     None => iced::widget::space().into(),
                 };
                 let width = panels::CENTER_WIDTH;
-                iced::widget::column![
+                let both = iced::widget::column![
                     panel::glass(calendar, width, panels::CALENDAR_HEIGHT),
-                    panel::glass(panel::center(&self.history), width, panels::CENTER_HEIGHT),
+                    panel::glass(panel::center(&self.history), width, panel::center_height()),
                 ]
-                .spacing(panels::PANEL_GAP)
-                .into()
+                .spacing(panels::PANEL_GAP);
+                let (_, height) = which.size();
+                if which.content_size().1 <= height {
+                    return both.into();
+                }
+                // Too short for both: the calendar and the centre scroll together (UI-08).
+                scroll(both).width(width).height(height).into()
             }
         }
     }
@@ -1129,6 +1169,8 @@ impl Bar {
                 shape.solid,
                 shape.radius,
             ));
+        // The blur behind its glass (lot D-37).
+        let bar = sherlock_ui::glass::glass(bar, shape.radius);
         // Flat: no shadow, but drawing it tells the menu which renderer draws the bar.
         surface::shadowed(bar, shape.radius, Elevation::Flat).into()
     }
@@ -1403,7 +1445,8 @@ mod tests {
     #[test]
     fn enter_activates_the_highlighted_entry_and_closes_the_menu() {
         let (mut bar, _) = with_menu();
-        let _ = bar.update(Message::Hover(4));
+        // « Verrouiller »: it runs at once.
+        let _ = bar.update(Message::Hover(2));
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert!(!bar.menu_open());
         assert_eq!(bar.cursor, None);
@@ -1448,6 +1491,28 @@ mod tests {
             assert_eq!(ran(&record), ["control-room"]);
             assert!(!bar.menu_open(), "the menu closes");
         }
+        // The compositor's Super + comma starts the same program (lot Q-31).
+        assert_eq!(crate::programs::CONTROL_ROOM, "control-room");
+        assert_eq!(
+            Action::Settings.trailing(),
+            sherlock_ui::component::Trailing::Shortcut("Super+,")
+        );
+    }
+
+    #[test]
+    fn the_settings_links_open_control_room() {
+        for page in [Some("network"), Some("sound"), Some("bluetooth"), None] {
+            let (mut bar, record) = recorded();
+            let _ = bar.update(Message::Quick(quick::Message::OpenSettings(page)));
+            assert_eq!(ran(&record), ["control-room"]);
+        }
+    }
+
+    #[test]
+    fn a_network_joined_from_the_settings_opens_its_page() {
+        let (mut bar, record) = recorded();
+        let _ = bar.update(Message::Quick(quick::Message::OpenNetworkSettings));
+        assert_eq!(ran(&record), ["control-room"]);
     }
 
     #[test]
@@ -1481,23 +1546,6 @@ mod tests {
         let _ = bar.update(Message::Activate(Action::PowerOff));
         let _ = bar.update(Message::MenuKey(menu::Key::Close));
         assert!(bar.armed.is_none() && ran(&record).is_empty());
-    }
-
-    #[test]
-    fn updates_and_game_mode_are_not_there_yet() {
-        for action in [Action::Updates, Action::GameMode] {
-            let (mut bar, record) = recorded();
-            assert!(!action.enabled());
-            assert_eq!(
-                action.trailing(),
-                sherlock_ui::component::Trailing::Shortcut("Bientôt")
-            );
-            let _ = bar.update(Message::Activate(action));
-            assert!(ran(&record).is_empty() && bar.menu_open());
-            let index = Action::ALL.iter().position(|a| *a == action).unwrap();
-            let _ = bar.update(Message::Hover(index));
-            assert_eq!(bar.cursor, None);
-        }
     }
 
     #[test]

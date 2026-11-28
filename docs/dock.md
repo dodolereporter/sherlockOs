@@ -151,6 +151,19 @@ wl_region#41.add(105, 56, 319, 76)                 # it leaves: the bar again
 wl_surface#28.set_input_region(wl_region#41)
 ```
 
+### Fitting the screen (D-21l)
+
+As on macOS, the dock is never longer than its screen. When its surface would leave less than
+`dock::SCREEN_ROOM` (8) at either end of the screen (its width, or its height on the left or the
+right), its icons shrink: `Geometry::fitted` finds the largest size, to the pixel, whose
+longest magnified bar and room for the labels fit, down to `dock::FIT_MIN_ICON` (20). The size
+of the settings is kept (`Dock::base`): an icon closed, another screen, or fewer icons give
+the room back, and they grow again, on the same springs as any other change. A screen not
+known yet keeps the settings' size. On 1366 × 768 at 1.5 (911 long), twenty icons and the separator
+fit, smaller (`the_dock_shrinks_its_icons_to_fit_its_screen`).
+
+![Four icons and Sherlock on a 520 wide screen](../desktop/dock/screenshots/fitted-520.png)
+
 ### Hiding
 
 `AutoHide` (`hide.rs`) decides when the dock leaves the screen:
@@ -289,6 +302,13 @@ magnified icon (88 by default) on a scale 2 screen (`dock::ICON_SCALE`) wins, el
 A scalable icon is then drawn at the size and scale of the screen. An absolute `Icon` is taken
 as it is. Without an icon, the initial of the name on a blue tile. Our applications' icons are
 in the hicolor theme of sherlock-ui (`docs/sherlock-ui.md`, Application icons).
+
+The initial is at least a pixel high (lot Q-32). An icon that arrives grows from a side of 0,
+and text of size 0 has a line height of 0, on which cosmic-text panics (`buffer.rs`: « line
+height cannot be 0 »): the dock died at the start of a session without screen, where no icon
+theme is found and every application shows its initial. sherlock-ui's text sizes taken from a
+caller (`ellipsis`, `glyph_fade`, the applications view's initial) go through
+`ellipsis::at_least_a_pixel` for the same reason.
 
 SVG and PNG both go through tiny-skia's SVG renderer: a PNG is drawn through a small SVG that
 embeds it by path. iced's `image` feature would add the `image` crate and its decoders; resvg
@@ -618,6 +638,12 @@ own thread, connection included:
 
 They are tried in this order. `windows::Auto`, the control of the running dock, acts through
 the shell protocol while its source runs, through the wlroots one otherwise.
+
+A window that asks for attention (`attention`, version 5 of the shell protocol, lot Q-52: the
+compositor refused it the keyboard because no click let it come forward) makes the icon of its
+application bounce `ATTENTION_HOPS` hops (3), the launch bounce's, then rest; a window that keeps
+asking bounces once, and again only after it stopped asking. The dock binds the shell manager
+up to version 5 (4 for App Expose).
 
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is

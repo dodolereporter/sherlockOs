@@ -8,7 +8,10 @@
 pub mod app;
 pub mod apps;
 pub mod arrangement;
+pub mod bluetooth;
 pub mod displays;
+pub mod instance;
+pub mod network;
 mod pages;
 pub mod scroll;
 pub mod search;

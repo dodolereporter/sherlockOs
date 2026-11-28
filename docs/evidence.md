@@ -14,6 +14,37 @@ Use `--release`: in a debug build, iced and tiny-skia are not optimised and the 
 renderer is several times slower (see Performance). Evidence logs the renderer it chose at start
 (ADR 0018); `ICED_BACKEND=tiny-skia` forces software rendering.
 
+## Runtime (ADR 0029, lot E-02a)
+
+On Wayland (`WAYLAND_DISPLAY` set), Evidence runs on `iced_exwlshell`, like the shell programs.
+Its window is an `xdg_toplevel` made with `NewBaseWindow` (app id `evidence`, client-side
+decorations, title « Evidence »), and its daemon starts in `StartMode::Background`, without any
+layer surface. This is what lets its menus be real `xdg_popup`s.
+
+The right-click menu and its submenu are popups of their own (lot E-02b), so they leave the
+window, as on macOS. The menu's popup is larger than the menu by the room of its shadow, its input
+region the menu only. Its anchor rectangle is chosen so that the menu's corner lands on the
+clicked point both ways: below right, or above left when the compositor flips it at the
+screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child popup anchored
+beside its entry, which the compositor flips to the left the same way. The popups grab the
+pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
+outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
+once it has faded out. Under winit, both are still drawn inside the window. The completion list,
+the drop-down lists and the tooltips follow in E-02c. Under X11, it keeps iced's own runtime on winit. The title
+bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
+closing the window, from its button or from the compositor, ends the program.
+
+Before choosing, Evidence reads the compositor's globals: `iced_exwlshell` needs `xdg_wm_base` 2
+at least, and an older compositor (WSLg's Weston offers version 1) gets the winit runtime
+instead, rather than a crash at start.
+
+In SherlockOS's compositor (nested, software rendering): ![](evidence/exwlshell-nested.png)
+
+Differences with winit, found while moving (the ADR's spike): `iced_exwlshell` 0.21.4 sets no
+smallest size on the window (`xdg_toplevel.set_min_size`), so `MIN_WINDOW` holds only under
+X11, and it has no resize from the edges of a client-side decorated window
+(`xdg_toplevel.resize`); winit had none either for a window without decorations.
+
 ## Architecture
 
 | Module | Role | iced |
@@ -79,6 +110,25 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   most 20 000 entries within 500 ms, offers 200 folders at most, and leaves out names that are
   not UTF-8 or hold a control character. A stale read, overtaken by a newer one, is dropped.
   A typed path longer than 4096 bytes, or with a control character, is refused.
+- **Images.** The preview reads an image's size from its header before decoding it: beyond
+  32 million pixels or 16 384 on a side, only its information shows (a 420 KB PNG can hold
+  12000 × 12000 pixels, 430 MB decoded). The decoder may hold 192 MB at most. A decode that is
+  no longer the last one asked for, or that ran out of time, stops at its next read, so that
+  images run through with the arrows never pile up. Application icons: 1 MB per file, 1024
+  pixels on a side.
+- **Disguised files.** The preview reads the first bytes of the selected file. A program (ELF,
+  Windows, `#!`) named like a document, or an image, PDF or ZIP named as another of these
+  kinds, gets a warning in salmon above the preview: « Attention : malgré son nom en .pdf, ce
+  fichier est un programme. »
+- **No program through xdg-open.** A file opened without an application chosen for its type
+  goes to `xdg-open`, which on some desktops runs launchers. An executable file, a `.desktop`
+  launcher, or a file that starts like a binary or a script, is never handed to it: Evidence
+  says it does not run programs. A file that cannot be read in time counts as one.
+- **Copies drop setuid and setgid**, as `cp` without `-p` does; the sticky bit of a folder
+  stays.
+- **Small files stay small.** Trash records and `user-dirs.dirs` are read up to 64 KB, a named
+  pipe in their place is never waited on.
+- **Renames refuse control characters** (a line feed, an escape, a tab), as they refuse « / ».
 - **Names shown safely.** In the listing, the preview and the breadcrumb, a control character
   of a name shows as its picture (␊ for a line feed, ␛ for an escape) and a direction mark
   (U+202E and its kin, which can make a name read « exe.txt » for an `.exe`) as �.
@@ -113,6 +163,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
     swings that die out) and says why in the status bar; the field stays open;
   - Escape, a click in the listing, or a navigation give the breadcrumb back.
 
+  « … » opens a menu of the folders it folds, as Finder's path bar does. The sheet lists the
+  last 10 folders reached by the field while nothing completes (for the session). The arrows
+  scroll the completion list to keep the picked folder in sight. Below 1000 px, the search
+  folds to its icon until it is used (a click, or Ctrl+F); Escape or a new folder folds it
+  back, and the path bar takes its room (lot E-04c).
+
   The breadcrumb and the field cross-fade (160 ms each way); the list fades and slides in and
   out; the sheet comes down and fades, over a dimmed window.
 
@@ -124,6 +180,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | 1920 × 1080 | Smallest window | In a WSLg window |
   | --- | --- | --- |
   | ![](evidence/path-crumbs-1080p.png) | ![](evidence/path-crumbs-small.png) | ![](evidence/path-wslg.png) |
+- The window follows its width (lot E-05, after the Finder and Nautilus). The name of a file
+  always keeps `NAME_MIN_WIDTH` (220): when the room runs short, the Git column folds first,
+  then Type, the preview, Size, Modified, and last the sidebar (`layout::Panes`). The preview
+  folds at half a 1080p screen; « Aperçu » brings it back at that width, and the columns fold
+  instead. Names, the origin of a trash item and the preview's title end with « … » where the
+  shaped text stops fitting (`sherlock_ui::ellipsis`), not after an estimated count of
+  characters.
+
+  | 720 × 460 | 944 × 1048 (half of 1080p) | 1366 × 768 | 1920 × 1080 |
+  | --- | --- | --- | --- |
+  | ![](evidence/width-720.png) | ![](evidence/width-944.png) | ![](evidence/width-1366.png) | ![](evidence/width-1920.png) |
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
   state (modified, new, ignored). Click a column header to sort, again to reverse. Folders
   stay first. Hidden files with Ctrl+H. A double click opens an item, selected or not: the
@@ -178,6 +245,32 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Space opens a large preview of the item under the cursor, after the Finder's Quick Look
+  (lot E-12): its name and its content (the text, the picture fitted to the room, or its
+  information) on a glass panel of 80 % of the window, over a dimmed window. It zooms in from
+  0.85 and fades in 200 ms, and zooms out the same way. The arrows go to the item before or
+  after, and the preview follows; Space, Escape or a click outside close it. It opens on one
+  item only. The side panel is shown or hidden from « Aperçu » in the bar's menu.
+
+  ![](evidence/quick-look.png)
+- Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
+  thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
+  « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
+  (« nom (copie) »), « Ignorer », or « Annuler ». While it runs, the status bar shows its share
+  done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
+  files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
+  failed leaves nothing half-written behind.
+- Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
+  network, found without any tool installed (`network`): a multicast DNS question for
+  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
+  WS-Discovery probe (Windows computers, Samba with wsdd). Each listening lasts 2.5 s, on a
+  thread of its own, again every 2 minutes; at most 256 answers of 9000 bytes are read and 64
+  servers kept; a compression loop or a cut packet names nothing; names are shown safely. A
+  click mounts the server as a guest through gvfs (`gio mount --anonymous smb://host/`, `smb`),
+  without root, off the interface thread with a 30 s limit, then opens the folder gvfs shows it
+  in (`gio info`, « local path »); an eject button beside it unmounts it. Without gvfs, the
+  status bar says so. Servers that want a name and a password say so for now: the sheet that
+  asks for them, and the Secret Service keyring, come in E-07b.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

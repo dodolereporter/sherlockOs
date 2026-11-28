@@ -127,6 +127,7 @@ dependencies = [
  "launcher",
  "log",
  "mime-apps",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -327,6 +328,7 @@ dependencies = [
  "dock-config",
  "iced",
  "iced_exwlshell",
+ "iced_runtime",
  "iced_test",
  "icon-theme",
  "image",
@@ -639,6 +641,7 @@ dependencies = [
  "image",
  "mime-apps",
  "resvg",
+ "rustix 1.1.6",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
@@ -683,6 +686,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]
@@ -1132,6 +1136,7 @@ dependencies = [
  "appearance-config",
  "futures",
  "iced",
+ "iced_exwlshell",
  "iced_runtime",
  "iced_test",
  "image",
@@ -1554,6 +1559,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91"
 dependencies = [
  "bitflags 2.13.2",
+]
+
+[[package]]
+name = "greeter"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "image",
+ "lock",
+ "serde_json",
+ "sherlock-3d",
+ "sherlock-ui",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -2168,6 +2193,7 @@ dependencies = [
  "image",
  "libc",
  "mime-apps",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -2295,6 +2321,7 @@ dependencies = [
  "image",
  "libc",
  "libloading",
+ "rustix 1.1.6",
  "sherlock-3d",
  "sherlock-ui",
  "system-services",
@@ -2514,6 +2541,7 @@ dependencies = [
  "iced_test",
  "libc",
  "notifications-config",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -3021,6 +3049,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "portal"
+version = "0.0.0"
+dependencies = [
+ "async-io",
+ "blocking",
+ "libloading",
+ "memmap2",
+ "rustix 1.1.6",
+ "shell-protocol",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
+ "zbus",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3488,6 +3534,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "iced",
+ "iced_exwlshell",
  "iced_renderer",
  "iced_runtime",
  "iced_test",
@@ -3763,6 +3810,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "softbuffer"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3885,6 +3942,9 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",
@@ -4010,6 +4070,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]

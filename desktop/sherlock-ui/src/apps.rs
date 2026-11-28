@@ -137,7 +137,7 @@ impl Layout {
     }
 
     pub fn letter_size(&self) -> f32 {
-        (self.icon * LETTER_RATIO).round()
+        crate::typography::at_least_a_pixel((self.icon * LETTER_RATIO).round())
     }
 
     /// Center of the cell of `place` on its page, on a screen `width` wide.

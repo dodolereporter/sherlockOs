@@ -42,11 +42,12 @@ pub mod top_bar {
     pub const SESSION_OPEN: &str = "Session ouverte";
     pub const ABOUT: &str = "À propos de cet ordinateur";
     pub const SETTINGS: &str = "Réglages";
-    pub const UPDATES: &str = "Mises à jour";
-    pub const GAME_MODE: &str = "Passer en mode jeu";
     pub const LOCK: &str = "Verrouiller";
     pub const LOG_OUT: &str = "Fermer la session";
     pub const POWER_OFF: &str = "Éteindre";
+    /// The shortcuts the compositor binds, shown beside their entry (lot Q-31).
+    pub const SETTINGS_KEYS: &str = "Super+,";
+    pub const LOCK_KEYS: &str = "Super+L";
 
     /// The button that holds the menus of the application that do not fit in the bar (lot
     /// D-36).

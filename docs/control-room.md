@@ -2,7 +2,8 @@
 
 Control Room is the settings application of the desktop (lot D-26a). Each setting is written to
 the file that its program already reads and follows live: nothing has to be restarted, and every
-setting survives a restart. The look follows the « Réglages » board
+setting survives a restart. It opens from « Réglages » in the bar's Sherlock menu, or with
+Super + comma (lot Q-31). The look follows the « Réglages » board
 (`docs/design/planches/Reglages.dc.html`): a sidebar of 240 with the search on top, the page on
 the right in cards. Its sizes, motions and French texts are in `sherlock_ui::control_room`.
 
@@ -55,6 +56,23 @@ goes to a task (`Writes::run`), one batch at a time, in the order of the changes
 made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
 the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
 
+**Network (lot D-26n).** The « Réseau » page switches the Wi-Fi on or off, lists the networks
+around (read again every 5 seconds while the page is open, « Rechercher » asks for a new scan),
+and joins one: an open network at once; a protected one through its saved connection, else
+with the password asked under it; a network flagged WEP or 802.1X (WPA2 or WPA3 Enterprise, as
+eduroam) with a form: WEP and its key, or « Entreprise » with PEAP or TTLS (MSCHAPv2 inside),
+the identity, the password and the domain the server's certificate must name. « Autre
+réseau… » joins a hidden network by its name. « Oublier » deletes the saved connection of the
+network in use, with its secrets. Every call goes to NetworkManager on the system bus, off the
+interface thread (`system_services::network`, shared with the bar), and polkit asks where its
+policy wants it; the secrets are bounded (256 bytes, 32 for a name) and never logged.
+
+**One window (lot D-26n).** `control-room --page <id>` opens a page: `network`, `bluetooth`,
+`sound`, `appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `apps`. The first Control Room listens on
+`$XDG_RUNTIME_DIR/sherlockos-control-room.sock`; a second one hands it its page (one line of at
+most 64 bytes) and leaves, and the window shows that page and takes the focus. The bar's
+« Ouvrir les Réglages », under a network it cannot join, runs `control-room --page network`.
+
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
 interface thread (`system_services::audio`). Choosing a device runs `set-default-sink` or
@@ -97,6 +115,28 @@ The wallpaper picker shows the wallpapers of the collection (`sherlock_ui::wallp
 the wallpaper folders (`desktop_config::wallpaper::dirs`), from the smallest variant of each,
 reduced off the interface thread. An image of the user's (`path`) is named above the picker;
 choosing a wallpaper replaces it.
+
+### Bluetooth (D-26o)
+
+« Bluetooth » goes through BlueZ on the system bus with the code of the bar's quick settings
+(`system_services::bluetooth`, `src/bluetooth.rs`): a connection for reads (5 s at most per
+call) and one for actions (60 s, for polkit to ask), each call in a task, never on the
+interface thread. The page has:
+
+- the switch of the adapter; a refusal or a failure says so in its help line;
+- « Mes appareils », the paired devices, each with the glyph of its kind (headphones, mouse,
+  keyboard, phone, computer, gamepad), its name with « … » when too long, « Connecté · 80 % »
+  when BlueZ gives the battery, and « Connecter » or « Déconnecter », « Renommer » (a field,
+  64 characters at most, BlueZ's `Alias`) and « Oublier » (asked again under the device);
+- « Appareils à proximité », found by a scan that runs while the page is open and stops when
+  it is left (« Recherche… » beside its title), each with « Appairer »;
+- while a device pairs, the agent's question in a card: the code, « Confirmer » and
+  « Annuler ». Leaving the page cancels the pairing.
+
+One device at a time: its line says « Connexion… » or « Appairage… » and the other buttons wait.
+The page follows what BlueZ announces (`bluetooth::changes`): another program connecting a
+device, a battery level, a device found. `control-room --page bluetooth` opens it, as the
+bar's « Réglages Bluetooth… » does.
 
 ## Search
 
@@ -200,6 +240,13 @@ Sound, lock and default applications:
 ![Lock, light](control-room/lock-wide-light.png)
 ![Default applications](control-room/default-apps-wide-dark.png)
 ![Default applications, narrow, light](control-room/default-apps-narrow-light.png)
+
+Bluetooth (D-26o), a headset connected, a mouse paired, a speaker found; the question of a
+pairing; and the narrow window, light:
+
+![Bluetooth](control-room/bluetooth-wide-dark.png)
+![Bluetooth, pairing](control-room/bluetooth-pairing-wide-dark.png)
+![Bluetooth, narrow, light](control-room/bluetooth-narrow-light.png)
 
 Search: the part of each name that matched, in green:
 
