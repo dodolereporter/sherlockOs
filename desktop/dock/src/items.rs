@@ -24,6 +24,10 @@ pub enum Kind {
     App(Box<DesktopEntry>),
     /// Open windows whose application has no desktop entry: their `app_id`.
     Window(String),
+    /// The trash, last (lot D-21j): full or empty.
+    Trash(bool),
+    /// A stack, before the trash (lot D-21k): its folder.
+    Stack(std::path::PathBuf),
     /// The hole of an application dragged over the dock (lot D-41d).
     Hole,
 }
@@ -38,6 +42,8 @@ pub enum Target {
     App(String),
     /// An `app_id` without desktop entry.
     Window(String),
+    Trash,
+    Stack,
     Hole,
 }
 
@@ -97,8 +103,37 @@ impl Item {
         }
     }
 
+    /// The trash, full or empty: its tile from sherlock-ui.
+    pub fn trash(full: bool) -> Self {
+        Self {
+            kind: Kind::Trash(full),
+            name: String::from(dock::text::TRASH),
+            glyph: Glyph::File(svg::Handle::from_memory(
+                dock::trash_icon(full).into_bytes(),
+            )),
+            pinned: false,
+        }
+    }
+
+    /// A stack named `name`, the downloads folder: the theme's `folder-download`, else the
+    /// tile from sherlock-ui.
+    pub fn stack(folder: std::path::PathBuf, name: &str, themed: Option<&Path>) -> Self {
+        let glyph = match themed {
+            Some(path) => Glyph::File(icon_handle(path)),
+            None => Glyph::File(svg::Handle::from_memory(dock::stack_icon().into_bytes())),
+        };
+        Self {
+            kind: Kind::Stack(folder),
+            name: name.to_owned(),
+            glyph,
+            pinned: false,
+        }
+    }
+
     pub fn target(&self) -> Target {
         match &self.kind {
+            Kind::Trash(_) => Target::Trash,
+            Kind::Stack(_) => Target::Stack,
             Kind::Applications => Target::Applications,
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
@@ -114,7 +149,7 @@ impl Item {
             Kind::App(entry) => Some(entry.id.as_str()),
             Kind::Sherlock => Some(SHERLOCK),
             Kind::Hole => Some(HOLE),
-            Kind::Applications | Kind::Window(_) => None,
+            Kind::Applications | Kind::Window(_) | Kind::Trash(_) | Kind::Stack(_) => None,
         }
     }
 
@@ -130,7 +165,9 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock | Kind::Applications | Kind::Hole => false,
+            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Stack(_) | Kind::Hole => {
+                false
+            }
         }
     }
 }
@@ -145,6 +182,10 @@ pub struct Builder<'a> {
     pub applications: bool,
     /// Sherlock in the dock (`DockConfig::sherlock`).
     pub sherlock: bool,
+    /// The trash at the end, full (`Some(true)`) or empty; none without a trash folder.
+    pub trash: Option<bool>,
+    /// The downloads stack before it: its folder and its name (lot D-21k).
+    pub stack: Option<(&'a Path, &'a str)>,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -200,6 +241,14 @@ impl Builder<'_> {
                 },
             };
             items.push(item);
+        }
+        // The stack, then the trash last, after the separator, as on macOS (lots D-21j, k).
+        if let Some((folder, name)) = self.stack {
+            let themed = self.lookup.find("folder-download", self.icon_size);
+            items.push(Item::stack(folder.to_path_buf(), name, themed.as_deref()));
+        }
+        if let Some(full) = self.trash {
+            items.push(Item::trash(full));
         }
         let separator = (items.len() > first_open).then_some(first_open);
         (items, separator)
@@ -274,6 +323,8 @@ mod tests {
         let mut builder = Builder {
             applications: true,
             sherlock: true,
+            trash: None,
+            stack: None,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -323,6 +374,39 @@ mod tests {
         );
         // Glyphs are looked up once per application.
         assert_eq!(glyphs.len(), 3);
+    }
+
+    #[test]
+    fn the_trash_comes_last_after_the_separator() {
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/data");
+        let catalog = Catalog::load(std::slice::from_ref(&data));
+        let lookup = IconLookup::new(&[data], None, None);
+        let mut glyphs = HashMap::new();
+        let mut builder = Builder {
+            applications: false,
+            sherlock: false,
+            trash: Some(true),
+            stack: Some((Path::new("/home/me/Downloads"), "Downloads")),
+            catalog: &catalog,
+            lookup: &lookup,
+            icon_size: 88,
+            glyphs: &mut glyphs,
+        };
+        let pinned = ["org.example.Files".to_owned()];
+        let (items, separator) = builder.build(&pinned, None);
+        assert_eq!(names(&items), ["Fichiers", "Downloads", "Corbeille"]);
+        assert_eq!(separator, Some(1));
+        assert_eq!(items[2].kind, Kind::Trash(true));
+        assert_eq!(items[2].target(), Target::Trash);
+        assert_eq!(items[1].target(), Target::Stack);
+        assert!(items[1].pin_id().is_none() && !items[2].pinned);
+        let Placeholder(windows) = Placeholder::new("terminal", None);
+        let (items, separator) = builder.build(&pinned, Some(&windows));
+        assert_eq!(
+            names(&items),
+            ["Fichiers", "Terminal d'exemple", "Downloads", "Corbeille"]
+        );
+        assert_eq!(separator, Some(1));
     }
 
     #[test]

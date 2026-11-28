@@ -24,11 +24,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::mcp::Level;
+use crate::own_server::json_line;
 
 /// How long the user has to answer. Past it, the call is refused.
 pub const CONSENT_TIMEOUT: Duration = Duration::from_secs(60);
-/// Bytes of the arguments shown in the window and written to the journal.
+/// Bytes of the arguments written to the journal.
 pub const MAX_SUMMARY: usize = 2048;
+/// Bytes of the arguments sent to the window: no more than its 4 lines of 56 characters
+/// (`sherlock_ui::consent::ARGUMENT_LINES` and `ARGUMENT_COLUMNS`) can show.
+pub const MAX_SHOWN: usize = 4 * 56;
+/// Characters kept of a value cut in its middle, at least: its start and its end.
+const MIN_VALUE: usize = 16;
 
 /// What the user is asked about: one call.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,8 +43,11 @@ pub struct Request {
     pub id: u64,
     pub tool: String,
     pub level: Level,
-    /// The arguments as JSON, cut to `MAX_SUMMARY`.
+    /// The arguments as JSON, cut to `MAX_SUMMARY`, for the journal.
     pub summary: String,
+    /// The arguments as the window shows them, cut to `MAX_SHOWN` bytes: every argument
+    /// named, a long value cut in its middle (`summary`).
+    pub shown: String,
 }
 
 impl Request {
@@ -166,7 +175,8 @@ impl Broker {
             id: self.next,
             tool: tool.to_owned(),
             level,
-            summary: summary(arguments),
+            summary: summary(arguments, MAX_SUMMARY),
+            shown: summary(arguments, MAX_SHOWN),
         };
         self.next += 1;
         let decision = if level == Level::Read {
@@ -208,18 +218,77 @@ impl Broker {
     }
 }
 
-/// The arguments as one line of JSON, cut to `MAX_SUMMARY` on a character boundary.
-fn summary(arguments: &Value) -> String {
-    let mut text = arguments.to_string();
-    if text.len() > MAX_SUMMARY {
-        let mut end = MAX_SUMMARY - '…'.len_utf8();
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-        text.push('…');
+/// The arguments as one line of JSON, at most `max` bytes, every hidden character escaped
+/// (`own_server::json_line`): a right-to-left override or a zero-width space cannot make the
+/// window show another path than the one used.
+///
+/// The consent covers the whole arguments (`Permit::allows`), so what is cut must not hide one:
+/// when they do not fit, every argument of an object stays named, and each long value is cut in
+/// its middle, its start and end kept (`~/Documents/a…/rapport.txt`). Only when the names alone
+/// do not fit is the line cut at its end, with « … ».
+fn summary(arguments: &Value, max: usize) -> String {
+    let whole = json_line(arguments);
+    if whole.len() <= max {
+        return whole;
     }
-    text
+    if let Value::Object(map) = arguments {
+        // Room left for the values, once the names, quotes, colons and commas are counted.
+        let names: usize = map.keys().map(|k| json_line(&json!(k)).len() + 4).sum();
+        let room = max.saturating_sub(names + 2) / map.len().max(1);
+        // Each value as text, then quoted again: its own escapes count.
+        let budget = room.saturating_sub(4).max(MIN_VALUE);
+        let cut: serde_json::Map<String, Value> = map
+            .iter()
+            .map(|(name, value)| {
+                let text = match value {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                };
+                let kept = if json_line(&json!(text)).len() <= budget + 2 {
+                    value.clone()
+                } else {
+                    Value::String(middle(&text, budget))
+                };
+                (name.clone(), kept)
+            })
+            .collect();
+        let line = json_line(&Value::Object(cut));
+        if line.len() <= max {
+            return line;
+        }
+        return end_cut(&line, max);
+    }
+    end_cut(&whole, max)
+}
+
+/// `text` cut in its middle to `max` bytes at most once quoted and escaped: its start, « … »,
+/// its end.
+fn middle(text: &str, max: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    // An escaped character takes up to 6 (`\u202e`): shrink until it fits.
+    let mut keep = max.saturating_sub(1).min(chars.len().saturating_sub(1));
+    loop {
+        let head = keep.div_ceil(2);
+        let tail = keep / 2;
+        let cut: String = chars[..head]
+            .iter()
+            .chain(std::iter::once(&'…'))
+            .chain(&chars[chars.len() - tail..])
+            .collect();
+        if keep == 0 || json_line(&json!(cut)).len() <= max + 2 {
+            return cut;
+        }
+        keep -= 1;
+    }
+}
+
+/// `text` cut to `max` bytes at most, on a character boundary, « … » at the end.
+fn end_cut(text: &str, max: usize) -> String {
+    let mut end = max.saturating_sub('…'.len_utf8()).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 /// The journal of consents and calls: one JSON object per line, only ever appended to, readable
@@ -406,6 +475,7 @@ mod tests {
             tool: "vider".into(),
             level: Level::Destructive,
             summary: String::new(),
+            shown: String::new(),
         };
         assert!(request.reinforced());
         assert!(
@@ -448,7 +518,45 @@ mod tests {
     #[test]
     fn the_summary_is_bounded() {
         let long = json!({ "text": "é".repeat(MAX_SUMMARY) });
-        let cut = summary(&long);
-        assert!(cut.len() <= MAX_SUMMARY && cut.ends_with('…'));
+        let cut = summary(&long, MAX_SUMMARY);
+        assert!(cut.len() <= MAX_SUMMARY && cut.contains('…'));
+        let short = json!({ "chemin": "~/Documents/a.txt" });
+        assert_eq!(summary(&short, MAX_SHOWN), short.to_string());
+    }
+
+    #[test]
+    fn what_is_shown_names_every_argument_and_hides_no_character() {
+        // A long first value no longer pushes the next arguments out of the window.
+        let padded = json!({
+            "a_note": "x".repeat(3000),
+            "chemin": format!("~/Documents/{}/rapport.txt", "y".repeat(400)),
+            "z_cible": "~/.bashrc",
+        });
+        for max in [MAX_SHOWN, MAX_SUMMARY] {
+            let shown = summary(&padded, max);
+            assert!(shown.len() <= max, "{shown}");
+            let back: Value = serde_json::from_str(&shown).unwrap();
+            assert_eq!(back["z_cible"], "~/.bashrc", "{shown}");
+            let path = back["chemin"].as_str().unwrap();
+            assert!(path.starts_with("~/Documents/") && path.ends_with("/rapport.txt"));
+            assert_eq!(path.contains('…'), max == MAX_SHOWN, "{path}");
+        }
+        // Hidden characters escaped, never shown as they are.
+        let trapped = json!({ "chemin": "facture\u{202e}txt.exe\u{200b}" });
+        let shown = summary(&trapped, MAX_SHOWN);
+        assert!(
+            shown.contains("\\u202e") && shown.contains("\\u200b"),
+            "{shown}"
+        );
+        assert!(!shown.chars().any(crate::own_server::hidden));
+        // Too many names for the room: cut at the end, and said so.
+        let many: serde_json::Map<String, Value> = (0..100)
+            .map(|i| (format!("argument_{i}"), json!(i)))
+            .collect();
+        let shown = summary(&Value::Object(many), MAX_SHOWN);
+        assert!(shown.len() <= MAX_SHOWN && shown.ends_with('…'));
+        // Not an object: cut at the end.
+        let list = json!(["z".repeat(500)]);
+        assert!(summary(&list, MAX_SHOWN).ends_with('…'));
     }
 }

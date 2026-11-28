@@ -10,13 +10,16 @@ use iced::font::{Style, Weight};
 use iced::futures::channel::mpsc::{self, Receiver};
 use iced::futures::{Stream, StreamExt, stream};
 use iced::widget::{
-    Stack, button, column, container, float, image, mouse_area, pin, rich_text, row, sensor, span,
-    svg, text,
+    Stack, column, container, float, image, mouse_area, pin, rich_text, row, sensor, span, svg,
+    text,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Subscription, Task, Vector, mouse, window};
 use iced_exwlshell::actions::RegionActionCB;
 use iced_exwlshell::reexport::{ActivationTokenSink, Anchor, LayerSize, XdgActivationTokenV1State};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
+use sherlock_ui::animated::hoverable;
+use sherlock_ui::ellipsis::ellipsis;
 use sherlock_ui::motion::{Animation, GEOMETRY_PRECISION};
 use sherlock_ui::notifications::{self as ui, SPRING};
 use sherlock_ui::{color, typography};
@@ -37,8 +40,21 @@ pub enum Message {
     /// The height a bubble took once laid out.
     Measured(u64, f32),
     Hover(u64, bool),
+    /// A button pressed on the bubble, and let go: the click (its default action, or it
+    /// closes).
+    Press(u64),
     Click(u64),
+    /// « × », or the bubble swiped away to the right (D-23d).
+    Dismiss(u64),
+    /// A horizontal scroll over a bubble: the fingers on the touchpad, in pixels.
+    Swipe(u64, f32),
+    /// The pile of an application opened, or closed again.
+    Expand(String, bool),
     Action(u64, String),
+    /// « Options » of a bubble with more actions than its row holds.
+    Options(u64),
+    /// The screen of the bubbles, its logical height: as many bubbles show as it holds.
+    Screen(f32),
 }
 
 /// The events of the core waiting for the interface, merged so that they stay few however
@@ -179,11 +195,28 @@ struct Bubble {
     top: Animation,
     slide: Animation,
     leaving: bool,
+    /// Its « Options » list is open.
+    options: bool,
+    /// The pointer is over it; a button is held on it.
+    hovered: bool,
+    pressed: bool,
+    /// How far the fingers pulled it to the right, and when they last moved.
+    swipe: f32,
+    swiped_at: Option<Duration>,
+    /// Laid behind the newest bubble of its application (a pile); the others of its pile,
+    /// counted on the newest; the newest of an opened pile.
+    behind: bool,
+    others: usize,
+    expanded_leader: bool,
+    /// Behind: the height of the bubble in front, so that its edge peeks out below it.
+    front_height: Option<f32>,
 }
 
 pub struct Notifications {
     core: Arc<Core>,
     inbox: Inbox,
+    /// iced_exwlshell's reports of the screen the surface is on.
+    shell_events: Option<ShellReceiver>,
     /// In the order they came: the newest is drawn at the top.
     bubbles: Vec<Bubble>,
     surface: Option<window::Id>,
@@ -191,6 +224,8 @@ pub struct Notifications {
     origin: Instant,
     now: Duration,
     serials: u64,
+    /// The applications whose pile is open: each of their bubbles shows whole.
+    expanded: HashSet<String>,
 }
 
 impl Notifications {
@@ -198,19 +233,30 @@ impl Notifications {
         Self {
             core,
             inbox,
+            shell_events: None,
             bubbles: Vec::new(),
             surface: None,
             height: 0,
             origin: Instant::now(),
             now: Duration::ZERO,
             serials: 0,
+            expanded: HashSet::new(),
         }
+    }
+
+    /// Told by `shell_events` of the screen of the stack: its height sets how many bubbles
+    /// show (D-23c).
+    pub fn with_shell_events(mut self, shell_events: ShellReceiver) -> Self {
+        self.shell_events = Some(shell_events);
+        self
     }
 
     fn animating(&self) -> bool {
         let now = self.now;
         self.bubbles.iter().any(|b| {
-            !b.top.is_done(now, GEOMETRY_PRECISION) || !b.slide.is_done(now, GEOMETRY_PRECISION)
+            !b.top.is_done(now, GEOMETRY_PRECISION)
+                || !b.slide.is_done(now, GEOMETRY_PRECISION)
+                || b.swipe != 0.0
         })
     }
 
@@ -223,6 +269,11 @@ impl Notifications {
         Subscription::batch([
             Subscription::run_with(self.inbox.clone(), Inbox::stream).map(Message::Core),
             Subscription::run(appearance).map(Message::Theme),
+            self.shell_events
+                .as_ref()
+                .map_or_else(Subscription::none, |events| {
+                    events.listen().filter_map(on_output)
+                }),
             frames,
         ])
     }
@@ -251,6 +302,9 @@ impl Notifications {
                 return self.relayout(false);
             }
             Message::Frame(_) => {
+                if let Some(task) = self.end_swipes() {
+                    return task;
+                }
                 if let Some(task) = self.sweep() {
                     return task;
                 }
@@ -260,17 +314,51 @@ impl Notifications {
             }
             // A bubble on its way out takes nothing: its id may already name another one.
             Message::Hover(serial, held) => {
+                if let Some(bubble) = self.bubble_mut(serial) {
+                    bubble.hovered = held;
+                    bubble.pressed &= held;
+                }
                 if let Some(id) = self.live(serial) {
                     self.core.hold(id, held);
                 }
             }
+            Message::Press(serial) => {
+                if let Some(bubble) = self.bubble_mut(serial) {
+                    bubble.pressed = true;
+                }
+            }
             // The application gets the activation token of the click first (lot Q-52).
             Message::Click(serial) => {
-                if let Some(id) = self.live(serial) {
+                let pressed = self
+                    .bubble_mut(serial)
+                    .is_some_and(|b| std::mem::replace(&mut b.pressed, false) && b.swipe == 0.0);
+                if let (true, Some(id)) = (pressed, self.live(serial)) {
                     let core = Arc::clone(&self.core);
                     return self
                         .after_token(move |token| core.click_activated(id, token.as_deref()));
                 }
+            }
+            Message::Dismiss(serial) => return self.dismiss(serial),
+            Message::Swipe(serial, dx) => {
+                if let Some(bubble) = self.bubble_mut(serial).filter(|b| !b.leaving) {
+                    // Pulled left, it barely moves: it only goes away to the right.
+                    let pulled = bubble.swipe + dx;
+                    bubble.swipe = if pulled < 0.0 {
+                        pulled * ui::SWIPE_RESISTANCE
+                    } else {
+                        pulled
+                    };
+                    bubble.swiped_at = Some(now);
+                    bubble.pressed = false;
+                }
+            }
+            Message::Expand(app, open) => {
+                if open {
+                    self.expanded.insert(app);
+                } else {
+                    self.expanded.remove(&app);
+                }
+                return self.relayout(false);
             }
             Message::Action(serial, key) => {
                 if let Some(id) = self.live(serial) {
@@ -280,6 +368,12 @@ impl Notifications {
                     });
                 }
             }
+            Message::Options(serial) => {
+                if let Some(bubble) = self.bubbles.iter_mut().find(|b| b.serial == serial) {
+                    bubble.options = !bubble.options;
+                }
+            }
+            Message::Screen(height) => self.core.set_screen_height(height),
             Message::Theme(theme) => color::set_active(theme),
             _ => {}
         }
@@ -305,6 +399,55 @@ impl Notifications {
     fn live(&self, serial: u64) -> Option<u32> {
         let bubble = self.bubbles.iter().find(|b| b.serial == serial)?;
         (!bubble.leaving).then_some(bubble.note.id)
+    }
+
+    fn bubble_mut(&mut self, serial: u64) -> Option<&mut Bubble> {
+        self.bubbles.iter_mut().find(|b| b.serial == serial)
+    }
+
+    /// Closes the bubble `serial` as the user asked (« × », a swipe): it slides out from where
+    /// it is, and the application hears it was dismissed.
+    fn dismiss(&mut self, serial: u64) -> Task<Message> {
+        let now = self.now;
+        let Some(id) = self.live(serial) else {
+            return Task::none();
+        };
+        if let Some(bubble) = self.bubble_mut(serial) {
+            let from = f64::from(at(&bubble.slide, now) + bubble.swipe);
+            bubble.slide = Animation::new(SPRING, from, f64::from(OUT), now);
+            bubble.swipe = 0.0;
+            bubble.swiped_at = None;
+        }
+        self.core.dismiss(id);
+        Task::none()
+    }
+
+    /// The swipes whose fingers rested `ui::SWIPE_END`: pulled far enough, the bubble goes;
+    /// else it springs back.
+    fn end_swipes(&mut self) -> Option<Task<Message>> {
+        let now = self.now;
+        let mut gone = Vec::new();
+        for bubble in &mut self.bubbles {
+            let Some(at_time) = bubble.swiped_at else {
+                continue;
+            };
+            if now.saturating_sub(at_time) < ui::SWIPE_END {
+                continue;
+            }
+            if bubble.swipe >= ui::WIDTH * ui::SWIPE_DISMISS {
+                gone.push(bubble.serial);
+            } else {
+                let from = f64::from(at(&bubble.slide, now) + bubble.swipe);
+                bubble.slide = Animation::new(SPRING, from, 0.0, now);
+                bubble.swipe = 0.0;
+                bubble.swiped_at = None;
+            }
+        }
+        let tasks: Vec<_> = gone
+            .into_iter()
+            .map(|serial| self.dismiss(serial))
+            .collect();
+        (!tasks.is_empty()).then(|| Task::batch(tasks))
     }
 
     /// Drops the bubbles that slid out, and the surface with the last one.
@@ -342,6 +485,15 @@ impl Notifications {
                 top: Animation::new(SPRING, 0.0, 0.0, now),
                 slide: Animation::new(SPRING, f64::from(OUT), f64::from(OUT), now),
                 leaving: false,
+                options: false,
+                hovered: false,
+                pressed: false,
+                swipe: 0.0,
+                swiped_at: None,
+                behind: false,
+                others: 0,
+                expanded_leader: false,
+                front_height: None,
             }),
         }
         let open = match self.surface {
@@ -365,12 +517,47 @@ impl Notifications {
             .rev()
             .filter(|&i| !self.bubbles[i].leaving && self.bubbles[i].height.is_some())
             .collect();
+        // The bubbles of one application pile up behind its newest one, unless its pile is
+        // open (D-23d).
+        let apps: Vec<String> = staying
+            .iter()
+            .map(|&i| app_name(&self.bubbles[i].note).to_owned())
+            .collect();
+        self.expanded
+            .retain(|app| apps.iter().filter(|a| *a == app).count() > 1);
+        let piles = layout::piles(&apps, |app| self.expanded.contains(app));
+        let newest_of_app: Vec<usize> = staying
+            .iter()
+            .zip(&apps)
+            .enumerate()
+            .filter(|(k, (_, app))| apps.iter().position(|a| a == *app) == Some(*k))
+            .map(|(_, (&i, _))| i)
+            .collect();
         let heights: Vec<f32> = staying
             .iter()
             .filter_map(|&i| self.bubbles[i].height)
             .collect();
-        for (&i, top) in staying.iter().zip(layout::stack(&heights)) {
-            let animation = &mut self.bubbles[i].top;
+        for ((&i, top), place) in staying
+            .iter()
+            .zip(layout::stack_piled(&heights, &piles))
+            .zip(&piles)
+        {
+            let leads = self.expanded.contains(app_name(&self.bubbles[i].note))
+                && newest_of_app.contains(&i);
+            let front = place
+                .behind
+                .then(|| {
+                    staying
+                        .get(place.leader)
+                        .and_then(|&j| self.bubbles[j].height)
+                })
+                .flatten();
+            let bubble = &mut self.bubbles[i];
+            bubble.front_height = front;
+            bubble.behind = place.behind;
+            bubble.others = place.others;
+            bubble.expanded_leader = leads;
+            let animation = &mut bubble.top;
             if (animation.target() - f64::from(top)).abs() > f64::EPSILON {
                 animation.retarget(now, f64::from(top));
             }
@@ -419,7 +606,7 @@ impl Notifications {
         let now = self.now;
         let layers = self.bubbles.iter().map(|b| {
             let id = b.serial;
-            let dx = at(&b.slide, now);
+            let dx = at(&b.slide, now) + b.swipe;
             let slid = float(bubble(b)).translate(move |_, _| Vector::new(dx, 0.0));
             // Keyed by the serial: a bubble that takes the place of another is measured anew.
             let measured = sensor(slid)
@@ -451,6 +638,20 @@ fn at(animation: &Animation, now: Duration) -> f32 {
 fn bubble(b: &Bubble) -> Element<'_, Message> {
     let note = &b.note;
     let id = b.serial;
+    // Behind the newest of its application, only its edge shows: an empty card of its height,
+    // so that nothing of its text shows through the glass in front.
+    if b.behind {
+        let card = container(
+            iced::widget::space()
+                .width(ui::WIDTH)
+                .height(b.front_height.or(b.height).unwrap_or(0.0)),
+        )
+        .style(ui::bubble(note.urgency == Urgency::Critical));
+        return mouse_area(card)
+            .on_press(Message::Expand(app_name(note).to_owned(), true))
+            .interaction(mouse::Interaction::Pointer)
+            .into();
+    }
     let glyph: Element<'_, Message> = match &b.glyph {
         Glyph::Svg(handle) => svg(handle.clone()).width(ui::TILE).height(ui::TILE).into(),
         Glyph::Image(handle) => image(handle.clone())
@@ -466,17 +667,23 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
         .style(ui::tile)
         .into(),
     };
-    let header = row![
+    // The application's name and the title on one line each, ending with « … » (D-23c).
+    let mut header = row![
         glyph,
-        text(app_name(note))
+        ellipsis(app_name(note))
             .size(ui::HEADER_SIZE)
             .style(ui::secondary_text)
+            .width(Length::Fill)
     ]
     .spacing(ui::HEADER_GAP)
     .align_y(Alignment::Center);
+    // « × » while the pointer is over it (D-23d).
+    if b.hovered && !b.behind {
+        header = header.push(ui::close_button(Message::Dismiss(id)));
+    }
     let mut content = column![header].spacing(ui::ROW_GAP);
     if !note.summary.is_empty() {
-        content = content.push(text(&note.summary).font(typography::UI_SEMIBOLD));
+        content = content.push(ellipsis(note.summary.as_str()).font(typography::UI_SEMIBOLD));
     }
     if !note.body.is_empty() {
         let secondary = color::palette().text_secondary;
@@ -500,36 +707,78 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
                 span(s.text.as_str()).font(font).color(secondary)
             })
             .collect();
-        content = content.push(rich_text(spans));
+        // A word longer than the bubble (an address) breaks where it must; four lines at most.
+        let body = rich_text(spans)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .line_height(ui::BODY_LINE_HEIGHT)
+            .width(Length::Fill);
+        let lines = ui::BODY_LINES * typography::UI_SIZE * ui::BODY_LINE_HEIGHT;
+        content = content.push(container(body).max_height(lines.ceil()).clip(true));
     }
-    let buttons: Vec<Element<'_, Message>> = note
+    let actions: Vec<(&str, Message)> = note
         .buttons()
-        .enumerate()
-        .map(|(i, (key, label))| {
-            button(container(text(label.as_str())).center_y(Length::Fill))
-                .height(ui::BUTTON_HEIGHT)
-                .padding([0.0, ui::BUTTON_PADDING])
-                .style(ui::action(i == 0))
-                .on_press(Message::Action(id, key.clone()))
-                .into()
-        })
+        .map(|(key, label)| (label.as_str(), Message::Action(id, key.clone())))
         .collect();
-    if !buttons.is_empty() {
-        let actions = row(buttons).spacing(ui::BUTTON_GAP);
+    if !actions.is_empty() {
+        let actions = ui::action_row(actions, b.options, Message::Options(id));
         content = content.push(container(actions).padding(Padding::ZERO.top(ui::BUTTONS_TOP)));
     }
-    let card = container(content)
-        .padding(ui::PADDING)
+    // Under the newest of a pile, the others it hides (or « Afficher moins » once open).
+    let app = app_name(note).to_owned();
+    if b.others > 0 {
+        content = content.push(pile_button(
+            ui::text::more(b.others),
+            Message::Expand(app.clone(), true),
+        ));
+    } else if b.expanded_leader {
+        content = content.push(pile_button(
+            ui::text::SHOW_LESS.to_owned(),
+            Message::Expand(app.clone(), false),
+        ));
+    }
+    let p = color::palette();
+    // The veil of the hover and of the press fades in over the glass, under the content.
+    let inside = hoverable(container(content).padding(ui::PADDING), p.hover, ui::RADIUS)
+        .pressed(p.pressed)
+        .key(id);
+    let card = container(inside)
         .width(ui::WIDTH)
         .style(ui::bubble(note.urgency == Urgency::Critical));
     // The blur behind its glass (lot D-37b).
     let card = sherlock_ui::glass::glass(card, ui::RADIUS);
-    mouse_area(card)
-        .on_press(Message::Click(id))
+    // A bubble behind another opens its pile; the others take a click, a press, a swipe.
+    let area = mouse_area(card)
         .on_enter(Message::Hover(id, true))
         .on_exit(Message::Hover(id, false))
-        .interaction(mouse::Interaction::Pointer)
+        .interaction(mouse::Interaction::Pointer);
+    area.on_press(Message::Press(id))
+        .on_release(Message::Click(id))
+        .on_scroll(move |delta| match delta {
+            mouse::ScrollDelta::Pixels { x, .. } => Message::Swipe(id, x),
+            mouse::ScrollDelta::Lines { x, .. } => Message::Swipe(id, x * ui::SWIPE_LINE),
+        })
         .into()
+}
+
+/// The line under a pile of bubbles: « 2 autres notifications », « Afficher moins ».
+fn pile_button<'a>(label: String, message: Message) -> Element<'a, Message> {
+    let label = text(label).size(ui::HEADER_SIZE).style(ui::secondary_text);
+    iced::widget::button(label)
+        .padding(0)
+        .style(|_, _| iced::widget::button::Style::default())
+        .on_press(message)
+        .into()
+}
+
+/// The logical height of the screen of the stack, from iced_exwlshell's reports.
+fn on_output(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { output, .. } => {
+            let (_, height) = output?.info.logical_size?;
+            Some(Message::Screen(height as f32))
+        }
+        _ => None,
+    }
 }
 
 /// The theme of the appearance file, each time it changes.
