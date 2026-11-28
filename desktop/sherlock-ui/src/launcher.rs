@@ -625,6 +625,8 @@ pub mod sherlock {
         pub const EMPTY: &str = "Pose ta question à Sherlock. Échap pour revenir.";
         pub const THINKING: &str = "Sherlock réfléchit…";
         pub const PLAN: &str = "Le plan de Sherlock";
+        /// A step of the plan no call has taken yet (lot A-19e).
+        pub const PLANNED: &str = "Prévue";
         /// The states of a step, as the board says them.
         pub const WAITING: &str = "Attend ton accord";
         pub const FREE: &str = "Libre";

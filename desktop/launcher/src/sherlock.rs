@@ -20,6 +20,8 @@ use sherlock_ui::launcher::sherlock::{self as tokens, text};
 const MAX_LINE: u64 = 256 * 1024;
 /// Events read for one request, at most.
 const MAX_EVENTS: usize = 10_000;
+/// Steps of a plan taken, at most, as sherlockd bounds them.
+const MAX_PLAN: usize = 12;
 /// Exchanges kept, and handed to sherlockd for its recap.
 pub const MAX_EXCHANGES: usize = 20;
 
@@ -32,6 +34,16 @@ pub struct Step {
     pub state: String,
     /// Run at the read level, with no consent asked.
     pub read: bool,
+    /// The step of the plan it takes (lot A-19e).
+    pub plan: Option<usize>,
+}
+
+/// A step of the plan Sherlock announced before acting (lot A-19e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    pub title: String,
+    pub description: String,
+    pub tool: String,
 }
 
 /// A request and what came back for it.
@@ -50,6 +62,9 @@ pub struct Exchange {
     pub born: Duration,
     pub texts_at: Vec<Duration>,
     pub steps_at: Vec<Duration>,
+    /// The plan announced, and when.
+    pub plan: Vec<Planned>,
+    pub plan_at: Option<Duration>,
 }
 
 impl Exchange {
@@ -62,6 +77,7 @@ impl Exchange {
         std::iter::once(self.born)
             .chain(self.texts_at.iter().copied())
             .chain(self.steps_at.iter().copied())
+            .chain(self.plan_at)
             .chain(self.ended)
     }
 }
@@ -157,7 +173,29 @@ impl Conversation {
                 summary: field("summary").to_owned(),
                 state: field("state").to_owned(),
                 read: false,
+                plan: event
+                    .get("plan")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok()),
             }),
+            "plan" if exchange.plan.is_empty() => {
+                let steps = event.get("steps").and_then(Value::as_array);
+                exchange.plan = steps
+                    .into_iter()
+                    .flatten()
+                    .take(MAX_PLAN)
+                    .map(|step| {
+                        let field =
+                            |name: &str| step.get(name).and_then(Value::as_str).unwrap_or_default();
+                        Planned {
+                            title: field("title").to_owned(),
+                            description: field("description").to_owned(),
+                            tool: field("tool").to_owned(),
+                        }
+                    })
+                    .collect();
+                exchange.plan_at = Some(now);
+            }
             "state" => {
                 if let Some(step) = exchange.steps.iter_mut().find(|s| s.id == field("id")) {
                     step.state = field("state").to_owned();
@@ -309,32 +347,60 @@ pub fn view<'a, M: Clone + 'a>(
         for (said, born) in exchange.texts.iter().zip(&exchange.texts_at) {
             body = body.push(appear(words(said, p.text_primary).into(), *born));
         }
-        if !exchange.steps.is_empty() {
+        if !exchange.steps.is_empty() || !exchange.plan.is_empty() {
             body = body.push(ui::section_label(tokens::text::PLAN));
         }
-        for ((place, step), born) in exchange.steps.iter().enumerate().zip(&exchange.steps_at) {
-            let number = container(text((place + 1).to_string()).size(tokens::SMALL_SIZE))
+        // A card of the plan: its number, two lines, its state.
+        let card = |number: usize, first: String, second: String, state: String, waiting: bool| {
+            let number = container(text(number.to_string()).size(tokens::SMALL_SIZE))
                 .center(tokens::STEP_NUMBER)
                 .style(look::key(false));
             let lines = column![
-                ui::ellipsis(step.tool.as_str()).font(typography::UI_SEMIBOLD),
-                ui::ellipsis(step.summary.as_str())
+                ui::ellipsis(first).font(typography::UI_SEMIBOLD),
+                ui::ellipsis(second)
                     .size(tokens::SMALL_SIZE)
                     .color(p.text_secondary),
             ]
             .width(Length::Fill);
-            let state = text(tokens::state_line(&step.state, step.read))
-                .size(tokens::SMALL_SIZE)
-                .color(p.text_secondary);
-            let card = row![number, lines, state]
+            let state = text(state).size(tokens::SMALL_SIZE).color(p.text_secondary);
+            let row = row![number, lines, state]
                 .spacing(look::GAP)
                 .align_y(Alignment::Center);
-            let waiting = step.state == "waiting";
-            let card = container(card)
+            container(row)
                 .padding(tokens::STEP_PADDING)
                 .width(Length::Fill)
-                .style(look::step(waiting));
-            body = body.push(appear(card.into(), *born));
+                .style(look::step(waiting))
+        };
+        // The plan announced, each step with the state of the call that took it (A-19e).
+        for (place, planned) in exchange.plan.iter().enumerate() {
+            let taken = exchange.steps.iter().find(|s| s.plan == Some(place));
+            let state = taken.map_or_else(
+                || tokens::text::PLANNED.to_owned(),
+                |s| tokens::state_line(&s.state, s.read),
+            );
+            let waiting = taken.is_some_and(|s| s.state == "waiting");
+            let second = format!("{} · {}", planned.description, planned.tool);
+            let shown = card(place + 1, planned.title.clone(), second, state, waiting);
+            body = body.push(appear(shown.into(), exchange.plan_at.unwrap_or(now)));
+        }
+        // The calls outside the plan, after it.
+        let unplanned = exchange
+            .steps
+            .iter()
+            .zip(&exchange.steps_at)
+            .filter(|(step, _)| step.plan.is_none_or(|i| i >= exchange.plan.len()));
+        for (place, (step, born)) in unplanned.enumerate() {
+            let state = tokens::state_line(&step.state, step.read);
+            let waiting = step.state == "waiting";
+            let number = exchange.plan.len() + place + 1;
+            let shown = card(
+                number,
+                step.tool.clone(),
+                step.summary.clone(),
+                state,
+                waiting,
+            );
+            body = body.push(appear(shown.into(), *born));
         }
         let ended = exchange.ended.unwrap_or(now);
         if let Some(answer) = &exchange.answer {
@@ -538,6 +604,27 @@ mod tests {
         // The next request carries the answered one.
         let input: Value = serde_json::from_str(&c.input("Et ensuite ?")).unwrap();
         assert_eq!(input["history"][0][1], "C'est fait.");
+    }
+
+    #[test]
+    fn the_plan_announced_first_is_kept_and_the_steps_take_it() {
+        let mut c = running("Installe Steam");
+        let at = Duration::from_secs;
+        let plan = json!({"event": "plan", "steps": [
+            {"title": "Vérifier", "description": "Les paquets.", "tool": "list"},
+            {"title": "Installer", "description": "steam", "tool": "install"},
+        ]});
+        c.apply(&plan, at(1));
+        let step = json!({"event": "step", "id": "a", "tool": "install", "summary": "{}", "state": "waiting", "plan": 1});
+        c.apply(&step, at(2));
+        let e = &c.exchanges[0];
+        assert_eq!(e.plan.len(), 2);
+        assert_eq!(e.plan[1].title, "Installer");
+        assert_eq!(e.plan_at, Some(at(1)));
+        assert_eq!(e.steps[0].plan, Some(1));
+        // A second plan in the same request is ignored.
+        c.apply(&json!({"event": "plan", "steps": []}), at(3));
+        assert_eq!(c.exchanges[0].plan.len(), 2);
     }
 
     #[test]

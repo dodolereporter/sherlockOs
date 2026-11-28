@@ -694,3 +694,50 @@ fn the_journal_shows_what_sherlock_did_by_conversation_or_all() {
     assert!(launcher.journal.is_none());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Lot A-19e: the plan announced first shows as on the board, each step with the state of the
+/// call that took it, « Prévue » before. `launcher-plan`.
+#[test]
+fn the_plan_announced_first_shows_with_its_states() {
+    use serde_json::json;
+    let (launcher, _) = recorded();
+    let mut launcher = launcher
+        .with_screen((1920.0, 1080.0))
+        .with_sherlockd("/nonexistent/sherlockd".into());
+    let _ = launcher.update(Message::Query("Installe Steam".into()));
+    let _ = launcher.update(Message::Key(app::Key::Tab));
+    launcher.conversation.exchanges.clear();
+    launcher
+        .conversation
+        .exchanges
+        .push(launcher::sherlock::Exchange {
+            request: "Installe Steam et prépare la machine pour jouer".into(),
+            ..Default::default()
+        });
+    for event in [
+        json!({"event": "plan", "steps": [
+            {"title": "Vérifier ce qui est déjà installé", "description": "Lecture de la liste des paquets et de la version du pilote graphique.", "tool": "packages_list"},
+            {"title": "Installer Steam et la pile graphique 32 bits", "description": "steam mesa lib32-mesa vulkan-icd-loader", "tool": "packages_install"},
+            {"title": "Te prévenir quand tout est prêt", "description": "Une notification.", "tool": "notify"},
+        ]}),
+        json!({"event": "step", "id": "a", "tool": "packages_list", "summary": "{}", "state": "waiting", "plan": 0}),
+        json!({"event": "state", "id": "a", "state": "granted", "level": "lecture"}),
+        json!({"event": "state", "id": "a", "state": "done"}),
+        json!({"event": "step", "id": "b", "tool": "packages_install", "summary": "{}", "state": "waiting", "plan": 1}),
+    ] {
+        let _ = launcher.update(Message::Sherlock(event));
+    }
+    settled(&mut launcher);
+    {
+        let mut ui = Simulator::with_size(
+            launcher::settings(),
+            (look::WIDTH, launcher.height()),
+            launcher.view_panel(),
+        );
+        assert!(ui.find("Vérifier ce qui est déjà installé").is_ok());
+        assert!(ui.find("Libre · fait").is_ok());
+        assert!(ui.find("Attend ton accord").is_ok());
+        assert!(ui.find("Prévue").is_ok());
+    }
+    assert!(capture(&launcher, "launcher-plan").expect("screenshot written") > 2_000);
+}
