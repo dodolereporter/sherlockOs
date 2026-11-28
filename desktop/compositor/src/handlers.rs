@@ -75,6 +75,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.lock_surface_committed(surface);
         self.drag_icon_commit(surface);
         if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
@@ -125,6 +126,7 @@ impl State {
                 let room = room(&window, area);
                 toplevel.with_pending_state(|s| s.bounds = Some(room));
             }
+            self.greeter_window(&window);
             toplevel.send_configure();
             return;
         }
@@ -597,7 +599,8 @@ impl XdgShellHandler for State {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.surface_window(&surface) {
+        // The login screen stays fullscreen (`greeter.rs`).
+        if let Some(window) = self.surface_window(&surface).filter(|_| !self.greeter) {
             surface.with_pending_state(|s| s.fullscreen_output = None);
             self.rearrange(&window, |a, _| a.fullscreen = false);
         }

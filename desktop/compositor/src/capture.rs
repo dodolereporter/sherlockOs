@@ -649,23 +649,8 @@ pub fn image(
     let mut texture = match target {
         Target::Window(window) => window_anim::snapshot(scene, renderer, state, window)?,
         Target::Screen(output) => {
-            let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
-            let size: Size<i32, Physical> = view.frame.size;
-            let view = View {
-                frame: Rectangle::from_size(size),
-                frame_size: size,
-                ..view
-            };
             let now = state.now();
-            let views = [(output.clone(), view)];
-            let mut ids = Ids::default();
-            let (screens, _) =
-                scene.screens(renderer, &mut ids, state, textures, &views, None, now);
-            let elements = screens.into_iter().next()?;
-            let desktop = color::palette().desktop.premultiplied();
-            window_anim::draw(renderer, size, &elements, desktop)
-                .inspect_err(|err| tracing::warn!("screenshot: drawing the screen: {err}"))
-                .ok()?
+            screen_texture(scene, renderer, textures, state, output, now)?
         }
     };
     if let Some(cursors) = cursors
@@ -674,6 +659,47 @@ pub fn image(
         tracing::warn!("screen share: drawing the cursor: {err}");
     }
     read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, counted from the start of the compositor: a
+/// screenshot, or a frame of an animation (the board of the screens off, lot D-38).
+pub fn screen_at(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<Image> {
+    let texture = screen_texture(scene, renderer, textures, state, output, now)?;
+    read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, into a texture: a screenshot, or the frame
+/// frozen under the curtain when the session locks (lot D-24e).
+pub fn screen_texture(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<GlesTexture> {
+    let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
+    let size: Size<i32, Physical> = view.frame.size;
+    let view = View {
+        frame: Rectangle::from_size(size),
+        frame_size: size,
+        ..view
+    };
+    let views = [(output.clone(), view)];
+    let mut ids = Ids::default();
+    let (screens, _) = scene.screens(renderer, &mut ids, state, textures, &views, None, now);
+    let elements = screens.into_iter().next()?;
+    let desktop = color::palette().desktop.premultiplied();
+    window_anim::draw(renderer, size, &elements, desktop)
+        .inspect_err(|err| tracing::warn!("drawing the screen: {err}"))
+        .ok()
 }
 
 /// Draws the cursor over `texture`, the picture of `target`, if the pointer is on it.
