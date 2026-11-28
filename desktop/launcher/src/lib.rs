@@ -11,6 +11,7 @@ pub mod instance;
 pub mod launch;
 pub mod search;
 pub mod service;
+pub mod sherlock;
 pub mod source;
 pub mod startup;
 pub mod system;
@@ -204,8 +205,7 @@ pub fn sources() -> app::Sources {
             catalog_terminal,
         )
     });
-    let ask = ask::Ask::new(terminal, ask::ASK_OPTION);
-    (arrange(apps, files, ask), walked)
+    (arrange(apps, files, ask::Ask), walked)
 }
 
 /// The sources in the order of their sections: the calculator, whose single result is the
@@ -224,11 +224,11 @@ pub fn arrange(apps: Apps, files: files::Files, ask: ask::Ask) -> Vec<Box<dyn so
     ]
 }
 
-/// The launcher for this session: its sources, `launch::spawn`, systemd, `wl-copy` when
+/// The launcher for this session: its sources, `launch::spawn_with`, systemd, `wl-copy` when
 /// installed.
 fn launcher() -> (Launcher, oneshot::Receiver<usize>) {
     let (sources, walked) = sources();
-    let launcher = Launcher::new(sources, Arc::new(launch::spawn))
+    let launcher = Launcher::new(sources, Arc::new(launch::spawn_with))
         .with_session(Arc::new(system::Systemd::from_env()))
         .with_clipboard(Clipboard::detect());
     (launcher, walked)

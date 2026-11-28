@@ -33,6 +33,7 @@ use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod network;
+pub use network::{Field, Login};
 mod path;
 mod popup;
 pub use path::{FoldedMenu, PathEdit};
@@ -366,6 +367,11 @@ pub enum Message {
     /// A server connected (its folder), or not; disconnected, or not.
     ServerMounted(String, Result<PathBuf, crate::smb::Error>),
     ServerUnmounted(String, Result<(), crate::smb::Error>),
+    /// The sheet of a server's name and password: typed, the keyring switch, sent, closed.
+    LoginInput(Field, String),
+    LoginRemember(bool),
+    LoginSubmit,
+    LoginCancel,
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
     /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
@@ -488,6 +494,10 @@ pub struct App {
     /// The servers of the network, and the folders of those connected, by host.
     pub(crate) servers: Vec<crate::network::Server>,
     pub(crate) mounted: HashMap<String, PathBuf>,
+    /// The sheet that asks a server's name and password, its fade, and the last name typed.
+    pub(crate) login: Option<Login>,
+    pub(crate) login_fade: Option<Fade>,
+    login_user: String,
     device_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
@@ -586,6 +596,9 @@ impl App {
             pending_paste: None,
             servers: Vec::new(),
             mounted: HashMap::new(),
+            login: None,
+            login_fade: None,
+            login_user: String::new(),
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
@@ -811,6 +824,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.login_fade)
             || fade(&self.preview_slide)
             || fade(&self.look_fade)
             || self.progress.is_some()
@@ -1213,6 +1227,10 @@ impl App {
             Message::EjectServer(host) => return self.eject_server(&host),
             Message::ServerMounted(host, result) => return self.server_mounted(host, result),
             Message::ServerUnmounted(host, result) => self.server_unmounted(&host, result),
+            Message::LoginInput(field, value) => self.login_input(field, value),
+            Message::LoginRemember(on) => self.login_remember(on),
+            Message::LoginSubmit => return self.login_submit(),
+            Message::LoginCancel => self.login = None,
             Message::PathInput(text) => return self.path_input(text),
             Message::PathSubmit => return self.path_submit(),
             Message::PathPick(index) => return self.path_pick(index),
@@ -1223,6 +1241,7 @@ impl App {
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
             Message::Escaped => {
                 self.close_path_edit();
+                self.login = None;
                 self.folded_menu(false);
             }
             Message::Folded(open) => self.folded_menu(open),

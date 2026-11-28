@@ -8,6 +8,9 @@ use std::io;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
+
+use iced_exwlshell::reexport::{ActivationTokenSink, XdgActivationTokenV1State};
 
 use crate::entry::{self, DesktopEntry};
 
@@ -47,11 +50,22 @@ pub fn command_line(app: &DesktopEntry, what: What) -> Option<Vec<String>> {
 
 /// Starts `what` for `app` and returns at once.
 pub fn launch(app: &DesktopEntry, what: What) -> Result<u32, LaunchError> {
+    launch_with(app, what, None)
+}
+
+/// `launch`, the application given the activation `token` of the click that starts it (lot
+/// Q-52): already open, it brings its window forward with it.
+pub fn launch_with(
+    app: &DesktopEntry,
+    what: What,
+    token: Option<&str>,
+) -> Result<u32, LaunchError> {
     let line = command_line(app, what).ok_or_else(|| LaunchError::NoCommand(app.id.clone()))?;
     let (program, args) = line
         .split_first()
         .ok_or_else(|| LaunchError::NoCommand(app.id.clone()))?;
-    spawn(Path::new(program), args, app.path.as_deref().map(Path::new))
+    let dir = app.path.as_deref().map(Path::new);
+    spawn(Path::new(program), args, dir, token)
 }
 
 /// Program of the applications view (D-41, `docs/apps.md`).
@@ -69,7 +83,7 @@ pub fn applications_program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
 /// Opens the applications view, or closes it when it is open: a second one closes the first.
 pub fn toggle_applications() -> Result<u32, LaunchError> {
     let program = applications_program(|key| std::env::var_os(key));
-    spawn(&program, &[], None)
+    spawn(&program, &[], None, None)
 }
 
 /// Opens the trash in Evidence (`trash:///`, lot D-21j), found beside the session's programs or
@@ -99,12 +113,18 @@ pub fn launcher_program(var: impl Fn(&str) -> Option<OsString>) -> PathBuf {
 /// the launcher closes, as with the shortcut.
 pub fn open_launcher() -> Result<u32, LaunchError> {
     let program = launcher_program(|key| std::env::var_os(key));
-    spawn(&program, &[], None)
+    spawn(&program, &[], None, None)
 }
 
 /// Starts `program` with `args`, in `dir`, and returns at once.
-fn spawn(program: &Path, args: &[String], dir: Option<&Path>) -> Result<u32, LaunchError> {
+fn spawn(
+    program: &Path,
+    args: &[String],
+    dir: Option<&Path>,
+    token: Option<&str>,
+) -> Result<u32, LaunchError> {
     let mut command = Command::new(program);
+    give_token(&mut command, token);
     // The application gets the environment the dock started with, not its renderer choice:
     // a game launched from the dock must still see the NVIDIA card (ADR 0018).
     sherlock_ui::gpu::for_child(&mut command);
@@ -132,6 +152,45 @@ fn spawn(program: &Path, args: &[String], dir: Option<&Path>) -> Result<u32, Lau
         tracing::warn!(%error, pid, "cannot watch the application: it will stay a zombie");
     }
     Ok(pid)
+}
+
+/// A sink for the activation token the compositor gives on behalf of the surface where the user
+/// clicked (lot Q-52): `then` runs once with it, or without one when none comes (no
+/// `xdg-activation-v1`, the surface gone, the request dropped).
+pub fn after_token(then: impl FnOnce(Option<String>) + Send + 'static) -> ActivationTokenSink {
+    type Then = Box<dyn FnOnce(Option<String>) + Send>;
+    struct Once(Mutex<Option<Then>>);
+    impl Once {
+        fn run(&self, token: Option<String>) {
+            let then = self.0.lock().ok().and_then(|mut then| then.take());
+            if let Some(then) = then {
+                then(token);
+            }
+        }
+    }
+    impl Drop for Once {
+        fn drop(&mut self) {
+            self.run(None);
+        }
+    }
+    let once = Once(Mutex::new(Some(Box::new(then))));
+    ActivationTokenSink::callback(move |state| {
+        let token = match state {
+            XdgActivationTokenV1State::Ready(token) => Some(token.token().to_owned()),
+            XdgActivationTokenV1State::Unsupported | XdgActivationTokenV1State::NoSurface => None,
+        };
+        once.run(token);
+    })
+}
+
+/// Gives a started program the activation `token`, Wayland's and X11's names for it: an
+/// application already open that gets the launch can bring its window forward with it.
+pub fn give_token(process: &mut Command, token: Option<&str>) {
+    if let Some(token) = token {
+        process
+            .env("XDG_ACTIVATION_TOKEN", token)
+            .env("DESKTOP_STARTUP_ID", token);
+    }
 }
 
 #[cfg(test)]
