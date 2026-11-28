@@ -467,8 +467,11 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   (lot D-45c); never shorter than a row and that line.
 - **Chevron.** A ghost button like the indicators', veiled with its green mark while the popup is
   open. It points down, and turns half a turn up on the panels' spring as the popup opens, back as
-  it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
-  chevron. Tab reaches it before the indicators; Enter opens the popup.
+  it closes (turned inside the SVG, in steps of 10°, as the spinner). It stays as long as the bar
+  has an icon of the notification area, in the popup or kept in the bar, and during the whole drag
+  of one, so that an icon can always go back into the popup (Q-49). It grows from 60 % and fades
+  in on the same spring when the first icon comes, and shrinks and fades out when the last one
+  goes. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
   the item's menu (D-45a, below). `tests/tray_click.rs` clicks through the bar's real widgets, in
@@ -516,7 +519,12 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   release: a click right after it is a click, even when it reaches the bar before the
   subscription tells its press (Q-48: the first click after a drag used to be lost). A kept icon answers the
   clicks and the wheel as in the popup, and breathes when it needs attention; the chevron's dot
-  only counts the icons of the popup. Without an icon left in the popup, no chevron.
+  only counts the icons of the popup. With every icon kept in the bar, the chevron stays, and the
+  popup it opens says « Glisse une icône ici pour la ranger »: an icon of the bar let go below
+  the bar, on the popup or not, goes back into it (Q-49).
+
+  ![Every icon kept in the bar, the popup open, 1920 × 1080](../desktop/bar/screenshots/tray-empty-1920.png)
+  ![The same in the light theme on a 1366 × 768 screen](../desktop/bar/screenshots/tray-empty-1366-light.png)
 - **Saved.** The icons kept are remembered by their `Id`, the same from one start of the
   application to the next, in `$XDG_CONFIG_HOME/bar/bar.conf`:
 
