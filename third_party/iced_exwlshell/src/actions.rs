@@ -1,0 +1,371 @@
+use crate::error::RegionError;
+use crate::reexport::{Anchor, Layer, WlRegion};
+use exwlshellev::blur::BlurOption;
+use exwlshellev::reexport::xdg_positioner::{
+    Anchor as PopupAnchor, ConstraintAdjustment as PopupConstraintAdjustment,
+    Gravity as PopupGravity,
+};
+use exwlshellev::{
+    ActivationTokenSink, ForeignHandleSink, ForeignToplevelHandle, InputRectangle, LayerSize,
+    Margin, NewInputPanelSettings, NewLayerShellSettings, NewXdgWindowSettings, PixelSize,
+    PopupPlacement, Position, RegionAction,
+};
+use iced_core::window::Id as IcedId;
+use std::sync::Arc;
+
+/// the [InputRegion] will delete the rectangle first, then you can add it later
+pub struct InputRegion {
+    region: Option<WlRegion>,
+    width: u32,
+    height: u32,
+    staged_input_region: Vec<RegionAction>,
+}
+
+impl InputRegion {
+    pub(crate) fn region(&self) -> Option<&WlRegion> {
+        self.region.as_ref()
+    }
+    pub(crate) fn new(region: WlRegion, width: u32, height: u32) -> Self {
+        Self {
+            region: Some(region),
+            width,
+            height,
+            staged_input_region: Vec::new(),
+        }
+    }
+    /// return the height of the surface
+    pub fn surface_height(&self) -> u32 {
+        self.height
+    }
+
+    /// return the width of the layer
+    pub fn surface_width(&self) -> u32 {
+        self.width
+    }
+
+    /// return the size of the layer, width, height
+    pub fn surface_size(&self) -> (u32, u32) {
+        (self.surface_width(), self.surface_height())
+    }
+
+    /// check if region is still exist
+    pub fn alive(&self) -> bool {
+        self.region.is_some()
+    }
+
+    /// wrapper of the add function of [WlRegion], if failed, return [RegionError]
+    pub fn add(&mut self, x: i32, y: i32, width: i32, height: i32) -> Result<(), RegionError> {
+        let region = self.region.as_ref().ok_or(RegionError::RegionDeleted)?;
+        region.add(x, y, width, height);
+        let input_region = RegionAction::Add(InputRectangle {
+            x,
+            y,
+            width,
+            height,
+        });
+        self.staged_input_region.push(input_region);
+        Ok(())
+    }
+
+    pub(crate) fn staged_input_region(&self) -> Vec<RegionAction> {
+        self.staged_input_region.clone()
+    }
+
+    /// wrapper of the subtract function of [WlRegion], if failed, return [RegionError]
+    pub fn subtract(&mut self, x: i32, y: i32, width: i32, height: i32) -> Result<(), RegionError> {
+        let region = self.region.as_ref().ok_or(RegionError::RegionDeleted)?;
+        region.subtract(x, y, width, height);
+        let input_region = RegionAction::Subtract(InputRectangle {
+            x,
+            y,
+            width,
+            height,
+        });
+        self.staged_input_region.push(input_region);
+        Ok(())
+    }
+
+    /// destroy the inner region, then will reset the region
+    pub fn remove(&mut self) {
+        let Some(region) = self.region.take() else {
+            return;
+        };
+        region.destroy();
+        self.staged_input_region.clear();
+    }
+}
+
+impl Drop for InputRegion {
+    fn drop(&mut self) {
+        let Some(region) = self.region.take() else {
+            return;
+        };
+        region.destroy();
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+pub struct IcedXdgWindowSettings {
+    /// The initial window size.
+    pub size: Option<PixelSize>,
+    /// Request client-side decorations instead of the default server-side mode.
+    pub client_side_decorations: bool,
+    /// The xdg `app_id`
+    pub app_id: Option<String>,
+
+    pub blur_option: BlurOption,
+    /// Stack the window above another client's toplevel using its xdg-foreign handle.
+    pub foreign_parent: Option<ForeignToplevelHandle>,
+}
+
+impl From<IcedXdgWindowSettings> for NewXdgWindowSettings {
+    fn from(val: IcedXdgWindowSettings) -> Self {
+        NewXdgWindowSettings {
+            title: None,
+            size: val.size,
+            client_side_decorations: val.client_side_decorations,
+            app_id: val.app_id,
+            blur_option: val.blur_option,
+            foreign_parent: val.foreign_parent,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct IcedNewPopupSettings {
+    pub size: PixelSize,
+    pub parent: Option<IcedId>,
+    pub placement: PopupPlacement,
+    pub anchor: PopupAnchor,
+    pub gravity: PopupGravity,
+    pub constraint_adjustment: PopupConstraintAdjustment,
+    pub blur_option: BlurOption,
+    /// Whether the popup takes an explicit grab (`xdg_popup.grab`) with the serial of the last
+    /// input event. `true` by default: the popup gets the keyboard and is dismissed when the
+    /// user clicks outside of it. Set it to `false` for a popup that must leave the keyboard
+    /// to its parent, such as a completion list under a text field or a tooltip.
+    pub grab: bool,
+}
+
+impl IcedNewPopupSettings {
+    pub fn new(
+        parent: IcedId,
+        size: PixelSize,
+        anchor_position: Position,
+        anchor_size: PixelSize,
+    ) -> Self {
+        Self::build(
+            Some(parent),
+            size,
+            PopupPlacement::Anchored {
+                position: anchor_position,
+                size: anchor_size,
+            },
+        )
+    }
+
+    pub fn on_current_surface(
+        size: PixelSize,
+        anchor_position: Position,
+        anchor_size: PixelSize,
+    ) -> Self {
+        Self::build(
+            None,
+            size,
+            PopupPlacement::Anchored {
+                position: anchor_position,
+                size: anchor_size,
+            },
+        )
+    }
+
+    pub fn at_position(parent: IcedId, size: PixelSize, position: Position) -> Self {
+        Self::build(Some(parent), size, PopupPlacement::Position(position))
+    }
+
+    pub fn at_position_on_current_surface(size: PixelSize, position: Position) -> Self {
+        Self::build(None, size, PopupPlacement::Position(position))
+    }
+
+    fn build(parent: Option<IcedId>, size: PixelSize, placement: PopupPlacement) -> Self {
+        Self {
+            size,
+            parent,
+            placement,
+            anchor: PopupAnchor::BottomLeft,
+            gravity: PopupGravity::BottomRight,
+            blur_option: BlurOption::None,
+            grab: true,
+            constraint_adjustment: PopupConstraintAdjustment::FlipX
+                | PopupConstraintAdjustment::FlipY
+                | PopupConstraintAdjustment::SlideX
+                | PopupConstraintAdjustment::SlideY,
+        }
+    }
+
+    /// Whether the popup grabs the keyboard and the pointer (`true` by default); see
+    /// [`IcedNewPopupSettings::grab`].
+    pub fn grab(mut self, grab: bool) -> Self {
+        self.grab = grab;
+        self
+    }
+
+    /// set the blur option for the popup
+    pub fn blur_option(mut self, blur_option: BlurOption) -> Self {
+        self.blur_option = blur_option;
+        self
+    }
+
+    /// Set which point of the anchor rect the popup is anchored to.
+    pub fn anchor(mut self, anchor: PopupAnchor) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    /// Set the direction the popup grows from the anchor point.
+    pub fn gravity(mut self, gravity: PopupGravity) -> Self {
+        self.gravity = gravity;
+        self
+    }
+
+    /// Set how the compositor may adjust (flip/slide/resize) the popup for off-screen cases
+    pub fn constraint_adjustment(
+        mut self,
+        constraint_adjustment: PopupConstraintAdjustment,
+    ) -> Self {
+        self.constraint_adjustment = constraint_adjustment;
+        self
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct IcedNewMenuSettings {
+    pub size: PixelSize,
+    pub gravity: PopupGravity,
+    pub blur_option: BlurOption,
+}
+
+impl IcedNewMenuSettings {
+    /// create a new [IcedNewMenuSettings]
+    pub fn new(size: PixelSize, gravity: PopupGravity) -> Self {
+        Self {
+            size,
+            gravity,
+            blur_option: BlurOption::None,
+        }
+    }
+
+    /// set the [BlurOption] and return itself
+    pub fn blur_option(mut self, blur_option: BlurOption) -> Self {
+        self.blur_option = blur_option;
+        self
+    }
+}
+
+/// region callback
+type RegionCB = Arc<dyn Fn(&mut InputRegion) + Send + Sync>;
+
+// Callback wrapper around dyn Fn(&WlRegion)
+#[derive(Clone)]
+pub struct RegionActionCB(pub RegionCB);
+
+impl std::fmt::Debug for RegionActionCB {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "callback function")
+    }
+}
+
+impl RegionActionCB {
+    pub fn new<F>(callback: F) -> Self
+    where
+        F: Fn(&mut InputRegion) + Send + Sync + 'static,
+    {
+        RegionActionCB(Arc::new(callback))
+    }
+}
+
+/// NOTE: DO NOT USE THIS ENUM DIERCTLY
+/// use macro to_layer_message
+#[derive(Debug, Clone)]
+pub enum ExWlShellCustomAction {
+    LayoutChange {
+        anchor: Anchor,
+        size: LayerSize,
+    },
+    LayerChange(Layer),
+    MarginChange(Margin),
+    ExclusiveZoneChange(i32),
+    KeyboardInteractivityChange(exwlshellev::reexport::KeyboardInteractivity),
+    VirtualKeyboardPressed {
+        key: u32,
+    },
+    BlurOptionChange(BlurOption),
+    // settings, info, single_tone
+    NewLayerShell {
+        settings: NewLayerShellSettings,
+        id: IcedId,
+    },
+    SetInputRegion(RegionActionCB),
+    /// Mint an `xdg_activation_v1` token on behalf of the addressed surface and
+    /// hand it to the sink. A layer shell has no toplevel to raise itself, so
+    /// the token is only useful once passed to the client that should be
+    /// focused.
+    RequestActivationToken(ActivationTokenSink),
+    NewPopUp {
+        settings: IcedNewPopupSettings,
+        id: IcedId,
+    },
+    /// During move/resize of a mapped popup `settings.parent` is ignored. Can't be reparented as per spec
+    PopUpReposition {
+        settings: IcedNewPopupSettings,
+    },
+    NewMenu {
+        settings: IcedNewMenuSettings,
+        id: IcedId,
+    },
+    NewBaseWindow {
+        settings: IcedXdgWindowSettings,
+        id: IcedId,
+    },
+    /// Replace the addressed xdg window's foreign parent, or clear it with `None`.
+    SetForeignParent(Option<ForeignToplevelHandle>),
+    /// Export the addressed xdg window with xdg-foreign and send the handle to the sink.
+    ExportToplevel(ForeignHandleSink),
+    /// Revoke the addressed xdg window export and invalidate its handle.
+    UnexportToplevel,
+    NewInputPanel {
+        settings: NewInputPanelSettings,
+        id: IcedId,
+    },
+    /// is same with WindowAction::Close(id)
+    RemoveWindow,
+    RedrawWindow,
+    ForgetLastOutput,
+    Lock,
+    UnLock,
+}
+
+/// Please do not use this struct directly
+/// Use macro to_layer_message instead
+#[derive(Debug, Clone)]
+pub struct ExWlShellCustomActionWithId(pub Option<IcedId>, pub ExWlShellCustomAction);
+
+impl ExWlShellCustomActionWithId {
+    pub fn new(id: Option<IcedId>, action: ExWlShellCustomAction) -> Self {
+        Self(id, action)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popups_grab_by_default_and_can_leave_the_keyboard() {
+        let size = PixelSize::px(100, 50);
+        let at = Position::new(10, 20);
+        let popup = IcedNewPopupSettings::at_position_on_current_surface(size, at);
+        assert!(popup.grab);
+        assert!(!popup.grab(false).grab);
+    }
+}
