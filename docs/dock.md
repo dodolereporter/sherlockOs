@@ -151,6 +151,19 @@ wl_region#41.add(105, 56, 319, 76)                 # it leaves: the bar again
 wl_surface#28.set_input_region(wl_region#41)
 ```
 
+### Fitting the screen (D-21l)
+
+As on macOS, the dock is never longer than its screen. When its surface would leave less than
+`dock::SCREEN_ROOM` (8) at either end of the screen (its width, or its height on the left or the
+right), its icons shrink: `Geometry::fitted` finds the largest size, to the pixel, whose
+longest magnified bar and room for the labels fit, down to `dock::FIT_MIN_ICON` (20). The size
+of the settings is kept (`Dock::base`): an icon closed, another screen, or fewer icons give
+the room back, and they grow again, on the same springs as any other change. A screen not
+known yet keeps the settings' size. On 1366 × 768 at 1.5 (911 long), twenty icons and the separator
+fit, smaller (`the_dock_shrinks_its_icons_to_fit_its_screen`).
+
+![Four icons and Sherlock on a 520 wide screen](../desktop/dock/screenshots/fitted-520.png)
+
 ### Hiding
 
 `AutoHide` (`hide.rs`) decides when the dock leaves the screen:

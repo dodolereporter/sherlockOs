@@ -35,6 +35,10 @@ pub const SEPARATOR_MARGIN: f32 = 2.0;
 /// Room left on each side of the widest magnified dock, so that the label of an icon at the
 /// edge still fits in the surface.
 pub const SURFACE_SLACK: f32 = 52.0;
+/// The dock fits its screen (lot D-21l), as on macOS: its icons shrink, down to `FIT_MIN_ICON`,
+/// until the surface leaves `SCREEN_ROOM` at each end of the screen.
+pub const FIT_MIN_ICON: f32 = 20.0;
+pub const SCREEN_ROOM: f32 = 8.0;
 /// Initial of an application without icon, as a share of the tile.
 pub const LETTER_RATIO: f32 = 0.42;
 /// Scale the icon files are looked up for, as in the launcher: a scalable icon is drawn at the

@@ -125,6 +125,8 @@ mod tests {
         let args = ["control-room", "--page", "network"].map(String::from);
         assert_eq!(page_argument(args), Some(Page::Network));
         assert_eq!(page_argument(["--page"].map(String::from)), None);
+        let args = ["control-room", "--page", "bluetooth"].map(String::from);
+        assert_eq!(page_argument(args), Some(Page::Bluetooth));
     }
 
     #[test]

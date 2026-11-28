@@ -420,7 +420,7 @@ fn the_panel_renders_its_results() {
     drop(ui);
     assert!(capture(&launcher, "launcher-nothing").expect("screenshot written") > 2_000);
     // The surface follows the panel, at the board's place.
-    let surface = launcher::surface(launcher.height());
+    let surface = launcher::surface(launcher.height(), launcher.fit());
     assert_eq!(surface.margin.top, look::TOP as i32);
     assert_eq!(surface.exclusive_zone, -1);
 }
