@@ -736,7 +736,9 @@ protected one, a check on the one in use. An open or saved network is joined at 
 protected one asks for its password below its line (a hidden field with an eye that shows it,
 Enter or « Rejoindre »); NetworkManager keeps the connection, its password readable by root
 only. WPA and WPA2 personal (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks
-say « Ce réseau se rejoint depuis les Réglages. ». « Autre réseau… », at the end of the list,
+say « Ce réseau se rejoint depuis les Réglages. », with « Ouvrir les Réglages », which runs
+`control-room --page network` (the window already open shows that page) and closes the panel
+(lot D-26n). « Autre réseau… », at the end of the list,
 joins a hidden network by its name (32 bytes at most), its protection and its password
 (`802-11-wireless.hidden`, any access point).
 
