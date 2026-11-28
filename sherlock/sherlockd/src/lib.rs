@@ -10,6 +10,7 @@
 //! - [`process`]: started processes never outlive sherlockd.
 //! - [`test_server`]: a test MCP server, with no effect on the system.
 //! - [`window`]: the compositor's consent window, which the broker asks (A-11c).
+//! - [`windows_server`]: the MCP server of the session's windows (A-12).
 //!
 //! Architecture and rules: `docs/sherlockd.md`.
 
@@ -23,3 +24,4 @@ pub mod proxy;
 pub mod scripted;
 pub mod test_server;
 pub mod window;
+pub mod windows_server;

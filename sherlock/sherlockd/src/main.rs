@@ -16,10 +16,11 @@ use sherlockd::proxy;
 use sherlockd::scripted::ScriptedProvider;
 use sherlockd::test_server::{self, Mode};
 use sherlockd::window::CompositorWindow;
+use sherlockd::windows_server::{self, Compositor};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str =
-    "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case]";
+const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case] \
+     | --windows-server <socket>";
 
 /// The longest request read on standard input.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
@@ -63,6 +64,16 @@ fn main() -> anyhow::Result<()> {
             let mode = Mode::from_arg(case).with_context(|| format!("unknown case: {case}"))?;
             test_server::run(mode).context("test server")
         }
+        // Started by sherlockd itself, with the compositor's windows socket (A-12).
+        ["--windows-server", socket] => {
+            windows_server::run(&Compositor::at(std::path::Path::new(socket)))
+                .context("windows server")
+        }
+        // For the tests, whose fake compositor is the test itself.
+        ["--windows-server", "--any-peer", socket] => {
+            let compositor = Compositor::at(std::path::Path::new(socket)).trusting_any_program();
+            windows_server::run(&compositor).context("windows server")
+        }
         _ => bail!("{USAGE}"),
     }
 }
@@ -82,10 +93,12 @@ fn exe() -> anyhow::Result<String> {
     Ok(exe.to_owned())
 }
 
-/// Sherlock's MCP servers. For now, only the test server, one of ours: its annotations are
-/// trusted (ADR 0015).
+/// Sherlock's MCP servers: the test server and, in a Wayland session, the windows server (A-12),
+/// both ours: their annotations are trusted (ADR 0015).
 async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers> {
     let exe = exe()?;
+    // The windows of the session (A-12), through the compositor's windows socket.
+    let windows = window.as_ref().and_then(CompositorWindow::windows_socket);
     let config = ServerConfig::new("test", &exe, &["--test-server"])
         .timeout(Duration::from_secs(5))
         .ours();
@@ -107,6 +120,15 @@ async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers>
     };
     let mut servers = McpServers::with_broker(Broker::new(consent, journal));
     servers.add(client).await.context("tool discovery")?;
+    if let Some(socket) = windows.as_deref().and_then(std::path::Path::to_str) {
+        let config = ServerConfig::new("windows", &exe, &["--windows-server", socket])
+            .timeout(Duration::from_secs(10))
+            .ours();
+        match McpClient::spawn(&config).await {
+            Ok(client) => servers.add(client).await.context("windows tools")?,
+            Err(error) => tracing::warn!(%error, "no windows server"),
+        }
+    }
     Ok(servers)
 }
 
