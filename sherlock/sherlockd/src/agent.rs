@@ -146,9 +146,9 @@ pub async fn execute<H: ToolHost>(
     let level = spec
         .ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?
         .level;
-    if level != Level::Read {
-        // Until the broker exists (A-11), only the read level runs. The tool host checks it
-        // too: this check is defence in depth.
+    if level != Level::Read && !tools.consents() {
+        // A host without a consent broker (A-11) runs reads only. `McpServers` asks the user
+        // itself, before any call reaches a server.
         tracing::warn!(tool, %level, "call refused: consent broker absent");
         return Err(McpError::BrokerAbsent {
             tool: tool.to_owned(),
