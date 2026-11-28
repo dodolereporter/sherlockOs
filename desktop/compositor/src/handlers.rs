@@ -790,8 +790,13 @@ impl DataDeviceHandler for State {
     }
 }
 
-// The drags of Wayland clients: `dnd.rs`. The compositor starts none of its own.
-impl ServerDndGrabHandler for State {}
+// The drags of Wayland clients: `dnd.rs`. The compositor starts one itself: the thumbnail of a
+// screenshot carried into an application (lot D-35e).
+impl ServerDndGrabHandler for State {
+    fn send(&mut self, mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>) {
+        self.send_dragged(&mime_type, fd);
+    }
+}
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&self) -> &PrimarySelectionState {

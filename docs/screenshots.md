@@ -27,13 +27,32 @@ fades in; it goes the other way on Escape, the right button or « Annuler ».
   Press and drag draws it, with its size in pixels of the screen beside the pointer; once let go
   it keeps eight handles to adjust it, and its inside moves it. Space held while drawing moves
   the area being drawn. Dragged past the edge of the screen, it stretches less and less, as a
-  rubber band, and springs back inside once let go. Enter or « Capturer » takes it.
-- **« Fenêtre ».** The window under the pointer is outlined in the accent color; a click takes it.
+  rubber band, and springs back inside once let go. Enter or « Capturer » takes it. While it is
+  drawn or pulled, and before it, a loupe beside the pointer shows the 15 × 15 pixels around it,
+  8 times larger, the pointer's one outlined: taken from an image of the screen made when the
+  tool opens, without the tool.
+- **« Fenêtre ».** The window under the pointer is outlined in the accent color; a click takes it,
+  with its shadow, as it shows on the desktop (`with_shadow`, on the worker thread).
 - **« Écran entier ».** The screen is outlined; a click or Enter takes the screen under the pointer.
 - **Timer.** With « 3 s » or « 10 s », the tool goes and a countdown shows in the middle of the
   screen; the image is taken at its end, without the countdown.
 - The image always goes to the clipboard. « Copier seulement » writes no file and notifies
-  « Capture d'écran copiée ». The choices stay while the session lasts.
+  « Capture d'écran copiée ». « Montrer le curseur » draws the arrow of the house theme where
+  the pointer is (screen and area only). The choices stay while the session lasts.
+
+## The thumbnail (lot D-35e)
+
+After every screenshot, its thumbnail (180 logical pixels on its longest side, rounded, with a
+border) slides in at the bottom right corner of the screen of the image, and fades out after
+5 s, unless it is held.
+
+- A click opens the file with `xdg-open`, and the thumbnail goes.
+- A drag to the right moves it, resisting as a rubber band to the left; let go past 35 % of its
+  width, it slides out of the screen; short of it, it springs back.
+- A drag in any other direction carries the image into the application under the pointer: a
+  drag and drop the compositor starts (`start_dnd` of smithay), offering `image/png` and, when
+  the file was written, its `text/uri-list`. X11 applications do not take it (no XDND, lot
+  D-29c).
 - Hover and press of a button come in the time of a hover; the chosen button of a group has
   the soft accent; a disabled one has the disabled color and takes no click.
 - Every measure follows the screen: the toolbar keeps its size from 1920 logical pixels up (a
@@ -53,7 +72,9 @@ measures of `sherlock_ui::screenshot_tool` are choices of the lot, to review wit
 | File | Role |
 | --- | --- |
 | `desktop/compositor/src/capture.rs` | The keys, the area, the drawing offscreen and the reading back, the worker that writes and notifies, the clipboard |
-| `desktop/compositor/src/screenshot_tool.rs` | The tool: its keys, pointer and drawing, the timer |
+| `desktop/compositor/src/screenshot_tool.rs` | The tool: its keys, pointer and drawing, the loupe, the timer |
+| `desktop/compositor/src/screenshot_thumbnail.rs` | The thumbnail: its motion, click, throw and drag and drop |
+| `desktop/compositor/src/picture.rs` | The thumbnail, the loupe and the cursor drawn on the processor, and their textures |
 | `desktop/sherlock-ui/src/screenshot.rs` | The folder and file names, the notification texts |
 | `desktop/sherlock-ui/src/screenshot_tool.rs` | The tool's choices, texts, measures and geometry: toolbar and menu layout, handles, rubber band, thumbnail place |
 | `desktop/system-services/src/notify.rs` | `org.freedesktop.Notifications.Notify` on the session bus |
@@ -92,7 +113,11 @@ measures of `sherlock_ui::screenshot_tool` are choices of the lot, to review wit
   Screen gives up with Escape, then takes a 200 × 150 area drawn with the pointer, on Enter.
 - `cargo test -p sherlock-ui --no-default-features --lib screenshot_tool`: the toolbar laid out
   from 640 × 480 to 3840 × 2160, its buttons, the menu and its disabled folders, the handles,
-  the turn over of an area, the rubber band, the thumbnail's place.
+  the turn over of an area, the rubber band, the thumbnail's place, the shadow of a window.
+- `cargo test -p compositor --lib picture`: the thumbnail rounded, the loupe's large pixels,
+  the cursor drawn at its point.
+- The integration test also checks the thumbnail after Print Screen, sprung back after a short
+  drag and thrown away after a long one, and draws the loupe while an area is drawn.
 
 ## Manual test
 

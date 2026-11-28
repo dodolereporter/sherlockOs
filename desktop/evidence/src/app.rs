@@ -319,6 +319,13 @@ pub enum Message {
     Done(Outcome),
     /// An operation that can be undone is over: its outcome, and its step for the history.
     Stepped(Outcome, Option<crate::undo::Step>, Recorded),
+    /// The names a paste would take, found off the interface thread: the items, where they
+    /// go, whether they move, and the names already there (lot E-11).
+    Taken(Vec<PathBuf>, PathBuf, bool, Vec<String>),
+    /// The choice for the taken names; none: the paste is called off.
+    TakenChoice(Option<crate::transfer_job::Taken>),
+    /// Stop the copy or the move under way.
+    StopTransfer,
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
     /// A frame of the window, during an animation or a measurement.
@@ -471,6 +478,9 @@ pub struct App {
     pub(crate) volumes: Vec<Volume>,
     /// What can be undone and redone (lot E-10).
     pub(crate) steps: crate::undo::History,
+    /// The copy or move under way, and the paste waiting for a choice on taken names.
+    pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
+    pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
     /// The servers of the network, and the folders of those connected, by host.
     pub(crate) servers: Vec<crate::network::Server>,
     pub(crate) mounted: HashMap<String, PathBuf>,
@@ -556,6 +566,8 @@ impl App {
             preview_fade: None,
             volumes: Vec::new(),
             steps: crate::undo::History::default(),
+            progress: None,
+            pending_paste: None,
             servers: Vec::new(),
             mounted: HashMap::new(),
             device_menu: None,
@@ -718,6 +730,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || self.progress.is_some()
             || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
@@ -1008,8 +1021,35 @@ impl App {
                 }
                 return self.handle(Message::Done(outcome));
             }
+            Message::Taken(sources, dest, moving, names) => {
+                if names.is_empty() {
+                    return self.transfer(
+                        sources,
+                        dest,
+                        moving,
+                        crate::transfer_job::Taken::KeepBoth,
+                    );
+                }
+                self.pending_paste = Some((sources, dest, moving, names));
+            }
+            Message::TakenChoice(choice) => {
+                if let (Some(taken), Some((sources, dest, moving, _))) =
+                    (choice, self.pending_paste.take())
+                {
+                    return self.transfer(sources, dest, moving, taken);
+                }
+                self.pending_paste = None;
+            }
+            Message::StopTransfer => {
+                if let Some(progress) = &self.progress {
+                    progress.stop();
+                }
+            }
             Message::Done(outcome) => {
                 self.busy = self.busy.saturating_sub(1);
+                if self.busy == 0 {
+                    self.progress = None;
+                }
                 let select = match outcome {
                     // A quiet operation (rename, new folder) leaves no message behind.
                     Ok((text, select)) => {
@@ -2323,21 +2363,56 @@ impl App {
         else {
             return Task::none();
         };
-        match mode {
-            Clip::Copy => self.spawn_step(texts::copying(sources.len()), move || {
-                made(ops::copy_into(&sources, &dest)?)
-            }),
-            Clip::Cut => {
-                // A cut item is pasted only once.
-                self.clipboard = None;
-                self.spawn_step(texts::moving(sources.len()), move || {
-                    let report = ops::move_into(&sources, &dest)?;
-                    let step = crate::undo::moved(&sources, &report);
-                    let (text, select) = done(report)?;
-                    Ok((text, select, Some(step)))
-                })
-            }
+        // A cut item is pasted only once.
+        let moving = mode == Clip::Cut;
+        if moving {
+            self.clipboard = None;
         }
+        // The names already taken there are looked for first, off the interface thread: if
+        // any, the user chooses (lot E-11).
+        Task::perform(
+            async move {
+                let names = crate::transfer_job::taken(&sources, &dest);
+                (sources, dest, names)
+            },
+            move |(sources, dest, names)| Message::Taken(sources, dest, moving, names),
+        )
+    }
+
+    /// Copies or moves with a progress the status bar shows, and that it can stop.
+    fn transfer(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        moving: bool,
+        taken: crate::transfer_job::Taken,
+    ) -> Task<Message> {
+        let progress = Arc::new(crate::transfer_job::Progress::default());
+        self.progress = Some(progress.clone());
+        let trash = self.config.trash.clone();
+        let text = if moving {
+            texts::moving(sources.len())
+        } else {
+            texts::copying(sources.len())
+        };
+        // Kept for Ctrl+Z (E-10): a move goes back, a copy goes to the trash.
+        self.spawn_step(text, move || {
+            if moving {
+                let report =
+                    crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?;
+                let step = crate::undo::moved(&sources, &report);
+                let (text, select) = done(report)?;
+                Ok((text, select, Some(step)))
+            } else {
+                made(crate::transfer_job::copy(
+                    &sources,
+                    &dest,
+                    taken,
+                    trash.as_ref(),
+                    progress,
+                )?)
+            }
+        })
     }
 
     fn new_folder(&mut self) -> Task<Message> {
