@@ -41,6 +41,10 @@ Sherlock's moods, the machine buttons and the pieces of the view from the `lock`
     others (Plasma), and once one is chosen the line says « Session : Plasma (Wayland) »;
   - the machine buttons, « Veille », « Redémarrer », « Éteindre », each confirmed by a second
     click (`lock::machine`), run by `systemctl`: logind decides whether greetd's user may.
+    « Redémarrer » and « Éteindre » leave as on the lock screen: Sherlock waves, the screen
+    fades to black, then the command (lot D-25i);
+  - in the bottom right corner, the network, the keyboard layout and the battery, discreet
+    (`lock::status`, read on a thread, bounded; `greeter-status-1366x768`).
 - **Sizes follow the screen** (`lock::screen::fit`): tried on 1366 × 768 and 1920 × 1080.
 
 ## Behavior
