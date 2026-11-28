@@ -142,7 +142,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Sidebar: Favourites (home, Desktop, Documents, Downloads, Projets when `~/Projets` exists,
   Pictures, from xdg-user-dirs), Devices, System (system disk, trash). The favourite that
   contains the current folder is active; Home only for the home folder itself.
-- Toolbar: back, forward, path bar, git branch, search in the current folder.
+- Toolbar: back, forward, path bar, git branch, search in the current folder, and at its right
+  end the button of the preview (lot E-08). The button, Ctrl+Alt+P (the Finder's Alt+Cmd+P)
+  or « Aperçu » in the bar's menu hide the preview and show it again: it slides out to the right
+  edge and back in 220 ms, the button lit while it shows. The choice is remembered in
+  `$XDG_CONFIG_HOME/evidence/settings` (`preview=on` or `off`), written whole to a temporary
+  file then renamed, off the interface thread, and read before the first frame.
 - Path bar (lot E-04, after Finder and Nautilus): a breadcrumb as wide as the toolbar allows;
   each segment opens its folder. A name wider than `CRUMB_MAX_WIDTH` keeps its start and its end
   around « … » (`sherlock_ui::ellipsis::fit_middle`); when the segments do not fit the bar,
