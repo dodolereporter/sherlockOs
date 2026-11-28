@@ -1,6 +1,7 @@
 //! What Sherlock's own MCP servers share (the windows server, A-12, the files server, A-13): the
-//! loop that serves standard input, the shape of a result, the annotations of a level, and the
-//! cleaning of a text that comes from outside (a title, a file name, a file's content).
+//! loop that serves standard input, the shape of a result, the annotations of a level, the
+//! cleaning of a text that comes from outside (a title, a file name, a file's content), and the
+//! masking of what looks like a secret in a log line (A-14, A-16).
 
 use std::io::{self, BufRead, Write};
 
@@ -114,6 +115,66 @@ pub fn json_line(value: &Value) -> String {
         }
     }
     text
+}
+
+/// `line` with the value of what looks like a secret masked: `PASSWORD=…`, `api_key: …`,
+/// `Authorization: Bearer …`.
+pub fn masked(line: &str) -> String {
+    const SECRETS: [&str; 7] = [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "authorization",
+    ];
+    // ASCII only: the same length as the line, its indices valid there.
+    let lower = line.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let skip = |mut i: usize, keep: fn(u8) -> bool| {
+        while i < bytes.len() && keep(bytes[i]) {
+            i += 1;
+        }
+        i
+    };
+    let (mut out, mut copied, mut at) = (String::new(), 0, 0);
+    while at < bytes.len() {
+        let Some(secret) = SECRETS
+            .iter()
+            .find(|s| bytes[at..].starts_with(s.as_bytes()))
+        else {
+            at += 1;
+            continue;
+        };
+        // The name may go on (`DB_PASSWORD_FILE`), then `=` or `:`, then the value.
+        let mut i = skip(at + secret.len(), |b| {
+            b.is_ascii_alphanumeric() || b == b'_'
+        });
+        i = skip(i, |b| matches!(b, b' ' | b'"' | b'\''));
+        if i >= bytes.len() || !matches!(bytes[i], b'=' | b':') {
+            at = i.max(at + 1);
+            continue;
+        }
+        i = skip(i + 1, |b| matches!(b, b' ' | b'"' | b'\''));
+        for scheme in ["bearer ", "basic "] {
+            if bytes[i..].starts_with(scheme.as_bytes()) {
+                i += scheme.len();
+            }
+        }
+        let start = i;
+        i = skip(i, |b| {
+            !matches!(b, b' ' | b'\t' | b'"' | b'\'' | b',' | b';')
+        });
+        if i > start {
+            out.push_str(&line[copied..start]);
+            out.push_str("•••");
+            copied = i;
+        }
+        at = i.max(at + 1);
+    }
+    out.push_str(&line[copied..]);
+    out
 }
 
 #[cfg(test)]
