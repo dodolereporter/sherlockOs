@@ -751,6 +751,12 @@ changes, not its content.
   - « Liste »: a menu of its items with their glyphs, a folder marked with a chevron; an item
     opens as in the grid. The submenus of the folders are not there yet.
   - « Automatique » (the default): the fan for ten items at most, else the grid.
+- An item of the content, in any presentation, is dragged out to an application (lot D-21k2):
+  pressed on it, the pointer goes `DRAG_THRESHOLD` away. `dnd` starts the drag from the popup
+  under the pointer, offering the file's `file://` address in `text/uri-list` and
+  `text/plain;charset=utf-8`, to be copied; a PNG shows under the pointer, any other file the
+  glyph of its kind, drawn on the drag thread. The content stays open until the drop, then
+  closes.
 - « Afficher comme » « Pile » (the default, lot D-21k2): the icon is the stack of its three first
   items, as macOS draws it, the first one in front and the two others behind it, turned and
   shifted a little (`dock::stack_pile`). A PNG shows on its card, from its own bytes (512 KiB at
