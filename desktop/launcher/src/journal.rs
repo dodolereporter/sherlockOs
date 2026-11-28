@@ -20,6 +20,9 @@ pub const MAX_ENTRIES: usize = 60;
 pub struct Entry {
     pub time: i64,
     id: u64,
+    /// The broker's session (A-20e): the conversation of the panel it belongs to. Older lines
+    /// have none.
+    pub session: Option<String>,
     pub tool: String,
     pub level: String,
     pub decision: String,
@@ -69,18 +72,18 @@ pub fn read(path: &Path) -> Vec<Entry> {
             entries.push(Entry {
                 time: value.get("time").and_then(Value::as_i64).unwrap_or(0),
                 id,
+                session: field("session"),
                 tool,
                 level: field("level").unwrap_or_default(),
                 decision,
                 outcome: None,
             });
         } else if let Some(outcome) = field("outcome") {
-            // The last decision of that call: the numbers start again with each session.
-            if let Some(entry) = entries
-                .iter_mut()
-                .rev()
-                .find(|e| e.id == id && e.tool == tool && e.outcome.is_none())
-            {
+            // The last decision of that call, in its session: the numbers start again with each.
+            let session = field("session");
+            if let Some(entry) = entries.iter_mut().rev().find(|e| {
+                e.id == id && e.tool == tool && e.outcome.is_none() && e.session == session
+            }) {
                 entry.outcome = Some(outcome);
             }
         }
@@ -130,9 +133,23 @@ mod tests {
             r#"{"time":20,"id":2,"tool":"restart","level":"action","arguments":"{}","decision":"granted"}"#,
             r#"{"time":21,"id":2,"tool":"restart","outcome":"error","error":"x"}"#,
             r#"{"time":30,"id":1,"tool":"empty","level":"destructif","arguments":"{}","decision":"denied"}"#,
+            // Two sessions at once, the same id and tool: each outcome to its own decision.
+            r#"{"time":40,"id":1,"tool":"restart","level":"action","decision":"granted","session":"a"}"#,
+            r#"{"time":41,"id":1,"tool":"restart","level":"action","decision":"granted","session":"b"}"#,
+            r#"{"time":42,"id":1,"tool":"restart","outcome":"error","session":"a"}"#,
         ];
         std::fs::write(&path, lines.join("\n") + "\n").unwrap();
         let entries = read(&path);
+        let (b, a) = (&entries[0], &entries[1]);
+        assert_eq!(
+            (b.session.as_deref(), b.outcome.as_deref()),
+            (Some("b"), None)
+        );
+        assert_eq!(
+            (a.session.as_deref(), a.outcome.as_deref()),
+            (Some("a"), Some("error"))
+        );
+        let entries = &entries[2..];
         let tools: Vec<&str> = entries.iter().map(|e| e.tool.as_str()).collect();
         assert_eq!(tools, ["empty", "restart", "list"]);
         assert_eq!(entries[1].outcome.as_deref(), Some("error"));

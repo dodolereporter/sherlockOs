@@ -88,12 +88,29 @@ pub fn shown(born: Duration, now: Duration) -> f32 {
     sherlock_ui::motion::Ease::OutCubic.apply(t.clamp(0.0, 1.0))
 }
 
+/// A session of its own for a conversation: the launcher's pid, then when it started, in
+/// hexadecimal, as `sherlockd` names its own.
+fn new_session() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{:x}-{:x}-{:x}",
+        std::process::id(),
+        now.as_secs(),
+        now.subsec_nanos()
+    )
+}
+
 /// The conversation: the exchanges, the last one running or not.
 #[derive(Debug, Default)]
 pub struct Conversation {
     pub exchanges: Vec<Exchange>,
-    /// When its first request was asked, in seconds since 1970: the journal's filter.
+    /// When its first request was asked, in seconds since 1970.
     pub started: Option<i64>,
+    /// Its session in the consent journal (A-20e), given to sherlockd with each request: the
+    /// journal's filter « Cette conversation ».
+    pub session: Option<String>,
     child: Option<Child>,
 }
 
@@ -117,7 +134,21 @@ impl Conversation {
             .iter()
             .filter_map(|e| Some(json!([e.request, e.answer.as_ref()?])))
             .collect();
-        json!({ "request": request, "history": history }).to_string()
+        let mut input = json!({ "request": request, "history": history });
+        if let Some(session) = &self.session {
+            input["session"] = json!(session);
+        }
+        input.to_string()
+    }
+
+    /// Whether `entry` of the journal belongs to this conversation: its session, or for a line
+    /// without one (written before A-20e), its time.
+    pub fn owns(&self, entry: &crate::journal::Entry) -> bool {
+        match (&entry.session, &self.session) {
+            (Some(theirs), Some(ours)) => theirs == ours,
+            (None, _) => self.started.is_some_and(|since| entry.time >= since),
+            (Some(_), None) => false,
+        }
     }
 
     /// Starts `request` with `program --ask`: the events come on the returned receiver. A
@@ -128,9 +159,10 @@ impl Conversation {
         request: &str,
         now: Duration,
     ) -> Option<mpsc::UnboundedReceiver<Value>> {
-        let input = self.input(request);
         self.started
             .get_or_insert_with(appearance_config::epoch_now);
+        self.session.get_or_insert_with(new_session);
+        let input = self.input(request);
         self.exchanges.push(Exchange {
             request: request.to_owned(),
             born: now,
@@ -424,13 +456,13 @@ pub fn view<'a, M: Clone + 'a>(
             ui::chip(tokens::text::EVERYTHING, all, Some((journal.filter)(true))),
         ]
         .spacing(tokens::STEP_GAP);
-        let since = if all { None } else { conversation.started };
+
         let mut list = column![ui::section_label(tokens::text::JOURNAL_SUBTITLE), filters]
             .spacing(tokens::GAP)
             .padding(tokens::PADDING);
         let shown: Vec<_> = entries
             .iter()
-            .filter(|e| since.is_none_or(|since| e.time >= since))
+            .filter(|e| all || conversation.owns(e))
             .collect();
         if shown.is_empty() {
             list = list.push(words(tokens::text::JOURNAL_EMPTY, p.text_secondary));
@@ -560,6 +592,38 @@ mod tests {
             ..Exchange::default()
         });
         conversation
+    }
+
+    #[test]
+    fn the_journal_of_this_conversation_is_that_of_its_session() {
+        let mut c = Conversation::default();
+        assert!(!c.input("x").contains("session"));
+        c.session = Some(String::from("c0ffee-1"));
+        c.started = Some(100);
+        let input: Value = serde_json::from_str(&c.input("x")).unwrap();
+        assert_eq!(input["session"], "c0ffee-1");
+        let entry = |time, session: Option<&str>| {
+            let line = json!({ "time": time, "id": 1, "tool": "t", "decision": "granted",
+                               "session": session });
+            let dir = std::env::temp_dir().join(format!("launcher-owns-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("j"), format!("{line}\n")).unwrap();
+            let entry = crate::journal::read(&dir.join("j")).remove(0);
+            std::fs::remove_dir_all(&dir).unwrap();
+            entry
+        };
+        assert!(
+            c.owns(&entry(50, Some("c0ffee-1"))),
+            "its session, whatever the time"
+        );
+        assert!(
+            !c.owns(&entry(200, Some("another"))),
+            "another conversation at the same time"
+        );
+        assert!(
+            c.owns(&entry(200, None)) && !c.owns(&entry(50, None)),
+            "older lines by time"
+        );
     }
 
     #[test]
