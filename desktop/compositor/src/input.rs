@@ -27,6 +27,7 @@ use smithay::{
     utils::{Logical, Physical, Point, Rectangle, SERIAL_COUNTER, Size},
     wayland::{
         compositor::with_states,
+        seat::WaylandFocus,
         shell::{wlr_layer::Layer, xdg::SurfaceCachedState},
     },
 };
@@ -127,16 +128,25 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// Comma: opens Control Room, as Cmd + , opens the settings on macOS (lot Q-31).
+    Settings,
     /// Super + V: the clipboard history (lot D-42).
     ClipboardHistory,
     /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
     Applications,
     /// Escape while Mission Control is open: closes it.
     CloseOverview,
+    /// A key while Sherlock's consent window is shown (lot A-11b).
+    ConsentKey(Keysym),
+    /// Ctrl + Down: the windows of the application in front, App Expose (lot D-33c).
+    AppExpose,
+    /// An arrow, Enter or Return while Mission Control is open: the selection moves, or is
+    /// chosen (lot D-33c).
+    OverviewKey(Keysym),
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
     SwitchVt(i32),
-    /// Ctrl + Alt + Backspace, in a real session: stops the compositor, the way out when
-    /// nothing else answers.
+    /// Ctrl + Alt + Backspace, in a real session and unlocked: stops the compositor, the way
+    /// out when nothing else answers. Never while locked (lot D-25j).
     Quit,
     /// A media key, in a real session, with its xkb code (lot D-35).
     Media(MediaKey, Keycode),
@@ -152,6 +162,11 @@ enum Shortcut {
     Lock,
     /// Enter on the rescue screen of the lock: the lock programs are tried again.
     RetryLock,
+    /// Shift + Escape: the session locks and the screens go off (lot D-38).
+    ScreenOff,
+    /// A key while the screens are off or going off: they come back; unlocked, the key goes
+    /// nowhere.
+    Wake,
 }
 
 impl Shortcut {
@@ -188,6 +203,30 @@ impl Shortcut {
         }
     }
 
+    /// Mission Control as on macOS (lot D-33c): Ctrl + Up, F3 alone or the Mission Control key
+    /// of a keyboard (`XF86LaunchA`); Ctrl + Down for the windows of the application in front.
+    fn for_mission_control(m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let ctrl_alone = m.ctrl && !m.alt && !m.shift && !m.logo;
+        let alone = !m.ctrl && !m.alt && !m.shift && !m.logo;
+        match sym {
+            Keysym::Up if ctrl_alone => Some(Self::ToggleOverview),
+            Keysym::Down if ctrl_alone => Some(Self::AppExpose),
+            Keysym::F3 if alone => Some(Self::ToggleOverview),
+            Keysym::XF86_LaunchA => Some(Self::ToggleOverview),
+            _ => None,
+        }
+    }
+
+    /// The keys of the open view: the arrows, Enter and Return, without modifier.
+    fn in_overview(m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let alone = !m.ctrl && !m.alt && !m.logo;
+        let navigation = matches!(
+            sym,
+            Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down | Keysym::Return
+        ) || sym == Keysym::KP_Enter;
+        (alone && navigation).then_some(Self::OverviewKey(sym))
+    }
+
     /// F4 without any modifier: the applications view (lot D-41).
     fn for_applications(m: &ModifiersState, sym: Keysym) -> Option<Self> {
         let alone = !m.ctrl && !m.alt && !m.shift && !m.logo;
@@ -202,6 +241,7 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::comma => Some(Self::Settings),
             Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
             _ => None,
@@ -209,15 +249,30 @@ impl Shortcut {
     }
 
     /// The only keys the compositor takes while the session is locked: the console switch,
-    /// Ctrl + Alt + Backspace, the volume and brightness keys, and Enter on the rescue screen.
-    /// Every other key goes to the lock surface, or nowhere.
+    /// the volume and brightness keys, the gesture key with Shift and Escape (the screens off),
+    /// and Enter on the rescue screen. Every other key goes to the lock surface, or nowhere:
+    /// Ctrl + Alt + Backspace too, which would close the session of anyone at the machine, and
+    /// give back the console it was started from (lot D-25j).
     fn while_locked(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
+        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
+        Self::screen_off(state.nested, m, sym)
+            .or(Self::in_greeter(state, m, key, sym).filter(|s| !matches!(s, Self::Quit)))
+            .or(retry.then_some(Self::RetryLock))
+    }
+
+    /// The only keys the compositor takes on the login screen (`greeter.rs`): the console
+    /// switch, Ctrl + Alt + Backspace, the volume and brightness keys. The players' keys go to
+    /// the greeter, like every other key.
+    fn in_greeter(state: &State, m: &ModifiersState, key: Keycode, sym: Keysym) -> Option<Self> {
         let media =
             MediaKey::of(sym).filter(|media| media.acts_while_locked() && state.takes_media_keys());
-        let retry = matches!(sym, Keysym::Return | Keysym::KP_Enter) && state.lock_rescue_shown();
-        Self::for_session(state.nested, m, sym)
-            .or(media.map(|media| Self::Media(media, key)))
-            .or(retry.then_some(Self::RetryLock))
+        Self::for_session(state.nested, m, sym).or(media.map(|media| Self::Media(media, key)))
+    }
+
+    /// The gesture key with Shift and Escape: lock and turn the screens off at once.
+    fn screen_off(nested: bool, m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        (gesture_modifier_held(nested, m) && m.shift && sym == Keysym::Escape)
+            .then_some(Self::ScreenOff)
     }
 }
 
@@ -627,6 +682,11 @@ impl State {
         if let Some(icon) = self.drag_cursor() {
             return Some(icon);
         }
+        if let Some(location) = self.seat.get_pointer().map(|p| p.current_location())
+            && self.over_thumbnail(location)
+        {
+            return self.thumbnail_cursor();
+        }
         if let Some(gesture) = &self.gesture {
             // A window taken by its title bar is held in the closed hand; moved with the
             // gesture key, the four arrows of the boards (« Super + glisser sur une fenêtre »).
@@ -743,17 +803,51 @@ impl State {
         None
     }
 
+    /// The key types a character, whatever the layout: a key of the main block or of the
+    /// keypad, without Ctrl, Alt nor the logo key (lot D-25g).
+    fn key_types(&self, key: Keycode) -> bool {
+        let held = self
+            .seat
+            .get_keyboard()
+            .map(|k| k.modifier_state())
+            .is_some_and(|m| m.ctrl || m.alt || m.logo);
+        // evdev codes, plus 8: 1 to =, Q to ], A to `, \ to /, space, the key left of Z, the
+        // keypad's digits and signs.
+        let typing = [
+            (2, 13),
+            (16, 27),
+            (30, 41),
+            (43, 53),
+            (57, 57),
+            (86, 86),
+            (71, 83),
+        ];
+        let code = key.raw().wrapping_sub(8);
+        !held && typing.iter().any(|(a, b)| (*a..=*b).contains(&code))
+    }
+
     /// A key (xkb code) is pressed or released. Entry point of every backend, and of the
     /// tests.
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        self.end_arrival();
+        // Locked: the lock program must answer, and show what is typed (lots D-25f, D-25g).
+        if key_state == KeyState::Pressed {
+            self.lock_input(self.key_types(key));
+        }
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
             return;
         };
         let serial = SERIAL_COUNTER.next_serial();
+        if key_state == KeyState::Pressed {
+            let focus = keyboard
+                .current_focus()
+                .and_then(|f| WaylandFocus::wl_surface(&f).map(|s| s.into_owned()));
+            self.note_press(serial, focus.as_ref());
+        }
         let shortcut = keyboard.input(self, key, key_state, serial, time, |state, mods, sym| {
             let sym = sym.modified_sym();
             // The gesture key pressed and released alone toggles Mission Control (lot D-33).
@@ -761,7 +855,7 @@ impl State {
             let alone = !mods.ctrl && !mods.shift && !other;
             let gesture_key = crate::mission_control::is_gesture_key(state.nested, sym);
             let pressed = key_state == KeyState::Pressed;
-            if !state.is_locked() {
+            if !state.is_locked() && !state.greeter {
                 state.overview.key(gesture_key, pressed, alone);
             }
             if key_state == KeyState::Released {
@@ -779,10 +873,34 @@ impl State {
             }
             // A forwarded press cancels an interception whose release got lost.
             state.intercepted_keys.retain(|k| *k != key);
+            // The screens off: the key brings them back, and nothing else (lot D-38). Locked, it
+            // goes on to the lock too: the first key brings its form, as on macOS.
+            if state.input_wakes() {
+                if state.is_locked() {
+                    state.screens_on();
+                } else {
+                    state.intercepted_keys.push(key);
+                    return FilterResult::Intercept(Some(Shortcut::Wake));
+                }
+            }
             if state.is_locked() {
                 let Some(shortcut) = Shortcut::while_locked(state, mods, key, sym) else {
                     return FilterResult::Forward;
                 };
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
+            if state.greeter {
+                let Some(shortcut) = Shortcut::in_greeter(state, mods, key, sym) else {
+                    return FilterResult::Forward;
+                };
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
+            // Sherlock's consent window keeps every key but the console switch (lot A-11b).
+            if state.consent_shown() {
+                let shortcut = Shortcut::for_session(state.nested, mods, sym)
+                    .unwrap_or(Shortcut::ConsentKey(sym));
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
             }
@@ -798,6 +916,12 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
+            if let Some(shortcut) =
+                Shortcut::in_overview(mods, sym).filter(|_| state.overview_open())
+            {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
             // Nested, Print Screen stays with the host session.
             let screenshot =
@@ -809,11 +933,13 @@ impl State {
                 && state.takes_screenshots())
             .then_some(Shortcut::ScreenshotTool);
             let shortcut = Shortcut::for_session(state.nested, mods, sym)
+                .or_else(|| Shortcut::screen_off(state.nested, mods, sym))
                 .or_else(|| Shortcut::for_workspaces(state.nested, mods, key, sym))
                 .or(media.map(|media| Shortcut::Media(media, key)))
                 .or(screenshot.map(Shortcut::Screenshot))
                 .or(tool)
-                .or_else(|| Shortcut::for_applications(mods, sym));
+                .or_else(|| Shortcut::for_applications(mods, sym))
+                .or_else(|| Shortcut::for_mission_control(mods, sym));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
@@ -843,6 +969,10 @@ impl State {
                 }
                 return;
             }
+            Shortcut::Quit if self.is_locked() => {
+                tracing::warn!("Ctrl + Alt + Backspace while locked: refused");
+                return;
+            }
             Shortcut::Quit => {
                 tracing::info!("Ctrl + Alt + Backspace: the compositor stops");
                 self.loop_signal.stop();
@@ -866,12 +996,28 @@ impl State {
                 self.close_overview();
                 return;
             }
+            Shortcut::ConsentKey(sym) => {
+                self.consent_key(sym);
+                return;
+            }
+            Shortcut::AppExpose => {
+                self.toggle_app_expose();
+                return;
+            }
+            Shortcut::OverviewKey(sym) => {
+                self.overview_key(sym);
+                return;
+            }
             Shortcut::Launcher => {
                 self.start_launcher();
                 return;
             }
             Shortcut::Applications => {
                 self.start_applications();
+                return;
+            }
+            Shortcut::Settings => {
+                self.start_settings();
                 return;
             }
             Shortcut::ClipboardHistory => {
@@ -906,6 +1052,16 @@ impl State {
             }
             Shortcut::RetryLock => {
                 self.retry_lock_program();
+                return;
+            }
+            Shortcut::ScreenOff => {
+                tracing::info!("Super + Shift + Escape: lock, the screens go off");
+                self.lock_session();
+                self.screens_off(crate::power::Then::Stay);
+                return;
+            }
+            Shortcut::Wake => {
+                self.screens_on();
                 return;
             }
             Shortcut::SendToWorkspace(index) => {
@@ -951,6 +1107,8 @@ impl State {
             }
             InputEvent::PointerAxis { event } => {
                 self.note_input();
+                // The gesture key held during a scroll is not alone (D-33 review).
+                self.overview.cancel_tap();
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
@@ -980,12 +1138,15 @@ impl State {
             }
             // The lid closed: the session locks, whether logind puts the machine to sleep for
             // it or not (lot D-25a3).
-            InputEvent::SwitchToggle { event } => {
-                if event.switch() == Some(Switch::Lid) && event.state() == SwitchState::On {
-                    tracing::info!("lid closed: the session locks");
+            InputEvent::SwitchToggle { event } => match (event.switch(), event.state()) {
+                (Some(Switch::Lid), SwitchState::On) => {
+                    tracing::info!("lid closed: the session locks, the screens go off");
                     self.lock_session();
+                    self.screens_off(crate::power::Then::Stay);
                 }
-            }
+                (Some(Switch::Lid), SwitchState::Off) => self.screens_on(),
+                _ => {}
+            },
             event => {
                 self.note_input();
                 self.gesture_event(event);
@@ -997,6 +1158,10 @@ impl State {
     pub fn pointer_motion(&mut self, location: Point<f64, Logical>, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // The pointer brings the screens back (lot D-38).
+        if self.input_wakes() {
+            self.screens_on();
+        }
         let Some(pointer) = self.seat.get_pointer() else {
             return;
         };
@@ -1008,6 +1173,10 @@ impl State {
             self.update_gesture(location);
             self.hover_decoration(None);
             None
+        } else if self.consent_shown() {
+            // Sherlock's consent window: no client has the pointer (lot A-11b).
+            self.consent_motion(location);
+            None
         } else if self.picking_area() {
             // The area of a screenshot: no client has the pointer (lot D-35c).
             self.tool_motion(location);
@@ -1015,6 +1184,10 @@ impl State {
         } else if self.overview_open() {
             // Mission Control: no client has the pointer (lot D-33).
             self.overview_motion(location);
+            None
+        } else if self.over_thumbnail(location) {
+            // The thumbnail of a screenshot (lot D-35e).
+            self.thumbnail_motion(location);
             None
         } else {
             let hit = self.hit(location);
@@ -1048,8 +1221,14 @@ impl State {
 
     /// A button (code from linux/input-event-codes.h) is pressed or released.
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: u32) {
+        self.end_arrival();
         self.queue_redraw();
         self.note_input();
+        // A click brings the screens back, and goes nowhere else (lot D-38).
+        if self.input_wakes() {
+            self.screens_on();
+            return;
+        }
         let (Some(pointer), Some(keyboard)) = (self.seat.get_pointer(), self.seat.get_keyboard())
         else {
             return;
@@ -1062,6 +1241,10 @@ impl State {
             serial,
             time,
         };
+        // A press lets the client it reaches grant an activation token with it (lot Q-52).
+        if state == ButtonState::Pressed {
+            self.note_press(serial, pointer.current_focus().as_ref());
+        }
         self.overview.cancel_tap();
         // The release that drops on an X11 window waits for it to take the data (lot D-29c).
         let last = match state {
@@ -1072,6 +1255,9 @@ impl State {
             return;
         }
         if self.is_locked() {
+            if state == ButtonState::Pressed {
+                self.lock_input(false);
+            }
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
             if state == ButtonState::Pressed {
@@ -1085,12 +1271,28 @@ impl State {
             // Show the clicks (lot C-01): a ring at the press, whatever it reaches.
             self.click_at(location);
         }
+        if self.consent_shown() {
+            // Sherlock's consent window: the click goes to no client (lot A-11b).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            if button == BTN_LEFT {
+                self.consent_button(state == ButtonState::Pressed, location);
+            }
+            return;
+        }
         if self.picking_area() {
             // The area of a screenshot: the click goes to no client (lot D-35c).
             pointer.button(self, &event);
             pointer.frame(self);
             let pressed = state == ButtonState::Pressed;
             self.tool_button(button == BTN_LEFT, pressed, location);
+            return;
+        }
+        if button == BTN_LEFT && self.over_thumbnail(location) {
+            // The thumbnail of a screenshot: the click goes to no client (lot D-35e).
+            pointer.button(self, &event);
+            pointer.frame(self);
+            self.thumbnail_button(state == ButtonState::Pressed, location);
             return;
         }
         if self.overview_open() {
@@ -1144,8 +1346,8 @@ impl State {
                 Some(
                     Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
                 ) => Some(window.clone()),
-                Some(Hit::Layer(layer, ..)) => {
-                    self.click_layer(layer);
+                Some(Hit::Layer(layer, surface, _)) => {
+                    self.click_layer(layer, surface);
                     pointer.button(self, &event);
                     pointer.frame(self);
                     return;

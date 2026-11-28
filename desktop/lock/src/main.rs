@@ -12,6 +12,10 @@ fn main() -> ExitCode {
     let renderer = sherlock_ui::gpu::Choice::detect().or_rescue(lock::rescue_asked());
     // SAFETY: first statements of `main`, no other thread exists yet.
     unsafe { renderer.apply() };
+    // Right after the renderer (ADR 0018), before the password can be typed: no other process
+    // of the user may trace this program or read its memory, and a panic writes no core dump
+    // (lot D-25k). Logged once the log is set up.
+    let private = lock::keep_memory_private();
     let rescue = renderer == sherlock_ui::gpu::Choice::Software(sherlock_ui::gpu::Reason::Rescue);
     // A panic aborts, without unwinding through the toolkit: a clean exit of the toolkit would
     // end the lock (see `app.rs`). The compositor keeps the session locked and starts the
@@ -26,6 +30,9 @@ fn main() -> ExitCode {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+    if let Err(err) = private {
+        tracing::warn!("the memory of the lock screen could not be made private: {err}");
+    }
     tracing::info!(?renderer, "renderer");
     match lock::run(rescue) {
         Ok(()) => ExitCode::SUCCESS,

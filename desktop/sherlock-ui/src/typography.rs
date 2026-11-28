@@ -88,3 +88,10 @@ const _: () = {
     assert!(SECTION_LABEL_SIZE >= 11.0 && SECTION_LABEL_SIZE <= 11.5);
     assert!(SYSTEM_SIZE >= 14.0 && SYSTEM_SIZE <= 15.0);
 };
+
+/// A text size the text engine takes: cosmic-text panics on a line height of 0, so on a size
+/// of 0 (lot Q-32). Not a number gives a pixel too. Here, outside the `iced` feature, for the
+/// tokens the compositor reads too (`apps`, lot Q-53).
+pub fn at_least_a_pixel(size: f32) -> f32 {
+    size.max(1.0)
+}

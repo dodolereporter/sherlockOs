@@ -50,6 +50,7 @@ pub fn init(
             state.add_output(backend.window_size(), *scale);
         }
         state.resize_frame(backend.window_size());
+        state.ensure_curtain();
         Rc::new(Scene::new(backend.renderer())?)
     };
     // The last image of a window that closes (lot D-34): drawn while the clients are read,
@@ -77,6 +78,11 @@ pub fn init(
     state.watch_pointer(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
+    )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
     )?;
     // What is copied, for Super + V, and its setting (lot D-42).
     state.watch_clipboard_settings(
@@ -126,7 +132,9 @@ pub fn init(
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
                     let mut textures = textures.borrow_mut();
                     let frame = (&*scene, &mut ids, &mut *textures, &mut preview);
-                    let locked = state.is_locked();
+                    // Only a frame with the curtain down confirms the lock (lot D-24e); in a
+                    // window, the curtain comes down over the plain background, nothing frozen.
+                    let locked = state.lock_frame_complete();
                     match render(&mut backend, frame, state) {
                         // The host window shows every screen at once (lot D-25a).
                         Ok(()) if locked => {

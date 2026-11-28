@@ -7,7 +7,7 @@ use std::{cell::Cell, os::fd::OwnedFd, sync::OnceLock};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_output,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_primary_selection, delegate_seat, delegate_shm,
     desktop::{PopupKind, PopupManager, Window, find_popup_root_surface},
     input::{
         Seat, SeatHandler, SeatState,
@@ -75,6 +75,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.lock_surface_committed(surface);
         self.drag_icon_commit(surface);
         if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
@@ -125,6 +126,7 @@ impl State {
                 let room = room(&window, area);
                 toplevel.with_pending_state(|s| s.bounds = Some(room));
             }
+            self.greeter_window(&window);
             toplevel.send_configure();
             return;
         }
@@ -469,6 +471,14 @@ impl XdgShellHandler for State {
         &mut self.xdg_shell_state
     }
 
+    fn new_client(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {
+        self.shell_client_bound(client);
+    }
+
+    fn client_pong(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {
+        self.shell_client_pong(&client);
+    }
+
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         // Placed for good at its first content, when its size is known.
         let loc = self.output_area().map(|a| a.loc).unwrap_or_default();
@@ -589,7 +599,8 @@ impl XdgShellHandler for State {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
-        if let Some(window) = self.surface_window(&surface) {
+        // The login screen stays fullscreen (`greeter.rs`).
+        if let Some(window) = self.surface_window(&surface).filter(|_| !self.greeter) {
             surface.with_pending_state(|s| s.fullscreen_output = None);
             self.rearrange(&window, |a, _| a.fullscreen = false);
         }
@@ -779,8 +790,13 @@ impl DataDeviceHandler for State {
     }
 }
 
-// The drags of Wayland clients: `dnd.rs`. The compositor starts none of its own.
-impl ServerDndGrabHandler for State {}
+// The drags of Wayland clients: `dnd.rs`. The compositor starts one itself: the thumbnail of a
+// screenshot carried into an application (lot D-35e).
+impl ServerDndGrabHandler for State {
+    fn send(&mut self, mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>) {
+        self.send_dragged(&mime_type, fd);
+    }
+}
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
@@ -792,7 +808,28 @@ delegate_compositor!(State);
 delegate_shm!(State);
 delegate_seat!(State);
 delegate_output!(State);
-delegate_xdg_shell!(State);
+// `delegate_xdg_shell!`, but the binding of `xdg_wm_base`, which `lock.rs` reads first to know
+// the shell client of the lock program (lot D-25f).
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase:
+        smithay::wayland::shell::xdg::XdgWmBaseUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::XdgPositioner:
+        smithay::wayland::shell::xdg::XdgPositionerUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup:
+        smithay::wayland::shell::xdg::XdgShellSurfaceUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface:
+        smithay::wayland::shell::xdg::XdgSurfaceUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel:
+        smithay::wayland::shell::xdg::XdgShellSurfaceUserData
+] => XdgShellState);
 delegate_cursor_shape!(State);
 delegate_data_device!(State);
 delegate_primary_selection!(State);

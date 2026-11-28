@@ -109,6 +109,10 @@ mod tests {
         wifi: bool,
         activated: Vec<(String, String)>,
         added: Vec<HashMap<String, HashMap<String, OwnedValue>>>,
+        /// The access point each new connection was asked on.
+        added_on: Vec<String>,
+        updated: Vec<HashMap<String, HashMap<String, OwnedValue>>>,
+        deleted: Vec<String>,
         powered: bool,
         brightness: Vec<(String, String, u32)>,
         profile: String,
@@ -178,13 +182,14 @@ mod tests {
             &self,
             settings: HashMap<String, HashMap<String, OwnedValue>>,
             _device: OwnedObjectPath,
-            _point: OwnedObjectPath,
+            point: OwnedObjectPath,
         ) -> fdo::Result<(OwnedObjectPath, OwnedObjectPath)> {
             let mut state = lock(&self.0);
             if state.refuse {
                 return Err(denied());
             }
             state.added.push(settings);
+            state.added_on.push(point.to_string());
             Ok((path("/nm/Settings/9"), path("/nm/ActiveConnection/2")))
         }
     }
@@ -277,21 +282,50 @@ mod tests {
         }
     }
 
-    struct Saved;
+    /// A saved connection: « Maison » at `/nm/Settings/1`, and the one a new network gets,
+    /// `/nm/Settings/9`, not listed.
+    struct Saved(Shared, &'static str);
 
     #[zbus::interface(name = "org.freedesktop.NetworkManager.Settings.Connection")]
     impl Saved {
         fn get_settings(&self) -> HashMap<String, HashMap<String, OwnedValue>> {
             let ssid = OwnedValue::try_from(Value::from(b"Maison".to_vec())).unwrap();
-            HashMap::from([(
-                String::from("802-11-wireless"),
-                HashMap::from([(String::from("ssid"), ssid)]),
-            )])
+            let id = OwnedValue::try_from(Value::from("Maison")).unwrap();
+            HashMap::from([
+                (
+                    String::from("802-11-wireless"),
+                    HashMap::from([(String::from("ssid"), ssid)]),
+                ),
+                (
+                    String::from("connection"),
+                    HashMap::from([(String::from("id"), id)]),
+                ),
+            ])
+        }
+
+        fn update(&self, settings: HashMap<String, HashMap<String, OwnedValue>>) {
+            lock(&self.0).updated.push(settings);
+        }
+
+        fn delete(&self) {
+            lock(&self.0).deleted.push(self.1.to_owned());
+        }
+    }
+
+    /// An activation, still under way until the test says how it ends (`StateChanged`).
+    struct Active;
+
+    #[zbus::interface(name = "org.freedesktop.NetworkManager.Connection.Active")]
+    impl Active {
+        #[zbus(property)]
+        fn state(&self) -> u32 {
+            1
         }
     }
 
     fn serve_network(bus: &mut Bus, state: &Shared) {
         let state = Arc::clone(state);
+        let saved = Arc::clone(&state);
         let point = |ssid, strength, rsn| Point {
             ssid,
             strength,
@@ -315,7 +349,16 @@ mod tests {
                 .unwrap()
                 .serve_at(network::SETTINGS_PATH, Settings)
                 .unwrap()
-                .serve_at("/nm/Settings/1", Saved)
+                .serve_at(
+                    "/nm/Settings/1",
+                    Saved(Arc::clone(&saved), "/nm/Settings/1"),
+                )
+                .unwrap()
+                .serve_at("/nm/Settings/9", Saved(saved, "/nm/Settings/9"))
+                .unwrap()
+                .serve_at("/nm/ActiveConnection/1", Active)
+                .unwrap()
+                .serve_at("/nm/ActiveConnection/2", Active)
                 .unwrap()
         });
     }
@@ -349,6 +392,7 @@ mod tests {
         zbus::block_on(network::scan(&client, &device)).unwrap();
 
         // A saved network is joined with its connection, without a password.
+        assert!(home.saved && !wifi.networks[1].saved);
         zbus::block_on(network::connect(&client, &device, &home, None)).unwrap();
         let activated = lock(&state).activated.clone();
         let expected = (
@@ -382,6 +426,154 @@ mod tests {
         assert!(matches!(refused, Err(Problem::Refused(_))), "{refused:?}");
         let wifi = zbus::block_on(network::read(&client)).unwrap();
         assert!(!wifi.enabled && wifi.connected().is_none());
+    }
+
+    /// Runs `join` while the fake NetworkManager ends the activation `active` with `state` and
+    /// `reason`, told again and again until the join returns (it listens before it reads).
+    fn join_ending(
+        bus: &Bus,
+        client: &zbus::Connection,
+        network: &network::Network,
+        password: Option<&str>,
+        active: &str,
+        (state, reason): (u32, u32),
+    ) -> network::Outcome {
+        let service = bus.served[0].clone();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = Arc::clone(&done);
+        let active = active.to_owned();
+        let teller = std::thread::spawn(move || {
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(50));
+                let _ = service.emit_signal(
+                    None::<&str>,
+                    active.as_str(),
+                    network::ACTIVE,
+                    "StateChanged",
+                    &(state, reason),
+                );
+            }
+        });
+        let outcome =
+            zbus::block_on(network::join(client, "/nm/Devices/2", network, password)).unwrap();
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        teller.join().unwrap();
+        outcome
+    }
+
+    #[test]
+    fn a_wrong_password_ends_the_join_and_leaves_no_connection() {
+        let mut bus = Bus::start("network-wrong");
+        let state = Shared::default();
+        lock(&state).wifi = true;
+        serve_network(&mut bus, &state);
+        let client = bus.connect();
+        let wifi = zbus::block_on(network::read(&client)).unwrap();
+        let mut other = wifi.networks[0].clone();
+        other.ssid = String::from("Voisin");
+        other.saved = false;
+
+        // NetworkManager says yes at once, then the activation ends without secrets: the
+        // connection it created is deleted, the password will be asked again.
+        let wrong = (4, 9);
+        let outcome = join_ending(
+            &bus,
+            &client,
+            &other,
+            Some("faux"),
+            "/nm/ActiveConnection/2",
+            wrong,
+        );
+        assert_eq!(outcome, network::Outcome::WrongPassword);
+        assert_eq!(lock(&state).deleted, ["/nm/Settings/9"]);
+        // Another failure deletes it too; a join keeps it.
+        let outcome = join_ending(
+            &bus,
+            &client,
+            &other,
+            Some("x"),
+            "/nm/ActiveConnection/2",
+            (4, 6),
+        );
+        assert_eq!(outcome, network::Outcome::Failed(6));
+        assert_eq!(lock(&state).deleted.len(), 2);
+        let outcome = join_ending(
+            &bus,
+            &client,
+            &other,
+            Some("bon"),
+            "/nm/ActiveConnection/2",
+            (2, 0),
+        );
+        assert_eq!(outcome, network::Outcome::Joined);
+        assert_eq!(lock(&state).deleted.len(), 2);
+
+        // A saved network whose password was wrong: the new one replaces it in its connection,
+        // which is then activated.
+        let home = wifi.connected().unwrap().clone();
+        let outcome = join_ending(
+            &bus,
+            &client,
+            &home,
+            Some("n0uveau"),
+            "/nm/ActiveConnection/1",
+            (2, 0),
+        );
+        assert_eq!(outcome, network::Outcome::Joined);
+        let updated = lock(&state).updated.clone();
+        assert_eq!(updated.len(), 1);
+        let security = &updated[0]["802-11-wireless-security"];
+        let text = |key: &str| String::try_from(security[key].try_clone().unwrap()).unwrap();
+        assert_eq!(text("psk"), "n0uveau");
+        assert_eq!(text("key-mgmt"), "wpa-psk");
+        // Its other settings are kept.
+        assert!(updated[0].contains_key("connection"));
+        assert!(
+            lock(&state).deleted.len() == 2,
+            "a saved connection is never deleted by a join"
+        );
+
+        // An activation that never ends stops at its limit.
+        let attempt =
+            zbus::block_on(network::connect(&client, "/nm/Devices/2", &home, None)).unwrap();
+        let limit = Duration::from_millis(200);
+        let outcome = zbus::block_on(network::outcome(&client, attempt.active.as_str(), limit));
+        assert_eq!(outcome.unwrap(), network::Outcome::TimedOut);
+        // An activation already gone failed.
+        let gone = zbus::block_on(network::outcome(&client, "/nm/ActiveConnection/7", limit));
+        assert_eq!(gone.unwrap(), network::Outcome::Failed(0));
+    }
+
+    #[test]
+    fn a_network_is_forgotten_and_a_hidden_one_joined_by_its_name() {
+        let mut bus = Bus::start("network-forget");
+        let state = Shared::default();
+        lock(&state).wifi = true;
+        serve_network(&mut bus, &state);
+        let client = bus.connect();
+
+        zbus::block_on(network::forget(&client, "Café")).unwrap();
+        assert!(lock(&state).deleted.is_empty());
+        zbus::block_on(network::forget(&client, "Maison")).unwrap();
+        assert_eq!(lock(&state).deleted, ["/nm/Settings/1"]);
+
+        let hidden = network::Network::hidden("Cachette", Security::Sae);
+        let outcome = join_ending(
+            &bus,
+            &client,
+            &hidden,
+            Some("s3cret"),
+            "/nm/ActiveConnection/2",
+            (2, 0),
+        );
+        assert_eq!(outcome, network::Outcome::Joined);
+        let state = lock(&state);
+        assert_eq!(state.added_on, ["/"]);
+        let wireless = &state.added[0]["802-11-wireless"];
+        assert!(bool::try_from(wireless["hidden"].try_clone().unwrap()).unwrap());
+        let security = &state.added[0]["802-11-wireless-security"];
+        let management = String::try_from(security["key-mgmt"].try_clone().unwrap()).unwrap();
+        assert_eq!(management, "sae");
     }
 
     // BlueZ: one adapter, two devices, one of them connected.
@@ -694,7 +886,10 @@ mod tests {
              get-sink-volume) grep '^Volume' '{f}/pactl-55.txt' ;;\n\
              get-sink-mute) grep '^Mute' '{f}/pactl-55.txt' ;;\n\
              get-default-sink) echo alsa_output.pci-0000_05_00.6.analog-stereo ;;\n\
-             list) cat '{f}/pactl-sinks.txt' ;;\n\
+             get-default-source) echo alsa_input.pci-0000_05_00.6.analog-stereo ;;\n\
+             get-source-volume) grep '^Volume' '{f}/pactl-55.txt' ;;\n\
+             get-source-mute) grep '^Mute' '{f}/pactl-muted.txt' ;;\n\
+             list) [ \"$2\" = sources ] && cat '{f}/pactl-sources.txt' || cat '{f}/pactl-sinks.txt' ;;\n\
              set-sink-volume) [ \"$3\" = 99% ] && exit 1 ;;\nesac\nexit 0\n",
             log = log.display(),
             f = fixtures.display(),
@@ -755,6 +950,29 @@ mod tests {
             "{calls}"
         );
         assert!(calls.contains("set-sink-mute @DEFAULT_SINK@ 1"), "{calls}");
+        // The outputs and the inputs (D-20g): the monitor of the speakers is no input.
+        let devices = quick::read_devices(&pactl).unwrap();
+        let names: Vec<_> = devices
+            .inputs
+            .iter()
+            .map(|e| e.description.as_str())
+            .collect();
+        assert_eq!(names, ["Microphone intégré", "Casque"]);
+        assert_eq!(devices.outputs.len(), 2);
+        assert_eq!(devices.input, "alsa_input.pci-0000_05_00.6.analog-stereo");
+        let microphone = devices.microphone.unwrap();
+        assert_eq!((microphone.volume, microphone.muted), (55, true));
+        pactl
+            .set_default(
+                bar::system::audio::Device::Microphone,
+                "bluez_input.headset",
+            )
+            .unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("set-default-source bluez_input.headset"),
+            "{calls}"
+        );
         // A refusal of the sound server, and no `pactl` at all.
         assert!(matches!(pactl.set_volume(99), Err(Problem::Failed(_))));
         let missing = Pactl {

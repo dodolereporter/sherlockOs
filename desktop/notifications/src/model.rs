@@ -132,12 +132,13 @@ impl Notification {
         self.actions.iter().any(|(key, _)| key == DEFAULT_ACTION)
     }
 
-    /// The actions shown as buttons: the first ones but the default one.
+    /// The actions shown as buttons, but the default one: a row of `ui::MAX_BUTTONS`, then the
+    /// « Options » list (`ui::MAX_OPTIONS`).
     pub fn buttons(&self) -> impl Iterator<Item = &(String, String)> {
         self.actions
             .iter()
             .filter(|(key, _)| key != DEFAULT_ACTION)
-            .take(ui::MAX_BUTTONS)
+            .take(ui::MAX_BUTTONS - 1 + ui::MAX_OPTIONS)
     }
 }
 
@@ -176,8 +177,39 @@ fn named(text: &str) -> Icon {
                 Icon::None
             }
         },
-        name if name.len() <= MAX_ICON_NAME_BYTES => Icon::Name(name.to_owned()),
+        name if name.len() <= MAX_ICON_NAME_BYTES => themed(name),
         _ => Icon::None,
+    }
+}
+
+/// The icon `name` of the user's theme, read like a file given by path (D-23d): the same checks,
+/// at twice the tile for screens at scale 2. Not found, or refused, the name stays and the
+/// bubble shows the initial. Looked up in the D-Bus thread that reads the notification, never
+/// in the interface's.
+fn themed(name: &str) -> Icon {
+    static LOOKUP: std::sync::OnceLock<icon_theme::Lookup> = std::sync::OnceLock::new();
+    let lookup = LOOKUP.get_or_init(|| {
+        let home = std::env::var_os("HOME").map_or_else(std::path::PathBuf::new, Into::into);
+        let dirs = mime_apps::Dirs::from_env(&home);
+        let data: Vec<std::path::PathBuf> = dirs.data().cloned().collect();
+        let theme = icon_theme::user_theme(&dirs.config_home);
+        icon_theme::Lookup::new(&data, Some(&home), theme.as_deref())
+    });
+    themed_in(lookup, name)
+}
+
+fn themed_in(lookup: &icon_theme::Lookup, name: &str) -> Icon {
+    let found = lookup
+        .find(name, ui::ICON_LOOKUP_SIZE, 1)
+        .map(|path| picture::read(&path));
+    match found {
+        Some(Ok((picture::Kind::Png, bytes))) => Icon::Png(Arc::new(bytes)),
+        Some(Ok((picture::Kind::Svg, bytes))) => Icon::Svg(Arc::new(bytes)),
+        Some(Err(error)) => {
+            tracing::debug!(%error, "theme icon refused");
+            Icon::Name(name.to_owned())
+        }
+        None => Icon::Name(name.to_owned()),
     }
 }
 
@@ -303,8 +335,33 @@ mod tests {
         let path = Value::from("file:///dev/zero");
         let note = Notification::new(1, request(-1, vec![("image-path", path)]));
         assert_eq!(note.icon, Icon::None);
-        assert_eq!(named("firefox"), Icon::Name(String::from("firefox")));
+        let unknown = "sherlockos-test-no-such-icon";
+        assert_eq!(named(unknown), Icon::Name(String::from(unknown)));
         assert_eq!(named(" "), Icon::None);
+        // A name of the theme is read from the theme's file, with the same checks.
+        let data = std::env::temp_dir().join(format!("notifications-theme-{}", std::process::id()));
+        let apps = data.join("icons/hicolor/scalable/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(
+            data.join("icons/hicolor/index.theme"),
+            "[Icon Theme]\nName=Hicolor\nDirectories=scalable/apps\n\n[scalable/apps]\n\
+             Size=48\nType=Scalable\nMinSize=16\nMaxSize=512\n",
+        )
+        .unwrap();
+        std::fs::write(
+            apps.join("mail.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+        )
+        .unwrap();
+        std::fs::write(
+            apps.join("far.svg"),
+            "<svg><image href=\"/dev/zero\"/></svg>",
+        )
+        .unwrap();
+        let lookup = icon_theme::Lookup::new(std::slice::from_ref(&data), None, None);
+        assert!(matches!(themed_in(&lookup, "mail"), Icon::Svg(_)));
+        assert_eq!(themed_in(&lookup, "far"), Icon::Name(String::from("far")));
+        std::fs::remove_dir_all(&data).unwrap();
         assert_eq!(named(&"a".repeat(MAX_ICON_NAME_BYTES + 1)), Icon::None);
         let svg =
             std::env::temp_dir().join(format!("notifications-model-{}.svg", std::process::id()));
@@ -343,7 +400,10 @@ mod tests {
                 .iter()
                 .all(|(_, l)| l.chars().count() <= ui::MAX_LABEL_CHARS + 1)
         );
-        assert_eq!(note.buttons().count(), ui::MAX_BUTTONS);
+        assert_eq!(
+            note.buttons().count(),
+            ui::MAX_BUTTONS - 1 + ui::MAX_OPTIONS
+        );
         assert_eq!(note.icon, Icon::None);
     }
 }

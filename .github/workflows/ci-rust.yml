@@ -1,4 +1,6 @@
-# CI Rust: fails any pull request that does not pass `just verify`.
+# CI Rust: fails any pull request that does not pass `just verify`, in two jobs side by side
+# (lot Q-18b): `checks` (format, language, clippy) and `verify` (the tests, through
+# cargo-nextest).
 # What is checked and how to run it locally: docs/ci.md.
 name: CI Rust
 
@@ -27,11 +29,10 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  verify:
-    name: verify
+  # Format, language and clippy: no test runs here, so it ends long before the tests.
+  checks:
+    name: checks
     runs-on: ubuntu-24.04
-    # 15 minutes stopped being enough once the lock screen, the greeter and their renders came
-    # (Q-24): a run of `just verify` is cancelled in the middle of the tests.
     timeout-minutes: 30
     steps:
       - name: Check out the repository
@@ -89,12 +90,70 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: just checks
+        run: just checks
+
+  # The tests: `just test-ci`, cargo-nextest then the doc tests.
+  verify:
+    name: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Without an argument, rustup installs the version and the components written in
+      # rust-toolchain.toml. No version is written here.
+      - name: Install Rust from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo clippy --version
+          cargo fmt --version
+
+      # The compositor (smithay) links to libxkbcommon, and its integration test loads
+      # libwayland-client. Its real session (lot D-14) links to udev, libinput, libseat and GBM
+      # (libdrm for its headers). The ubuntu-24.04 image lacks their development packages.
+      # xwayland provides the Xwayland binary that the XWayland integration test starts, and
+      # libegl1 the libEGL.so.1 without which it stops at startup: libepoxy loads it at run
+      # time, and the xwayland package does not pull it in. libegl-mesa0 gives Mesa's software
+      # EGL device, on which the compositor's genie test draws (lot D-19). dbus-daemon runs the
+      # private session buses of the notification daemon's tests. mesa-vulkan-drivers gives
+      # lavapipe, Mesa's software Vulkan driver, on which sherlock-3d renders the mascot.
+      # Keep this list in line with the prerequisites of CLAUDE.md and docs/ci.md.
+      - name: Install the system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev \
+            libudev-dev libinput-dev libseat-dev libgbm-dev libdrm-dev xwayland libegl1 libegl-mesa0 \
+            dbus-daemon mesa-vulkan-drivers
+
+      # `just verify` runs check-language, a Python script that only uses the standard library.
+      - name: Show the Python of check-language
+        run: python3 --version
+
+      # cargo-nextest runs the tests of every binary side by side, a process per test (lot
+      # Q-18b, docs/ci.md). Installed from its release, checked by install-action.
+      - name: Install just and cargo-nextest
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just@1.59.0,cargo-nextest@0.9.151
+
+      # After installing Rust: the cache key contains the rustc version.
+      # Only main saves the cache, pull requests read it back.
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       # The mascot's model is not in the repository (ADR 0024): downloaded at a pinned revision,
       # its SHA-256 checked. With SHERLOCK_3D_REQUIRE=1 its tests fail instead of skipping.
       - name: just mascot
         run: just mascot
 
-      - name: just verify
+      - name: just test-ci
         env:
           SHERLOCK_3D_REQUIRE: "1"
-        run: just verify
+        run: just test-ci

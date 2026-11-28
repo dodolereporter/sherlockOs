@@ -26,7 +26,7 @@
 
 use std::{
     ffi::OsString,
-    fmt, fs, io,
+    fmt, io,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -196,11 +196,19 @@ impl Config {
         Ok(())
     }
 
-    /// Reads the settings file. A missing file is the default setting.
+    /// Reads the settings file as `read_lenient` does, without the list of its wrong lines.
     pub fn read(path: &Path) -> Result<Self, Error> {
-        match fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
+        Self::read_lenient(path).map(|(config, _)| config)
+    }
+
+    /// Reads the settings file. A missing file is the default setting. A line that cannot be
+    /// taken is left out and listed, and the other lines still count: one typo never turns
+    /// the whole file back to the defaults (a lock set to never would lock after 5 minutes).
+    /// Only a file that cannot be read at all is an error.
+    pub fn read_lenient(path: &Path) -> Result<(Self, Vec<Error>), Error> {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
+            Ok(text) => Ok(Self::parse_lenient(&text)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Self::default(), Vec::new())),
             Err(source) => Err(Error::Read {
                 path: path.into(),
                 source,
@@ -243,6 +251,7 @@ pub fn config_file(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn an_empty_file_is_the_default() {
@@ -312,6 +321,24 @@ mod tests {
             written.contains("speed = 0.5\nclick = middle\n"),
             "{written}"
         );
+    }
+
+    #[test]
+    fn a_wrong_line_keeps_the_others() {
+        let dir =
+            std::env::temp_dir().join(format!("desktop-config-touchpad-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(FILE);
+        fs::write(
+            &path,
+            "tap-to-click = false\nspeed = fast\nnatural-scroll = false\n",
+        )
+        .unwrap();
+        let (config, problems) = Config::read_lenient(&path).unwrap();
+        assert!(!config.tap_to_click && !config.natural_scroll);
+        assert_eq!(config.speed, Config::default().speed);
+        assert!(matches!(problems[..], [Error::Line { line: 2, .. }]));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

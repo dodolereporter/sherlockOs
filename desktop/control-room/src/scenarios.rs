@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use appearance_config::Mode;
-use desktop_config::touchpad::Click;
+use desktop_config::touchpad::{Click, SwipeDown};
 use dock_config::{AutoHide, Position};
 use iced::{Pixels, Settings as IcedSettings};
 use iced_test::simulator::Simulator;
@@ -16,7 +16,7 @@ use sherlock_ui::color::{self, Theme};
 use sherlock_ui::control_room::{self as cr, texts as t};
 use sherlock_ui::{theme, typography};
 
-use crate::app::{App, Change, Config, Delay, Hour, Message, Sound};
+use crate::app::{App, Change, Config, Delay, Hour, LayoutChoice, Message, Sound};
 use crate::apps::{self, Kind};
 use crate::search::{Page, Setting};
 use crate::settings::{File, Paths, Settings};
@@ -69,6 +69,7 @@ fn the_files_are_found_where_the_programs_read_them() {
     assert_eq!(paths.wallpaper, Path::new("/cfg/sherlockos/wallpaper.conf"));
     assert_eq!(paths.touchpad, Path::new("/cfg/sherlockos/touchpad.conf"));
     assert_eq!(paths.pointer, Path::new("/cfg/sherlockos/pointer.conf"));
+    assert_eq!(paths.keyboard, Path::new("/cfg/sherlockos/keyboard.conf"));
 }
 
 #[test]
@@ -93,6 +94,12 @@ fn every_setting_is_written_and_read_back() {
         Change::Speed(75),
         Change::Typing(false),
         Change::ShowClicks(true),
+        Change::TapAndDrag(false),
+        Change::DragLock(true),
+        Change::SwipeDown(SwipeDown::Minimize),
+        Change::Layout(LayoutChoice::Known(2)),
+        Change::RepeatDelay(100),
+        Change::RepeatRate(0),
     ] {
         let _ = app.update(Message::Set(change));
     }
@@ -108,6 +115,12 @@ fn every_setting_is_written_and_read_back() {
     assert_eq!(s.wallpaper, written.wallpaper);
     assert_eq!(s.touchpad, written.touchpad);
     assert_eq!(s.pointer, written.pointer);
+    assert_eq!(s.keyboard, written.keyboard);
+    assert_eq!(s.keyboard.layout.as_deref(), Some("fr"));
+    assert_eq!(s.keyboard.variant, "bepo");
+    assert_eq!((s.keyboard.repeat_delay, s.keyboard.repeat_rate), (1000, 2));
+    assert!(!s.touchpad.tap_and_drag && s.touchpad.drag_lock);
+    assert_eq!(s.touchpad.swipe_down, SwipeDown::Minimize);
     assert_eq!(s.appearance.mode, Mode::Auto);
     assert_eq!(s.appearance.light_from.minutes(), 6 * 60 + 30);
     assert_eq!(s.wallpaper.wallpaper.as_deref(), Some("aurora"));
@@ -127,6 +140,8 @@ fn every_setting_is_written_and_read_back() {
     assert!(text(&app.paths.appearance).contains("AutoLightFrom=06:30"));
     assert!(text(&app.paths.dock).contains("Position=left"));
     assert!(text(&app.paths.pointer).contains("show-clicks = true"));
+    assert!(text(&app.paths.touchpad).contains("swipe-down = minimize"));
+    assert!(text(&app.paths.keyboard).contains("variant = bepo"));
     assert!(text(&app.paths.wallpaper).contains("wallpaper = aurora"));
     assert_eq!(text(&app.paths.lock), "idle-minutes = 15\n");
     assert_eq!(read.lock.idle_minutes, 15);
@@ -290,6 +305,71 @@ fn a_slider_writes_once_it_rests() {
 }
 
 #[test]
+fn the_keyboard_page_survives_a_restart_and_keeps_an_unknown_layout() {
+    let (_tmp, mut app) = bench_with(
+        "keyboard",
+        &[("sherlockos/keyboard.conf", "# mine\nlayout = sv\n")],
+    );
+    // A layout the menu does not offer is shown as such, and kept.
+    assert_eq!(
+        LayoutChoice::of(&app.settings.keyboard),
+        LayoutChoice::Other
+    );
+    let _ = app.update(Message::Set(Change::RepeatRate(50)));
+    let _ = app.update(Message::Set(Change::RepeatDelay(0)));
+    assert_eq!(
+        fs::read_to_string(&app.paths.keyboard).expect("file"),
+        "# mine\nlayout = sv\n",
+        "a slider writes once it rests"
+    );
+    let _ = app.flush();
+    app.finish_writes();
+    // Opened again, as after a restart: everything is there.
+    let (again, _) = App::new(Config {
+        paths: app.paths.clone(),
+        page: Page::Keyboard,
+    });
+    let kb = &again.settings.keyboard;
+    assert_eq!(kb.layout.as_deref(), Some("sv"));
+    assert_eq!((kb.repeat_delay, kb.repeat_rate), (150, 26));
+    // The system's layout empties the key: the compositor goes back to the system's.
+    let _ = app.update(Message::Set(Change::Layout(LayoutChoice::System)));
+    app.finish_writes();
+    let text = fs::read_to_string(&app.paths.keyboard).expect("file");
+    assert!(text.starts_with("# mine\nlayout = \n"), "{text}");
+    assert_eq!(Settings::load(&app.paths).0.keyboard.layout, None);
+    // Every layout offered has its name, and the field to try keeps a bounded text.
+    assert_eq!(
+        LayoutChoice::offered().len(),
+        cr::KEYBOARD_LAYOUTS.len() + 1
+    );
+    let _ = app.update(Message::TryKeys("a".repeat(cr::TRIAL_MAX + 50)));
+    assert_eq!(app.trial.chars().count(), cr::TRIAL_MAX);
+}
+
+#[test]
+fn the_right_click_offers_two_fingers_first_and_the_corner() {
+    let (_tmp, mut app) = bench("right-click", Vec::new());
+    assert_eq!(app.settings.touchpad.click, Click::Fingers);
+    let _ = app.update(Message::Go(Page::Touchpad));
+    app.settle();
+    let messages: Vec<Message> = {
+        let mut ui = simulator(&app, cr::WINDOW);
+        assert!(ui.find(t::TWO_FINGERS).is_ok());
+        ui.click(t::CORNER).expect("the corner is offered");
+        ui.into_messages().collect()
+    };
+    assert!(matches!(
+        messages.as_slice(),
+        [Message::Set(Change::Click(Click::Areas))]
+    ));
+    // Drag lock waits for tap and drag, which waits for tap to click.
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::DRAG_LOCK).is_ok() && ui.find(t::SWIPE_MINIMIZE).is_ok());
+}
+
+#[test]
 fn the_hours_of_the_two_themes_never_meet() {
     let (_tmp, mut app) = bench("hours", Vec::new());
     let dark = app.settings.appearance.dark_from.minutes();
@@ -410,6 +490,93 @@ fn capture(app: &App, name: &str, size: (f32, f32)) -> PathBuf {
 /// bar, and a narrow one, where the sidebar folds.
 const SIZES: [((f32, f32), &str); 2] = [((1920.0, 1032.0), "wide"), ((520.0, 760.0), "narrow")];
 
+/// The Bluetooth page (lot D-26o) with what BlueZ would give: a headset connected at 80 %, a
+/// mouse paired, a speaker around while the scan runs; then the question of a pairing. Both
+/// sizes, both themes: `bluetooth-<size>-<theme>`, `bluetooth-pairing-wide-dark`.
+#[test]
+fn captures_of_the_bluetooth_page() {
+    use crate::bluetooth::Msg;
+    use system_services::bluetooth::{Asked, Bluetooth, Device, Kind, Reply};
+    let device = |path: &str, name: &str, kind, paired, connected, battery| Device {
+        path: path.to_owned(),
+        name: name.to_owned(),
+        kind,
+        paired,
+        connected,
+        battery,
+    };
+    let read = Bluetooth {
+        adapter: String::from("/org/bluez/hci0"),
+        powered: true,
+        connected: 1,
+        devices: vec![
+            device(
+                "/dev/1",
+                "Casque WH-1000XM4",
+                Kind::Audio,
+                true,
+                true,
+                Some(80),
+            ),
+            device(
+                "/dev/2",
+                "Souris MX Master 3 de Camille, au bureau",
+                Kind::Mouse,
+                true,
+                false,
+                None,
+            ),
+            device(
+                "/dev/3",
+                "Enceinte du salon",
+                Kind::Audio,
+                false,
+                false,
+                None,
+            ),
+        ],
+    };
+    for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let (_tmp, mut app) = bench("bluetooth", Vec::new());
+        let _ = app.update(Message::Go(Page::Bluetooth));
+        let _ = app.update(Message::Bluetooth(Msg::Read(Ok(read.clone()))));
+        app.settle();
+        for &(size, size_name) in &SIZES {
+            let path = capture(&app, &format!("bluetooth-{size_name}-{theme_name}"), size);
+            assert!(path.exists(), "{}", path.display());
+        }
+        if which == Theme::Dark {
+            let messages: Vec<Message> = {
+                let mut ui = simulator(&app, SIZES[0].0);
+                ui.click(t::CONNECT).expect("the mouse connects");
+                ui.click(t::PAIR).expect("the speaker pairs");
+                ui.into_messages().collect()
+            };
+            assert!(
+                matches!(
+                    messages.as_slice(),
+                    [
+                        Message::Bluetooth(Msg::Device(mouse)),
+                        Message::Bluetooth(Msg::Device(speaker)),
+                    ] if mouse == "/dev/2" && speaker == "/dev/3"
+                ),
+                "{messages:?}"
+            );
+            // A pairing asks to confirm a code.
+            app.bluetooth.busy = Some(String::from("/dev/3"));
+            let (sender, _answer) = iced::futures::channel::oneshot::channel();
+            let asked = Asked::Confirm(String::from("123456"));
+            app.bluetooth.asked = Some((asked, Reply::new(sender)));
+            let path = capture(&app, "bluetooth-pairing-wide-dark", SIZES[0].0);
+            assert!(path.exists());
+        }
+        // Leaving the page stops the scan and what was under way.
+        let _ = app.update(Message::Go(Page::Sound));
+        assert!(app.bluetooth.asked.is_none() && app.bluetooth.busy.is_none());
+    }
+}
+
 #[test]
 fn captures_of_the_pages_in_both_themes() {
     let (_, dirs) = wallpapers();
@@ -421,6 +588,7 @@ fn captures_of_the_pages_in_both_themes() {
         for (page, page_name) in [
             (Page::Sound, "sound"),
             (Page::Appearance, "appearance"),
+            (Page::Keyboard, "keyboard"),
             (Page::Touchpad, "touchpad"),
             (Page::Lock, "lock"),
             (Page::Clipboard, "clipboard"),
@@ -712,4 +880,155 @@ fn the_page_left_fades_out_under_the_new_one() {
     std::thread::sleep(cr::PAGE_FADE);
     let _ = app.update(Message::Frame(std::time::Instant::now()));
     assert!(app.leaving.is_none());
+}
+
+/// Two screens as a laptop with a monitor on its right gives them.
+fn two_screens() -> Vec<crate::displays::Screen> {
+    use crate::displays::{Lit, Mode, Screen};
+    let mode = |width, height, refresh| Mode {
+        width,
+        height,
+        refresh,
+    };
+    let laptop = vec![
+        mode(2560, 1600, 60_000),
+        mode(1920, 1200, 60_000),
+        mode(1280, 800, 60_000),
+    ];
+    let monitor = vec![
+        mode(2560, 1440, 143_981),
+        mode(2560, 1440, 59_951),
+        mode(1920, 1080, 60_000),
+    ];
+    vec![
+        Screen {
+            name: "eDP-1".into(),
+            make: "BOE".into(),
+            model: "Écran intégré".into(),
+            on: Some(Lit {
+                mode: laptop[0],
+                position: (0, 0),
+                transform: 0,
+                scale: 2.0,
+            }),
+            modes: laptop,
+        },
+        Screen {
+            name: "DP-1".into(),
+            make: "DEL".into(),
+            model: "Moniteur 27 pouces".into(),
+            on: Some(Lit {
+                mode: monitor[0],
+                position: (1280, 0),
+                transform: 0,
+                scale: 1.25,
+            }),
+            modes: monitor,
+        },
+    ]
+}
+
+#[test]
+fn a_screen_change_waits_for_keep_and_comes_back_without_it() {
+    use crate::displays::{Answer, Event};
+    use crate::pages::displays::Change as Screens;
+    let (_tmp, mut app) = bench("displays", Vec::new());
+    let _ = app.update(Message::Go(Page::Displays));
+    let (sender, requests) = std::sync::mpsc::channel();
+    let event = |e| Message::Displays(Screens::Event(e));
+    let _ = app.update(event(Event::Ready(sender)));
+    let _ = app.update(event(Event::Screens(two_screens())));
+    // The main screen is chosen first.
+    assert_eq!(app.displays.selected.as_deref(), Some("eDP-1"));
+
+    // A scale: sent whole, the other screen as it is.
+    let _ = app.update(Message::Displays(Screens::Scale(1.5)));
+    let sent = requests.try_recv().expect("a configuration");
+    let laptop = sent
+        .0
+        .iter()
+        .find(|(n, _)| n == "eDP-1")
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(laptop.scale, 1.5);
+    let monitor = sent.0.iter().find(|(n, _)| n == "DP-1").unwrap().1.unwrap();
+    assert_eq!(monitor.scale, 1.25);
+    assert!(app.displays.confirm.is_none());
+    let _ = app.update(event(Event::Answer(Answer::Applied)));
+    let (previous, until) = app.displays.confirm.clone().expect("a confirmation");
+    // Before the delay nothing comes back; after it, the previous configuration does.
+    app.tick_displays(until - std::time::Duration::from_secs(1));
+    assert!(requests.try_recv().is_err());
+    app.tick_displays(until);
+    assert_eq!(requests.try_recv().unwrap(), previous);
+    assert!(app.displays.confirm.is_none());
+
+    // « Garder » keeps it.
+    let _ = app.update(Message::Displays(Screens::Rotation(1)));
+    let _ = requests.try_recv().unwrap();
+    let _ = app.update(event(Event::Answer(Answer::Applied)));
+    let _ = app.update(Message::Displays(Screens::Keep));
+    assert!(app.displays.confirm.is_none());
+
+    // A refusal says so, and waits for nothing.
+    let _ = app.update(Message::Displays(Screens::Resolution(1280, 800)));
+    let _ = requests.try_recv().unwrap();
+    let _ = app.update(event(Event::Answer(Answer::Refused)));
+    assert!(app.displays.refused && app.displays.confirm.is_none());
+
+    // The monitor becomes the main screen: it goes to the origin, the laptop to its left.
+    let _ = app.update(Message::Displays(Screens::Select("DP-1".into())));
+    let _ = app.update(Message::Displays(Screens::Main));
+    let sent = requests.try_recv().unwrap();
+    let at = |n: &str| {
+        sent.0
+            .iter()
+            .find(|(m, _)| m == n)
+            .unwrap()
+            .1
+            .unwrap()
+            .position
+    };
+    assert_eq!((at("DP-1"), at("eDP-1")), ((0, 0), (-1280, 0)));
+}
+
+#[test]
+fn captures_of_the_screens() {
+    use crate::displays::Event;
+    use crate::pages::displays::Change as Screens;
+    for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let (_tmp, mut app) = bench("capture-displays", Vec::new());
+        let _ = app.update(Message::Go(Page::Displays));
+        let (sender, _requests) = std::sync::mpsc::channel();
+        let event = |e| Message::Displays(Screens::Event(e));
+        let _ = app.update(event(Event::Ready(sender)));
+        let _ = app.update(event(Event::Screens(two_screens())));
+        app.settle();
+        for &(size, size_name) in &SIZES {
+            capture(&app, &format!("displays-{size_name}-{theme_name}"), size);
+        }
+        // Waiting for « Garder ».
+        let _ = app.update(Message::Displays(Screens::Scale(1.5)));
+        let _ = app.update(event(Event::Answer(crate::displays::Answer::Applied)));
+        capture(&app, &format!("displays-confirm-{theme_name}"), SIZES[0].0);
+    }
+}
+
+#[test]
+fn a_file_changed_elsewhere_shows_unless_a_change_of_ours_waits() {
+    let (_tmp, mut app) = bench_with("follow", &[("sherlockos/touchpad.conf", "speed = 0.4\n")]);
+    // Changed by hand while Control Room is open.
+    fs::write(&app.paths.touchpad, "speed = 0.4\ntap-to-click = false\n").expect("file");
+    let _ = app.update(Message::FilesChanged);
+    let _ = app.update(Message::Reloaded(Arc::new(Settings::load(&app.paths))));
+    assert!(!app.settings.touchpad.tap_to_click);
+    // A change of ours waits: what was read before it does not replace it.
+    let stale = Arc::new(Settings::load(&app.paths));
+    let _ = app.update(Message::Set(Change::NaturalScroll(false)));
+    let _ = app.update(Message::Reloaded(stale));
+    assert!(!app.settings.touchpad.natural_scroll);
+    app.finish_writes();
+    assert!(!Settings::load(&app.paths).0.touchpad.natural_scroll);
 }

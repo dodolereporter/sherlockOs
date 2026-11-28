@@ -303,9 +303,18 @@ mod tests {
             next(&signals),
             (String::from("NotificationClosed"), id, String::from("2"))
         );
-        // A click on the bubble runs its default action.
+        // A click on the bubble runs its default action, after the activation token of the
+        // click when the compositor gave one (`ActivationToken`, lot Q-52).
         let id = notify(&client, 0, "Clic", &actions, HashMap::new(), 0);
-        core.click(id);
+        core.click_activated(id, Some("click-token"));
+        assert_eq!(
+            next(&signals),
+            (
+                String::from("ActivationToken"),
+                id,
+                String::from("click-token")
+            )
+        );
         assert_eq!(
             next(&signals),
             (String::from("ActionInvoked"), id, String::from("default"))
@@ -340,6 +349,7 @@ mod tests {
         let signals = signals(&client);
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&settings)
         .unwrap();
@@ -359,6 +369,14 @@ mod tests {
         // Read again at once: the next notification shows.
         NotificationsConfig {
             do_not_disturb: false,
+            until: None,
+        }
+        .save(&settings)
+        .unwrap();
+        // An end already past (D-23e): Do not disturb holds no more.
+        NotificationsConfig {
+            do_not_disturb: true,
+            until: Some(1),
         }
         .save(&settings)
         .unwrap();

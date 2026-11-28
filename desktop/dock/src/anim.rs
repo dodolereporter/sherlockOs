@@ -155,6 +155,49 @@ pub struct Leaving {
     pub dropped: Option<(f32, f32)>,
 }
 
+/// The puffs of a `Poof` at one instant: the center and radius of each, and their opacity.
+pub type Puffs = (Vec<((f32, f32), f32)>, f32);
+
+/// The puff of smoke where a pinned application was let go out of the dock (lot D-21d).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Poof {
+    /// Its center, in the dock surface.
+    pub at: (f32, f32),
+    pub side: f32,
+    pub start: Duration,
+}
+
+impl Poof {
+    /// Each puff at `now`: its center and radius, and the opacity of all. Nothing once over.
+    pub fn puffs(&self, now: Duration) -> Option<Puffs> {
+        let t = now.saturating_sub(self.start).as_secs_f32() / dock::POOF_DURATION.as_secs_f32();
+        if t >= 1.0 {
+            return None;
+        }
+        // Out fast, then slower, as smoke that spreads.
+        let eased = 1.0 - (1.0 - t).powi(3);
+        let lerp = |(a, b): (f32, f32)| (a + (b - a) * eased) * self.side;
+        let (drift, radius) = (lerp(dock::POOF_DRIFT), lerp(dock::POOF_RADIUS));
+        let count = dock::POOF_PUFFS;
+        let puffs = (0..count)
+            .map(|k| {
+                let angle =
+                    std::f32::consts::TAU * k as f32 / count as f32 - std::f32::consts::FRAC_PI_2;
+                let center = (
+                    self.at.0 + drift * angle.cos(),
+                    self.at.1 + drift * angle.sin(),
+                );
+                (center, radius)
+            })
+            .collect();
+        Some((puffs, 1.0 - t * t))
+    }
+
+    pub fn is_done(&self, now: Duration) -> bool {
+        now >= self.start + dock::POOF_DURATION
+    }
+}
+
 /// Height of the bounce of an icon of `side` at `elapsed` into it: hops of `BOUNCE_PERIOD`,
 /// each a parabola, as a thrown object falls, `BOUNCE_HEIGHT` of the side high.
 pub fn hop(elapsed: Duration, side: f32) -> f32 {
@@ -174,6 +217,14 @@ pub struct Bounce {
 impl Bounce {
     pub fn new(start: Duration) -> Self {
         Self { start, end: None }
+    }
+
+    /// A bounce of `hops` hops from `start`, then it lands: a window asks for attention.
+    pub fn hops(start: Duration, hops: u32) -> Self {
+        Self {
+            start,
+            end: Some(start + dock::BOUNCE_PERIOD * hops),
+        }
     }
 
     /// Height above its place at `now`, for an icon of `side`.
@@ -385,6 +436,21 @@ mod tests {
         let mut launch = Launch::new(Target::App(String::from("a")), ms(0), Some((2, 4)));
         assert!(!launch.windows(2, 4, ms(10)));
         assert!(launch.windows(2, 5, ms(20)), "a window got the keyboard");
+    }
+
+    #[test]
+    fn the_poof_spreads_and_fades() {
+        let poof = Poof {
+            at: (100.0, 50.0),
+            side: 52.0,
+            start: ms(1000),
+        };
+        let (first, opacity) = poof.puffs(ms(1000)).expect("puffs");
+        assert_eq!((first.len(), opacity), (dock::POOF_PUFFS, 1.0));
+        let (later, faded) = poof.puffs(ms(1300)).expect("puffs");
+        assert!(later[0].1 > first[0].1 && faded < 0.5, "bigger, fainter");
+        assert!(poof.puffs(ms(1000) + dock::POOF_DURATION).is_none());
+        assert!(poof.is_done(ms(1400)) && !poof.is_done(ms(1399)));
     }
 
     #[test]

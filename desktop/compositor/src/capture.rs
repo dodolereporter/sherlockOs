@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use sherlock_ui::{
@@ -53,6 +54,7 @@ use crate::{
     damage::Ids,
     output::View,
     render::Scene,
+    screenshot_thumbnail::Taken,
     screenshot_tool::{Pending, Tool},
     wallpaper, window_anim,
 };
@@ -133,6 +135,12 @@ struct Job {
     image: Image,
     destination: Destination,
     folder: Folder,
+    /// A window taken alone gets its shadow, at the scale of its screen (lot D-35e).
+    shadow: Option<f64>,
+    /// The scale of the screen its thumbnail shows on, and the thumbnail's border.
+    scale: f64,
+    border: sherlock_ui::color::Color,
+    serial: u64,
 }
 
 #[derive(Default)]
@@ -144,6 +152,12 @@ pub struct Capture {
     pub(crate) tool: Option<Tool>,
     pub(crate) options: Options,
     pub(crate) pending: Option<Pending>,
+    /// The thumbnail of the last image taken, the screen of each image on its way, and the
+    /// image carried into an application (lot D-35e).
+    pub(crate) thumbnail: Option<crate::screenshot_thumbnail::Thumbnail>,
+    pub(crate) thumbnail_outputs: std::collections::VecDeque<Option<Output>>,
+    pub(crate) dragged: Option<(Arc<[u8]>, Option<PathBuf>)>,
+    serial: u64,
     /// Pastes of a screenshot being written.
     pastes: Rc<Cell<usize>>,
 }
@@ -238,9 +252,19 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 }
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
-fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Arc<[u8]>>) {
-    let mut bus: Option<zbus::Connection> = None;
-    while let Ok(job) = jobs.recv() {
+fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Taken>) {
+    let notifier = notifier(settings.session_bus.clone());
+    while let Ok(mut job) = jobs.recv() {
+        if let Some(scale) = job.shadow {
+            let shadow = sherlock_ui::color::palette().shadow;
+            let size = (job.image.width, job.image.height);
+            let (rgba, width, height) = tool_ui::with_shadow(&job.image.rgba, size, scale, shadow);
+            job.image = Image {
+                width,
+                height,
+                rgba,
+            };
+        }
         let png = match encode(&job.image) {
             Ok(png) => png,
             Err(err) => {
@@ -248,8 +272,8 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 continue;
             }
         };
-        let (title, body) = match job.destination {
-            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY)),
+        let (title, body, path) = match job.destination {
+            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY), None),
             Destination::SaveAndCopy => {
                 let base = settings.pictures.as_deref();
                 let Some(folder) = folder_of(job.folder, base, |k| std::env::var_os(k)) else {
@@ -265,31 +289,93 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 };
                 tracing::info!(path = %path.display(), "screenshot written");
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                (ui::SAVED, ui::saved_body(&name.unwrap_or_default()))
+                (
+                    ui::SAVED,
+                    ui::saved_body(&name.unwrap_or_default()),
+                    Some(path),
+                )
             }
         };
-        if saved.send(Arc::from(png)).is_err() {
+        let taken = Taken {
+            png: Arc::from(png),
+            path,
+            size: (job.image.width, job.image.height),
+            picture: thumbnail_of(&job),
+        };
+        if saved.send(taken).is_err() {
             return;
         }
-        let sent = zbus::block_on(async {
-            if bus.is_none() {
-                let builder = match &settings.session_bus {
-                    Some(address) => zbus::connection::Builder::address(address.as_str())?,
-                    None => zbus::connection::Builder::session()?,
-                };
-                bus = Some(builder.build().await?);
-            }
-            match &bus {
-                Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
-                    .await
-                    .map_err(|p| zbus::Error::Failure(p.to_string())),
-                None => Ok(0),
-            }
-        });
-        if let Err(err) = sent {
-            tracing::warn!("screenshot notification: {err}");
+        // Handed to the notifier: a notifications daemon that no longer answers never holds
+        // the next screenshots back. Past a few waiting, the confirmation is left out.
+        if let Some(notifier) = &notifier
+            && notifier.try_send((title, body)).is_err()
+        {
+            tracing::warn!("screenshot notification left out: the notifier is behind");
         }
     }
+}
+
+/// Longest wait for the notifications daemon, to connect or to answer.
+const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
+
+/// Confirmations waiting for the notifier, at most.
+const NOTIFY_QUEUE: usize = 4;
+
+/// A confirmation: its title and its text.
+type Confirmation = (&'static str, String);
+
+/// A thread of its own that sends the confirmations of the screenshots on the session bus at
+/// `address` (the session's without one), each call limited to `NOTIFY_LIMIT`. Its connection
+/// is made again after an error: a bus or a daemon that restarted is found again.
+fn notifier(address: Option<String>) -> Option<mpsc::SyncSender<Confirmation>> {
+    let (sender, confirmations) = mpsc::sync_channel::<Confirmation>(NOTIFY_QUEUE);
+    let spawned = std::thread::Builder::new()
+        .name(String::from("screenshot-notify"))
+        .spawn(move || {
+            let mut bus: Option<zbus::Connection> = None;
+            while let Ok((title, body)) = confirmations.recv() {
+                let sent = zbus::block_on(async {
+                    if bus.is_none() {
+                        let builder = match &address {
+                            Some(address) => zbus::connection::Builder::address(address.as_str())?,
+                            None => zbus::connection::Builder::session()?,
+                        };
+                        bus = Some(builder.method_timeout(NOTIFY_LIMIT).build().await?);
+                    }
+                    match &bus {
+                        Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
+                            .await
+                            .map_err(|p| zbus::Error::Failure(p.to_string())),
+                        None => Ok(0),
+                    }
+                });
+                if let Err(err) = sent {
+                    tracing::warn!("screenshot notification: {err}");
+                    bus = None;
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => Some(sender),
+        Err(err) => {
+            tracing::warn!("cannot start the screenshot notifier: {err}");
+            None
+        }
+    }
+}
+
+/// The thumbnail of the image of `job`, at the scale of its screen.
+fn thumbnail_of(job: &Job) -> Option<crate::picture::Picture> {
+    let screen = tool_ui::Rect::new(0.0, 0.0, 1.0e5, 1.0e5);
+    let size = (job.image.width, job.image.height);
+    let r = tool_ui::thumbnail(&screen, size, 0.0);
+    let px = |v: f64| (v * job.scale).round().max(1.0) as u32;
+    let radius = tool_ui::THUMBNAIL_RADIUS * job.scale as f32;
+    let border = (
+        job.border,
+        sherlock_ui::metrics::BORDER_WIDTH * job.scale as f32,
+    );
+    crate::picture::thumbnail(&job.image, (px(r.w), px(r.h)), radius, border, job.serial)
 }
 
 impl State {
@@ -297,11 +383,18 @@ impl State {
     pub fn enable_screenshots(&mut self, settings: Settings) {
         let (jobs, worker_jobs) = mpsc::channel();
         let (saved, pngs) = channel::channel();
-        let inserted = self.loop_handle.insert_source(pngs, |event, _, state| {
-            if let Event::Msg(png) = event {
-                state.copy_png(png);
-            }
-        });
+        let inserted = self
+            .loop_handle
+            .insert_source(pngs, |event: Event<Taken>, _, state| {
+                if let Event::Msg(taken) = event {
+                    state.copy_png(taken.png.clone());
+                    // The thumbnail, on the screen of the image (lot D-35e).
+                    let output = state.capture.thumbnail_outputs.pop_front().flatten();
+                    if let Some(output) = output.or_else(|| state.pointer_output()) {
+                        state.show_thumbnail(output, taken);
+                    }
+                }
+            });
         if let Err(err) = inserted {
             tracing::warn!("no screenshots: {err}");
             return;
@@ -354,37 +447,69 @@ impl State {
         match target {
             Some(target) => {
                 let options = Options::default();
-                self.take_with(&target, None, &options);
+                self.take_with(&target, None, &options, false);
             }
             None => tracing::info!(?kind, "screenshot: nothing to take"),
         }
     }
 
+    /// `target` drawn by the backend, without the cursor.
+    pub fn draw_target(&mut self, target: &Target) -> Option<Image> {
+        let Some(mut capturer) = self.capture.capturer.take() else {
+            tracing::warn!("screenshot: no renderer");
+            return None;
+        };
+        // The cursor is stamped by the screenshot itself when it is asked for (`take_with`).
+        let image = capturer(self, target, false);
+        self.capture.capturer = Some(capturer);
+        image
+    }
+
     /// Draws `target`, cut to `crop`, and hands it to the worker with the choices of
-    /// `options`.
+    /// `options`; a window with its `shadow`.
     pub(crate) fn take_with(
         &mut self,
         target: &Target,
         crop: Option<Rectangle<i32, Physical>>,
         options: &Options,
+        shadow: bool,
     ) {
-        let Some(mut capturer) = self.capture.capturer.take() else {
-            tracing::warn!("screenshot: no renderer");
-            return;
+        let mut image = self.draw_target(target);
+        let output = match target {
+            Target::Screen(output) => Some(output.clone()),
+            Target::Window(window) => self.window_output(window),
         };
-        let image = capturer(self, target, false);
-        self.capture.capturer = Some(capturer);
+        let scale = output
+            .as_ref()
+            .map_or(1.0, |o| o.current_scale().fractional_scale());
+        // The cursor, where it is on that screen, when it is asked for (lot D-35e).
+        if let (Target::Screen(output), Some(image), true) = (target, &mut image, options.cursor)
+            && let (Some(screen), Some(pointer)) =
+                (self.space.output_geometry(output), self.seat.get_pointer())
+        {
+            let at = (pointer.current_location() - screen.loc.to_f64()).to_physical(scale);
+            let light = self.theme() == sherlock_ui::color::Theme::Light;
+            crate::picture::stamp_cursor(image, (at.x, at.y), scale, light);
+        }
         let image = match (image, crop) {
             (Some(image), Some(rect)) => image.crop(rect),
             (image, _) => image,
         };
         match (image, &self.capture.jobs) {
             (Some(image), Some(jobs)) => {
-                let _ = jobs.send(Job {
+                self.capture.serial += 1;
+                let job = Job {
                     image,
                     destination: options.destination,
                     folder: options.folder,
-                });
+                    shadow: (shadow && matches!(target, Target::Window(_))).then_some(scale),
+                    scale,
+                    border: sherlock_ui::color::palette().border,
+                    serial: self.capture.serial,
+                };
+                if jobs.send(job).is_ok() {
+                    self.capture.thumbnail_outputs.push_back(output);
+                }
             }
             (None, _) => tracing::warn!("screenshot: nothing drawn"),
             _ => {}
@@ -393,7 +518,7 @@ impl State {
 
     /// The console is left: the tool and its timer go, at once.
     pub(crate) fn cancel_area(&mut self) {
-        let open = self.capture.tool.take().is_some() || self.capture.pending.take().is_some();
+        let open = self.capture.tool.take().is_some() | self.capture.pending.take().is_some();
         if open {
             self.queue_redraw();
         }
@@ -524,23 +649,8 @@ pub fn image(
     let mut texture = match target {
         Target::Window(window) => window_anim::snapshot(scene, renderer, state, window)?,
         Target::Screen(output) => {
-            let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
-            let size: Size<i32, Physical> = view.frame.size;
-            let view = View {
-                frame: Rectangle::from_size(size),
-                frame_size: size,
-                ..view
-            };
             let now = state.now();
-            let views = [(output.clone(), view)];
-            let mut ids = Ids::default();
-            let (screens, _) =
-                scene.screens(renderer, &mut ids, state, textures, &views, None, now);
-            let elements = screens.into_iter().next()?;
-            let desktop = color::palette().desktop.premultiplied();
-            window_anim::draw(renderer, size, &elements, desktop)
-                .inspect_err(|err| tracing::warn!("screenshot: drawing the screen: {err}"))
-                .ok()?
+            screen_texture(scene, renderer, textures, state, output, now)?
         }
     };
     if let Some(cursors) = cursors
@@ -549,6 +659,47 @@ pub fn image(
         tracing::warn!("screen share: drawing the cursor: {err}");
     }
     read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, counted from the start of the compositor: a
+/// screenshot, or a frame of an animation (the board of the screens off, lot D-38).
+pub fn screen_at(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<Image> {
+    let texture = screen_texture(scene, renderer, textures, state, output, now)?;
+    read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, into a texture: a screenshot, or the frame
+/// frozen under the curtain when the session locks (lot D-24e).
+pub fn screen_texture(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<GlesTexture> {
+    let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
+    let size: Size<i32, Physical> = view.frame.size;
+    let view = View {
+        frame: Rectangle::from_size(size),
+        frame_size: size,
+        ..view
+    };
+    let views = [(output.clone(), view)];
+    let mut ids = Ids::default();
+    let (screens, _) = scene.screens(renderer, &mut ids, state, textures, &views, None, now);
+    let elements = screens.into_iter().next()?;
+    let desktop = color::palette().desktop.premultiplied();
+    window_anim::draw(renderer, size, &elements, desktop)
+        .inspect_err(|err| tracing::warn!("drawing the screen: {err}"))
+        .ok()
 }
 
 /// Draws the cursor over `texture`, the picture of `target`, if the pointer is on it.
@@ -602,6 +753,33 @@ fn draw_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_daemon_that_never_answers_holds_no_screenshot_back() {
+        // A bus that takes the connection and never says a word: the notifier waits there,
+        // the screenshots go on, and past a few waiting the confirmations are left out.
+        let dir = std::env::temp_dir().join(format!("capture-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let notifier = notifier(Some(format!("unix:path={}", socket.display()))).unwrap();
+        notifier
+            .try_send((ui::SAVED, String::from("first")))
+            .unwrap();
+        // The notifier took the first one and waits on the silent bus.
+        let _held = listener.accept().unwrap();
+        let start = std::time::Instant::now();
+        let taken = (0..20)
+            .filter(|n| notifier.try_send((ui::SAVED, format!("shot {n}"))).is_ok())
+            .count();
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(
+            (NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken),
+            "{taken}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_keys_choose_what_is_taken() {

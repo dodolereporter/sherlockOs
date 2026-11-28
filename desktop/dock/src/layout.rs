@@ -103,6 +103,37 @@ impl Geometry {
             + separator
     }
 
+    /// This geometry, its icons smaller if they must be for `count` icons (and the separator)
+    /// to fit in a screen `room` long along the dock, `SCREEN_ROOM` left at each end, as macOS
+    /// does (lot D-21l). The largest size that fits, to the pixel, `FIT_MIN_ICON` at least;
+    /// unchanged when it fits as it is.
+    pub fn fitted(self, room: f32, count: usize, separator: bool) -> Self {
+        let room = room - 2.0 * dock::SCREEN_ROOM;
+        let fits = |icon: f32| {
+            let geometry = Self { icon, ..self };
+            (geometry.longest(count, separator) + 2.0 * dock::SURFACE_SLACK).ceil() <= room
+        };
+        if count == 0 || fits(self.icon) {
+            return self;
+        }
+        let (mut low, mut high) = (dock::FIT_MIN_ICON.min(self.icon), self.icon);
+        if !fits(low) {
+            return Self { icon: low, ..self };
+        }
+        while high - low > 0.5 {
+            let middle = (low + high) / 2.0;
+            if fits(middle) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        Self {
+            icon: low.floor().max(dock::FIT_MIN_ICON.min(self.icon)),
+            ..self
+        }
+    }
+
     /// Size of the dock surface for `count` icons: as long as the longest magnified bar plus
     /// room for the label at its ends, as deep as the label (beside the icons on the sides) or
     /// the top of the highest bounce, whichever reaches farther.
@@ -517,8 +548,8 @@ impl Layout {
     }
 
     /// The band a hovered dock keeps the pointer in: along the bar as it is drawn, from the
-    /// screen edge to the top of the tallest icon. The gaps between grown icons are in it, so
-    /// the magnification does not drop when the pointer crosses one.
+    /// screen edge, gap included, to the top of the tallest icon. The gaps between grown icons
+    /// are in it, so the magnification does not drop when the pointer crosses one.
     pub fn hover_band(&self) -> Rectangle {
         let (start, length) = self.along;
         let tallest = self
@@ -530,17 +561,56 @@ impl Layout {
             .geometry
             .bar_thickness()
             .max(self.geometry.inset() + tallest);
-        to_surface(&self.geometry, self.surface, start, 0.0, length, depth)
+        let gap = self.geometry.gap;
+        to_surface(
+            &self.geometry,
+            self.surface,
+            start,
+            -gap,
+            length,
+            depth + gap,
+        )
     }
 
-    /// Whether `point` is over the dock: the bar, or an icon that grew past it.
+    /// Whether `point` is over the dock: the bar and the gap down to the screen edge, or an
+    /// icon that grew past the bar.
     pub fn contains(&self, point: Point) -> bool {
-        self.bar.contains(point) || self.icon_at(point).is_some()
+        self.in_column(point) || self.icon_at(point).is_some()
     }
 
-    /// The icon under `point`. The gap between two icons belongs to neither.
+    /// Whether `point` is on the bar or between it and the screen edge, along the bar, the
+    /// edge itself included (lot D-21f).
+    fn in_column(&self, point: Point) -> bool {
+        let (along, depth) = along_depth(&self.geometry, self.surface, point);
+        let (start, length) = self.along;
+        (start..=start + length).contains(&along)
+            && (-self.geometry.gap..=self.geometry.bar_thickness()).contains(&depth)
+    }
+
+    /// The icon drawn under `point`. The gap between two icons belongs to neither.
     pub fn icon_at(&self, point: Point) -> Option<usize> {
         self.icons.iter().position(|icon| icon.contains(point))
+    }
+
+    /// The icon a press or a hover at `point` acts on (lot D-21f): the icon drawn there, or,
+    /// on the bar and between it and the screen edge, the nearest one along the dock. As on
+    /// macOS (Fitts's law), the pointer pushed against the edge is on the icon of its column,
+    /// and a space between two icons goes to the closer one.
+    pub fn icon_for(&self, point: Point) -> Option<usize> {
+        if let Some(index) = self.icon_at(point) {
+            return Some(index);
+        }
+        if !self.in_column(point) {
+            return None;
+        }
+        let along = self.along(point);
+        let distance = |icon: &Rectangle| {
+            let (start, side) = self.along_of(*icon);
+            (along - (start + side / 2.0)).abs()
+        };
+        (self.icons.iter().enumerate())
+            .min_by(|(_, a), (_, b)| distance(a).total_cmp(&distance(b)))
+            .map(|(index, _)| index)
     }
 
     /// The dot of an open application, between its icon and the screen edge.
@@ -625,6 +695,41 @@ fn to_surface(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lot D-21l: twenty icons and the separator on 1366 × 768 at 1.5 (911 long) shrink until
+    /// the dock's surface leaves 8 at each end; on 1920 they keep their size; vertical docks fit
+    /// the height.
+    #[test]
+    fn the_dock_shrinks_its_icons_to_fit_its_screen() {
+        let geometry = Geometry::default();
+        let wide = geometry.fitted(1920.0, 12, true);
+        assert_eq!(wide, geometry, "room enough");
+        let fitted = geometry.fitted(911.0, 20, true);
+        assert!(fitted.icon < geometry.icon, "{}", fitted.icon);
+        assert!(fitted.icon >= dock::FIT_MIN_ICON);
+        let surface = fitted.surface_size(20, true);
+        assert!(
+            surface.width <= 911.0 - 2.0 * dock::SCREEN_ROOM,
+            "{surface:?}"
+        );
+        // One pixel more would not fit: the largest size that does.
+        let larger = Geometry {
+            icon: fitted.icon + 1.0,
+            ..fitted
+        };
+        assert!(larger.surface_size(20, true).width > 911.0 - 2.0 * dock::SCREEN_ROOM);
+        // Far too many icons: the smallest size, never less.
+        assert_eq!(geometry.fitted(911.0, 200, true).icon, dock::FIT_MIN_ICON);
+        assert_eq!(geometry.fitted(911.0, 0, false), geometry);
+        // On the left edge, the height is the room.
+        let side = Geometry {
+            position: Position::Left,
+            ..geometry
+        };
+        let fitted = side.fitted(533.0, 10, true);
+        assert!(fitted.icon < side.icon && fitted.icon > dock::FIT_MIN_ICON);
+        assert!(fitted.surface_size(10, true).height <= 533.0 - 2.0 * dock::SCREEN_ROOM);
+    }
 
     /// The board's script, transcribed as it is (`Dock.dc.html`, `renderVals`).
     fn board(p: f64, i: usize, n: usize) -> f64 {

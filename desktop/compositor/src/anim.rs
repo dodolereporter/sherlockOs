@@ -109,6 +109,8 @@ pub struct WindowMotion {
     opened: bool,
     /// Shown at once at its first frame: fullscreen, or window animations off (lot D-34).
     no_opening: bool,
+    /// The opening is a reappearance of the desktop (lot D-24g): a key or a click ends it.
+    reappearing: bool,
     /// Animated geometry. `None` at rest: the window is drawn at its real place.
     geometry: Option<AnimatedRect>,
     /// Last geometry drawn, before the opening scale.
@@ -213,6 +215,29 @@ impl WindowMotion {
         self.no_opening = !self.opened;
     }
 
+    /// The desktop is revealed (lot D-24g): the window opens again from `start`, invisible
+    /// until then, over `greeter::REAPPEAR`. A window not drawn yet keeps its own opening.
+    pub fn reappear(&mut self, start: Duration) {
+        if !self.opened || self.no_opening {
+            return;
+        }
+        self.open = Some(Fade::eased(
+            0.0,
+            1.0,
+            start,
+            sherlock_ui::greeter::REAPPEAR,
+            motion::WINDOW_OPEN_EASE,
+        ));
+        self.reappearing = true;
+    }
+
+    /// A key or a click: a reappearance under way ends, the window in place at once.
+    pub fn end_reappearing(&mut self) {
+        if std::mem::take(&mut self.reappearing) {
+            self.open = None;
+        }
+    }
+
     /// Where to draw the window whose real geometry is `target`: there, or at the size it was
     /// given while its client has not taken it yet. Its place is always the real one, which
     /// the compositor sets at once.
@@ -300,6 +325,7 @@ impl WindowMotion {
             Some(open) if !open.is_done(now) => open.value(now),
             _ => {
                 self.open = None;
+                self.reappearing = false;
                 1.0
             }
         };
@@ -537,6 +563,29 @@ mod tests {
     }
 
     /// A window opened at once, as with animations off: at rest from its first frame.
+    #[test]
+    fn a_window_reappears_from_its_start_and_a_key_ends_it() {
+        let place = rect(0, 0, 400, 300);
+        let mut motion = WindowMotion::default();
+        motion.frame(ms(0), place);
+        assert_eq!(motion.frame(ms(500), place).opacity, 1.0, "opened");
+        // Never drawn: it keeps its own opening.
+        let mut fresh = WindowMotion::default();
+        fresh.reappear(ms(0));
+        assert!(!fresh.reappearing);
+        motion.reappear(ms(1000));
+        assert_eq!(
+            motion.frame(ms(1000), place).opacity,
+            0.0,
+            "hidden until its turn"
+        );
+        let half = motion.frame(ms(1100), place).opacity;
+        assert!(half > 0.0 && half < 1.0, "{half}");
+        motion.end_reappearing();
+        assert_eq!(motion.frame(ms(1101), place).opacity, 1.0);
+        assert!(!motion.is_animating());
+    }
+
     fn at_rest() -> WindowMotion {
         let mut motion = WindowMotion::default();
         motion.skip_opening();

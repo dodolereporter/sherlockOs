@@ -2,7 +2,8 @@
 
 Control Room is the settings application of the desktop (lot D-26a). Each setting is written to
 the file that its program already reads and follows live: nothing has to be restarted, and every
-setting survives a restart. The look follows the « Réglages » board
+setting survives a restart. It opens from « Réglages » in the bar's Sherlock menu, or with
+Super + comma (lot Q-31). The look follows the « Réglages » board
 (`docs/design/planches/Reglages.dc.html`): a sidebar of 240 with the search on top, the page on
 the right in cards. Its sizes, motions and French texts are in `sherlock_ui::control_room`.
 
@@ -16,15 +17,18 @@ To try it without touching your own settings, give it a configuration folder of 
 
 ## Pages
 
-D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications.
-Displays come with D-26a3.
+D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications;
+D-26b the screens; D-26c the keyboard page and the gestures of the touchpad page.
 
 | Page | Setting | File | Read by |
 | --- | --- | --- | --- |
+| « Écrans » | Arrangement (dragged), resolution, refresh, scale (100 to 200 %), rotation, main screen, on or off | `$XDG_CONFIG_HOME/sherlockos/displays.conf`, per screen (EDID), written by the compositor | Compositor, through `wlr-output-management` (ADR 0025) |
 | « Apparence » | Theme: Sombre, Clair, Auto, and the hours of Auto (half-hour steps) | `$XDG_CONFIG_HOME/appearance/appearance.conf` | Every program (`appearance-config`) |
 | « Apparence » | Wallpaper among the installed ones, « Suivre le thème » | `$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` | Compositor |
 | « Apparence » | Dock: size, magnification and its strength, hiding, edge | `$XDG_CONFIG_HOME/dock/dock.conf` | Dock |
+| « Clavier » | Layout (a menu of common xkb layouts, or « Celle du système »), delay before repetition (150 to 1000 ms) and repeats per second (2 to 50), a field to try them, the desktop's shortcuts listed | `$XDG_CONFIG_HOME/sherlockos/keyboard.conf` | Compositor |
 | « Pavé tactile et souris » | Right click: « Appuyer à deux doigts » (default) or « Coin en bas à droite »; tap to click; natural scrolling; speed; off while typing | `$XDG_CONFIG_HOME/sherlockos/touchpad.conf` | Compositor |
+| « Pavé tactile et souris » | Gestures: three fingers down (« Rien » or « Réduire la fenêtre »), tap and drag, drag lock; the gestures that do not change are listed | `$XDG_CONFIG_HOME/sherlockos/touchpad.conf` | Compositor |
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
 | « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
 | « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
@@ -53,6 +57,47 @@ goes to a task (`Writes::run`), one batch at a time, in the order of the changes
 made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
 the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
 
+**Screens.** The page does not write a file: it is a client of `wlr-output-management`
+(ADR 0025), on a Wayland connection of its own, in a thread that runs only while the page is
+open or a change waits (`displays::run`). The compositor sends every screen with its modes and
+state; what it sends is bounded (16 screens, 256 modes, names of 64 characters). Each change is
+sent as a whole configuration and shown once the compositor has taken it. A change of
+resolution, refresh, scale, rotation or of a screen on or off asks « Garder ces réglages
+d'affichage ? » with « Revenir » and « Garder »; without an answer the previous configuration
+comes back after `CONFIRM_DELAY` (15 seconds), as on macOS and Windows. Moving a screen needs no
+confirmation. In the arrangement, the screens are drawn to scale; a screen dropped goes to the
+nearest place along the edge of another, where it covers none (`arrangement::snap`), and the
+main screen (the one at the origin, with the bar drawn on top) stays at the origin: dragging it
+moves the others. « En faire l'écran principal » moves the origin to the chosen screen. The last
+screen on cannot be switched off. The compositor keeps the setting of each screen under its
+EDID names and gives it back when the screen comes back; it writes it only once a change has
+held for 20 seconds, so that a change never confirmed is not kept. Under `--nested`, a screen
+is a slice of the host window: its resolution cannot change and it cannot turn.
+
+| Captures | |
+| --- | --- |
+| Wide, dark | ![Screens](control-room/displays-wide-dark.png) |
+| Narrow, dark | ![Screens, narrow](control-room/displays-narrow-dark.png) |
+| Waiting for « Garder », light | ![Confirmation](control-room/displays-confirm-light.png) |
+| In the nested compositor, two screens of its window | ![Nested](control-room/displays-nested.png) |
+
+**Network (lot D-26n).** The « Réseau » page switches the Wi-Fi on or off, lists the networks
+around (read again every 5 seconds while the page is open, « Rechercher » asks for a new scan),
+and joins one: an open network at once; a protected one through its saved connection, else
+with the password asked under it; a network flagged WEP or 802.1X (WPA2 or WPA3 Enterprise, as
+eduroam) with a form: WEP and its key, or « Entreprise » with PEAP or TTLS (MSCHAPv2 inside),
+the identity, the password and the domain the server's certificate must name. « Autre
+réseau… » joins a hidden network by its name. « Oublier » deletes the saved connection of the
+network in use, with its secrets. Every call goes to NetworkManager on the system bus, off the
+interface thread (`system_services::network`, shared with the bar), and polkit asks where its
+policy wants it; the secrets are bounded (256 bytes, 32 for a name) and never logged.
+
+**One window (lot D-26n).** `control-room --page <id>` opens a page: `displays`, `network`,
+`bluetooth`, `sound`, `appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `apps`. The first Control Room listens on
+`$XDG_RUNTIME_DIR/sherlockos-control-room.sock`; a second one hands it its page (one line of at
+most 64 bytes) and leaves, and the window shows that page and takes the focus. The bar's
+« Ouvrir les Réglages », under a network it cannot join, runs `control-room --page network`.
+
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
 interface thread (`system_services::audio`). Choosing a device runs `set-default-sink` or
@@ -61,6 +106,18 @@ The changes reach `pactl` one at a time, in the order they were made, through a 
 keeps only the last volume of each device, as the media keys do.
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
+
+**Keyboard.** The menu offers the layouts of `control_room::KEYBOARD_LAYOUTS`, each checked
+against xkb by a test of the compositor. A layout written in the file by hand that the menu does
+not offer shows as « Autre disposition » and is kept until another is chosen; « Celle du
+système » empties the `layout` key. The two sliders write once they rest, as the others. The
+field to try the keys keeps 200 characters at most and writes nothing. The shortcuts are a table
+of `control_room::texts::SHORTCUT_LIST`, the ones `input.rs` and `capture.rs` take: it must
+follow them. In nested mode Alt stands for Super, which the page says.
+
+**Gestures.** « Toucher puis glisser » waits for « Toucher pour cliquer », and « Glissement
+prolongé » for both: their switches are disabled otherwise. Three fingers up, left and right,
+and two fingers pinched are listed under them, without a setting.
 
 **Clipboard.** `clipboard.conf` is read by the compositor within a second of a change (see
 "Clipboard history" in `docs/compositor.md`). « Historique du presse-papiers » off forgets
@@ -83,6 +140,39 @@ The wallpaper picker shows the wallpapers of the collection (`sherlock_ui::wallp
 the wallpaper folders (`desktop_config::wallpaper::dirs`), from the smallest variant of each,
 reduced off the interface thread. An image of the user's (`path`) is named above the picker;
 choosing a wallpaper replaces it.
+
+### Bluetooth (D-26o)
+
+« Bluetooth » goes through BlueZ on the system bus with the code of the bar's quick settings
+(`system_services::bluetooth`, `src/bluetooth.rs`): a connection for reads (5 s at most per
+call) and one for actions (60 s, for polkit to ask), each call in a task, never on the
+interface thread. The page has:
+
+- the switch of the adapter; a refusal or a failure says so in its help line;
+- « Mes appareils », the paired devices, each with the glyph of its kind (headphones, mouse,
+  keyboard, phone, computer, gamepad), its name with « … » when too long, « Connecté · 80 % »
+  when BlueZ gives the battery, and « Connecter » or « Déconnecter », « Renommer » (a field,
+  64 characters at most, BlueZ's `Alias`) and « Oublier » (asked again under the device);
+- « Appareils à proximité », found by a scan that runs while the page is open and stops when
+  it is left (« Recherche… » beside its title), each with « Appairer »;
+- while a device pairs, the agent's question in a card: the code, « Confirmer » and
+  « Annuler ». Leaving the page cancels the pairing.
+
+One device at a time: its line says « Connexion… » or « Appairage… » and the other buttons wait.
+The page follows what BlueZ announces (`bluetooth::changes`): another program connecting a
+device, a battery level, a device found. `control-room --page bluetooth` opens it, as the
+bar's « Réglages Bluetooth… » does.
+
+## Changes made elsewhere
+
+While Control Room is open, its files are looked at every `follow::FILES_EVERY` (2 seconds:
+their modification time and length only, on a thread of their own), and `mimeapps.list` with
+them. When one changes (by hand, or by its program: a pin in the dock), the settings are read
+again off the interface thread and shown, unless a change of ours waits or is being written:
+that one is read back once written. While the sound page is open, `pactl subscribe`
+(`system_services::watch::sound`) tells when an output or the default changes: the devices
+are read again, unless a change of ours is on its way to `pactl`. The appearance file is also
+followed for the theme, as before.
 
 ## Search
 
@@ -122,6 +212,8 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
 | `sound` | Outputs, microphones and volumes through `pactl` | no |
 | `apps` | The kinds of default applications, their choices, writing them | no |
+| `displays` | The compositor's screens through `wlr-output-management`, in a thread | no |
+| `arrangement` | The screens drawn to scale, where a dropped screen lands | no |
 | `app` | State, messages, saving, animations | yes |
 | `view` | Window, title bar, sidebar, page and its transition, cards and rows | yes |
 | `pages` | One module per page | yes |
@@ -154,6 +246,9 @@ configuration:
 - default applications written to a temporary `mimeapps.list` and `xdg-terminals.list`, then
   read back by `mime-apps`;
 - the lock delay written and read back;
+- the keyboard page: layout, delay and rate written, read back after the application is opened
+  again (a restart), a hand-written layout kept, « Celle du système » emptying the key, the
+  field to try bounded; the right click offers « Appuyer à deux doigts » first and the corner;
 - captures of every page, dark and light, at 1920 by 1032 (a window maximized on a 1080p
   screen, under the bar) and 520 by 760, in `target/tmp/control-room-*.png`.
 
@@ -168,11 +263,13 @@ The touchpad page, dark and light:
 
 ![Touchpad, dark](control-room/touchpad-wide-dark.png)
 ![Touchpad, light](control-room/touchpad-wide-light.png)
+![Keyboard, dark](control-room/keyboard-wide-dark.png)
 
 Narrow window: one column, the sidebar folded, then unfolded over the page during a search:
 
 ![Appearance, narrow](control-room/appearance-narrow-dark.png)
 ![Touchpad, narrow, light](control-room/touchpad-narrow-light.png)
+![Keyboard, narrow, light](control-room/keyboard-narrow-light.png)
 ![Sidebar unfolded](control-room/sidebar-narrow.png)
 
 Sound, lock and default applications:
@@ -181,6 +278,13 @@ Sound, lock and default applications:
 ![Lock, light](control-room/lock-wide-light.png)
 ![Default applications](control-room/default-apps-wide-dark.png)
 ![Default applications, narrow, light](control-room/default-apps-narrow-light.png)
+
+Bluetooth (D-26o), a headset connected, a mouse paired, a speaker found; the question of a
+pairing; and the narrow window, light:
+
+![Bluetooth](control-room/bluetooth-wide-dark.png)
+![Bluetooth, pairing](control-room/bluetooth-pairing-wide-dark.png)
+![Bluetooth, narrow, light](control-room/bluetooth-narrow-light.png)
 
 Search: the part of each name that matched, in green:
 

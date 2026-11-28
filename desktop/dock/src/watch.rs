@@ -24,7 +24,7 @@ const MASK: u32 = libc::IN_CLOSE_WRITE
     | libc::IN_MOVE_SELF;
 
 /// Editors write in several steps: the events of a burst give one reload.
-const SETTLE: Duration = Duration::from_millis(50);
+pub(crate) const SETTLE: Duration = Duration::from_millis(50);
 
 /// The directory itself went away.
 const GONE: u32 = libc::IN_DELETE_SELF | libc::IN_MOVE_SELF | libc::IN_IGNORED;
@@ -89,7 +89,7 @@ fn run(path: &Path, sender: &mpsc::UnboundedSender<Box<DockConfig>>) -> io::Resu
 
 /// Blocks until `dir` exists. While it does not, watches its closest existing ancestor for the
 /// next missing folder on the way, as many levels up as needed.
-fn wait_for_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn wait_for_dir(dir: &Path) -> io::Result<()> {
     while !dir.exists() {
         let Some((ancestor, next)) = dir
             .ancestors()
@@ -128,12 +128,12 @@ pub fn load(path: &Path) -> io::Result<DockConfig> {
 }
 
 /// An inotify instance watching one directory.
-struct Inotify {
+pub(crate) struct Inotify {
     fd: OwnedFd,
 }
 
 impl Inotify {
-    fn new(dir: &Path) -> io::Result<Self> {
+    pub(crate) fn new(dir: &Path) -> io::Result<Self> {
         // SAFETY: inotify_init1 takes flags only and returns a new descriptor or -1.
         let raw = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
         if raw < 0 {
@@ -149,8 +149,17 @@ impl Inotify {
         Ok(Self { fd })
     }
 
+    /// Blocks until something in the directory changes: `true`; or until it goes: `false`.
+    pub(crate) fn wait_any(&self) -> io::Result<bool> {
+        self.wait_for(None)
+    }
+
     /// Blocks until an event comes for `name`: `true`; or until the directory goes: `false`.
     fn wait(&self, name: &OsStr) -> io::Result<bool> {
+        self.wait_for(Some(name))
+    }
+
+    fn wait_for(&self, name: Option<&OsStr>) -> io::Result<bool> {
         let mut buffer = [0u8; 4096];
         loop {
             // SAFETY: the buffer is ours, writable and `buffer.len()` long.
@@ -173,7 +182,7 @@ impl Inotify {
             let (mut gone, mut named) = (false, false);
             for (mask, event) in events(&buffer[..read]) {
                 gone |= mask & GONE != 0;
-                named |= event == name.as_bytes();
+                named |= name.is_none_or(|name| event == name.as_bytes());
             }
             if gone {
                 return Ok(false);

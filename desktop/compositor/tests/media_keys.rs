@@ -387,16 +387,22 @@ mod tests {
         h.run_for(REPEAT_DELAY + REPEAT_INTERVAL * 4 + REPEAT_INTERVAL / 2);
         h.key(BRIGHTNESS_UP, KeyState::Released);
         let count = |h: &Harness| h.brightness.lock().unwrap().len();
-        h.run_until("the steps done", |h| count(h) >= 4);
-        // The worker ends what it was given; then nothing more comes.
-        h.run_for(REPEAT_INTERVAL * 3);
+        // How many calls the steps take depends on how fast the fake logind answers: the
+        // repeats that come while it answers go together in the next call. On a loaded machine
+        // the six steps came in three calls, and waiting for four timed out (lot Q-18b). What
+        // does not depend on it: the first step, at least one repeat, and the level reached.
+        h.run_until("the first step and a repeat", |h| count(h) >= 2);
+        // The worker ends what it was given, however long logind takes; then nothing more
+        // comes (Q-46: a fixed wait was too short on a loaded machine).
+        h.run_until("the worker idle", |h| h.state.media_keys_idle());
         let steps = count(&h);
         h.run_for(REPEAT_INTERVAL * 4);
         let calls = h.brightness.lock().unwrap().clone();
         assert_eq!(calls.len(), steps, "{calls:?}");
-        assert!((4..=8).contains(&steps), "{calls:?}");
+        assert!((2..=8).contains(&steps), "{calls:?}");
         // From 20 %, by steps of 5, through logind: never written by the compositor itself. A
-        // repeat skipped while logind answers is not lost: the steps waiting go together.
+        // repeat that comes while logind answers is kept, and the steps waiting go together
+        // (`REPEATS_OWED`, Q-46): none is lost.
         assert_eq!(calls[0], "backlight amdgpu_bl1 64");
         let raw = |percent: u16| {
             format!(
@@ -405,6 +411,7 @@ mod tests {
             )
         };
         let last = calls.last().unwrap();
+        // Every step counts in the level reached, however they were grouped: four at least.
         let percent = (40..=100).step_by(5).find(|p| raw(*p) == *last);
         let percent = percent.unwrap_or_else(|| panic!("{calls:?}"));
         let shown = level(Kind::Brightness, percent, false);

@@ -20,7 +20,7 @@ use bar::system::audio::Output;
 use bar::system::backlight::Backlight;
 use bar::system::bluetooth::Bluetooth;
 use bar::system::keyboard::{KeyboardLight, Through};
-use bar::system::network::{Network as WifiNetwork, Security, Wifi};
+use bar::system::network::{Network as WifiNetwork, Outcome, Security, Wifi};
 use bar::system::power::{Power, Profile};
 use iced_test::simulator::Simulator;
 use sherlock_ui::color::{self, Theme};
@@ -125,6 +125,56 @@ fn the_bar_and_its_menu_render_in_both_themes() {
             assert_written(capture(ui, &format!("sherlock-menu{suffix}")));
         });
     }
+}
+
+/// Lot UI-09: without a GPU the bar renders with tiny-skia, whose buffers lose their alpha.
+/// Its glass is then drawn opaque, the color it shows over the desktop, not mixed with black:
+/// in the light theme a light glass, and « 12 % » of a low battery readable. At 1920 and 1366,
+/// `bar-software-light-1920` and `bar-software-light-1366`, copied to `screenshots/`.
+#[test]
+fn in_software_the_bar_glass_is_opaque_with_its_own_color() {
+    for width in [1920.0, 1366.0] {
+        in_theme(Theme::Light, || {
+            let mut state = sample();
+            let low = Battery {
+                percent: 12,
+                charge: Charge::Discharging,
+                minutes: Some(25),
+            };
+            let _ = state.update(Message::Battery(Some(low)));
+            let size = (
+                width - 2.0 * metrics::TOP_BAR_MARGIN_SIDE,
+                metrics::TOP_BAR_HEIGHT,
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+            let name = format!("bar-software-light-{width}");
+            let (path, _) = capture(ui, &name).unwrap();
+            // tiny-skia drew it: the glass is opaque from the first frame on.
+            assert_eq!(sherlock_ui::surface::gpu_drawn(), Some(false));
+            let p = color::palette();
+            assert!(p.top_bar_glass.a >= 1.0);
+            let expected = color::Palette::LIGHT
+                .top_bar_glass
+                .over(color::Palette::LIGHT.desktop);
+            assert_eq!(p.top_bar_glass, expected);
+            // A pixel of glass in the middle of the bar, between the workspaces and the
+            // clock: opaque, of that color (at the capture's scale).
+            let image = image::open(&path).unwrap().to_rgba8();
+            let pixel = image.get_pixel(image.width() / 2, image.height() - 4);
+            assert_eq!(pixel.0[3], 255, "opaque");
+            let close = |a: u8, b: u8| a.abs_diff(b) <= 2;
+            assert!(
+                close(pixel.0[0], expected.r) && close(pixel.0[1], expected.g),
+                "{:?} for {expected:?}",
+                pixel.0
+            );
+            // « 12 % » in amber on it: 4.5 to 1 at least.
+            assert!(p.amber_text.contrast(p.top_bar_glass) >= 4.5);
+            let copy = format!("{}/screenshots/{name}.png", env!("CARGO_MANIFEST_DIR"));
+            std::fs::copy(&path, copy).unwrap();
+        });
+    }
+    color::set_opaque_glass(false);
 }
 
 /// The bar attached to the top edge, as over a maximized window: the whole width, square
@@ -292,6 +342,7 @@ fn board_quick(state: &mut Bar) {
         strength: 90,
         security: Security::Psk,
         active: true,
+        saved: true,
         path: String::from("/ap/1"),
     };
     let cafe = WifiNetwork {
@@ -299,6 +350,7 @@ fn board_quick(state: &mut Bar) {
         strength: 60,
         security: Security::Open,
         active: false,
+        saved: false,
         path: String::from("/ap/2"),
     };
     let messages = [
@@ -406,6 +458,22 @@ fn the_panels_render_in_both_themes() {
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("wifi-networks{suffix}")));
 
+            // Its password refused (D-20e): asked again, said under the field.
+            state.quick.password = quick::Secret::default();
+            state.quick.refused = Some((String::from("Voisin"), Outcome::WrongPassword));
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-wrong-password{suffix}")));
+            // « Autre réseau… » open, its password shown.
+            state.quick.refused = None;
+            state.quick.joining = None;
+            state.quick.other = Some((String::from("Cachette"), Security::Psk));
+            state.quick.password = quick::Secret::new(String::from("visible"));
+            state.quick.reveal = true;
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-other-network{suffix}")));
+            state.quick.other = None;
+            state.quick.reveal = false;
+
             // A network name too long for its tile and its line ends with « … » (UI-01).
             let long = "Livebox-Résidence-des-Lilas-étage-3-5GHz";
             if let Load::Ready(wifi) = &mut state.quick.wifi {
@@ -422,6 +490,125 @@ fn the_panels_render_in_both_themes() {
             assert!(ui.find(long).is_ok());
             assert_written(capture(ui, &format!("control-centre-long-name{suffix}")));
         });
+    }
+}
+
+/// Do not disturb for a time (D-23e): the moon among the indicators (`bar-do-not-disturb`), the
+/// tile saying until when and its durations page (`do-not-disturb-durations`).
+#[test]
+fn do_not_disturb_shows_in_the_bar_and_its_durations() {
+    let mut state = sample();
+    state.do_not_disturb = true;
+    let ui = Simulator::with_size(bar::settings(), bar_size(), state.view_bar());
+    assert_written(capture(ui, "bar-do-not-disturb"));
+    state.panel_margins = panel::margins(false);
+    board_quick(&mut state);
+    state.quick.do_not_disturb = Some(true);
+    state.quick.dnd_until = Some(notifications_config::epoch_now() + 3600);
+    let size = panel_size(&state, Panel::Control);
+    {
+        let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+        assert!(ui.find("Ne pas déranger").is_ok());
+    }
+    let _ = state.quick.update(quick::Message::ShowFocus(true));
+    state.quick.tick(state.quick.now + Duration::from_secs(5));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+    assert!(ui.find("Pendant 1 heure").is_ok());
+    assert!(ui.find("Jusqu’à demain matin").is_ok());
+    assert_written(capture(ui, "do-not-disturb-durations"));
+}
+
+/// The outputs and the inputs of the sound (D-20g): the speakers in use, HDMI and a
+/// Bluetooth headset, two inputs and the microphone's slider. `sound-devices`, both themes.
+#[test]
+fn the_outputs_and_inputs_render_in_both_themes() {
+    use bar::system::audio::Endpoint;
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            board_quick(&mut state);
+            let endpoint = |name: &str, description: &str| Endpoint {
+                name: name.to_owned(),
+                description: description.to_owned(),
+            };
+            let devices = quick::Devices {
+                outputs: vec![
+                    endpoint("speakers", "Haut-parleurs intégrés"),
+                    endpoint("hdmi", "HDMI / DisplayPort"),
+                    endpoint("headset", "Casque WH-1000XM4"),
+                ],
+                inputs: vec![
+                    endpoint("mic", "Microphone intégré"),
+                    endpoint("headset-mic", "Casque WH-1000XM4"),
+                ],
+                output: String::from("speakers"),
+                input: String::from("mic"),
+                microphone: Some(Sound {
+                    volume: 70,
+                    muted: false,
+                }),
+            };
+            let _ = state.quick.update(quick::Message::ShowSound(true));
+            let _ = state
+                .quick
+                .update(quick::Message::Audio(Load::Ready(devices)));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let size = panel_size(&state, Panel::Control);
+            let mut ui =
+                Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert!(ui.find("HDMI / DisplayPort").is_ok());
+            let _ = ui.click("HDMI / DisplayPort");
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(
+                messages.iter().any(
+                    |m| matches!(m, Message::Quick(quick::Message::ChooseOutput(n)) if n == "hdmi")
+                ),
+                "{messages:?}"
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("sound-devices{suffix}")));
+        });
+    }
+}
+
+/// The panels on short screens (UI-08), the logical heights of 1280 × 800 at 1.5 (`-533`),
+/// 1366 × 768 at 1.25 (`-614`) and 1920 × 1080 at 1.5 (`-720`): `calendar-<height>`, the
+/// centre shorter, or both scrolling together on the shortest; `control-centre-<height>`, the
+/// settings scrolling in a panel that ends above the bottom of the screen.
+#[test]
+fn the_panels_fit_short_screens() {
+    for (screen, tag) in [(533.3, "533"), (614.4, "614"), (720.0, "720")] {
+        let mut state = sample();
+        state.panel_margins = panel::margins(false);
+        state.month = Some(Month {
+            year: 2026,
+            month: 11,
+        });
+        state.history = board_history();
+        board_quick(&mut state);
+        let light = KeyboardLight {
+            brightness: 1,
+            max: 3,
+            through: Through::UPower,
+        };
+        let _ = state
+            .quick
+            .update(quick::Message::Keyboard(Load::Ready(light)));
+        panel::reserve_keyboard(true);
+        panel::reserve_screen(Some(screen));
+        for (which, name) in [
+            (Panel::Calendar, "calendar"),
+            (Panel::Control, "control-centre"),
+        ] {
+            let size = panel_size(&state, which);
+            let top = 54.0;
+            assert!(top + size.1 <= screen, "{name} on {screen}: {size:?}");
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(which));
+            assert_written(capture(ui, &format!("{name}-{tag}")));
+        }
+        panel::reserve_screen(None);
+        panel::reserve_keyboard(false);
     }
 }
 
@@ -551,6 +738,50 @@ fn the_centre_runs_an_action_and_clears() {
     ));
 }
 
+/// D-23d: a card of five notifications shows three and « 2 autres notifications », which opens
+/// it; a click on a notification opens it (`Message::OpenNotification`). `centre-group`, then
+/// `centre-group-open`.
+#[test]
+fn a_card_of_the_centre_opens_and_its_notifications_answer() {
+    let mut state = sample();
+    state.panel_margins = panel::margins(false);
+    let entries = (1..=5)
+        .map(|i| {
+            entry(
+                10 + i,
+                "Courrier",
+                &format!("Message {i}"),
+                "Un message de démonstration.",
+                "21:00",
+                &[],
+            )
+        })
+        .collect();
+    state.history = History::Ready(vec![Group {
+        app: String::from("Courrier"),
+        entries,
+    }]);
+    let size = panel_size(&state, Panel::Calendar);
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert!(ui.find("Message 4").is_err(), "beyond the first three");
+    let _ = ui.click("Message 1");
+    let _ = ui.click("2 autres notifications");
+    assert_written(capture(ui, "centre-group"));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    let _ = ui.click("Message 1");
+    let _ = ui.click("2 autres notifications");
+    let messages: Vec<_> = ui.into_messages().collect();
+    assert!(
+        matches!(&messages[..], [Message::OpenNotification(11), Message::ExpandGroup(app, true)] if app == "Courrier"),
+        "{messages:?}"
+    );
+    let _ = state.update(Message::ExpandGroup(String::from("Courrier"), true));
+    let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert_written(capture(ui, "centre-group-open"));
+    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Calendar));
+    assert!(ui.find("Message 5").is_ok());
+}
+
 /// The bar with the control centre open: the indicators, one button, keep one veil and the
 /// green mark under the whole group (UI-02). `bar-open`, then `bar-open-light`.
 #[test]
@@ -639,8 +870,6 @@ fn the_quick_settings_answer_their_clicks() {
         "Maison",
         "Bluetooth",
         "Désactivé",
-        "Mode jeu",
-        "Bientôt",
         "Haut-parleurs intégrés",
         "Équilibré",
         "Camille",
@@ -650,6 +879,10 @@ fn the_quick_settings_answer_their_clicks() {
             ui.find(text).is_ok(),
             "{text} missing from the quick settings"
         );
+    }
+    // Nothing that does nothing (D-20f).
+    for gone in ["Mode jeu", "Carte graphique", "Bientôt"] {
+        assert!(ui.find(gone).is_err(), "{gone} still shown");
     }
     ui.click("Bluetooth").expect("tile found");
     ui.click("Économie").expect("profile found");
@@ -663,11 +896,6 @@ fn the_quick_settings_answer_their_clicks() {
             Message::Quick(quick::Message::ToggleDoNotDisturb),
         ]
     ));
-    // The game mode and the graphics card do nothing yet.
-    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-    ui.click("Mode jeu").expect("tile found");
-    ui.click("NVIDIA").expect("segment found");
-    assert_eq!(ui.into_messages().count(), 0);
 }
 
 /// The battery of the bar at 5, 50 and 100 % on its own, charging at 54 %, plugged in and

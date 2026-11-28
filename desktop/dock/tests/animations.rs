@@ -236,7 +236,13 @@ fn dragging_a_pinned_icon_reorders_and_writes_the_file() {
     );
     let _ = dock.update(Message::Gesture(Gesture::Released));
     assert!(dock.held().is_none());
-    // Written once let go, atomically by dock-config, the comment kept, Sherlock's place too.
+    // Written once let go, atomically by dock-config, the comment kept, Sherlock's place too:
+    // on the dock's thread that saves, never on the interface's.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(&path).ok().as_deref() == Some(text) {
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let written = std::fs::read_to_string(&path).expect("file read");
     let (read, _) = DockConfig::parse(&written);
     let order = [
@@ -319,6 +325,12 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
             "example-browser"
         ]
     );
+    // Written on the dock's thread that saves, never on the interface's.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let (read, _) = DockConfig::parse(&std::fs::read_to_string(&path).expect("written"));
     assert_eq!(read.pinned.as_deref(), Some(&dock.pinned[..]));
     // It vanishes where it was let go: smaller and fainter, then gone.
@@ -329,6 +341,118 @@ fn dragging_an_icon_out_of_the_dock_unpins_it() {
     assert!(dock.leaving[0].track.drawn_scale(t1 + ms(100)) < 0.6);
     settle(&mut dock);
     assert!(dock.leaving.is_empty());
+}
+
+/// The file once the dock's thread that saves wrote it: its text when it is no longer `before`.
+fn changed(path: &std::path::Path, before: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if text != before {
+            return text;
+        }
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Lot D-21d: an open application dragged across the separator among the pinned ones is
+/// pinned where it is let go; dragged back after it, it is unpinned; a pinned application let
+/// go out of the dock goes up in smoke. The file is read again just before it is written.
+#[test]
+fn dragging_across_the_separator_pins_and_unpins() {
+    let dir = scratch("cross");
+    let path = dir.join("dock.conf");
+    let mut dock = dock(
+        &[],
+        &["org.example.Files", "example-editor"],
+        flat(),
+        Some(path.clone()),
+    );
+    open(&mut dock, "terminal");
+    let t = settle(&mut dock);
+    assert_eq!(
+        names(&dock),
+        ["Fichiers", "Sherlock", "Éditeur", "Terminal d'exemple"]
+    );
+    assert_eq!(dock.separator, Some(3));
+    // Another program changes the file meanwhile: the dock must not undo it.
+    std::fs::write(
+        &path,
+        "[Dock]\nPinned=org.example.Files;example-editor;\nIconSize=40\n",
+    )
+    .expect("file written");
+
+    // The terminal, after the separator, dragged to the second place.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 3);
+    // Over the left half of Sherlock: the second place.
+    let between = Point::new(rest.icons[1].center_x() - 8.0, terminal.y);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, between);
+    assert_eq!(dock.separator, None, "the separator went with it");
+    assert_eq!(
+        names(&dock),
+        ["Fichiers", "Terminal d'exemple", "Sherlock", "Éditeur"],
+        "pinned where the pointer is"
+    );
+    assert_eq!(
+        dock.held().map(|(i, _)| i),
+        Some(1),
+        "it follows the pointer"
+    );
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    // Written on the dock's thread that saves, never on the interface's.
+    let written = changed(
+        &path,
+        "[Dock]\nPinned=org.example.Files;example-editor;\nIconSize=40\n",
+    );
+    let (read, _) = DockConfig::parse(&written);
+    // Sherlock's place is written with the others (lot D-21h).
+    let order = [
+        "org.example.Files",
+        "org.example.Terminal",
+        "sherlock",
+        "example-editor",
+    ];
+    assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
+    assert_eq!(read.icon_size, 40.0, "what Control Room wrote stays");
+    let t = settle(&mut dock);
+
+    // Dragged back past the last icon: open, it is unpinned, after a new separator.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 1);
+    let end = Point::new(rest.icons[3].x + rest.icons[3].width + 40.0, terminal.y);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, end);
+    assert_eq!(dock.separator, Some(3));
+    assert_eq!(names(&dock)[3], "Terminal d'exemple");
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    let (read, _) = DockConfig::parse(&changed(&path, &written));
+    let order = ["org.example.Files", "sherlock", "example-editor"];
+    assert_eq!(read.pinned, Some(order.map(String::from).to_vec()));
+    let t = settle(&mut dock);
+
+    // An open application that is not pinned, let go out of the dock: it comes back, no smoke.
+    let rest = dock.layout(t);
+    let terminal = middle(&rest, 3);
+    press(&mut dock, terminal);
+    drag_to(&mut dock, terminal, Point::new(terminal.x, 2.0));
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert!(dock.poofs.is_empty());
+    assert_eq!(dock.separator, Some(3));
+    let t = settle(&mut dock);
+
+    // The files, pinned and closed, let go out of the dock: unpinned, in a puff of smoke.
+    let files = middle(&dock.layout(t), 0);
+    press(&mut dock, files);
+    drag_to(&mut dock, files, Point::new(files.x, 2.0));
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    assert_eq!(dock.pinned, ["sherlock", "example-editor"]);
+    assert_eq!(dock.poofs.len(), 1);
+    assert!(dock.animating(), "frames while it smokes");
+    settle(&mut dock);
+    assert!(dock.poofs.is_empty(), "gone");
 }
 
 #[test]
@@ -376,6 +500,92 @@ fn quick_app(name: &str) -> PathBuf {
     let written = std::fs::write(dir.join("org.example.Quick.desktop"), entry);
     assert!(written.is_ok(), "entry");
     dir.parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// Two applications that start at once and do nothing (`Exec=true`).
+fn quick_pair(name: &str) -> PathBuf {
+    let dir = scratch(name).join("applications");
+    assert!(std::fs::create_dir_all(&dir).is_ok(), "folder");
+    for letter in ["A", "B"] {
+        let entry = format!("[Desktop Entry]\nType=Application\nName=Rapide {letter}\nExec=true\n");
+        let path = dir.join(format!("org.example.Quick{letter}.desktop"));
+        assert!(std::fs::write(path, entry).is_ok(), "entry");
+    }
+    dir.parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// A click at `point`: the icon whose application it started, if any.
+fn clicked(dock: &mut Dock, point: Point) -> Option<usize> {
+    press(dock, point);
+    let _ = dock.update(Message::Gesture(Gesture::Released));
+    let launched = dock.launches.first().map(|l| l.target.clone());
+    if launched.is_some() {
+        settle_bounce(dock);
+    }
+    launched.and_then(|target| dock.items.iter().position(|i| i.target() == target))
+}
+
+/// Lot D-21f: Fitts's law, as on macOS. The gap between the glass and the screen edge and the
+/// spaces between the icons are the dock: a click pushed against the bottom edge, or 2 px
+/// above it, starts the icon of its column, and one between two icons the closer one.
+#[test]
+fn a_click_against_the_screen_edge_starts_the_icon_of_its_column() {
+    let data = quick_pair("fitts-bottom");
+    let pinned = ["org.example.QuickA", "org.example.QuickB"];
+    let mut dock = dock(&[data], &pinned, flat(), None);
+    let t = settle(&mut dock);
+    let layout = dock.layout(t);
+    // The first application, Sherlock, the second one.
+    let (first, sherlock, last) = (layout.icons[0], layout.icons[1], layout.icons[2]);
+    let bottom = dock.surface_size.height;
+    assert!(
+        bottom - first.y - first.height > 2.0,
+        "a gap below the glass"
+    );
+    // Below the icons, against the edge and 2 px above it.
+    assert_eq!(
+        clicked(&mut dock, Point::new(first.center_x(), bottom)),
+        Some(0)
+    );
+    assert_eq!(
+        clicked(&mut dock, Point::new(last.center_x(), bottom - 2.0)),
+        Some(2)
+    );
+    // In the space between two icons, 1 px from either.
+    let row = first.center_y();
+    let gap = (first.x + first.width, sherlock.x);
+    assert!(gap.1 - gap.0 >= 4.0, "{gap:?}");
+    assert_eq!(clicked(&mut dock, Point::new(gap.0 + 1.0, row)), Some(0));
+    assert_eq!(layout.icon_for(Point::new(gap.1 - 1.0, row)), Some(1));
+    let gap = (sherlock.x + sherlock.width, last.x);
+    assert_eq!(layout.icon_for(Point::new(gap.0 + 1.0, row)), Some(1));
+    assert_eq!(clicked(&mut dock, Point::new(gap.1 - 1.0, row)), Some(2));
+    // The surface takes the pointer down to the edge, and the dock counts it as on itself
+    // there: the magnification and the label follow the column.
+    let edge = Point::new(last.center_x(), bottom - 0.5);
+    assert!(dock.input_area().contains(edge), "{:?}", dock.input_area());
+    assert!(layout.contains(edge));
+    // Past the ends of the glass, nothing.
+    let past = Point::new(layout.bar.x - 4.0, bottom);
+    assert_eq!(clicked(&mut dock, past), None);
+}
+
+/// Lot D-21f: the same on the left edge, a click pushed against it.
+#[test]
+fn a_click_against_the_left_edge_starts_the_icon_of_its_row() {
+    let data = quick_pair("fitts-left");
+    let pinned = ["org.example.QuickA", "org.example.QuickB"];
+    let mut config = flat();
+    config.position = dock_config::Position::Left;
+    let mut dock = dock(&[data], &pinned, config, None);
+    let t = settle(&mut dock);
+    // The first application, Sherlock, the second one.
+    let last = dock.layout(t).icons[2];
+    assert!(last.x > 2.0, "a gap beside the glass");
+    assert_eq!(
+        clicked(&mut dock, Point::new(0.0, last.center_y())),
+        Some(2)
+    );
 }
 
 fn shell(app_ids: &[&str]) -> Message {
@@ -457,6 +667,48 @@ fn the_icon_stops_bouncing_at_the_timeout() {
     assert!(!dock.animating());
 }
 
+/// Lot Q-52: a window that asks for attention (refused the keyboard by the compositor) makes
+/// its icon bounce a few hops, once, then rest; asking again later bounces it again.
+#[test]
+fn the_icon_of_a_window_asking_for_attention_bounces_a_few_hops() {
+    let data = quick_app("quick-attention");
+    let mut dock = dock(&[data], &["org.example.Quick"], flat(), None);
+    settle(&mut dock);
+    let index = dock
+        .items
+        .iter()
+        .position(|i| i.name == "Rapide")
+        .expect("pinned");
+    let asking = |attention: bool| {
+        let mut window = Window::new(7, "QuickExample", false);
+        window.attention = attention;
+        Message::Windows(Windows {
+            list: vec![window],
+            ..Windows::default()
+        })
+    };
+    let _ = dock.update(asking(false));
+    let t0 = dock.now();
+    assert!(dock.calls.is_empty() && dock.lift(index, t0) == 0.0);
+    let _ = dock.update(asking(true));
+    let t0 = dock.now();
+    let period = tokens::BOUNCE_PERIOD;
+    assert!(dock.animating());
+    assert!(dock.lift(index, t0 + period / 2) > 20.0, "it hops");
+    // Still asking at the next list: not started again.
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+    let end = t0 + period * tokens::ATTENTION_HOPS;
+    assert!(dock.lift(index, end - period / 2) > 0.0);
+    let _ = dock.tick(end);
+    assert!(dock.calls.is_empty() && !dock.animating());
+    assert_eq!(dock.lift(index, end + period / 2), 0.0, "then it rests");
+    // Given the keyboard, then asking again: it bounces again.
+    let _ = dock.update(asking(false));
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+}
+
 /// A capture sets the active theme: one at a time.
 static THEME: Mutex<()> = Mutex::new(());
 
@@ -513,6 +765,26 @@ fn the_animations_render_without_a_screen() {
     let _ = dock.tick(dock.now() + ms(400));
     assert!(dock.held().is_some());
     assert!(capture(&dock, "dock-drag").expect("screenshot written") > 2_000);
+    color::set_active(Theme::Dark);
+}
+
+/// An application without an icon, its initial drawn instead, arriving: at its first frame
+/// its side is 0. Text of size 0 made the text engine panic (`cosmic-text`, `buffer.rs`: « line
+/// height cannot be 0 »), which killed the dock at the start of a session without screen,
+/// where no theme gives the applications their icons (lot Q-32).
+#[test]
+fn an_initial_arriving_from_nothing_is_drawn() {
+    let _theme = in_dark();
+    let data = quick_app("quick-arrives");
+    let mut dock = dock(&[data], &FOUR, flat(), None);
+    settle(&mut dock);
+    let mut config = flat();
+    let mut pinned: Vec<String> = FOUR.map(String::from).to_vec();
+    pinned.push(String::from("org.example.Quick"));
+    config.pinned = Some(pinned);
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert!(dock.animating(), "it arrives");
+    assert!(capture(&dock, "dock-initial-arrives").expect("screenshot written") > 2_000);
     color::set_active(Theme::Dark);
 }
 

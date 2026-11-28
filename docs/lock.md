@@ -10,17 +10,32 @@ and asks PAM. If it crashes, the session stays locked and the compositor starts 
 macOS-like, as the author asked; no board draws it (the board of the login screen inspires it).
 Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
-- **At rest** (lot D-25b), every screen has a lock surface of its own, at its size and scale,
-  with only the background, the date (« jeudi 26 novembre ») and the large time at the top
-  (regular Inter: iced 0.14 draws the variable font at its default weight only, a thin weight
-  would fall back to another font). No form, as on macOS.
-- **A key, a click or the pointer** bring the form on the screen of the pointer, at the bottom
-  middle: the round bubble of Sherlock in 3D (`sherlock_3d::Sherlock3d`; the still picture
+- Every screen has a lock surface of its own, at its size and scale, with the background, the
+  date (« jeudi 26 novembre ») and the large time at the top (regular Inter: iced 0.14 draws
+  the variable font at its default weight only, a thin weight would fall back to another
+  font). **At rest** (lot D-25b), that is all, as on macOS.
+- **The form comes with the lock** (lot D-24d), and again with a key, a click or the pointer
+  once it left, on the screen of the pointer, at the bottom middle: the round bubble of Sherlock in 3D (`sherlock_3d::Sherlock3d`; the still picture
   `docs/design/images/sherlock-neutre.png` in software or without the model), the user's name, the password pill of glass with the eye (show or hide the password) and the
   arrow, the line of the error under it, then the machine buttons: « Veille », « Redémarrer »,
   « Éteindre ». The pill and the buttons move to the screen the pointer enters, or the one that
   gets the keyboard; the compositor gives the keyboard to the lock surface of the screen under
   the pointer.
+- **The bottom corner** (lot D-25i, `src/status.rs`), with the form, discreet, in the secondary
+  color: the network (Wi-Fi with its signal, a cable, or none), the keyboard layout (« FR »,
+  picked as the compositor picks it: `keyboard.conf`, `XKB_DEFAULT_LAYOUT`, the system's, then
+  French) and the battery with its charge, on a machine that has one (not a mouse's: `scope`
+  Device is left out). Read every 5 s on a thread of its own from the kernel's files only
+  (`/sys/class/net`, `/proc/net/wireless`, `/sys/class/power_supply`), each read bounded: no
+  bus, nothing that can hang the screen. The login screen shows the same line.
+- **Towards a restart or a power off** (lot D-25i, `machine::Departure`): once « Redémarrer »
+  or « Éteindre » is confirmed, Sherlock waves (`Wave`) for 1.4 s, the screen fades to black
+  over 0.6 s, then `systemctl` runs; the other buttons do nothing meanwhile. If the machine is
+  still there 12 s later (logind refused, an inhibitor), the screen comes back. « Veille » is
+  unchanged.
+
+  ![The line of the corner, 1920 × 1080](lock/status-1920.png)
+  ![The same, 1280 × 800](lock/status-1280.png)
 - **Sizes follow the screen.** The time, the room above it, the bubble and the gaps are a share
   of the screen's logical height, kept between a minimum and a maximum (`screen::fit`); the
   rest has fixed logical sizes, which the screen's scale multiplies. Tried on 1366 × 768,
@@ -45,12 +60,24 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 
 ## Behavior
 
-- **Entrance:** the time comes with the screen. The form comes on demand (`src/form.rs`): the
-  bubble grows from 60 % of its size on a spring, then the name, the pill and the buttons rise
-  and fade in, 70 ms apart. A key once the form shows ends the animations: typing is never
-  slowed down.
+- **Background (lot D-24d):** the surfaces are transparent; the compositor shows the picture
+  of the lock behind them (its curtain), and this program's own picture fades in over it once
+  read, or shows at once when read before the first frame: the same picture, so nothing
+  moves. Only the rescue mode fills its screen with the plain color.
+- **Entrance:** once the compositor's curtain is down (`sherlock_ui::lock::CURTAIN`, 400 ms
+  after the start, or from the first frame when it comes later), the time, then the bubble,
+  which grows from 60 % of its size on a spring, the name, the pill and the buttons rise and
+  fade in, 70 ms apart. Later, the form comes on demand (`src/form.rs`) the same way. A key
+  once the form shows ends the animations: typing is never slowed down.
 - **The key that brings the form is not lost:** a letter, a digit or a sign goes into the field;
-  Space and Enter only bring the form (Enter sends nothing to PAM). Escape sends the form away.
+  Space and Enter only bring the form (Enter sends nothing to PAM). Escape empties the field;
+  on an empty field, it sends the form away.
+- **The keyboard stays in the field** (as on macOS): the field takes it as soon as the form
+  shows, without a click (when its surface comes, at its first size and first frame, and when
+  the form comes back), and gets it back after a wrong password, a click on the eye, on a
+  machine button or anywhere on the screen, and after Escape. The keys typed during the entrance
+  go into it. Tab goes from the field to the eye, the arrow and the machine buttons, and back
+  (`sherlock_ui::focus`: Enter or Space presses the button that has the focus, its ring shows).
 - **Leaving:** after 20 s without input (unless PAM is checking), the form leaves in reverse
   order, and the field empties, the eye closed.
 - **Sleep:** confirming « Veille » sends the form away and wipes the field first. The 20 s are
@@ -60,7 +87,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   whoever opens the lid.
 - **Sherlock** follows the field: he waves (`Wave`) when the form comes, closes his eyes
   (`EyesClosed`) while something is typed, opens one eye (`Peek`) when the eye shows the
-  password, opens them and looks at the field when it is empty again, thinks (`Think`) while
+  password, opens them when it is empty again. While keys come, and 1.5 s after the last one
+  (`TYPING_GAZE`), he looks down at the field whatever his eyes do: his head bends toward it
+  (`sherlock_3d::animator::HEAD_GAZE_LIMIT`) and his open eyes turn to it. He thinks (`Think`) while
   PAM checks, is sorry (`Sorry`) for 2.5 s after a refusal, happy (`Success`) when it is
   accepted, and sleeps (`Sleep`) once « Veille » is confirmed. The model is read on a thread at
   start (`sherlock_3d::locate`); hidden, he costs nothing.
@@ -69,8 +98,10 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - **Refused:** the pill comes back, shakes three times and stays empty, with « Mot de passe
   incorrect » under it (or « Trop d'essais… » when PAM says so, or « Vérification
   impossible… »); the keyboard stays in the field.
-- **Accepted:** everything fades out in 220 ms, then the program ends the lock
-  (`unlock_and_destroy`) and leaves.
+- **Accepted:** the elements leave in reverse order, the buttons first and the time last, 70 ms
+  apart, each in 220 ms (`screen::exit`), the bubble shrinking; the picture stays. Then the
+  program ends the lock (`unlock_and_destroy`) and leaves, and the compositor raises its
+  curtain off the desktop.
 - **Machine buttons:** a first click arms the button (amber, « Reclique pour confirmer »), a
   second click at least 400 ms later runs `systemctl suspend`, `reboot` or `poweroff`; the button
   disarms after 4 seconds or when the password is typed. logind decides whether it is allowed.
@@ -78,8 +109,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 ## Password and PAM
 
 - PAM only, never a check of our own, nothing stored (ADR 0023). The service is
-  `sherlockos-lock` (`desktop/lock/pam/sherlockos-lock`: `auth` and `account` of `login`, like
-  swaylock), for the user of the session only, read from the password database (`getpwuid_r`),
+  `sherlockos-lock` (`desktop/lock/pam/sherlockos-lock`, lot D-25l: `common-auth` with
+  pam_faildelay at 3 s, not `login`'s stack, whose pam_nologin refused the right password once
+  `/run/nologin` existed, five minutes before a `shutdown +N`), for the user of the session only, read from the password database (`getpwuid_r`),
   not from `$USER`. Without `/etc/pam.d/sherlockos-lock`, PAM uses its `other` service, which
   refuses every password on Debian: `sherlockos-session` writes a warning in the session log,
   and `just install-session` prints the `sudo install` line, which the author runs.
@@ -90,16 +122,48 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   when dropped. The conversation function gives PAM a `malloc` copy, which PAM frees; our copy
   is overwritten as soon as it is handed over. It is never logged.
 - The first key, which brings the form, travels as a `Secret` too (`form::Input`).
-- **Limit: the copies of iced's text field are not wiped.** The `text_input` keeps the typed
-  text in its own state, and `on_input` hands a new `String` at each key before it becomes a
-  `Secret`; iced frees them without overwriting them. They live in the memory of this process
-  only, for the time the field shows them; a process able to read it (ptrace) could read the
-  password anyway.
-- **Tries.** The lock screen runs as the user, so it cannot write the counters of
-  pam_faillock: failures are not counted, as with swaylock. Each wrong password waits for the
-  delay of pam_faildelay from `login` (3 s on Debian) before PAM answers, and only one check
-  runs at a time: that is what slows the tries. The check runs on its own thread, the screen
-  keeps drawing.
+- **Memory closed** (lot D-25k). The first thing `main` does: `PR_SET_DUMPABLE` at 0 (no other
+  process of the user may trace the program nor read `/proc/<pid>/mem`, and no core dump) and
+  `RLIMIT_CORE` at 0, since a panic aborts. A failure is logged, the lock goes on.
+- **The text field never holds the password** (lot D-25m). iced's `text_input` keeps its own
+  copy of its value, rebuilt at each frame and freed without being wiped. So, while hidden, the
+  field is given one mask per character (characters of the private use area, a different one
+  at each place, drawn as dots), never the password; each edit of the field (a key, an erase, a
+  paste, a selection replaced) is found by comparing the new value with the masks, and applied
+  to the `Secret` (`app::edited`), in one allocation. What is left in iced's memory: the
+  characters typed, one by one, in the `String` that `on_input` hands over (wrapped in a
+  `Secret` at once, so wiped), and, while the eye shows the password, the password itself, as on
+  the screen. The memory of the program is closed to the user's other processes (lot D-25k).
+- **Tries** (lot D-25n, `src/throttle.rs`). pam_faillock does not count them for the lock
+  screen, for two reasons:
+  - it is not in the stack: our service includes Debian's `common-auth`, which does not call
+    it;
+  - it could not count them if it were: the lock screen runs as the user, and pam_faillock keeps
+    its counters in `/var/run/faillock`, which only root may write.
+  So the lock counts the wrong passwords itself. The first 5 in a row are free; then each new
+  one makes the next try wait, 30 s, then twice as long each time, 5 minutes at most: the user
+  is never shut out of their session for good. While it waits, a try is answered
+  « Trop d'essais. Patiente un peu avant de réessayer. » at once, without reaching PAM, the
+  password wiped. The right password starts the count again; PAM unavailable or busy counts
+  nothing. It is a delay, not a check: PAM alone says whether a password is right (ADR 0023),
+  and nothing is stored: the count lasts as long as the lock program (a lock program started
+  again by the compositor starts from zero). On top of it, each wrong password waits for the
+  delay of pam_faildelay (3 s, in our service) before PAM answers, and only one check runs at a
+  time. The check runs on its own thread, the screen keeps drawing.
+- **A PAM that hangs** (lot D-25f). The interface never waits for PAM: the check runs on a
+  thread of its own, and after 20 s (`pam::TIMEOUT`) without an answer it counts as PAM
+  unavailable: the spinner stops, the field comes back with « Vérification impossible. Réessaie. ».
+  One check at a time (lot D-25m): until the thread of the check that hangs ends, a new try is
+  answered at once with « Vérification encore en cours. Réessaie dans un instant. », its
+  password wiped without reaching PAM, so that threads stuck in PAM never pile up. A module waiting for a daemon (`pam_winbind`, in Debian's
+  `common-auth` when Samba's winbind is installed) or for the network can no longer leave the
+  lock screen in its spinner for good. The session log says « authentication: checking » at each
+  try.
+- **The log of the input** (lot D-25g), without anything typed: « input on the lock at rest »
+  for a key or the pointer while the form is away, then « form shown ». A test runs the real
+  program, in software, on a headless compositor: one Space brings the form
+  (`LOCK_PROGRAM=target/debug/sherlockos-lock cargo test -p compositor --test session_lock --
+  --ignored the_real_lock_program`).
 - **Only one clean exit.** The toolkit (`exwlshellev`) sends `unlock_and_destroy` on every
   clean exit while the lock is held: the program reaches `iced::exit()` only after PAM accepted
   the password. A panic aborts the process (no unwinding through the toolkit), and an error
@@ -114,7 +178,14 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - `src/pam.rs`: the conversation, driven like PAM drives it with fake messages (the hidden
   prompt gets the password once, the visible one the user, the others nothing); never the
   system's PAM, never a real password.
-- `src/machine.rs`: the second click and its delay.
+- `src/throttle.rs`, with a fake PAM and a clock moved by hand: 5 free wrong passwords, then
+  the waits (the right password itself not handed to PAM while it waits), doubling up to 5
+  minutes and never more, and the right password starting the count again.
+- `src/machine.rs`: the second click and its delay; the departure (the wave, the black, the
+  command run once, the screen back after 12 s).
+- `src/status.rs`: the line of the corner read from a fixture of `/sys` and `/proc` (a bridge
+  left out, Wi-Fi and its signal, a cable winning, the layout of the setting and of the system,
+  a mouse's battery left out).
 - `src/form.rs`: the form on demand (a letter goes into the field, Space and Enter do not,
   Escape and 20 s without input send it away, not while PAM checks) and Sherlock's mood.
 - `src/background.rs`: the picture reduced, blurred and darkened; `lock.conf` before the
@@ -123,11 +194,18 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   it, Space and Enter, the form leaving and the field emptied, the mood of Sherlock; the right
   password unlocks, a wrong one empties the field, an empty one sends nothing; only PAM's
   acceptance leads to the exit; the typed password never shows in a message (`Typed(***)`);
-  the pill follows the screen of the pointer; a machine button needs a second click.
+  the pill follows the screen of the pointer; a machine button needs a second click, and a
+  power off runs after the wave and the black; the line of the corner (`lock-status-1920`,
+  `lock-status-1280`) and the fade to black halfway (`lock-departing`).
   Screenshots in `target/tmp/lock/`, on the blurred wallpaper: rest (no form), form, typing,
   password shown (`peek`), spinner and error in both themes, the second screen, and the rest
   and the form on the four sizes above. In software, Sherlock is his still picture: the 3D
-  bubble is seen on the machine.
+  bubble is seen on the machine. The boards of the lock (the curtain over the frozen desktop,
+  then the elements one by one, 8 frames) and of the unlock (6 frames), composed as the
+  compositor shows them: `cargo test -p lock --test render -- --ignored boards`. Sherlock
+  looking down at the field is in the captures of `sherlock-3d` (`seq-frappe-*.png`).
+- `src/form.rs` and `tests/render.rs` also check that Sherlock looks at the field while keys
+  come in it, and ahead again 1.5 s after the last one.
 
 ## Manual test (rule 9)
 

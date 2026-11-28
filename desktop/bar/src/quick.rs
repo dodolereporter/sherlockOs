@@ -24,17 +24,22 @@ use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, typography};
 
 use crate::source::battery::{Battery, Charge};
-use crate::system::audio::{Output, Pactl};
+use crate::system::audio::{Device, Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
 use crate::system::keyboard::{self, KeyboardLight};
-use crate::system::network::{self, Network, Security, Wifi};
+use crate::system::network::{self, Network, Outcome, Security, Wifi};
 use crate::system::power::{self, Power, Profile};
 use crate::system::watch;
 use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
 mod devices;
+mod focus;
+mod sound;
+
+pub use focus::Span;
+pub use sound::{Devices, read as read_devices};
 
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,18 +78,20 @@ pub enum Service {
     Session,
     /// The keyboard backlight, when the machine has one.
     Keyboard,
+    /// The outputs, the inputs and the microphone (D-20g).
+    Microphone,
 }
 
 /// One read of a service at a time: one asked meanwhile runs once the first ends, however
 /// many were asked. A burst of signals never stacks reads on the bus.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Reads {
-    reading: u8,
-    again: u8,
+    reading: u16,
+    again: u16,
 }
 
 impl Reads {
-    fn bit(service: Service) -> u8 {
+    fn bit(service: Service) -> u16 {
         1 << service as u8
     }
 
@@ -142,6 +149,10 @@ pub enum Page {
     Networks,
     /// The Bluetooth devices, paired and found (`devices.rs`).
     Devices,
+    /// The durations of Do not disturb (`focus.rs`).
+    Focus,
+    /// The outputs and the inputs of the sound (`sound.rs`).
+    Sound,
 }
 
 /// What runs the session commands: the launcher's.
@@ -254,16 +265,31 @@ pub struct Quick {
     pub wifi: Load<Wifi>,
     pub bluetooth: Load<Bluetooth>,
     pub sound: Load<Output>,
+    /// The outputs, the inputs and the microphone, read while their page is open (D-20g).
+    pub audio: Load<Devices>,
     pub brightness: Load<Backlight>,
     pub keyboard: Load<KeyboardLight>,
     pub energy: Load<Power>,
     pub do_not_disturb: Option<bool>,
+    /// When Do not disturb ends by itself, while it holds (D-23e).
+    pub dnd_until: Option<u64>,
     pub page: Page,
     /// The network chosen that needs its password, and the password typed.
     pub joining: Option<Network>,
     pub password: Secret,
-    /// The network being joined, until NetworkManager reports it.
+    /// The network being joined, until its activation ends (`network::ACTIVATION_LIMIT` at
+    /// most).
     pub connecting: Option<String>,
+    /// The network whose last join ended badly, and how: said on its line and on the tile.
+    pub refused: Option<(String, Outcome)>,
+    /// When the password field started shaking: the password was wrong.
+    pub shaken: Option<Duration>,
+    /// The password typed shows in clear (the eye of the field).
+    pub reveal: bool,
+    /// « Autre réseau… » open: the name and the protection of a hidden network.
+    pub other: Option<(String, Security)>,
+    /// A saved network whose « Oublier ce réseau » waits for its confirmation.
+    pub forgetting_network: Option<String>,
     /// A session command waiting for its second click, and when it was armed.
     pub armed: Option<(Command, Instant)>,
     /// The last action that failed.
@@ -277,6 +303,7 @@ pub struct Quick {
     sound_calls: SoundQueue,
     light: Throttle,
     keyboard_calls: Throttle,
+    microphone_calls: Throttle,
     /// The slider held under the pointer: a change made elsewhere does not move it.
     pub held: Option<Service>,
     pub reads: Reads,
@@ -306,16 +333,37 @@ pub enum Message {
     Wifi(Load<Wifi>),
     Bluetooth(Load<Bluetooth>),
     Sound(Load<Output>),
+    Audio(Load<Devices>),
+    /// The outputs and the inputs, or back (D-20g).
+    ShowSound(bool),
+    ChooseOutput(String),
+    ChooseInput(String),
+    MicrophoneVolume(u8),
+    MuteMicrophone,
     Brightness(Load<Backlight>),
     Keyboard(Load<KeyboardLight>),
     Energy(Load<Power>),
     ToggleWifi,
     ShowNetworks(bool),
+    /// « Réglages Wi-Fi… » and the others: Control Room on that page (`--page`), or on its
+    /// first one without. Started by the bar, which has the programs (D-20f).
+    OpenSettings(Option<&'static str>),
     Join(Network),
-    /// The network chosen has no saved connection: its password is asked for.
-    AskPassword,
+    /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
+    OpenNetworkSettings,
     Password(Secret),
     SubmitPassword,
+    /// The join of a network ended: joined, its password refused, failed or too long.
+    Joined(Network, Result<Outcome, Problem>),
+    /// The eye of the password field.
+    Reveal,
+    /// « Autre réseau… » opened or closed, its name typed, its protection chosen.
+    OtherNetwork(bool),
+    OtherName(String),
+    OtherSecurity(Security),
+    /// « Oublier ce réseau », then its confirmation.
+    ForgetNetwork(String),
+    ConfirmForgetNetwork(bool),
     ToggleBluetooth,
     ShowDevices(bool),
     /// A device of the list: connected or disconnected when paired, else paired.
@@ -329,6 +377,12 @@ pub enum Message {
     Forget(String),
     ConfirmForget(bool),
     ToggleDoNotDisturb,
+    /// Do not disturb for a time, on until switched off, or off (D-23e).
+    DoNotDisturb(Span),
+    /// The notifications file read, or written (`true`), off the interface thread.
+    DoNotDisturbRead(Result<NotificationsConfig, Problem>, bool),
+    /// The durations of Do not disturb, or back.
+    ShowFocus(bool),
     Volume(u8),
     Mute,
     Light(u8),
@@ -421,12 +475,11 @@ impl Quick {
         self.page = Page::Main;
         self.armed = None;
         self.failure = None;
+        self.refused = None;
         self.held = None;
-        self.do_not_disturb = self.settings.as_deref().map(|path| {
-            NotificationsConfig::load(path).is_ok_and(|(config, _)| config.do_not_disturb)
-        });
         Task::batch([
             stopped,
+            self.read_do_not_disturb(),
             self.read(Service::Wifi),
             self.read(Service::Bluetooth),
             self.read(Service::Sound),
@@ -475,13 +528,18 @@ impl Quick {
                     |r| Message::Keyboard(Load::from_result(r)),
                 )
             }
+            Service::Microphone => self.read_devices(),
             Service::DoNotDisturb | Service::Session => Task::none(),
         }
     }
 
     /// Frames are needed: a tile or a page moves.
     pub fn running(&self) -> bool {
-        self.page_motion.running() || self.lit.iter().any(|lit| lit.running(self.now))
+        self.page_motion.running()
+            || self.lit.iter().any(|lit| lit.running(self.now))
+            || self
+                .shaken
+                .is_some_and(|at| self.now.saturating_sub(at) < sherlock_ui::lock::screen::SHAKE)
     }
 
     pub fn tick(&mut self, now: Duration) {
@@ -521,10 +579,13 @@ impl Quick {
                 | Message::Pairing(_)
                 | Message::DeviceDone(_)
                 | Message::Done(..)
+                | Message::DoNotDisturbRead(..)
+                | Message::Joined(..)
                 | Message::Changed(_)
                 | Message::Wifi(_)
                 | Message::Bluetooth(_)
                 | Message::Sound(_)
+                | Message::Audio(_)
                 | Message::Brightness(_)
                 | Message::Keyboard(_)
                 | Message::Energy(_)
@@ -596,11 +657,11 @@ impl Quick {
                     });
                 }
             }
+            Message::OpenSettings(_) => {}
             Message::ShowNetworks(show) => {
                 let page = if show { Page::Networks } else { Page::Main };
                 self.turn_page(page, show);
-                self.joining = None;
-                self.password.wipe();
+                self.forget_typed();
                 let device = self.wifi.ready().and_then(|w| w.device.clone());
                 if let (true, Some(device)) = (show, device) {
                     // The networks found come later, with the signals of the device
@@ -615,16 +676,41 @@ impl Quick {
                 }
             }
             Message::Join(chosen) => return self.join(chosen),
-            Message::AskPassword => {}
+            // Started by the bar, which has the programs (`app.rs`).
+            Message::OpenNetworkSettings => {}
             Message::Password(typed) => self.password = typed,
-            Message::SubmitPassword => {
-                if let Some(chosen) = self.joining.clone()
-                    && !self.password.is_empty()
-                {
-                    // Moved out: the field empties, the secret is wiped once sent.
-                    let password = std::mem::take(&mut self.password);
-                    return self.connect(chosen, Some(password));
+            Message::SubmitPassword => return self.submit(),
+            Message::Joined(network, result) => return self.joined(network, result),
+            Message::Reveal => self.reveal = !self.reveal,
+            Message::OtherNetwork(open) => {
+                self.forget_typed();
+                self.other = open.then(|| (String::new(), Security::Psk));
+            }
+            Message::OtherName(name) => {
+                if let Some((typed, _)) = &mut self.other {
+                    // A name has 32 bytes at most: the field takes no more.
+                    *typed = name;
+                    while typed.len() > network::MAX_SSID {
+                        typed.pop();
+                    }
                 }
+            }
+            Message::OtherSecurity(security) => {
+                if let Some((_, chosen)) = &mut self.other {
+                    *chosen = security;
+                }
+            }
+            Message::ForgetNetwork(ssid) => self.forgetting_network = Some(ssid),
+            Message::ConfirmForgetNetwork(yes) => {
+                if let (true, Some(ssid)) = (yes, self.forgetting_network.take()) {
+                    if self.refused.as_ref().is_some_and(|(name, _)| *name == ssid) {
+                        self.refused = None;
+                    }
+                    return act(Service::Wifi, move |bus| async move {
+                        network::forget(&bus, &ssid).await
+                    });
+                }
+                self.forgetting_network = None;
             }
             Message::ToggleBluetooth => {
                 if let Some(read) = self.bluetooth.ready() {
@@ -634,7 +720,19 @@ impl Quick {
                     });
                 }
             }
-            Message::ToggleDoNotDisturb => self.toggle_do_not_disturb(),
+            Message::ToggleDoNotDisturb => {
+                let span = if self.do_not_disturb == Some(true) {
+                    Span::Off
+                } else {
+                    Span::On
+                };
+                return self.set_do_not_disturb(span);
+            }
+            Message::DoNotDisturb(span) => return self.set_do_not_disturb(span),
+            Message::DoNotDisturbRead(read, written) => {
+                return self.do_not_disturb_read(read, written);
+            }
+            Message::ShowFocus(show) => self.show_focus(show),
             Message::Volume(value) => {
                 self.held = Some(Service::Sound);
                 if let Load::Ready(output) = &mut self.sound {
@@ -695,7 +793,18 @@ impl Quick {
             Message::ConfirmForget(yes) => return self.forget(yes),
             Message::Session(command) => self.session(command),
             Message::Done(service, done) => return self.done(service, done),
+            Message::Changed(Service::Sound) if self.page == Page::Sound => {
+                // Another output chosen elsewhere, a headset plugged in: the page follows.
+                let sound = self.read(Service::Sound);
+                return Task::batch([sound, self.read(Service::Microphone)]);
+            }
             Message::Changed(service) => return self.read(service),
+            Message::Audio(read) => return self.devices_read(read),
+            Message::ShowSound(show) => return self.show_sound(show),
+            Message::ChooseOutput(name) => return self.choose(Device::Output, name),
+            Message::ChooseInput(name) => return self.choose(Device::Microphone, name),
+            Message::MicrophoneVolume(value) => return self.microphone_volume(value),
+            Message::MuteMicrophone => return self.mute_microphone(),
         }
         Task::none()
     }
@@ -730,6 +839,10 @@ impl Quick {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
             Service::Keyboard => self.keyboard_calls.done().map(|v| self.send_keyboard(v)),
+            Service::Microphone => self
+                .microphone_calls
+                .done()
+                .map(|v| self.send_microphone(v)),
             _ => None,
         };
         match next {
@@ -753,8 +866,7 @@ impl Quick {
     /// The panel closed, whichever way: the password typed is wiped, the network chosen
     /// forgotten, a scan for Bluetooth devices stopped, a question of the agent cancelled.
     pub fn close(&mut self) -> Task<Message> {
-        self.password.wipe();
-        self.joining = None;
+        self.forget_typed();
         self.forgetting = None;
         self.stop_pairing();
         self.stop_scan()
@@ -767,6 +879,7 @@ impl Quick {
                 Service::Sound => self.sound_calls.busy(),
                 Service::Brightness => self.light.busy(),
                 Service::Keyboard => self.keyboard_calls.busy(),
+                Service::Microphone => self.microphone_calls.busy(),
                 _ => false,
             }
     }
@@ -789,74 +902,103 @@ impl Quick {
         })
     }
 
+    /// What was typed for a network goes: its password (wiped), a hidden network's form, a
+    /// pending « Oublier ce réseau ».
+    fn forget_typed(&mut self) {
+        self.password.wipe();
+        self.joining = None;
+        self.other = None;
+        self.reveal = false;
+        self.shaken = None;
+        self.forgetting_network = None;
+    }
+
     /// A network of the list: joined at once when it is open or saved; else its password is
     /// asked for below it.
     fn join(&mut self, chosen: Network) -> Task<Message> {
-        if chosen.active {
+        if chosen.active || self.connecting.is_some() {
             return Task::none();
         }
-        if chosen.security == Security::Open {
+        if chosen.security == Security::Open || chosen.saved {
             return self.connect(chosen, None);
         }
-        self.password.wipe();
-        self.joining = Some(chosen.clone());
-        if chosen.security == Security::Other {
-            return Task::none();
-        }
-        let Some(device) = self.wifi.ready().and_then(|w| w.device.clone()) else {
-            return Task::none();
-        };
-        on_system(
-            move |bus| async move {
-                if network::saved(&bus, &chosen.ssid).await?.is_none() {
-                    return Ok(false);
-                }
-                network::connect(&bus, &device, &chosen, None).await?;
-                Ok(true)
-            },
-            |r| match r {
-                Ok(true) => Message::Done(Service::Wifi, Ok(())),
-                Ok(false) => Message::AskPassword,
-                Err(problem) => Message::Done(Service::Wifi, Err(problem)),
-            },
-        )
+        self.forget_typed();
+        self.joining = Some(chosen);
+        Task::none()
     }
 
+    /// « Rejoindre », or Enter in a password field: the network asked for, or the hidden one.
+    fn submit(&mut self) -> Task<Message> {
+        if let Some(chosen) = self.joining.clone()
+            && !self.password.is_empty()
+        {
+            // Moved out: the field empties, the secret is wiped once sent.
+            let password = std::mem::take(&mut self.password);
+            return self.connect(chosen, Some(password));
+        }
+        if let Some((name, security)) = self.other.clone()
+            && !name.is_empty()
+            && (security == Security::Open || !self.password.is_empty())
+        {
+            let password = (security != Security::Open).then(|| std::mem::take(&mut self.password));
+            return self.connect(Network::hidden(&name, security), password);
+        }
+        Task::none()
+    }
+
+    /// Joins `chosen` through the bus for actions (polkit may ask for a password, for
+    /// `ACTION_TIMEOUT`), and follows the activation to its end.
     fn connect(&mut self, chosen: Network, password: Option<Secret>) -> Task<Message> {
         let Some(device) = self.wifi.ready().and_then(|w| w.device.clone()) else {
             return Task::none();
         };
-        self.joining = None;
+        self.forget_typed();
+        self.refused = None;
+        if self
+            .failure
+            .as_ref()
+            .is_some_and(|(s, _)| *s == Service::Wifi)
+        {
+            self.failure = None;
+        }
         self.connecting = Some(chosen.ssid.clone());
-        act(Service::Wifi, move |bus| async move {
-            let password = password.as_ref().map(Secret::as_str);
-            network::connect(&bus, &device, &chosen, password).await
-        })
+        let network = chosen.clone();
+        Task::perform(
+            async move {
+                let bus = system::system_for_actions().await?;
+                let password = password.as_ref().map(Secret::as_str);
+                network::join(&bus, &device, &chosen, password).await
+            },
+            move |result| Message::Joined(network.clone(), result),
+        )
     }
 
-    fn toggle_do_not_disturb(&mut self) {
-        let Some(path) = self.settings.clone() else {
-            return;
-        };
-        let (mut config, _) = NotificationsConfig::load(&path).unwrap_or_default();
-        config.do_not_disturb = !config.do_not_disturb;
-        match config.save(&path) {
-            Ok(()) => {
-                self.do_not_disturb = Some(config.do_not_disturb);
-                if self
-                    .failure
-                    .as_ref()
-                    .is_some_and(|(s, _)| *s == Service::DoNotDisturb)
-                {
-                    self.failure = None;
-                }
-            }
-            Err(error) => {
-                tracing::warn!(%error, "cannot write Do not disturb");
-                let problem = Problem::Failed(error.to_string());
-                self.failure = Some((Service::DoNotDisturb, problem));
-            }
+    /// A join ended. A wrong password is asked again under its network's line (or in the
+    /// hidden network's form), the field shaking.
+    fn joined(&mut self, network: Network, result: Result<Outcome, Problem>) -> Task<Message> {
+        if self.connecting.as_deref() == Some(network.ssid.as_str()) {
+            self.connecting = None;
         }
+        match result {
+            Ok(Outcome::Joined) => {}
+            Ok(Outcome::WrongPassword) if network.security != Security::Open => {
+                tracing::info!("the Wi-Fi password was refused");
+                self.forget_typed();
+                if network.path == network::ANY_POINT {
+                    self.other = Some((network.ssid.clone(), network.security));
+                } else {
+                    self.joining = Some(network.clone());
+                }
+                self.shaken = Some(self.now);
+                self.refused = Some((network.ssid, Outcome::WrongPassword));
+            }
+            Ok(outcome) => {
+                tracing::warn!(?outcome, "the Wi-Fi network was not joined");
+                self.refused = Some((network.ssid, outcome));
+            }
+            Err(problem) => return self.done(Service::Wifi, Err(problem)),
+        }
+        self.read(Service::Wifi)
     }
 
     /// The launcher's rules: locking runs at once; logging out, restarting and powering off
@@ -1071,6 +1213,8 @@ impl Quick {
             Page::Main => self.view_main(user, battery),
             Page::Networks => self.view_networks(),
             Page::Devices => self.view_devices(),
+            Page::Focus => self.view_focus(),
+            Page::Sound => self.view_sound(),
         };
         let forward = self.page_forward;
         let coming = self.page_motion.page(forward, || page(self.page));
@@ -1109,22 +1253,15 @@ impl Quick {
     fn view_main<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
         let tiles = column![
             row![self.wifi_tile(), self.bluetooth_tile()].spacing(panels::TILE_GAP),
-            row![self.do_not_disturb_tile(), game_tile()].spacing(panels::TILE_GAP),
+            // « Mode jeu » and « Carte graphique » are not there: nothing behind them yet
+            // (D-20f). The tile keeps its width, half the row.
+            row![self.do_not_disturb_tile(), space::horizontal()].spacing(panels::TILE_GAP),
         ]
         .spacing(panels::TILE_GAP);
-        let gpu = words::GPU_CHOICES
-            .iter()
-            .map(|label| (*label, false, None))
-            .collect();
         column![
             tiles,
             self.volume_row(),
             self.lights(),
-            group(
-                words::GPU,
-                Some(words::SOON.to_owned()),
-                panels::segmented(gpu)
-            ),
             self.energy_group(battery),
             space::vertical(),
             self.footer(user),
@@ -1143,11 +1280,13 @@ impl Quick {
             }
             Load::Ready(wifi) if wifi.hardware_off => (false, words::BLOCKED.to_owned(), false),
             Load::Ready(wifi) => {
-                let line = match (wifi.enabled, &self.connecting, wifi.connected()) {
-                    (false, _, _) => words::OFF.to_owned(),
-                    (true, Some(_), _) => words::CONNECTING.to_owned(),
-                    (true, None, Some(network)) => network.ssid.clone(),
-                    (true, None, None) => words::NOT_CONNECTED.to_owned(),
+                let refused = self.refused.as_ref().map(|(_, outcome)| refusal(*outcome));
+                let line = match (wifi.enabled, &self.connecting, wifi.connected(), refused) {
+                    (false, _, _, _) => words::OFF.to_owned(),
+                    (true, Some(_), _, _) => words::CONNECTING.to_owned(),
+                    (true, None, Some(network), _) => network.ssid.clone(),
+                    (true, None, None, Some(refused)) => refused.to_owned(),
+                    (true, None, None, None) => words::NOT_CONNECTED.to_owned(),
                 };
                 (wifi.enabled, line, true)
             }
@@ -1185,20 +1324,19 @@ impl Quick {
     }
 
     fn do_not_disturb_tile(&self) -> Element<'_, Message> {
-        let on = self.do_not_disturb == Some(true);
         let line = match self.failed(Service::DoNotDisturb) {
-            Some(failed) => failed,
-            None if on => words::ON,
-            None => words::OFF,
+            Some(failed) => failed.to_owned(),
+            None => self.do_not_disturb_line(),
         };
         let enabled = self.settings.is_some();
+        let more = enabled.then_some((words::DURATIONS, Message::ShowFocus(true)));
         panels::quick_tile(
             Glyph::Moon,
             words::DO_NOT_DISTURB,
-            line.to_owned(),
+            line,
             self.lit[2].value(self.now),
             enabled.then_some(Message::ToggleDoNotDisturb),
-            None,
+            more,
         )
     }
 
@@ -1220,12 +1358,21 @@ impl Quick {
         };
         let mute = volume.map(|_| Message::Mute);
         let on_change: Option<fn(u8) -> Message> = volume.map(|_| Message::Volume as fn(u8) -> _);
-        let control = panels::held_slider_row(
+        let slider = panels::held_slider_row(
             panels::glyph_button(glyph, label, mute),
             volume.unwrap_or(0),
             on_change,
             Some(Message::Release(Service::Sound)),
         );
+        // The chevron on its right opens the outputs and the inputs (D-20g).
+        let more = ui::icon_button(
+            Icon::Chevron,
+            words::SOUND_DEVICES,
+            volume.map(|_| Message::ShowSound(true)),
+        );
+        let control = row![slider, more]
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(Alignment::Center);
         let caption = ui::ellipsis(line)
             .size(typography::SMALL_SIZE)
             .style(panels::secondary_text);
@@ -1359,13 +1506,17 @@ impl Quick {
         .spacing(metrics::GAP_ICON)
         .align_y(Alignment::Center);
         let body: Element<'_, Message> = match wifi {
-            Some(wifi) if wifi.enabled && !wifi.networks.is_empty() => {
-                let rows = wifi.networks.iter().map(|n| self.network_row(n));
+            Some(wifi) if wifi.enabled => {
+                let mut rows: Vec<Element<'_, Message>> =
+                    wifi.networks.iter().map(|n| self.network_row(n)).collect();
+                if wifi.networks.is_empty() {
+                    rows.push(ui::description(words::NO_NETWORK).into());
+                }
+                rows.push(self.other_network());
                 scroll(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
                     .height(Length::Fill)
                     .into()
             }
-            Some(wifi) if wifi.enabled => notice(words::NO_NETWORK),
             _ => notice(words::WIFI_OFF_LINE),
         };
         let mut page = column![head, body]
@@ -1379,46 +1530,170 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(settings_link(words::WIFI_SETTINGS, Some(NETWORK_PAGE)));
         page.into()
     }
 
     fn network_row<'a>(&'a self, network: &'a Network) -> Element<'a, Message> {
-        let p = color::palette();
-        let glyph = if network.security == Security::Open {
-            Glyph::Wifi
-        } else {
-            Glyph::Padlock
-        };
-        let leading = panels::glyph(glyph, p.text_secondary).into();
-        let trailing = if network.active {
-            Trailing::Checked
-        } else {
-            Trailing::None
-        };
-        let join = Some(Message::Join(network.clone()));
-        let item = ui::menu_item_with(Some(leading), network.ssid.as_str(), trailing, join);
+        let connecting = self.connecting.as_deref() == Some(network.ssid.as_str());
+        let refused = self
+            .refused
+            .as_ref()
+            .filter(|(name, _)| *name == network.ssid)
+            .map(|(_, outcome)| refusal(*outcome));
         let joining = self
             .joining
             .as_ref()
             .is_some_and(|j| j.path == network.path);
-        if !joining {
-            return item.into();
-        }
+        // Under a password asked again, the refusal is said once, under the field.
+        let line = if connecting {
+            Some(words::CONNECTING)
+        } else {
+            refused.filter(|_| !joining)
+        };
+        let forget = (network.saved || network.active).then(|| {
+            let ask = Message::ForgetNetwork(network.ssid.clone());
+            ui::icon_button(Icon::Trash, words::FORGET_NETWORK, Some(ask)).into()
+        });
+        let item = panels::network_row(
+            sherlock_ui::icon::wifi_level(network.strength),
+            network.security != Security::Open,
+            network.active,
+            network.ssid.as_str(),
+            line,
+            Some(Message::Join(network.clone())),
+            forget,
+        );
         let inset = Padding::from([metrics::GAP_TIGHT * 2.0, metrics::MENU_ITEM_PADDING]);
+        if self.forgetting_network.as_deref() == Some(network.ssid.as_str()) {
+            let buttons = row![
+                ui::danger_button(words::FORGET, Some(Message::ConfirmForgetNetwork(true))),
+                ui::secondary_button(words::CANCEL, Some(Message::ConfirmForgetNetwork(false))),
+            ]
+            .spacing(metrics::GAP_INLINE / 2.0);
+            let ask = column![
+                ui::description(words::forget_network_question(&network.ssid)),
+                buttons
+            ]
+            .spacing(metrics::GAP_TIGHT * 2.0);
+            return column![item, container(ask).padding(inset)].into();
+        }
+        if !joining {
+            return item;
+        }
         if network.security == Security::Other {
-            let line = ui::description(words::ENTERPRISE);
+            let open =
+                ui::secondary_button(words::OPEN_SETTINGS, Some(Message::OpenNetworkSettings));
+            let line =
+                column![ui::description(words::ENTERPRISE), open].spacing(metrics::GAP_TIGHT);
             return column![item, container(line).padding(inset)].into();
         }
+        column![item, self.password_row()].into()
+    }
+
+    /// The password field, its eye and « Rejoindre », shaking after a wrong password.
+    fn password_row(&self) -> Element<'_, Message> {
         let field = ui::text_field(words::PASSWORD, self.password.as_str(), Some(typed))
-            .secure(true)
+            .secure(!self.reveal)
             .on_submit(Message::SubmitPassword)
             .width(Length::Fill);
+        let (eye, label) = if self.reveal {
+            (Icon::EyeOff, words::HIDE_PASSWORD)
+        } else {
+            (Icon::Eye, words::SHOW_PASSWORD)
+        };
+        let eye = ui::icon_button(eye, label, Some(Message::Reveal));
         let ready = (!self.password.is_empty()).then_some(Message::SubmitPassword);
-        let ask = row![field, ui::primary_button(words::JOIN, ready)]
+        let ask = row![field, eye, ui::primary_button(words::JOIN, ready)]
             .spacing(metrics::GAP_INLINE / 2.0)
             .align_y(Alignment::Center);
-        column![item, container(ask).padding(inset)].into()
+        let dx = self
+            .shaken
+            .map_or(0.0, |at| panels::shake(self.now.saturating_sub(at)));
+        let mut lines = column![ask].spacing(metrics::GAP_TIGHT * 2.0);
+        if self
+            .refused
+            .as_ref()
+            .is_some_and(|(_, o)| *o == Outcome::WrongPassword)
+        {
+            lines = lines.push(
+                text(words::WRONG_PASSWORD)
+                    .font(typography::UI)
+                    .size(typography::SMALL_SIZE)
+                    .style(panels::error_text),
+            );
+        }
+        container(lines)
+            .padding(Padding {
+                top: metrics::GAP_TIGHT * 2.0,
+                bottom: metrics::GAP_TIGHT * 2.0,
+                left: metrics::MENU_ITEM_PADDING + dx,
+                right: metrics::MENU_ITEM_PADDING - dx,
+            })
+            .into()
     }
+
+    /// « Autre réseau… » at the end of the list, and once open the form of a hidden network:
+    /// its name, its protection, its password.
+    fn other_network(&self) -> Element<'_, Message> {
+        let Some((name, security)) = &self.other else {
+            let open = Some(Message::OtherNetwork(true));
+            return ui::menu_item_with(None, words::OTHER_NETWORK, Trailing::None, open).into();
+        };
+        let close = Some(Message::OtherNetwork(false));
+        let head = ui::menu_item_with(None, words::OTHER_NETWORK, Trailing::None, close);
+        let field = ui::text_field(words::NETWORK_NAME, name, Some(Message::OtherName))
+            .on_submit(Message::SubmitPassword)
+            .width(Length::Fill);
+        let choices = [Security::Open, Security::Psk, Security::Sae]
+            .into_iter()
+            .zip(words::SECURITY_CHOICES)
+            .map(|(choice, label)| {
+                (
+                    label,
+                    *security == choice,
+                    Some(Message::OtherSecurity(choice)),
+                )
+            })
+            .collect();
+        let mut form = column![
+            field,
+            group(words::SECURITY, None, panels::segmented(choices))
+        ]
+        .spacing(metrics::GAP_INLINE / 2.0);
+        let inset = Padding::from([metrics::GAP_TIGHT * 2.0, metrics::MENU_ITEM_PADDING]);
+        if *security == Security::Open {
+            let ready = (!name.is_empty()).then_some(Message::SubmitPassword);
+            form = form.push(ui::primary_button(words::JOIN, ready));
+            return column![head, container(form).padding(inset)].into();
+        }
+        column![head, container(form).padding(inset), self.password_row()].into()
+    }
+}
+
+/// What a line says after a join that ended badly.
+fn refusal(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::WrongPassword => words::WRONG_PASSWORD,
+        Outcome::TimedOut => words::JOIN_TIMED_OUT,
+        Outcome::Joined | Outcome::Failed(_) => words::JOIN_FAILED,
+    }
+}
+
+/// Control Room's pages the bar opens (`control-room --page <id>`).
+pub const NETWORK_PAGE: &str = "network";
+pub const SOUND_PAGE: &str = "sound";
+pub const BLUETOOTH_PAGE: &str = "bluetooth";
+
+/// « Réglages … » at the bottom of a page: Control Room on `page`.
+fn settings_link<'a>(label: &'a str, page: Option<&'static str>) -> Element<'a, Message> {
+    let open = Some(Message::OpenSettings(page));
+    column![
+        ui::divider(),
+        ui::menu_item_with(None, label, Trailing::None, open)
+    ]
+    .spacing(metrics::GAP_TIGHT)
+    .into()
 }
 
 fn typed(password: String) -> Message {
@@ -1427,18 +1702,6 @@ fn typed(password: String) -> Message {
 
 fn switch_wifi(_: bool) -> Message {
     Message::ToggleWifi
-}
-
-/// The tile of the game mode: there is no game mode yet.
-fn game_tile<'a>() -> Element<'a, Message> {
-    panels::quick_tile(
-        Glyph::Gamepad,
-        words::GAME_MODE,
-        words::SOON.to_owned(),
-        0.0,
-        None,
-        None,
-    )
 }
 
 /// A labelled group (« Carte graphique », « Énergie »): its label, a note on its right, its
@@ -1605,6 +1868,7 @@ mod tests {
             strength: 50,
             security: Security::Psk,
             active: false,
+            saved: false,
             path: String::from("/ap/3"),
         };
         quick.joining = Some(network);
@@ -1620,6 +1884,98 @@ mod tests {
         let mut secret = Secret::new(typed.to_owned());
         secret.wipe();
         assert_eq!(secret, Secret::default());
+    }
+
+    fn wifi_with(networks: Vec<Network>) -> Quick {
+        Quick {
+            wifi: Load::Ready(Wifi {
+                enabled: true,
+                hardware_off: false,
+                device: Some(String::from("/dev/1")),
+                networks,
+            }),
+            ..Quick::default()
+        }
+    }
+
+    fn neighbour(saved: bool) -> Network {
+        Network {
+            ssid: String::from("Voisin"),
+            strength: 50,
+            security: Security::Psk,
+            active: false,
+            saved,
+            path: String::from("/ap/3"),
+        }
+    }
+
+    #[test]
+    fn a_wrong_password_is_asked_again_and_the_tile_says_so() {
+        let mut quick = wifi_with(vec![neighbour(false)]);
+        // A new protected network asks for its password; a saved one connects at once.
+        let _ = quick.update(Message::Join(neighbour(false)));
+        assert!(quick.joining.is_some() && quick.connecting.is_none());
+        let _ = quick.update(Message::Password(Secret::new(String::from("faux"))));
+        let _ = quick.update(Message::SubmitPassword);
+        assert_eq!(quick.connecting.as_deref(), Some("Voisin"));
+        assert!(quick.joining.is_none() && quick.password.is_empty());
+        // A second click while it connects does nothing.
+        let _ = quick.update(Message::Join(neighbour(true)));
+        assert!(quick.joining.is_none());
+
+        quick.now = Duration::from_secs(10);
+        let wrong = Ok(Outcome::WrongPassword);
+        let _ = quick.update(Message::Joined(neighbour(false), wrong));
+        assert!(quick.connecting.is_none(), "« Connexion… » ends");
+        assert_eq!(
+            quick.joining.as_ref().map(|n| n.ssid.as_str()),
+            Some("Voisin")
+        );
+        assert_eq!(quick.shaken, Some(Duration::from_secs(10)));
+        assert!(quick.running(), "the field shakes");
+        quick.tick(Duration::from_secs(11));
+        assert!(!quick.running());
+        assert_eq!(refusal(Outcome::WrongPassword), words::WRONG_PASSWORD);
+
+        // Another failure says so without asking anything.
+        let _ = quick.update(Message::Joined(neighbour(true), Ok(Outcome::TimedOut)));
+        assert_eq!(
+            quick.refused,
+            Some((String::from("Voisin"), Outcome::TimedOut))
+        );
+        // Reopened, the panel starts clean.
+        let _ = quick.open();
+        assert!(quick.refused.is_none() && quick.joining.is_none());
+
+        // A saved network shows « Connexion… » too.
+        let _ = quick.update(Message::Join(neighbour(true)));
+        assert_eq!(quick.connecting.as_deref(), Some("Voisin"));
+    }
+
+    #[test]
+    fn a_hidden_network_needs_a_name_and_its_password() {
+        let mut quick = wifi_with(Vec::new());
+        let _ = quick.update(Message::OtherNetwork(true));
+        let _ = quick.update(Message::SubmitPassword);
+        assert!(quick.connecting.is_none());
+        let _ = quick.update(Message::OtherName("x".repeat(40)));
+        assert_eq!(quick.other.as_ref().map(|(n, _)| n.len()), Some(32));
+        let _ = quick.update(Message::OtherName(String::from("Cachette")));
+        let _ = quick.update(Message::SubmitPassword);
+        assert!(
+            quick.connecting.is_none(),
+            "a WPA network wants its password"
+        );
+        let _ = quick.update(Message::Reveal);
+        assert!(quick.reveal);
+        let _ = quick.update(Message::Password(Secret::new(String::from("s3cret"))));
+        let _ = quick.update(Message::SubmitPassword);
+        assert_eq!(quick.connecting.as_deref(), Some("Cachette"));
+        assert!(quick.other.is_none() && !quick.reveal);
+        // Its password refused, the form comes back with its name.
+        let hidden = Network::hidden("Cachette", Security::Psk);
+        let _ = quick.update(Message::Joined(hidden, Ok(Outcome::WrongPassword)));
+        assert_eq!(quick.other, Some((String::from("Cachette"), Security::Psk)));
     }
 
     #[test]
@@ -1686,32 +2042,6 @@ mod tests {
         let mut refused = Quick::default();
         let _ = refused.update(Message::Session(Command::Lock));
         assert!(matches!(refused.failure, Some((Service::Session, _))));
-    }
-
-    #[test]
-    fn do_not_disturb_is_written_to_the_notifications_file() {
-        let dir = std::env::temp_dir().join(format!("bar-dnd-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let file = dir.join("notifications").join("notifications.conf");
-        let mut quick = Quick {
-            settings: Some(file.clone()),
-            ..Quick::default()
-        };
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert_eq!(quick.do_not_disturb, Some(true));
-        let (config, _) = NotificationsConfig::load(&file).unwrap();
-        assert!(config.do_not_disturb);
-        let _ = quick.update(Message::ToggleDoNotDisturb);
-        assert!(!NotificationsConfig::load(&file).unwrap().0.do_not_disturb);
-        // A file that cannot be written: « Échec » under the tile.
-        let mut blocked = Quick {
-            settings: Some(PathBuf::from("/proc/no/notifications.conf")),
-            ..Quick::default()
-        };
-        let _ = blocked.update(Message::ToggleDoNotDisturb);
-        assert!(matches!(blocked.failure, Some((Service::DoNotDisturb, _))));
-        assert_eq!(blocked.failed(Service::DoNotDisturb), Some(words::FAILED));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

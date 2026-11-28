@@ -86,6 +86,8 @@ fn mixed() -> Windows {
             window(20, "org.example.terminal", "", 0),
         ],
         controllable: true,
+        expose: true,
+        force: false,
         ..Windows::default()
     }
 }
@@ -163,6 +165,38 @@ fn a_click_with_zero_one_or_several_windows() {
     let _ = dock.update(Message::Windows(windows));
     dock.click(TERMINAL);
     assert_eq!(recorder.requests(), [Request::Minimize]);
+}
+
+/// Lot D-21d, the author's report « le multi-fenêtre ne marche pas »: seen with the real dock,
+/// Konsole and three of its windows in a compositor without a screen, a click on Konsole in
+/// front minimized all three, and the next click brought back the most recent only. A click in
+/// front now goes from one window to the next, round them all.
+#[test]
+fn a_click_in_front_goes_from_one_window_to_the_next() {
+    let recorder = Recorder::default();
+    let mut dock = dock_with(&[], &FOUR, &recorder);
+    let mut windows = mixed();
+    // The browser's windows, least recent first: 11, 13, then 12 in front.
+    windows.list[1].activated = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    let mut recency = 3;
+    for expected in [11, 13, 12, 11] {
+        dock.click(BROWSER);
+        assert_eq!(
+            recorder.targeted().last(),
+            Some(&(Request::Activate, expected))
+        );
+        // The compositor gives it the keyboard: it becomes the most recent.
+        recency += 1;
+        for window in &mut windows.list[..3] {
+            window.activated = window.id == expected;
+            if window.activated {
+                window.recency = recency;
+            }
+        }
+        let _ = dock.update(Message::Windows(windows.clone()));
+    }
+    assert!(recorder.requests().is_empty(), "nothing minimized");
 }
 
 /// A data folder with an application that starts and exits at once (`true`), whose windows
@@ -275,8 +309,14 @@ fn the_menu_lists_the_windows_then_the_actions() {
             ("Notes de réunion — Example Browser", true, false),
             ("Nouvelle fenêtre", true, false),
             ("Nouvelle fenêtre de navigation privée", true, false),
-            ("Retirer du Dock", true, false),
+            ("Options", false, false),
+            ("Garder dans le Dock", true, true),
+            ("Ouvrir à l’ouverture de session", true, false),
+            ("Afficher dans Evidence", true, false),
+            ("Afficher toutes les fenêtres", true, false),
+            ("Masquer", true, false),
             ("Quitter", true, false),
+            ("Forcer à quitter", false, false),
         ]
     );
     // An untitled window takes the application's name.
@@ -293,9 +333,63 @@ fn the_menu_lists_the_windows_then_the_actions() {
     open_menu(&mut dock, BROWSER);
     let _ = dock.update(Message::MenuPick(Entry::Quit));
     assert_eq!(recorder.requests(), [Request::Close]);
+    settle(&mut dock);
+    // « Masquer » minimizes them (lot D-21i).
+    open_menu(&mut dock, BROWSER);
+    let _ = dock.update(Message::MenuPick(Entry::Hide));
+    assert_eq!(recorder.requests(), [Request::Close, Request::Minimize]);
     // While it folds back, it takes no other pick.
     let _ = dock.update(Message::MenuPick(Entry::Window(11)));
     assert_eq!(recorder.targeted().len(), 1);
+}
+
+/// App Expose (lot D-21c2): the menu of an application with several windows, and a swipe down
+/// over its icon. A click keeps going from one window to the next (lot D-21d).
+#[test]
+fn app_expose_shows_the_windows_of_the_application() {
+    let recorder = Recorder::default();
+    let mut dock = dock_with(&[], &FOUR, &recorder);
+    let mut windows = mixed();
+    windows.list[1].activated = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    // A click in front goes to the next window, it does not open App Expose.
+    dock.click(BROWSER);
+    assert!(recorder.exposed().is_empty());
+    // From the menu, the minimized ones left out.
+    windows.list[0].minimized = true;
+    let _ = dock.update(Message::Windows(windows.clone()));
+    open_menu(&mut dock, BROWSER);
+    let _ = dock.update(Message::MenuPick(Entry::ShowAll));
+    assert_eq!(recorder.exposed(), [vec![13, 12]]);
+    settle(&mut dock);
+    // A swipe down over the icon: once, however far it goes, then again after a pause.
+    let point = center(&dock, BROWSER);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let pixels = |y| Message::Scroll(mouse::ScrollDelta::Pixels { x: 0.0, y });
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE / 2.0));
+    assert_eq!(recorder.exposed().len(), 1, "not far enough");
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE));
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE * 3.0));
+    assert_eq!(recorder.exposed().len(), 2, "once per swipe");
+    // Up does nothing; a notch of the wheel down, after a pause, opens it again.
+    let _ = dock.tick(dock.now() + tokens::EXPOSE_SWIPE_GAP * 2);
+    let _ = dock.update(pixels(-tokens::EXPOSE_SWIPE * 2.0));
+    assert_eq!(recorder.exposed().len(), 2);
+    let _ = dock.tick(dock.now() + tokens::EXPOSE_SWIPE_GAP * 2);
+    let _ = dock.update(Message::Scroll(mouse::ScrollDelta::Lines {
+        x: 0.0,
+        y: -1.0,
+    }));
+    assert_eq!(recorder.exposed().len(), 3);
+    // Without App Expose (a source before version 4): the entry is off, a swipe does nothing.
+    windows.expose = false;
+    let _ = dock.update(Message::Windows(windows));
+    let _ = dock.tick(dock.now() + tokens::EXPOSE_SWIPE_GAP * 2);
+    let _ = dock.update(pixels(tokens::EXPOSE_SWIPE * 2.0));
+    assert_eq!(recorder.exposed().len(), 3);
+    let lines = dock.menu_lines(BROWSER);
+    let show_all = lines.iter().find(|l| l.entry == Entry::ShowAll);
+    assert!(show_all.is_some_and(|l| !l.enabled));
 }
 
 #[test]

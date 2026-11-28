@@ -118,6 +118,17 @@ pub async fn list(bus: &Connection) -> zbus::Result<Vec<Entry>> {
         .collect())
 }
 
+/// The key of the action a click on a notification runs.
+pub const DEFAULT_ACTION: &str = "default";
+
+/// « × » of a notification or of an application's card: the notifications `ids` leave the
+/// history, and close (dismissed) if they are still on screen.
+pub async fn remove(bus: &Connection, ids: &[u32]) -> zbus::Result<()> {
+    bus.call_method(Some(NAME), PATH, Some(INTERFACE), "Remove", &(ids,))
+        .await
+        .map(|_| ())
+}
+
 /// « Tout effacer ».
 pub async fn clear(bus: &Connection) -> zbus::Result<()> {
     bus.call_method(Some(NAME), PATH, Some(INTERFACE), "Clear", &())

@@ -92,6 +92,7 @@ name = "appearance-config"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "mime-apps",
  "sherlock-ui",
  "tracing",
 ]
@@ -126,7 +127,7 @@ dependencies = [
  "launcher",
  "log",
  "mime-apps",
- "resvg",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -327,6 +328,7 @@ dependencies = [
  "dock-config",
  "iced",
  "iced_exwlshell",
+ "iced_runtime",
  "iced_test",
  "icon-theme",
  "image",
@@ -639,6 +641,9 @@ dependencies = [
  "image",
  "mime-apps",
  "resvg",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
@@ -683,6 +688,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]
@@ -886,6 +892,7 @@ name = "desktop-config"
 version = "0.0.0"
 dependencies = [
  "image",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
 ]
@@ -936,11 +943,13 @@ dependencies = [
  "iced_test",
  "icon-theme",
  "libc",
+ "mime-apps",
  "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
  "wayland-client",
  "wayland-protocols-wlr",
  "wayland-server",
@@ -1130,6 +1139,7 @@ dependencies = [
  "appearance-config",
  "futures",
  "iced",
+ "iced_exwlshell",
  "iced_runtime",
  "iced_test",
  "image",
@@ -1555,6 +1565,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "greeter"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "image",
+ "lock",
+ "serde_json",
+ "sherlock-3d",
+ "sherlock-ui",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1935,6 +1965,9 @@ dependencies = [
 [[package]]
 name = "icon-theme"
 version = "0.0.0"
+dependencies = [
+ "mime-apps",
+]
 
 [[package]]
 name = "ident_case"
@@ -2163,6 +2196,9 @@ dependencies = [
  "image",
  "libc",
  "mime-apps",
+ "serde_json",
+ "shell-protocol",
+ "sherlock-3d",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -2290,6 +2326,7 @@ dependencies = [
  "image",
  "libc",
  "libloading",
+ "rustix 1.1.6",
  "sherlock-3d",
  "sherlock-ui",
  "system-services",
@@ -2507,8 +2544,11 @@ dependencies = [
  "iced",
  "iced_exwlshell",
  "iced_test",
+ "icon-theme",
  "libc",
+ "mime-apps",
  "notifications-config",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -2521,6 +2561,7 @@ name = "notifications-config"
 version = "0.0.0"
 dependencies = [
  "dock-config",
+ "mime-apps",
 ]
 
 [[package]]
@@ -3504,6 +3545,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "iced",
+ "iced_exwlshell",
  "iced_renderer",
  "iced_runtime",
  "iced_test",
@@ -3517,6 +3559,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "libc",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3779,6 +3822,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "softbuffer"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3901,6 +3954,9 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",
@@ -4026,6 +4082,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -4077,6 +4134,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "cursor-theme",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",

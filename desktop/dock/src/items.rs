@@ -24,6 +24,12 @@ pub enum Kind {
     App(Box<DesktopEntry>),
     /// Open windows whose application has no desktop entry: their `app_id`.
     Window(String),
+    /// The trash, last (lot D-21j): full or empty.
+    Trash(bool),
+    /// A stack, before the trash (lot D-21k): its folder.
+    Stack(std::path::PathBuf),
+    /// The hole of an application dragged over the dock (lot D-41d).
+    Hole,
 }
 
 /// What an icon stands for, by identity rather than by place: the place of an icon changes
@@ -36,11 +42,16 @@ pub enum Target {
     App(String),
     /// An `app_id` without desktop entry.
     Window(String),
+    Trash,
+    Stack,
+    Hole,
 }
 
 /// How an icon is drawn.
 #[derive(Debug, Clone)]
 pub enum Glyph {
+    /// Nothing: the hole an application dragged from the Applications view opens (lot D-41d).
+    None,
     /// An icon file, or Sherlock's tile. A PNG goes through an SVG that embeds it: tiny-skia's
     /// SVG renderer draws both, without iced's `image` feature and the decoders it would add.
     File(svg::Handle),
@@ -70,6 +81,16 @@ impl Item {
         }
     }
 
+    /// The hole an application dragged over the dock opens among the pinned ones (lot D-41d).
+    pub fn hole() -> Self {
+        Self {
+            kind: Kind::Hole,
+            name: String::new(),
+            glyph: Glyph::None,
+            pinned: true,
+        }
+    }
+
     /// The « Applications » button: always there, first.
     pub fn applications() -> Self {
         Self {
@@ -82,12 +103,42 @@ impl Item {
         }
     }
 
+    /// The trash, full or empty: its tile from sherlock-ui.
+    pub fn trash(full: bool) -> Self {
+        Self {
+            kind: Kind::Trash(full),
+            name: String::from(dock::text::TRASH),
+            glyph: Glyph::File(svg::Handle::from_memory(
+                dock::trash_icon(full).into_bytes(),
+            )),
+            pinned: false,
+        }
+    }
+
+    /// A stack named `name`, the downloads folder: the theme's `folder-download`, else the
+    /// tile from sherlock-ui.
+    pub fn stack(folder: std::path::PathBuf, name: &str, themed: Option<&Path>) -> Self {
+        let glyph = match themed {
+            Some(path) => Glyph::File(icon_handle(path)),
+            None => Glyph::File(svg::Handle::from_memory(dock::stack_icon().into_bytes())),
+        };
+        Self {
+            kind: Kind::Stack(folder),
+            name: name.to_owned(),
+            glyph,
+            pinned: false,
+        }
+    }
+
     pub fn target(&self) -> Target {
         match &self.kind {
+            Kind::Trash(_) => Target::Trash,
+            Kind::Stack(_) => Target::Stack,
             Kind::Applications => Target::Applications,
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
             Kind::Window(app_id) => Target::Window(app_id.clone()),
+            Kind::Hole => Target::Hole,
         }
     }
 
@@ -97,7 +148,8 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => Some(entry.id.as_str()),
             Kind::Sherlock => Some(SHERLOCK),
-            Kind::Applications | Kind::Window(_) => None,
+            Kind::Hole => Some(HOLE),
+            Kind::Applications | Kind::Window(_) | Kind::Trash(_) | Kind::Stack(_) => None,
         }
     }
 
@@ -113,10 +165,16 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock | Kind::Applications => false,
+            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Stack(_) | Kind::Hole => {
+                false
+            }
         }
     }
 }
+
+/// The token of the hole in the pinned list while an application is dragged over the dock
+/// (lot D-41d): never a desktop id, and never written to the file.
+pub const HOLE: &str = "<hole>";
 
 /// Builds the icons, and finds their glyphs once: `glyphs` keeps them by desktop file id.
 pub struct Builder<'a> {
@@ -124,6 +182,10 @@ pub struct Builder<'a> {
     pub applications: bool,
     /// Sherlock in the dock (`DockConfig::sherlock`).
     pub sherlock: bool,
+    /// The trash at the end, full (`Some(true)`) or empty; none without a trash folder.
+    pub trash: Option<bool>,
+    /// The downloads stack before it: its folder and its name (lot D-21k).
+    pub stack: Option<(&'a Path, &'a str)>,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -146,6 +208,10 @@ impl Builder<'_> {
         for id in pinned {
             if id == SHERLOCK {
                 items.extend(sherlock.take());
+                continue;
+            }
+            if id == HOLE {
+                items.push(Item::hole());
                 continue;
             }
             match self.catalog.get(id) {
@@ -175,6 +241,14 @@ impl Builder<'_> {
                 },
             };
             items.push(item);
+        }
+        // The stack, then the trash last, after the separator, as on macOS (lots D-21j, k).
+        if let Some((folder, name)) = self.stack {
+            let themed = self.lookup.find("folder-download", self.icon_size);
+            items.push(Item::stack(folder.to_path_buf(), name, themed.as_deref()));
+        }
+        if let Some(full) = self.trash {
+            items.push(Item::trash(full));
         }
         let separator = (items.len() > first_open).then_some(first_open);
         (items, separator)
@@ -225,21 +299,9 @@ fn letter(name: &str) -> Glyph {
     Glyph::Letter(name.chars().next().map_or('?', |c| c.to_ascii_uppercase()))
 }
 
-/// An SVG file as it is; any other image inside an SVG.
+/// An icon file, SVG or PNG: `sherlock_ui::raster` reads it, with its bounds, and draws it.
 fn icon_handle(path: &Path) -> svg::Handle {
-    if path.extension().is_some_and(|e| e == "svg") {
-        return svg::Handle::from_path(path);
-    }
-    let href = path
-        .to_string_lossy()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
-    let document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    );
-    svg::Handle::from_memory(document.into_bytes())
+    svg::Handle::from_path(path)
 }
 
 #[cfg(test)]
@@ -261,6 +323,8 @@ mod tests {
         let mut builder = Builder {
             applications: true,
             sherlock: true,
+            trash: None,
+            stack: None,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -310,6 +374,39 @@ mod tests {
         );
         // Glyphs are looked up once per application.
         assert_eq!(glyphs.len(), 3);
+    }
+
+    #[test]
+    fn the_trash_comes_last_after_the_separator() {
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/data");
+        let catalog = Catalog::load(std::slice::from_ref(&data));
+        let lookup = IconLookup::new(&[data], None, None);
+        let mut glyphs = HashMap::new();
+        let mut builder = Builder {
+            applications: false,
+            sherlock: false,
+            trash: Some(true),
+            stack: Some((Path::new("/home/me/Downloads"), "Downloads")),
+            catalog: &catalog,
+            lookup: &lookup,
+            icon_size: 88,
+            glyphs: &mut glyphs,
+        };
+        let pinned = ["org.example.Files".to_owned()];
+        let (items, separator) = builder.build(&pinned, None);
+        assert_eq!(names(&items), ["Fichiers", "Downloads", "Corbeille"]);
+        assert_eq!(separator, Some(1));
+        assert_eq!(items[2].kind, Kind::Trash(true));
+        assert_eq!(items[2].target(), Target::Trash);
+        assert_eq!(items[1].target(), Target::Stack);
+        assert!(items[1].pin_id().is_none() && !items[2].pinned);
+        let Placeholder(windows) = Placeholder::new("terminal", None);
+        let (items, separator) = builder.build(&pinned, Some(&windows));
+        assert_eq!(
+            names(&items),
+            ["Fichiers", "Terminal d'exemple", "Downloads", "Corbeille"]
+        );
+        assert_eq!(separator, Some(1));
     }
 
     #[test]
