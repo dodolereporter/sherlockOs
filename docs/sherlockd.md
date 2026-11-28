@@ -465,7 +465,12 @@ server's `tools/call`:
 - the journal, `$XDG_STATE_HOME/sherlock/journal.jsonl` (`broker::Journal`): created 0600,
   appended to only, never through a symbolic link, one JSON object per line (the decision of
   each request, then the outcome of each call that ran, under the same id, with the tool's
-  error when it failed, cut to 512 characters), the arguments cut to 2 KiB, every line break of a value escaped by JSON;
+  error when it failed, cut to 512 characters), the arguments cut to 2 KiB, every line break of
+  a value escaped by JSON. Each line names its `session` (lot A-20e): the ids start again at 1
+  with each broker, one per proxy, so that the session and the id together name a call. A
+  session is the process's own (its pid and when it started), or the one the panel gives its
+  conversation, through `--ask` then `--proxy --session <id>` (1 to 64 letters, digits or `-`;
+  anything else is left aside); `--ask` only follows the lines of its session;
 - `agent::execute` keeps refusing everything but read for a tool host without a broker
   (`ToolHost::consents`), as defence in depth.
 

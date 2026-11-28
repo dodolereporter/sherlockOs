@@ -226,12 +226,50 @@ fn summary(arguments: &Value) -> String {
 /// by the user (`$XDG_STATE_HOME/sherlock/journal.jsonl`, 0600).
 pub struct Journal {
     file: Option<File>,
+    /// The session written on each line (A-20e): the ids start again at 1 with each broker.
+    session: String,
+}
+
+/// Whether `id` may name a session: 1 to 64 ASCII letters, digits or `-`.
+pub fn valid_session(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// A session of its own for this process: its pid and when it started, in hexadecimal, then
+/// the nanoseconds, so that two processes of the same second differ.
+pub fn new_session() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{:x}-{:x}-{:x}",
+        std::process::id(),
+        now.as_secs(),
+        now.subsec_nanos()
+    )
 }
 
 impl Journal {
     /// No journal: a read still runs; an action is refused (nothing to record it in).
     pub fn none() -> Self {
-        Self { file: None }
+        Self {
+            file: None,
+            session: new_session(),
+        }
+    }
+
+    /// The same journal, its lines written for `session` (one conversation of the shell's
+    /// panel, A-20e); a name that is not [`valid_session`] keeps the process's own.
+    pub fn for_session(mut self, session: &str) -> Self {
+        if valid_session(session) {
+            self.session = session.to_owned();
+        }
+        self
+    }
+
+    /// The session written on each line.
+    pub fn session(&self) -> &str {
+        &self.session
     }
 
     /// Opens `path` to append to it: created 0600, never truncated, never through a symbolic
@@ -246,7 +284,10 @@ impl Journal {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(path)?;
-        Ok(Self { file: Some(file) })
+        Ok(Self {
+            file: Some(file),
+            session: new_session(),
+        })
     }
 
     /// Where the session's journal is: `$XDG_STATE_HOME/sherlock/journal.jsonl`, or under
@@ -294,6 +335,8 @@ impl Journal {
             .file
             .as_mut()
             .ok_or_else(|| io::Error::other("no journal"))?;
+        let mut line = line;
+        line["session"] = Value::String(self.session.clone());
         let mut bytes = line.to_string().into_bytes();
         bytes.push(b'\n');
         file.write_all(&bytes)?;
@@ -389,6 +432,22 @@ mod tests {
         assert_eq!(lines[2]["outcome"], "ok");
         assert_eq!(lines[3]["decision"], "denied");
         assert_eq!(lines[4]["decision"], "unavailable");
+        // Each line names its session (A-20e): the ids start again with each broker.
+        let session = lines[0]["session"].as_str().unwrap();
+        assert!(valid_session(session));
+        assert!(lines.iter().all(|l| l["session"] == session));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_session_is_a_plain_name_and_each_process_has_its_own() {
+        let (path, journal) = journal();
+        assert_eq!(journal.for_session("c0ffee-1").session(), "c0ffee-1");
+        for trapped in ["", "a b", "a\nb", "\"}", &"x".repeat(65)] {
+            assert!(!valid_session(trapped), "{trapped:?}");
+            assert_ne!(Journal::none().for_session(trapped).session(), trapped);
+        }
+        assert!(valid_session(&new_session()));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

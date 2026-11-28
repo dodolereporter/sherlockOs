@@ -49,6 +49,8 @@ pub struct Input {
     pub request: String,
     /// Earlier exchanges, oldest first.
     pub history: Vec<(String, String)>,
+    /// The conversation's session in the journal (A-20e), when the panel gives a valid one.
+    pub session: Option<String>,
 }
 
 impl Input {
@@ -77,14 +79,19 @@ impl Input {
                     })
                     .unwrap_or_default();
                 let skip = history.len().saturating_sub(MAX_HISTORY);
+                let session = object.get("session").and_then(Value::as_str);
                 Self {
                     request,
                     history: history.into_iter().skip(skip).collect(),
+                    session: session
+                        .filter(|s| crate::broker::valid_session(s))
+                        .map(str::to_owned),
                 }
             }
             _ => Self {
                 request: text.to_owned(),
                 history: Vec::new(),
+                session: None,
             },
         };
         (!input.request.is_empty()).then_some(input)
@@ -155,6 +162,8 @@ pub struct Events {
     steps: VecDeque<Step>,
     /// The tools of the plan announced, by step; `true` once a call took that step.
     plan: Vec<(String, bool)>,
+    /// The session of this request's journal lines (A-20e): those of another are left out.
+    session: Option<String>,
 }
 
 /// The plan in `text`, and the text without it: `None` without a readable `<plan>` block. Each
@@ -257,12 +266,22 @@ impl Events {
         }
     }
 
+    /// Only the journal lines of `session` count, once it is known (A-20e).
+    pub fn for_session(mut self, session: &str) -> Self {
+        self.session = Some(session.to_owned());
+        self
+    }
+
     /// The events a line of the journal gives: a decision for the first step of its tool still
     /// waiting for one. Outcomes and lines of other sessions give none.
     pub fn journal(&mut self, line: &str) -> Vec<Value> {
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             return Vec::new();
         };
+        let session = entry.get("session").and_then(Value::as_str);
+        if self.session.is_some() && session != self.session.as_deref() {
+            return Vec::new();
+        }
         let (Some(tool), Some(decision)) = (
             entry.get("tool").and_then(Value::as_str),
             entry.get("decision").and_then(Value::as_str),
@@ -367,14 +386,24 @@ mod tests {
 
     #[test]
     fn the_input_is_json_or_plain_text_and_bounded() {
-        let input = Input::parse(br#"{"request":" Hello ","history":[["a","b"],["c"]]}"#);
+        let input = Input::parse(
+            br#"{"request":" Hello ","history":[["a","b"],["c"]],"session":"c0ffee-1"}"#,
+        );
         assert_eq!(
             input,
             Some(Input {
                 request: "Hello".into(),
                 history: vec![("a".into(), "b".into())],
+                session: Some("c0ffee-1".into()),
             })
         );
+        // A session that is not a plain name is left aside: the request keeps one of its own.
+        let trapped = Input::parse(
+            br#"{"request":"x","session":"a
+b"}"#,
+        )
+        .unwrap();
+        assert_eq!(trapped.session, None);
         assert_eq!(
             Input::parse(b"Range mes fichiers").unwrap().request,
             "Range mes fichiers"
@@ -414,6 +443,13 @@ mod tests {
                 .is_empty()
         );
         assert!(events.journal("not json").is_empty());
+        // With its session known, a line of another conversation gives nothing (A-20e).
+        let mut mine = Events::default().for_session("s-1");
+        let _ = mine.message(&call("1", "restart"));
+        let other = r#"{"id":1,"tool":"restart","decision":"granted","session":"s-2"}"#;
+        assert!(mine.journal(other).is_empty());
+        let ours = r#"{"id":1,"tool":"restart","decision":"granted","session":"s-1"}"#;
+        assert_eq!(mine.journal(ours)[0]["state"], "granted");
         let result = |id: &str, is_error| Message::ToolResult {
             call_id: id.into(),
             content: String::new(),
