@@ -77,6 +77,14 @@ fn git_badge(status: GitStatus) -> (&'static str, Tone) {
     }
 }
 
+/// Where the menu of « … » starts, in the window: just under the path bar.
+pub(crate) fn folded_top() -> f32 {
+    metrics::TITLE_BAR_HEIGHT
+        + metrics::BORDER_WIDTH
+        + (metrics::TOOLBAR_HEIGHT + metrics::BREADCRUMB_HEIGHT) / 2.0
+        + metrics::MENU_PADDING
+}
+
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         crate::startup::first(&crate::app::FIRST_VIEW, "first view");
