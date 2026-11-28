@@ -166,6 +166,25 @@ During one series of Evidence (before), the NVIDIA card was seen `resuming` then
 binary compiles no GPU renderer and loads no graphics driver; the five runs repeated right after
 saw it `suspended` throughout. The wake came from another process of the machine.
 
+## Amendment (lot UI-09)
+
+Without an AMD chip (an Intel laptop, an NVIDIA desktop, no GPU), the shell rendered with
+tiny-skia: black corners around the bar, the bubbles' glass mixed with black (a dull gray in
+the light theme, « 12 % » of a low battery at 3.1 to 1), and no animation of the panels and
+menus. Proposed change, to approve with the rest of this ADR:
+
+- The chip that drives the screen (`boot_vga`, or the only chip) is used when its kernel driver
+  has a Vulkan driver the shell trusts, restricted to that driver's manifests exactly as for
+  AMD: `i915`/`xe` with ANV and HASVK, NVIDIA's own driver with its manifest (that chip drives
+  the screen, so it is awake anyway). nouveau (NVK) and virtual GPUs are not used. A second
+  chip of the same family keeps the choice in software, as for two AMD chips.
+- Otherwise, Vulkan on the processor (lavapipe), when installed, rather than tiny-skia: alpha,
+  rounded corners and animations, at the cost of the processor time of a software rasterizer
+  while something moves. tiny-skia stays the last resort, with an opaque glass.
+
+The NVIDIA card of a hybrid laptop stays asleep: it never drives the screen there, and the
+loader is never given its manifest.
+
 ## What would make us reconsider
 
 - The NVIDIA card leaves `suspended` while a shell program starts, renders or stops on the GPU.
