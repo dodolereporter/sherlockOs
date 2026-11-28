@@ -25,7 +25,8 @@ use crate::devices::Volume;
 use crate::git::GitStatus;
 use crate::icons::AppIcon;
 use crate::listing::{Column as SortColumn, Entry, Kind};
-use crate::preview::Preview;
+use crate::pathbar::visible;
+use crate::preview::{Preview, Real};
 
 mod path;
 
@@ -615,6 +616,26 @@ impl App {
                 let header = row![tile, title]
                     .spacing(metrics::PREVIEW_GAP)
                     .align_y(Alignment::Center);
+                // A name that hides what the file is: said before anything else (audit I-3).
+                let header: Element<'_, Message> = match (self.disguise, entry.extension()) {
+                    (Some(real), Some(extension)) => {
+                        let real = match real {
+                            Real::Program => t::REAL_PROGRAM,
+                            Real::Png => t::REAL_PNG,
+                            Real::Jpeg => t::REAL_JPEG,
+                            Real::Gif => t::REAL_GIF,
+                            Real::Pdf => t::REAL_PDF,
+                            Real::Zip => t::REAL_ZIP,
+                        };
+                        let warning = ui::body(t::disguised(&visible(&extension), real))
+                            .font(typography::UI_SEMIBOLD)
+                            .color(color::palette().salmon_text);
+                        column![header, warning]
+                            .spacing(metrics::PREVIEW_GAP)
+                            .into()
+                    }
+                    _ => header.into(),
+                };
                 let body: Element<'_, Message> = match &self.preview {
                     Preview::Text(lines) => ui::code_block(lines).into(),
                     Preview::Image(handle) => image(handle.clone()).width(Length::Fill).into(),
