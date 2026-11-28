@@ -71,10 +71,11 @@ pub fn set_with(
 /// just before: what another program changed in it since the dock last read it (a setting
 /// of Control Room, a comment) is kept. The dock's list wins: it is the order on screen.
 pub fn write(path: &Path, pinned: &[String], sherlock: bool) -> io::Result<()> {
-    let (mut config, _) = DockConfig::load(path)?;
-    config.pinned = Some(pinned.to_vec());
-    config.sherlock = sherlock;
-    config.save(path)
+    DockConfig::update(path, |config| {
+        config.pinned = Some(pinned.to_vec());
+        config.sherlock = sherlock;
+    })
+    .map(|_| ())
 }
 
 /// A desktop file id without `.desktop`, as the file lists it.

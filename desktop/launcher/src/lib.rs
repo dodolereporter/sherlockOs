@@ -15,6 +15,19 @@ pub mod source;
 pub mod startup;
 pub mod system;
 
+/// Taken by every test of this crate that starts a process (lot Q-30). Until its `exec`, a
+/// child is a copy of this program: it holds a copy of every descriptor, the lock another test
+/// has just released included, so that lock looked still taken; and its `/proc/<id>/exe` is
+/// still this program, so a stranger looked like a launcher and was signalled.
+#[cfg(test)]
+pub(crate) static PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds `PROCESSES` for as long as the guard lives; a test that panicked leaves it usable.
+#[cfg(test)]
+pub(crate) fn processes() -> std::sync::MutexGuard<'static, ()> {
+    PROCESSES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -234,6 +247,8 @@ pub enum Mode {
 /// it is resident.
 pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
     startup::timed("theme read", apply_theme);
+    // Icon files are rasterized by a worker thread, never by the one that draws the panel.
+    sherlock_ui::raster::draw_in_background();
     let resident = match mode {
         Mode::OnDemand => None,
         Mode::Resident(inbox) => Some(inbox),
