@@ -85,7 +85,7 @@ pub fn catalog() -> Catalog {
 /// it is resident (`inbox`, lot P-02).
 pub fn run(inbox: Option<Inbox>) -> Result<(), iced_exwlshell::Error> {
     startup::timed("theme read", launcher::apply_theme);
-    let view = View::new(catalog(), Arc::new(launcher::launch::spawn))
+    let view = View::new(catalog(), Arc::new(launcher::launch::spawn_with))
         .with_backdrop_loader(app::session_backdrop());
     let layer = match inbox {
         Some(_) => LayerShellSettings {
@@ -105,7 +105,7 @@ pub fn run(inbox: Option<Inbox>) -> Result<(), iced_exwlshell::Error> {
             .ok()
             .and_then(|mut v| v.take())
             .unwrap_or_else(|| {
-                View::new(catalog(), Arc::new(launcher::launch::spawn))
+                View::new(catalog(), Arc::new(launcher::launch::spawn_with))
                     .with_backdrop_loader(app::session_backdrop())
             });
         let task = match inbox.clone() {
