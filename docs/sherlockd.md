@@ -22,8 +22,9 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/windows_server.rs` | The windows server: the session's windows, through the compositor's windows socket (A-12) |
 | `src/files_server.rs`, `src/folders.rs` | The files server: the allowed folders, the paths resolved without leaving them (A-13) |
 | `src/containers_server.rs`, `src/docker.rs` | The containers server, and its minimal client of the Docker Engine API over a Unix socket (A-14) |
+| `src/services_server.rs` | The services server: the systemd units over D-Bus, their journal through `journalctl` (A-16) |
 | `src/own_server.rs` | What Sherlock's own servers share: the serving loop, the levels' annotations, the cleaning of outside text |
-| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server` and `--containers-server` |
+| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server`, `--containers-server` and `--services-server` |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
@@ -432,6 +433,8 @@ cargo test -p sherlockd
 | `tests/files_server.rs` | The files server as a real process on a tree of its own: reads as data, a trapped name escaped, a long file cut; out of the folders refused and journaled (absolute path, `..`, links out, `~/.ssh`, a pipe, a NUL); each action with consent and its effect; hostile actions refused even with consent; no action without consent |
 | `src/docker.rs`, `src/containers_server.rs` | Responses read within their bounds (chunks, lengths, lines), multiplexed logs; levels; names refused; secrets masked |
 | `tests/front_next.rs` | The scenario « relance front-next » against a fake Docker daemon: seen exited, logs read as data, a password masked, the consent asked once at the action level, the restart called once, the journal; refused, nothing; hostile names never reach the daemon; a Compose service restarted by its labels |
+| `src/services_server.rs` | Levels, unit names refused, journal entries (priority, date, bytes, a secret masked) |
+| `tests/services_server.rs` | Against a fake systemd on two private buses and a fake `journalctl`: a failed service explained from its logs (data, a password masked, an injection inert); a user unit restarted with a consent, a system unit with the reinforced one and polkit's interactive flag; polkit's refusal and an unknown unit said; hostile names refused; refused, nothing |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -605,6 +608,35 @@ compositor's window protocol, and a fake daemon that imitates the API. Sherlock 
 containers and sees front-next exited, reads its logs as data (a password masked, an injection
 inert), asks to restart it: granted, the restart is called once, the journal has the consent and
 the outcome; refused, nothing is called.
+
+## The services server (lot A-16, ADR 0035, proposed)
+
+`sherlockd --services-server` is one of Sherlock's own servers, started by `servers()`: the
+systemd units of the user (the session bus) and of the system (the system bus), over D-Bus
+(`org.freedesktop.systemd1`, zbus's blocking API), and their journal.
+
+- **The journal** comes from `journalctl --output=json` (`/usr/bin/journalctl`), with fixed
+  arguments (`--user` for a unit of the user, `--unit=<unit>`, `--lines=<n>`, `--no-pager`,
+  `--quiet`), no shell, 10 s at most and 4 MiB of output read; each entry is given as `date
+  [priority] message`, the last ones within 500 lines and 64 KiB, the values of what looks like
+  a secret masked (`own_server::masked`), as JSON after a sentence that says it is data, never
+  instructions.
+- **A unit's name** is what systemd accepts (`[A-Za-z0-9:_.\@-]`, 250 characters, never starting
+  with `-` or `.`), with a known kind; `.service` when it has none. It comes after `--unit=`,
+  never as an option of its own.
+- **The system's units** are acted on at the destructive level (the reinforced consent) and
+  with D-Bus's interactive authorization flag: systemd asks polkit, which asks the user for a
+  password where its policy wants one. Never `sudo`. polkit's refusal is said to the model.
+
+| Tool | Level |
+| --- | --- |
+| `lister_unites` (`portee`, `en_echec`), `etat_unite`, `journal_unite` | read |
+| `demarrer_unite_utilisateur`, `arreter_unite_utilisateur`, `redemarrer_unite_utilisateur` | action |
+| `demarrer_unite_systeme`, `arreter_unite_systeme`, `redemarrer_unite_systeme` | destructive |
+
+**Sherlock explains a service in failure from its logs** (`tests/services_server.rs`, the A-16
+criterion): the failed units listed, the state of front-next (`exit-code`, three restarts), its
+journal (`EADDRINUSE` on port 3000) reach the model as data; the explanation is the model's.
 
 ## What will come next
 
