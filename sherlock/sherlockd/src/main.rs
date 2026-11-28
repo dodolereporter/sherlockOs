@@ -10,7 +10,6 @@ use serde_json::json;
 use sherlockd::agent::{Agent, AgentConfig};
 use sherlockd::broker::{Broker, Consent, Journal, Nobody};
 use sherlockd::claude_code::{ClaudeCode, ClaudeCodeConfig};
-use sherlockd::files_server;
 use sherlockd::mcp::{McpClient, McpServers, ServerConfig, ToolHost};
 use sherlockd::model::{Message, ModelReply, ModelRequest, ToolCall};
 use sherlockd::proxy;
@@ -18,10 +17,12 @@ use sherlockd::scripted::ScriptedProvider;
 use sherlockd::test_server::{self, Mode};
 use sherlockd::window::CompositorWindow;
 use sherlockd::windows_server::{self, Compositor};
+use sherlockd::{containers_server, files_server};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case] \
-     | --windows-server <socket> | --files-server [--settings <file>]";
+     | --windows-server <socket> | --files-server [--settings <file>] \
+     | --containers-server [--socket <path>]";
 
 /// The longest request read on standard input.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
@@ -80,6 +81,11 @@ fn main() -> anyhow::Result<()> {
         ["--files-server", "--settings", settings] => {
             files_server::run(Some(std::path::Path::new(settings))).context("files server")
         }
+        // Started by sherlockd itself, on the session's Docker or Podman daemon (A-14).
+        ["--containers-server"] => containers_server::run(None).context("containers server"),
+        ["--containers-server", "--socket", socket] => {
+            containers_server::run(Some(std::path::Path::new(socket))).context("containers server")
+        }
         _ => bail!("{USAGE}"),
     }
 }
@@ -99,8 +105,8 @@ fn exe() -> anyhow::Result<String> {
     Ok(exe.to_owned())
 }
 
-/// Sherlock's MCP servers: the test server, the files server (A-13) and, in a Wayland session,
-/// the windows server (A-12), all ours: their annotations are trusted (ADR 0015).
+/// Sherlock's MCP servers: the test server, the files (A-13) and containers (A-14) servers and,
+/// in a Wayland session, the windows server (A-12), all ours: their annotations are trusted (ADR 0015).
 async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers> {
     let exe = exe()?;
     // The windows of the session (A-12), through the compositor's windows socket.
@@ -133,6 +139,14 @@ async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers>
     match McpClient::spawn(&config).await {
         Ok(client) => servers.add(client).await.context("files tools")?,
         Err(error) => tracing::warn!(%error, "no files server"),
+    }
+    // The containers of the Docker or Podman daemon (A-14).
+    let config = ServerConfig::new("containers", &exe, &["--containers-server"])
+        .timeout(Duration::from_secs(60))
+        .ours();
+    match McpClient::spawn(&config).await {
+        Ok(client) => servers.add(client).await.context("containers tools")?,
+        Err(error) => tracing::warn!(%error, "no containers server"),
     }
     if let Some(socket) = windows.as_deref().and_then(std::path::Path::to_str) {
         let config = ServerConfig::new("windows", &exe, &["--windows-server", socket])

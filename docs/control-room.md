@@ -138,6 +138,17 @@ The page follows what BlueZ announces (`bluetooth::changes`): another program co
 device, a battery level, a device found. `control-room --page bluetooth` opens it, as the
 bar's « Réglages Bluetooth… » does.
 
+## Changes made elsewhere
+
+While Control Room is open, its files are looked at every `follow::FILES_EVERY` (2 seconds:
+their modification time and length only, on a thread of their own), and `mimeapps.list` with
+them. When one changes (by hand, or by its program: a pin in the dock), the settings are read
+again off the interface thread and shown, unless a change of ours waits or is being written:
+that one is read back once written. While the sound page is open, `pactl subscribe`
+(`system_services::watch::sound`) tells when an output or the default changes: the devices
+are read again, unless a change of ours is on its way to `pactl`. The appearance file is also
+followed for the theme, as before.
+
 ## Search
 
 The field on top of the sidebar finds a setting by its name, its page or the words people use

@@ -47,6 +47,7 @@ and write the same file without pulling iced or zbus.
 | `GetServerInformation` | `notifications`, `SherlockOS` (the OS has no name yet), the crate version, `1.2` |
 | `NotificationClosed` | Reason 1 when it expires, 2 when the user closes it (click, action), 3 on `CloseNotification`, 4 when the daemon closes it itself (too many waiting, hidden by Do not disturb) |
 | `ActionInvoked` | A button, or `default` for a click on the bubble |
+| `ActivationToken` | Just before `ActionInvoked` for a click on a bubble: the `xdg-activation-v1` token the compositor gave for that click (lot Q-52), with which the application brings its window forward. None from the bar's notification centre (`InvokeAction`) |
 
 **Timeout.** The application's (`expire_timeout` > 0, in ms); 0 means never; -1 takes
 `notifications::DEFAULT_TIMEOUT` of sherlock-ui (6 s, a choice of this batch). A critical
