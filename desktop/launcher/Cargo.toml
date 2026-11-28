@@ -36,6 +36,11 @@ icon-theme = { path = "../icon-theme" }
 mime-apps = { path = "../mime-apps" }
 # `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37b).
 sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
+# Sherlock in his bubble in the panel of Sherlock (lot A-19), as on the lock screen
+# (workspace crate); the events of `sherlockd --ask` are JSON lines: the version the workspace
+# already pins.
+sherlock-3d = { path = "../sherlock-3d" }
+serde_json = "=1.0.154"
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
