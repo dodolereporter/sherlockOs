@@ -38,6 +38,9 @@ const SETTLE: Duration = Duration::from_millis(50);
 pub enum Event {
     /// The theme to show from now on.
     Theme(Theme),
+    /// The Accessibility settings changed (lot D-26p): already applied to the process
+    /// (`Accessibility::apply`); the theme comes again after it, for the program to redraw.
+    Accessibility(crate::Accessibility),
     /// A value of the file was ignored.
     Problem(Problem),
     /// The file, the local time or the timer cannot be read, or the file cannot be watched.
@@ -67,6 +70,7 @@ pub fn follow_themes(
 ) -> io::Result<()> {
     follow(path, move |event| match event {
         Event::Theme(theme) => on_theme(theme),
+        Event::Accessibility(_) => true,
         Event::Problem(problem) => {
             tracing::warn!(%problem, "appearance file");
             true
@@ -87,6 +91,7 @@ fn run(path: &Path, timer: &Timer, mut on_event: impl FnMut(Event) -> bool) {
     let mut config = AppearanceConfig::default();
     let mut reload = true;
     let mut last = None;
+    let mut accessibility = None;
     loop {
         if watch.is_none() {
             match Watch::new(dir, name) {
@@ -104,6 +109,16 @@ fn run(path: &Path, timer: &Timer, mut on_event: impl FnMut(Event) -> bool) {
             match AppearanceConfig::load(path) {
                 Ok((read, problems)) => {
                     config = read;
+                    // Applied to the whole process, then told: the theme follows, so that the
+                    // program redraws with them (lot D-26p).
+                    if accessibility != Some(config.accessibility) {
+                        accessibility = Some(config.accessibility);
+                        config.accessibility.apply();
+                        last = None;
+                        if !on_event(Event::Accessibility(config.accessibility)) {
+                            return;
+                        }
+                    }
                     for problem in problems {
                         if !on_event(Event::Problem(problem)) {
                             return;

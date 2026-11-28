@@ -22,9 +22,11 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/windows_server.rs` | The windows server: the session's windows, through the compositor's windows socket (A-12) |
 | `src/files_server.rs`, `src/folders.rs` | The files server: the allowed folders, the paths resolved without leaving them (A-13) |
 | `src/containers_server.rs`, `src/docker.rs` | The containers server, and its minimal client of the Docker Engine API over a Unix socket (A-14) |
+| `src/services_server.rs` | The services server: the systemd units over D-Bus, their journal through `journalctl` (A-16) |
+| `src/settings_server.rs` | The settings server: every setting of Control Room, by its functions (A-17) |
 | `src/own_server.rs` | What Sherlock's own servers share: the serving loop, the levels' annotations, the cleaning of outside text |
-| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server` and `--containers-server` |
-| `tests/injection.rs` | Hidden instructions (lot A-20): a corpus of orders hidden in a file's content (plain, behind hidden characters, a fake end of data and a fake system line), a file's name, a saved page (hidden block, comment), a window's title and application id, a container's name, status and logs, a tool's result, read by a fake model that obeys every order it reads, through the agent loop and through the proxy as Claude Code: every order asked and refused, nothing changed on the system, every outcome of the journal after a granted decision; granted for what the user asked, only that runs; without a window, nothing but reads |
+| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server`, `--containers-server`, `--services-server` and `--settings-server` |
+| `tests/injection.rs` | Hidden instructions (lot A-20): a corpus of orders hidden in a file's content (plain, behind hidden characters, a fake end of data and a fake system line), a file's name, a saved page (hidden block, comment), a window's title and application id, a container's name, status and logs, a systemd unit's description and journal, the names of Wi-Fi networks (A-16, A-17, on a private bus with a fake systemd and a fake NetworkManager), a tool's result, read by a fake model that obeys every order it reads, through the agent loop and through the proxy as Claude Code: every order asked and refused, nothing changed on the system, every outcome of the journal after a granted decision; granted for what the user asked, only that runs; without a window, nothing but reads |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
@@ -433,6 +435,9 @@ cargo test -p sherlockd
 | `tests/files_server.rs` | The files server as a real process on a tree of its own: reads as data, a trapped name escaped, a long file cut; out of the folders refused and journaled (absolute path, `..`, links out, `~/.ssh`, a pipe, a NUL); each action with consent and its effect; hostile actions refused even with consent; no action without consent |
 | `src/docker.rs`, `src/containers_server.rs` | Responses read within their bounds (chunks, lengths, lines), multiplexed logs; levels; names refused; secrets masked |
 | `tests/front_next.rs` | The scenario « relance front-next » against a fake Docker daemon: seen exited, logs read as data, a password masked, the consent asked once at the action level, the restart called once, the journal; refused, nothing; hostile names never reach the daemon; a Compose service restarted by its labels |
+| `src/services_server.rs` | Levels, unit names refused, journal entries (priority, date, bytes, a secret masked) |
+| `tests/services_server.rs` | Against a fake systemd on two private buses and a fake `journalctl`: a failed service explained from its logs (data, a password masked, an injection inert); a user unit restarted with a consent, a system unit with the reinforced one and polkit's interactive flag; polkit's refusal and an unknown unit said; hostile names refused; refused, nothing |
+| `tests/settings_server.rs` | On a configuration folder, a fake `pactl` and a fake NetworkManager on a private bus: each setting changed and read back as Control Room reads it; a value the parser refuses, a path, an unknown key, a line break never written; the sound set, a device chosen by name only; Wi-Fi switched off; a network forgotten with the reinforced consent; refused, nothing |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -476,6 +481,11 @@ server's `tools/call`:
   name than the one used;
 - `agent::execute` keeps refusing everything but read for a tool host without a broker
   (`ToolHost::consents`), as defence in depth.
+- consent fatigue (lot A-20): after 3 refusals or unanswered requests in one session
+  (`broker::MAX_REFUSALS`; a session is one proxy, so one request of Claude Code's, or one
+  agent), nothing more is asked: every call beyond read is refused at once, journaled
+  `stopped`, and the model is told not to insist (`McpError::StoppedAsking`). A model obeying a
+  hidden instruction cannot ask again and again until a tired user grants.
 
 **Who asks: the compositor's window** (`window::CompositorWindow`, lot A-11c). One connection per
 request to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-consent`, the compositor's consent socket
@@ -606,6 +616,60 @@ compositor's window protocol, and a fake daemon that imitates the API. Sherlock 
 containers and sees front-next exited, reads its logs as data (a password masked, an injection
 inert), asks to restart it: granted, the restart is called once, the journal has the consent and
 the outcome; refused, nothing is called.
+
+## The services server (lot A-16, ADR 0035, proposed)
+
+`sherlockd --services-server` is one of Sherlock's own servers, started by `servers()`: the
+systemd units of the user (the session bus) and of the system (the system bus), over D-Bus
+(`org.freedesktop.systemd1`, zbus's blocking API), and their journal.
+
+- **The journal** comes from `journalctl --output=json` (`/usr/bin/journalctl`), with fixed
+  arguments (`--user` for a unit of the user, `--unit=<unit>`, `--lines=<n>`, `--no-pager`,
+  `--quiet`), no shell, 10 s at most and 4 MiB of output read; each entry is given as `date
+  [priority] message`, the last ones within 500 lines and 64 KiB, the values of what looks like
+  a secret masked (`own_server::masked`), as JSON after a sentence that says it is data, never
+  instructions.
+- **A unit's name** is what systemd accepts (`[A-Za-z0-9:_.\@-]`, 250 characters, never starting
+  with `-` or `.`), with a known kind; `.service` when it has none. It comes after `--unit=`,
+  never as an option of its own.
+- **The system's units** are acted on at the destructive level (the reinforced consent) and
+  with D-Bus's interactive authorization flag: systemd asks polkit, which asks the user for a
+  password where its policy wants one. Never `sudo`. polkit's refusal is said to the model.
+
+| Tool | Level |
+| --- | --- |
+| `lister_unites` (`portee`, `en_echec`), `etat_unite`, `journal_unite` | read |
+| `demarrer_unite_utilisateur`, `arreter_unite_utilisateur`, `redemarrer_unite_utilisateur` | action |
+| `demarrer_unite_systeme`, `arreter_unite_systeme`, `redemarrer_unite_systeme` | destructive |
+
+**Sherlock explains a service in failure from its logs** (`tests/services_server.rs`, the A-16
+criterion): the failed units listed, the state of front-next (`exit-code`, three restarts), its
+journal (`EADDRINUSE` on port 3000) reach the model as data; the explanation is the model's.
+
+## The settings server (lot A-17, ADR 0036, proposed)
+
+`sherlockd --settings-server` is one of Sherlock's own servers, started by `servers()`: every
+setting Control Room shows, by the same functions.
+
+- **The settings files** (appearance, keyboard, touchpad, pointer, lock, clipboard history,
+  wallpaper, dock) go through the `settings-files` crate, taken out of Control Room for this:
+  `Settings::set_key` puts the key's line in the file's text in memory, the file's own parser
+  reads it, and only a value it understands is written, by `Settings::update` (only the keys
+  that change, with `mime_apps::write_atomically`). A value with a control character, a key
+  that is not in the server's table, a setting that is a path (the wallpaper's file, the lock's
+  background) are refused. Do not disturb goes through `notifications-config`.
+- **The sound** through `pactl` (`system-services::audio`): a volume from 0 to 100, muted or
+  not, the default output or microphone chosen only among those `pactl` lists. **Wi-Fi and
+  Bluetooth** through NetworkManager and BlueZ on the system bus (`system-services`), which ask
+  polkit where their policy wants it. The screens are read only: they change live with the
+  compositor, from Control Room (ADR 0025).
+- Accessibility (D-26p) joins `apparence` once its keys are in `appearance-config`.
+
+| Tool | Level |
+| --- | --- |
+| `lire_reglages` (`domaine`: `apparence`, `clavier`, `pave_tactile`, `pointeur`, `verrouillage`, `presse_papiers`, `fond_ecran`, `dock`, `ne_pas_deranger`, `ecrans`, `son`, `wifi`, `bluetooth`) | read |
+| `changer_reglage` (`domaine`, `reglage`, `valeur`), `regler_son`, `choisir_appareil_son`, `activer_wifi`, `activer_bluetooth` | action |
+| `oublier_reseau` (`ssid`): its password goes with it; `changer_reglage_de_securite`: a setting that lowers the session's protection, never locking again (`verrouillage` `idle-minutes` 0) or the clipboard history kept on the disk (`presse_papiers` `keep-on-disk` on), which `changer_reglage` refuses (the A-20 review) | destructive |
 
 ## What will come next
 

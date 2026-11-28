@@ -44,6 +44,9 @@ pub fn follow_at(handle: &LoopHandle<'static, State>, state: &mut State, path: P
     let source = handle.insert_source(themes, |event, _, state| {
         if let channel::Event::Msg(theme) = event {
             state.set_theme(theme);
+            // The theme comes again after a change of the Accessibility settings, already
+            // applied to the process (lot D-26p): what the compositor draws follows them.
+            state.queue_redraw();
         }
     });
     if let Err(err) = source {

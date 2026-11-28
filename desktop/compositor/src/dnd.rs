@@ -64,7 +64,9 @@ const FINISH_STEP: Duration = Duration::from_millis(20);
 pub(crate) struct Dnd {
     drag: Option<Drag>,
     back: Option<Back>,
-    x11: Option<X11Side>,
+    pub(crate) x11: Option<X11Side>,
+    /// A drag of an X11 application, carried to the Wayland clients (`dnd_x11.rs`).
+    pub(crate) from_x11: Option<crate::dnd_x11::FromX11>,
 }
 
 /// A drag started by a Wayland client.
@@ -98,8 +100,8 @@ struct Back {
 }
 
 /// The XDND source and its sources in the loop.
-struct X11Side {
-    xdnd: Xdnd,
+pub(crate) struct X11Side {
+    pub(crate) xdnd: Xdnd,
     reads: Sender<(Request, Option<Vec<u8>>)>,
 }
 

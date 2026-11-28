@@ -21,6 +21,7 @@ members = [
     "desktop/notifications",
     "desktop/notifications-config",
     "desktop/portal",
+    "desktop/settings-files",
     "desktop/sherlock-3d",
     "desktop/sherlock-ui",
     "desktop/shell-protocol",

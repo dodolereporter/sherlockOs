@@ -87,7 +87,7 @@ FRENCH_WORDS = {
 
 # Names that the user or the model sees, so French on purpose, quoted in English text:
 # a tool of the sherlockd test server and the keys of its recap, the tools of the windows
-# files and containers servers and their arguments (A-12 to A-14).
+# files, containers, services and settings servers and their arguments (A-12 to A-17).
 INTERFACE_NAMES = {
     "vider_corbeille", "demande", "reponse",
     "lister_fenetres", "activer_fenetre", "agrandir_fenetre", "reduire_fenetre",
@@ -101,6 +101,13 @@ INTERFACE_NAMES = {
     "journaux_conteneur", "demarrer_conteneur", "arreter_conteneur", "redemarrer_conteneur",
     "demarrer_service", "arreter_service", "redemarrer_service", "supprimer_conteneur",
     "supprimer_image", "supprimer_volume", "conteneur", "lignes", "projet",
+    "lister_unites", "etat_unite", "journal_unite", "demarrer_unite_utilisateur",
+    "arreter_unite_utilisateur", "redemarrer_unite_utilisateur", "demarrer_unite_systeme",
+    "arreter_unite_systeme", "redemarrer_unite_systeme", "portee", "en_echec", "unite",
+    "lire_reglages", "changer_reglage", "regler_son", "choisir_appareil_son", "activer_wifi",
+    "activer_bluetooth", "oublier_reseau", "domaine", "reglage", "valeur", "apparence",
+    "clavier", "pave_tactile", "pointeur", "verrouillage", "presse_papiers", "fond_ecran",
+    "ne_pas_deranger", "ecrans", "son", "changer_reglage_de_securite",
 }
 
 # Marker for a French name kept on purpose in a script or configuration file, such as a former
