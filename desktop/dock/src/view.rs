@@ -29,6 +29,8 @@ impl Dock {
             .width(bar.width)
             .height(bar.height)
             .style(dock::bar);
+        // The blur behind the glass, over its rounded shape (lot D-37).
+        let glass = sherlock_ui::glass::glass(glass, metrics::DOCK_RADIUS);
         let mut layers = vec![place(glass, bar.x, bar.y)];
         if let Some(separator) = layout.separator {
             let line = container(space())
@@ -93,20 +95,35 @@ impl Dock {
             }
         }
         layers.extend(on_top);
+        // The smoke of an application let go out of the dock, over everything.
+        for poof in &self.poofs {
+            let Some((puffs, opacity)) = poof.puffs(now) else {
+                continue;
+            };
+            for ((x, y), radius) in puffs {
+                let puff = container(space())
+                    .width(2.0 * radius)
+                    .height(2.0 * radius)
+                    .style(dock::poof(radius, opacity));
+                layers.push(place(puff, x - radius, y - radius));
+            }
+        }
         if let Some(label) = self.view_label(&layout) {
             layers.push(label);
         }
         // The pointer is tracked over the whole surface: `mouse_area` also reports where the
         // pointer enters, which the bare enter event does not carry.
         let layers = stack(layers).width(Length::Fill).height(Length::Fill);
-        mouse_area(layers)
+        let area = mouse_area(layers)
             .on_move(|point| Message::Pointer(Pointer::Moved(point)))
             .on_exit(Message::Pointer(Pointer::Left))
             .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
             .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
-            .into()
+            .on_scroll(Message::Scroll);
+        // The closed hand while an icon is dragged, wherever the pointer goes.
+        sherlock_ui::pointer::held(area, self.held().is_some()).into()
     }
 
     /// The name of the icon closest to the pointer, past the magnified icons (board: 108 above
@@ -185,6 +202,10 @@ impl Dock {
                     .color(color::palette().text_secondary);
                 header = header.push(count);
             }
+            if let Some(count) = menu.grid {
+                let grid = self.view_grid(header.into(), count);
+                return sherlock_ui::glass::glass(grid, metrics::MENU_RADIUS);
+            }
             let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
             for (index, line) in menu.entries.iter().enumerate() {
                 if line.starts_group {
@@ -203,7 +224,9 @@ impl Dock {
                 }
                 entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
             }
-            ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill)
+            let menu = ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill);
+            // The blur behind its glass (lot D-37b).
+            sherlock_ui::glass::glass(menu, metrics::MENU_RADIUS)
         });
         // It unfolds from its icon: from the side facing the dock.
         let origin = match self.geometry.position {
@@ -215,6 +238,50 @@ impl Dock {
         reveal(panel)
             .opacity(opacity)
             .scale(menu.unfold.scale(self.now), origin)
+            .into()
+    }
+}
+
+impl Dock {
+    /// The grid of the downloads stack (lot D-21k): its newest items, `count` at most, four to
+    /// a row, then « Ouvrir dans Evidence ».
+    fn view_grid<'a>(&'a self, header: Element<'a, Message>, count: usize) -> Element<'a, Message> {
+        let items = self.stack.as_ref().map_or(&[][..], |s| &s.items[..]);
+        let cells: Vec<Element<'a, Message>> = items
+            .iter()
+            .take(count)
+            .enumerate()
+            .map(|(index, item)| {
+                let picture =
+                    ui::icon(item.icon, dock::STACK_ICON, color::palette().text_secondary);
+                dock::stack_cell(picture, &item.name, Message::StackOpen(index))
+            })
+            .collect();
+        let mut rows = iced::widget::Column::new().spacing(dock::STACK_GAP);
+        if cells.is_empty() {
+            let empty = container(ui::description(dock::text::STACK_EMPTY))
+                .center_x(Length::Fill)
+                .center_y(dock::STACK_CELL.1);
+            rows = rows.push(empty);
+        }
+        let mut cells = cells.into_iter().peekable();
+        while cells.peek().is_some() {
+            let line: Vec<_> = cells.by_ref().take(dock::STACK_COLUMNS).collect();
+            rows = rows.push(iced::widget::Row::from_vec(line).spacing(dock::STACK_GAP));
+        }
+        let footer = ui::menu_item(
+            dock::text::OPEN_IN_EVIDENCE,
+            Trailing::None,
+            Some(Message::StackFolder),
+        );
+        let content = iced::widget::column![header, rows, space::vertical(), footer]
+            .width(Length::Fill)
+            .height(Length::Fill);
+        container(content)
+            .padding(dock::STACK_PADDING)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(sherlock_ui::theme::menu)
             .into()
     }
 }
@@ -244,13 +311,17 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
         ..c
     };
     match glyph {
+        // The hole of an application dragged over the dock: room, nothing drawn (D-41d).
+        Glyph::None => space().width(side).height(side).into(),
         // Smooth edges on the GPU, at rest and magnified, rasterized once per step (UI-05).
         Glyph::File(handle) => sherlock_ui::raster::icon(handle, side)
             .opacity(opacity)
             .into(),
         Glyph::Letter(letter) => {
+            // At least a pixel: an icon that appears from nothing has no side yet, and text of
+            // size 0 makes the text engine panic.
             let letter = text(letter.to_string())
-                .size(side * dock::LETTER_RATIO)
+                .size((side * dock::LETTER_RATIO).max(1.0))
                 .font(typography::TITLE)
                 .color(faded(dock::FALLBACK_LETTER));
             tile(letter, faded(dock::FALLBACK_TILE), side)

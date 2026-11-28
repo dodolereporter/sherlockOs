@@ -60,6 +60,10 @@ pub const CHOOSER_CHROME: f32 = typography::CARD_TITLE_SIZE * 1.3
 pub const CHOOSER_MARGIN: f32 = 24.0;
 pub const CHOOSER_MIN_ROWS: f32 = 4.0;
 
+/// The name of a file always keeps this much room in the listing: the columns, the preview
+/// and then the sidebar fold before it shrinks further (lot E-05).
+pub const NAME_MIN_WIDTH: f32 = 220.0;
+
 /// The path bar (lot E-04). A segment of the breadcrumb is never wider than this: a longer
 /// name keeps its start and its end around « … ».
 pub const CRUMB_MAX_WIDTH: f32 = 180.0;
@@ -78,8 +82,24 @@ pub const COMPLETION_MAX_ENTRIES: usize = 20_000;
 pub const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 /// Folders offered at most in the list.
 pub const COMPLETION_MAX_SHOWN: usize = 200;
+/// Folders the « Aller au dossier » sheet remembers.
+pub const RECENT_FOLDERS: usize = 10;
+/// Below this window width, the search folds to its icon until it is used, and the path bar
+/// takes its room.
+pub const SEARCH_COMPACT_WIDTH: f32 = 1000.0;
 /// Width of the « Aller au dossier » sheet.
 pub const GO_TO_WIDTH: f32 = 460.0;
+
+/// The tab bar (lot D-27b), shown from two tabs on: its height, and the padding of a tab.
+pub const TAB_BAR_HEIGHT: f32 = 34.0;
+pub const TAB_PADDING: f32 = 4.0;
+/// The preview slides in and out in this time when its button or Ctrl+Alt+P toggles it.
+pub const PREVIEW_SLIDE: std::time::Duration = std::time::Duration::from_millis(220);
+/// The large preview of Space (lot E-12): it zooms in and out in this time, from this scale,
+/// and takes this share of the window.
+pub const QUICK_LOOK_ZOOM: std::time::Duration = std::time::Duration::from_millis(200);
+pub const QUICK_LOOK_FROM: f32 = 0.85;
+pub const QUICK_LOOK_SHARE: f32 = 0.8;
 
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";

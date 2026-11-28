@@ -50,6 +50,7 @@ pub fn init(
             state.add_output(backend.window_size(), *scale);
         }
         state.resize_frame(backend.window_size());
+        state.ensure_curtain();
         Rc::new(Scene::new(backend.renderer())?)
     };
     // The last image of a window that closes (lot D-34): drawn while the clients are read,
@@ -78,18 +79,37 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::pointer::config_file(var),
     )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
+    )?;
+    // What is copied, for Super + V, and its setting (lot D-42).
+    state.watch_clipboard_settings(
+        &event_loop.handle(),
+        desktop_config::clipboard::config_file(var),
+    )?;
     // Shared with the screenshot tool (lot D-35e), which draws between two frames: nested,
-    // Super + Shift + S is Alt + Shift + S, and Print Screen stays with the host session.
+    // Super + Shift + S is Alt + Shift + S, and Print Screen stays with the host session. Screen
+    // sharing (lot D-28c) is drawn the same way; the host draws the pointer: no cursor in the
+    // frames.
     let textures = Rc::new(RefCell::new(Textures::default()));
     state.enable_screenshots(crate::capture::Settings::default());
     let (weak_backend, weak_scene) = (Rc::downgrade(&backend), Rc::downgrade(&scene));
     let weak_textures = Rc::downgrade(&textures);
-    state.set_capturer(Box::new(move |state, target| {
+    state.set_capturer(Box::new(move |state, target, _| {
         let (backend, scene) = (weak_backend.upgrade()?, weak_scene.upgrade()?);
         let textures = weak_textures.upgrade()?;
         let mut backend = backend.try_borrow_mut().ok()?;
         let mut textures = textures.try_borrow_mut().ok()?;
-        crate::capture::image(&scene, backend.renderer(), &mut textures, state, target)
+        crate::capture::image(
+            &scene,
+            backend.renderer(),
+            &mut textures,
+            state,
+            target,
+            None,
+        )
     }));
     // The host frame is drawn in full every time: the identities only matter to the real
     // session's damage trackers.
@@ -112,7 +132,9 @@ pub fn init(
                     update_cursor(&backend, &mut cursor, state.cursor_icon());
                     let mut textures = textures.borrow_mut();
                     let frame = (&*scene, &mut ids, &mut *textures, &mut preview);
-                    let locked = state.is_locked();
+                    // Only a frame with the curtain down confirms the lock (lot D-24e); in a
+                    // window, the curtain comes down over the plain background, nothing frozen.
+                    let locked = state.lock_frame_complete();
                     match render(&mut backend, frame, state) {
                         // The host window shows every screen at once (lot D-25a).
                         Ok(()) if locked => {
@@ -120,7 +142,12 @@ pub fn init(
                                 state.lock_frame_shown(&output);
                             }
                         }
-                        Ok(()) => {}
+                        // A new picture: the captures waiting for one are due.
+                        Ok(()) => {
+                            for output in state.outputs() {
+                                state.screen_changed(&output);
+                            }
+                        }
                         Err(err) => tracing::warn!("render: {err}"),
                     }
                     send_frames(state);

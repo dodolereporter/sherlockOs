@@ -4,7 +4,9 @@
 //! same shortcut opens and closes it (`docs/launcher.md`). The program is
 //! `$SHERLOCKOS_BIN/launcher` when that file exists, `launcher` in the session's `PATH`
 //! otherwise. F4 starts the applications view, `sherlockos-apps`, the same way (lot D-41); the
-//! four finger pinch starts it with `--show` or `--hide` (lot D-41c).
+//! four finger pinch starts it with `--show` or `--hide` (lot D-41c). Super + V starts the
+//! clipboard history panel, `sherlockos-clipboard` (lot D-42). Super + comma (Alt + comma
+//! nested) starts Control Room, as « Réglages » in the Sherlock menu of the bar does (lot Q-31).
 
 use std::{
     ffi::OsString,
@@ -20,9 +22,16 @@ pub const PROGRAM: &str = "launcher";
 /// The applications view (lot D-41), found the same way, started by F4.
 pub const APPLICATIONS: &str = "sherlockos-apps";
 
+/// Control Room, found the same way, started by Super + comma. The bar's Sherlock menu starts
+/// the same program for « Réglages ».
+pub const SETTINGS: &str = "control-room";
+
 /// The options of `APPLICATIONS` that only show, or only hide, the view (lot D-41c).
 pub const SHOW: &str = "--show";
 pub const HIDE: &str = "--hide";
+
+/// The clipboard history panel (lot D-42), found the same way, started by Super + V.
+pub const CLIPBOARD: &str = "sherlockos-clipboard";
 
 /// The folder of the session's programs, as `sherlockos-session` exports it.
 pub const BIN_VAR: &str = "SHERLOCKOS_BIN";
@@ -47,6 +56,11 @@ impl State {
         self.launcher_program = Some(program);
     }
 
+    /// Replaces the program Super + comma starts (the tests).
+    pub fn set_settings_program(&mut self, program: PathBuf) {
+        self.settings_program = Some(program);
+    }
+
     /// Starts the launcher, or closes it if it is open: a second launcher closes the first.
     pub(crate) fn start_launcher(&mut self) {
         let program = self
@@ -59,6 +73,15 @@ impl State {
     /// Opens the applications view, or closes it if it is open, the same way (lot D-41).
     pub(crate) fn start_applications(&mut self) {
         self.start_applications_with(None);
+    }
+
+    /// Starts Control Room (lot Q-31).
+    pub(crate) fn start_settings(&mut self) {
+        let program = self
+            .settings_program
+            .clone()
+            .unwrap_or_else(|| program_named(SETTINGS, |key| std::env::var_os(key)));
+        self.start_shell_program(program, None);
     }
 
     /// Shows the applications view, left as it is when it is open: fingers pinching in.
@@ -82,6 +105,12 @@ impl State {
     /// Replaces the program of the applications view (the tests).
     pub fn set_applications_program(&mut self, program: PathBuf) {
         self.applications_program = Some(program);
+    }
+
+    /// Opens the clipboard history panel, or closes it if it is open, the same way (lot D-42).
+    pub(crate) fn start_clipboard_panel(&mut self) {
+        let program = program_named(CLIPBOARD, |key| std::env::var_os(key));
+        self.start_shell_program(program, None);
     }
 
     /// Starts `program`, with `option` if any, with the compositor's Wayland socket and X11

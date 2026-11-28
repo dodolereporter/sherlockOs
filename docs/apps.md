@@ -170,8 +170,9 @@ dominant axis counts, vertical or horizontal.
 ### Starting an application
 
 As in the launcher: its `Exec` expanded by `mime-apps`, no shell, the environment without the
-renderer choice (ADR 0018), its own process group, no standard streams, its `Path`. Then the
-view fades out and the program ends. A failed start leaves the view open and is logged.
+renderer choice (ADR 0018), its own process group, no standard streams, its `Path`, and the
+activation token of the click (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`, lot Q-52; see
+`docs/launcher.md`). Then the view fades out and the program ends. A failed start is logged.
 
 ### Menu of an application
 
@@ -247,6 +248,18 @@ applications installed meanwhile; until an icon is drawn, the SVG widget shows i
 `$XDG_RUNTIME_DIR/sherlockos-apps.lock`, the launcher's mechanism (`docs/launcher.md`, One
 launcher at a time): started again while open, the program closes the open view. The view
 started by a key or a button toggles.
+
+## Dragging an application to the dock (D-41d)
+
+A press on a tile that moves past `dock::DRAG_THRESHOLD` drags the application out, as from
+Launchpad: the tile under the pointer is followed (`Hover`), the press and its place too. The
+view hands the desktop id to its Wayland thread (`dock::dnd`, on the surface's connection, as
+Evidence does in E-03), which starts the drag with the icon drawn under the pointer (the icon
+file rasterized there, off the interface thread), and empties the surface's input region so that
+the pointer reaches the dock under it; the view fades out at once. Its surface stays until the
+drag ends (dropped or not), then goes as usual, and takes the pointer again at its next
+opening. Without Wayland (the tests), nothing starts and a click still starts the tile. The dock
+side is in `docs/dock.md`.
 
 ## Animations
 
@@ -342,4 +355,3 @@ close it.
 
 - Folders of applications, a later batch.
 - The four finger pinch opens and closes the view, but the view does not follow the fingers.
-- Dragging an icon to the dock (see Menu of an application).

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use appearance_config::{Mode, TimeOfDay};
-use desktop_config::touchpad::{self, Click};
+use desktop_config::keyboard as keyboard_config;
+use desktop_config::touchpad::{self, Click, SwipeDown};
 use dock_config::{AutoHide, Position};
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{image, operation};
@@ -23,6 +24,9 @@ use system_services::Problem;
 use system_services::audio::{Device, Pactl};
 
 use crate::apps::{self, Choice, Kind};
+use crate::displays;
+use crate::pages::displays::{Change as DisplayChange, Displays};
+use crate::pages::network::{Change as NetworkChange, Net};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
 use crate::sound::{self, Audio};
@@ -83,6 +87,45 @@ pub(crate) fn delays(current: u32) -> Vec<Delay> {
     delays
 }
 
+/// A keyboard layout of the menu: the system's, one of `KEYBOARD_LAYOUTS` (its index), or
+/// another one written in the file, which the menu shows but does not offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutChoice {
+    System,
+    Known(usize),
+    Other,
+}
+
+impl LayoutChoice {
+    /// The choice that `config` holds.
+    pub(crate) fn of(config: &keyboard_config::Config) -> Self {
+        let Some(layout) = &config.layout else {
+            return Self::System;
+        };
+        cr::KEYBOARD_LAYOUTS
+            .iter()
+            .position(|(l, v, _)| l == layout && *v == config.variant)
+            .map_or(Self::Other, Self::Known)
+    }
+
+    /// What the menu offers: the system's, then every known layout.
+    pub(crate) fn offered() -> Vec<Self> {
+        let known = (0..cr::KEYBOARD_LAYOUTS.len()).map(Self::Known);
+        std::iter::once(Self::System).chain(known).collect()
+    }
+}
+
+impl std::fmt::Display for LayoutChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::System => texts::SYSTEM_LAYOUT,
+            Self::Known(i) => cr::KEYBOARD_LAYOUTS.get(*i).map_or("", |(_, _, n)| n),
+            Self::Other => texts::OTHER_LAYOUT,
+        };
+        f.write_str(name)
+    }
+}
+
 /// What the sound page knows of the devices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sound {
@@ -110,7 +153,15 @@ pub enum Change {
     Speed(u8),
     Typing(bool),
     ShowClicks(bool),
+    TapAndDrag(bool),
+    DragLock(bool),
+    SwipeDown(SwipeDown),
+    Layout(LayoutChoice),
+    RepeatDelay(u8),
+    RepeatRate(u8),
     LockAfter(Delay),
+    ClipboardHistory(bool),
+    ClipboardKeep(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,10 +197,26 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// A settings file changed elsewhere.
+    FilesChanged,
+    /// The files as they are now, read off the interface thread.
+    Reloaded(Arc<(Settings, Vec<File>)>),
+    /// The sound devices changed elsewhere.
+    SoundChanged,
+    /// The « Réseau » page.
+    Network(NetworkChange),
+    /// Another `control-room` asked for a page: this window shows it.
+    Show(Page),
+    /// Text typed in the field where the keyboard is tried.
+    TryKeys(String),
     /// Whether the default application of a kind was written.
     AppWritten(Kind, bool),
+    /// The Bluetooth page: BlueZ read, an action asked or ended (lot D-26o).
+    Bluetooth(crate::bluetooth::Msg),
     /// Where the page scrolls to for the setting opened: from, to.
     ScrollTo(Option<(f64, f64)>),
+    /// The « Écrans » page: the compositor's screens and what is changed of them.
+    Displays(DisplayChange),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -227,6 +294,8 @@ pub struct App {
     /// The installed wallpapers, once found off the interface thread.
     pub(crate) installed: Option<Vec<&'static wallpapers::Wallpaper>>,
     pub(crate) sound: Sound,
+    /// The Bluetooth page's view of BlueZ (lot D-26o).
+    pub(crate) bluetooth: crate::bluetooth::State,
     /// The installed applications and their associations, once read.
     pub(crate) catalog: Option<Arc<Catalog>>,
     /// Files that cannot be changed: unreadable, not text, or not writable. Their settings
@@ -240,6 +309,8 @@ pub struct App {
     /// whether it is busy: one call at a time, as the media keys do.
     pub(crate) sound_queue: Vec<sound::Change>,
     pub(crate) sound_busy: bool,
+    /// What was typed in the field where the keyboard is tried.
+    pub(crate) trial: String,
     save_at: Option<Instant>,
     /// The batch of changes being written, off the interface thread.
     writing: Option<Writes>,
@@ -247,6 +318,10 @@ pub struct App {
     closing: bool,
     pub(crate) theme: ThemeFade,
     origin: Instant,
+    /// The screens, while the « Écrans » page is open or a change waits for « Garder ».
+    pub(crate) displays: Displays,
+    /// The Wi-Fi, while the « Réseau » page is open.
+    pub(crate) network: Net,
 }
 
 impl App {
@@ -269,10 +344,12 @@ impl App {
             thumbnails: HashMap::new(),
             installed: None,
             sound: Sound::Loading,
+            bluetooth: crate::bluetooth::State::default(),
             catalog: None,
             locked,
             sound_queue: Vec::new(),
             sound_busy: false,
+            trial: String::new(),
             pending: Vec::new(),
             volumes: Vec::new(),
             save_at: None,
@@ -280,6 +357,8 @@ impl App {
             closing: false,
             theme: ThemeFade::default(),
             origin: Instant::now(),
+            displays: Displays::default(),
+            network: Net::default(),
         };
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
             Message::Thumbnails(Arc::new(found))
@@ -287,7 +366,16 @@ impl App {
         let pactl = app.pactl();
         let audio = Task::perform(async move { sound::read(&pactl) }, Message::Audio);
         let catalog = app.load_catalog();
-        (app, Task::batch([load, audio, catalog]))
+        let mut app = app;
+        let bluetooth = match app.page {
+            Page::Bluetooth => app.bluetooth.open().map(Message::Bluetooth),
+            _ => Task::none(),
+        };
+        let network = match app.page == Page::Network {
+            true => app.open_network(),
+            false => Task::none(),
+        };
+        (app, Task::batch([load, audio, catalog, bluetooth, network]))
     }
 
     fn pactl(&self) -> Pactl {
@@ -328,6 +416,7 @@ impl App {
             || self.spotlight.is_some()
             || self.theme.running()
             || self.save_at.is_some()
+            || self.displays.confirm.is_some()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -363,13 +452,73 @@ impl App {
             receiver
         })
         .map(Message::Theme);
-        Subscription::batch([frames, tab, keys, appearance])
+        // Its own Wayland connection, only while the screens are shown or a change waits.
+        let screens = match self.page == Page::Displays || self.displays.confirm.is_some() {
+            true => Subscription::run(follow_screens)
+                .map(|e| Message::Displays(DisplayChange::Event(e))),
+            false => Subscription::none(),
+        };
+        // Changes made elsewhere: the files, and the sound while its page is open.
+        let files = Subscription::run_with(self.followed_files(), crate::follow::files)
+            .map(|()| Message::FilesChanged);
+        let sound = match self.page == Page::Sound {
+            true => Subscription::run_with(self.paths.pactl.clone(), crate::follow::sound)
+                .map(|()| Message::SoundChanged),
+            false => Subscription::none(),
+        };
+        let bluetooth = if self.page == Page::Bluetooth {
+            Subscription::run(crate::bluetooth::changes).map(Message::Bluetooth)
+        } else {
+            Subscription::none()
+        };
+        // The networks around, read again while their page is open; the pages other
+        // `control-room` ask for.
+        let network = match self.page == Page::Network {
+            true => Subscription::run_with((), crate::network::ticks)
+                .map(|()| Message::Network(NetworkChange::Tick)),
+            false => Subscription::none(),
+        };
+        let asked = Subscription::run(crate::instance::asked).map(Message::Show);
+        Subscription::batch([
+            frames, tab, keys, appearance, screens, files, sound, bluetooth, network, asked,
+        ])
+    }
+
+    /// The files Control Room shows, followed while it is open.
+    fn followed_files(&self) -> crate::follow::Files {
+        let mut files: Vec<_> = File::ALL
+            .iter()
+            .map(|f| self.paths.of(*f).to_owned())
+            .collect();
+        files.push(self.paths.apps.config_home.join("mimeapps.list"));
+        crate::follow::Files(files)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.page;
+        let task = self.handle(message);
+        // The Bluetooth page reads BlueZ and scans while it is open, and stops when it is left.
+        let follow = match (before == Page::Bluetooth, self.page == Page::Bluetooth) {
+            (false, true) => self.bluetooth.open(),
+            (true, false) => self.bluetooth.close(),
+            _ => Task::none(),
+        };
+        Task::batch([task, follow.map(Message::Bluetooth)])
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         let now = self.now();
         match message {
-            Message::Go(page) => self.go(page),
+            Message::Bluetooth(message) => {
+                return self.bluetooth.update(message).map(Message::Bluetooth);
+            }
+            Message::Go(page) => return self.go(page),
+            Message::Show(page) => {
+                let shown = self.go(page);
+                let raise = window::latest().and_then(window::gain_focus);
+                return Task::batch([shown, raise]);
+            }
+            Message::Network(change) => return self.update_network(change),
             Message::Search(query) => {
                 let hits = search::search(&query);
                 // A new list of results comes in, one after the other.
@@ -389,15 +538,41 @@ impl App {
                 }
             }
             Message::Open(setting) => {
-                self.go(setting.page());
+                let opened = self.go(setting.page());
                 let fade = Fade::new(1.0, 0.0, now, cr::SPOTLIGHT);
                 self.spotlight = Some((setting, fade));
                 // The page scrolls to the setting, once it is laid out.
-                return crate::scroll::find(setting).map(Message::ScrollTo);
+                let scroll = crate::scroll::find(setting).map(Message::ScrollTo);
+                return Task::batch([opened, scroll]);
             }
             Message::ScrollTo(found) => {
                 if let Some((from, to)) = found {
                     self.scroll = Some(Animation::new(cr::PAGE_SPRING, from, to, now));
+                }
+            }
+            Message::FilesChanged => {
+                // Our own changes, waiting or being written, are read back when written.
+                if self.writing.is_some() || !self.pending.is_empty() {
+                    return Task::none();
+                }
+                let paths = self.paths.clone();
+                let read = Task::perform(async move { Settings::load(&paths) }, |read| {
+                    Message::Reloaded(Arc::new(read))
+                });
+                return Task::batch([read, self.load_catalog()]);
+            }
+            Message::Reloaded(read) => {
+                if self.writing.is_none() && self.pending.is_empty() {
+                    let (settings, locked) = (*read).clone();
+                    self.settings = settings;
+                    self.locked = locked;
+                }
+            }
+            Message::SoundChanged => {
+                // A change of ours on its way shows itself when `pactl` answers.
+                if !self.sound_busy && self.sound_queue.is_empty() && self.volumes.is_empty() {
+                    let pactl = self.pactl();
+                    return Task::perform(async move { sound::read(&pactl) }, Message::Audio);
                 }
             }
             Message::AppWritten(kind, ok) => {
@@ -422,6 +597,7 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                self.tick_displays(instant);
                 if self
                     .leaving
                     .is_some_and(|(_, at)| now >= at + cr::PAGE_FADE)
@@ -530,6 +706,10 @@ impl App {
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::Displays(change) => self.update_displays(change),
+            Message::TryKeys(text) => {
+                self.trial = text.chars().take(cr::TRIAL_MAX).collect();
+            }
             Message::SetApp(kind, choice) => {
                 let paths = self.paths.clone();
                 let reload = self.load_catalog();
@@ -581,8 +761,9 @@ impl App {
         )
     }
 
-    /// Opens `page`: it comes in, and the folded sidebar goes.
-    fn go(&mut self, page: Page) {
+    /// Opens `page`: it comes in, and the folded sidebar goes. The « Réseau » page reads the
+    /// Wi-Fi: the task returned.
+    fn go(&mut self, page: Page) -> Task<Message> {
         let now = self.now();
         if page != self.page {
             // The page left fades out under the one coming in.
@@ -591,8 +772,13 @@ impl App {
             self.page_slide = Slide::coming(now);
             self.spotlight = None;
             self.scroll = None;
+            if page == Page::Network {
+                self.sidebar.show(now, false);
+                return self.open_network();
+            }
         }
         self.sidebar.show(now, false);
+        Task::none()
     }
 
     /// The message of `change`, none when its file is locked: the control is disabled.
@@ -745,6 +931,19 @@ fn close_window() -> Task<Message> {
     window::latest().and_then(window::close)
 }
 
+/// The screens of the compositor, from a thread of their own (`displays::run`), which stops
+/// once the subscription is dropped.
+fn follow_screens() -> impl iced::futures::Stream<Item = displays::Event> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let started = std::thread::Builder::new()
+        .name("screens".into())
+        .spawn(move || displays::run(|event| sender.unbounded_send(event).is_ok()));
+    if let Err(error) = started {
+        tracing::warn!(%error, "the screens cannot be read");
+    }
+    receiver
+}
+
 /// The file that holds a change.
 pub(crate) fn file_of(change: Change) -> File {
     match change {
@@ -757,6 +956,8 @@ pub(crate) fn file_of(change: Change) -> File {
         | Change::Position(_) => File::Dock,
         Change::ShowClicks(_) => File::Pointer,
         Change::LockAfter(_) => File::Lock,
+        Change::Layout(_) | Change::RepeatDelay(_) | Change::RepeatRate(_) => File::Keyboard,
+        Change::ClipboardHistory(_) | Change::ClipboardKeep(_) => File::Clipboard,
         _ => File::Touchpad,
     }
 }
@@ -797,7 +998,28 @@ fn apply(s: &mut Settings, change: Change) {
         }
         Change::Typing(on) => s.touchpad.disable_while_typing = on,
         Change::ShowClicks(on) => s.pointer.show_clicks = on,
+        Change::TapAndDrag(on) => s.touchpad.tap_and_drag = on,
+        Change::DragLock(on) => s.touchpad.drag_lock = on,
+        Change::SwipeDown(what) => s.touchpad.swipe_down = what,
+        Change::Layout(LayoutChoice::System) => {
+            s.keyboard.layout = None;
+            s.keyboard.variant.clear();
+        }
+        Change::Layout(LayoutChoice::Known(i)) => {
+            if let Some((layout, variant, _)) = cr::KEYBOARD_LAYOUTS.get(i) {
+                s.keyboard.layout = Some((*layout).to_owned());
+                s.keyboard.variant = (*variant).to_owned();
+            }
+        }
+        Change::Layout(LayoutChoice::Other) => {}
+        Change::RepeatDelay(v) => {
+            let step = cr::REPEAT_DELAY_STEP as f32;
+            s.keyboard.repeat_delay = ((from_share(v, DELAYS) / step).round() * step) as u32;
+        }
+        Change::RepeatRate(v) => s.keyboard.repeat_rate = from_share(v, RATES).round() as u32,
         Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
+        Change::ClipboardHistory(on) => s.clipboard.history = on,
+        Change::ClipboardKeep(on) => s.clipboard.keep_on_disk = on,
     }
 }
 
@@ -820,6 +1042,14 @@ impl App {
         to_share(self.settings.dock.magnification_factor, FACTORS)
     }
 
+    pub(crate) fn repeat_delay(&self) -> u8 {
+        to_share(self.settings.keyboard.repeat_delay as f32, DELAYS)
+    }
+
+    pub(crate) fn repeat_rate(&self) -> u8 {
+        to_share(self.settings.keyboard.repeat_rate as f32, RATES)
+    }
+
     pub(crate) fn speed(&self) -> u8 {
         to_share(self.settings.touchpad.speed as f32, SPEEDS)
     }
@@ -833,11 +1063,24 @@ const SPEEDS: (f32, f32) = (
     touchpad::SPEED_RANGE.1 as f32,
 );
 
+const DELAYS: (f32, f32) = (
+    keyboard_config::REPEAT_DELAY_RANGE.0 as f32,
+    keyboard_config::REPEAT_DELAY_RANGE.1 as f32,
+);
+const RATES: (f32, f32) = (
+    keyboard_config::REPEAT_RATE_RANGE.0 as f32,
+    keyboard_config::REPEAT_RATE_RANGE.1 as f32,
+);
+
 /// A slider moves by steps: its file is written once it rests.
 fn is_continuous(change: Change) -> bool {
     matches!(
         change,
-        Change::DockSize(_) | Change::MagnificationFactor(_) | Change::Speed(_)
+        Change::DockSize(_)
+            | Change::MagnificationFactor(_)
+            | Change::Speed(_)
+            | Change::RepeatDelay(_)
+            | Change::RepeatRate(_)
     )
 }
 

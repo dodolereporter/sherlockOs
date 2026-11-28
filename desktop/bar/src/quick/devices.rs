@@ -4,11 +4,12 @@
 
 use iced::futures::StreamExt;
 use iced::futures::stream;
-use iced::widget::{Column, column, container, row, scrollable, space, text};
+use iced::widget::{Column, column, container, row, space, text};
 use iced::{Alignment, Element, Length, Task};
 use sherlock_ui::component as ui;
 use sherlock_ui::icon::Icon;
 use sherlock_ui::panels::{self, Glyph, text as words};
+use sherlock_ui::scroll::scroll;
 use sherlock_ui::{metrics, typography};
 
 use super::{Message, Page, Quick, Service, act, notice, on_system};
@@ -205,6 +206,10 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(super::settings_link(
+            words::BLUETOOTH_SETTINGS,
+            Some(super::BLUETOOTH_PAGE),
+        ));
         page.into()
     }
 
@@ -225,7 +230,7 @@ impl Quick {
             rows.push(ui::description(words::NO_DEVICE).into());
         }
         rows.extend(found.into_iter().map(|d| self.device_row(d)));
-        scrollable(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
+        scroll(Column::with_children(rows).spacing(metrics::GAP_TIGHT))
             .height(Length::Fill)
             .into()
     }

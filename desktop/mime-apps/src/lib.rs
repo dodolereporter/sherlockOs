@@ -17,7 +17,9 @@ pub mod terminals;
 
 pub use dirs::Dirs;
 pub use entry::{DesktopEntry, read_applications};
-pub use file::write_atomically;
+pub use file::{
+    MAX_SETTINGS_SIZE, breaks_line, read_bounded, write_atomically, write_bytes_atomically,
+};
 pub use list::{MimeApps, set_default};
 pub use mime::MimeDb;
 

@@ -80,6 +80,49 @@ pub const APP_MENU_WIDTH: f32 = CONTROL_WIDTH;
 /// Step of the hours of the automatic theme, in minutes.
 pub const HOUR_STEP: u32 = 30;
 
+/// The « Écrans » page (lot D-26b): the arrangement's area, the margin around the screens in
+/// it, the corner radius of a screen, its thickness of the main screen's bar, and the
+/// smallest a screen is drawn.
+pub const ARRANGEMENT_HEIGHT: f32 = 200.0;
+pub const ARRANGEMENT_MARGIN: f32 = 24.0;
+pub const SCREEN_RADIUS: f32 = 6.0;
+pub const MAIN_BAR: f32 = 5.0;
+/// A change of mode, scale, rotation or of a screen on or off is undone after this long
+/// without « Garder », as on macOS and Windows: a screen left black comes back by itself.
+pub const CONFIRM_DELAY: Duration = Duration::from_secs(15);
+/// The scales offered.
+pub const SCALES: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+/// Width of the menus of resolution, refresh and rotation.
+pub const DISPLAY_MENU_WIDTH: f32 = 220.0;
+/// Width of the value written on the right of a repeat slider (« 1000 ms », « 50 par seconde »).
+pub const VALUE_WIDTH: f32 = 104.0;
+/// Width of the menu of the keyboard layouts.
+pub const LAYOUT_WIDTH: f32 = CONTROL_WIDTH;
+/// Steps of the repeat sliders: 10 ms for the delay, one repeat per second for the rate.
+pub const REPEAT_DELAY_STEP: u32 = 10;
+/// Most characters kept in the field where the keyboard is tried.
+pub const TRIAL_MAX: usize = 200;
+
+/// The keyboard layouts the menu offers: xkb layout, xkb variant, name shown. Any other layout
+/// written in `keyboard.conf` still works, and shows as « Autre disposition ».
+pub const KEYBOARD_LAYOUTS: [(&str, &str, &str); 15] = [
+    ("fr", "", "Français (AZERTY)"),
+    ("fr", "afnor", "Français (AZERTY AFNOR)"),
+    ("fr", "bepo", "Français (BÉPO)"),
+    ("fr", "mac", "Français (Mac)"),
+    ("be", "", "Belge"),
+    ("ch", "fr", "Suisse romand"),
+    ("ca", "", "Français (Canada)"),
+    ("us", "", "Anglais (États-Unis)"),
+    ("us", "intl", "Anglais (international, touches mortes)"),
+    ("gb", "", "Anglais (Royaume-Uni)"),
+    ("de", "", "Allemand"),
+    ("es", "", "Espagnol"),
+    ("it", "", "Italien"),
+    ("pt", "", "Portugais"),
+    ("nl", "", "Néerlandais"),
+];
+
 /// The interface texts of Control Room, in French.
 pub mod texts {
     pub use crate::texts::evidence::{CLOSE, MAXIMIZE, MINIMIZE};
@@ -96,12 +139,140 @@ pub mod texts {
     pub const APPEARANCE_ABOUT: &str = "Le thème, le fond d'écran et le dock.";
     pub const TOUCHPAD: &str = "Pavé tactile et souris";
     pub const TOUCHPAD_ABOUT: &str = "Comment tes doigts cliquent, glissent et défilent.";
+    pub const BLUETOOTH: &str = "Bluetooth";
+    pub const BLUETOOTH_ABOUT: &str = "Tes casques, souris et claviers sans fil.";
+    // The Bluetooth page (D-26o).
+    pub const BLUETOOTH_SWITCH: &str = "Bluetooth";
+    pub const BLUETOOTH_SWITCH_HELP: &str = "Les appareils appairés se reconnectent seuls.";
+    pub const BLUETOOTH_WORDS: &str = "sans fil casque écouteurs souris clavier manette appairer";
+    pub const MY_DEVICES: &str = "Mes appareils";
+    pub const NEARBY: &str = "Appareils à proximité";
+    pub const NEARBY_SEARCH: &str = "Appareils à proximité Bluetooth";
+    pub const SEARCHING: &str = "Recherche…";
+    pub const NO_PAIRED: &str = "Aucun appareil appairé.";
+    pub const NOTHING_NEARBY: &str = "Aucun appareil à proximité pour l'instant.";
+    pub const BLUETOOTH_OFF_NOTE: &str = "Le Bluetooth est coupé.";
+    pub const BLUETOOTH_LOADING: &str = "Lecture du Bluetooth…";
+    pub const BLUETOOTH_UNAVAILABLE: &str = "Pas de Bluetooth sur cet ordinateur.";
+    pub const CONNECT: &str = "Connecter";
+    pub const DISCONNECT: &str = "Déconnecter";
+    pub const PAIR: &str = "Appairer";
+    pub const RENAME: &str = "Renommer";
+    pub const CONFIRM: &str = "Confirmer";
+    pub const OK: &str = "OK";
+    pub const DEVICE_NAME: &str = "Nom de l'appareil";
+    pub const BLUETOOTH_REFUSED: &str = "Refusé.";
+    pub const BLUETOOTH_FAILED: &str = "Le Bluetooth n'a pas répondu.";
     pub const SOUND: &str = "Son";
     pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
     pub const LOCK: &str = "Verrouillage";
     pub const LOCK_ABOUT: &str = "Quand ta session se verrouille toute seule.";
+    pub const KEYBOARD: &str = "Clavier";
+    pub const KEYBOARD_ABOUT: &str =
+        "La disposition des touches, leur répétition et les raccourcis.";
+    pub const CLIPBOARD: &str = "Presse-papiers";
+    pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
+
+    pub const DISPLAYS: &str = "Écrans";
+    pub const DISPLAYS_ABOUT: &str = "La définition, la taille et la place de chaque écran.";
+
+    // « Écrans ».
+    pub const ARRANGEMENT: &str = "Disposition des écrans";
+    pub const ARRANGEMENT_HELP: &str = "Glisse les écrans pour les placer comme sur ton bureau.";
+    pub const RESOLUTION: &str = "Résolution";
+    pub const RESOLUTION_HELP: &str = "Plus elle est haute, plus l'image est fine.";
+    pub const REFRESH: &str = "Fréquence";
+    pub const REFRESH_HELP: &str = "Les images que l'écran affiche chaque seconde.";
+    pub const SCALE: &str = "Échelle";
+    pub const SCALE_HELP: &str = "La taille du texte et des fenêtres.";
+    pub const ROTATION: &str = "Rotation";
+    pub const ROTATION_HELP: &str = "Pour un écran tourné sur le côté.";
+    pub const ROTATIONS: [&str; 4] = ["Standard", "90°", "180°", "270°"];
+    pub const MAIN_DISPLAY: &str = "Écran principal";
+    pub const MAIN_DISPLAY_HELP: &str = "La barre et les notifications s'y affichent.";
+    pub const MAKE_MAIN: &str = "En faire l'écran principal";
+    pub const IS_MAIN: &str = "C'est l'écran principal.";
+    pub const DISPLAY_ON: &str = "Utiliser cet écran";
+    pub const DISPLAY_ON_HELP: &str = "Éteint, il ne montre plus rien.";
+    pub const KEEP_DISPLAYS: &str = "Garder ces réglages d'affichage ?";
+    pub const KEEP: &str = "Garder";
+    pub const REVERT: &str = "Revenir";
+    pub const DISPLAYS_LOADING: &str = "Recherche des écrans…";
+    pub const DISPLAYS_UNAVAILABLE: &str = "Les écrans ne se règlent pas ici pour l'instant.";
+    pub const DISPLAY_REFUSED: &str = "L'écran a refusé ce réglage : rien n'a changé.";
+    pub const DISPLAY_OFF: &str = "Éteint";
+
+    /// What the confirmation says while it waits: « Retour aux réglages précédents dans 12 s. »
+    pub fn reverting_in(seconds: u64) -> String {
+        format!("Retour aux réglages précédents dans {seconds} s.")
+    }
+
+    /// A resolution in a menu: « 1920 × 1080 », « 2560 × 1600 (recommandée) ».
+    pub fn resolution(width: i32, height: i32, preferred: bool) -> String {
+        match preferred {
+            true => format!("{width} × {height} (recommandée)"),
+            false => format!("{width} × {height}"),
+        }
+    }
+
+    /// A refresh rate in millihertz, as a menu shows it: « 60 Hz », « 143,98 Hz ».
+    pub fn hertz(millihertz: i32) -> String {
+        let hundredths = (f64::from(millihertz) / 10.0).round() as i64;
+        match hundredths % 100 {
+            0 => format!("{} Hz", hundredths / 100),
+            rest => format!("{},{rest:02} Hz", hundredths / 100),
+        }
+    }
+
+    /// The scales of `SCALES`, as the segmented control shows them.
+    pub const SCALE_LABELS: [&str; 5] = ["100 %", "125 %", "150 %", "175 %", "200 %"];
+
+    /// A scale as a percentage: « 125 % ».
+    pub fn percent(scale: f64) -> String {
+        format!("{} %", (scale * 100.0).round())
+    }
+
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_ABOUT: &str = "Le Wi-Fi, les réseaux autour de toi et ceux que tu gardes.";
+
+    // « Réseau ».
+    pub const WIFI: &str = "Wi-Fi";
+    pub const WIFI_HELP: &str = "Coupé, l'ordinateur ne cherche plus de réseau.";
+    pub const WIFI_HARDWARE_OFF: &str =
+        "Coupé par l'interrupteur ou le mode avion de l'ordinateur.";
+    pub const NETWORKS: &str = "Réseaux";
+    pub const NETWORK_LOADING: &str = "Lecture du Wi-Fi…";
+    pub const NETWORK_UNAVAILABLE: &str = "Le gestionnaire de réseau ne répond pas.";
+    pub const NO_WIFI: &str = "Aucune carte Wi-Fi trouvée.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const OPEN_NETWORK: &str = "Ouvert";
+    pub const PROTECTED_NETWORK: &str = "Protégé par un mot de passe";
+    pub const ENTERPRISE_NETWORK: &str = "Entreprise ou WEP";
+    pub const FORGET: &str = "Oublier";
+    pub const SCAN: &str = "Rechercher";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const OTHER_NETWORK_SEARCH: &str = "Rejoindre un réseau caché";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY_NONE: &str = "Aucune";
+    pub const SECURITY_PASSWORD: &str = "Mot de passe";
+    pub const SECURITY_WEP: &str = "WEP";
+    pub const SECURITY_ENTERPRISE: &str = "Entreprise";
+    pub const PEAP: &str = "PEAP";
+    pub const TTLS: &str = "TTLS";
+    pub const IDENTITY: &str = "Identifiant";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const WEP_KEY: &str = "Clé WEP";
+    pub const DOMAIN: &str = "Domaine du serveur (facultatif)";
+    pub const DOMAIN_HELP: &str =
+        "Ton établissement le donne : il prouve que c'est bien son serveur qui répond.";
+    pub const CANCEL: &str = "Annuler";
+    pub const JOIN: &str = "Rejoindre";
+    pub const NETWORK_REFUSED: &str = "Refusé : tu n'as pas le droit de changer ce réglage.";
+    pub const NETWORK_FAILED: &str = "Échec : le réseau n'a pas pu être rejoint.";
+    pub const NETWORK_WRONG_PASSWORD: &str = "Mot de passe incorrect : le réseau l'a refusé.";
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -156,6 +327,70 @@ pub mod texts {
     pub const POINTER: &str = "Pointeur";
     pub const SHOW_CLICKS: &str = "Montrer les clics";
     pub const SHOW_CLICKS_HELP: &str = "Un anneau vert marque chaque clic.";
+    pub const GESTURES: &str = "Gestes";
+    pub const TAP_AND_DRAG: &str = "Toucher puis glisser";
+    pub const TAP_AND_DRAG_HELP: &str = "Touche deux fois et glisse pour déplacer un objet.";
+    pub const DRAG_LOCK: &str = "Glissement prolongé";
+    pub const DRAG_LOCK_HELP: &str = "Le glissement continue un instant après avoir levé le doigt.";
+    pub const SWIPE_DOWN: &str = "Trois doigts vers le bas";
+    pub const SWIPE_DOWN_HELP: &str = "Sur le bureau, hors de Mission Control.";
+    pub const SWIPE_NOTHING: &str = "Rien";
+    pub const SWIPE_MINIMIZE: &str = "Réduire la fenêtre";
+    /// The gestures that do not change: the fingers, what they do.
+    pub const FIXED_GESTURES: [(&str, &str); 3] = [
+        ("Trois doigts vers le haut", "Ouvrir Mission Control"),
+        ("Trois doigts à gauche ou à droite", "Changer de bureau"),
+        ("Deux doigts écartés ou pincés", "Zoomer dans l'application"),
+    ];
+
+    // « Clavier ».
+    pub const TYPING_CARD: &str = "Saisie";
+    pub const LAYOUT: &str = "Disposition";
+    pub const LAYOUT_HELP: &str = "Ce que tape chaque touche.";
+    pub const SYSTEM_LAYOUT: &str = "Celle du système";
+    pub const OTHER_LAYOUT: &str = "Autre disposition";
+    pub const REPEAT_DELAY: &str = "Délai avant répétition";
+    pub const REPEAT_DELAY_HELP: &str =
+        "Combien de temps tenir une touche avant qu'elle se répète.";
+    pub const REPEAT_RATE: &str = "Vitesse de répétition";
+    pub const REPEAT_RATE_HELP: &str = "À quel rythme elle se répète ensuite.";
+    pub const TRY_KEYS: &str = "Essai";
+    pub const TRY_KEYS_HELP: &str = "Tape ici pour essayer la disposition et la répétition.";
+    pub const TRY_KEYS_PLACEHOLDER: &str = "Tape quelques lettres…";
+    pub const SHORTCUTS: &str = "Raccourcis du bureau";
+    pub const SHORTCUTS_HELP: &str = "Dans une fenêtre d'essai, Alt remplace Super.";
+
+    /// The shortcuts of the desktop, as the compositor takes them: the keys, what they do.
+    pub const SHORTCUT_LIST: [(&str, &str); 16] = [
+        ("Super + Espace", "Ouvrir le lanceur"),
+        ("F4", "Afficher les applications"),
+        ("Super + Tab", "Ouvrir Mission Control"),
+        ("Super + L", "Verrouiller la session"),
+        ("Super + ↑", "Agrandir ou rétablir la fenêtre"),
+        (
+            "Super + ← ou →",
+            "Placer la fenêtre sur une moitié de l'écran",
+        ),
+        ("Super + ↓", "Remettre la fenêtre à sa place"),
+        ("Super + glisser", "Déplacer une fenêtre"),
+        ("Super + clic droit glissé", "Redimensionner une fenêtre"),
+        ("Super + 1 à 9", "Aller à ce bureau"),
+        ("Super + Maj + 1 à 9", "Envoyer la fenêtre sur ce bureau"),
+        ("Super + Ctrl + ← ou →", "Aller au bureau voisin"),
+        ("Impr. écran", "Capturer l'écran"),
+        ("Maj + Impr. écran", "Capturer une zone"),
+        ("Alt + Impr. écran", "Capturer la fenêtre"),
+        ("Ctrl + Alt + F1 à F12", "Passer à une console"),
+    ];
+
+    /// A delay in milliseconds, a rate in repeats per second, as the sliders say them.
+    pub fn milliseconds(count: u32) -> String {
+        format!("{count} ms")
+    }
+
+    pub fn per_second(count: u32) -> String {
+        format!("{count} par seconde")
+    }
 
     // « Son ».
     pub const OUTPUT: &str = "Sortie";
@@ -178,6 +413,13 @@ pub mod texts {
         "Sans clavier ni souris pendant ce temps, la session se verrouille.";
     pub const NEVER: &str = "Jamais";
     pub const ONE_HOUR: &str = "1 heure";
+
+    // « Presse-papiers ».
+    pub const CLIPBOARD_HISTORY_CARD: &str = "Historique";
+    pub const CLIPBOARD_HISTORY: &str = "Historique du presse-papiers";
+    pub const CLIPBOARD_HISTORY_HELP: &str = "Garde en mémoire tes 50 dernières copies, pour les retrouver avec Super + V. Jamais les mots de passe, rien pendant le verrouillage.";
+    pub const CLIPBOARD_KEEP: &str = "Garder après la déconnexion";
+    pub const CLIPBOARD_KEEP_HELP: &str = "Écrit l'historique sur le disque, avec les éléments épinglés. Sinon, il s'efface à la fin de la session.";
 
     /// A delay before the lock: « 1 minute », « 5 minutes ».
     pub fn minutes(count: u32) -> String {
@@ -216,6 +458,8 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const DISPLAY_WORDS: &str = "écran moniteur affichage définition taille hdmi projecteur";
+    pub const NETWORK_WORDS: &str = "wifi internet réseau sans fil eduroam mot de passe";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";
@@ -227,6 +471,11 @@ pub mod texts {
     pub const SOUND_WORDS: &str = "son audio haut-parleurs casque enceinte hdmi";
     pub const MICROPHONE_WORDS: &str = "son audio micro microphone entrée casque";
     pub const LOCK_WORDS: &str = "verrouillage écran veille inactivité délai sécurité";
+    pub const KEYBOARD_WORDS: &str = "clavier azerty qwerty bépo langue touches";
+    pub const REPEAT_WORDS: &str = "clavier touches répétition maintenir tenir";
+    pub const SHORTCUT_WORDS: &str = "clavier raccourcis touches super combinaisons";
+    pub const GESTURE_WORDS: &str = "gestes doigts trackpad glisser balayer";
+    pub const CLIPBOARD_WORDS: &str = "presse-papiers copier coller historique super v vie privée";
     pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 
     /// Hour of the day as the menus show it: « 07:30 ».
@@ -244,6 +493,25 @@ mod tests {
         assert_eq!(texts::hour(7 * 60 + 30), "07:30");
         assert_eq!(texts::hour(0), "00:00");
         assert_eq!(texts::hour(23 * 60 + 59), "23:59");
+    }
+
+    #[test]
+    fn display_values_read_as_in_the_menus() {
+        assert_eq!(texts::hertz(60_000), "60 Hz");
+        assert_eq!(texts::hertz(59_951), "59,95 Hz");
+        assert_eq!(texts::hertz(143_981), "143,98 Hz");
+        assert_eq!(texts::percent(1.25), "125 %");
+        for (scale, label) in SCALES.iter().zip(texts::SCALE_LABELS) {
+            assert_eq!(texts::percent(*scale), label);
+        }
+        assert_eq!(
+            texts::resolution(1920, 1080, true),
+            "1920 × 1080 (recommandée)"
+        );
+        assert_eq!(
+            texts::reverting_in(15),
+            "Retour aux réglages précédents dans 15 s."
+        );
     }
 
     #[test]

@@ -12,6 +12,9 @@ name = "sherlockos-apps"
 path = "src/main.rs"
 
 [dependencies]
+# Its connection to the shell socket, the only one that offers anchored surfaces (workspace
+# crate, lot D-46).
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
 # The same as the launcher (docs/launcher.md).
 iced = { version = "=0.14.0", default-features = false, features = [
     "advanced",
@@ -37,16 +40,13 @@ icon-theme = { path = "../icon-theme" }
 launcher = { path = "../launcher" }
 # The data directories and the terminal (workspace crate).
 mime-apps = { path = "../mime-apps" }
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37b).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",
     "fmt",
 ] }
-
-# Draws each icon once at its size on the screen (lot P-02): the version iced already pulls for
-# its SVG widget, which the compositor and cursor-theme pin too.
-resvg = { version = "=0.45.1", default-features = false }
 
 # The wallpaper behind the view, decoded, blurred and kept in the cache (lot P-02c): the version
 # and features the lock screen and the compositor already pin.

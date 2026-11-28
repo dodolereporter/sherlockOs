@@ -6,51 +6,89 @@
 //! ```text
 //! [Notifications]
 //! DoNotDisturb=true
+//! DoNotDisturbUntil=1795892400
 //! ```
+//!
+//! `DoNotDisturbUntil` (D-23e) ends Do not disturb at that instant, in seconds since 1970:
+//! « Pendant 1 heure », « Jusqu'à ce soir ». Without it, it lasts until switched off.
 //!
 //! Every key is optional; an absent file gives the defaults. See `docs/notifications.md`.
 
-use std::io::{self, Write};
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use dock_config::KeyFile;
 
 const GROUP: &str = "Notifications";
 const DO_NOT_DISTURB: &str = "DoNotDisturb";
+const UNTIL: &str = "DoNotDisturbUntil";
 
 /// The notifications settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NotificationsConfig {
     /// Nothing shows but critical notifications; all of them still go to the history.
     pub do_not_disturb: bool,
+    /// When Do not disturb ends by itself, in seconds since 1970.
+    pub until: Option<u64>,
 }
 
 impl NotificationsConfig {
+    /// Do not disturb holds at `now` (seconds since 1970): on, and its end not reached.
+    pub fn active_at(&self, now: u64) -> bool {
+        self.do_not_disturb && self.until.is_none_or(|until| now < until)
+    }
+
+    /// `active_at` the system clock's now.
+    pub fn active_now(&self) -> bool {
+        self.active_at(epoch_now())
+    }
+
     /// Reads a text: the settings, and the value that could not be read, if any (the default
     /// is then used).
     pub fn parse(text: &str) -> (Self, Option<String>) {
         let file = KeyFile::parse(text);
+        let until = file.get(GROUP, UNTIL);
         let Some(raw) = file.get(GROUP, DO_NOT_DISTURB) else {
             return (Self::default(), None);
         };
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "true" => (
+        let on = match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return (Self::default(), Some(raw)),
+        };
+        match until.as_deref().map(str::trim) {
+            None | Some("") => (
                 Self {
-                    do_not_disturb: true,
+                    do_not_disturb: on,
+                    until: None,
                 },
                 None,
             ),
-            "false" => (Self::default(), None),
-            _ => (Self::default(), Some(raw)),
+            Some(text) => match text.parse::<u64>() {
+                Ok(at) => (
+                    Self {
+                        do_not_disturb: on,
+                        until: Some(at),
+                    },
+                    None,
+                ),
+                // An end that cannot be read: on until switched off, as without one.
+                Err(_) => (
+                    Self {
+                        do_not_disturb: on,
+                        until: None,
+                    },
+                    Some(text.to_owned()),
+                ),
+            },
         }
     }
 
     /// Reads the file at `path`; an absent file gives the defaults.
     pub fn load(path: &Path) -> io::Result<(Self, Option<String>)> {
-        match std::fs::read_to_string(path) {
+        match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => Ok(Self::parse(&text)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((Self::default(), None)),
             Err(error) => Err(error),
@@ -58,36 +96,29 @@ impl NotificationsConfig {
     }
 
     /// Writes the settings into the file at `path`, creating its directory and keeping its
-    /// other lines. The text goes to a temporary file of its own, renamed over the old one: a
-    /// reader never sees half a file, and two writers never mix.
+    /// other lines, with `mime_apps::write_atomically`: a reader never sees half a file, two
+    /// writers never mix, a linked file (dotfiles) is written where it lives and keeps its
+    /// permissions. A file that cannot be read is not written over.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let mut file = match std::fs::read_to_string(path) {
+        let mut file = match mime_apps::read_bounded(path, mime_apps::MAX_SETTINGS_SIZE) {
             Ok(text) => KeyFile::parse(&text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => KeyFile::default(),
             Err(error) => return Err(error),
         };
         let value = if self.do_not_disturb { "true" } else { "false" };
         file.set(GROUP, DO_NOT_DISTURB, value);
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)?;
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        let count = SAVES.fetch_add(1, Ordering::Relaxed);
-        let temporary = dir.join(format!(".{name}.{}.{count}.tmp", std::process::id()));
-        let written = (|| {
-            let mut out = std::fs::File::create(&temporary)?;
-            out.write_all(file.to_text().as_bytes())?;
-            out.sync_all()?;
-            std::fs::rename(&temporary, path)
-        })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        written
+        let until = self.until.map(|at| at.to_string()).unwrap_or_default();
+        file.set(GROUP, UNTIL, &until);
+        mime_apps::write_atomically(path, &file.to_text())
     }
 }
 
-/// Saves made by this process, for unique temporary names.
-static SAVES: AtomicU64 = AtomicU64::new(0);
+/// The system clock, in seconds since 1970.
+pub fn epoch_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 /// Path of the file: `$XDG_CONFIG_HOME/notifications/notifications.conf`.
 pub fn path() -> Option<PathBuf> {
@@ -153,6 +184,7 @@ mod tests {
         );
         let on = NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         };
         assert_eq!(
             NotificationsConfig::parse("[Notifications]\nDoNotDisturb=True\n"),
@@ -166,12 +198,40 @@ mod tests {
     }
 
     #[test]
+    fn do_not_disturb_ends_at_its_time() {
+        let (config, problem) = NotificationsConfig::parse(
+            "[Notifications]\nDoNotDisturb=true\nDoNotDisturbUntil=1000\n",
+        );
+        assert_eq!((config.until, problem), (Some(1000), None));
+        assert!(config.active_at(999) && !config.active_at(1000));
+        let (config, problem) =
+            NotificationsConfig::parse("[Notifications]\nDoNotDisturb=true\nDoNotDisturbUntil=x\n");
+        assert!(config.active_at(u64::MAX) && problem.is_some());
+        assert!(!NotificationsConfig::default().active_at(0));
+        let path = temp("until");
+        let timed = NotificationsConfig {
+            do_not_disturb: true,
+            until: Some(42),
+        };
+        timed.save(&path).unwrap();
+        assert_eq!(NotificationsConfig::load(&path).unwrap().0, timed);
+        let endless = NotificationsConfig {
+            until: None,
+            ..timed
+        };
+        endless.save(&path).unwrap();
+        assert_eq!(NotificationsConfig::load(&path).unwrap().0, endless);
+        std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn saving_keeps_the_other_lines() {
         let path = temp("save");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "# mine\n[Notifications]\nOther=1\n").unwrap();
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&path)
         .unwrap();
@@ -182,6 +242,27 @@ mod tests {
         );
         let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1);
+        // A linked file (dotfiles) stays a link, and a private one stays private.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = path.parent().unwrap();
+        let target = dir.join("dotfiles.conf");
+        std::fs::rename(&path, &target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink("dotfiles.conf", &path).unwrap();
+        NotificationsConfig {
+            do_not_disturb: false,
+            until: None,
+        }
+        .save(&path)
+        .unwrap();
+        assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("DoNotDisturb=false")
+        );
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
     }
 
@@ -192,6 +273,7 @@ mod tests {
         assert!(!follower.current().0.do_not_disturb);
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&path)
         .unwrap();

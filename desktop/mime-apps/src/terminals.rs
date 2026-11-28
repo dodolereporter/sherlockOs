@@ -39,7 +39,8 @@ pub fn installed(catalog: &Catalog) -> Vec<&DesktopEntry> {
 
 /// The default terminal: the first of the list that is installed, else the first installed.
 pub fn default(catalog: &Catalog) -> Option<&DesktopEntry> {
-    let text = std::fs::read_to_string(path(&catalog.dirs)).unwrap_or_default();
+    let text = crate::file::read_bounded(&path(&catalog.dirs), crate::file::MAX_SETTINGS_SIZE)
+        .unwrap_or_default();
     let terminals = installed(catalog);
     ids(&text)
         .into_iter()
@@ -49,8 +50,14 @@ pub fn default(catalog: &Catalog) -> Option<&DesktopEntry> {
 
 /// Makes `id` the default terminal: first in the list, the others kept after it.
 pub fn set_default(dirs: &Dirs, id: &str) -> io::Result<()> {
+    if id.is_empty() || crate::file::breaks_line(id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a valid id",
+        ));
+    }
     let path = path(dirs);
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::file::read_bounded(&path, crate::file::MAX_SETTINGS_SIZE) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),

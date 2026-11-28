@@ -17,11 +17,12 @@ thiserror = "=2.0.21"
 # Async runtime, already in Cargo.lock (pulled by iced). Minimal features: a single thread
 # (`rt`), `process` and `io-util` to talk to MCP servers over stdio, `io-std` to serve the proxy
 # on standard input and output, `time` for timeouts, `macros` for `#[tokio::main]`,
-# `#[tokio::test]` and `select!`.
+# `#[tokio::test]` and `select!`, `net` for the compositor's consent socket (A-11c).
 tokio = { version = "=1.54.1", default-features = false, features = [
     "io-std",
     "io-util",
     "macros",
+    "net",
     "process",
     "rt",
     "time",
@@ -29,6 +30,9 @@ tokio = { version = "=1.54.1", default-features = false, features = [
 tracing = "=0.1.44"
 # prctl(PR_SET_PDEATHSIG) and kill of a process group: the version the desktop already pins.
 libc = "=0.2.191"
+# The files server (A-13): openat2 with RESOLVE_BENEATH, and the *at calls on a held folder,
+# without unsafe; the peer of the Docker socket (A-14). The version the compositor already pins.
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs", "net", "process"] }
 # Prints logs on standard error, level set by RUST_LOG.
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",

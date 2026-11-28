@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use iced::futures::channel::oneshot;
 use iced::mouse::ScrollDelta;
 use iced::widget::{
     Column, Row, Stack, column, container, image, mouse_area, opaque, row, scrollable,
@@ -14,7 +15,9 @@ use iced::widget::{
 use iced::window::Id;
 use iced::{Alignment, Element, Length, Padding, Rectangle, Task, window};
 use iced_exwlshell::actions::{IcedNewPopupSettings, RegionActionCB};
-use iced_exwlshell::reexport::{PixelSize, PopupAnchor, PopupGravity, Position};
+use iced_exwlshell::reexport::{
+    ActivationTokenSink, PixelSize, PopupAnchor, PopupGravity, Position, XdgActivationTokenV1State,
+};
 use sherlock_ui::component::{self as ui};
 use sherlock_ui::motion::{Animation, SCALE_PRECISION};
 use sherlock_ui::surface::{self, Elevation};
@@ -29,6 +32,10 @@ use crate::unfold::Unfold;
 /// How many breaths an icon that needs attention takes, when it starts to and each time the
 /// popup opens: then it rests, the dot of the chevron still there, and no frame is drawn.
 const BREATHS: u32 = 3;
+
+/// The chevron comes and goes on the spring it turns on, from this scale (Q-49).
+const SPRING: sherlock_ui::motion::Spring = look::CHEVRON_SPRING;
+const APPEAR_SCALE: f32 = 0.6;
 
 /// A button of the mouse on an icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +58,8 @@ pub struct Tray {
     pub unfold: Unfold,
     /// The chevron's half turn: 0 pointing down, 1 up while the popup is open.
     turn: Option<Animation>,
+    /// The chevron there: 1 shown, 0 gone; it grows and fades in, and out (Q-49).
+    presence: Option<Animation>,
     /// Where the chevron is drawn in the bar surface.
     pub chevron: Option<Rectangle>,
     /// The item under the pointer.
@@ -92,6 +101,37 @@ impl Tray {
         !item.properties.id.is_empty() && self.pins.contains(&item.properties.id)
     }
 
+    /// Whether the bar has an icon of the notification area, in the popup or kept in the bar.
+    pub fn has_icons(&self) -> bool {
+        self.shown().next().is_some()
+    }
+
+    /// How present the chevron is now, from 0 (gone) to 1 (shown), `wanted` or not.
+    fn presence(&self, wanted: bool) -> f32 {
+        let wanted = if wanted { 1.0 } else { 0.0 };
+        let now = self.presence.map_or(wanted, |p| {
+            if p.is_done(self.now, SCALE_PRECISION) {
+                p.target()
+            } else {
+                p.value(self.now)
+            }
+        });
+        now.clamp(0.0, 1.0) as f32
+    }
+
+    /// The chevron comes or goes towards what is wanted now; at once without animations.
+    fn follow_presence(&mut self, wanted: bool, now: Duration, animates: bool) {
+        let target = if wanted { 1.0 } else { 0.0 };
+        match &mut self.presence {
+            Some(presence) if !animates => *presence = Animation::new(SPRING, target, target, now),
+            Some(presence) if presence.target() != target => presence.retarget(now, target),
+            Some(_) => {}
+            // The first icon: the chevron grows in.
+            None if animates => self.presence = Some(Animation::new(SPRING, 0.0, target, now)),
+            None => self.presence = Some(Animation::new(SPRING, target, target, now)),
+        }
+    }
+
     /// Some item of the popup needs attention: the chevron carries a dot.
     pub fn attention(&self) -> bool {
         self.in_popup().any(Item::needs_attention)
@@ -103,9 +143,10 @@ impl Tray {
 
     /// Something moves: the popup, the chevron, an icon that breathes in the open popup.
     pub fn running(&self) -> bool {
-        let turning = self
-            .turn
-            .is_some_and(|t| !t.is_done(self.now, SCALE_PRECISION));
+        let turning = [self.turn, self.presence]
+            .iter()
+            .flatten()
+            .any(|t| !t.is_done(self.now, SCALE_PRECISION));
         let seen = |key: &str| self.popup.is_some() || self.pinned().any(|i| i.key == key);
         let breathing = self
             .breathing
@@ -192,7 +233,32 @@ impl Bar {
             }
         }
         self.tray.now = now;
+        self.follow_chevron();
         self.resize_tray()
+    }
+
+    /// The chevron comes or goes with the icons and the drags (Q-49).
+    pub(super) fn follow_chevron(&mut self) {
+        let now = animated::clock().max(self.tray.now);
+        self.tray.now = now;
+        let animates = self.animates();
+        let wanted = self.chevron_wanted();
+        self.tray.follow_presence(wanted, now, animates);
+    }
+
+    /// Whether the chevron is wanted: with an icon of the notification area, even every one
+    /// kept in the bar, and during the whole drag of one, so that one can always go back into
+    /// the popup (Q-49).
+    pub fn chevron_wanted(&self) -> bool {
+        use super::pins::Place;
+        self.tray.has_icons()
+            || self.tray_dragged_from(Place::Popup)
+            || self.tray_dragged_from(Place::Bar)
+    }
+
+    /// How present the chevron is now, from 0 (gone) to 1 (shown).
+    pub fn chevron_presence(&self) -> f32 {
+        self.tray.presence(self.chevron_wanted())
     }
 
     /// Opens the popup under the chevron, or closes it when it is open. Clicked again while it
@@ -390,7 +456,24 @@ impl Bar {
         };
         tracing::debug!(key, ?click, "tray item clicked");
         let fallback = (click == Click::Primary).then(|| key.to_owned());
-        self.close_tray().chain(send(sent, fallback))
+        // A token of the click, for the application to bring its window forward with (lot
+        // Q-52): asked for on the surface clicked, the popup or the bar.
+        let in_popup = self.tray.open() && self.tray.in_popup().any(|i| i.key == key);
+        let clicked = if in_popup {
+            self.tray.popup
+        } else {
+            self.surface
+        };
+        let (ask, token) = match clicked {
+            Some(id) => {
+                let (ask, token) = activation_token(id);
+                (ask, Some(token))
+            }
+            None => (Task::none(), None),
+        };
+        self.close_tray()
+            .chain(ask)
+            .chain(send(sent, fallback, token))
     }
 
     /// The menu of the icon of `key`, under it: its D-Bus menu, with the style of ours; an item
@@ -402,7 +485,7 @@ impl Bar {
         let (service, path) = (item.service.clone(), item.path.clone());
         let Some(menu) = item.properties.menu.clone() else {
             let (x, y) = self.tray_point();
-            return send((service, path, Request::ContextMenu(x, y)), None);
+            return send((service, path, Request::ContextMenu(x, y)), None, None);
         };
         let Some(anchor) = self.tray_anchor(key) else {
             return Task::none();
@@ -458,7 +541,11 @@ impl Bar {
         let item = self.tray.items.iter().find(|i| i.key == key);
         let request = item.zip(Request::scroll(delta));
         request.map_or_else(Task::none, |(item, request)| {
-            send((item.service.clone(), item.path.clone(), request), None)
+            send(
+                (item.service.clone(), item.path.clone(), request),
+                None,
+                None,
+            )
         })
     }
 
@@ -470,15 +557,33 @@ impl Bar {
         (x, y)
     }
 
-    /// The chevron in the bar, before the indicators; none without an item to show.
+    /// The chevron in the bar, before the indicators: there as long as the bar has an icon of
+    /// the notification area, in the popup or kept in the bar, and while one is dragged (Q-49).
+    /// It grows and fades in, and out once the last icon goes.
     pub(super) fn view_chevron(&self) -> Option<Element<'static, Message>> {
-        self.tray.in_popup().next()?;
-        let glyph = look::chevron(self.tray.turned(), self.tray.attention());
-        let mut button = panels::bar_button(glyph, self.tray.open(), Some(Message::ToggleTray));
-        if self.focused() == Some(super::Target::Tray) {
-            button = button.focus_ring();
+        let presence = self.chevron_presence();
+        let wanted = self.chevron_wanted();
+        if !wanted && presence <= 0.0 {
+            return None;
         }
-        Some(locate(button, Message::TrayChevron))
+        let chevron = color::with_opacity(presence, || {
+            let glyph = look::chevron(self.tray.turned(), self.tray.attention());
+            let toggle = wanted.then_some(Message::ToggleTray);
+            let mut button = panels::bar_button(glyph, self.tray.open(), toggle);
+            if self.focused() == Some(super::Target::Tray) {
+                button = button.focus_ring();
+            }
+            let button = locate(button, Message::TrayChevron);
+            if presence >= 1.0 {
+                return button;
+            }
+            let scale = APPEAR_SCALE + (1.0 - APPEAR_SCALE) * presence;
+            animated::reveal(button)
+                .opacity(presence)
+                .scale(scale, (0.5, 0.5))
+                .into()
+        });
+        Some(chevron)
     }
 
     /// The popup: the grid of icons, and the line of the one under the pointer.
@@ -491,13 +596,13 @@ impl Bar {
                 .in_popup()
                 .map(|item| self.tray_cell(item))
                 .collect();
-            let grid: Element<'_, Message> = if cells.is_empty() {
-                let empty = ui::body(look::text::EMPTY).color(color::palette().text_tertiary);
-                container(empty)
-                    .center_x(Length::Fill)
-                    .height(look::CELL)
-                    .center_y(look::CELL)
-                    .into()
+            let content: Element<'_, Message> = if cells.is_empty() {
+                // Every icon kept in the bar: the popup says it takes one back, dropped here,
+                // in the middle of the room of a row and of the tooltip line.
+                let empty = ui::body(look::text::EMPTY)
+                    .color(color::palette().text_tertiary)
+                    .align_x(Alignment::Center);
+                container(empty).center(Length::Fill).into()
             } else {
                 let mut rows = Column::new().spacing(look::GAP);
                 let mut cells = cells.into_iter().peekable();
@@ -506,9 +611,10 @@ impl Bar {
                     rows = rows.push(Row::with_children(line).spacing(look::GAP));
                 }
                 // Within the screen, the rows that do not fit scroll above the tooltip line.
-                scrollable(rows).height(Length::Fill).into()
+                let grid = scrollable(rows).height(Length::Fill);
+                column![grid, self.tray_tip()].into()
             };
-            let glass = container(column![grid, self.tray_tip()])
+            let glass = container(content)
                 .width(width)
                 .height(height)
                 .padding(look::PADDING + metrics::BORDER_WIDTH)
@@ -632,15 +738,43 @@ pub fn icon_view<'a>(icon: Option<&Icon>, side: f32, name: &str) -> Element<'a, 
         .into()
 }
 
-/// Sends `request` to the item at `path` of `service`, on the connection of the menus. When
-/// `fallback` names an item, a refused `Activate` opens its menu instead, as KDE does.
+/// Asks the compositor for an activation token on behalf of the surface `id`, where the click
+/// was (lot Q-52): the receiver gets it, or closes without one.
+fn activation_token(id: Id) -> (Task<Message>, oneshot::Receiver<String>) {
+    let (sender, token) = oneshot::channel();
+    let sender = std::sync::Mutex::new(Some(sender));
+    let sink = ActivationTokenSink::callback(move |state| {
+        let taken = sender.lock().ok().and_then(|mut s| s.take());
+        if let (Some(sender), XdgActivationTokenV1State::Ready(token)) = (taken, state) {
+            let _ = sender.send(token.token().to_owned());
+        }
+    });
+    (
+        Task::done(Message::RequestActivationToken { id, sink }),
+        token,
+    )
+}
+
+/// Sends `request` to the item at `path` of `service`, on the connection of the menus, after
+/// the activation `token` when one comes (`ProvideXdgActivationToken`, as Plasma does): the
+/// application may bring its window forward with it. When `fallback` names an item, a refused
+/// `Activate` opens its menu instead, as KDE does.
 pub(super) fn send(
     (service, path, request): (String, String, Request),
     fallback: Option<String>,
+    token: Option<oneshot::Receiver<String>>,
 ) -> Task<Message> {
     Task::perform(
         async move {
             let bus = dbusmenu::bus().await?;
+            if let Some(Ok(token)) = match token {
+                Some(token) => Some(token.await),
+                None => None,
+            } && let Err(error) = crate::tray::provide_token(&bus, &service, &path, &token).await
+            {
+                // An item without the method (libappindicator) activates as before.
+                tracing::debug!(%error, "the item takes no activation token");
+            }
             request.send(&bus, &service, &path).await
         },
         move |sent| Message::TraySent(fallback.clone(), sent.map_err(|e| e.to_string())),
@@ -735,6 +869,85 @@ mod tests {
         assert_eq!(bar.focused(), Some(Target::Tray));
         let _ = bar.update(Message::MenuKey(menu::Key::Activate));
         assert!(bar.tray_open());
+    }
+
+    #[test]
+    fn the_chevron_stays_while_every_icon_is_kept_in_the_bar_and_comes_and_goes_animated() {
+        let second = Duration::from_secs(2);
+        let mut bar = with_items(&[]);
+        assert!(bar.view_chevron().is_none());
+        // The first icon: the chevron grows in, then rests.
+        let _ = bar.update(Message::Tray(Event::Changed(Box::new(item(
+            1,
+            Status::Active,
+        )))));
+        assert!(bar.view_chevron().is_some() && bar.animating());
+        assert!(bar.chevron_presence() < 1.0);
+        let _ = frame_in(&mut bar, second);
+        assert!(!bar.animating());
+        assert_eq!(bar.chevron_presence(), 1.0);
+        // Every icon kept in the bar: the chevron stays, reachable, and opens the popup, which
+        // says it takes one back.
+        let _ = bar.update(Message::Tray(Event::Changed(Box::new(item(
+            2,
+            Status::Active,
+        )))));
+        let _ = bar.update(Message::Pins(vec![
+            String::from("item-1"),
+            String::from("item-2"),
+        ]));
+        assert_eq!(bar.tray.in_popup().count(), 0);
+        let _ = frame_in(&mut bar, second);
+        assert!(bar.view_chevron().is_some() && !bar.animating());
+        assert!(bar.targets().contains(&Target::Tray));
+        let _ = bar.update(Message::ToggleTray);
+        assert!(bar.tray_open());
+        let (width, height) = bar.tray.size;
+        {
+            let mut ui = iced_test::simulator::Simulator::with_size(
+                crate::settings(),
+                (width as f32, height as f32),
+                bar.view_tray(),
+            );
+            assert!(ui.find(look::text::EMPTY).is_ok());
+        }
+        let _ = bar.update(Message::MenuKey(menu::Key::Close));
+        let _ = frame_in(&mut bar, second);
+        // An icon of the bar dragged below it goes back into the popup.
+        let surface = bar.surface.unwrap();
+        let row = Rectangle::new(
+            iced::Point::new(1400.0, 3.0),
+            iced::Size::new(2.0 * super::super::pins::SLOT, 30.0),
+        );
+        let _ = bar.update(Message::TrayPinnedRow(row));
+        let _ = bar.update(Message::TrayHover(Some(item(1, Status::Active).key)));
+        let pointer = |bar: &mut Bar, event| bar.update(Message::TrayPointer(surface, event));
+        let _ = pointer(
+            &mut bar,
+            iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left),
+        );
+        for y in [18.0, 80.0] {
+            let position = iced::Point::new(1416.0, y);
+            let _ = pointer(&mut bar, iced::mouse::Event::CursorMoved { position });
+        }
+        assert!(bar.view_chevron().is_some(), "there during the drag");
+        let _ = pointer(
+            &mut bar,
+            iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left),
+        );
+        assert_eq!(bar.tray.pins, ["item-2"]);
+        // The last icons go: the chevron shrinks and fades out, then is gone.
+        for n in [1, 2] {
+            let _ = bar.update(Message::Tray(Event::Gone(item(n, Status::Active).key)));
+        }
+        assert!(
+            bar.view_chevron().is_some() && bar.animating(),
+            "it fades out"
+        );
+        assert!(!bar.targets().contains(&Target::Tray));
+        // The frames of this test run ahead of the clock: the fade starts at the last one.
+        let _ = frame_in(&mut bar, 3 * second);
+        assert!(bar.view_chevron().is_none() && !bar.animating());
     }
 
     #[test]

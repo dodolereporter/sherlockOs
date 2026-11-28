@@ -57,13 +57,22 @@ mod tests {
         runner: Arc<FakeRunner>,
     }
 
-    /// The lock on two screens of `size`, the first one under the pointer, at rest.
+    /// The lock on two screens of `size`, the first one under the pointer, at rest: the form
+    /// that comes with the lock sent away.
     fn screen(size: (f32, f32)) -> Screen {
+        let mut s = arriving(size);
+        key(&mut s, Key::Escape, "\u{1b}");
+        assert!(!s.lock.form_shown());
+        s
+    }
+
+    /// The lock as it comes, the form with it.
+    fn arriving(size: (f32, f32)) -> Screen {
         let (pam, runner) = (
             Arc::new(FakePam::default()),
             Arc::new(FakeRunner::default()),
         );
-        let mut lock = Lock::new("alex".into(), pam.clone(), runner.clone());
+        let mut lock = Lock::new("sam".into(), pam.clone(), runner.clone());
         let (primary, other) = (window::Id::unique(), window::Id::unique());
         for id in [primary, other] {
             let _ = lock.update(Message::Surface(id));
@@ -111,6 +120,56 @@ mod tests {
         written
     }
 
+    /// Lays `frames` side by side, `columns` per row, each reduced to a quarter of its side,
+    /// into the board `name`.
+    fn board(frames: &[image::RgbaImage], columns: u32, name: &str) -> PathBuf {
+        let (w, h) = (frames[0].width() / 4, frames[0].height() / 4);
+        let rows = (frames.len() as u32).div_ceil(columns);
+        let gap = 8;
+        let mut sheet = image::RgbaImage::from_pixel(
+            columns * (w + gap) + gap,
+            rows * (h + gap) + gap,
+            image::Rgba([16, 16, 16, 255]),
+        );
+        for (index, frame) in frames.iter().enumerate() {
+            let small = image::imageops::resize(frame, w, h, image::imageops::FilterType::Triangle);
+            let (x, y) = (index as u32 % columns, index as u32 / columns);
+            image::imageops::overlay(
+                &mut sheet,
+                &small,
+                i64::from(gap + x * (w + gap)),
+                i64::from(gap + y * (h + gap)),
+            );
+        }
+        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("lock")
+            .join(format!("{name}.png"));
+        sheet.save(&path).unwrap();
+        path
+    }
+
+    /// `picture` reduced to cover `size` and cut to it, centered: how the compositor draws it.
+    fn cover(path: &std::path::Path, size: (u32, u32)) -> image::RgbaImage {
+        let picture = lock::background::fitted(path, size).unwrap();
+        let full = image::RgbaImage::from_raw(picture.width, picture.height, picture.rgba).unwrap();
+        let (x, y) = ((full.width() - size.0) / 2, (full.height() - size.1) / 2);
+        image::imageops::crop_imm(&full, x, y, size.0, size.1).to_image()
+    }
+
+    /// What the compositor shows while the curtain moves: `under`, and the curtain over it,
+    /// down by `down` of the screen (`sherlock_ui::lock::curtain`, which the compositor draws
+    /// with).
+    fn curtained(
+        under: &image::RgbaImage,
+        curtain: &image::RgbaImage,
+        down: f32,
+    ) -> image::RgbaImage {
+        let mut frame = under.clone();
+        let top = -((1.0 - down) * curtain.height() as f32).round() as i64;
+        image::imageops::overlay(&mut frame, curtain, 0, top);
+        frame
+    }
+
     /// The form comes with the pointer, and its animations end.
     fn show_form(s: &mut Screen) {
         let _ = s.lock.update(Message::Input(s.primary, Input::Pointer));
@@ -133,48 +192,76 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(*s.pam.0.lock().unwrap(), ["alex"]);
+        assert_eq!(*s.pam.0.lock().unwrap(), ["sam"]);
         let _ = s.lock.update(Message::Checked(expected));
     }
 
-    #[test]
-    fn the_states_render_in_both_themes() {
-        let themes = [(color::Theme::Dark, ""), (color::Theme::Light, "-light")];
-        let sizes = [((1920.0, 1080.0), ""), ((1366.0, 768.0), "-1366x768")];
-        for ((which, theme), (size, name)) in themes
-            .into_iter()
-            .flat_map(|t| sizes.into_iter().map(move |s| (t, s)))
-        {
-            let suffix = format!("{name}{theme}");
-            color::set_active(which);
-            let mut s = screen(size);
-            snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
-            show_form(&mut s);
-            snapshot(&s.lock, s.primary, size, &format!("form{suffix}"));
-            snapshot(&s.lock, s.other, size, &format!("other-screen{suffix}"));
+    /// The theme is a global of the process: the captures take it one at a time. Each one is a
+    /// test of its own, so that a runner with a process per test (`cargo nextest`, the CI) draws
+    /// them side by side; the single test took five minutes of the CI (lot Q-18b).
+    static THEME: Mutex<()> = Mutex::new(());
 
-            let _ = s
-                .lock
-                .update(Message::Typed(Secret::new("motdepas".into())));
-            snapshot(&s.lock, s.primary, size, &format!("typing{suffix}"));
-            let _ = s.lock.update(Message::ShowPassword);
-            snapshot(&s.lock, s.primary, size, &format!("peek{suffix}"));
-            let _ = s.lock.update(Message::ShowPassword);
+    /// Each state in `which` on a screen of `size`, the files named with `suffix`.
+    fn states(which: color::Theme, size: (f32, f32), suffix: &str) {
+        let _one = THEME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        color::set_active(which);
+        let mut s = screen(size);
+        snapshot(&s.lock, s.primary, size, &format!("rest{suffix}"));
+        show_form(&mut s);
+        snapshot(&s.lock, s.primary, size, &format!("form{suffix}"));
+        snapshot(&s.lock, s.other, size, &format!("other-screen{suffix}"));
 
-            let _ = s.lock.update(Message::Submit);
-            assert!(matches!(s.lock.phase(), Phase::Checking(_)));
-            assert_eq!(s.lock.password_len(), 0, "the field empties at once");
-            s.lock.set_now(Instant::now() + Duration::from_millis(4300));
-            snapshot(&s.lock, s.primary, size, &format!("spinner{suffix}"));
+        let _ = s
+            .lock
+            .update(Message::Typed(Secret::new("motdepas".into())));
+        snapshot(&s.lock, s.primary, size, &format!("typing{suffix}"));
+        let _ = s.lock.update(Message::ShowPassword);
+        snapshot(&s.lock, s.primary, size, &format!("peek{suffix}"));
+        let _ = s.lock.update(Message::ShowPassword);
 
-            checked(&mut s, Err(AuthError::Refused));
-            assert!(matches!(s.lock.phase(), Phase::Refused(..)));
-            // In the middle of the shake.
-            s.lock.set_now(Instant::now() + Duration::from_millis(4350));
-            snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
-        }
+        let _ = s.lock.update(Message::Submit);
+        assert!(matches!(s.lock.phase(), Phase::Checking(_)));
+        assert_eq!(s.lock.password_len(), 0, "the field empties at once");
+        s.lock.set_now(Instant::now() + Duration::from_millis(4300));
+        snapshot(&s.lock, s.primary, size, &format!("spinner{suffix}"));
+
+        checked(&mut s, Err(AuthError::Refused));
+        assert!(matches!(s.lock.phase(), Phase::Refused(..)));
+        // In the middle of the shake.
+        s.lock.set_now(Instant::now() + Duration::from_millis(4350));
+        snapshot(&s.lock, s.primary, size, &format!("error{suffix}"));
         color::set_active(color::Theme::Dark);
-        // The two other screens of the brief, in the same test: the theme is a global.
+    }
+
+    #[test]
+    fn the_states_render_in_the_dark_theme() {
+        states(color::Theme::Dark, (1920.0, 1080.0), "");
+    }
+
+    #[test]
+    fn the_states_render_in_the_light_theme() {
+        states(color::Theme::Light, (1920.0, 1080.0), "-light");
+    }
+
+    #[test]
+    fn the_states_render_on_a_small_screen_in_the_dark_theme() {
+        states(color::Theme::Dark, (1366.0, 768.0), "-1366x768");
+    }
+
+    #[test]
+    fn the_states_render_on_a_small_screen_in_the_light_theme() {
+        states(color::Theme::Light, (1366.0, 768.0), "-1366x768-light");
+    }
+
+    /// The two other screens of the brief: the rest, the form and the second screen.
+    #[test]
+    fn the_rest_and_the_form_render_on_large_screens() {
+        let _one = THEME
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        color::set_active(color::Theme::Dark);
         for (size, name) in [
             ((2560.0 / 1.5, 1600.0 / 1.5), "2560x1600-scale-150"),
             ((1920.0, 1080.0), "3840x2160-scale-200"),
@@ -185,6 +272,56 @@ mod tests {
             snapshot(&s.lock, s.primary, size, &format!("form-{name}"));
             snapshot(&s.lock, s.other, size, &format!("other-screen-{name}"));
         }
+    }
+
+    /// The boards of the lock and of the unlock, at 1920 × 1080 in the dark theme, composed as
+    /// the compositor shows them (lot D-24d): the last frame of the desktop, frozen, the curtain
+    /// coming down over it, then the lock screen on the same picture, its elements one after the
+    /// other (8 frames); once unlocked, the elements leaving in reverse order, then the curtain
+    /// going up off the live desktop (6 frames). The desktop is a wallpaper of the desktop.
+    #[test]
+    #[ignore = "boards for the review: cargo test -p lock --test render -- --ignored boards"]
+    fn boards_of_the_lock_and_the_unlock() {
+        use sherlock_ui::lock::{CURTAIN, curtain};
+        let size = (1920.0, 1080.0);
+        let pixels = (1920, 1080);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let desktop = cover(&root.join("wallpapers/first-clue.jpg"), pixels);
+        let lock_picture = cover(&root.join("lock").join(lock::background::DARK), pixels);
+        let mut s = arriving(size);
+        let shot = |s: &Screen, name: &str| {
+            image::open(snapshot(&s.lock, s.primary, size, name))
+                .unwrap()
+                .to_rgba8()
+        };
+        let ms = Duration::from_millis;
+        let mut lock_frames = Vec::new();
+        // The curtain comes down; the lock screen is not shown before it is down.
+        for t in [0, 130, 260] {
+            lock_frames.push(curtained(&desktop, &lock_picture, curtain(ms(t), true)));
+        }
+        for t in [400, 480, 560, 680, 1100] {
+            s.lock.set_elapsed(ms(t).max(CURTAIN));
+            lock_frames.push(shot(&s, &format!("lock-{t}ms")));
+        }
+        assert_eq!(lock_frames.len(), 8);
+        board(&lock_frames, 4, "board-lock");
+
+        s.lock.set_elapsed(Duration::from_secs(3));
+        let _ = s.lock.update(Message::Typed(Secret::new(FAKE.into())));
+        let _ = s.lock.update(Message::Submit);
+        checked(&mut s, Ok(()));
+        let leaving = Duration::from_secs(3);
+        let mut unlock_frames = Vec::new();
+        for t in [0, 120, 260, 500] {
+            s.lock.set_elapsed(leaving + ms(t));
+            unlock_frames.push(shot(&s, &format!("unlock-{t}ms")));
+        }
+        // Unlocked: the curtain goes up off the live desktop.
+        for t in [150, CURTAIN.as_millis() as u64] {
+            unlock_frames.push(curtained(&desktop, &lock_picture, curtain(ms(t), false)));
+        }
+        board(&unlock_frames, 3, "board-unlock");
     }
 
     #[test]
@@ -235,12 +372,76 @@ mod tests {
     #[test]
     fn a_machine_button_asks_for_a_second_click() {
         let mut s = screen((1920.0, 1080.0));
+        // Drawn once: the clock of the animations runs from the frames.
+        let _ = s.lock.update(Message::Frame(Instant::now()));
         let _ = s.lock.update(Message::Machine(Machine::PowerOff));
         assert_eq!(s.lock.armed(), Some(Machine::PowerOff));
         assert!(s.runner.0.lock().unwrap().is_empty());
         std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
         let _ = s.lock.update(Message::Machine(Machine::PowerOff));
-        assert_eq!(*s.runner.0.lock().unwrap(), [Machine::PowerOff]);
+        // Sherlock waves first, the screen fades to black, then the command runs (D-25i).
+        assert!(s.runner.0.lock().unwrap().is_empty());
+        assert_eq!(s.lock.mood(), Mood::Wave);
+        let _ = s.lock.update(Message::Machine(Machine::Reboot));
+        assert_eq!(s.lock.armed(), None, "nothing else while it leaves");
+        let black = Instant::now() + Duration::from_secs(5);
+        let _ = s.lock.update(Message::Frame(black));
+        let _ = s.lock.update(Message::Frame(black));
+        let _ = s
+            .lock
+            .update(Message::Frame(black + Duration::from_secs(1)));
+        assert_eq!(*s.runner.0.lock().unwrap(), [Machine::PowerOff], "once");
+        // Still there long after: the screen comes back.
+        s.lock.set_now(black + Duration::from_secs(30));
+        let _ = s.lock.update(Message::GiveUp);
+        assert!(s.lock.departure().is_none());
+    }
+
+    /// The discreet line of the bottom corner (D-25i): Wi-Fi, « FR » and the battery, with the
+    /// form, at two sizes; then the fade to black of a power off, halfway. `lock-status-1920`,
+    /// `lock-status-1280`, `lock-departing`.
+    #[test]
+    fn the_status_line_shows_and_the_screen_fades_out_to_power_off() {
+        use lock::status::{Battery, Network, Status};
+        for size in [(1920.0, 1080.0), (1280.0, 800.0)] {
+            let mut s = screen(size);
+            show_form(&mut s);
+            let _ = s.lock.update(Message::Status(Status {
+                network: Network::Wireless(80),
+                layout: "FR".into(),
+                battery: Some(Battery {
+                    percent: 72,
+                    charging: false,
+                    plugged: false,
+                }),
+            }));
+            let name = format!("lock-status-{}", size.0 as u32);
+            let written = snapshot(&s.lock, s.primary, size, &name);
+            // The lower half, at a quarter of its side: small enough for the review.
+            let full = image::open(&written).unwrap();
+            let (w, h) = (full.width(), full.height());
+            let half = full.crop_imm(0, h / 2, w, h / 2);
+            let small = half.resize(w / 4, h / 8, image::imageops::FilterType::Triangle);
+            small
+                .save(written.with_file_name(format!("{name}-review.png")))
+                .unwrap();
+            {
+                let mut ui = Simulator::with_size(lock::settings(), size, s.lock.view(s.primary));
+                assert!(ui.find("FR").is_ok() && ui.find("72\u{202F}%").is_ok());
+            }
+            if size.0 < 1900.0 {
+                continue;
+            }
+            let _ = s.lock.update(Message::Machine(Machine::PowerOff));
+            std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
+            let _ = s.lock.update(Message::Machine(Machine::PowerOff));
+            let departure = s.lock.departure().expect("leaving");
+            let half =
+                sherlock_ui::lock::screen::DEPART_WAVE + sherlock_ui::lock::screen::DEPART_FADE / 2;
+            s.lock.set_elapsed(s.lock.elapsed() + half);
+            assert!(departure.black(s.lock.elapsed()) > 0.1);
+            snapshot(&s.lock, s.primary, size, "lock-departing");
+        }
     }
 
     /// The toolkit unlocks on every clean exit: only PAM's acceptance may lead to `UnLock` and
@@ -285,6 +486,127 @@ mod tests {
             exit - leaving < 1200,
             "the exit is in the branch of the acceptance"
         );
+    }
+
+    /// `step` gives the keyboard to the field again.
+    fn focuses(s: &mut Screen, what: &str, step: impl FnOnce(&mut Screen)) {
+        let before = s.lock.focus_requests();
+        step(s);
+        assert!(
+            s.lock.focus_requests() > before,
+            "{what}: the field keeps the keyboard"
+        );
+    }
+
+    /// The field has the keyboard as soon as the form shows: when its surface comes, at its
+    /// first size and at its first frame, without a click.
+    #[test]
+    fn the_field_has_the_keyboard_as_soon_as_the_lock_shows() {
+        let mut s = arriving((1920.0, 1080.0));
+        assert!(
+            s.lock.focus_requests() >= 2,
+            "the surface and its first size"
+        );
+        focuses(&mut s, "the first frame", |s| {
+            let _ = s.lock.update(Message::Frame(Instant::now()));
+        });
+        // The keys typed during the entrance go into the field: it takes them at once.
+        s.lock.set_elapsed(sherlock_ui::lock::CURTAIN);
+        let size = (1920.0, 1080.0);
+        let mut ui = Simulator::with_size(lock::settings(), size, s.lock.view(s.primary));
+        let _ = ui.click(sherlock_ui::lock::screen::PASSWORD);
+        let _ = ui.typewrite("ab");
+        let typed = ui
+            .into_messages()
+            .filter(|m| matches!(m, Message::Typed(_)))
+            .count();
+        assert_eq!(typed, 2, "both keys reach the field during the entrance");
+    }
+
+    /// The field keeps the keyboard: after a wrong password (emptied, shaking), after a click
+    /// on the eye, on a machine button or anywhere on the screen.
+    #[test]
+    fn the_field_keeps_the_keyboard() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        focuses(&mut s, "a wrong password", |s| {
+            let _ = s.lock.update(Message::Typed(Secret::new("faux".into())));
+            let _ = s.lock.update(Message::Submit);
+            checked(s, Err(AuthError::Refused));
+        });
+        assert_eq!(s.lock.password_len(), 0);
+        assert!(matches!(s.lock.phase(), Phase::Refused(..)));
+        focuses(&mut s, "the eye", |s| {
+            let _ = s.lock.update(Message::ShowPassword);
+        });
+        focuses(&mut s, "a machine button", |s| {
+            let _ = s.lock.update(Message::Machine(Machine::Reboot));
+        });
+        focuses(&mut s, "a click on the screen", |s| {
+            let _ = s.lock.update(Message::Pressed(s.primary));
+        });
+        assert!(s.runner.0.lock().unwrap().is_empty(), "one click only arms");
+    }
+
+    /// The form back after its 20 s away: the field has the keyboard, the letter that brought
+    /// it is in it.
+    #[test]
+    fn the_form_back_after_a_while_has_the_keyboard() {
+        let mut s = screen((1920.0, 1080.0));
+        assert!(!s.lock.form_shown());
+        focuses(&mut s, "the form back", |s| key(s, Key::Other, "p"));
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 1);
+    }
+
+    /// Escape empties the field and keeps the form and the keyboard; on an empty field, it
+    /// sends the form away. Tab moves the focus without typing nor sending the form away.
+    #[test]
+    fn escape_empties_the_field_and_tab_moves_the_focus() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        let _ = s.lock.update(Message::Typed(Secret::new("abc".into())));
+        focuses(&mut s, "Escape", |s| key(s, Key::Escape, "\u{1b}"));
+        assert_eq!(s.lock.password_len(), 0);
+        assert!(s.lock.form_shown());
+        key(&mut s, Key::Tab { back: false }, "\t");
+        key(&mut s, Key::Tab { back: true }, "\t");
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.password_len(), 0);
+        key(&mut s, Key::Escape, "\u{1b}");
+        assert!(!s.lock.form_shown());
+    }
+
+    /// The form comes with the lock, its elements once the curtain of the compositor is down;
+    /// Sherlock waves.
+    #[test]
+    fn the_form_comes_with_the_lock() {
+        let s = arriving((1920.0, 1080.0));
+        assert!(s.lock.form_shown());
+        assert_eq!(s.lock.mood(), Mood::Wave);
+    }
+
+    /// While keys come in the field, Sherlock looks down at it, eyes closed or peeking; about
+    /// 1.5 s after the last one, he looks ahead again.
+    #[test]
+    fn sherlock_looks_at_the_field_while_typing() {
+        let mut s = screen((1920.0, 1080.0));
+        show_form(&mut s);
+        assert!(!s.lock.looks_at_field());
+        let _ = s.lock.update(Message::Typed(Secret::new("ab".into())));
+        assert!(s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::EyesClosed);
+        let _ = s.lock.update(Message::ShowPassword);
+        assert!(s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::Peek);
+        s.lock.set_now(
+            Instant::now()
+                + Duration::from_secs(4)
+                + sherlock_ui::lock::screen::TYPING_GAZE
+                + Duration::from_millis(50),
+        );
+        assert!(!s.lock.looks_at_field());
+        assert_eq!(s.lock.mood(), Mood::Peek, "the mood stays");
     }
 
     #[test]
@@ -404,7 +726,7 @@ mod tests {
             Arc::new(FakePam::default()),
             Arc::new(FakeRunner::default()),
         );
-        let mut lock = Lock::new("alex".into(), pam.clone(), runner.clone()).rescue();
+        let mut lock = Lock::new("sam".into(), pam.clone(), runner.clone()).rescue();
         let id = window::Id::unique();
         let _ = lock.update(Message::Surface(id));
         let _ = lock.update(Message::Resized(id, Size::new(1366.0, 768.0)));

@@ -33,6 +33,7 @@ mod tests {
             wl_callback::{self, WlCallback},
             wl_compositor::WlCompositor,
             wl_output::WlOutput,
+            wl_pointer::{self, WlPointer},
             wl_registry,
             wl_seat::WlSeat,
             wl_shm::{Format, WlShm},
@@ -44,6 +45,10 @@ mod tests {
         ext_workspace_group_handle_v1::{self, ExtWorkspaceGroupHandleV1},
         ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
         ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
+    };
+    use wayland_protocols::xdg::activation::v1::client::{
+        xdg_activation_token_v1::{self, XdgActivationTokenV1},
+        xdg_activation_v1::XdgActivationV1,
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_popup::XdgPopup,
@@ -63,6 +68,7 @@ mod tests {
 
     const MANAGER: &str = "sherlock_shell_manager_v1";
     const WORKSPACES: &str = "ext_workspace_manager_v1";
+    const LAYER_SHELL: &str = "zwlr_layer_shell_v1";
     const BTN_LEFT: u32 = 0x110;
     // xkb codes (evdev + 8): left Super, Shift and Ctrl, the arrows, and 1 to 3 of the top row.
     const KEY_SUPER: u32 = 133;
@@ -74,6 +80,7 @@ mod tests {
     const KEY_1: u32 = 10;
     const KEY_2: u32 = 11;
     const KEY_3: u32 = 12;
+    const KEY_ESC: u32 = 9;
 
     /// A window as the shell client knows it, applied at `done`.
     #[derive(Debug, Default, Clone)]
@@ -120,6 +127,9 @@ mod tests {
         workspaces_done: usize,
         /// Frame callbacks done.
         frames: usize,
+        /// Serial of the last button press it got, and the last activation token it got.
+        pressed: Option<u32>,
+        token: Option<String>,
     }
 
     fn values(bytes: &[u8]) -> Vec<u32> {
@@ -407,6 +417,39 @@ mod tests {
     delegate_noop!(Client: XdgPositioner);
     delegate_noop!(Client: OrgKdeKwinAppmenuManager);
     delegate_noop!(Client: OrgKdeKwinAppmenu);
+    delegate_noop!(Client: XdgActivationV1);
+
+    impl Dispatch<WlPointer, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &WlPointer,
+            event: wl_pointer::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wl_pointer::Event::Button { serial, state, .. } = event
+                && state == wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed)
+            {
+                client.pressed = Some(serial);
+            }
+        }
+    }
+
+    impl Dispatch<XdgActivationTokenV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &XdgActivationTokenV1,
+            event: xdg_activation_token_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let xdg_activation_token_v1::Event::Done { token } = event {
+                client.token = Some(token);
+            }
+        }
+    }
 
     /// A connection, its queue and what it received.
     struct Side {
@@ -667,6 +710,15 @@ mod tests {
             .cloned()
             .unwrap();
         let _: SherlockShellManagerV1 = h.app.registry.bind(name, 1, &h.app.queue.handle(), ());
+        assert_bind_refused(&mut h);
+        assert!(h.app.client.toplevels.is_empty());
+        // The shell client is not affected.
+        h.bind_manager();
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    /// The application's connection ended on its bind of a global it cannot see.
+    fn assert_bind_refused(h: &mut Harness) {
         for _ in 0..50 {
             h.turn();
         }
@@ -684,10 +736,58 @@ mod tests {
             Some(22),
             "not EINVAL: the bind was not refused as invalid"
         );
-        assert!(h.app.client.toplevels.is_empty());
-        // The shell client is not affected.
-        h.bind_manager();
+    }
+
+    /// Lot D-46: an application could cover every screen with an overlay surface that takes the
+    /// keyboard, and imitate the lock screen or a password dialog.
+    #[test]
+    fn an_ordinary_client_neither_sees_nor_binds_the_layer_shell() {
+        let mut h = Harness::start();
+        assert!(
+            h.shell.sees(LAYER_SHELL),
+            "the shell does not see layer-shell"
+        );
+        assert!(!h.app.sees(LAYER_SHELL), "the application sees layer-shell");
+
+        let (name, _, _) = h
+            .shell
+            .client
+            .globals
+            .iter()
+            .find(|g| g.1 == LAYER_SHELL)
+            .cloned()
+            .unwrap();
+        let _: ZwlrLayerShellV1 = h.app.registry.bind(name, 1, &h.app.queue.handle(), ());
+        assert_bind_refused(&mut h);
+        // The shell client still anchors its surfaces.
+        let _dock = h.dock();
         assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    #[test]
+    fn the_login_screen_shares_the_layer_shell() {
+        let event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((800, 600).into(), 1.0);
+        state.share_layer_shell();
+        let (server, app) = UnixStream::pair().unwrap();
+        state.insert_client(server);
+        let (server, shell) = UnixStream::pair().unwrap();
+        state.insert_shell_client(server);
+        let mut h = Harness {
+            event_loop,
+            state,
+            app: Side::new(app),
+            shell: Side::new(shell),
+        };
+        h.run_until("the globals", |h| {
+            h.app.sees("wl_shm") && h.shell.sees("wl_shm")
+        });
+        assert!(
+            h.app.sees(LAYER_SHELL),
+            "the greeter does not see layer-shell"
+        );
+        assert!(!h.app.sees(MANAGER), "the shell's own globals stay hidden");
     }
 
     #[test]
@@ -712,8 +812,8 @@ mod tests {
         h.run_until("the globals", |h| {
             h.app.sees("wl_shm") && h.shell.sees("wl_shm")
         });
-        assert!(h.shell.sees(MANAGER) && h.shell.sees(WORKSPACES));
-        assert!(!h.app.sees(MANAGER) && !h.app.sees(WORKSPACES));
+        assert!(h.shell.sees(MANAGER) && h.shell.sees(WORKSPACES) && h.shell.sees(LAYER_SHELL));
+        assert!(!h.app.sees(MANAGER) && !h.app.sees(WORKSPACES) && !h.app.sees(LAYER_SHELL));
         h.state.shutdown();
         assert!(!path.exists() && !shell_path.exists());
     }
@@ -804,6 +904,25 @@ mod tests {
         toplevel.destroy();
         h.run_until("the window closed", |h| h.shell.client.window(id).closed);
         manager.destroy();
+    }
+
+    /// Lot D-21i: `kill` never sends a signal to the compositor's own process. The test's
+    /// client is the test process itself: the window stays, open and answering.
+    #[test]
+    fn a_kill_never_reaches_the_compositor_itself() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let (_toplevel, _surface) = h.open_window("Frozen");
+        h.run_until("the window listed", |h| {
+            h.shell.client.toplevels.iter().any(|t| t.1.id.is_some())
+        });
+        let id = h.shell.client.toplevels[0].1.id.expect("its id");
+        h.shell.client.handle(id).kill();
+        // A request after it, handled after it, whose change gives a done.
+        h.shell.client.handle(id).minimize();
+        h.next_done("minimized after the kill");
+        assert!(!h.shell.client.window(id).closed);
+        assert_eq!(h.state.space.elements().count(), 1);
     }
 
     #[test]
@@ -1204,6 +1323,154 @@ mod tests {
         assert!(h.shell.conn.protocol_error().is_none());
     }
 
+    /// The id the shell client knows the window titled `title` by.
+    fn id_of(h: &Harness, title: &str) -> u32 {
+        let seen = h.shell.client.toplevels.iter().find(|t| t.1.title == title);
+        seen.and_then(|t| t.1.id).unwrap()
+    }
+
+    /// The shell client asks for a token, with `serial` when given, and gets it.
+    fn token(h: &mut Harness, shell: bool, serial: Option<(u32, &WlSeat)>) -> String {
+        let side = if shell { &mut h.shell } else { &mut h.app };
+        side.client.token = None;
+        let activation: XdgActivationV1 = side.bind();
+        let token = activation.get_activation_token(&side.queue.handle(), ());
+        if let Some((serial, seat)) = serial {
+            token.set_serial(serial, seat);
+        }
+        token.commit();
+        h.run_until("the token", |h| {
+            let side = if shell { &h.shell } else { &h.app };
+            side.client.token.is_some()
+        });
+        let side = if shell { &h.shell } else { &h.app };
+        side.client.token.clone().unwrap()
+    }
+
+    #[test]
+    fn an_application_brings_its_window_forward_with_a_token_from_a_click_or_asks_for_attention() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let (_one, one_surface) = h.open_window("One");
+        let one = h.titled("One");
+        // The bar, or the dock, of the shell client: a click on it.
+        h.dock();
+        let seat: WlSeat = h.shell.bind();
+        let _pointer = seat.get_pointer(&h.shell.queue.handle(), ());
+        // "One" minimized on workspace 1, "Two" opened on workspace 2 has the keyboard.
+        h.state.minimize(&one);
+        h.keys(&[KEY_SUPER], KEY_2);
+        let (_two, two_surface) = h.open_window("Two");
+        h.run_until("both listed", |h| {
+            let ids = h.shell.client.toplevels.iter().filter(|t| t.1.id.is_some());
+            ids.count() == 2
+        });
+        h.state.pointer_motion((400.0, 570.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 3);
+        h.run_until("the click on the dock", |h| {
+            h.shell.client.pressed.is_some()
+        });
+        let serial = h.shell.client.pressed.unwrap();
+
+        // A token of the shell client with the serial of that click, handed to the application:
+        // "One" comes out of its minimized state, on its workspace, with the keyboard.
+        let granted = token(&mut h, true, Some((serial, &seat)));
+        let activation: XdgActivationV1 = h.app.bind();
+        activation.activate(granted.clone(), &one_surface);
+        h.run_until("One activated", |h| {
+            h.focused_title().as_deref() == Some("One")
+        });
+        assert!(!h.state.is_minimized(&one));
+        assert_eq!(h.state.workspace_of(&one), h.state.workspaces().active());
+        // A token is used once: used again, it does nothing.
+        activation.activate(granted, &two_surface);
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert_eq!(h.focused_title().as_deref(), Some("One"));
+        h.keys(&[KEY_SUPER], KEY_2);
+        assert_eq!(h.focused_title().as_deref(), Some("Two"));
+        // Without a serial, or with one the asking client never got: no keyboard stolen, the
+        // window asks for attention, seen by the shell, until it gets the keyboard.
+        let one_id = id_of(&h, "One");
+        let two = h.titled("Two");
+        let app_seat: WlSeat = h.app.bind();
+        for serial in [None, Some((serial, &app_seat))] {
+            let refused = token(&mut h, false, serial);
+            activation.activate(refused, &one_surface);
+            h.run_until("One asks for attention", |h| {
+                h.shell.client.has(one_id, Flag::Attention)
+            });
+            assert_eq!(h.focused_title().as_deref(), Some("Two"));
+            h.state.focus(Some(one.clone()));
+            h.next_done("One given the keyboard");
+            assert!(!h.shell.client.has(one_id, Flag::Attention));
+            h.state.focus(Some(two.clone()));
+        }
+    }
+
+    /// App Expose (lot D-21c2): the shell opens Mission Control on some windows only.
+    #[test]
+    fn the_shell_opens_mission_control_on_the_windows_of_one_application() {
+        let mut h = Harness::start();
+        let manager = h.bind_manager();
+        for title in ["One", "Two", "Three"] {
+            h.open_window(title);
+        }
+        h.run_until("three windows", |h| h.shell.client.toplevels.len() == 3);
+        let id = |h: &Harness, title: &str| {
+            let toplevels = &h.shell.client.toplevels;
+            toplevels
+                .iter()
+                .find(|t| t.1.title == title)
+                .unwrap()
+                .1
+                .id
+                .unwrap()
+        };
+        let ids = |list: &[u32]| -> Vec<u8> { list.iter().flat_map(|v| v.to_ne_bytes()).collect() };
+        let output = h.state.space.outputs().next().unwrap().clone();
+        let titles = |h: &Harness| -> Vec<String> {
+            let tiles = h.state.overview_tiles(&output, None);
+            let mut titles: Vec<String> = tiles
+                .iter()
+                .filter_map(|t| State::title(&t.window))
+                .collect();
+            titles.sort();
+            titles
+        };
+
+        // Unknown windows only: nothing opens.
+        manager.show_windows(ids(&[9_999]));
+        for _ in 0..5 {
+            h.turn();
+        }
+        assert!(!h.state.overview_open());
+
+        // Two of the three, an unknown id among them: only those, without the strip.
+        let (one, three) = (id(&h, "One"), id(&h, "Three"));
+        manager.show_windows(ids(&[one, 9_999, three]));
+        h.run_until("app expose open", |h| h.state.overview_open());
+        assert_eq!(titles(&h), ["One", "Three"]);
+        assert!(h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), Some(&[one, 9_999, three][..]));
+
+        // Open, it shows other windows instead.
+        let two = id(&h, "Two");
+        manager.show_windows(ids(&[two]));
+        h.run_until("the other windows", |h| titles(h) == ["Two"]);
+
+        // Escape closes it; Mission Control opened afterwards shows everything, strip included.
+        h.keys(&[], KEY_ESC);
+        assert!(!h.state.overview_open());
+        h.state.open_overview();
+        assert_eq!(titles(&h), ["One", "Three", "Two"]);
+        assert!(!h.state.overview_strip(&output).is_empty());
+        assert_eq!(h.state.overview_only(), None);
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
     #[test]
     fn a_minimized_window_follows_the_work_area() {
         let mut h = Harness::start();
@@ -1401,6 +1668,50 @@ mod tests {
         );
     }
 
+    /// Lot D-21d: the band a hidden dock keeps at the bottom of the screen takes the pointer
+    /// over a fullscreen window, which has the pointer until then: anchored surfaces of the
+    /// top layer come before every window, fullscreen ones included. A button held in the
+    /// window keeps the pointer there (the implicit grab of a drag), as for any surface.
+    #[test]
+    fn a_hidden_dock_takes_the_pointer_at_the_edge_over_a_fullscreen_window() {
+        let mut h = Harness::start();
+        let (toplevel, surface) = h.open_window("Film");
+        let window = h.titled("Film");
+        toplevel.set_fullscreen(None);
+        surface.commit();
+        h.run_until("fullscreen", |_| pending(&window) == Some((800, 600)));
+        h.app.draw(&surface, 800, 600);
+        h.run_until("drawn fullscreen", |h| {
+            h.state.space.element_geometry(&window).map(|g| g.size) == Some((800, 600).into())
+        });
+        // The dock hides as the real one does: no zone, all but 2 of its 76 below the edge.
+        let (dock_surface, dock) = h.dock();
+        dock.set_exclusive_zone(-1);
+        dock.set_margin(0, 0, 2 - 76, 0);
+        dock_surface.commit();
+        for _ in 0..10 {
+            h.turn();
+        }
+        let pointer = h.state.seat.get_pointer().unwrap();
+        let film = window.wl_surface().map(|s| s.into_owned());
+        // Only the window and the dock are there: a focus that is not the window is the dock.
+        let on_dock = |focus: Option<_>| focus.is_some() && focus != film;
+        // Above the band: the fullscreen window.
+        h.state.pointer_motion((400.0, 590.0).into(), 1);
+        assert_eq!(pointer.current_focus(), film);
+        // The last row of the screen, where the pointer stops: the dock.
+        h.state.pointer_motion((400.0, 599.0).into(), 2);
+        assert!(on_dock(pointer.current_focus()), "the band of the dock");
+        // A button held in the window: it keeps the pointer down to the edge.
+        h.state.pointer_motion((400.0, 590.0).into(), 3);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 4);
+        h.state.pointer_motion((400.0, 599.0).into(), 5);
+        assert_eq!(pointer.current_focus(), film);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 6);
+        h.state.pointer_motion((401.0, 599.0).into(), 7);
+        assert!(on_dock(pointer.current_focus()), "released, the dock again");
+    }
+
     /// Lot D-18d: a snapped window covers its screen for the dock (version 2), which then gives
     /// up its zone: the window takes the whole height, still 8 from the edges. A client of
     /// version 1 (the bar) is not told.
@@ -1565,7 +1876,7 @@ mod tests {
         let mut h = Harness::start();
         let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
         let (id, _, version) = name.unwrap().clone();
-        assert_eq!(version, 3);
+        assert_eq!(version, 6, "version 4: App Expose, 5: attention, 6: kill");
         let _manager: SherlockShellManagerV1 =
             h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
         let done = h.shell.client.done;

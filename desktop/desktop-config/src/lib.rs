@@ -1,20 +1,28 @@
 //! Settings of the desktop that several programs share: the compositor applies them, Control
 //! Room (lot D-26a) writes them: the wallpaper (see "Wallpapers" in `docs/compositor.md`),
-//! the touchpad (see "Touchpad" there), the pointer (see "Show the clicks" in
-//! `docs/cursor.md`), the lock (see "Session lock" in `docs/compositor.md`) and the screens
-//! (ADR 0025, see "Screens" in `docs/compositor.md`).
+//! the touchpad (see "Touchpad" there), the keyboard (see "Keyboard" there), the pointer (see
+//! "Show the clicks" in `docs/cursor.md`), the lock (see "Session lock" in `docs/compositor.md`),
+//! the power (see "Screen off" there), the screens (ADR 0025, see "Screens" in
+//! `docs/compositor.md`) and the clipboard history (see "Clipboard history" there).
 
 use std::{ffi::OsString, path::PathBuf};
 
+pub mod clipboard;
 pub mod conf;
 pub mod displays;
+pub mod keyboard;
 pub mod lock;
 pub mod pointer;
+pub mod power;
 pub mod touchpad;
 pub mod wallpaper;
 
 #[cfg(feature = "variants")]
 pub mod variants;
+
+/// The picture behind the lock and login screens, shared with the compositor's curtain.
+#[cfg(feature = "lock-background")]
+pub mod lock_background;
 
 /// Folder of the desktop in the XDG directories: `$XDG_CONFIG_HOME/<DIR>`,
 /// `$XDG_DATA_DIRS/<DIR>`: the name of the OS in paths (ADR 0022).

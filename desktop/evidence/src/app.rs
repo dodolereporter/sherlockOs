@@ -4,10 +4,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
+mod drag;
+
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
+use iced_exwlshell::to_layer_message;
 use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::evidence as more;
@@ -27,10 +30,16 @@ use crate::probe::{Probe, Step};
 use crate::selection::{Click, Lasso, Selection, edge_scroll};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
+use crate::undo::Step as Undoable;
 use sherlock_ui::motion::{self, Animation, Fade};
 
+mod network;
+pub use network::{Field, Login};
 mod path;
-pub use path::PathEdit;
+mod popup;
+mod tabs;
+pub use path::{FoldedMenu, PathEdit};
+pub use popup::Popups;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -61,12 +70,15 @@ pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
 pub const PATH: &str = "path";
+pub const SUGGESTIONS: &str = "path-suggestions";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub home: PathBuf,
     pub start: PathBuf,
+    /// Opens on the trash (`trash:///` as argument, lot D-21j), when there is one.
+    pub start_trash: bool,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
     /// `--measure <folder> [--maximized]`: measures smoothness on this folder, then quits.
@@ -99,8 +111,11 @@ impl Config {
             _ => None,
         };
         let maximized = measure.is_some() && args.iter().any(|a| a == "--maximized");
+        // `trash:///`, as the dock's trash asks (lot D-21j): Evidence opens on the trash.
+        let start_trash = measure.is_none() && args.first().is_some_and(|a| a == "trash:///");
         let start = match measure {
             Some(_) => home.clone(),
+            None if start_trash => home.clone(),
             None => args
                 .first()
                 .and_then(|p| std::path::absolute(p).ok())
@@ -111,6 +126,7 @@ impl Config {
         Self {
             home,
             start,
+            start_trash,
             favorites,
             trash: Trash::user(),
             measure,
@@ -166,6 +182,11 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// Undo the last step done to the disk, or redo the last undone (lot E-10).
+    Undo,
+    Redo,
+    /// The large preview of the item under the cursor, opened or closed (lot E-12).
+    QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
     ViewList,
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
@@ -239,6 +260,17 @@ pub struct Notice {
 /// the error.
 pub type Outcome = Result<(String, Vec<PathBuf>), String>;
 
+/// Which list a finished step goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recorded {
+    /// Done by the user: undoable, and nothing to redo any more.
+    Done,
+    /// Undone: it can be redone.
+    Undone,
+    /// Redone: it can be undone again.
+    Redone,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAction {
     Drag,
@@ -256,6 +288,9 @@ impl std::hash::Hash for MenubarStart {
     }
 }
 
+/// On Wayland, the messages also carry the surface requests of `iced_exwlshell` (ADR 0029):
+/// the window, and later the menus as popups.
+#[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The menus in the bar: served, or an entry clicked there (lot D-36c).
@@ -293,6 +328,15 @@ pub enum Message {
     ConfirmEmpty,
     CancelEmpty,
     Done(Outcome),
+    /// An operation that can be undone is over: its outcome, and its step for the history.
+    Stepped(Outcome, Option<crate::undo::Step>, Recorded),
+    /// The names a paste would take, found off the interface thread: the items, where they
+    /// go, whether they move, and the names already there (lot E-11).
+    Taken(Vec<PathBuf>, PathBuf, bool, Vec<String>),
+    /// The choice for the taken names; none: the paste is called off.
+    TakenChoice(Option<crate::transfer_job::Taken>),
+    /// Stop the copy or the move under way.
+    StopTransfer,
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
     /// A frame of the window, during an animation or a measurement.
@@ -303,9 +347,11 @@ pub enum Message {
     /// overtaken by a more recent navigation.
     Loaded(u64, Result<Vec<Entry>, ()>),
     /// Preview prepared off the interface thread.
-    Preview(PathBuf, Preview),
+    Preview(PathBuf, Preview, Option<preview::Real>),
     /// A program was started, or could not be.
     Launched(bool),
+    /// A program or a launcher was not handed to xdg-open.
+    ProgramRefused,
     /// Installed applications and associations, read off the interface thread.
     Catalog(Arc<mime_apps::Catalog>),
     /// Application icons, decoded off the interface thread.
@@ -330,8 +376,37 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// Tabs (lot D-27b): a new one on this folder, one closed, one shown, one pressed (to
+    /// drag), the pointer over one while dragging, a folder opened in a tab by the middle
+    /// button.
+    NewTab,
+    CloseTab(usize),
+    SwitchTab(usize),
+    PressTab(usize),
+    OverTab(usize),
+    MiddleClick(usize),
+    /// The folder shown changed, by another program (lot E-09).
+    FolderChanged(PathBuf),
+    /// The file servers of the network, found now (lot E-07).
+    Servers(Vec<crate::network::Server>),
+    /// A click on a server: connect to it, or open it when it is.
+    OpenServer(String),
+    /// The eject button beside a connected server.
+    EjectServer(String),
+    /// A server connected (its folder), or not; disconnected, or not.
+    ServerMounted(String, Result<PathBuf, crate::smb::Error>),
+    ServerUnmounted(String, Result<(), crate::smb::Error>),
+    /// The sheet of a server's name and password: typed, the keyring switch, sent, closed.
+    LoginInput(Field, String),
+    LoginRemember(bool),
+    LoginSubmit,
+    LoginCancel,
     /// An action on a device is over.
     DeviceDone(DeviceAction, Result<Option<PathBuf>, DeviceError>),
+    /// The window's Wayland handles, for drag and drop with the other applications (lot E-03).
+    DndReady(Option<crate::dnd::Handles>),
+    /// Drag and drop and the clipboard of files, from the Wayland side.
+    Dnd(crate::dnd::Event),
     /// The path field: typed, Enter, a suggestion clicked, closed.
     PathInput(String),
     PathSubmit,
@@ -341,8 +416,18 @@ pub enum Message {
     PathFolders(u64, Option<crate::pathbar::Folders>),
     /// What the typed path leads to: a folder, something else, nothing.
     PathResolved(PathBuf, crate::pathbar::Found),
+    /// A window closed: the main one, or a menu's popup (`popup_done`).
+    WindowClosed(window::Id),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
+    /// The menu of the folders folded behind « … », opened or closed.
+    Folded(bool),
+    /// The completion list scrolled to this offset.
+    PathScrolled(f32),
+    /// A recent folder clicked in the « Aller au dossier » sheet.
+    PathRecent(usize),
+    /// The search, folded to its icon in a narrow window, opens.
+    OpenSearch,
 }
 
 /// What was asked of a device.
@@ -361,6 +446,10 @@ enum Clip {
 
 /// The Evidence application.
 pub struct App {
+    /// The `xdg_toplevel` opened by the Wayland daemon (`shell`); none under winit.
+    main: Option<window::Id>,
+    /// The popups of the menu and its submenu, on Wayland (`popup`).
+    pub(crate) popups: Popups,
     /// The menus exported to the bar, once served (lot D-36c).
     menubar: Option<crate::menubar::MenuBar>,
     pub(crate) config: Config,
@@ -378,9 +467,19 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview sliding in or out (lot E-08), and the file that remembers it.
+    pub(crate) preview_slide: Option<Fade>,
+    prefs: Option<PathBuf>,
+    /// The large preview is open, and its zoom in or out (lot E-12).
+    pub(crate) looking: bool,
+    pub(crate) look_fade: Option<Fade>,
+    /// The preview was asked for while the width had folded it: it stays, the columns fold.
+    pub(crate) preview_pinned: bool,
     pub(crate) search: String,
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
+    /// What the selected file really is, when its name hides it (audit I-3).
+    pub(crate) disguise: Option<preview::Real>,
     clipboard: Option<(Clip, Vec<PathBuf>)>,
     /// Item being renamed and its new name.
     pub(crate) renaming: Option<(PathBuf, String)>,
@@ -418,6 +517,23 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The tabs of the window (lot D-27b).
+    pub(crate) tabs: tabs::Tabs,
+    /// What can be undone and redone (lot E-10).
+    pub(crate) steps: crate::undo::History,
+    /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
+    /// rename, a lasso).
+    folder_changed: bool,
+    /// The copy or move under way, and the paste waiting for a choice on taken names.
+    pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
+    pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
+    /// The servers of the network, and the folders of those connected, by host.
+    pub(crate) servers: Vec<crate::network::Server>,
+    pub(crate) mounted: HashMap<String, PathBuf>,
+    /// The sheet that asks a server's name and password, its fade, and the last name typed.
+    pub(crate) login: Option<Login>,
+    pub(crate) login_fade: Option<Fade>,
+    login_user: String,
     device_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
@@ -435,6 +551,8 @@ pub struct App {
     pub(crate) icons: Arc<HashMap<String, AppIcon>>,
     /// The theme of the appearance file, shown with a fade.
     pub(crate) theme: ThemeFade,
+    /// Drag and drop and the clipboard of files with the other applications (lot E-03).
+    pub(crate) dnd: drag::Dnd,
     /// The path field, open or fading out, and how far it has come in.
     pub(crate) path_edit: Option<PathEdit>,
     pub(crate) path_leaving: Option<PathEdit>,
@@ -445,14 +563,25 @@ pub struct App {
     /// The folder the completion last read, and the number of the last read asked.
     folders: Option<crate::pathbar::Folders>,
     folders_generation: u64,
+    /// The menu of the folded folders, the completion list's scroll, the folders last
+    /// reached by the field (with their labels), and the search opened from its icon.
+    pub(crate) folded: FoldedMenu,
+    suggest_offset: f32,
+    pub(crate) recent: Vec<(PathBuf, String)>,
+    pub(crate) search_open: bool,
 }
 
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
         let built = Instant::now();
-        let start = Location::Folder(config.start.clone());
+        let start = match config.start_trash && config.trash.is_some() {
+            true => Location::Trash,
+            false => Location::Folder(config.start.clone()),
+        };
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
+            main: None,
+            popups: Popups::default(),
             menubar: None,
             config,
             location: start,
@@ -466,9 +595,15 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_slide: None,
+            prefs: None,
+            looking: false,
+            look_fade: None,
+            preview_pinned: false,
             search: String::new(),
             repo: None,
             preview: Preview::Info,
+            disguise: None,
             clipboard: None,
             renaming: None,
             menu: None,
@@ -493,6 +628,16 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            tabs: tabs::Tabs::default(),
+            steps: crate::undo::History::default(),
+            folder_changed: false,
+            progress: None,
+            pending_paste: None,
+            servers: Vec::new(),
+            mounted: HashMap::new(),
+            login: None,
+            login_fade: None,
+            login_user: String::new(),
             device_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
@@ -502,6 +647,7 @@ impl App {
             chooser: None,
             icons: Arc::default(),
             theme: ThemeFade::default(),
+            dnd: drag::Dnd::default(),
             path_edit: None,
             path_leaving: None,
             path_fade: None,
@@ -509,8 +655,22 @@ impl App {
             suggest_fade: None,
             folders: None,
             folders_generation: 0,
+            folded: FoldedMenu::default(),
+            suggest_offset: 0.0,
+            recent: Vec::new(),
+            search_open: false,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
+        // The preview as it was left (lot E-08): a file of a few bytes, read before the first
+        // frame so that the window opens as it was.
+        app.prefs = app
+            .config
+            .xdg
+            .as_ref()
+            .map(|dirs| crate::prefs::path(&dirs.config_home));
+        if let Some(shown) = app.prefs.as_deref().and_then(crate::prefs::read_preview) {
+            app.show_preview = shown;
+        }
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
@@ -546,8 +706,20 @@ impl App {
             }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
+            // The compositor closed the window (Wayland daemon): the program ends with it.
             _ => None,
         });
+        // The folder shown, watched for the changes of other programs (lot E-09); only with
+        // the live sources, never in the tests.
+        let folder = match &self.location {
+            Location::Folder(dir) if self.config.watch_devices => {
+                Subscription::run_with(crate::watch::Watched(dir.clone()), crate::watch::changes)
+                    .map(Message::FolderChanged)
+            }
+            _ => Subscription::none(),
+        };
+        // A window closed: the main one ends the program, a menu's popup closes its menu.
+        let closed = window::close_events().map(Message::WindowClosed);
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
             Subscription::run(crate::udisks::stream).map(Message::Devices)
         } else {
@@ -566,7 +738,41 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([events, frames, devices, appearance, menubar])
+        // The network is listened to only with the live sources (not in the tests).
+        let network = if self.config.watch_devices {
+            Subscription::run(crate::network::stream).map(Message::Servers)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([
+            closed, events, frames, folder, devices, appearance, menubar, network,
+        ])
+    }
+
+    /// Asks the Wayland daemon for the window (`shell`), and keeps its id.
+    pub fn open_window(
+        &mut self,
+        settings: iced_exwlshell::actions::IcedXdgWindowSettings,
+    ) -> Task<Message> {
+        let (id, open) = Message::base_window_open(settings);
+        self.main = Some(id);
+        open
+    }
+
+    /// `act` on the main window: the one opened on Wayland (`shell`), else iced's only window.
+    fn on_window(
+        &self,
+        act: impl Fn(window::Id) -> Task<Message> + Send + 'static,
+    ) -> Task<Message> {
+        match self.main {
+            Some(id) => act(id),
+            None => window::latest().and_then(act),
+        }
+    }
+
+    /// The view of a window of the Wayland daemon: Evidence has only its main window.
+    pub fn view_window(&self, window: window::Id) -> iced::Element<'_, Message> {
+        self.popup_view(window).unwrap_or_else(|| self.view())
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -576,7 +782,12 @@ impl App {
 
     /// Name of the current folder, for the title bar and the search.
     pub fn location_name(&self) -> String {
-        match &self.location {
+        self.name_of(&self.location)
+    }
+
+    /// Name of a location: « Accueil », « Corbeille », « Disque », or its folder's name.
+    pub fn name_of(&self, location: &Location) -> String {
+        match location {
             Location::Trash => texts::TRASH.into(),
             Location::Folder(dir) if *dir == self.config.home => texts::HOME.into(),
             Location::Folder(dir) => dir
@@ -585,12 +796,68 @@ impl App {
         }
     }
 
+    /// The panes and columns the window's width leaves room for (lot E-05).
+    pub fn panes(&self) -> crate::layout::Panes {
+        crate::layout::Panes::at(self.size.width, self.show_preview, self.preview_pinned)
+    }
+
     pub fn can_go_back(&self) -> bool {
         !self.history.is_empty()
     }
 
     pub fn can_go_forward(&self) -> bool {
         !self.future.is_empty()
+    }
+
+    /// Shows or hides the preview, sliding, and remembers it off the interface thread.
+    fn toggle_preview(&mut self) -> Task<Message> {
+        let from = self.preview_level();
+        self.show_preview = !self.show_preview;
+        self.preview_pinned = false;
+        let now = self.now();
+        let to = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide = Some(Fade::new(from, to, now, more::PREVIEW_SLIDE));
+        let Some(path) = self.prefs.clone() else {
+            return Task::none();
+        };
+        let shown = self.show_preview;
+        Task::perform(
+            async move {
+                if let Err(error) = crate::prefs::write_preview(&path, shown) {
+                    tracing::warn!(%error, "the preview choice is not remembered");
+                }
+            },
+            |()| Message::Inert,
+        )
+    }
+
+    /// How far the preview is in, from 0 (hidden) to 1 (shown).
+    pub(crate) fn preview_level(&self) -> f32 {
+        // What the width leaves room for (E-05), at rest.
+        let rest = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
+    /// Opens or closes the large preview, zooming in or out. It opens on one item only.
+    fn quick_look(&mut self, open: bool) {
+        if open && self.single().is_none() {
+            return;
+        }
+        let now = self.now();
+        let from = self.look_level();
+        self.looking = open;
+        let to = if open { 1.0 } else { 0.0 };
+        self.look_fade = Some(Fade::new(from, to, now, more::QUICK_LOOK_ZOOM));
+    }
+
+    /// How far the large preview has come in, from 0 to 1.
+    pub(crate) fn look_level(&self) -> f32 {
+        let rest = if self.looking { 1.0 } else { 0.0 };
+        self.look_fade
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
     }
 
     /// Animation time.
@@ -610,8 +877,15 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.tabs.fade)
+            || fade(&self.login_fade)
+            || fade(&self.preview_slide)
+            || fade(&self.look_fade)
+            || self.progress.is_some()
+            || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
+            || fade(&self.folded.fade)
             || self
                 .path_edit
                 .as_ref()
@@ -624,9 +898,12 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.preview_slide = None;
+        self.look_fade = None;
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
+        self.folded.fade = None;
         if let Some(edit) = &mut self.path_edit {
             edit.shake = None;
         }
@@ -661,12 +938,16 @@ impl App {
         if elsewhere && self.path_edit.as_ref().is_some_and(|e| !e.sheet) {
             self.close_path_edit();
         }
+        if elsewhere {
+            self.folded_menu(false);
+        }
         let task = self.handle(message);
         self.sync_menubar();
         let now = self.now();
         if self.menu.is_some() {
             self.closing = None;
-        } else if shown.is_some() {
+        } else if shown.is_some() && !std::mem::take(&mut self.popups.dismissed) {
+            // Folds back, unless the compositor already took its popup away.
             self.closing = shown;
             self.menu_motion.close(now);
         } else if self.closing.is_some() && self.menu_motion.gone(now) {
@@ -693,7 +974,18 @@ impl App {
                 self.always = false;
             }
         }
-        Task::batch([task, self.preview_task()])
+        let reread = if self.folder_changed
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.lasso.is_none()
+        {
+            self.folder_changed = false;
+            self.load(&[])
+        } else {
+            Task::none()
+        };
+        let popups = self.sync_popups();
+        Task::batch([task, self.preview_task(), reread, popups])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -705,12 +997,12 @@ impl App {
         }
         self.preview_path.clone_from(&path);
         self.preview = Preview::Info;
+        self.disguise = None;
         match (wanted, path) {
-            (Some(entry), Some(path)) => {
-                Task::perform(async move { preview::load(&entry) }, move |preview| {
-                    Message::Preview(path.clone(), preview)
-                })
-            }
+            (Some(entry), Some(path)) => Task::perform(
+                async move { (preview::load(&entry), preview::disguise(&entry)) },
+                move |(preview, disguise)| Message::Preview(path.clone(), preview, disguise),
+            ),
             _ => Task::none(),
         }
     }
@@ -722,6 +1014,8 @@ impl App {
             in_trash: self.location == Location::Trash,
             show_hidden: self.show_hidden,
             show_preview: self.show_preview,
+            can_undo: !self.steps.undo.is_empty(),
+            can_redo: !self.steps.redo.is_empty(),
             can_back: self.can_go_back(),
             can_forward: self.can_go_forward(),
             places: self
@@ -784,7 +1078,11 @@ impl App {
                 self.renaming = None;
                 let base = self.lasso_base();
                 let how = Click::new(self.modifiers.command(), self.modifiers.shift());
-                self.selection.click(index, how);
+                // A press on the selection may become a drag out of the window (lot E-03).
+                let on_name = !self.beside_name(index);
+                if self.dnd_press(index, how == Click::Only, on_name) {
+                    self.selection.click(index, how);
+                }
                 // Beside the name, a press may start a lasso too, as in Dolphin: a long
                 // listing has no background left to start one from.
                 if self.beside_name(index) {
@@ -843,17 +1141,30 @@ impl App {
                 self.lasso = Some(Lasso::new(at, base));
             }
             Message::Released => {
+                self.tabs.dragging = None;
+                self.dnd_release();
                 self.lasso = None;
                 self.lasso_frame = None;
             }
             Message::Key(event) => return self.key(event),
-            Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Modifiers(modifiers) => {
+                self.modifiers = modifiers;
+                self.dnd_modifiers();
+            }
             Message::Cursor(position) => {
                 self.pointer = position;
+                self.dnd_moved();
                 self.drag_lasso();
             }
             Message::Resized(size) => self.size = size,
-            Message::Opened => crate::startup::first(&OPENED, "window opened"),
+            Message::Opened => {
+                crate::startup::first(&OPENED, "window opened");
+                return window::latest().and_then(|id| {
+                    window::run(id, |window| crate::dnd::handles(window)).map(Message::DndReady)
+                });
+            }
+            Message::DndReady(handles) => return self.dnd_ready(handles),
+            Message::Dnd(event) => return self.dnd_event(event),
             Message::Scrolled(offset, height) => {
                 self.scroll = (offset, height);
                 self.drag_lasso();
@@ -869,8 +1180,45 @@ impl App {
                 return self.empty_trash();
             }
             Message::CancelEmpty => self.confirm_empty = false,
+            Message::Stepped(outcome, step, how) => {
+                if let (Ok(_), Some(step)) = (&outcome, step) {
+                    match how {
+                        Recorded::Done => self.steps.done(step),
+                        Recorded::Undone => self.steps.undone(step),
+                        Recorded::Redone => self.steps.redone(step),
+                    }
+                }
+                return self.handle(Message::Done(outcome));
+            }
+            Message::Taken(sources, dest, moving, names) => {
+                if names.is_empty() {
+                    return self.transfer(
+                        sources,
+                        dest,
+                        moving,
+                        crate::transfer_job::Taken::KeepBoth,
+                    );
+                }
+                self.pending_paste = Some((sources, dest, moving, names));
+            }
+            Message::TakenChoice(choice) => {
+                if let (Some(taken), Some((sources, dest, moving, _))) =
+                    (choice, self.pending_paste.take())
+                {
+                    return self.transfer(sources, dest, moving, taken);
+                }
+                self.pending_paste = None;
+            }
+            Message::StopTransfer => {
+                if let Some(progress) = &self.progress {
+                    progress.stop();
+                }
+            }
             Message::Done(outcome) => {
                 self.busy = self.busy.saturating_sub(1);
+                if self.busy == 0 {
+                    self.progress = None;
+                }
                 let select = match outcome {
                     // A quiet operation (rename, new folder) leaves no message behind.
                     Ok((text, select)) => {
@@ -894,7 +1242,8 @@ impl App {
             }
             Message::Frame(now) => {
                 self.theme.tick(now);
-                return self.frame(now);
+                let spring = self.dnd_spring();
+                return Task::batch([spring, self.frame(now)]);
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
             Message::Devices(volumes) => {
@@ -928,6 +1277,12 @@ impl App {
                     error: true,
                 });
             }
+            Message::ProgramRefused => {
+                self.notice = Some(Notice {
+                    text: texts::IS_PROGRAM.into(),
+                    error: true,
+                });
+            }
             Message::Launched(started) => {
                 if !started {
                     self.notice = Some(Notice {
@@ -944,6 +1299,35 @@ impl App {
                 self.open_menu(self.pointer);
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
+            Message::NewTab => {
+                let here = self.location.clone();
+                return self.open_tabs(vec![here], true);
+            }
+            Message::CloseTab(index) => return self.close_tab(index),
+            Message::SwitchTab(index) => return self.switch_tab(index),
+            Message::PressTab(index) => {
+                self.tabs.dragging = Some(index);
+                return self.switch_tab(index);
+            }
+            Message::OverTab(index) => self.drag_tab(index),
+            Message::MiddleClick(index) => {
+                if let Some(entry) = self.entries.get(index)
+                    && entry.kind == Kind::Folder
+                    && self.location != Location::Trash
+                {
+                    let folder = Location::Folder(entry.path.clone());
+                    return self.open_tabs(vec![folder], false);
+                }
+            }
+            Message::Servers(servers) => self.servers = servers,
+            Message::OpenServer(host) => return self.open_server(&host),
+            Message::EjectServer(host) => return self.eject_server(&host),
+            Message::ServerMounted(host, result) => return self.server_mounted(host, result),
+            Message::ServerUnmounted(host, result) => self.server_unmounted(&host, result),
+            Message::LoginInput(field, value) => self.login_input(field, value),
+            Message::LoginRemember(on) => self.login_remember(on),
+            Message::LoginSubmit => return self.login_submit(),
+            Message::LoginCancel => self.login = None,
             Message::PathInput(text) => return self.path_input(text),
             Message::PathSubmit => return self.path_submit(),
             Message::PathPick(index) => return self.path_pick(index),
@@ -952,27 +1336,55 @@ impl App {
                 return self.path_folders(generation, folders);
             }
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
-            Message::Escaped => self.close_path_edit(),
+            Message::Escaped => {
+                self.close_path_edit();
+                self.login = None;
+                self.folded_menu(false);
+            }
+            Message::Folded(open) => self.folded_menu(open),
+            Message::PathScrolled(offset) => self.suggest_offset = offset,
+            Message::PathRecent(index) => return self.path_recent(index),
+            Message::OpenSearch => {
+                self.search_open = true;
+                return operation::focus(SEARCH);
+            }
+            Message::FolderChanged(dir) => {
+                if self.location == Location::Folder(dir) {
+                    self.folder_changed = true;
+                }
+            }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
                     return self.loaded(result);
                 }
             }
-            Message::Preview(path, preview) => {
+            Message::Preview(path, preview, disguise) => {
                 if self.preview_path.as_ref() == Some(&path) {
                     self.preview = preview;
+                    self.disguise = disguise;
                     self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
                 }
             }
+            // Closing the window ends the program, whichever runtime holds it: the Wayland
+            // daemon would otherwise go on with no window.
+            Message::Window(WindowAction::Close) => return iced::exit(),
             Message::Window(action) => {
-                return window::latest().and_then(move |id| match action {
+                return self.on_window(move |id| match action {
                     WindowAction::Drag => window::drag(id),
                     WindowAction::Minimize => window::minimize(id, true),
                     WindowAction::Maximize => window::toggle_maximize(id),
                     WindowAction::Close => window::close(id),
                 });
             }
+            Message::WindowClosed(id) => {
+                if self.main.is_none_or(|main| main == id) {
+                    return iced::exit();
+                }
+                self.popup_closed(id);
+            }
+            // The surface requests of `iced_exwlshell`, which its runtime takes before `update`.
+            _ => {}
         }
         Task::none()
     }
@@ -1007,12 +1419,18 @@ impl App {
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
         }
+        if self.preview_slide.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.preview_slide = None;
+        }
         if self.path_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.path_fade = None;
             self.path_leaving = None;
         }
         if self.suggest_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.suggest_fade = None;
+        }
+        if self.folded.fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.folded.fade = None;
         }
         let Some(probe) = &mut self.probe else {
             return scroll;
@@ -1022,7 +1440,7 @@ impl App {
         match probe.frame(now, loaded) {
             Step::Open if self.config.maximized => Task::batch([
                 self.go(target),
-                window::latest().and_then(|id| window::maximize(id, true)),
+                self.on_window(|id| window::maximize(id, true)),
             ]),
             Step::Open => self.go(target),
             Step::Scroll => operation::scroll_by(
@@ -1156,6 +1574,7 @@ impl App {
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.search.clear();
+        self.search_open = false;
         self.clear_selection();
         self.repo = None;
         self.notice = None;
@@ -1315,25 +1734,31 @@ impl App {
     // Lasso.
 
     /// Top left corner of the listing's rows in the window, below its column headers.
-    fn list_origin() -> Point {
+    fn list_origin(&self) -> Point {
+        // The tab bar, when shown, pushes the listing down (D-27b).
+        let tabs = match self.tab_bar_level() {
+            level if level > 0.0 => (more::TAB_BAR_HEIGHT * level).round() + metrics::BORDER_WIDTH,
+            _ => 0.0,
+        };
         Point::new(
-            metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING,
+            self.panes().sidebar_width() + metrics::LIST_PADDING,
             metrics::TITLE_BAR_HEIGHT
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
-                + 3.0 * metrics::BORDER_WIDTH,
+                + 3.0 * metrics::BORDER_WIDTH
+                + tabs,
         )
     }
 
     /// Height of the visible part of the listing.
     fn list_height(&self) -> f32 {
         let below = metrics::BORDER_WIDTH + metrics::STATUS_BAR_HEIGHT;
-        self.size.height - Self::list_origin().y - below
+        self.size.height - self.list_origin().y - below
     }
 
     /// A point of the window in the content of the listing, scroll included.
     fn in_list(&self, at: Point) -> (f32, f32) {
-        let origin = Self::list_origin();
+        let origin = self.list_origin();
         (at.x - origin.x, at.y - origin.y + self.scroll.0)
     }
 
@@ -1378,7 +1803,7 @@ impl App {
         if !self.lasso.as_ref().is_some_and(|l| l.dragging) {
             return 0.0;
         }
-        let y = self.pointer.y - Self::list_origin().y;
+        let y = self.pointer.y - self.list_origin().y;
         let (offset, height) = (self.scroll.0, self.list_height());
         let content = metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT;
         let speed = edge_scroll(
@@ -1668,12 +2093,17 @@ impl App {
     fn open_menu(&mut self, at: Point) {
         let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
-        // Inside the window; a submenu opens on the left when the right has no room.
-        let at = Point::new(
-            at.x.min(self.size.width - metrics::CONTEXT_MENU_WIDTH)
-                .max(0.0),
-            at.y.min(self.size.height - height).max(0.0),
-        );
+        // Inside the window; a submenu opens on the left when the right has no room. A popup
+        // is placed by the compositor instead, which flips it at the screen's edges.
+        let at = if self.menus_in_popups() {
+            at
+        } else {
+            Point::new(
+                at.x.min(self.size.width - metrics::CONTEXT_MENU_WIDTH)
+                    .max(0.0),
+                at.y.min(self.size.height - height).max(0.0),
+            )
+        };
         self.menu = Some(Menu {
             at,
             on_selection,
@@ -1692,7 +2122,7 @@ impl App {
             + metrics::LIST_HEADER_HEIGHT
             + 3.0 * metrics::BORDER_WIDTH
             + metrics::LIST_TOP_GAP;
-        let left = metrics::SIDEBAR_WIDTH + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
+        let left = self.panes().sidebar_width() + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
         self.open_menu(Point::new(left, top + row - self.scroll.0));
     }
 
@@ -1700,13 +2130,8 @@ impl App {
     /// menu opens again there, as in any file manager; elsewhere it only closes.
     fn reopen(&mut self) -> Task<Message> {
         self.menu = None;
-        let origin = Self::list_origin();
-        let preview = if self.show_preview {
-            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
-        } else {
-            0.0
-        };
-        let right = self.size.width - preview - metrics::LIST_PADDING;
+        let origin = self.list_origin();
+        let right = self.size.width - self.panes().preview_width() - metrics::LIST_PADDING;
         let (x, y) = (self.pointer.x, self.pointer.y);
         let inside = x >= origin.x && x < right && y >= origin.y;
         if !inside || y >= origin.y + self.list_height() {
@@ -1824,6 +2249,25 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(&key);
         }
+        // The large preview: Space or Escape close it, the arrows go to the next item and it
+        // follows (lot E-12).
+        if self.looking {
+            match key.as_ref() {
+                Key::Named(Named::Space | Named::Escape) => {
+                    self.quick_look(false);
+                    return Task::none();
+                }
+                Key::Named(Named::ArrowDown | Named::ArrowRight) => {
+                    let to = self.selection.cursor().map_or(0, |c| c + 1);
+                    return self.move_cursor(to.min(self.entries.len().saturating_sub(1)), false);
+                }
+                Key::Named(Named::ArrowUp | Named::ArrowLeft) => {
+                    let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
+                    return self.move_cursor(to, false);
+                }
+                _ => return Task::none(),
+            }
+        }
         if self.path_edit.is_some() {
             return self.path_key(&key, modifiers);
         }
@@ -1836,6 +2280,8 @@ impl App {
         let shift = modifiers.shift();
         let last = self.entries.len().saturating_sub(1);
         match key.as_ref() {
+            // Ctrl+Tab and Ctrl+Maj+Tab go from tab to tab (D-27b).
+            Key::Named(Named::Tab) if ctrl => self.cycle_tab(shift),
             Key::Named(Named::Tab) => focus::advance(direction(modifiers)),
             Key::Named(Named::ArrowLeft) if modifiers.alt() => self.update(Message::Back),
             Key::Named(Named::ArrowRight) if modifiers.alt() => self.update(Message::Forward),
@@ -1858,7 +2304,8 @@ impl App {
             Key::Named(Named::F2) => self.run(Command::Rename),
             Key::Named(Named::F5) => self.run(Command::Refresh),
             Key::Named(Named::Delete) => self.run(Command::Trash),
-            Key::Named(Named::Space) => self.run(Command::TogglePreview),
+            // Space opens the large preview, as Quick Look in the Finder (lot E-12).
+            Key::Named(Named::Space) => self.run(Command::QuickLook),
             Key::Named(Named::ContextMenu) => {
                 self.open_menu_at_cursor();
                 Task::none()
@@ -1868,11 +2315,17 @@ impl App {
                 Task::none()
             }
             Key::Named(Named::Escape) => {
+                self.search_open = false;
+                self.folded_menu(false);
                 self.search.clear();
                 self.notice = None;
                 self.refilter();
                 self.clear_selection();
                 Task::none()
+            }
+            // As Alt+Cmd+P in the Finder (lot E-08).
+            Key::Character(c) if ctrl && modifiers.alt() && c.eq_ignore_ascii_case("p") => {
+                self.run(Command::TogglePreview)
             }
             Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), shift) {
                 ("c", true) => self.run(Command::CopyPath),
@@ -1883,7 +2336,17 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
-                ("f", _) => operation::focus(SEARCH),
+                ("t", _) => self.update(Message::NewTab),
+                ("w", _) => {
+                    let active = self.tabs.active;
+                    self.close_tab(active)
+                }
+                ("z", false) => self.run(Command::Undo),
+                ("z", true) | ("y", _) => self.run(Command::Redo),
+                ("f", _) => {
+                    self.search_open = true;
+                    operation::focus(SEARCH)
+                }
                 ("r", _) => self.run(Command::Refresh),
                 ("l", _) => self.run(Command::EditPath),
                 ("g", true) => self.run(Command::GoToFolder),
@@ -1920,7 +2383,7 @@ impl App {
             Command::Rename if !in_trash => return self.start_rename(),
             Command::Duplicate if !in_trash && !selected.is_empty() => {
                 let text = texts::copying(selected.len());
-                return self.spawn(text, move || done(ops::duplicate(&selected)?));
+                return self.spawn_step(text, move || made(ops::duplicate(&selected)?));
             }
             Command::CopyPath if !selected.is_empty() => {
                 let paths: Vec<String> = selected.iter().map(|p| p.display().to_string()).collect();
@@ -1931,11 +2394,15 @@ impl App {
                 return iced::clipboard::write(paths.join("\n"));
             }
             Command::Copy if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Copy, &selected);
                 self.clipboard = Some((Clip::Copy, selected));
             }
             Command::Cut if !in_trash && !selected.is_empty() => {
+                self.dnd_clip(Clip::Cut, &selected);
                 self.clipboard = Some((Clip::Cut, selected));
             }
+            // The session's clipboard first: it may hold files of another application.
+            Command::Paste if self.dnd_paste() => {}
             Command::Paste => return self.paste(),
             Command::NewFolder => return self.new_folder(),
             Command::ToggleHidden => {
@@ -1947,11 +2414,16 @@ impl App {
                     return Task::none();
                 };
                 let count = selected.len();
-                return self.spawn(texts::MOVE_TO_TRASH.into(), move || {
-                    for path in &selected {
-                        trash.put(path)?;
-                    }
-                    Ok((texts::trashed(count), Vec::new()))
+                return self.spawn_step(texts::MOVE_TO_TRASH.into(), move || {
+                    let ids = selected
+                        .iter()
+                        .map(|path| trash.put(path))
+                        .collect::<ops::Result<Vec<_>>>()?;
+                    Ok((
+                        texts::trashed(count),
+                        Vec::new(),
+                        Some(Undoable::Trashed(ids)),
+                    ))
                 });
             }
             Command::Restore if in_trash => return self.restore(),
@@ -1970,9 +2442,20 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::Undo => return self.undo(false),
+            Command::Redo => return self.undo(true),
+            Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            Command::TogglePreview => self.show_preview = !self.show_preview,
+            // A preview the width had folded comes back, pinned, rather than a hidden one
+            // being hidden (E-05); it slides in (E-08).
+            Command::TogglePreview if self.show_preview && !self.panes().preview => {
+                let from = self.preview_level();
+                self.preview_pinned = true;
+                let now = self.now();
+                self.preview_slide = Some(Fade::new(from, 1.0, now, more::PREVIEW_SLIDE));
+            }
+            Command::TogglePreview => return self.toggle_preview(),
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();
@@ -1995,6 +2478,63 @@ impl App {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Runs an operation off the interface thread, and keeps its step for Ctrl+Z (lot E-10).
+    fn spawn_step(
+        &mut self,
+        text: String,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.spawn_recorded(text, Recorded::Done, job)
+    }
+
+    fn spawn_recorded(
+        &mut self,
+        text: String,
+        how: Recorded,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.busy += 1;
+        self.notice = (!text.is_empty()).then_some(Notice { text, error: false });
+        Task::perform(
+            async move {
+                match job() {
+                    Ok((text, select, step)) => (Ok((text, select)), step),
+                    Err(error) => {
+                        tracing::warn!(%error, "operation refused");
+                        (Err(error.to_string()), None)
+                    }
+                }
+            },
+            move |(outcome, step)| Message::Stepped(outcome, step, how),
+        )
+    }
+
+    /// Undoes the last step (Ctrl+Z), or redoes the last undone (Ctrl+Maj+Z, Ctrl+Y).
+    fn undo(&mut self, redo: bool) -> Task<Message> {
+        let list = if redo {
+            &mut self.steps.redo
+        } else {
+            &mut self.steps.undo
+        };
+        let Some(step) = list.pop() else {
+            self.notice = Some(Notice {
+                text: texts::NOTHING_TO_UNDO.into(),
+                error: false,
+            });
+            return Task::none();
+        };
+        let trash = self.config.trash.clone();
+        let (text, how) = if redo {
+            (texts::REDONE, Recorded::Redone)
+        } else {
+            (texts::UNDONE, Recorded::Undone)
+        };
+        self.spawn_recorded(String::new(), how, move || {
+            let back = step.undo(trash.as_ref())?;
+            Ok((text.to_owned(), back.shown(), Some(back)))
+        })
     }
 
     /// Runs an operation off the interface thread: big copies do not block it.
@@ -2021,6 +2561,11 @@ impl App {
             return Task::none();
         };
         if entry.kind == Kind::Folder && self.location != Location::Trash {
+            // Several folders selected: each in a tab of its own, the first shown (D-27b).
+            let folders = self.selected_folders();
+            if folders.len() > 1 {
+                return self.open_tabs(folders, true);
+            }
             let path = entry.path.clone();
             return self.go(Location::Folder(path));
         }
@@ -2038,9 +2583,28 @@ impl App {
         let Some(entry) = self.selection.focus().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
-        let mut open = Process::new("xdg-open");
-        open.arg(&entry.path);
-        self.launch(open)
+        let path = entry.path.clone();
+        self.open_blind(path)
+    }
+
+    /// Opens a file no application was chosen for, with `xdg-open`, unless it is a program or
+    /// a launcher: `xdg-open` may run those, depending on the desktop (audit I-14).
+    pub(crate) fn open_blind(&mut self, path: PathBuf) -> Task<Message> {
+        let mut command = Process::new("xdg-open");
+        command.arg(&path);
+        if let Some(parent) = path.parent() {
+            command.current_dir(parent);
+        }
+        sherlock_ui::gpu::for_child(&mut command);
+        Task::perform(
+            async move {
+                if preview::is_program(&path) {
+                    return None;
+                }
+                Some(spawn_reaped(&mut command))
+            },
+            |started| started.map_or(Message::ProgramRefused, Message::Launched),
+        )
     }
 
     /// Opens with an application without touching the defaults.
@@ -2056,21 +2620,7 @@ impl App {
     fn launch(&mut self, mut command: Process) -> Task<Message> {
         // The program gets the environment Evidence started with, not its renderer choice.
         sherlock_ui::gpu::for_child(&mut command);
-        Task::perform(
-            async move {
-                match command.spawn() {
-                    Ok(mut child) => {
-                        std::thread::spawn(move || child.wait());
-                        true
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "launch failed");
-                        false
-                    }
-                }
-            },
-            Message::Launched,
-        )
+        Task::perform(async move { spawn_reaped(&mut command) }, Message::Launched)
     }
 
     fn paste(&mut self) -> Task<Message> {
@@ -2078,18 +2628,56 @@ impl App {
         else {
             return Task::none();
         };
-        match mode {
-            Clip::Copy => self.spawn(texts::copying(sources.len()), move || {
-                done(ops::copy_into(&sources, &dest)?)
-            }),
-            Clip::Cut => {
-                // A cut item is pasted only once.
-                self.clipboard = None;
-                self.spawn(texts::moving(sources.len()), move || {
-                    done(ops::move_into(&sources, &dest)?)
-                })
-            }
+        // A cut item is pasted only once.
+        let moving = mode == Clip::Cut;
+        if moving {
+            self.clipboard = None;
         }
+        // The names already taken there are looked for first, off the interface thread: if
+        // any, the user chooses (lot E-11).
+        Task::perform(
+            async move {
+                let names = crate::transfer_job::taken(&sources, &dest);
+                (sources, dest, names)
+            },
+            move |(sources, dest, names)| Message::Taken(sources, dest, moving, names),
+        )
+    }
+
+    /// Copies or moves with a progress the status bar shows, and that it can stop.
+    fn transfer(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        moving: bool,
+        taken: crate::transfer_job::Taken,
+    ) -> Task<Message> {
+        let progress = Arc::new(crate::transfer_job::Progress::default());
+        self.progress = Some(progress.clone());
+        let trash = self.config.trash.clone();
+        let text = if moving {
+            texts::moving(sources.len())
+        } else {
+            texts::copying(sources.len())
+        };
+        // Kept for Ctrl+Z (E-10): a move goes back, a copy goes to the trash.
+        self.spawn_step(text, move || {
+            if moving {
+                let report =
+                    crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?;
+                let step = crate::undo::moved(&sources, &report);
+                let (text, select) = done(report)?;
+                Ok((text, select, Some(step)))
+            } else {
+                made(crate::transfer_job::copy(
+                    &sources,
+                    &dest,
+                    taken,
+                    trash.as_ref(),
+                    progress,
+                )?)
+            }
+        })
     }
 
     fn new_folder(&mut self) -> Task<Message> {
@@ -2100,9 +2688,13 @@ impl App {
         // reread listing has selected it.
         self.search.clear();
         self.pending_rename = true;
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let path = ops::new_folder(&dir)?;
-            Ok((String::new(), vec![path]))
+            Ok((
+                String::new(),
+                vec![path.clone()],
+                Some(Undoable::Made(vec![path])),
+            ))
         })
     }
 
@@ -2134,9 +2726,13 @@ impl App {
         let Some((path, name)) = self.renaming.take() else {
             return Task::none();
         };
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let renamed = ops::rename(&path, &name)?;
-            Ok((String::new(), vec![renamed]))
+            let step = (renamed != path).then(|| Undoable::Renamed {
+                from: path,
+                to: renamed.clone(),
+            });
+            Ok((String::new(), vec![renamed], step))
         })
     }
 
@@ -2244,6 +2840,27 @@ fn read_location(
                     Some(entry)
                 })
                 .collect())
+        }
+    }
+}
+
+/// A copy as a step: what it made, which an undo puts in the trash.
+fn made(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> {
+    let step = Undoable::Made(report.paths.clone());
+    let (text, select) = done(report)?;
+    Ok((text, select, Some(step)))
+}
+
+/// Starts a program without waiting for it; a thread reaps it when it ends.
+fn spawn_reaped(command: &mut Process) -> bool {
+    match command.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(error) => {
+            tracing::warn!(%error, "launch failed");
+            false
         }
     }
 }

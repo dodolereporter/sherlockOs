@@ -9,6 +9,16 @@ use std::process::Command;
 use sherlock_ui::gpu::{self, Choice};
 
 fn main() {
+    // A test runner that lists the tests first (`cargo nextest`, the CI: lot Q-18b) gets this
+    // binary's one test, as libtest would name it, and nothing runs then.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--list") {
+        if !args.iter().any(|a| a == "--ignored") {
+            use std::io::Write as _;
+            let _ = writeln!(std::io::stdout().lock(), "gpu_apply: test");
+        }
+        return;
+    }
     // SAFETY: no harness, so no other thread exists.
     unsafe {
         std::env::set_var("DRI_PRIME", "1");
@@ -21,6 +31,7 @@ fn main() {
     let choice = Choice::Vulkan {
         manifests: vec![PathBuf::from(radv)],
         user_backend: false,
+        software: None,
     };
     // SAFETY: as above.
     unsafe { choice.apply() };

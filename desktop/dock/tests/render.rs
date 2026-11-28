@@ -264,8 +264,13 @@ fn the_menu_of_an_icon_renders_its_entries() {
         "1 fenêtre",
         "Nouvelle fenêtre",
         "Nouvel onglet",
-        "Retirer du Dock",
+        "Options",
+        "Garder dans le Dock",
+        "Ouvrir à l’ouverture de session",
+        "Afficher dans Evidence",
+        "Masquer",
         "Quitter",
+        "Forcer à quitter",
     ] {
         assert!(ui.find(text).is_ok(), "{text} missing from the menu");
     }
@@ -575,4 +580,217 @@ fn the_applications_button_comes_first() {
     dock.frame(Duration::from_secs(2));
     let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
     assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
+}
+
+/// Lot D-21j: the trash comes last, after the separator, full here; its menu opens it or empties
+/// it, the second click only: the first one arms « Reclique pour vider » and the menu stays.
+/// `dock-trash`, `dock-trash-menu`.
+#[test]
+fn the_trash_ends_the_dock_and_empties_on_a_second_click() {
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Trash(true));
+    let _ = dock.tick(Duration::from_secs(5));
+    let last = dock.items.len() - 1;
+    assert_eq!(dock.items[last].name, "Corbeille");
+    assert!(dock.separator.is_some_and(|s| s <= last));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-trash").expect("screenshot") > 2_000);
+    let point = icon_center(&dock, last);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    assert!(dock.menu_open());
+    unfolded(&mut dock);
+    let labels: Vec<String> = dock
+        .menu_lines(last)
+        .iter()
+        .map(|l| l.label.clone())
+        .collect();
+    assert_eq!(labels, ["Ouvrir", "Vider la corbeille"]);
+    let _ = dock.update(Message::MenuPick(dock::menu::Entry::EmptyTrash));
+    assert!(dock.menu_open(), "a first click only arms");
+    assert_eq!(dock.menu_lines(last)[1].label, "Reclique pour vider");
+    let entries = dock.menu_lines(last);
+    let (width, height) = dock::menu::surface_size(&entries);
+    {
+        let mut ui = Simulator::with_size(
+            dock::settings(),
+            (width as f32, height as f32),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(
+            ui.find("Reclique pour vider").is_ok(),
+            "the open menu says it"
+        );
+        assert!(capture(ui, "dock-trash-menu").expect("screenshot") > 2_000);
+    }
+    // Emptied elsewhere: the trash shows empty and its menu cannot empty it.
+    let _ = dock.update(Message::Trash(false));
+    let last = dock.items.len() - 1;
+    assert!(!dock.menu_lines(last)[1].enabled);
+}
+
+/// A downloads stack of `count` items, one with a long name.
+fn downloads(count: usize) -> dock::stack::Stack {
+    use sherlock_ui::icon::Icon;
+    let names = [
+        "rapport-trimestriel-version-finale-relue.pdf",
+        "photo.png",
+        "archive.zip",
+        "Projets",
+        "notes.txt",
+        "capture.jpg",
+    ];
+    let items = (0..count)
+        .map(|n| {
+            let name = names[n % names.len()];
+            let folder = name == "Projets";
+            let icon = match name.rsplit('.').next() {
+                _ if folder => Icon::Folder,
+                Some("png" | "jpg") => Icon::Image,
+                _ => Icon::Document,
+            };
+            dock::stack::Shown {
+                path: PathBuf::from("/home/me/Downloads").join(name),
+                name: name.to_owned(),
+                folder,
+                icon,
+            }
+        })
+        .collect();
+    dock::stack::Stack {
+        folder: PathBuf::from("/home/me/Downloads"),
+        name: String::from("Downloads"),
+        items,
+    }
+}
+
+/// Lot D-21k: the downloads stack stands before the trash; a click opens its grid over it, the
+/// newest first, a long name ending with « … », then « Ouvrir dans Evidence ». A right click
+/// gives its menu. `dock-stack`, `dock-stack-grid`, `dock-stack-grid-full`.
+#[test]
+fn the_downloads_stack_opens_its_grid() {
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Trash(false));
+    let _ = dock.update(Message::Stack(Some(downloads(6))));
+    let _ = dock.tick(Duration::from_secs(5));
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names[names.len() - 2..], ["Downloads", "Corbeille"]);
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-stack").expect("screenshot") > 2_000);
+
+    let index = dock.items.len() - 2;
+    assert_eq!(dock.menu_lines(index)[0].label, "Ouvrir dans Evidence");
+    for (count, name) in [(6, "dock-stack-grid"), (16, "dock-stack-grid-full")] {
+        let _ = dock.update(Message::Stack(Some(downloads(count))));
+        let _ = dock.press_icon(index);
+        assert!(dock.menu_open(), "the grid opens");
+        unfolded(&mut dock);
+        let (width, height) = sherlock_ui::dock::stack_size(count);
+        let mut ui = Simulator::with_size(
+            dock::settings(),
+            (width, height),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(ui.find("photo.png").is_ok());
+        assert!(ui.find("Ouvrir dans Evidence").is_ok());
+        assert!(capture(ui, name).expect("screenshot") > 2_000);
+        // An item picked: the grid closes.
+        let _ = dock.update(Message::StackOpen(usize::MAX));
+        let _ = dock.tick(dock.now() + Duration::from_secs(1));
+        assert!(!dock.menu_open());
+    }
+}
+
+/// Lot D-21l: on a screen too narrow for its icons, the dock shrinks them and its surface stays
+/// inside the screen, 8 from each end; on 1920 it keeps its size. `dock-fitted-1920`,
+/// `dock-fitted-520`.
+#[test]
+fn the_dock_shrinks_to_fit_a_narrow_screen() {
+    use dock::app::Screen;
+    use iced::window::Id;
+    for width in [1920, 520] {
+        let mut dock = sample();
+        let id = Id::unique();
+        let _ = dock.update(Message::Surface(id));
+        let _ = dock.update(Message::Screen(
+            id,
+            Some(Screen {
+                name: Some(String::from("eDP-1")),
+                size: Some((width, 800)),
+            }),
+        ));
+        let _ = dock.tick(Duration::from_secs(5));
+        let room = width as f32 - 2.0 * sherlock_ui::dock::SCREEN_ROOM;
+        assert!(
+            dock.surface_size.width <= room,
+            "{width}: {:?}",
+            dock.surface_size
+        );
+        if width == 1920 {
+            assert_eq!(dock.geometry, dock.base);
+        } else {
+            assert!(dock.geometry.icon < dock.base.icon);
+        }
+        let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+        let written = capture(ui, &format!("dock-fitted-{width}")).expect("capture");
+        assert!(written > 1_000);
+    }
+}
+
+/// Lot D-41d: an application dragged from the Applications view opens a hole among the pinned
+/// icons under the pointer, moves it, closes it out of the dock, and is pinned where it is
+/// dropped. `dock-hole`, `dock-dropped`.
+#[test]
+fn an_application_dragged_from_the_view_opens_a_hole_and_is_pinned() {
+    use dock::dnd::Event;
+    use dock::items::{HOLE, Kind};
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.tick(Duration::from_secs(5));
+    let (files, terminal) = (icon_center(&dock, 0), icon_center(&dock, 1));
+    let between = Point::new((files.x + terminal.x) / 2.0, files.y);
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    assert_eq!(
+        dock.items[1].kind,
+        Kind::Hole,
+        "the hole before the terminal"
+    );
+    let _ = dock.tick(Duration::from_secs(10));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-hole").expect("screenshot") > 2_000);
+    // Out of the dock's band: it closes.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, 0.0)));
+    assert!(dock.items.iter().all(|i| i.kind != Kind::Hole));
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped(
+        "org.example.OtherBrowser".into(),
+    )));
+    assert_eq!(dock.pinned[1], "org.example.OtherBrowser");
+    assert!(dock.pinned.iter().all(|p| p != HOLE), "never kept");
+    let _ = dock.tick(Duration::from_secs(15));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-dropped").expect("screenshot") > 2_000);
+    // Dropped again where it already is: it stays pinned once.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped(
+        "org.example.OtherBrowser".into(),
+    )));
+    let count = dock
+        .pinned
+        .iter()
+        .filter(|p| *p == "org.example.OtherBrowser")
+        .count();
+    assert_eq!(count, 1);
+    // Something unknown: the hole closes, nothing is pinned.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped("not.installed".into())));
+    assert!(
+        dock.pinned
+            .iter()
+            .all(|p| p != HOLE && p != "not.installed")
+    );
 }

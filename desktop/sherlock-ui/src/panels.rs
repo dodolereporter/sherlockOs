@@ -51,13 +51,14 @@ pub const QUICK_WIDTH: f32 = 336.0;
 /// and 8, the volume and brightness rows, the two segmented groups, the user row, 14 between
 /// each), plus the line under the volume that names the output, plus the row of the keyboard
 /// backlight (D-35d). On a machine without one, the panel is `KEYBOARD_ROW` shorter (UI-04).
+/// The board's « Carte graphique » group is not there (D-20f): nothing switches the card yet.
 pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + (2.0 * 56.0 + 8.0)
-    + 5.0 * metrics::GAP_SECTION
+    + 4.0 * metrics::GAP_SECTION
     + KEYBOARD_ROW
     + (28.0 + 4.0 + 17.0)
     + 28.0
-    + 2.0 * (17.0 + 6.0 + 36.0)
+    + (17.0 + 6.0 + 36.0)
     + (metrics::BORDER_WIDTH + 12.0 + 34.0);
 
 /// The slider of the keyboard backlight under the brightness, with its gap.
@@ -168,10 +169,13 @@ pub enum Glyph {
     Keyboard,
     Phone,
     Computer,
+    /// The microphone, on and muted (D-20g).
+    Microphone,
+    MicrophoneMuted,
 }
 
 impl Glyph {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Wifi,
         Self::Bluetooth,
         Self::Moon,
@@ -190,6 +194,8 @@ impl Glyph {
         Self::Keyboard,
         Self::Phone,
         Self::Computer,
+        Self::Microphone,
+        Self::MicrophoneMuted,
     ];
 
     /// Path on the 24 grid.
@@ -225,6 +231,8 @@ impl Glyph {
                 "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2"
             }
             Self::Computer => "M4 5h16v10H4zM2 19h20",
+            Self::Microphone => Icon::Microphone.path(),
+            Self::MicrophoneMuted => Icon::MicrophoneMuted.path(),
         }
     }
 
@@ -286,6 +294,23 @@ impl Colors {
     }
 }
 
+/// The shake of a refused password, as on the lock screen (same length and swings): its
+/// horizontal offset `elapsed` after the refusal, three swings of `FIELD_SHAKE` that die out,
+/// then 0.
+pub fn shake(elapsed: std::time::Duration) -> f32 {
+    use crate::lock::screen::{SHAKE, SHAKES};
+    let p = elapsed.as_secs_f32() / SHAKE.as_secs_f32();
+    if p < 1.0 {
+        FIELD_SHAKE * (p * SHAKES * std::f32::consts::TAU).sin() * (1.0 - p)
+    } else {
+        0.0
+    }
+}
+
+/// The widest swing of a shaking password field of a panel: less than the inset of a menu
+/// entry, which it borrows on each side.
+pub const FIELD_SHAKE: f32 = 8.0;
+
 /// Panel texts, in French.
 pub mod text {
     /// Notification centre.
@@ -328,7 +353,15 @@ pub mod text {
     pub const WIFI: &str = "Wi-Fi";
     pub const BLUETOOTH: &str = "Bluetooth";
     pub const DO_NOT_DISTURB: &str = "Ne pas déranger";
-    pub const GAME_MODE: &str = "Mode jeu";
+    // Its durations (D-23e).
+    pub const DURATIONS: &str = "Durées";
+    pub const FOR_AN_HOUR: &str = "Pendant 1 heure";
+    pub const UNTIL_EVENING: &str = "Jusqu’à ce soir";
+    pub const UNTIL_TOMORROW: &str = "Jusqu’à demain matin";
+    /// The line of the tile while it holds for a time: « Jusqu’à 19:00 ».
+    pub fn until(time: &str) -> String {
+        format!("Jusqu’à {time}")
+    }
     pub const ON: &str = "Activé";
     pub const OFF: &str = "Désactivé";
     pub const LOADING: &str = "…";
@@ -347,11 +380,38 @@ pub mod text {
     pub const WIFI_OFF_LINE: &str = "Le Wi-Fi est coupé.";
     pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
     pub const ENTERPRISE: &str = "Ce réseau se rejoint depuis les Réglages.";
+    pub const OPEN_SETTINGS: &str = "Ouvrir les Réglages";
+    // A join that ends badly, a forgotten network, a hidden one (D-20e).
+    pub const WRONG_PASSWORD: &str = "Mot de passe incorrect";
+    pub const JOIN_FAILED: &str = "Connexion impossible";
+    pub const JOIN_TIMED_OUT: &str = "Le réseau ne répond pas";
+    pub const FORGET_NETWORK: &str = "Oublier ce réseau";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY: &str = "Sécurité";
+    /// The protections a hidden network is joined with: none, WPA2 and WPA3 personal.
+    pub const SECURITY_CHOICES: [&str; 3] = ["Aucune", "WPA2", "WPA3"];
+    pub const SHOW_PASSWORD: &str = "Afficher le mot de passe";
+    pub const HIDE_PASSWORD: &str = "Masquer le mot de passe";
+
+    pub fn forget_network_question(name: &str) -> String {
+        format!("Oublier {name} ? Il faudra retaper son mot de passe.")
+    }
     pub const MUTE: &str = "Couper le son";
+    // The outputs and the inputs of the sound (D-20g).
+    pub const SOUND: &str = "Son";
+    pub const SOUND_DEVICES: &str = "Sorties et entrées";
+    // What opens Control Room on the right page (D-20f).
+    pub const WIFI_SETTINGS: &str = "Réglages Wi-Fi…";
+    pub const BLUETOOTH_SETTINGS: &str = "Réglages Bluetooth…";
+    pub const SOUND_SETTINGS: &str = "Réglages du son…";
+    pub const OUTPUT: &str = "Sortie";
+    pub const INPUT: &str = "Entrée";
+    pub const NO_INPUT: &str = "Aucun micro";
+    pub const MUTE_MICROPHONE: &str = "Couper le micro";
+    pub const UNMUTE_MICROPHONE: &str = "Rétablir le micro";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
-    pub const GPU: &str = "Carte graphique";
-    pub const GPU_CHOICES: [&str; 3] = ["Auto", "AMD", "NVIDIA"];
     pub const ENERGY: &str = "Énergie";
     pub const PROFILES: [&str; 3] = ["Économie", "Équilibré", "Performance"];
     pub const ENERGY_ABSENT: &str = "Service absent";
@@ -853,6 +913,89 @@ mod styles {
             .spacing(metrics::GAP_INLINE)
             .align_y(iced::Alignment::Center)
             .height(Length::Fill);
+        let mut entry = Control::new(
+            content,
+            theme::menu_item,
+            on_press,
+            metrics::MENU_ITEM_RADIUS,
+        );
+        entry.button = entry
+            .button
+            .width(Length::Fill)
+            .height(metrics::MENU_ITEM_HEIGHT)
+            .padding([0.0, metrics::MENU_ITEM_PADDING]);
+        let mut line = iced::widget::Row::new()
+            .push(entry)
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(iced::Alignment::Center);
+        if let Some(more) = more {
+            line = line.push(more);
+        }
+        line.into()
+    }
+
+    /// The Wi-Fi arcs of a signal at `level` (0 to 3), built once per level.
+    fn wifi_handle(level: u8) -> iced::widget::svg::Handle {
+        static HANDLES: std::sync::OnceLock<Vec<iced::widget::svg::Handle>> =
+            std::sync::OnceLock::new();
+        let all = HANDLES.get_or_init(|| {
+            (0..=3)
+                .map(|l| {
+                    let svg = crate::icon::wifi_svg(l, crate::icon::WifiMark::None);
+                    iced::widget::svg::Handle::from_memory(svg.into_bytes())
+                })
+                .collect()
+        });
+        all.get(usize::from(level.min(3)))
+            .cloned()
+            .unwrap_or_else(|| {
+                let svg = crate::icon::wifi_svg(level, crate::icon::WifiMark::None);
+                iced::widget::svg::Handle::from_memory(svg.into_bytes())
+            })
+    }
+
+    /// A Wi-Fi network of the list (D-20e), as a menu entry: the arcs of its signal (`level`,
+    /// 0 to 3) and its name, then `line` (« Connexion… »), a padlock when it is `secured` and a
+    /// check when it is in use; then `more` (« Oublier ce réseau »). `on_press` joins it.
+    pub fn network_row<'a, Message: Clone + 'a>(
+        level: u8,
+        secured: bool,
+        active: bool,
+        name: &'a str,
+        line: Option<&'a str>,
+        on_press: Option<Message>,
+        more: Option<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let p = crate::color::palette();
+        let tint = p.text_secondary;
+        let arcs = iced::widget::svg(wifi_handle(level))
+            .width(GLYPH)
+            .height(GLYPH)
+            .opacity(crate::color::icon_opacity(tint))
+            .style(move |_, _| iced::widget::svg::Style {
+                color: Some(tint.into()),
+            });
+        let mut content = iced::widget::row![arcs, ellipsis(name).width(Length::Fill)]
+            .spacing(metrics::GAP_ICON)
+            .align_y(iced::Alignment::Center)
+            .height(Length::Fill);
+        if let Some(line) = line {
+            content = content.push(
+                ellipsis(line)
+                    .size(typography::SMALL_SIZE)
+                    .color(p.text_tertiary),
+            );
+        }
+        if secured {
+            content = content.push(glyph_sized(Glyph::Padlock, p.text_tertiary, TILE_GLYPH));
+        }
+        if active {
+            content = content.push(crate::component::icon(
+                crate::icon::Icon::Check,
+                metrics::ICON_SIZE_SMALL,
+                p.accent_text,
+            ));
+        }
         let mut entry = Control::new(
             content,
             theme::menu_item,

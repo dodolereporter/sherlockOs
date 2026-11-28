@@ -152,12 +152,13 @@ impl State {
 }
 
 impl ServerDndGrabHandler for State {
-    /// The Wayland client reads the drag: from `XdndSelection`, in a thread.
+    /// The Wayland client reads the drag: from `XdndSelection`, in a thread, for an X11 drag;
+    /// otherwise the thumbnail of a screenshot the compositor drags itself (lot D-35e).
     fn send(&mut self, mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>) {
-        let (Some(display), Some(_)) = (self.x_display, self.dnd.from_x11.as_ref()) else {
-            return;
-        };
-        crate::x11_paste::paste_drag(display, mime_type, fd);
+        match (self.x_display, self.dnd.from_x11.as_ref()) {
+            (Some(display), Some(_)) => crate::x11_paste::paste_drag(display, mime_type, fd),
+            _ => self.send_dragged(&mime_type, fd),
+        }
     }
 
     fn dropped(&mut self, _seat: Seat<Self>) {

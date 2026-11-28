@@ -5,6 +5,7 @@
 //! sends is external data: nothing may make the client panic or grow without bound, and any
 //! doubt about a level resolves to the most restrictive one.
 
+use crate::broker::{Broker, Decision, Refusal};
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt;
@@ -265,6 +266,9 @@ pub enum McpError {
          seuls les outils de lecture s'exécutent"
     )]
     BrokerAbsent { tool: String, level: Level },
+    /// The user refused the call, closed the window, or did not answer in time (A-11).
+    #[error("appel refusé : l'utilisateur n'a pas donné son accord pour l'outil {tool} ({level})")]
+    Refused { tool: String, level: Level },
 }
 
 impl McpError {
@@ -601,7 +605,13 @@ pub trait ToolHost {
     /// Available tools, with their level.
     fn tools(&self) -> &[ToolSpec];
 
-    /// Executes a read-level tool, refuses the others.
+    /// Whether it asks the user's consent for what is not a read (a broker, A-11). A host that
+    /// does not is only ever given read calls (`agent::execute`).
+    fn consents(&self) -> bool {
+        false
+    }
+
+    /// Executes a tool: a read at once, the others once the user consented.
     fn call(
         &mut self,
         tool: &str,
@@ -610,17 +620,38 @@ pub trait ToolHost {
 }
 
 /// The session's MCP servers, and the tools each one exposes.
-#[derive(Default)]
 pub struct McpServers {
     servers: Vec<McpClient>,
     tools: Vec<ToolSpec>,
     owners: Vec<usize>,
+    /// Asks the user before anything but a read, and journals (A-11). Closed by default:
+    /// nobody to ask, read only.
+    broker: Broker,
+}
+
+impl Default for McpServers {
+    fn default() -> Self {
+        Self {
+            servers: Vec::new(),
+            tools: Vec::new(),
+            owners: Vec::new(),
+            broker: Broker::closed(),
+        }
+    }
 }
 
 impl McpServers {
-    /// No server.
+    /// No server, and no one to ask: read only.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// No server, and `broker` before every call.
+    pub fn with_broker(broker: Broker) -> Self {
+        Self {
+            broker,
+            ..Self::default()
+        }
     }
 
     /// Adds an initialized server and discovers its tools. On error, the server is stopped.
@@ -663,9 +694,27 @@ impl ToolHost for McpServers {
         let index = self.tools.iter().position(|t| t.name == tool);
         let index = index.ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?;
         let level = self.tools[index].level;
-        if level != Level::Read {
-            // Until the broker exists (A-11), nothing but read calls goes to the server.
-            return Err(McpError::BrokerAbsent {
+        // The only path to a server's `tools/call`: the broker first, for every level.
+        let permit = match self.broker.authorize(tool, level, &arguments).await {
+            Ok(permit) => permit,
+            Err(Refusal {
+                decision: Decision::Unavailable,
+                ..
+            }) => {
+                return Err(McpError::BrokerAbsent {
+                    tool: tool.to_owned(),
+                    level,
+                });
+            }
+            Err(_) => {
+                return Err(McpError::Refused {
+                    tool: tool.to_owned(),
+                    level,
+                });
+            }
+        };
+        if !permit.allows(tool, level, &arguments) {
+            return Err(McpError::Refused {
                 tool: tool.to_owned(),
                 level,
             });
@@ -673,7 +722,18 @@ impl ToolHost for McpServers {
         let server = self.servers.get_mut(self.owners[index]);
         let server = server.ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?;
         tracing::debug!(server = server.name(), tool, "tools/call");
-        server.call_tool(tool, arguments).await
+        let result = server.call_tool(tool, arguments).await;
+        let (outcome, error) = match &result {
+            Ok(output) if output.is_error => ("error", Some(output.text.as_str())),
+            Ok(_) => ("ok", None),
+            Err(_) => ("failed", None),
+        };
+        self.broker.outcome(permit.id(), tool, outcome, error);
+        result
+    }
+
+    fn consents(&self) -> bool {
+        true
     }
 }
 

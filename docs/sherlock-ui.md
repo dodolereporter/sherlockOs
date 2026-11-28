@@ -30,13 +30,25 @@ unsafe { renderer.apply() };
 ```
 
 `Choice::detect` reads `/sys/class/drm` (never `lspci`, which wakes a sleeping card) and the
-Vulkan loader's folders. With a single chip on `amdgpu`, an AMD chip that drives the screen
-(`boot_vga`), and Mesa's Vulkan manifest (`radeon_icd*.json`, not the 32-bit ones), it renders
-with wgpu on Vulkan, the loader seeing that manifest only (`VK_DRIVER_FILES`): a dedicated card,
-NVIDIA or Radeon, is never asked anything. It also unsets `VK_ADD_DRIVER_FILES`,
-`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`. Otherwise it renders with tiny-skia, a dedicated
-Radeon card included (an Intel laptop with a Radeon card, an APU with a Radeon card). It also
-sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see ADR 0018).
+Vulkan loader's folders. It looks for the chip that drives the screen (`boot_vga`, or the only
+chip). If its kernel driver is one the shell renders on, it renders with wgpu on Vulkan, the
+loader seeing only the manifests of that chip's driver (`VK_DRIVER_FILES`, 32-bit ones left
+out): `amdgpu` with RADV (`radeon_icd*`), `i915` or `xe` with ANV and HASVK (`intel_icd*`,
+`intel_hasvk_icd*`), NVIDIA's own driver with `nvidia_icd*` (lot UI-09). A dedicated card that
+does not drive the screen is never asked anything, nor is a second chip of the same family
+(an APU and a Radeon card: RADV would open both). It also unsets `VK_ADD_DRIVER_FILES`,
+`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`, and sets Mesa's
+`vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see ADR 0018).
+
+Otherwise (no chip, nouveau, a virtual GPU, two chips of one family, the driver missing) it
+renders with wgpu on Mesa's Vulkan driver on the processor, lavapipe (`lvp_icd*`), when it is
+installed: the glass stays translucent, the corners round, and the panels and menus animate
+(`Choice::Vulkan` with `software: Some(reason)`). Only without lavapipe does it fall back to
+tiny-skia, whose buffers (softbuffer, `XRGB8888`) have no alpha: there, every glass of the
+palette is laid over the theme's desktop color (`color::set_opaque_glass`, set by
+`surface::Shadowed` when it sees the software renderer), so that the bar and the bubbles show
+their color over the desktop instead of a mix with black; the corners outside the rounded
+surfaces stay black, and the panels open without animation.
 `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software); set to
 `wgpu`, it is kept and the Vulkan restriction still applies where it can. If wgpu finds no
 adapter that can present, iced falls back to tiny-skia by itself.
@@ -755,6 +767,34 @@ of the tile, enlarged four times:
 ![Edges before and after, dark](sherlock-ui/icon-edges.png)
 ![Edges before and after, light](sherlock-ui/icon-edges-light.png)
 
+### Icon files from outside, read with bounds, drawn off the interface thread (S-DOCK-2)
+
+Any application installs an icon, and `Icon=` may name any file. `raster` reads them with
+bounds:
+
+- an SVG file of 1 MiB at most (`MAX_SVG_BYTES`), a PNG file of 4 MiB at most
+  (`MAX_PICTURE_BYTES`), each a regular file once its links are followed (a link to `/dev/zero`
+  is refused);
+- a PNG of 4,096 pixels a side at most (`MAX_PICTURE_SIDE`, read in its header before decoding);
+- no compressed SVG (`.svgz`): usvg would inflate it whole, whatever its size;
+- no `<image>` that names a file, absolute or relative: usvg's own resolver would read any file
+  the program can. Only a PNG written in the document (`data:`) is drawn, with the same bound.
+  A PNG icon file is drawn through a small document whose one image is that file's bytes, read
+  above.
+
+`rasterize_file(path, side)` does this for a file; `rasterize(document, side)` applies the same
+options to a document in memory (Evidence's). A handle made with `svg::Handle::from_path` goes
+through `rasterize_file`.
+
+A program that calls `raster::draw_in_background()` before it starts (the dock and the launcher)
+never rasterizes a file on its interface thread: the first time an icon file is asked at a size,
+`raster::icon` draws it transparent and hands it to one worker thread, which keeps the result in
+the same cache; `raster::drawn()` is a subscription that sends a message each time, so that the
+program draws again and the icon appears. A file is asked once per size while it is pending.
+Documents in memory (the program's own icons) are still drawn at once. Programs that do not call
+it, and the tests, draw at once as before. The applications view draws its grid off the thread
+already (`apps/src/icons.rs`), now with `rasterize_file`.
+
 ## Additions of D-26a (Control Room)
 
 - **`control_room`**: sizes, motions and French texts of Control Room (`docs/control-room.md`).
@@ -767,6 +807,23 @@ of the tile, enlarged four times:
   picker, veiled on hover, ringed in green when chosen.
 - **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
   and `Sidebar`, drawn on the same grid and stroke.
+
+## Blur behind glass (D-37)
+
+- **Tokens** (`blur`): `PASSES` and `OFFSET` set how much the compositor blurs, `SATURATION`
+  how much livelier the blurred colors are, `VEIL_OPACITY` the veil of the desktop color laid
+  behind glass where there is no blur. `rounded_region` cuts a rounded rectangle into the
+  rectangles of a Wayland region: one band per row in the corners.
+- **Component** (`glass`, feature `layer-shell`): `glass(content, radius)` draws its content as
+  is and gives its rounded bounds to iced_exwlshell as the blur region of the surface
+  (`ext_background_effect_v1`). The dock and its menu, the top bar, the notification bubbles and
+  the launcher's panel are wrapped in it. The tint and the border stay the content's style.
+- **Automatic** (lot D-37b): with `layer-shell`, `surface::shadowed` with the `Menu` or
+  `Panel` elevation asks for the blur over its rounded bounds by itself: every menu, submenu,
+  floating menu and panel of the shell. `Flat` does not: it only learns the renderer.
+- **Too slow** (lot D-37b): `LATE_AFTER` and `LATE_IN_A_ROW` say when the compositor gives up
+  the blur for the veil. See "Blur behind glass" in
+  `docs/compositor.md` and ADR 0027.
 
 ## Scroll areas (UI-11)
 
