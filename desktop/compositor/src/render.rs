@@ -45,6 +45,7 @@ use smithay::{
 use crate::{
     State,
     anim::Visual,
+    blur,
     damage::{Ids, Key, Part, Stamped, params_hash},
     decorations::{self, Bar, Look},
     genie, is_override_redirect, mission_control, osd,
@@ -65,6 +66,7 @@ render_elements! {
     Genie=Stamped<genie::GenieElement>,
     Decoration=Stamped<TextureRenderElement<GlesTexture>>,
     Thumbnail=RoundedSurface<TextureRenderElement<GlesTexture>>,
+    Blur=blur::BlurElement,
 }
 
 /// Programs compiled once and for all when rendering starts.
@@ -81,6 +83,8 @@ pub struct Scene {
     osd: RefCell<osd::Texture>,
     /// Textures of the thumbnail of a screenshot and of the loupe (lot D-35e).
     pictures: RefCell<crate::picture::Pictures>,
+    /// The blur behind glass surfaces (lot D-37).
+    pub blur: blur::Painter,
 }
 
 /// What a screen shows, from front to back, before it becomes render elements: plain data,
@@ -164,6 +168,12 @@ pub enum Item {
         rect: Rectangle<i32, Physical>,
         radius: f32,
     },
+    /// The blur behind the glass surface `key`, over `rects` of the frame (lot D-37).
+    Blur {
+        key: Key,
+        rects: Vec<Rectangle<i32, Physical>>,
+        alpha: f32,
+    },
     /// The last image of a window that closes, stretched into `rect` (lot D-34).
     Snapshot {
         key: Key,
@@ -245,6 +255,7 @@ impl Scene {
             labels: RefCell::default(),
             osd: RefCell::default(),
             pictures: RefCell::default(),
+            blur: blur::Painter::new(renderer),
         })
     }
 
@@ -275,13 +286,16 @@ impl Scene {
             let (items, moving) = items(state, (output, view), preview, shown, now);
             animating |= moving || fading;
             let mode = state.wallpaper.mode;
-            let elements = items
+            self.blur.begin_screen(output.name());
+            let elements: Vec<_> = items
                 .into_iter()
                 .flat_map(|item| self.elements(renderer, ids, item, view, &wallpaper, mode))
                 .collect();
+            blur::track(&elements);
             screens.push(elements);
         }
         ids.sweep();
+        self.blur.sweep();
         self.genie.sweep();
         self.bars.borrow_mut().sweep();
         self.labels.borrow_mut().sweep();
@@ -492,6 +506,10 @@ impl Scene {
                     })
                 })
                 .collect(),
+            Item::Blur { key, rects, alpha } => {
+                let element = self.blur.element(renderer, key, &rects, alpha, view);
+                element.map(SceneElement::Blur).into_iter().collect()
+            }
             Item::Snapshot {
                 key,
                 texture,
@@ -611,8 +629,8 @@ pub fn items(
         &[Layer::Bottom, Layer::Background],
         |_, _| Some(Point::default()),
     );
-    // Last, so drawn first: what the blur behind glass surfaces (lot D-11b) will read from
-    // the frame, like the rest of the desktop.
+    // Last, so drawn first: what the blur behind glass surfaces (lot D-37) reads from the
+    // frame, like the rest of the desktop.
     if wallpaper {
         items.push(Item::Wallpaper);
         return (items, animating);
@@ -655,21 +673,52 @@ fn push_layers(
                 alpha: 1.0,
             };
             push_surface(items, surface.wl_surface(), at, true);
-            let mut rect = geometry.to_f64();
-            rect.loc += shift;
-            push_backdrop(items, view.rect(rect));
         }
     }
 }
 
-/// Placeholder for the blur behind glass surfaces (lot D-11b): what is already drawn behind
-/// `rect` gets blurred here, just behind the surface. Nothing yet: the surface is drawn as is,
-/// translucent over a sharp background.
-fn push_backdrop(_items: &mut [Item], _rect: Rectangle<i32, Physical>) {}
+/// The rectangles of the frame that cover `rect` rounded by `radius` (lot D-37b).
+pub(crate) fn rounded_rects(
+    rect: Rectangle<i32, Physical>,
+    radius: f32,
+) -> Vec<Rectangle<i32, Physical>> {
+    let Rectangle { loc, size } = rect;
+    sherlock_ui::blur::rounded_region(loc.x, loc.y, size.w, size.h, radius)
+        .into_iter()
+        .map(|[x, y, w, h]| Rectangle::new((x, y).into(), (w, h).into()))
+        .collect()
+}
 
-/// A surface tree, untouched (no clip, border or shadow), placed by `at`. `popups`: its menus
-/// too, in front of it (smithay lists nested menus with the root surface, so a menu never has
-/// menus of its own here).
+/// The blur `surface` asks for behind its window drawn in `rect` from `geometry`, cut to the
+/// window's rounded `frame` (lot D-37b): Qt's translucent windows, our glass windows.
+fn window_blur(
+    surface: &WlSurface,
+    (rect, geometry): (Rectangle<i32, Physical>, Rectangle<i32, Logical>),
+    (frame, radius): (Rectangle<i32, Physical>, f32),
+) -> Vec<Rectangle<i32, Physical>> {
+    let region = crate::background_effect::region(surface);
+    if region.is_empty() {
+        return Vec::new();
+    }
+    let shape = rounded_rects(frame, radius);
+    let sx = f64::from(rect.size.w) / f64::from(geometry.size.w);
+    let sy = f64::from(rect.size.h) / f64::from(geometry.size.h);
+    let x = |v: i32| (f64::from(rect.loc.x) + f64::from(v - geometry.loc.x) * sx).round() as i32;
+    let y = |v: i32| (f64::from(rect.loc.y) + f64::from(v - geometry.loc.y) * sy).round() as i32;
+    region
+        .into_iter()
+        .flat_map(|r| {
+            let (left, top) = (x(r.loc.x), y(r.loc.y));
+            let (right, bottom) = (x(r.loc.x + r.size.w), y(r.loc.y + r.size.h));
+            let r = Rectangle::new((left, top).into(), (right - left, bottom - top).into());
+            shape.iter().filter_map(move |s| s.intersection(r))
+        })
+        .collect()
+}
+
+/// A surface tree, untouched (no clip, border or shadow), placed by `at`, with the blur it asks
+/// for just behind it (lot D-37). `popups`: its menus too, in front of it (smithay lists nested
+/// menus with the root surface, so a menu never has menus of its own here).
 fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, popups: bool) {
     if popups {
         for (popup, offset) in PopupManager::popups_for_surface(surface) {
@@ -687,6 +736,15 @@ fn push_surface(items: &mut Vec<Item>, surface: &WlSurface, at: Placement<'_>, p
         scale: view.scale,
         alpha,
     });
+    let region = crate::background_effect::region(surface);
+    if !region.is_empty() {
+        let rects = region
+            .into_iter()
+            .map(|r| view.rect(Rectangle::new(loc + r.loc.to_f64(), r.size.to_f64())))
+            .collect();
+        let key = Key::of(Some(surface.id()), Part::Blur);
+        items.push(Item::Blur { key, rects, alpha });
+    }
 }
 
 pub(crate) fn push_window(
@@ -792,6 +850,15 @@ pub(crate) fn push_window(
         alpha: visual.opacity,
         radius,
     });
+    let rects = window_blur(surface, (rect, geometry), (frame, radius));
+    if !rects.is_empty() {
+        let key = Key::of(owner.clone(), Part::Blur);
+        items.push(Item::Blur {
+            key,
+            rects,
+            alpha: visual.opacity,
+        });
+    }
     if decorated && shadow {
         items.push(Item::Shadow {
             key: Key::of(owner, Part::Shadow),
@@ -913,7 +980,7 @@ impl Shadow {
 /// Rectangle `clip` of the frame in the buffer being drawn into, where `gl_FragCoord` counts
 /// its pixels: after the frame transform. The windowed backend flips the frame (`Flipped180`):
 /// the top of the frame is at the bottom of the buffer.
-fn clip_in_frame(
+pub(crate) fn clip_in_frame(
     clip: Rectangle<f64, Physical>,
     transform: Transform,
     frame_size: Size<i32, Physical>,

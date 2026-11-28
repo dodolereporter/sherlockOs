@@ -52,8 +52,6 @@ pub struct Drag {
     pub start: Option<Point>,
     pub at: Option<Point>,
     pub moving: bool,
-    /// Let go: kept until the next press, so that the release is not taken for a click.
-    pub done: bool,
 }
 
 /// The buttons and, while an icon is pressed, the moves of the pointer over the bar's surfaces.
@@ -105,23 +103,19 @@ impl Bar {
             mouse::Event::CursorMoved { position } => {
                 if let Some(drag) = &mut self.tray.drag
                     && drag.from == place
-                    && !drag.done
                 {
                     let start = *drag.start.get_or_insert(position);
                     drag.at = Some(position);
                     drag.moving |= start.distance(position) > THRESHOLD;
                 }
             }
+            // The button heard the release first, and took no click from a drag (`tray_click`):
+            // the drag ends here, and the next click is a click, even one whose press the
+            // subscription has not told yet (Q-48).
             mouse::Event::ButtonReleased(_) => {
                 FOLLOW.store(false, Ordering::Relaxed);
-                let dropped = self.tray.drag.as_mut().filter(|d| d.moving && !d.done);
-                let Some(drag) = dropped else {
-                    self.tray.drag = None;
-                    return Task::none();
-                };
-                drag.done = true;
-                let drag = drag.clone();
-                if let Some(change) = self.dropped(&drag) {
+                let dropped = self.tray.drag.take().filter(|d| d.moving);
+                if let Some(change) = dropped.and_then(|drag| self.dropped(&drag)) {
                     return self.change_pins(change);
                 }
             }
@@ -143,7 +137,6 @@ impl Bar {
             start: None,
             at: None,
             moving: false,
-            done: false,
         })
     }
 
@@ -153,7 +146,7 @@ impl Bar {
         self.tray
             .drag
             .as_ref()
-            .is_some_and(|d| d.from == place && d.moving && !d.done)
+            .is_some_and(|d| d.from == place && d.moving)
     }
 
     /// Where the pointer of `drag` is in the bar surface.
@@ -228,7 +221,7 @@ impl Bar {
     /// The icon of popup being dragged over the bar, and where it would land: shown there.
     fn preview(&self) -> Option<(&Item, usize)> {
         let drag = self.tray.drag.as_ref()?;
-        if drag.from != Place::Popup || !drag.moving || drag.done {
+        if drag.from != Place::Popup || !drag.moving {
             return None;
         }
         let at = self.in_bar(drag)?;
@@ -275,7 +268,7 @@ impl Bar {
             .tray
             .drag
             .as_ref()
-            .filter(|d| d.key == key && d.from == Place::Bar && d.moving && !d.done);
+            .filter(|d| d.key == key && d.from == Place::Bar && d.moving);
         if let Some((Some(start), Some(at))) = dragged.map(|d| (d.start, d.at)) {
             let leaving = at.y > metrics::TOP_BAR_HEIGHT + look::BELOW_BAR;
             let opacity = if leaving { DRAGGED } else { 1.0 };
@@ -384,6 +377,12 @@ mod tests {
             Some((key.clone(), 0))
         );
         assert!(bar.view_pinned().is_some());
+        // Let go over its cell, the button would hear it first: that is not a click.
+        assert_eq!(
+            bar.update(Message::TrayClick(key.clone(), Click::Primary))
+                .units(),
+            0
+        );
         let saved = pointer(&mut bar, popup, mouse::Event::ButtonReleased(Button::Left));
         assert!(saved.units() > 0, "written to the settings file");
         assert_eq!(bar.tray.pins, ["item-2"]);
@@ -394,12 +393,11 @@ mod tests {
         // It left the popup for the bar.
         assert_eq!(bar.tray.in_popup().count(), 2);
         assert_eq!(bar.tray.pinned().count(), 1);
-        // The release over its cell is not a click.
-        assert_eq!(
-            bar.update(Message::TrayClick(key, Click::Primary)).units(),
-            0
-        );
-        assert!(bar.tray_open());
+        assert_eq!(bar.tray.drag, None);
+        // A quick click on it right after, which reaches the bar before the subscription tells
+        // its press, activates it (Q-48: it used to be taken for the end of the drag).
+        let clicked = bar.update(Message::TrayClick(key, Click::Primary));
+        assert!(clicked.units() > 0);
         // The file's answer replaces the list.
         let _ = bar.update(Message::Pins(vec![
             String::from("item-2"),
