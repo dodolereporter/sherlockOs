@@ -205,6 +205,8 @@ pub enum Message {
     TryKeys(String),
     /// Whether the default application of a kind was written.
     AppWritten(Kind, bool),
+    /// The Bluetooth page: BlueZ read, an action asked or ended (lot D-26o).
+    Bluetooth(crate::bluetooth::Msg),
     /// Where the page scrolls to for the setting opened: from, to.
     ScrollTo(Option<(f64, f64)>),
     /// The « Écrans » page: the compositor's screens and what is changed of them.
@@ -286,6 +288,8 @@ pub struct App {
     /// The installed wallpapers, once found off the interface thread.
     pub(crate) installed: Option<Vec<&'static wallpapers::Wallpaper>>,
     pub(crate) sound: Sound,
+    /// The Bluetooth page's view of BlueZ (lot D-26o).
+    pub(crate) bluetooth: crate::bluetooth::State,
     /// The installed applications and their associations, once read.
     pub(crate) catalog: Option<Arc<Catalog>>,
     /// Files that cannot be changed: unreadable, not text, or not writable. Their settings
@@ -334,6 +338,7 @@ impl App {
             thumbnails: HashMap::new(),
             installed: None,
             sound: Sound::Loading,
+            bluetooth: crate::bluetooth::State::default(),
             catalog: None,
             locked,
             sound_queue: Vec::new(),
@@ -356,11 +361,15 @@ impl App {
         let audio = Task::perform(async move { sound::read(&pactl) }, Message::Audio);
         let catalog = app.load_catalog();
         let mut app = app;
+        let bluetooth = match app.page {
+            Page::Bluetooth => app.bluetooth.open().map(Message::Bluetooth),
+            _ => Task::none(),
+        };
         let network = match app.page == Page::Network {
             true => app.open_network(),
             false => Task::none(),
         };
-        (app, Task::batch([load, audio, catalog, network]))
+        (app, Task::batch([load, audio, catalog, bluetooth, network]))
     }
 
     fn pactl(&self) -> Pactl {
@@ -443,6 +452,11 @@ impl App {
                 .map(|e| Message::Displays(DisplayChange::Event(e))),
             false => Subscription::none(),
         };
+        let bluetooth = if self.page == Page::Bluetooth {
+            Subscription::run(crate::bluetooth::changes).map(Message::Bluetooth)
+        } else {
+            Subscription::none()
+        };
         // The networks around, read again while their page is open; the pages other
         // `control-room` ask for.
         let network = match self.page == Page::Network {
@@ -451,12 +465,29 @@ impl App {
             false => Subscription::none(),
         };
         let asked = Subscription::run(crate::instance::asked).map(Message::Show);
-        Subscription::batch([frames, tab, keys, appearance, screens, network, asked])
+        Subscription::batch([
+            frames, tab, keys, appearance, screens, bluetooth, network, asked,
+        ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.page;
+        let task = self.handle(message);
+        // The Bluetooth page reads BlueZ and scans while it is open, and stops when it is left.
+        let follow = match (before == Page::Bluetooth, self.page == Page::Bluetooth) {
+            (false, true) => self.bluetooth.open(),
+            (true, false) => self.bluetooth.close(),
+            _ => Task::none(),
+        };
+        Task::batch([task, follow.map(Message::Bluetooth)])
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         let now = self.now();
         match message {
+            Message::Bluetooth(message) => {
+                return self.bluetooth.update(message).map(Message::Bluetooth);
+            }
             Message::Go(page) => return self.go(page),
             Message::Show(page) => {
                 let shown = self.go(page);

@@ -127,6 +127,56 @@ fn the_bar_and_its_menu_render_in_both_themes() {
     }
 }
 
+/// Lot UI-09: without a GPU the bar renders with tiny-skia, whose buffers lose their alpha.
+/// Its glass is then drawn opaque, the color it shows over the desktop, not mixed with black:
+/// in the light theme a light glass, and « 12 % » of a low battery readable. At 1920 and 1366,
+/// `bar-software-light-1920` and `bar-software-light-1366`, copied to `screenshots/`.
+#[test]
+fn in_software_the_bar_glass_is_opaque_with_its_own_color() {
+    for width in [1920.0, 1366.0] {
+        in_theme(Theme::Light, || {
+            let mut state = sample();
+            let low = Battery {
+                percent: 12,
+                charge: Charge::Discharging,
+                minutes: Some(25),
+            };
+            let _ = state.update(Message::Battery(Some(low)));
+            let size = (
+                width - 2.0 * metrics::TOP_BAR_MARGIN_SIDE,
+                metrics::TOP_BAR_HEIGHT,
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+            let name = format!("bar-software-light-{width}");
+            let (path, _) = capture(ui, &name).unwrap();
+            // tiny-skia drew it: the glass is opaque from the first frame on.
+            assert_eq!(sherlock_ui::surface::gpu_drawn(), Some(false));
+            let p = color::palette();
+            assert!(p.top_bar_glass.a >= 1.0);
+            let expected = color::Palette::LIGHT
+                .top_bar_glass
+                .over(color::Palette::LIGHT.desktop);
+            assert_eq!(p.top_bar_glass, expected);
+            // A pixel of glass in the middle of the bar, between the workspaces and the
+            // clock: opaque, of that color (at the capture's scale).
+            let image = image::open(&path).unwrap().to_rgba8();
+            let pixel = image.get_pixel(image.width() / 2, image.height() - 4);
+            assert_eq!(pixel.0[3], 255, "opaque");
+            let close = |a: u8, b: u8| a.abs_diff(b) <= 2;
+            assert!(
+                close(pixel.0[0], expected.r) && close(pixel.0[1], expected.g),
+                "{:?} for {expected:?}",
+                pixel.0
+            );
+            // « 12 % » in amber on it: 4.5 to 1 at least.
+            assert!(p.amber_text.contrast(p.top_bar_glass) >= 4.5);
+            let copy = format!("{}/screenshots/{name}.png", env!("CARGO_MANIFEST_DIR"));
+            std::fs::copy(&path, copy).unwrap();
+        });
+    }
+    color::set_opaque_glass(false);
+}
+
 /// The bar attached to the top edge, as over a maximized window: the whole width, square
 /// corners, opaque. The third workspace holds no window: its chip is bare. `bar-attached`, then
 /// `bar-attached-light`.
@@ -443,6 +493,60 @@ fn the_panels_render_in_both_themes() {
     }
 }
 
+/// The outputs and the inputs of the sound (D-20g): the speakers in use, HDMI and a
+/// Bluetooth headset, two inputs and the microphone's slider. `sound-devices`, both themes.
+#[test]
+fn the_outputs_and_inputs_render_in_both_themes() {
+    use bar::system::audio::Endpoint;
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            board_quick(&mut state);
+            let endpoint = |name: &str, description: &str| Endpoint {
+                name: name.to_owned(),
+                description: description.to_owned(),
+            };
+            let devices = quick::Devices {
+                outputs: vec![
+                    endpoint("speakers", "Haut-parleurs intégrés"),
+                    endpoint("hdmi", "HDMI / DisplayPort"),
+                    endpoint("headset", "Casque WH-1000XM4"),
+                ],
+                inputs: vec![
+                    endpoint("mic", "Microphone intégré"),
+                    endpoint("headset-mic", "Casque WH-1000XM4"),
+                ],
+                output: String::from("speakers"),
+                input: String::from("mic"),
+                microphone: Some(Sound {
+                    volume: 70,
+                    muted: false,
+                }),
+            };
+            let _ = state.quick.update(quick::Message::ShowSound(true));
+            let _ = state
+                .quick
+                .update(quick::Message::Audio(Load::Ready(devices)));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let size = panel_size(&state, Panel::Control);
+            let mut ui =
+                Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert!(ui.find("HDMI / DisplayPort").is_ok());
+            let _ = ui.click("HDMI / DisplayPort");
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(
+                messages.iter().any(
+                    |m| matches!(m, Message::Quick(quick::Message::ChooseOutput(n)) if n == "hdmi")
+                ),
+                "{messages:?}"
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("sound-devices{suffix}")));
+        });
+    }
+}
+
 /// The panels on short screens (UI-08), the logical heights of 1280 × 800 at 1.5 (`-533`),
 /// 1366 × 768 at 1.25 (`-614`) and 1920 × 1080 at 1.5 (`-720`): `calendar-<height>`, the
 /// centre shorter, or both scrolling together on the shortest; `control-centre-<height>`, the
@@ -697,8 +801,6 @@ fn the_quick_settings_answer_their_clicks() {
         "Maison",
         "Bluetooth",
         "Désactivé",
-        "Mode jeu",
-        "Bientôt",
         "Haut-parleurs intégrés",
         "Équilibré",
         "Camille",
@@ -708,6 +810,10 @@ fn the_quick_settings_answer_their_clicks() {
             ui.find(text).is_ok(),
             "{text} missing from the quick settings"
         );
+    }
+    // Nothing that does nothing (D-20f).
+    for gone in ["Mode jeu", "Carte graphique", "Bientôt"] {
+        assert!(ui.find(gone).is_err(), "{gone} still shown");
     }
     ui.click("Bluetooth").expect("tile found");
     ui.click("Économie").expect("profile found");
@@ -721,11 +827,6 @@ fn the_quick_settings_answer_their_clicks() {
             Message::Quick(quick::Message::ToggleDoNotDisturb),
         ]
     ));
-    // The game mode and the graphics card do nothing yet.
-    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-    ui.click("Mode jeu").expect("tile found");
-    ui.click("NVIDIA").expect("segment found");
-    assert_eq!(ui.into_messages().count(), 0);
 }
 
 /// The battery of the bar at 5, 50 and 100 % on its own, charging at 54 %, plugged in and

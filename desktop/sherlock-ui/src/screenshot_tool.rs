@@ -775,6 +775,103 @@ pub fn thumbnail_out(thumb: &Rect, screen: &Rect) -> f64 {
     screen.right() - thumb.x + metrics::SHADOW_BLUR as f64 / 2.0
 }
 
+/// The shadow of a window taken alone, as it shows on the desktop: offset down, blurred, in
+/// the shadow color. Room it needs around the window at `scale`: left and right, top, bottom.
+pub fn shadow_room(scale: f64) -> (u32, u32, u32) {
+    let blur = (f64::from(metrics::SHADOW_BLUR) * scale).ceil();
+    let offset = (f64::from(metrics::SHADOW_OFFSET) * scale).ceil();
+    let side = blur as u32;
+    (
+        side,
+        (blur - offset).max(0.0) as u32,
+        (blur + offset) as u32,
+    )
+}
+
+/// `rgba` (straight, `w` by `h`) on a larger transparent image, its shadow under it: what a
+/// window taken alone looks like on macOS. Returns the new image and its size.
+pub fn with_shadow(
+    rgba: &[u8],
+    (w, h): (u32, u32),
+    scale: f64,
+    shadow: Color,
+) -> (Vec<u8>, u32, u32) {
+    let (side, top, bottom) = shadow_room(scale);
+    let (nw, nh) = (w + 2 * side, h + top + bottom);
+    let (wu, nwu) = (w as usize, nw as usize);
+    // The alpha of the window, where its shadow falls.
+    let offset = (f64::from(metrics::SHADOW_OFFSET) * scale).round() as usize;
+    let mut mask = vec![0.0f32; nwu * nh as usize];
+    for y in 0..h as usize {
+        for x in 0..wu {
+            let a = f32::from(rgba[(y * wu + x) * 4 + 3]) / 255.0;
+            let (mx, my) = (x + side as usize, y + top as usize + offset);
+            if let Some(m) = mask.get_mut(my * nwu + mx) {
+                *m = a;
+            }
+        }
+    }
+    // A gaussian of the blur's spread, as three box blurs one after the other.
+    let sigma = f64::from(metrics::SHADOW_BLUR) * scale / 2.0;
+    let radius = ((sigma * sigma * 4.0 + 1.0).sqrt() / 2.0).round().max(1.0) as usize;
+    for _ in 0..3 {
+        box_blur(&mut mask, nwu, nh as usize, radius);
+    }
+    let mut out = vec![0u8; nwu * nh as usize * 4];
+    for (i, m) in mask.iter().enumerate() {
+        let a = (m * shadow.a).clamp(0.0, 1.0);
+        out[i * 4..i * 4 + 4].copy_from_slice(&[
+            shadow.r,
+            shadow.g,
+            shadow.b,
+            (a * 255.0).round() as u8,
+        ]);
+    }
+    // The window over its shadow, straight alpha.
+    for y in 0..h as usize {
+        for x in 0..wu {
+            let src = &rgba[(y * wu + x) * 4..(y * wu + x) * 4 + 4];
+            let at = ((y + top as usize) * nwu + x + side as usize) * 4;
+            let dst = &mut out[at..at + 4];
+            let (sa, da) = (f32::from(src[3]) / 255.0, f32::from(dst[3]) / 255.0);
+            let a = sa + da * (1.0 - sa);
+            if a > 0.0 {
+                for c in 0..3 {
+                    let v = (f32::from(src[c]) * sa + f32::from(dst[c]) * da * (1.0 - sa)) / a;
+                    dst[c] = v.round().clamp(0.0, 255.0) as u8;
+                }
+            }
+            dst[3] = (a * 255.0).round() as u8;
+        }
+    }
+    (out, nw, nh)
+}
+
+/// A blur of `radius` along the rows, then along the columns, with running sums.
+fn box_blur(values: &mut [f32], w: usize, h: usize, radius: usize) {
+    let mut line = Vec::new();
+    let mut pass =
+        |values: &mut [f32], count: usize, len: usize, at: &dyn Fn(usize, usize) -> usize| {
+            let span = (2 * radius + 1) as f32;
+            for n in 0..count {
+                line.clear();
+                line.extend((0..len).map(|i| values[at(n, i)]));
+                let mut sum: f32 = line.iter().take(radius + 1).sum();
+                for i in 0..len {
+                    values[at(n, i)] = sum / span;
+                    if let Some(v) = line.get(i + radius + 1) {
+                        sum += v;
+                    }
+                    if i >= radius {
+                        sum -= line[i - radius];
+                    }
+                }
+            }
+        };
+    pass(values, h, w, &|row, i| row * w + i);
+    pass(values, w, h, &|col, i| i * w + col);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -962,5 +1059,28 @@ mod tests {
         // A tall image keeps its height bounded.
         let tall = thumbnail(&screen(1920.0, 1080.0), (100, 2000), 0.0);
         assert!((tall.h - f64::from(THUMBNAIL)).abs() < 1e-9 && tall.w >= 24.0);
+    }
+
+    #[test]
+    fn a_window_taken_alone_carries_its_shadow() {
+        let (w, h) = (40u32, 30u32);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|_| [200, 100, 50, 255]).collect();
+        let shadow = Color::rgba(3, 8, 18, 0.55);
+        let (out, nw, nh) = with_shadow(&rgba, (w, h), 0.5, shadow);
+        let (side, top, bottom) = shadow_room(0.5);
+        assert_eq!((nw, nh), (w + 2 * side, h + top + bottom));
+        assert_eq!(out.len(), (nw * nh * 4) as usize);
+        let px =
+            |x: u32, y: u32| &out[((y * nw + x) * 4) as usize..((y * nw + x) * 4 + 4) as usize];
+        // The window unchanged, at its place.
+        assert_eq!(px(side + 5, top + 5), &[200, 100, 50, 255]);
+        // Below it, some shadow; far in the corner, none.
+        let under = px(side + w / 2, top + h + bottom / 3);
+        assert!(under[3] > 10, "{under:?}");
+        assert_eq!(px(0, 0)[3], 0);
+        // More shadow below than above: it falls down.
+        let above = px(side + w / 2, top / 2);
+        let below = px(side + w / 2, top + h + top / 2);
+        assert!(below[3] > above[3], "{above:?} {below:?}");
     }
 }

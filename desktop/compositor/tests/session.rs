@@ -14,9 +14,9 @@ mod tests {
     const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/session/sherlockos-session");
 
     /// The system tools the script uses, linked into the test's `PATH`.
-    const TOOLS: [&str; 12] = [
+    const TOOLS: [&str; 13] = [
         "sh", "dirname", "readlink", "mkdir", "mv", "awk", "date", "wc", "cat", "sleep", "env",
-        "kill",
+        "kill", "rm",
     ];
 
     struct Session {
@@ -79,6 +79,13 @@ mod tests {
 
         /// Runs the script with `vars`, and returns its log.
         fn run(&self, vars: &[(&str, String)]) -> String {
+            let (status, log) = self.run_status(vars);
+            assert!(status.success(), "{status}");
+            log
+        }
+
+        /// Runs the script with `vars`, and returns how it ended and its log.
+        fn run_status(&self, vars: &[(&str, String)]) -> (std::process::ExitStatus, String) {
             let d = &self.dir;
             let mut command = Command::new("env");
             command
@@ -93,9 +100,8 @@ mod tests {
                 command.arg(format!("{key}={value}"));
             }
             let status = command.arg("sh").arg(SCRIPT).status().unwrap();
-            assert!(status.success(), "{status}");
             let log = d.join("home/.local/state/sherlockos/session.log");
-            std::fs::read_to_string(log).unwrap_or_default()
+            (status, std::fs::read_to_string(log).unwrap_or_default())
         }
 
         fn out(&self, name: &str) -> String {
@@ -224,5 +230,45 @@ mod tests {
         assert!(!s.out("args").contains("--xwayland"), "{}", s.out("args"));
         assert!(s.dir.join("out/bar").exists(), "{log}");
         assert!(!s.dir.join("out/sherlockos-autostart").exists(), "{log}");
+    }
+
+    /// The compositor stops while locked (lot D-25j): the logind session ends, instead of the
+    /// console it was started from coming back. Unlocked, the session just ends.
+    #[test]
+    fn a_compositor_that_stops_while_locked_ends_the_logind_session() {
+        let s = Session::new("locked");
+        let o = s.dir.join("out");
+        s.fake(
+            "loginctl",
+            &format!(
+                "#!/bin/sh\n[ \"$1\" = terminate-session ] && echo \"$@\" >> '{}/loginctl'\nexit 0\n",
+                o.display()
+            ),
+        );
+        // A compositor that locks, then stops (or crashes) without unlocking.
+        write(
+            &s.dir.join("bin/compositor"),
+            "#!/bin/sh\n: > \"$SHERLOCKOS_LOCK_MARK\"\nexit 0\n",
+        );
+        let vars = [
+            ("XDG_SESSION_ID", String::from("7")),
+            ("SHERLOCKOS_XWAYLAND", String::from("0")),
+        ];
+        let (status, log) = s.run_status(&vars);
+        assert!(!status.success());
+        assert_eq!(s.out("loginctl").trim(), "terminate-session 7", "{log}");
+        assert!(log.contains("stopped while locked"), "{log}");
+        assert!(!s.dir.join("run/sherlockos-locked").exists());
+
+        // A mark left by a crash before is not taken for a lock: the compositor that locks and
+        // unlocks leaves the session to end by itself.
+        std::fs::remove_file(o.join("loginctl")).unwrap();
+        std::fs::write(s.dir.join("run/sherlockos-locked"), "").unwrap();
+        write(
+            &s.dir.join("bin/compositor"),
+            "#!/bin/sh\n: > \"$SHERLOCKOS_LOCK_MARK\"\nrm \"$SHERLOCKOS_LOCK_MARK\"\n",
+        );
+        let log = s.run(&vars);
+        assert!(!o.join("loginctl").exists(), "{log}");
     }
 }

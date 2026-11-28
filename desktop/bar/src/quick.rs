@@ -24,7 +24,7 @@ use sherlock_ui::scroll::scroll;
 use sherlock_ui::{color, metrics, typography};
 
 use crate::source::battery::{Battery, Charge};
-use crate::system::audio::{Output, Pactl};
+use crate::system::audio::{Device, Output, Pactl};
 use crate::system::backlight::{self, Backlight};
 use crate::system::bluetooth::{self, Bluetooth};
 use crate::system::keyboard::{self, KeyboardLight};
@@ -35,6 +35,9 @@ use crate::system::{self, Problem};
 use crate::unfold::Unfold;
 
 mod devices;
+mod sound;
+
+pub use sound::{Devices, read as read_devices};
 
 /// A value read from a service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,18 +76,20 @@ pub enum Service {
     Session,
     /// The keyboard backlight, when the machine has one.
     Keyboard,
+    /// The outputs, the inputs and the microphone (D-20g).
+    Microphone,
 }
 
 /// One read of a service at a time: one asked meanwhile runs once the first ends, however
 /// many were asked. A burst of signals never stacks reads on the bus.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Reads {
-    reading: u8,
-    again: u8,
+    reading: u16,
+    again: u16,
 }
 
 impl Reads {
-    fn bit(service: Service) -> u8 {
+    fn bit(service: Service) -> u16 {
         1 << service as u8
     }
 
@@ -142,6 +147,8 @@ pub enum Page {
     Networks,
     /// The Bluetooth devices, paired and found (`devices.rs`).
     Devices,
+    /// The outputs and the inputs of the sound (`sound.rs`).
+    Sound,
 }
 
 /// What runs the session commands: the launcher's.
@@ -254,6 +261,8 @@ pub struct Quick {
     pub wifi: Load<Wifi>,
     pub bluetooth: Load<Bluetooth>,
     pub sound: Load<Output>,
+    /// The outputs, the inputs and the microphone, read while their page is open (D-20g).
+    pub audio: Load<Devices>,
     pub brightness: Load<Backlight>,
     pub keyboard: Load<KeyboardLight>,
     pub energy: Load<Power>,
@@ -288,6 +297,7 @@ pub struct Quick {
     sound_calls: SoundQueue,
     light: Throttle,
     keyboard_calls: Throttle,
+    microphone_calls: Throttle,
     /// The slider held under the pointer: a change made elsewhere does not move it.
     pub held: Option<Service>,
     pub reads: Reads,
@@ -317,11 +327,21 @@ pub enum Message {
     Wifi(Load<Wifi>),
     Bluetooth(Load<Bluetooth>),
     Sound(Load<Output>),
+    Audio(Load<Devices>),
+    /// The outputs and the inputs, or back (D-20g).
+    ShowSound(bool),
+    ChooseOutput(String),
+    ChooseInput(String),
+    MicrophoneVolume(u8),
+    MuteMicrophone,
     Brightness(Load<Backlight>),
     Keyboard(Load<KeyboardLight>),
     Energy(Load<Power>),
     ToggleWifi,
     ShowNetworks(bool),
+    /// « Réglages Wi-Fi… » and the others: Control Room on that page (`--page`), or on its
+    /// first one without. Started by the bar, which has the programs (D-20f).
+    OpenSettings(Option<&'static str>),
     Join(Network),
     /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
     OpenNetworkSettings,
@@ -527,6 +547,7 @@ impl Quick {
                     |r| Message::Keyboard(Load::from_result(r)),
                 )
             }
+            Service::Microphone => self.read_devices(),
             Service::DoNotDisturb | Service::Session => Task::none(),
         }
     }
@@ -582,6 +603,7 @@ impl Quick {
                 | Message::Wifi(_)
                 | Message::Bluetooth(_)
                 | Message::Sound(_)
+                | Message::Audio(_)
                 | Message::Brightness(_)
                 | Message::Keyboard(_)
                 | Message::Energy(_)
@@ -653,6 +675,7 @@ impl Quick {
                     });
                 }
             }
+            Message::OpenSettings(_) => {}
             Message::ShowNetworks(show) => {
                 let page = if show { Page::Networks } else { Page::Main };
                 self.turn_page(page, show);
@@ -781,7 +804,18 @@ impl Quick {
             Message::ConfirmForget(yes) => return self.forget(yes),
             Message::Session(command) => self.session(command),
             Message::Done(service, done) => return self.done(service, done),
+            Message::Changed(Service::Sound) if self.page == Page::Sound => {
+                // Another output chosen elsewhere, a headset plugged in: the page follows.
+                let sound = self.read(Service::Sound);
+                return Task::batch([sound, self.read(Service::Microphone)]);
+            }
             Message::Changed(service) => return self.read(service),
+            Message::Audio(read) => return self.devices_read(read),
+            Message::ShowSound(show) => return self.show_sound(show),
+            Message::ChooseOutput(name) => return self.choose(Device::Output, name),
+            Message::ChooseInput(name) => return self.choose(Device::Microphone, name),
+            Message::MicrophoneVolume(value) => return self.microphone_volume(value),
+            Message::MuteMicrophone => return self.mute_microphone(),
         }
         Task::none()
     }
@@ -816,6 +850,10 @@ impl Quick {
             Service::Sound => self.sound_calls.done().map(|c| self.send_sound(c)),
             Service::Brightness => self.light.done().map(|v| self.send_light(v)),
             Service::Keyboard => self.keyboard_calls.done().map(|v| self.send_keyboard(v)),
+            Service::Microphone => self
+                .microphone_calls
+                .done()
+                .map(|v| self.send_microphone(v)),
             _ => None,
         };
         match next {
@@ -852,6 +890,7 @@ impl Quick {
                 Service::Sound => self.sound_calls.busy(),
                 Service::Brightness => self.light.busy(),
                 Service::Keyboard => self.keyboard_calls.busy(),
+                Service::Microphone => self.microphone_calls.busy(),
                 _ => false,
             }
     }
@@ -1205,6 +1244,7 @@ impl Quick {
             Page::Main => self.view_main(user, battery),
             Page::Networks => self.view_networks(),
             Page::Devices => self.view_devices(),
+            Page::Sound => self.view_sound(),
         };
         let forward = self.page_forward;
         let coming = self.page_motion.page(forward, || page(self.page));
@@ -1243,22 +1283,15 @@ impl Quick {
     fn view_main<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
         let tiles = column![
             row![self.wifi_tile(), self.bluetooth_tile()].spacing(panels::TILE_GAP),
-            row![self.do_not_disturb_tile(), game_tile()].spacing(panels::TILE_GAP),
+            // « Mode jeu » and « Carte graphique » are not there: nothing behind them yet
+            // (D-20f). The tile keeps its width, half the row.
+            row![self.do_not_disturb_tile(), space::horizontal()].spacing(panels::TILE_GAP),
         ]
         .spacing(panels::TILE_GAP);
-        let gpu = words::GPU_CHOICES
-            .iter()
-            .map(|label| (*label, false, None))
-            .collect();
         column![
             tiles,
             self.volume_row(),
             self.lights(),
-            group(
-                words::GPU,
-                Some(words::SOON.to_owned()),
-                panels::segmented(gpu)
-            ),
             self.energy_group(battery),
             space::vertical(),
             self.footer(user),
@@ -1356,12 +1389,21 @@ impl Quick {
         };
         let mute = volume.map(|_| Message::Mute);
         let on_change: Option<fn(u8) -> Message> = volume.map(|_| Message::Volume as fn(u8) -> _);
-        let control = panels::held_slider_row(
+        let slider = panels::held_slider_row(
             panels::glyph_button(glyph, label, mute),
             volume.unwrap_or(0),
             on_change,
             Some(Message::Release(Service::Sound)),
         );
+        // The chevron on its right opens the outputs and the inputs (D-20g).
+        let more = ui::icon_button(
+            Icon::Chevron,
+            words::SOUND_DEVICES,
+            volume.map(|_| Message::ShowSound(true)),
+        );
+        let control = row![slider, more]
+            .spacing(metrics::GAP_TIGHT)
+            .align_y(Alignment::Center);
         let caption = ui::ellipsis(line)
             .size(typography::SMALL_SIZE)
             .style(panels::secondary_text);
@@ -1519,6 +1561,7 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(settings_link(words::WIFI_SETTINGS, Some(NETWORK_PAGE)));
         page.into()
     }
 
@@ -1668,24 +1711,28 @@ fn refusal(outcome: Outcome) -> &'static str {
     }
 }
 
+/// Control Room's pages the bar opens (`control-room --page <id>`).
+pub const NETWORK_PAGE: &str = "network";
+pub const SOUND_PAGE: &str = "sound";
+pub const BLUETOOTH_PAGE: &str = "bluetooth";
+
+/// « Réglages … » at the bottom of a page: Control Room on `page`.
+fn settings_link<'a>(label: &'a str, page: Option<&'static str>) -> Element<'a, Message> {
+    let open = Some(Message::OpenSettings(page));
+    column![
+        ui::divider(),
+        ui::menu_item_with(None, label, Trailing::None, open)
+    ]
+    .spacing(metrics::GAP_TIGHT)
+    .into()
+}
+
 fn typed(password: String) -> Message {
     Message::Password(Secret::new(password))
 }
 
 fn switch_wifi(_: bool) -> Message {
     Message::ToggleWifi
-}
-
-/// The tile of the game mode: there is no game mode yet.
-fn game_tile<'a>() -> Element<'a, Message> {
-    panels::quick_tile(
-        Glyph::Gamepad,
-        words::GAME_MODE,
-        words::SOON.to_owned(),
-        0.0,
-        None,
-        None,
-    )
 }
 
 /// A labelled group (« Carte graphique », « Énergie »): its label, a note on its right, its

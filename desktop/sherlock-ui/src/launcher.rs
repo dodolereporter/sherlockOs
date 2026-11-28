@@ -81,6 +81,70 @@ pub fn panel_height(sections: usize, rows: usize) -> f32 {
         + rows as f32 * ROW_HEIGHT
 }
 
+/// The least room between the panel and the edges of the screen, at its sides and above the
+/// dock.
+pub const SCREEN_GUTTER: f32 = 16.0;
+/// Distance from the top at most, as a share of the screen's height: the board's 150 on the
+/// 900 high reference screen, less on a small one (L-1).
+pub const TOP_SHARE: f32 = TOP / crate::metrics::REFERENCE_SCREEN.1;
+
+/// Height kept free for a dock whose icons are `icon` wide at rest: its bar and its margin.
+pub fn dock_room(icon: f32) -> f32 {
+    crate::metrics::DOCK_HEIGHT
+        + (icon - crate::metrics::DOCK_ICON).max(0.0)
+        + crate::dock::MARGIN_BOTTOM
+}
+
+/// Where the panel goes on a screen, and how many results it shows there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    /// Width of the panel.
+    pub width: f32,
+    /// Distance from the top of the screen.
+    pub top: f32,
+    /// Results shown at most, all sections together.
+    pub results: usize,
+}
+
+impl Default for Fit {
+    /// The board's panel, for a screen not known yet.
+    fn default() -> Self {
+        Self {
+            width: WIDTH,
+            top: TOP,
+            results: MAX_RESULTS,
+        }
+    }
+}
+
+/// The panel on a screen `size` logical pixels wide and high, above a dock whose icons are
+/// `dock_icon` wide (L-1): `WIDTH` wide at most, with `SCREEN_GUTTER` on each side; `TOP` from
+/// the top at most, `TOP_SHARE` of the height on a small screen; as many results as fit above
+/// the dock and its gutter, every section shown, at least one. On a screen too small even for
+/// that, the panel climbs, never above the gutter.
+pub fn fit(size: (f32, f32), dock_icon: f32) -> Fit {
+    let (width, height) = size;
+    let bottom = dock_room(dock_icon) + SCREEN_GUTTER;
+    let width = WIDTH.min(width - 2.0 * SCREEN_GUTTER).max(1.0);
+    let top = TOP.min(height * TOP_SHARE).max(SCREEN_GUTTER);
+    let room = |top: f32| height - top - bottom;
+    let tallest = |results: usize| panel_height(results.min(MAX_SECTIONS), results);
+    let results = (1..=MAX_RESULTS)
+        .rev()
+        .find(|n| tallest(*n) <= room(top))
+        .unwrap_or(1);
+    let top = if tallest(results) <= room(top) {
+        top
+    } else {
+        (height - bottom - tallest(results)).max(SCREEN_GUTTER)
+    };
+    Fit {
+        width,
+        top,
+        results,
+    }
+}
+
 // Colors.
 
 /// The launcher's own colors, for one theme; the rest comes from the palette.
@@ -435,6 +499,61 @@ mod tests {
             }
             assert!(glyph.svg().contains("stroke-linecap=\"round\""));
         }
+    }
+
+    /// Screens of every size the panel must fit, in logical pixels: small laptops, 1920 by 1080
+    /// at scales 1, 1.25, 1.5 and 2, 4K at 1.5 and 2, a 1280 by 800 laptop at 1.5, a
+    /// projector at 1024 by 768.
+    const SCREENS: [(f32, f32); 10] = [
+        (1366.0, 768.0),
+        (1280.0, 720.0),
+        (1920.0, 1080.0),
+        (1536.0, 864.0),
+        (1280.0, 720.0),
+        (960.0, 540.0),
+        (2560.0, 1440.0),
+        (1920.0, 1080.0),
+        (853.0, 533.0),
+        (1024.0, 768.0),
+    ];
+
+    #[test]
+    fn the_panel_fits_every_screen_above_the_dock() {
+        let icons = [
+            crate::metrics::DOCK_ICON,
+            crate::dock::ICON_SIZE_MIN,
+            crate::dock::ICON_SIZE_MAX,
+        ];
+        for (width, height) in SCREENS {
+            for icon in icons {
+                let fit = fit((width, height), icon);
+                let tallest = panel_height(fit.results.min(MAX_SECTIONS), fit.results);
+                assert!(fit.width <= width - 2.0 * SCREEN_GUTTER, "{width}");
+                assert!(fit.top >= SCREEN_GUTTER, "{height}");
+                assert!(
+                    fit.top + tallest <= height - dock_room(icon) - SCREEN_GUTTER + 0.01,
+                    "{width}x{height}, dock {icon}: {fit:?}"
+                );
+                assert!(fit.results >= 1);
+            }
+        }
+        let dock = crate::metrics::DOCK_ICON;
+        // The reference screen and 1920 by 1080: the board's panel, every result.
+        assert_eq!(fit(crate::metrics::REFERENCE_SCREEN, dock), Fit::default());
+        assert_eq!(fit((1920.0, 1080.0), dock), Fit::default());
+        // 1366 by 768: lower and fewer results, as wide.
+        let laptop = fit((1366.0, 768.0), dock);
+        assert_eq!(laptop.width, WIDTH);
+        assert!(
+            laptop.top < TOP && laptop.results < MAX_RESULTS,
+            "{laptop:?}"
+        );
+        // A larger dock leaves fewer results.
+        let large = fit((1366.0, 768.0), crate::dock::ICON_SIZE_MAX);
+        assert!(large.results < laptop.results, "{large:?}");
+        // Narrow screens: narrower than the board, the gutter kept.
+        assert_eq!(fit((853.0, 533.0), dock).width, WIDTH);
+        assert_eq!(fit((560.0, 533.0), dock).width, 560.0 - 2.0 * SCREEN_GUTTER);
     }
 
     /// Room between the launcher's top and the dock on the reference screen.

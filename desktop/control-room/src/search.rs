@@ -15,6 +15,7 @@ use crate::settings::File;
 pub enum Page {
     Displays,
     Sound,
+    Bluetooth,
     Network,
     Appearance,
     Keyboard,
@@ -25,9 +26,10 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Displays,
         Self::Sound,
+        Self::Bluetooth,
         Self::Network,
         Self::Appearance,
         Self::Keyboard,
@@ -41,6 +43,7 @@ impl Page {
         match self {
             Self::Displays => t::DISPLAYS,
             Self::Sound => t::SOUND,
+            Self::Bluetooth => t::BLUETOOTH,
             Self::Network => t::NETWORK,
             Self::Appearance => t::APPEARANCE,
             Self::Keyboard => t::KEYBOARD,
@@ -56,6 +59,7 @@ impl Page {
         match self {
             Self::Displays => t::DISPLAYS_ABOUT,
             Self::Sound => t::SOUND_ABOUT,
+            Self::Bluetooth => t::BLUETOOTH_ABOUT,
             Self::Network => t::NETWORK_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
             Self::Keyboard => t::KEYBOARD_ABOUT,
@@ -71,6 +75,7 @@ impl Page {
         match self {
             Self::Displays => "displays",
             Self::Sound => "sound",
+            Self::Bluetooth => "bluetooth",
             Self::Network => "network",
             Self::Appearance => "appearance",
             Self::Keyboard => "keyboard",
@@ -89,6 +94,7 @@ impl Page {
         match self {
             Self::Displays => Icon::Desktop,
             Self::Sound => Icon::Sound,
+            Self::Bluetooth => Icon::Bluetooth,
             Self::Network => Icon::Network,
             Self::Appearance => Icon::Image,
             Self::Keyboard => Icon::Keyboard,
@@ -141,13 +147,14 @@ pub enum Setting {
     InputDevice,
     InputVolume,
     LockAfter,
+    Bluetooth,
     ClipboardHistory,
     ClipboardKeep,
     App(Kind),
 }
 
 impl Setting {
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 49] = [
         Self::Arrangement,
         Self::Resolution,
         Self::Refresh,
@@ -186,6 +193,7 @@ impl Setting {
         Self::InputDevice,
         Self::InputVolume,
         Self::LockAfter,
+        Self::Bluetooth,
         Self::ClipboardHistory,
         Self::ClipboardKeep,
         Self::App(Kind::Browser),
@@ -240,6 +248,7 @@ impl Setting {
             Self::InputDevice => (Sound, t::INPUT_DEVICE, t::MICROPHONE_WORDS),
             Self::InputVolume => (Sound, t::INPUT_VOLUME, t::MICROPHONE_WORDS),
             Self::LockAfter => (Lock, t::LOCK_AFTER, t::LOCK_WORDS),
+            Self::Bluetooth => (Bluetooth, t::BLUETOOTH_SWITCH, t::BLUETOOTH_WORDS),
             Self::ClipboardHistory => (Clipboard, t::CLIPBOARD_HISTORY, t::CLIPBOARD_WORDS),
             Self::ClipboardKeep => (Clipboard, t::CLIPBOARD_KEEP, t::CLIPBOARD_WORDS),
             Self::App(kind) => (DefaultApps, kind.texts().0, t::APPS_WORDS),
@@ -269,7 +278,9 @@ impl Setting {
             },
             Page::Lock => File::Lock,
             Page::Clipboard => File::Clipboard,
-            Page::Displays | Page::Sound | Page::Network | Page::DefaultApps => return None,
+            Page::Displays | Page::Sound | Page::Bluetooth | Page::Network | Page::DefaultApps => {
+                return None;
+            }
         };
         Some(file)
     }

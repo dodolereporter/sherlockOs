@@ -31,7 +31,7 @@ use smithay::{
     input::keyboard::Keysym,
     output::Output,
     reexports::wayland_server::Resource as _,
-    utils::{Logical, Point, Rectangle},
+    utils::{IsAlive as _, Logical, Point, Rectangle},
     wayland::seat::WaylandFocus as _,
 };
 
@@ -48,6 +48,9 @@ use crate::{
     window_data,
 };
 
+/// Openings per second past which a flick of the fingers decides, whatever the distance.
+const FLICK: f64 = 2.0;
+
 /// Half a pixel on a screen 4096 wide, as a share of the opening.
 const PRECISION: f64 = motion::GEOMETRY_PRECISION / 4096.0;
 const NO_FILL: [f32; 4] = [0.0; 4];
@@ -58,6 +61,44 @@ pub enum Target {
     Window(Window),
     /// A thumbnail of the strip, by the index of its workspace.
     Workspace(usize),
+    /// The « × » of a window under the pointer, which closes it (lot D-33c).
+    Close(Window),
+    /// The « + » after the thumbnails, and the « × » of the thumbnail under the pointer: add a
+    /// workspace, remove that one (lot D-33c).
+    AddWorkspace,
+    RemoveWorkspace(usize),
+}
+
+impl Target {
+    /// The window it is on, its « × » included.
+    pub fn window(&self) -> Option<&Window> {
+        match self {
+            Self::Window(window) | Self::Close(window) => Some(window),
+            Self::Workspace(_) | Self::AddWorkspace | Self::RemoveWorkspace(_) => None,
+        }
+    }
+}
+
+/// The title and the « × » of a window fade in when the pointer comes on it, and out when it
+/// leaves (lot D-33c): `mc::HOVER_FADE`, linear, from where it was.
+#[derive(Debug, Clone)]
+struct TitleFade {
+    window: Window,
+    from: f32,
+    shown: bool,
+    start: Duration,
+}
+
+impl TitleFade {
+    fn value(&self, now: Duration) -> f32 {
+        let t = now.saturating_sub(self.start).as_secs_f32() / mc::HOVER_FADE.as_secs_f32();
+        let to = if self.shown { 1.0 } else { 0.0 };
+        self.from + (to - self.from) * t.clamp(0.0, 1.0)
+    }
+
+    fn running(&self, now: Duration) -> bool {
+        now < self.start + mc::HOVER_FADE
+    }
 }
 
 /// A press of the left button in the view.
@@ -81,10 +122,16 @@ pub struct Overview {
     /// Progress when the three finger swipe in progress started.
     swipe: Option<f64>,
     hovered: Option<Target>,
+    /// The titles shown or fading, one per window the pointer was on.
+    titles: Vec<TitleFade>,
+    /// The workspace just added by its « + », by index, and when: its thumbnail fades in.
+    arrived: Option<(usize, Duration)>,
     press: Option<Press>,
     /// App Expose: only the windows of these ids, without the strip of the workspaces. Kept
     /// while the view closes, so that they go back the way they came.
     only: Option<Vec<u32>>,
+    /// The view was closed by a key while fingers held it: the rest of that swipe does nothing.
+    swipe_closed: bool,
     /// The gesture key is down and nothing else happened since: its release toggles the view.
     tap: bool,
     toggle: bool,
@@ -111,8 +158,69 @@ impl Overview {
         self.held.is_none() && self.motion.is_some_and(|m| !m.is_done(now, PRECISION))
     }
 
+    /// A title is fading in or out at `now`, or a new thumbnail.
+    fn titles_fading(&self, now: Duration) -> bool {
+        let arriving = self.arrived.is_some_and(|(_, at)| now < at + mc::ARRIVAL);
+        arriving || self.titles.iter().any(|t| t.running(now))
+    }
+
+    /// How much the thumbnail `index` has faded in at `now`: 1 but for a new one.
+    fn arrival(&self, index: usize, now: Duration) -> f32 {
+        match self.arrived {
+            Some((i, at)) if i == index => {
+                let t = now.saturating_sub(at).as_secs_f32() / mc::ARRIVAL.as_secs_f32();
+                t.clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// How much of the title and the « × » of `window` is shown at `now`.
+    fn title(&self, window: &Window, now: Duration) -> f32 {
+        let fade = self.titles.iter().find(|t| &t.window == window);
+        fade.map_or(0.0, |t| t.value(now))
+    }
+
+    /// The pointer, or the keyboard, is now on `target`: the title of its window fades in, the
+    /// one it left fades out.
+    fn hover(&mut self, target: Option<Target>, now: Duration) {
+        let window = target.as_ref().and_then(Target::window).cloned();
+        self.hovered = target;
+        self.titles
+            .retain(|t| t.window.alive() && (t.shown || t.running(now)));
+        for fade in &mut self.titles {
+            let shown = Some(&fade.window) == window.as_ref();
+            if fade.shown != shown {
+                *fade = TitleFade {
+                    from: fade.value(now),
+                    shown,
+                    start: now,
+                    window: fade.window.clone(),
+                };
+            }
+        }
+        if let Some(window) = window
+            && !self.titles.iter().any(|t| t.window == window)
+        {
+            self.titles.push(TitleFade {
+                window,
+                from: 0.0,
+                shown: true,
+                start: now,
+            });
+        }
+    }
+
     fn shown(&self, now: Duration) -> bool {
         self.open || self.held.is_some() || self.animating(now)
+    }
+
+    /// Leaves from where the fingers let it, towards `to`, at their `speed` (openings per
+    /// second): no break between the fingers and the spring (lot D-33c).
+    fn fling(&mut self, now: Duration, to: f64, speed: f64) {
+        let from = self.progress(now);
+        self.held = None;
+        self.motion = Some(Animation::with_velocity(mc::SPRING, from, to, speed, now));
     }
 
     /// Leaves from where the view is, towards `to`, without a jolt.
@@ -177,6 +285,33 @@ fn lerp(a: RectF, b: RectF, t: f64) -> RectF {
         (at(a.loc.x, b.loc.x), at(a.loc.y, b.loc.y)).into(),
         (at(a.size.w, b.size.w), at(a.size.h, b.size.h)).into(),
     )
+}
+
+/// Where the « × » of a window drawn in `frame` is centered: inside its top left corner.
+fn close_center(frame: RectF) -> (f64, f64) {
+    let offset = f64::from(mc::CLOSE_INSET);
+    (frame.loc.x + offset, frame.loc.y + offset)
+}
+
+fn center(r: RectF) -> (f64, f64) {
+    (r.loc.x + r.size.w / 2.0, r.loc.y + r.size.h / 2.0)
+}
+
+/// The choice nearest `from` in `direction` (a unit step on one axis): ahead of it, the
+/// distance along the way counting less than the distance across it.
+fn nearest(choices: &[(Target, RectF)], from: (f64, f64), direction: (f64, f64)) -> Option<Target> {
+    let score = |r: &RectF| {
+        let (x, y) = center(*r);
+        let (dx, dy) = (x - from.0, y - from.1);
+        let along = dx * direction.0 + dy * direction.1;
+        let across = (dx * direction.1 - dy * direction.0).abs();
+        (along > 1.0).then_some(along + 2.0 * across)
+    };
+    choices
+        .iter()
+        .filter_map(|(t, r)| Some((t, score(r)?)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(t, _)| t.clone())
 }
 
 /// Height the strip takes at the top of the work area: thumbnails, their names and margins.
@@ -255,6 +390,11 @@ impl State {
         }
     }
 
+    /// What the pointer is over in the open view, or the keyboard selected.
+    pub fn overview_selected(&self) -> Option<&Target> {
+        self.overview.hovered.as_ref()
+    }
+
     /// The window ids App Expose shows, if the view is App Expose.
     pub fn overview_only(&self) -> Option<&[u32]> {
         self.overview.only.as_deref()
@@ -282,6 +422,7 @@ impl State {
         self.overview.open = true;
         self.dismiss_popups();
         self.hover_decoration(None);
+        self.forget_decoration_press();
         self.set_keyboard_focus(None);
         self.refresh_overview_pointer();
         true
@@ -294,8 +435,10 @@ impl State {
         let now = self.now();
         let overview = &mut self.overview;
         overview.open = false;
-        overview.hovered = None;
+        overview.hover(None, now);
         overview.press = None;
+        // Closed by a key while the fingers held it: they no longer move it.
+        overview.swipe_closed |= overview.swipe.is_some() && overview.held.is_some();
         overview.animate(now, 0.0);
         match chosen {
             Some(window) => self.activate(&window),
@@ -409,13 +552,60 @@ impl State {
             .collect()
     }
 
+    /// The « + » after the thumbnails of `output`: none past 9 workspaces, nor in App Expose.
+    pub fn overview_add_button(&self, output: &Output) -> Option<RectF> {
+        if self.workspaces().list().len() >= crate::shell::MAX_WORKSPACES {
+            return None;
+        }
+        let last = *self.overview_strip(output).last()?;
+        let side = f64::from(mc::ADD_SIZE);
+        let x = last.loc.x + last.size.w + f64::from(mc::ADD_GAP);
+        let y = last.loc.y + (last.size.h - side) / 2.0;
+        Some(Rectangle::new((x, y).into(), (side, side).into()))
+    }
+
     /// What is at `at` in the open view: a thumbnail, or a window in its slot.
     pub fn overview_target(&self, at: Point<f64, Logical>) -> Option<Target> {
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        // The « × » of the window under the pointer, over its corner.
+        let shown = self.overview.hovered.as_ref().and_then(Target::window);
+        if let Some(window) = shown.filter(|_| self.overview.press.is_none()) {
+            let slot = outputs.iter().find_map(|o| {
+                let tiles = self.overview_tiles(o, None);
+                tiles
+                    .into_iter()
+                    .find(|t| &t.window == window)
+                    .map(|t| t.slot)
+            });
+            if let Some(slot) = slot {
+                let (x, y) = close_center(slot);
+                if (at.x - x).hypot(at.y - y) <= f64::from(mc::CLOSE_SIZE) / 2.0 {
+                    return Some(Target::Close(window.clone()));
+                }
+            }
+        }
         for output in &outputs {
             let strip = self.overview_strip(output);
+            // The « × » of the thumbnail under the pointer, when another workspace remains.
+            let hovered = match self.overview.hovered {
+                Some(Target::Workspace(i) | Target::RemoveWorkspace(i)) => Some(i),
+                _ => None,
+            };
+            let thumb = hovered.and_then(|i| Some((i, *strip.get(i)?)));
+            if let Some((index, thumb)) = thumb.filter(|_| strip.len() > 1) {
+                let (x, y) = close_center(thumb);
+                if (at.x - x).hypot(at.y - y) <= f64::from(mc::CLOSE_SIZE) / 2.0 {
+                    return Some(Target::RemoveWorkspace(index));
+                }
+            }
             if let Some(index) = strip.iter().position(|r| r.contains(at)) {
                 return Some(Target::Workspace(index));
+            }
+            if self
+                .overview_add_button(output)
+                .is_some_and(|r| r.contains(at))
+            {
+                return Some(Target::AddWorkspace);
             }
         }
         outputs.iter().find_map(|output| {
@@ -423,6 +613,94 @@ impl State {
             let tile = tiles.into_iter().rev().find(|t| t.slot.contains(at))?;
             Some(Target::Window(tile.window))
         })
+    }
+
+    /// Ctrl + Down (lot D-33c): App Expose for the application in front, its windows of the
+    /// active workspace; closes the view when it is open.
+    pub fn toggle_app_expose(&mut self) {
+        if self.overview.open {
+            self.close_overview();
+            return;
+        }
+        let Some(front) = self.focused_window() else {
+            return;
+        };
+        let app = crate::shell::app_id(&front);
+        let ids = self
+            .space
+            .elements()
+            .filter(|w| crate::shell::app_id(w) == app)
+            .map(crate::shell::window_id)
+            .collect();
+        self.show_windows(ids);
+    }
+
+    /// Everything the keyboard can select in the open view, on every screen: the thumbnails
+    /// of the strip, then the windows.
+    fn overview_choices(&self) -> Vec<(Target, RectF)> {
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let strip = outputs.iter().flat_map(|o| {
+            let thumbs = self.overview_strip(o).into_iter().enumerate();
+            thumbs.map(|(i, r)| (Target::Workspace(i), r))
+        });
+        let tiles = outputs.iter().flat_map(|o| {
+            let tiles = self.overview_tiles(o, None).into_iter();
+            tiles.map(|t| (Target::Window(t.window), t.slot))
+        });
+        strip.chain(tiles).collect()
+    }
+
+    /// An arrow, Enter or Return in the open view (lot D-33c). An arrow moves the selection
+    /// (drawn as under the pointer) to the nearest choice that way; the first arrow selects
+    /// the window in front. Enter chooses it, as a click would.
+    pub(crate) fn overview_key(&mut self, sym: Keysym) {
+        self.queue_redraw();
+        let choices = self.overview_choices();
+        // The « × » under the pointer stands for its window.
+        let current = (self.overview.hovered.as_ref()).map(|t| match t {
+            Target::Close(window) => Target::Window(window.clone()),
+            Target::RemoveWorkspace(index) => Target::Workspace(*index),
+            other => other.clone(),
+        });
+        let at = current
+            .as_ref()
+            .and_then(|c| choices.iter().find(|(t, _)| t == c))
+            .map(|(_, r)| center(*r));
+        let direction = match sym {
+            Keysym::Left => (-1.0, 0.0),
+            Keysym::Right => (1.0, 0.0),
+            Keysym::Up => (0.0, -1.0),
+            Keysym::Down => (0.0, 1.0),
+            _ => {
+                match current {
+                    Some(Target::Window(window) | Target::Close(window)) => {
+                        self.leave_overview(Some(window));
+                    }
+                    Some(Target::Workspace(index)) => {
+                        if let Some(id) = self.workspaces().id_at(index).map(str::to_owned) {
+                            self.activate_workspace(&id);
+                            self.stop_workspace_slide();
+                        }
+                        self.leave_overview(None);
+                    }
+                    Some(Target::AddWorkspace | Target::RemoveWorkspace(_)) | None => {}
+                }
+                return;
+            }
+        };
+        let Some(at) = at else {
+            // Nothing selected yet: the window in front, or the first choice.
+            let front = self.top_window().map(Target::Window);
+            let first = choices.iter().find(|(t, _)| matches!(t, Target::Window(_)));
+            let chosen = front
+                .filter(|f| choices.iter().any(|(t, _)| t == f))
+                .or_else(|| first.or(choices.first()).map(|(t, _)| t.clone()));
+            self.overview.hover(chosen, self.now());
+            return;
+        };
+        if let Some(next) = nearest(&choices, at, direction) {
+            self.overview.hover(Some(next), self.now());
+        }
     }
 
     /// The pointer moved to `at` in the open view: what it is over, and the window it drags.
@@ -434,7 +712,11 @@ impl State {
             let far = delta.x.hypot(delta.y) >= f64::from(ui_window::DRAG_THRESHOLD);
             press.dragging |= far && matches!(press.target, Some(Target::Window(_)));
         }
-        self.overview.hovered = self.overview_target(at);
+        let target = self.overview_target(at);
+        if target != self.overview.hovered {
+            self.queue_redraw();
+            self.overview.hover(target, self.now());
+        }
     }
 
     /// A press or release of `button` at `at` in the open view. A click on a window chooses it,
@@ -476,16 +758,38 @@ impl State {
                 }
                 self.leave_overview(None);
             }
+            // The « × »: the window is asked to close; the view stays open, and the window
+            // leaves the grid once gone.
+            (Some(Target::Close(window)), _, Some(Target::Close(over))) if over == window => {
+                State::close(&window);
+            }
+            (Some(Target::AddWorkspace), _, Some(Target::AddWorkspace)) => {
+                if self.add_workspace() {
+                    let index = self.workspaces().list().len() - 1;
+                    self.overview.arrived = Some((index, self.now()));
+                }
+            }
+            (Some(Target::RemoveWorkspace(index)), _, Some(Target::RemoveWorkspace(over)))
+                if over == index =>
+            {
+                self.remove_workspace(index);
+            }
             (None, _, None) => self.leave_overview(None),
             _ => {}
         }
-        self.overview.hovered = self.overview_target(at);
+        if self.overview.open {
+            let target = self.overview_target(at);
+            self.overview.hover(target, self.now());
+        }
     }
 
     /// Three fingers moved `travel` units up (negative) or down since the swipe started: the
     /// view follows them, from where it was, a whole opening per `OVERVIEW_DISTANCE`. Down on
     /// the desktop opens nothing.
     pub(crate) fn follow_overview(&mut self, travel: f64) {
+        if self.overview.swipe_closed {
+            return;
+        }
         let start = if self.overview.open { 1.0 } else { 0.0 };
         let base = *self.overview.swipe.get_or_insert(start);
         let progress = (base - travel / crate::gestures::OVERVIEW_DISTANCE).clamp(0.0, 1.0);
@@ -498,19 +802,34 @@ impl State {
         }
     }
 
-    /// The three fingers lifted: the view opens if they went far enough up (`done`), closes if
-    /// they went far enough down, and goes back to where it was otherwise. `false` if the
-    /// swipe did not move the view.
-    pub(crate) fn release_overview(&mut self, up: bool, done: bool) -> bool {
+    /// The three fingers lifted, moving at `velocity` (units per second, down positive): the
+    /// view goes where that velocity carries it, open past half way, closed short of it, and
+    /// leaves at the fingers' speed, without a break (lot D-33c). A quick short flick is
+    /// enough; fingers that came back past their start close it, whatever direction they
+    /// first took. Cancelled by libinput, it goes back to where it was. `false` if the swipe
+    /// did not move the view.
+    pub(crate) fn release_overview(&mut self, cancelled: bool, velocity: f64) -> bool {
         let base = self.overview.swipe.take();
-        let (Some(base), Some(_)) = (base, self.overview.held) else {
+        if std::mem::take(&mut self.overview.swipe_closed) {
+            return true;
+        }
+        let (Some(base), Some(held)) = (base, self.overview.held) else {
             return false;
         };
-        let open = if done { up } else { base >= 0.5 };
+        // In openings per second, up opening.
+        let speed = -velocity / crate::gestures::OVERVIEW_DISTANCE;
+        let projected = held + speed * crate::gestures::PROJECTION;
+        let open = match cancelled {
+            true => base >= 0.5,
+            false if speed.abs() >= FLICK => speed > 0.0,
+            false => projected >= 0.5,
+        };
+        let now = self.now();
         if open {
-            self.overview.animate(self.now(), 1.0);
+            self.overview.fling(now, 1.0, speed);
         } else {
             self.leave_overview(None);
+            self.overview.fling(now, 0.0, speed);
         }
         true
     }
@@ -533,7 +852,7 @@ pub(crate) fn push_items(
     let progress = overview.progress(now);
     let fade = progress.clamp(0.0, 1.0) as f32;
     let colors = Colors::of(color::palette());
-    let mut animating = overview.animating(now);
+    let mut animating = overview.animating(now) || overview.titles_fading(now);
     let tiles = state.overview_tiles(output, Some(now));
     let dragged = overview
         .press
@@ -552,11 +871,20 @@ pub(crate) fn push_items(
         if let Some((_, delta)) = drag {
             frame.loc += delta;
         }
-        let hovered = overview.hovered == Some(Target::Window(tile.window.clone()));
+        let hovered = overview.hovered.as_ref().and_then(Target::window) == Some(&tile.window);
+        let title = overview.title(&tile.window, now);
+        let close = overview.hovered == Some(Target::Close(tile.window.clone()));
         let look = TileLook {
             frame,
+            slot: tile.slot,
             highlight: hovered && dragged.is_none(),
-            label: if drag.is_some() { 0.0 } else { fade },
+            // Titles on hover only, as in Sequoia (lot D-33c).
+            label: if drag.is_some() || dragged.is_some() {
+                0.0
+            } else {
+                fade * title
+            },
+            close,
             opacity: tile.opacity,
             decoration: tile.decoration + (1.0 - tile.decoration) * fade,
         };
@@ -570,7 +898,17 @@ pub(crate) fn push_items(
         }
     }
     let target = dragged.and(overview.hovered.clone());
-    push_strip(items, state, (output, view), (progress, target), colors);
+    let hovered = dragged
+        .is_none()
+        .then(|| overview.hovered.clone())
+        .flatten();
+    push_strip(
+        items,
+        state,
+        (output, view),
+        (progress, target, hovered, now),
+        colors,
+    );
     items.append(&mut pushed);
     if let Some(screen) = state.space.output_geometry(output) {
         let dim = colors.dim.premultiplied();
@@ -592,9 +930,14 @@ pub(crate) fn push_items(
 struct TileLook {
     /// The whole window, title bar included, in the space.
     frame: RectF,
+    /// Its place in the grid once open: its title is drawn at the size it has there, so that
+    /// the texture is made once, not at every frame of the animation (lot D-33c).
+    slot: RectF,
     highlight: bool,
-    /// Opacity of its title below it.
+    /// Opacity of its title below it, and of its « × ».
     label: f32,
+    /// The pointer is on its « × ».
+    close: bool,
     opacity: f32,
     decoration: f32,
 }
@@ -625,15 +968,51 @@ fn push_tile(
     let rect = view.rect(frame);
     let radius = corner_radius(real.size) * scale * zoom as f32 * look.decoration;
     let title = State::title(window).unwrap_or_default();
+    if look.label > 0.0 {
+        let side = f64::from(mc::CLOSE_SIZE);
+        let (x, y) = close_center(frame);
+        let at = view.rect(Rectangle::new(
+            (x - side / 2.0, y - side / 2.0).into(),
+            (side, side).into(),
+        ));
+        let pixels = (side * view.scale).round().max(1.0) as u32;
+        // Under the pointer, the red of the close buttons of the title bars.
+        let background = match look.close {
+            true => BarColors::of(color::palette()).close_hover,
+            false => colors.label,
+        };
+        items.push(Item::Label {
+            key: Key::of(owner.clone(), Part::CloseButton),
+            rect: at,
+            label: Label {
+                text: String::new(),
+                size: (pixels, pixels),
+                scale,
+                background,
+                color: colors.label_text,
+                icon: Some(ui_decorations::Button::Close.icon(false)),
+            },
+            alpha: look.label,
+        });
+    }
     if look.label > 0.0 && !title.is_empty() {
-        let width = f64::from(label::width(&title));
-        let at = view.rect(label_rect(frame, width));
+        let width = f64::from(label::width(&title))
+            .min(look.slot.size.w)
+            .max(f64::from(mc::LABEL_RADIUS) * 2.0);
+        let x = frame.loc.x + (frame.size.w - width) / 2.0;
+        let y = frame.loc.y + frame.size.h + f64::from(mc::LABEL_GAP);
+        let height = f64::from(mc::LABEL_HEIGHT);
+        let at = view.rect(Rectangle::new((x, y).into(), (width, height).into()));
         let label = Label {
             text: title,
-            size: (at.size.w.max(1) as u32, at.size.h.max(1) as u32),
+            size: (
+                (width * view.scale).round().max(1.0) as u32,
+                (height * view.scale).round().max(1.0) as u32,
+            ),
             scale,
             background: colors.label,
             color: colors.label_text,
+            icon: None,
         };
         items.push(Item::Label {
             key: Key::of(owner.clone(), Part::Label),
@@ -719,19 +1098,75 @@ fn push_strip(
     items: &mut Vec<Item>,
     state: &State,
     (output, view): (&Output, &View),
-    (progress, target): (f64, Option<Target>),
+    (progress, target, hovered, now): (f64, Option<Target>, Option<Target>, Duration),
     colors: Colors,
 ) {
     let Some(screen) = state.space.output_geometry(output) else {
         return;
     };
-    let drop = |i: usize| target == Some(Target::Workspace(i));
     let (scale, fade) = (view.scale as f32, progress.clamp(0.0, 1.0) as f32);
+    // A round button of the strip: a disc and an icon, at the view's scale.
+    let push_button = |items: &mut Vec<Item>, key, rect: RectF, icon, background| {
+        let pixels = (rect.size.w * view.scale).round().max(1.0) as u32;
+        items.push(Item::Label {
+            key,
+            rect: view.rect(rect),
+            label: Label {
+                text: String::new(),
+                size: (pixels, pixels),
+                scale,
+                background,
+                color: colors.label_text,
+                icon: Some(icon),
+            },
+            alpha: fade,
+        });
+    };
+    let drop = |i: usize| target == Some(Target::Workspace(i));
     let rise = (1.0 - progress) * (strip_height() + f64::from(mc::STRIP_MARGIN));
     let active = state.workspaces().active_index();
     let list = state.workspaces().list();
+    // The « + » after the thumbnails: menu glass, accent under the pointer.
+    if let Some(mut add) = state.overview_add_button(output) {
+        add.loc.y -= rise;
+        let background = match hovered == Some(Target::AddWorkspace) {
+            true => colors.highlight,
+            false => colors.label,
+        };
+        push_button(
+            items,
+            Key::of(None, Part::AddWorkspace),
+            add,
+            mc::ADD_ICON,
+            background,
+        );
+    }
+    let fade_all = fade;
     for (index, mut thumb) in state.overview_strip(output).into_iter().enumerate() {
         thumb.loc.y -= rise;
+        let fade = fade_all * state.overview.arrival(index, now);
+        // The « × » of the thumbnail under the pointer, when another workspace remains.
+        let shown = matches!(
+            hovered,
+            Some(Target::Workspace(i) | Target::RemoveWorkspace(i)) if i == index
+        );
+        if shown && list.len() > 1 {
+            let side = f64::from(mc::CLOSE_SIZE);
+            let (x, y) = close_center(thumb);
+            let rect = Rectangle::new((x - side / 2.0, y - side / 2.0).into(), (side, side).into());
+            let background = match hovered == Some(Target::RemoveWorkspace(index)) {
+                true => BarColors::of(color::palette()).close_hover,
+                false => colors.label,
+            };
+            let icon = ui_decorations::Button::Close.icon(false);
+            push_button(
+                items,
+                Key::of(None, Part::ThumbnailClose(index)),
+                rect,
+                icon,
+                background,
+            );
+        }
         let k = thumb.size.w / f64::from(screen.size.w);
         let radius = mc::THUMBNAIL_RADIUS * scale;
         let name = strings::mission_control::workspace(index + 1);
@@ -746,6 +1181,7 @@ fn push_strip(
                 scale,
                 background: colors.label,
                 color: colors.label_text,
+                icon: None,
             },
             alpha: fade,
         });
@@ -809,6 +1245,9 @@ fn push_miniature(
         let loc = (r.loc - screen.loc).to_f64().upscale(k);
         Rectangle::new(thumb.loc + loc, r.size.to_f64().upscale(k))
     };
+    if content.size.is_empty() || window.geometry().size.is_empty() {
+        return;
+    }
     let frame = in_thumb(decorations::frame(window, content));
     let Some(clip) = frame.intersection(thumb) else {
         return;

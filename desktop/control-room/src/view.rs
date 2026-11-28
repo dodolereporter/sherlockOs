@@ -264,6 +264,7 @@ impl App {
             let cards = match page {
                 Page::Displays => self.displays(inner),
                 Page::Sound => self.sound(inner),
+                Page::Bluetooth => self.bluetooth_page(inner),
                 Page::Network => self.network_page(inner),
                 Page::Appearance => self.appearance(inner),
                 Page::Keyboard => self.keyboard(inner),

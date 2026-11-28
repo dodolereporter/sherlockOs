@@ -2,6 +2,7 @@
 
 mod appearance;
 mod apps;
+mod bluetooth;
 mod clipboard;
 pub(crate) mod displays;
 mod keyboard;

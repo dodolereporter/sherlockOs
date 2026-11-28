@@ -5,10 +5,13 @@
 //! own. The password goes to PAM through the conversation function, in a copy PAM frees; ours
 //! is overwritten with zeros as soon as it is handed over, and never logged. A check that takes
 //! longer than `TIMEOUT` counts as PAM unavailable (lot D-25f): the field comes back, and the
-//! interface never waits for PAM.
+//! interface never waits for PAM. Only one check runs at a time (lot D-25m): while the thread of
+//! a check that hangs is still there, a new try is answered `Busy` at once, so that threads
+//! stuck in PAM never pile up.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -69,6 +72,9 @@ pub enum AuthError {
     /// PAM itself could not run: no library, no service, an error of the system.
     #[error("PAM unavailable: {0}")]
     Unavailable(String),
+    /// The previous check has not given its thread back yet (lot D-25m).
+    #[error("a check is still running")]
+    Busy,
 }
 
 /// What checks a password: PAM, or a fake one in the tests.
@@ -81,15 +87,33 @@ pub trait Authenticator: Send + Sync + 'static {
 /// in its spinner forever, with no way to try again (lot D-25f).
 pub const TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Gives the check back when its thread ends, however it ends.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Checks `password` for `user` on a thread of its own: the answer, or `Unavailable` once
-/// `limit` has passed. Returns at once; a check that hangs is left to its thread.
+/// `limit` has passed. Returns at once; a check that hangs is left to its thread, and until that
+/// thread ends, any other check with the same `busy` is answered `Busy` at once, the password
+/// wiped without reaching PAM.
 pub fn check_in_background(
     authenticator: Arc<dyn Authenticator>,
+    busy: &Arc<AtomicBool>,
     user: String,
     password: Secret,
     limit: Duration,
 ) -> oneshot::Receiver<Result<(), AuthError>> {
     let (sender, receiver) = oneshot::channel();
+    if busy.swap(true, Ordering::SeqCst) {
+        tracing::warn!("PAM: the previous check still runs, this one is refused");
+        let _ = sender.send(Err(AuthError::Busy));
+        return receiver;
+    }
+    let running = Running(Arc::clone(busy));
     // The first answer wins: PAM's, or the end of the limit.
     let sender = Arc::new(Mutex::new(Some(sender)));
     let answer = |sender: &Mutex<Option<oneshot::Sender<_>>>, result| {
@@ -100,7 +124,10 @@ pub fn check_in_background(
     let pam = Arc::clone(&sender);
     let spawned = std::thread::Builder::new()
         .name("pam".into())
-        .spawn(move || answer(&pam, authenticator.check(&user, password)));
+        .spawn(move || {
+            let _running = running;
+            answer(&pam, authenticator.check(&user, password));
+        });
     if let Err(err) = spawned {
         answer(&sender, Err(AuthError::Unavailable(err.to_string())));
         return receiver;
@@ -267,13 +294,12 @@ impl Authenticator for Pam {
         let library = unsafe { libloading::Library::new(LIBRARY) }
             .map_err(|err| AuthError::Unavailable(err.to_string()))?;
         // SAFETY: the symbols have the types of <security/pam_appl.h>.
-        let (start, authenticate, account, end) = unsafe {
+        let (start, authenticate, end) = unsafe {
             let start = library.get::<StartFn>(b"pam_start\0");
             let authenticate = library.get::<StepFn>(b"pam_authenticate\0");
-            let account = library.get::<StepFn>(b"pam_acct_mgmt\0");
             let end = library.get::<StepFn>(b"pam_end\0");
-            match (start, authenticate, account, end) {
-                (Ok(s), Ok(a), Ok(m), Ok(e)) => (*s, *a, *m, *e),
+            match (start, authenticate, end) {
+                (Ok(s), Ok(a), Ok(e)) => (*s, *a, *e),
                 _ => return Err(unavailable("symbols")),
             }
         };
@@ -295,12 +321,12 @@ impl Authenticator for Pam {
         if status != PAM_SUCCESS || handle.is_null() {
             return Err(AuthError::Unavailable(format!("pam_start: {status}")));
         }
+        // Authentication only, as swaylock: no `pam_acct_mgmt`, whose answers (an account or a
+        // password expired during the session, `PAM_NEW_AUTHTOK_REQD`) would keep a user who
+        // gave the right password locked out of the session already open (lot D-25l).
         // SAFETY: a handle from pam_start, used on this thread only, ended once.
         let status = unsafe {
-            let mut status = authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK);
-            if status == PAM_SUCCESS {
-                status = account(handle, 0);
-            }
+            let status = authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK);
             end(handle, status);
             status
         };
@@ -371,7 +397,8 @@ mod tests {
         let slow = Arc::new(Slow(Duration::from_secs(30)));
         let receiver = check_in_background(
             slow,
-            "dodo".into(),
+            &Arc::default(),
+            "sam".into(),
             Secret::new("x".into()),
             Duration::from_millis(200),
         );
@@ -385,11 +412,37 @@ mod tests {
         let quick = Arc::new(Slow(Duration::from_millis(10)));
         let receiver = check_in_background(
             quick,
-            "dodo".into(),
+            &Arc::default(),
+            "sam".into(),
             Secret::new("x".into()),
             Duration::from_secs(5),
         );
         assert!(wait(receiver).is_ok());
+    }
+
+    /// One check at a time (lot D-25m): while a check that hangs keeps its thread, the next
+    /// tries are answered at once and start no thread; once it ends, a try reaches PAM again.
+    #[test]
+    fn a_check_that_hangs_holds_back_the_next_ones_without_new_threads() {
+        let busy = Arc::default();
+        let check = |pam: Duration, limit: Duration| {
+            check_in_background(
+                Arc::new(Slow(pam)),
+                &busy,
+                "dodo".into(),
+                Secret::new("x".into()),
+                limit,
+            )
+        };
+        let hung = check(Duration::from_millis(800), Duration::from_millis(100));
+        assert!(matches!(wait(hung), Err(AuthError::Unavailable(_))));
+        for _ in 0..5 {
+            let again = check(Duration::ZERO, Duration::from_secs(5));
+            assert_eq!(wait(again), Err(AuthError::Busy));
+        }
+        std::thread::sleep(Duration::from_millis(900));
+        let later = check(Duration::ZERO, Duration::from_secs(5));
+        assert_eq!(wait(later), Ok(()));
     }
 
     /// A conversation as PAM leads it: `messages`, then the answers read back and freed.
@@ -482,5 +535,32 @@ mod tests {
     #[test]
     fn the_session_user_is_read_from_the_password_database() {
         assert!(session_user().is_some_and(|name| !name.is_empty()));
+    }
+
+    /// The PAM service shipped (lot D-25l): the password only, never `login`'s stack with its
+    /// pam_nologin (which refuses everyone during a `shutdown +N`), nor any account check.
+    #[test]
+    fn the_pam_service_checks_the_password_only() {
+        let service = include_str!("../pam/sherlockos-lock");
+        let rules: Vec<Vec<&str>> = service
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.split_whitespace().collect())
+            .collect();
+        assert!(rules.iter().all(|rule| rule[0] == "auth"), "{rules:?}");
+        assert!(rules.contains(&vec!["auth", "include", "common-auth"]));
+        let faildelay = rules.iter().position(|rule| rule[2] == "pam_faildelay.so");
+        assert!(faildelay.is_some_and(|i| rules[i][1] == "optional"));
+        for rule in &rules {
+            assert!(
+                !rule.contains(&"login") && !rule.contains(&"pam_nologin.so"),
+                "{rule:?}"
+            );
+        }
+        // The program never asks for the account checks.
+        let code = include_str!("pam.rs");
+        let account = ["pam_", "acct_mgmt"].concat();
+        assert!(!code.contains(&format!("b\"{account}")));
     }
 }
