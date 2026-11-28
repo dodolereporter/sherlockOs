@@ -36,12 +36,15 @@ pub struct Label {
     pub scale: f32,
     pub background: Color,
     pub color: Color,
+    /// A round button instead of a pill of text (lot D-33c): a disc and this icon, an SVG path
+    /// on the grid of the title bars' icons (the « × » of a window, the « + » of the strip).
+    pub icon: Option<&'static str>,
 }
 
 impl Label {
     pub fn hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        (&self.text, self.size, self.scale.to_bits()).hash(&mut hasher);
+        (&self.text, self.size, self.scale.to_bits(), self.icon).hash(&mut hasher);
         for c in [self.background, self.color] {
             (c.r, c.g, c.b, c.a.to_bits()).hash(&mut hasher);
         }
@@ -73,6 +76,19 @@ pub fn draw(label: &Label) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(w, h)?;
     let (wf, hf, s) = (w as f32, h as f32, label.scale);
     let radius = (mc::LABEL_RADIUS * s).min(hf / 2.0);
+    if let Some(icon) = label.icon {
+        let side = wf.min(hf);
+        let disc = raster::rounded((0.0, 0.0, side, side), side / 2.0, side / 2.0);
+        raster::fill(&mut pixmap, disc, label.background);
+        raster::stroke_icon(
+            &mut pixmap,
+            icon,
+            (side / 2.0, side / 2.0),
+            s * 0.75,
+            label.color,
+        );
+        return Some(pixmap);
+    }
     let pill = raster::rounded((0.0, 0.0, wf, hf), radius, radius);
     raster::fill(&mut pixmap, pill, label.background);
     if let Some(font) = font() {
@@ -86,10 +102,11 @@ pub fn draw(label: &Label) -> Option<Pixmap> {
 /// Frames a texture stays without being drawn, before it is freed.
 const KEEP_FRAMES: u64 = 600;
 
-/// The textures of the labels, one per key: the one of its last look.
+/// The textures of the labels, one per key and scale (a thumbnail's name is drawn on every
+/// screen, at each one's scale): the one of its last look.
 #[derive(Default)]
 pub struct Labels {
-    textures: HashMap<Key, (u64, TextureBuffer<GlesTexture>, u64)>,
+    textures: HashMap<(Key, u32), (u64, TextureBuffer<GlesTexture>, u64)>,
     frame: u64,
 }
 
@@ -104,6 +121,7 @@ impl Labels {
         alpha: f32,
     ) -> Option<TextureRenderElement<GlesTexture>> {
         let hash = label.hash();
+        let key = (key, label.scale.to_bits());
         let fresh = self.textures.get(&key).filter(|(h, ..)| *h == hash);
         let buffer = match fresh {
             Some((_, buffer, _)) => buffer.clone(),
@@ -143,6 +161,22 @@ impl Labels {
         ))
     }
 
+    /// Frees at once the textures of Mission Control, no longer shown (D-33 review): the
+    /// others (lock screen, screenshot tool) stay.
+    pub fn forget_view(&mut self) {
+        use crate::damage::Part;
+        self.textures.retain(|(key, _), _| {
+            !matches!(
+                key.part,
+                Part::Label
+                    | Part::CloseButton
+                    | Part::ThumbnailLabel(_)
+                    | Part::ThumbnailClose(_)
+                    | Part::AddWorkspace
+            )
+        });
+    }
+
     /// End of a frame: the labels not drawn for a while are freed.
     pub fn sweep(&mut self) {
         self.frame += 1;
@@ -170,6 +204,7 @@ mod tests {
             scale: 1.0,
             background: Color::rgb(0, 0, 0),
             color: Color::rgb(255, 255, 255),
+            icon: None,
         };
         let pixmap = draw(&label).unwrap();
         // Some white of the text in the middle of the black pill.

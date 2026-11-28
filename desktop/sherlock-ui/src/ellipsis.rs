@@ -50,11 +50,7 @@ pub fn fit<'a>(content: &'a str, max: f32, mut measure: impl FnMut(&str) -> f32)
     }
 }
 
-/// A text size the text engine takes: cosmic-text panics on a line height of 0, so on a size
-/// of 0 (lot Q-32). Not a number gives a pixel too.
-pub fn at_least_a_pixel(size: f32) -> f32 {
-    size.max(1.0)
-}
+pub use crate::typography::at_least_a_pixel;
 
 /// `content` with « … » in its middle when it does not fit `max`: its start and its end stay,
 /// as Finder shows a long folder name in its path bar (lot E-04). The start keeps one more
