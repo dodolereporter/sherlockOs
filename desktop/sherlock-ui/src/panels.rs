@@ -51,13 +51,14 @@ pub const QUICK_WIDTH: f32 = 336.0;
 /// and 8, the volume and brightness rows, the two segmented groups, the user row, 14 between
 /// each), plus the line under the volume that names the output, plus the row of the keyboard
 /// backlight (D-35d). On a machine without one, the panel is `KEYBOARD_ROW` shorter (UI-04).
+/// The board's « Carte graphique » group is not there (D-20f): nothing switches the card yet.
 pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + (2.0 * 56.0 + 8.0)
-    + 5.0 * metrics::GAP_SECTION
+    + 4.0 * metrics::GAP_SECTION
     + KEYBOARD_ROW
     + (28.0 + 4.0 + 17.0)
     + 28.0
-    + 2.0 * (17.0 + 6.0 + 36.0)
+    + (17.0 + 6.0 + 36.0)
     + (metrics::BORDER_WIDTH + 12.0 + 34.0);
 
 /// The slider of the keyboard backlight under the brightness, with its gap.
@@ -352,7 +353,6 @@ pub mod text {
     pub const WIFI: &str = "Wi-Fi";
     pub const BLUETOOTH: &str = "Bluetooth";
     pub const DO_NOT_DISTURB: &str = "Ne pas déranger";
-    pub const GAME_MODE: &str = "Mode jeu";
     pub const ON: &str = "Activé";
     pub const OFF: &str = "Désactivé";
     pub const LOADING: &str = "…";
@@ -392,6 +392,10 @@ pub mod text {
     // The outputs and the inputs of the sound (D-20g).
     pub const SOUND: &str = "Son";
     pub const SOUND_DEVICES: &str = "Sorties et entrées";
+    // What opens Control Room on the right page (D-20f).
+    pub const WIFI_SETTINGS: &str = "Réglages Wi-Fi…";
+    pub const BLUETOOTH_SETTINGS: &str = "Réglages Bluetooth…";
+    pub const SOUND_SETTINGS: &str = "Réglages du son…";
     pub const OUTPUT: &str = "Sortie";
     pub const INPUT: &str = "Entrée";
     pub const NO_INPUT: &str = "Aucun micro";
@@ -399,8 +403,6 @@ pub mod text {
     pub const UNMUTE_MICROPHONE: &str = "Rétablir le micro";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
-    pub const GPU: &str = "Carte graphique";
-    pub const GPU_CHOICES: [&str; 3] = ["Auto", "AMD", "NVIDIA"];
     pub const ENERGY: &str = "Énergie";
     pub const PROFILES: [&str; 3] = ["Économie", "Équilibré", "Performance"];
     pub const ENERGY_ABSENT: &str = "Service absent";
