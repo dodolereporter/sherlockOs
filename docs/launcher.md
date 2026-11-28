@@ -252,7 +252,8 @@ grows to its height (560 at most, less on a short screen), the query is the firs
   Sherlock's texts as they come, « Le plan de Sherlock » with each step (its number, the tool,
   its arguments ending with « … », the state as the board says it: « Attend ton accord »,
   « Libre », « Avec ton accord », « … · fait », « Refusée », « Erreur »), then the answer, or why
-  there is none. « Sherlock réfléchit… » while it runs.
+  there is none. « Sherlock réfléchit… » while it runs. Each part fades in and rises by 8 as
+  it comes, over 220 ms (lot A-19c, `sherlock::shown`): frames are asked for only that long.
 - **The field** « Ta demande » at the bottom: Enter asks the next request, once the one running
   has ended. Escape comes back to the search, the conversation kept for the next opening.
 

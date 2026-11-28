@@ -317,7 +317,8 @@ impl Launcher {
             || (self.surface.is_some()
                 && !self.parked
                 && (!self.presence.is_done(self.now, look::OPEN_PRECISION)
-                    || self.list_moving(self.now)))
+                    || self.list_moving(self.now)
+                    || (self.sherlock && self.conversation.appearing(self.now))))
     }
 
     /// The rows move, appear, the panel's height or the selection follow them.
