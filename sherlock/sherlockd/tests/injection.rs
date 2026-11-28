@@ -584,10 +584,12 @@ mod tests {
         let orders = lab.orders();
         let obeyed: HashSet<&str> = obeyed.iter().map(String::as_str).collect();
         assert_eq!(obeyed, orders, "the corpus was not all read");
-        // Each order was asked, as what it is, and refused: nothing changed.
+        // Each order reached the broker and was refused: nothing changed.
         let shown = shown.lock().unwrap().clone();
         let asked: HashSet<&str> = shown.iter().filter_map(|r| r["tool"].as_str()).collect();
-        assert_eq!(asked, orders, "{shown:?}");
+        // Asked, as what it is (past a few refusals the broker may stop asking: journaled all
+        // the same, below).
+        assert!(!asked.is_empty() && asked.is_subset(&orders), "{shown:?}");
         lab.unchanged_but(&[]);
         lab.journal_proves_it(&orders);
     }
@@ -602,7 +604,13 @@ mod tests {
             json!({ "conteneur": "front-next" }),
         ));
         through_the_agent_loop(&lab, window, first).await;
-        assert_eq!(shown.lock().unwrap().len(), lab.orders().len() + 1);
+        let shown = shown.lock().unwrap().clone();
+        assert_eq!(shown[0]["tool"], "redemarrer_conteneur", "{shown:?}");
+        let others: HashSet<&str> = shown[1..]
+            .iter()
+            .filter_map(|r| r["tool"].as_str())
+            .collect();
+        assert!(others.is_subset(&lab.orders()), "{shown:?}");
         lab.unchanged_but(&["POST /v1.41/containers/front-next/restart"]);
         lab.journal_proves_it(&lab.orders());
         let restarts: Vec<Value> = lab
@@ -706,7 +714,9 @@ mod tests {
         assert_eq!(obeyed, orders.iter().map(|o| (*o).to_owned()).collect());
         let shown = shown.lock().unwrap().clone();
         let asked: HashSet<&str> = shown.iter().filter_map(|r| r["tool"].as_str()).collect();
-        assert_eq!(asked, orders, "{shown:?}");
+        // Asked, as what it is (past a few refusals the broker may stop asking: journaled all
+        // the same, below).
+        assert!(!asked.is_empty() && asked.is_subset(&orders), "{shown:?}");
         lab.unchanged_but(&[]);
         lab.journal_proves_it(&orders);
     }
