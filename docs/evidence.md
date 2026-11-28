@@ -30,7 +30,9 @@ beside its entry, which the compositor flips to the left the same way. The popup
 pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
 outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
 once it has faded out. Under winit, both are still drawn inside the window. The completion list,
-the drop-down lists and the tooltips follow in E-02c. Under X11, it keeps iced's own runtime on winit. The title
+the drop-down lists and the tooltips follow in E-02c. The menu of the folders folded behind
+« … » in the path bar is a popup the same way, under « … » (lot E-04d): a click outside closes
+it at once, Escape or a choice let it fade out first. Under X11, it keeps iced's own runtime on winit. The title
 bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
 closing the window, from its button or from the compositor, ends the program.
 
@@ -140,7 +142,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Sidebar: Favourites (home, Desktop, Documents, Downloads, Projets when `~/Projets` exists,
   Pictures, from xdg-user-dirs), Devices, System (system disk, trash). The favourite that
   contains the current folder is active; Home only for the home folder itself.
-- Toolbar: back, forward, path bar, git branch, search in the current folder.
+- Toolbar: back, forward, path bar, git branch, search in the current folder, and at its right
+  end the button of the preview (lot E-08). The button, Ctrl+Alt+P (the Finder's Alt+Cmd+P)
+  or « Aperçu » in the bar's menu hide the preview and show it again: it slides out to the right
+  edge and back in 220 ms, the button lit while it shows. The choice is remembered in
+  `$XDG_CONFIG_HOME/evidence/settings` (`preview=on` or `off`), written whole to a temporary
+  file then renamed, off the interface thread, and read before the first frame.
 - Path bar (lot E-04, after Finder and Nautilus): a breadcrumb as wide as the toolbar allows;
   each segment opens its folder. A name wider than `CRUMB_MAX_WIDTH` keeps its start and its end
   around « … » (`sherlock_ui::ellipsis::fit_middle`); when the segments do not fit the bar,
@@ -163,6 +170,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
     swings that die out) and says why in the status bar; the field stays open;
   - Escape, a click in the listing, or a navigation give the breadcrumb back.
 
+  « … » opens a menu of the folders it folds, as Finder's path bar does. The sheet lists the
+  last 10 folders reached by the field while nothing completes (for the session). The arrows
+  scroll the completion list to keep the picked folder in sight. Below 1000 px, the search
+  folds to its icon until it is used (a click, or Ctrl+F); Escape or a new folder folds it
+  back, and the path bar takes its room (lot E-04c).
+
   The breadcrumb and the field cross-fade (160 ms each way); the list fades and slides in and
   out; the sheet comes down and fades, over a dimmed window.
 
@@ -177,7 +190,7 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - The window follows its width (lot E-05, after the Finder and Nautilus). The name of a file
   always keeps `NAME_MIN_WIDTH` (220): when the room runs short, the Git column folds first,
   then Type, the preview, Size, Modified, and last the sidebar (`layout::Panes`). The preview
-  folds at half a 1080p screen; Space brings it back at that width, and the columns fold
+  folds at half a 1080p screen; « Aperçu » brings it back at that width, and the columns fold
   instead. Names, the origin of a trash item and the preview's title end with « … » where the
   shaped text stops fitting (`sherlock_ui::ellipsis`), not after an estimated count of
   characters.
@@ -239,6 +252,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Space opens a large preview of the item under the cursor, after the Finder's Quick Look
+  (lot E-12): its name and its content (the text, the picture fitted to the room, or its
+  information) on a glass panel of 80 % of the window, over a dimmed window. It zooms in from
+  0.85 and fades in 200 ms, and zooms out the same way. The arrows go to the item before or
+  after, and the preview follows; Space, Escape or a click outside close it. It opens on one
+  item only. The side panel is shown or hidden from « Aperçu » in the bar's menu.
+
+  ![](evidence/quick-look.png)
 - Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
   thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
   « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »

@@ -9,6 +9,7 @@ pub mod background;
 pub mod form;
 pub mod machine;
 pub mod pam;
+pub mod status;
 pub mod throttle;
 pub mod view;
 

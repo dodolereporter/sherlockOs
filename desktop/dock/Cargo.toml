@@ -44,6 +44,12 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 # iced_exwlshell and smithay already pull.
 wayland-client = "=0.31.15"
 wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+# An application dragged from the Applications view to the dock (lot D-41d), on the surface's
+# own connection, as Evidence does: the version and features Evidence and winit already pull.
+wayland-backend = { version = "=0.3.17", default-features = false, features = [
+    "client_system",
+    "dlopen",
+] }
 
 [dev-dependencies]
 iced_test = "=0.14.0"

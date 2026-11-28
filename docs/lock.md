@@ -21,6 +21,21 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   « Éteindre ». The pill and the buttons move to the screen the pointer enters, or the one that
   gets the keyboard; the compositor gives the keyboard to the lock surface of the screen under
   the pointer.
+- **The bottom corner** (lot D-25i, `src/status.rs`), with the form, discreet, in the secondary
+  color: the network (Wi-Fi with its signal, a cable, or none), the keyboard layout (« FR »,
+  picked as the compositor picks it: `keyboard.conf`, `XKB_DEFAULT_LAYOUT`, the system's, then
+  French) and the battery with its charge, on a machine that has one (not a mouse's: `scope`
+  Device is left out). Read every 5 s on a thread of its own from the kernel's files only
+  (`/sys/class/net`, `/proc/net/wireless`, `/sys/class/power_supply`), each read bounded: no
+  bus, nothing that can hang the screen. The login screen shows the same line.
+- **Towards a restart or a power off** (lot D-25i, `machine::Departure`): once « Redémarrer »
+  or « Éteindre » is confirmed, Sherlock waves (`Wave`) for 1.4 s, the screen fades to black
+  over 0.6 s, then `systemctl` runs; the other buttons do nothing meanwhile. If the machine is
+  still there 12 s later (logind refused, an inhibitor), the screen comes back. « Veille » is
+  unchanged.
+
+  ![The line of the corner, 1920 × 1080](lock/status-1920.png)
+  ![The same, 1280 × 800](lock/status-1280.png)
 - **Sizes follow the screen.** The time, the room above it, the bubble and the gaps are a share
   of the screen's logical height, kept between a minimum and a maximum (`screen::fit`); the
   rest has fixed logical sizes, which the screen's scale multiplies. Tried on 1366 × 768,
@@ -166,7 +181,11 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - `src/throttle.rs`, with a fake PAM and a clock moved by hand: 5 free wrong passwords, then
   the waits (the right password itself not handed to PAM while it waits), doubling up to 5
   minutes and never more, and the right password starting the count again.
-- `src/machine.rs`: the second click and its delay.
+- `src/machine.rs`: the second click and its delay; the departure (the wave, the black, the
+  command run once, the screen back after 12 s).
+- `src/status.rs`: the line of the corner read from a fixture of `/sys` and `/proc` (a bridge
+  left out, Wi-Fi and its signal, a cable winning, the layout of the setting and of the system,
+  a mouse's battery left out).
 - `src/form.rs`: the form on demand (a letter goes into the field, Space and Enter do not,
   Escape and 20 s without input send it away, not while PAM checks) and Sherlock's mood.
 - `src/background.rs`: the picture reduced, blurred and darkened; `lock.conf` before the
@@ -175,7 +194,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   it, Space and Enter, the form leaving and the field emptied, the mood of Sherlock; the right
   password unlocks, a wrong one empties the field, an empty one sends nothing; only PAM's
   acceptance leads to the exit; the typed password never shows in a message (`Typed(***)`);
-  the pill follows the screen of the pointer; a machine button needs a second click.
+  the pill follows the screen of the pointer; a machine button needs a second click, and a
+  power off runs after the wave and the black; the line of the corner (`lock-status-1920`,
+  `lock-status-1280`) and the fade to black halfway (`lock-departing`).
   Screenshots in `target/tmp/lock/`, on the blurred wallpaper: rest (no form), form, typing,
   password shown (`peek`), spinner and error in both themes, the second screen, and the rest
   and the form on the four sizes above. In software, Sherlock is his still picture: the 3D
