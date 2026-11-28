@@ -170,9 +170,13 @@ right edge; it slides out the same way, and the bubbles below close up. Both fol
 click counts on release, after a press on the bubble, and the press darkens it: the hover and
 press veils of `animated::hoverable` fade in over the glass, under the text (D-23d).
 
-**Closing** (D-23d). Under the pointer a bubble shows « × » at the right end of its header
-(`notifications::close_button`, the size of the tile, so that nothing moves): it closes the
-notification, dismissed (reason 2), with no action. Swiped to the right with two fingers, the
+**Closing** (D-23d, D-23f). Under the pointer a bubble shows « × » as on macOS, the author's
+choice: a round badge of 16 on its top left corner, its centre on the curve of the corner, half
+outside the bubble, fading in and out over 120 ms (`notifications::close_badge`). It closes the
+notification, dismissed (reason 2), with no action. The surface keeps 8 of room for it on the
+left and above (`CLOSE_OUTSET`, taken from the gap under the bar: the bubbles stay where they
+were), and its input region takes the badge's square besides the bubble, nothing more: the
+pointer over the badge stays over the bubble, and beside them it goes to the window below. Swiped to the right with two fingers, the
 bubble follows them, held back to a quarter of the way to the left; once they rest 120 ms
 (`SWIPE_END`), past a third of its width (`SWIPE_DISMISS`) it slides on out and is dismissed,
 else it springs back.
@@ -186,6 +190,7 @@ stack, its newest bubble then saying « Afficher moins ». A pile of one closes 
 ![A pile of three bubbles above another application](../desktop/notifications/screenshots/pile.png)
 ![The pile opened](../desktop/notifications/screenshots/pile-open.png)
 ![« × » under the pointer](../desktop/notifications/screenshots/hover.png)
+![« × » on a bubble with its actions](../desktop/notifications/screenshots/hover-actions.png)
 
 The pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
 a replacement meanwhile does not restart it. A bubble on its way out takes no click: its

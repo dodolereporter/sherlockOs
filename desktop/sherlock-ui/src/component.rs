@@ -57,6 +57,13 @@ impl<'a, Message: Clone + 'a> Control<'a, Message> {
     }
 
     /// Forces a state, instead of the one the mouse and the keyboard give. For the gallery.
+    /// Without its tooltip: an application that shows it elsewhere (a popup of its own, on
+    /// Wayland) keeps the label for itself.
+    pub fn without_tooltip(mut self) -> Self {
+        self.label = None;
+        self
+    }
+
     pub fn status(mut self, status: button::Status) -> Self {
         self.forced = Some(status);
         if let Some(on) = self.toggle {
