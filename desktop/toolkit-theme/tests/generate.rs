@@ -311,11 +311,23 @@ fn switching_the_qt_palette_keeps_the_other_settings() {
     let switched = qt::with_palette(&settings, light).must();
     assert_eq!(switched, settings.replace("dark.conf", "light.conf"));
     assert_eq!(qt::with_palette(&switched, light), None);
-    // Settings without the key are written again in full.
+    // Settings without the key keep everything else: the key is added, never the file
+    // written again in full.
     assert_eq!(
-        qt::with_palette("[Fonts]\n", light),
-        Some(qt::qtct_settings(light))
+        qt::with_palette("[Fonts]\nfixed=\"Mono,10\"\n", light).must(),
+        "[Fonts]\nfixed=\"Mono,10\"\n\n[Appearance]\ncolor_scheme_path=/t/qt6ct/light.conf\n\
+         custom_palette=true\n"
     );
+    assert_eq!(
+        qt::with_palette(
+            "[Appearance]\ncustom_palette=false\nstyle=kvantum\n[Fonts]\n",
+            light
+        )
+        .must(),
+        "[Appearance]\ncolor_scheme_path=/t/qt6ct/light.conf\ncustom_palette=false\n\
+         style=kvantum\n[Fonts]\n"
+    );
+    assert!(!qt::has_palette("[Fonts]\n") && qt::has_palette(&settings));
 }
 
 #[test]
