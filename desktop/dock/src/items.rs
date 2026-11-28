@@ -24,6 +24,8 @@ pub enum Kind {
     App(Box<DesktopEntry>),
     /// Open windows whose application has no desktop entry: their `app_id`.
     Window(String),
+    /// The trash, last (lot D-21j): full or empty.
+    Trash(bool),
     /// The hole of an application dragged over the dock (lot D-41d).
     Hole,
 }
@@ -38,6 +40,7 @@ pub enum Target {
     App(String),
     /// An `app_id` without desktop entry.
     Window(String),
+    Trash,
     Hole,
 }
 
@@ -97,8 +100,21 @@ impl Item {
         }
     }
 
+    /// The trash, full or empty: its tile from sherlock-ui.
+    pub fn trash(full: bool) -> Self {
+        Self {
+            kind: Kind::Trash(full),
+            name: String::from(dock::text::TRASH),
+            glyph: Glyph::File(svg::Handle::from_memory(
+                dock::trash_icon(full).into_bytes(),
+            )),
+            pinned: false,
+        }
+    }
+
     pub fn target(&self) -> Target {
         match &self.kind {
+            Kind::Trash(_) => Target::Trash,
             Kind::Applications => Target::Applications,
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
@@ -114,7 +130,7 @@ impl Item {
             Kind::App(entry) => Some(entry.id.as_str()),
             Kind::Sherlock => Some(SHERLOCK),
             Kind::Hole => Some(HOLE),
-            Kind::Applications | Kind::Window(_) => None,
+            Kind::Applications | Kind::Window(_) | Kind::Trash(_) => None,
         }
     }
 
@@ -130,7 +146,7 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock | Kind::Applications | Kind::Hole => false,
+            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Hole => false,
         }
     }
 }
@@ -145,6 +161,8 @@ pub struct Builder<'a> {
     pub applications: bool,
     /// Sherlock in the dock (`DockConfig::sherlock`).
     pub sherlock: bool,
+    /// The trash at the end, full (`Some(true)`) or empty; none without a trash folder.
+    pub trash: Option<bool>,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -200,6 +218,10 @@ impl Builder<'_> {
                 },
             };
             items.push(item);
+        }
+        // The trash last, after the separator, as on macOS (lot D-21j).
+        if let Some(full) = self.trash {
+            items.push(Item::trash(full));
         }
         let separator = (items.len() > first_open).then_some(first_open);
         (items, separator)
@@ -274,6 +296,7 @@ mod tests {
         let mut builder = Builder {
             applications: true,
             sherlock: true,
+            trash: None,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -323,6 +346,37 @@ mod tests {
         );
         // Glyphs are looked up once per application.
         assert_eq!(glyphs.len(), 3);
+    }
+
+    #[test]
+    fn the_trash_comes_last_after_the_separator() {
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/data");
+        let catalog = Catalog::load(std::slice::from_ref(&data));
+        let lookup = IconLookup::new(&[data], None, None);
+        let mut glyphs = HashMap::new();
+        let mut builder = Builder {
+            applications: false,
+            sherlock: false,
+            trash: Some(true),
+            catalog: &catalog,
+            lookup: &lookup,
+            icon_size: 88,
+            glyphs: &mut glyphs,
+        };
+        let pinned = ["org.example.Files".to_owned()];
+        let (items, separator) = builder.build(&pinned, None);
+        assert_eq!(names(&items), ["Fichiers", "Corbeille"]);
+        assert_eq!(separator, Some(1));
+        assert_eq!(items[1].kind, Kind::Trash(true));
+        assert_eq!(items[1].target(), Target::Trash);
+        assert!(items[1].pin_id().is_none() && !items[1].pinned);
+        let Placeholder(windows) = Placeholder::new("terminal", None);
+        let (items, separator) = builder.build(&pinned, Some(&windows));
+        assert_eq!(
+            names(&items),
+            ["Fichiers", "Terminal d'exemple", "Corbeille"]
+        );
+        assert_eq!(separator, Some(1));
     }
 
     #[test]

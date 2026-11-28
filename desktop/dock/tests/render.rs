@@ -582,6 +582,55 @@ fn the_applications_button_comes_first() {
     assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
 }
 
+/// Lot D-21j: the trash comes last, after the separator, full here; its menu opens it or empties
+/// it, the second click only: the first one arms « Reclique pour vider » and the menu stays.
+/// `dock-trash`, `dock-trash-menu`.
+#[test]
+fn the_trash_ends_the_dock_and_empties_on_a_second_click() {
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Trash(true));
+    let _ = dock.tick(Duration::from_secs(5));
+    let last = dock.items.len() - 1;
+    assert_eq!(dock.items[last].name, "Corbeille");
+    assert!(dock.separator.is_some_and(|s| s <= last));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-trash").expect("screenshot") > 2_000);
+    let point = icon_center(&dock, last);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    assert!(dock.menu_open());
+    unfolded(&mut dock);
+    let labels: Vec<String> = dock
+        .menu_lines(last)
+        .iter()
+        .map(|l| l.label.clone())
+        .collect();
+    assert_eq!(labels, ["Ouvrir", "Vider la corbeille"]);
+    let _ = dock.update(Message::MenuPick(dock::menu::Entry::EmptyTrash));
+    assert!(dock.menu_open(), "a first click only arms");
+    assert_eq!(dock.menu_lines(last)[1].label, "Reclique pour vider");
+    let entries = dock.menu_lines(last);
+    let (width, height) = dock::menu::surface_size(&entries);
+    {
+        let mut ui = Simulator::with_size(
+            dock::settings(),
+            (width as f32, height as f32),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(
+            ui.find("Reclique pour vider").is_ok(),
+            "the open menu says it"
+        );
+        assert!(capture(ui, "dock-trash-menu").expect("screenshot") > 2_000);
+    }
+    // Emptied elsewhere: the trash shows empty and its menu cannot empty it.
+    let _ = dock.update(Message::Trash(false));
+    let last = dock.items.len() - 1;
+    assert!(!dock.menu_lines(last)[1].enabled);
+}
+
 /// Lot D-21l: on a screen too narrow for its icons, the dock shrinks them and its surface stays
 /// inside the screen, 8 from each end; on 1920 it keeps its size. `dock-fitted-1920`,
 /// `dock-fitted-520`.
