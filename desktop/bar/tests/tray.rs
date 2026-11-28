@@ -705,6 +705,22 @@ mod tests {
                 let name = format!("tray-menu-{width}{suffix}");
                 let path = screen(&mut state, (width, height), &name);
                 assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
+                // Every icon kept in the bar: the chevron stays, and the popup says it takes
+                // one back (Q-49).
+                let _ = state.update(Message::MenuKey(bar::menu::Key::Close));
+                let later = std::time::Instant::now() + Duration::from_secs(10);
+                let _ = state.update(Message::Frame(later));
+                let all = state
+                    .tray
+                    .shown()
+                    .map(|i| i.properties.id.clone())
+                    .collect();
+                let _ = state.update(Message::Pins(all));
+                locate_chevron(&mut state, bar_size);
+                assert!(state.tray_open() && state.tray.in_popup().next().is_none());
+                let name = format!("tray-empty-{width}{suffix}");
+                let path = screen(&mut state, (width, height), &name);
+                assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
             }
         }
         color::set_active(Theme::Dark);

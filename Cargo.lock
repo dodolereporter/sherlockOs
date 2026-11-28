@@ -327,6 +327,7 @@ dependencies = [
  "dock-config",
  "iced",
  "iced_exwlshell",
+ "iced_runtime",
  "iced_test",
  "icon-theme",
  "image",
@@ -1132,6 +1133,7 @@ dependencies = [
  "appearance-config",
  "futures",
  "iced",
+ "iced_exwlshell",
  "iced_runtime",
  "iced_test",
  "image",
@@ -3023,6 +3025,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "portal"
+version = "0.0.0"
+dependencies = [
+ "async-io",
+ "blocking",
+ "libloading",
+ "memmap2",
+ "rustix 1.1.6",
+ "shell-protocol",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
+ "zbus",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3490,6 +3510,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "iced",
+ "iced_exwlshell",
  "iced_renderer",
  "iced_runtime",
  "iced_test",
@@ -3887,6 +3908,8 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",

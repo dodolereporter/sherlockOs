@@ -723,6 +723,8 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
     let card = container(inside)
         .width(ui::WIDTH)
         .style(ui::bubble(note.urgency == Urgency::Critical));
+    // The blur behind its glass (lot D-37b).
+    let card = sherlock_ui::glass::glass(card, ui::RADIUS);
     // A bubble behind another opens its pile; the others take a click, a press, a swipe.
     let area = mouse_area(card)
         .on_enter(Message::Hover(id, true))

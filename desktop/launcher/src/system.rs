@@ -253,6 +253,8 @@ mod refusal_tests {
 
     #[test]
     fn a_refusal_is_read_and_a_long_command_is_not_waited_for() {
+        // Its children would hold a copy of the lock of `instance`'s tests (`crate::PROCESSES`).
+        let _processes = crate::processes();
         assert!(run_waiting(&sh("exit 0"), REFUSAL_WAIT).is_ok());
         let refused = run_waiting(
             &sh("echo 'Access denied' >&2; exit 1"),
