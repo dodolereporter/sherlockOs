@@ -208,7 +208,9 @@ fn ask(input: &sherlockd::shell::Input) -> anyhow::Result<()> {
     use sherlockd::shell::{Events, Follower, reason};
     use std::sync::{Arc, Mutex, PoisonError};
     runtime()?.block_on(async {
-        let mut config = ClaudeCodeConfig::new(&exe()?, SYSTEM);
+        // The plan announced first, for the shell's panel (lot A-19e).
+        let system = format!("{SYSTEM} {}", sherlockd::shell::PLAN_INSTRUCTIONS);
+        let mut config = ClaudeCodeConfig::new(&exe()?, &system);
         if let Some(path) =
             CompositorWindow::of_session().and_then(|w| w.path().to_str().map(String::from))
         {
