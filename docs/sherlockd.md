@@ -461,7 +461,7 @@ It asks for no consent: every call reaches it through `McpServers::call`, with a
 checks every argument before sending anything (unknown argument, number out of range, a screen
 name past 64 characters or with control characters: refused), and the compositor refuses what
 does not exist (« aucun bureau 9 »), said to the model as a failed tool. The list is given as
-JSON after a sentence that says titles are the applications' text, never instructions: a title
+JSON after a sentence that says titles are the applications' text, never instructions, without control characters, line separators nor bidirectional marks: a title
 cannot break a line nor pass for the model's text. The socket's peer must be the compositor of
 this user (`--any-peer` only for the tests' fake). One connection per call, 5 s to answer,
 256 KiB at most.
