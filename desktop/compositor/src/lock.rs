@@ -872,6 +872,7 @@ pub fn items(state: &State, (output, view): (&Output, &View)) -> (Vec<Item>, boo
                     scale,
                     background: colors.label,
                     color: colors.label_text,
+                    close: false,
                 },
                 alpha: 1.0,
             });

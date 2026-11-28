@@ -330,7 +330,7 @@ pub(crate) fn fill(pixmap: &mut Pixmap, path: Option<Path>, color: Color) {
 }
 
 /// Strokes the icon `d`, an SVG path on the grid of `icon`, centered on `center`.
-fn stroke_icon(pixmap: &mut Pixmap, d: &str, center: (f32, f32), s: f32, color: Color) {
+pub(crate) fn stroke_icon(pixmap: &mut Pixmap, d: &str, center: (f32, f32), s: f32, color: Color) {
     let Some(path) = icon_path(d) else {
         tracing::warn!(d, "icon path not understood");
         return;
