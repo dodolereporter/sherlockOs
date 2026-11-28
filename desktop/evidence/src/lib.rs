@@ -22,6 +22,7 @@ pub mod places;
 pub mod preview;
 pub mod probe;
 pub mod selection;
+pub mod shell;
 pub mod smb;
 pub mod startup;
 pub mod transfer;
