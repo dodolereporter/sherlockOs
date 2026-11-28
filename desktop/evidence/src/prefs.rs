@@ -1,7 +1,7 @@
 //! What Evidence remembers from one start to the next (lot E-08): whether the preview is shown.
 //! One line, `preview=on` or `preview=off`, in `$XDG_CONFIG_HOME/evidence/settings`.
 
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Longest settings file read: a few lines.
@@ -12,14 +12,10 @@ pub fn path(config_home: &Path) -> PathBuf {
     config_home.join("evidence").join("settings")
 }
 
-/// Whether the preview was shown, if the file says so.
+/// Whether the preview was shown, if the file says so. Read with a bound, as every settings
+/// file of the desktop (`mime_apps::file`, lot Q-41).
 pub fn read_preview(path: &Path) -> Option<bool> {
-    let mut text = String::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(MAX_SIZE)
-        .read_to_string(&mut text)
-        .ok()?;
+    let text = mime_apps::file::read_bounded(path, MAX_SIZE).ok()?;
     text.lines().find_map(|line| match line.trim() {
         "preview=on" => Some(true),
         "preview=off" => Some(false),
@@ -27,17 +23,13 @@ pub fn read_preview(path: &Path) -> Option<bool> {
     })
 }
 
-/// Remembers whether the preview is shown: written whole to a temporary file, then renamed, so
-/// that a crash never leaves half a file.
+/// Remembers whether the preview is shown, through the desktop's one atomic writer: a crash
+/// never leaves half a file.
 pub fn write_preview(path: &Path, shown: bool) -> io::Result<()> {
     let dir = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     std::fs::create_dir_all(dir)?;
-    let temporary = path.with_extension("new");
-    let mut file = std::fs::File::create(&temporary)?;
     let value = if shown { "on" } else { "off" };
-    writeln!(file, "preview={value}")?;
-    file.sync_all()?;
-    std::fs::rename(&temporary, path)
+    mime_apps::file::write_atomically(path, &format!("preview={value}\n"))
 }
 
 #[cfg(test)]

@@ -42,14 +42,15 @@ impl Action {
         }
     }
 
-    /// The board also shows the shortcuts Super+, Super+G and Super+L. No compositor binds
-    /// them yet, so they are not shown: a shortcut that does nothing would mislead. What does
-    /// not exist yet says « Bientôt ».
+    /// The shortcuts of the board the compositor binds: Super+, and Super+L (lot Q-31). Super+G
+    /// is not shown, as a shortcut that does nothing would mislead: what does not exist yet says
+    /// « Bientôt ».
     pub fn trailing(self) -> Trailing<'static> {
-        if self.enabled() {
-            Trailing::None
-        } else {
-            Trailing::Shortcut(panels::text::SOON)
+        match self {
+            _ if !self.enabled() => Trailing::Shortcut(panels::text::SOON),
+            Self::Settings => Trailing::Shortcut(text::SETTINGS_KEYS),
+            Self::Lock => Trailing::Shortcut(text::LOCK_KEYS),
+            _ => Trailing::None,
         }
     }
 
