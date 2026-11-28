@@ -193,7 +193,9 @@ impl App {
             }
             _ => {
                 let row = ((y - metrics::LIST_TOP_GAP) / metrics::LIST_ROW_HEIGHT).floor();
-                (row >= 0.0 && (row as usize) < self.entries.len()).then_some(row as usize)
+                (row >= 0.0)
+                    .then(|| self.item_of_row(row as usize))
+                    .flatten()
             }
         }
     }
@@ -234,10 +236,7 @@ impl App {
     pub fn item_span(&self, index: usize) -> (f32, f32) {
         match self.view_mode {
             ViewMode::Icons => self.grid_line(index),
-            _ => (
-                metrics::LIST_TOP_GAP + index as f32 * metrics::LIST_ROW_HEIGHT,
-                metrics::LIST_ROW_HEIGHT,
-            ),
+            _ => (self.row_top(index), metrics::LIST_ROW_HEIGHT),
         }
     }
 
@@ -248,7 +247,7 @@ impl App {
                 let (top, line) = self.grid_line(self.entries.len() - 1);
                 top + line
             }
-            _ => metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT,
+            _ => metrics::LIST_TOP_GAP + self.row_count() as f32 * metrics::LIST_ROW_HEIGHT,
         }
     }
 }

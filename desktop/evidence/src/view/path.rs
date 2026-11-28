@@ -39,6 +39,9 @@ impl App {
         let left = metrics::TOOLBAR_PADDING
             + 2.0 * (metrics::ICON_BUTTON + metrics::GAP_ICON)
             + ui::icon_segmented_width(crate::views::ViewMode::ALL.len())
+            + metrics::GAP_ICON
+            // The « Présentation » button (lot E-15b).
+            + metrics::ICON_BUTTON
             + metrics::GAP_ICON;
         let search = if self.search_folded() {
             metrics::ICON_BUTTON

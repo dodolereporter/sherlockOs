@@ -348,6 +348,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   looked at, 12 levels, 2000 results and 5 s at most, links never followed, hidden items only
   when shown; a new letter stops the walk still running and starts another. Escape, or
   another folder, forgets the search and its tokens.
+- « Présentation » (lot E-15b): a toolbar button, after the views, opens a menu of « Trier
+  par » (the columns, as the background's menu), « Grouper par » and « Vue ». Grouped by kind
+  (the « Type » token's kinds, folders first, then « Autres »), by date (« Aujourd'hui »,
+  « Hier », 7 and 30 days, « Plus ancien ») or by size (folders, then the three sizes), the
+  list shows each group under a header row, sorted inside as chosen; a header takes a row's
+  place, so the rows, the selection's blocks (split by a header), the highlight, the lasso and
+  the hit tests count the headers above. The grid, the columns and the gallery show the folder
+  without groups; folders do not unfold while grouped.
 - Thumbnails (lot E-14, `thumbs`, `app/thumbnails`): the grid's tiles and the gallery's
   strip show a picture of what a file holds instead of its icon. Pictures (PNG, JPEG, WebP,
   GIF) are decoded with the bounds of the preview (lot E-06: size read from the header first,

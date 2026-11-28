@@ -151,6 +151,13 @@ pub mod evidence {
     pub const SCOPE_FOLDER: &str = "Ce dossier";
     pub const SCOPE_SUBFOLDERS: &str = "Sous-dossiers aussi";
     pub const FILTER_CLEAR: &str = "Effacer";
+    /// The « Présentation » menu (lot E-15b): the list's groups.
+    pub const PRESENTATION: &str = "Présentation";
+    pub const GROUP_BY: &str = "Grouper par";
+    pub const GROUP_NONE: &str = "Aucun";
+    pub const GROUP_OTHER: &str = "Autres";
+    pub const GROUP_YESTERDAY: &str = "Hier";
+    pub const GROUP_OLDER: &str = "Plus ancien";
     /// A token and what it keeps: « Type : Images, Vidéos ».
     pub fn token(name: &str, chosen: &str) -> String {
         format!("{name} : {chosen}")

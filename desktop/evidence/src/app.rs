@@ -41,7 +41,9 @@ mod popup;
 pub use hint::HintTarget;
 mod columns;
 mod disclose;
-mod search;
+mod groups;
+pub use groups::GroupBy;
+pub(crate) mod search;
 pub use search::Token;
 mod tabs;
 mod thumbnails;
@@ -181,6 +183,8 @@ pub enum Location {
 pub enum Command {
     /// The search's tokens (lot E-15): a kind kept or not, a date, a size.
     FilterKind(crate::filter::KindFilter),
+    /// How the list groups its items (lot E-15b).
+    GroupBy(GroupBy),
     FilterDate(Option<crate::filter::DateFilter>),
     FilterSize(Option<crate::filter::SizeFilter>),
     Open,
@@ -236,6 +240,8 @@ pub enum Sub {
     OpenWith,
     SortBy,
     View,
+    /// « Grouper par », in the « Présentation » menu (lot E-15b).
+    GroupBy,
 }
 
 /// An entry of the right-click menu.
@@ -372,6 +378,8 @@ pub enum Message {
     /// The search's tokens (lot E-15): a token's menu, where it looks, all forgotten; what
     /// the walk through the subfolders found.
     TokenMenu(Token),
+    /// The toolbar's « Présentation » button: its menu (lot E-15b).
+    PresentationMenu,
     SetScope(crate::filter::Scope),
     ClearFilters,
     DeepFound(u64, Vec<Entry>),
@@ -559,6 +567,11 @@ pub struct App {
     deep_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     deep_generation: u64,
     token_menu: Option<Token>,
+    /// How the list groups its items, where each group starts, and whether the
+    /// « Présentation » menu is the one open (lot E-15b).
+    pub(crate) group_by: GroupBy,
+    pub(crate) groups: Vec<(usize, &'static str)>,
+    presentation_menu: bool,
     /// The thumbnails of the grid and of the gallery (lot E-14).
     pub(crate) thumbnails: thumbnails::Thumbnails,
     /// The large preview is open, and its zoom in or out (lot E-12).
@@ -702,6 +715,9 @@ impl App {
             deep_stop: std::sync::Arc::default(),
             deep_generation: 0,
             token_menu: None,
+            group_by: GroupBy::None,
+            groups: Vec::new(),
+            presentation_menu: false,
             thumbnails: thumbnails::Thumbnails::default(),
             looking: false,
             look_fade: None,
@@ -1080,9 +1096,11 @@ impl App {
         }
         // The highlight follows the item when it is selected alone, in the list.
         let list = self.view_mode == ViewMode::List;
-        let target = self.selection.single().filter(|_| list).map(|i| {
-            f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT)
-        });
+        let target = self
+            .selection
+            .single()
+            .filter(|_| list)
+            .map(|i| f64::from(self.row_top(i)));
         match (target, &mut self.highlight) {
             (None, _) => self.highlight = None,
             (Some(y), Some(anim)) if (anim.target() - y).abs() > f64::EPSILON => {
@@ -1096,6 +1114,7 @@ impl App {
         if self.menu.is_none() {
             self.device_menu = None;
             self.token_menu = None;
+            self.presentation_menu = false;
             // Closing the menu (or the chooser) forgets the "always" switch.
             if self.chooser.is_none() {
                 self.always = false;
@@ -1266,6 +1285,11 @@ impl App {
                 if self.filters.scope == crate::filter::Scope::Subfolders {
                     return self.walk_subfolders();
                 }
+            }
+            Message::PresentationMenu => {
+                self.renaming = None;
+                self.presentation_menu = true;
+                self.open_menu(self.pointer);
             }
             Message::TokenMenu(token) => {
                 self.renaming = None;
@@ -1856,10 +1880,18 @@ impl App {
         listing::sort(&mut self.entries, self.sort);
         // The unfolded folders' items under each (lot E-13d); not while searching.
         let searching = !needle.is_empty() || self.filters.any();
-        if !searching && self.view_mode == ViewMode::List && !self.unfolded.is_empty() {
+        let grouping = self.group_by != GroupBy::None && self.view_mode == ViewMode::List;
+        if !searching && !grouping && self.view_mode == ViewMode::List && !self.unfolded.is_empty()
+        {
             let top = std::mem::take(&mut self.entries);
             self.entries = disclose::flatten(top, &self.unfolded);
         }
+        // In groups, each under its header (lot E-15b): the list only.
+        self.groups = if grouping {
+            groups::arrange(&mut self.entries, self.group_by)
+        } else {
+            Vec::new()
+        };
         self.select_paths(&keep);
     }
 
@@ -1992,14 +2024,20 @@ impl App {
         let (dx, dy) = (end.0 - lasso.start.0, end.1 - lasso.start.1);
         lasso.dragging |= dx.hypot(dy) > sherlock_ui::evidence::LASSO_THRESHOLD;
         if lasso.dragging {
+            let lasso = lasso.clone();
             let (top, row) = (metrics::LIST_TOP_GAP, metrics::LIST_ROW_HEIGHT);
             self.selection = match self.view_mode {
                 // The gallery has no lasso: its strip is a single line.
                 ViewMode::Gallery => lasso.base.clone(),
-                ViewMode::Icons => {
-                    let rect = lasso.rect();
-                    let lasso = lasso.clone();
-                    lasso.selection_with(&self.tiles_in(rect))
+                ViewMode::Icons => lasso.selection_with(&self.tiles_in(lasso.rect())),
+                // In groups, the items of the rows crossed, headers left out (lot E-15b).
+                _ if self.grouped() => {
+                    let (_, y, _, h) = lasso.rect();
+                    let first = ((y - top) / row).floor().max(0.0) as usize;
+                    let last = ((y + h - top) / row).floor().max(0.0) as usize;
+                    let crossed: Vec<usize> =
+                        (first..=last).filter_map(|r| self.item_of_row(r)).collect();
+                    lasso.selection_with(&crossed)
                 }
                 _ => lasso.selection(top, row, count),
             };
@@ -2037,6 +2075,13 @@ impl App {
         use MenuItem::{Action, Separator, Submenu};
         if let Some(token) = self.token_menu {
             return self.token_items(token);
+        }
+        if self.presentation_menu {
+            return vec![
+                Submenu(Sub::SortBy),
+                Submenu(Sub::GroupBy),
+                Submenu(Sub::View),
+            ];
         }
         if let Some(volume) = self.menu_volume() {
             let open = if volume.mount_point.is_some() {
@@ -2134,6 +2179,16 @@ impl App {
     pub fn submenu_items(&self, sub: Sub) -> Vec<MenuItem> {
         match sub {
             Sub::OpenWith => self.open_with_items(),
+            Sub::GroupBy => GroupBy::ALL
+                .into_iter()
+                .map(|by| MenuItem::Action {
+                    label: by.label(),
+                    keys: None,
+                    command: Command::GroupBy(by),
+                    danger: false,
+                    checked: self.group_by == by,
+                })
+                .collect(),
             Sub::SortBy => {
                 let in_trash = self.location == Location::Trash;
                 let columns = [
@@ -2308,8 +2363,10 @@ impl App {
     }
 
     fn open_menu(&mut self, at: Point) {
-        let on_selection =
-            !self.selection.is_empty() && self.device_menu.is_none() && self.token_menu.is_none();
+        let on_selection = !self.selection.is_empty()
+            && self.device_menu.is_none()
+            && self.token_menu.is_none()
+            && !self.presentation_menu;
         let height = Self::menu_height(&self.menu_items(on_selection));
         // Inside the window; a submenu opens on the left when the right has no room. A popup
         // is placed by the compositor instead, which flips it at the screen's edges.
@@ -2333,8 +2390,11 @@ impl App {
 
     /// Opens the menu from the keyboard, under the cursor row.
     fn open_menu_at_cursor(&mut self) {
-        let row =
-            self.selection.cursor().map_or(0.0, |i| (i + 1) as f32) * metrics::LIST_ROW_HEIGHT;
+        let row = self
+            .selection
+            .cursor()
+            .map_or(0.0, |i| (self.row_of(i) + 1) as f32)
+            * metrics::LIST_ROW_HEIGHT;
         let top = metrics::TITLE_BAR_HEIGHT
             + metrics::TOOLBAR_HEIGHT
             + metrics::LIST_HEADER_HEIGHT
@@ -2721,6 +2781,11 @@ impl App {
                     _ => DeviceAction::Open,
                 };
                 return self.device(action, id);
+            }
+            Command::GroupBy(by) => {
+                self.group_by = by;
+                self.highlight = None;
+                self.refilter();
             }
             Command::FilterKind(kind) => {
                 if !self.filters.kinds.remove(&kind) {

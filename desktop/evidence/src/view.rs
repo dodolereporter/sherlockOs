@@ -36,6 +36,16 @@ mod path;
 mod search;
 
 /// Vertical rule between two panels.
+/// The header of a group of the list (lot E-15b): its name, over a rule, a row high.
+fn group_header<'a>(label: &'static str) -> Element<'a, Message> {
+    container(ui::section_label(label))
+        .width(Length::Fill)
+        .height(metrics::LIST_ROW_HEIGHT)
+        .padding([0.0, metrics::LIST_ROW_PADDING])
+        .align_y(Alignment::End)
+        .into()
+}
+
 fn vline<'a>() -> Element<'a, Message> {
     container(space())
         .width(metrics::BORDER_WIDTH)
@@ -242,8 +252,14 @@ impl App {
                 })
                 .collect(),
         );
+        // How the folder is presented: its sort and its groups (lot E-15b).
+        let presentation = ui::toolbar_button(
+            Icon::Arrange,
+            t::PRESENTATION,
+            Some(Message::PresentationMenu),
+        );
         let trail = self.path_bar();
-        let mut line = row![back, forward, views, trail]
+        let mut line = row![back, forward, views, presentation, trail]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center);
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
@@ -553,7 +569,8 @@ impl App {
     /// listing of 5,000 files lays out only a few dozen widgets.
     fn rows(&self, now: Duration, slide: f32, shown: [bool; 4]) -> Element<'_, Message> {
         let row_height = metrics::LIST_ROW_HEIGHT;
-        let total = self.entries.len();
+        // Rows, the groups' headers counted (lot E-15b).
+        let total = self.row_count();
         let (offset, _) = self.scroll;
         let visible = self.size.height;
         // Only the visible rows (plus a margin) are built, between two spacers that hold the
@@ -568,7 +585,10 @@ impl App {
         let after = (total - last) as f32 * row_height;
         let rows = Column::new()
             .push(space().height(before))
-            .extend((first..last).map(|i| self.row(i, &self.entries[i], shown)))
+            .extend((first..last).map(|r| match self.item_of_row(r) {
+                Some(i) => self.row(i, &self.entries[i], shown),
+                None => group_header(self.header_at(r).unwrap_or_default()),
+            }))
             .push(space().height(after))
             .width(Length::Fill);
         // The selection is drawn under the rows, in the first layer of the stack, which sets
@@ -627,9 +647,17 @@ impl App {
                     .push(block(row_height));
             }
             _ => {
+                // Runs of selected rows: a group's header splits a run (lot E-15b).
+                let mut runs: Vec<(usize, usize)> = Vec::new();
+                for row in self.selection.iter().map(|i| self.row_of(i)) {
+                    match runs.last_mut() {
+                        Some((_, end)) if *end == row => *end = row + 1,
+                        _ => runs.push((row, row + 1)),
+                    }
+                }
                 let mut y = 0.0;
-                for run in self.selection.runs() {
-                    let (start, end) = ((*run.start()).max(first), (*run.end() + 1).min(last));
+                for (start, end) in runs {
+                    let (start, end) = (start.max(first), end.min(last));
                     if start >= end {
                         continue;
                     }
@@ -1293,6 +1321,7 @@ impl App {
                     Sub::OpenWith => t::OPEN_WITH,
                     Sub::SortBy => more::SORT_BY,
                     Sub::View => more::VIEW,
+                    Sub::GroupBy => t::GROUP_BY,
                 };
                 let open = submenu_open == Some(sub);
                 let toggle = Message::Submenu((!open).then_some(sub));

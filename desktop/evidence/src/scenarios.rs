@@ -1125,6 +1125,7 @@ fn menu_labels(items: &[crate::app::MenuItem]) -> Vec<String> {
             MenuItem::Submenu(Sub::OpenWith) => Some(t::OPEN_WITH.to_owned()),
             MenuItem::Submenu(Sub::SortBy) => Some(more::SORT_BY.to_owned()),
             MenuItem::Submenu(Sub::View) => Some(more::VIEW.to_owned()),
+            MenuItem::Submenu(Sub::GroupBy) => Some(t::GROUP_BY.to_owned()),
             MenuItem::App(_) | MenuItem::Separator => None,
         })
         .collect()
@@ -2877,4 +2878,77 @@ fn the_search_tokens_narrow_and_reach_the_subfolders() {
     assert!(!bench.app.filter_bar_shown());
     assert_eq!(bench.app.filters, crate::filter::Filters::default());
     assert_eq!(bench.names().len(), 4);
+}
+
+/// Lot E-15b: the « Présentation » menu sorts and groups the list; each group shows under a
+/// header row, which no click selects, and the rows below it are where they are drawn.
+/// Captures at two sizes (`evidence-captures/groups-*`).
+#[test]
+fn the_list_groups_its_items_under_headers() {
+    use crate::app::{Command, GroupBy, MenuItem, Sub};
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = views_bench("groups", 2);
+    let project = bench.path("projet");
+    fs::write(project.join("photo.png"), "x").expect("write");
+    fs::write(project.join("film.mkv"), "x").expect("write");
+    bench.send(Message::Go(Location::Folder(project.join("dossier"))));
+    bench.send(Message::Back);
+    bench.send(Message::PresentationMenu);
+    assert_eq!(
+        bench.app.menu_items(false),
+        [
+            MenuItem::Submenu(Sub::SortBy),
+            MenuItem::Submenu(Sub::GroupBy),
+            MenuItem::Submenu(Sub::View)
+        ]
+    );
+    bench.send(Message::Run(Command::GroupBy(GroupBy::Kind)));
+    assert!(bench.app.menu.is_none());
+    assert_eq!(
+        bench.names(),
+        [
+            "dossier",
+            "photo.png",
+            "fichier-00.txt",
+            "fichier-01.txt",
+            "film.mkv"
+        ]
+    );
+    let headers: Vec<&str> = bench.app.groups.iter().map(|(_, h)| *h).collect();
+    assert_eq!(headers, ["Dossiers", "Images", "Documents", "Vidéos"]);
+    // Row 0 is a header, row 1 the folder, row 2 the next header, row 3 the picture.
+    let row = |r: usize| metrics::LIST_TOP_GAP + (r as f32 + 0.5) * metrics::LIST_ROW_HEIGHT;
+    assert_eq!(bench.app.item_at(10.0, row(0)), None);
+    assert_eq!(bench.app.item_at(10.0, row(1)), Some(0));
+    assert_eq!(bench.app.item_at(10.0, row(2)), None);
+    assert_eq!(bench.app.item_at(10.0, row(3)), Some(1));
+    assert_eq!(bench.app.row_of(4), 8, "under four headers");
+    bench.press(Named::ArrowDown);
+    bench.press(Named::ArrowDown);
+    assert_eq!(bench.selected(), ["photo.png"]);
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let out = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&out).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = out.join(format!("groups-{width}.png"));
+        let _ = fs::remove_file(out.join(format!("groups-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+    // The grid shows the folder without groups; « Aucun » takes them away.
+    bench.ctrl("1");
+    assert!(!bench.app.grouped());
+    bench.ctrl("2");
+    bench.send(Message::Run(Command::GroupBy(GroupBy::None)));
+    assert!(bench.app.groups.is_empty());
 }
