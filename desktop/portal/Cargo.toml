@@ -14,6 +14,21 @@ path = "src/main.rs"
 # Runs the reaper of ended shares on the main thread, on zbus's reactor: the version zbus
 # already pulls.
 async-io = "=2.6.0"
+# The theme of the appearance file, read once by the picker (workspace crate).
+appearance-config = { path = "../appearance-config" }
+# The picker's window, as the launcher draws it, with the thumbnails as pixels (docs/bar.md).
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+    "image-without-codecs",
+] }
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+sherlock-ui = { path = "../sherlock-ui" }
 # Runs the blocking parts of a portal call (the picker, PipeWire's start) off the bus's
 # thread: the version zbus already pulls.
 blocking = "=1.7.0"

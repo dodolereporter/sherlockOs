@@ -13,6 +13,11 @@ use portal::{
 use tracing_subscriber::EnvFilter;
 
 fn main() -> std::process::ExitCode {
+    // Before anything else: the picker's renderer is chosen through the environment (ADR 0018).
+    // The service draws nothing, but the picker it starts inherits the choice.
+    let renderer = sherlock_ui::gpu::Choice::detect();
+    // SAFETY: first statements of `main`, no other thread exists yet.
+    unsafe { renderer.apply() };
     let pick = std::env::args().nth(1).as_deref() == Some("--pick");
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -20,9 +25,13 @@ fn main() -> std::process::ExitCode {
         .init();
     if pick {
         let request = picker::read_request();
-        // The picker's window comes with lot D-28d4: until then, every request is cancelled.
-        tracing::warn!(app = request.app_id, "no picker yet: nothing shared");
-        return std::process::ExitCode::SUCCESS;
+        return match portal::chooser::run(request) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(err) => {
+                tracing::error!("picker: {err}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
     match serve() {
         Ok(()) => std::process::ExitCode::SUCCESS,
