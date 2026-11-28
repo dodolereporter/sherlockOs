@@ -40,6 +40,8 @@ pub enum Entry {
     ForceQuit,
     /// The dock's own menu: puts Sherlock back in the dock, or takes it out.
     ShowSherlock,
+    /// The trash's menu (lot D-21j): deletes what it holds, after a second click.
+    EmptyTrash,
 }
 
 /// An entry as the menu shows it.
@@ -167,6 +169,25 @@ pub fn dock_entries(sherlock: bool) -> Vec<Line> {
         checked: sherlock,
         ..Line::new(Entry::ShowSherlock, text::SHOW_SHERLOCK, true)
     }]
+}
+
+/// The entries of the trash's menu: « Ouvrir », then « Vider la corbeille » while it holds
+/// something, which reads « Reclique pour vider » once `armed`.
+pub fn trash_entries(full: bool, armed: bool) -> Vec<Line> {
+    let empty = if armed {
+        text::EMPTY_TRASH_CONFIRM
+    } else {
+        text::EMPTY_TRASH
+    };
+    vec![
+        Line::new(Entry::Open, text::OPEN, true),
+        Line::new(Entry::EmptyTrash, empty, full).group(),
+    ]
+}
+
+/// The menu of a stack (lot D-21k): its folder opened in Evidence.
+pub fn stack_entries() -> Vec<Line> {
+    vec![Line::new(Entry::Open, text::OPEN_IN_EVIDENCE, true)]
 }
 
 /// Size of the menu surface for `lines`: width, then height.

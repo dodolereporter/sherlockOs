@@ -18,6 +18,8 @@ pub mod menu;
 pub mod pins;
 pub mod save;
 pub mod shell;
+pub mod stack;
+pub mod trash;
 mod view;
 pub mod watch;
 pub mod windows;

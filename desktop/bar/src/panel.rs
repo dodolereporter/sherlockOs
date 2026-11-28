@@ -215,7 +215,11 @@ pub enum History {
 
 /// The notification centre of the Panels board: its title and « Tout effacer », then a card per
 /// application, newest first.
-pub fn center(history: &History, options: Option<u32>) -> Element<'_, Message> {
+pub fn center<'a>(
+    history: &'a History,
+    options: Option<u32>,
+    expanded: &std::collections::HashSet<String>,
+) -> Element<'a, Message> {
     let empty = !matches!(history, History::Ready(groups) if !groups.is_empty());
     let title = text(words::NOTIFICATIONS)
         .font(typography::TITLE)
@@ -231,7 +235,9 @@ pub fn center(history: &History, options: Option<u32>) -> Element<'_, Message> {
         });
     let body: Element<'_, Message> = match history {
         History::Ready(groups) if !groups.is_empty() => {
-            let cards = groups.iter().map(|group| card(group, options));
+            let cards = groups
+                .iter()
+                .map(|group| card(group, options, expanded.contains(&group.app)));
             scroll(Column::with_children(cards).spacing(panels::CENTER_GAP))
                 .height(Length::Fill)
                 .into()
@@ -255,8 +261,9 @@ fn notice(line: &str) -> Element<'_, Message> {
     container(line).center(Length::Fill).into()
 }
 
-/// The card of an application: its tile and name, then its newest notifications.
-fn card(group: &Group, options: Option<u32>) -> Element<'_, Message> {
+/// The card of an application: its tile and name and « × » that clears them all, then its newest
+/// notifications, all of them once `open` (« N autres notifications », D-23d).
+fn card(group: &Group, options: Option<u32>, open: bool) -> Element<'_, Message> {
     let initial: String = group
         .app
         .chars()
@@ -288,18 +295,45 @@ fn card(group: &Group, options: Option<u32>) -> Element<'_, Message> {
     if let (true, Some(first)) = (single, group.entries.first()) {
         header = header.push(small(&first.when));
     }
+    let ids: Vec<u32> = group.entries.iter().map(|e| e.id).collect();
+    header = header.push(sherlock_ui::notifications::close_button(
+        Message::RemoveNotifications(ids),
+    ));
     let mut rows = vec![header.into()];
-    for entry in group.entries.iter().take(panels::GROUP_MAX) {
+    let shown = if open {
+        group.entries.len()
+    } else {
+        panels::GROUP_MAX
+    };
+    for entry in group.entries.iter().take(shown) {
         rows.push(notification(entry, !single, options == Some(entry.id)));
     }
     let hidden = group.entries.len().saturating_sub(panels::GROUP_MAX);
     if hidden > 0 {
-        rows.push(small(&words::more(hidden)));
+        let label = if open {
+            sherlock_ui::notifications::text::SHOW_LESS.to_owned()
+        } else {
+            words::more(hidden)
+        };
+        rows.push(link(label, Message::ExpandGroup(group.app.clone(), !open)));
     }
     container(Column::with_children(rows).spacing(panels::CARD_GAP))
         .width(Length::Fill)
         .padding(panels::CARD_PADDING)
         .style(panels::card)
+        .into()
+}
+
+/// A line of small secondary text that does something when clicked.
+fn link<'a>(label: String, message: Message) -> Element<'a, Message> {
+    let label = text(label)
+        .font(typography::UI)
+        .size(typography::SMALL_SIZE)
+        .style(panels::secondary_text);
+    iced::widget::button(label)
+        .padding(0)
+        .style(|_, _| iced::widget::button::Style::default())
+        .on_press(message)
         .into()
 }
 
@@ -310,19 +344,21 @@ fn notification(entry: &Entry, timed: bool, options: bool) -> Element<'_, Messag
     let title = ui::ellipsis(entry.summary.as_str())
         .font(typography::UI_SEMIBOLD)
         .width(Length::Fill);
-    let mut lines: Vec<Element<'_, Message>> = if timed {
+    let mut head = row![title.width(Length::Fill)]
+        .spacing(panels::HEADER_GAP)
+        .align_y(Alignment::Center);
+    if timed {
         let when = text(entry.when.as_str())
             .font(typography::UI)
             .size(typography::SMALL_SIZE)
             .style(panels::secondary_text);
-        vec![
-            row![title.width(Length::Fill), when]
-                .spacing(panels::HEADER_GAP)
-                .into(),
-        ]
-    } else {
-        vec![title.into()]
-    };
+        head = head
+            .push(when)
+            .push(sherlock_ui::notifications::close_button(
+                Message::RemoveNotifications(vec![entry.id]),
+            ));
+    }
+    let mut lines: Vec<Element<'_, Message>> = vec![head.into()];
     if !entry.body.is_empty() {
         lines.push(
             ui::body(entry.body.as_str())
@@ -350,8 +386,12 @@ fn notification(entry: &Entry, timed: bool, options: bool) -> Element<'_, Messag
                 .into(),
         );
     }
-    Column::with_children(lines)
-        .spacing(panels::CARD_GAP)
+    // A click on it runs its default action, as on a bubble, and clears it (D-23d); « × » on
+    // the right of its title clears it alone.
+    let body = Column::with_children(lines).spacing(panels::CARD_GAP);
+    mouse_area(body)
+        .on_press(Message::OpenNotification(entry.id))
+        .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }
 

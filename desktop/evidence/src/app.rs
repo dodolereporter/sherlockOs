@@ -37,6 +37,7 @@ mod network;
 pub use network::{Field, Login};
 mod path;
 mod popup;
+mod tabs;
 pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
@@ -76,6 +77,8 @@ pub const SUGGESTIONS: &str = "path-suggestions";
 pub struct Config {
     pub home: PathBuf,
     pub start: PathBuf,
+    /// Opens on the trash (`trash:///` as argument, lot D-21j), when there is one.
+    pub start_trash: bool,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
     /// `--measure <folder> [--maximized]`: measures smoothness on this folder, then quits.
@@ -108,8 +111,11 @@ impl Config {
             _ => None,
         };
         let maximized = measure.is_some() && args.iter().any(|a| a == "--maximized");
+        // `trash:///`, as the dock's trash asks (lot D-21j): Evidence opens on the trash.
+        let start_trash = measure.is_none() && args.first().is_some_and(|a| a == "trash:///");
         let start = match measure {
             Some(_) => home.clone(),
+            None if start_trash => home.clone(),
             None => args
                 .first()
                 .and_then(|p| std::path::absolute(p).ok())
@@ -120,6 +126,7 @@ impl Config {
         Self {
             home,
             start,
+            start_trash,
             favorites,
             trash: Trash::user(),
             measure,
@@ -369,6 +376,15 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// Tabs (lot D-27b): a new one on this folder, one closed, one shown, one pressed (to
+    /// drag), the pointer over one while dragging, a folder opened in a tab by the middle
+    /// button.
+    NewTab,
+    CloseTab(usize),
+    SwitchTab(usize),
+    PressTab(usize),
+    OverTab(usize),
+    MiddleClick(usize),
     /// The folder shown changed, by another program (lot E-09).
     FolderChanged(PathBuf),
     /// The file servers of the network, found now (lot E-07).
@@ -501,6 +517,8 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The tabs of the window (lot D-27b).
+    pub(crate) tabs: tabs::Tabs,
     /// What can be undone and redone (lot E-10).
     pub(crate) steps: crate::undo::History,
     /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
@@ -556,7 +574,10 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
         let built = Instant::now();
-        let start = Location::Folder(config.start.clone());
+        let start = match config.start_trash && config.trash.is_some() {
+            true => Location::Trash,
+            false => Location::Folder(config.start.clone()),
+        };
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
             main: None,
@@ -607,6 +628,7 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            tabs: tabs::Tabs::default(),
             steps: crate::undo::History::default(),
             folder_changed: false,
             progress: None,
@@ -760,7 +782,12 @@ impl App {
 
     /// Name of the current folder, for the title bar and the search.
     pub fn location_name(&self) -> String {
-        match &self.location {
+        self.name_of(&self.location)
+    }
+
+    /// Name of a location: « Accueil », « Corbeille », « Disque », or its folder's name.
+    pub fn name_of(&self, location: &Location) -> String {
+        match location {
             Location::Trash => texts::TRASH.into(),
             Location::Folder(dir) if *dir == self.config.home => texts::HOME.into(),
             Location::Folder(dir) => dir
@@ -850,6 +877,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.tabs.fade)
             || fade(&self.login_fade)
             || fade(&self.preview_slide)
             || fade(&self.look_fade)
@@ -1113,6 +1141,7 @@ impl App {
                 self.lasso = Some(Lasso::new(at, base));
             }
             Message::Released => {
+                self.tabs.dragging = None;
                 self.dnd_release();
                 self.lasso = None;
                 self.lasso_frame = None;
@@ -1270,6 +1299,26 @@ impl App {
                 self.open_menu(self.pointer);
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
+            Message::NewTab => {
+                let here = self.location.clone();
+                return self.open_tabs(vec![here], true);
+            }
+            Message::CloseTab(index) => return self.close_tab(index),
+            Message::SwitchTab(index) => return self.switch_tab(index),
+            Message::PressTab(index) => {
+                self.tabs.dragging = Some(index);
+                return self.switch_tab(index);
+            }
+            Message::OverTab(index) => self.drag_tab(index),
+            Message::MiddleClick(index) => {
+                if let Some(entry) = self.entries.get(index)
+                    && entry.kind == Kind::Folder
+                    && self.location != Location::Trash
+                {
+                    let folder = Location::Folder(entry.path.clone());
+                    return self.open_tabs(vec![folder], false);
+                }
+            }
             Message::Servers(servers) => self.servers = servers,
             Message::OpenServer(host) => return self.open_server(&host),
             Message::EjectServer(host) => return self.eject_server(&host),
@@ -1686,12 +1735,18 @@ impl App {
 
     /// Top left corner of the listing's rows in the window, below its column headers.
     fn list_origin(&self) -> Point {
+        // The tab bar, when shown, pushes the listing down (D-27b).
+        let tabs = match self.tab_bar_level() {
+            level if level > 0.0 => (more::TAB_BAR_HEIGHT * level).round() + metrics::BORDER_WIDTH,
+            _ => 0.0,
+        };
         Point::new(
             self.panes().sidebar_width() + metrics::LIST_PADDING,
             metrics::TITLE_BAR_HEIGHT
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
-                + 3.0 * metrics::BORDER_WIDTH,
+                + 3.0 * metrics::BORDER_WIDTH
+                + tabs,
         )
     }
 
@@ -2225,6 +2280,8 @@ impl App {
         let shift = modifiers.shift();
         let last = self.entries.len().saturating_sub(1);
         match key.as_ref() {
+            // Ctrl+Tab and Ctrl+Maj+Tab go from tab to tab (D-27b).
+            Key::Named(Named::Tab) if ctrl => self.cycle_tab(shift),
             Key::Named(Named::Tab) => focus::advance(direction(modifiers)),
             Key::Named(Named::ArrowLeft) if modifiers.alt() => self.update(Message::Back),
             Key::Named(Named::ArrowRight) if modifiers.alt() => self.update(Message::Forward),
@@ -2279,6 +2336,11 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
+                ("t", _) => self.update(Message::NewTab),
+                ("w", _) => {
+                    let active = self.tabs.active;
+                    self.close_tab(active)
+                }
                 ("z", false) => self.run(Command::Undo),
                 ("z", true) | ("y", _) => self.run(Command::Redo),
                 ("f", _) => {
@@ -2499,6 +2561,11 @@ impl App {
             return Task::none();
         };
         if entry.kind == Kind::Folder && self.location != Location::Trash {
+            // Several folders selected: each in a tab of its own, the first shown (D-27b).
+            let folders = self.selected_folders();
+            if folders.len() > 1 {
+                return self.open_tabs(folders, true);
+            }
             let path = entry.path.clone();
             return self.go(Location::Folder(path));
         }

@@ -223,6 +223,13 @@ impl Core {
         self.send(events);
         true
     }
+    /// « × » or a swipe: the notification closes, dismissed by the user, with no action.
+    pub fn dismiss(&self, id: u32) {
+        if self.close(id) {
+            self.signal_closed(id, Reason::Dismissed);
+        }
+    }
+
     /// A click on the bubble: its default action, if it has one, then it closes.
     pub fn click(&self, id: u32) {
         self.click_activated(id, None);
@@ -319,6 +326,24 @@ impl Core {
     }
 
     /// Empties the history (« Tout effacer » of the centre).
+    /// Takes `ids` out of the history; those still open close, dismissed.
+    pub fn remove(&self, ids: &[u32]) {
+        let mut state = self.lock();
+        state.history.retain(|note| !ids.contains(&note.id));
+        state.changed = true;
+        let open: Vec<u32> = state
+            .open
+            .iter()
+            .map(|o| o.note.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        drop(state);
+        self.tick.notify_all();
+        for id in open {
+            self.dismiss(id);
+        }
+    }
+
     pub fn clear_history(&self) {
         let mut state = self.lock();
         state.history.clear();
@@ -536,6 +561,18 @@ mod tests {
         assert_eq!(core.shown(), [1, 2, 3, 4]);
         assert!(core.close(1) && core.close(2));
         assert_eq!(core.shown(), [3, 4]);
+    }
+
+    #[test]
+    fn removed_notifications_leave_the_history_and_the_screen() {
+        let (core, _events) = core();
+        let ids: Vec<u32> = (0..3)
+            .map(|i| core.notify(request(&i.to_string(), 0)))
+            .collect();
+        core.remove(&ids[..2]);
+        let left: Vec<u32> = core.history().iter().map(|n| n.id).collect();
+        assert_eq!(left, [ids[2]]);
+        assert!(core.open(ids[0]).is_none() && core.open(ids[2]).is_some());
     }
 
     #[test]
