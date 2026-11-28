@@ -20,8 +20,8 @@ use sherlockd::windows_server::{self, Compositor};
 use sherlockd::{containers_server, files_server};
 use tracing_subscriber::EnvFilter;
 
-const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --proxy | --test-server [case] \
-     | --windows-server <socket> | --files-server [--settings <file>] \
+const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --ask < request | --proxy \
+     | --test-server [case] | --windows-server <socket> | --files-server [--settings <file>] \
      | --containers-server [--socket <path>]";
 
 /// The longest request read on standard input.
@@ -48,7 +48,9 @@ fn main() -> anyhow::Result<()> {
         ["--demo"] => demo(),
         // Never in the arguments: every local account reads them (`ps`, `/proc/*/cmdline`).
         ["--claude-code"] => claude_code(&read_request(std::io::stdin().lock())?),
-        ["--claude-code", _] => {
+        // The shell's panel (A-19): the request on standard input, the events as JSON lines.
+        ["--ask"] => ask(&read_input(std::io::stdin().lock())?),
+        ["--claude-code", _] | ["--ask", _] => {
             bail!("the request is read on standard input, never in the arguments")
         }
         ["--proxy"] => serve_proxy(CompositorWindow::of_session()),
@@ -177,6 +179,86 @@ fn read_request(input: impl std::io::Read) -> anyhow::Result<String> {
         bail!("empty request on standard input");
     }
     Ok(request.to_owned())
+}
+
+/// The shell's input on `input`: `shell::MAX_INPUT_BYTES` at most.
+fn read_input(input: impl std::io::Read) -> anyhow::Result<sherlockd::shell::Input> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    let max = sherlockd::shell::MAX_INPUT_BYTES as u64;
+    input
+        .take(max + 1)
+        .read_to_end(&mut bytes)
+        .context("reading the request")?;
+    sherlockd::shell::Input::parse(&bytes).context("empty, too long or not UTF-8 request")
+}
+
+/// Writes `events` as JSON lines, at once: the lock of standard output keeps lines whole.
+fn emit(events: Vec<serde_json::Value>) {
+    let mut stdout = std::io::stdout().lock();
+    for event in events {
+        let _ = writeln!(stdout, "{event}");
+    }
+    let _ = stdout.flush();
+}
+
+/// The shell's request (A-19): the conversation as JSON lines, as it happens, the steps
+/// following the consent journal, then the answer or why there is none.
+fn ask(input: &sherlockd::shell::Input) -> anyhow::Result<()> {
+    use sherlockd::shell::{Events, Follower, reason};
+    use std::sync::{Arc, Mutex, PoisonError};
+    runtime()?.block_on(async {
+        // The plan announced first, for the shell's panel (lot A-19e).
+        let system = format!("{SYSTEM} {}", sherlockd::shell::PLAN_INSTRUCTIONS);
+        let mut config = ClaudeCodeConfig::new(&exe()?, &system);
+        if let Some(path) =
+            CompositorWindow::of_session().and_then(|w| w.path().to_str().map(String::from))
+        {
+            config.proxy_args = vec!["--proxy".into(), "--consent".into(), path];
+        }
+        let mut claude = ClaudeCode::new(config);
+        for (request, answer) in &input.history {
+            claude.remember(request, answer);
+        }
+        let events = Arc::new(Mutex::new(Events::default()));
+        let mut follower = Follower::new(Journal::default_path());
+        let journal = {
+            let events = events.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    for line in follower.lines() {
+                        let shown = events
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .journal(&line);
+                        emit(shown);
+                    }
+                }
+            })
+        };
+        emit(vec![json!({ "event": "started" })]);
+        let shown = events.clone();
+        let answer = claude
+            .ask_with(&input.request, &mut |message| {
+                let lines = shown
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .message(message);
+                emit(lines);
+            })
+            .await;
+        journal.abort();
+        let last = match answer {
+            Ok(text) => json!({ "event": "answer", "text": text }),
+            Err(error) => {
+                tracing::warn!(%error, "no answer");
+                json!({ "event": "failed", "reason": reason(&error), "message": error.to_string() })
+            }
+        };
+        emit(vec![last]);
+        Ok(())
+    })
 }
 
 /// Serves the proxy on standard input and output, for Claude Code.

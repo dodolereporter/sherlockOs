@@ -8,9 +8,11 @@ pub mod ask;
 pub mod calc;
 pub mod files;
 pub mod instance;
+pub mod journal;
 pub mod launch;
 pub mod search;
 pub mod service;
+pub mod sherlock;
 pub mod source;
 pub mod startup;
 pub mod system;
@@ -204,8 +206,7 @@ pub fn sources() -> app::Sources {
             catalog_terminal,
         )
     });
-    let ask = ask::Ask::new(terminal, ask::ASK_OPTION);
-    (arrange(apps, files, ask), walked)
+    (arrange(apps, files, ask::Ask), walked)
 }
 
 /// The sources in the order of their sections: the calculator, whose single result is the

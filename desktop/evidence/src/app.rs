@@ -362,6 +362,8 @@ pub enum Message {
     PressTab(usize),
     OverTab(usize),
     MiddleClick(usize),
+    /// The folder shown changed, by another program (lot E-09).
+    FolderChanged(PathBuf),
     /// The file servers of the network, found now (lot E-07).
     Servers(Vec<crate::network::Server>),
     /// A click on a server: connect to it, or open it when it is.
@@ -494,6 +496,9 @@ pub struct App {
     pub(crate) volumes: Vec<Volume>,
     /// The tabs of the window (lot D-27b).
     pub(crate) tabs: tabs::Tabs,
+    /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
+    /// rename, a lasso).
+    folder_changed: bool,
     /// The copy or move under way, and the paste waiting for a choice on taken names.
     pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
     pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
@@ -596,6 +601,7 @@ impl App {
             preview_fade: None,
             volumes: Vec::new(),
             tabs: tabs::Tabs::default(),
+            folder_changed: false,
             progress: None,
             pending_paste: None,
             servers: Vec::new(),
@@ -674,6 +680,15 @@ impl App {
             // The compositor closed the window (Wayland daemon): the program ends with it.
             _ => None,
         });
+        // The folder shown, watched for the changes of other programs (lot E-09); only with
+        // the live sources, never in the tests.
+        let folder = match &self.location {
+            Location::Folder(dir) if self.config.watch_devices => {
+                Subscription::run_with(crate::watch::Watched(dir.clone()), crate::watch::changes)
+                    .map(Message::FolderChanged)
+            }
+            _ => Subscription::none(),
+        };
         // A window closed: the main one ends the program, a menu's popup closes its menu.
         let closed = window::close_events().map(Message::WindowClosed);
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
@@ -701,7 +716,7 @@ impl App {
             Subscription::none()
         };
         Subscription::batch([
-            closed, events, frames, devices, network, appearance, menubar,
+            closed, events, frames, folder, devices, appearance, menubar, network,
         ])
     }
 
@@ -930,8 +945,18 @@ impl App {
                 self.always = false;
             }
         }
+        let reread = if self.folder_changed
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.lasso.is_none()
+        {
+            self.folder_changed = false;
+            self.load(&[])
+        } else {
+            Task::none()
+        };
         let popups = self.sync_popups();
-        Task::batch([task, self.preview_task(), popups])
+        Task::batch([task, self.preview_task(), reread, popups])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1281,6 +1306,11 @@ impl App {
             Message::OpenSearch => {
                 self.search_open = true;
                 return operation::focus(SEARCH);
+            }
+            Message::FolderChanged(dir) => {
+                if self.location == Location::Folder(dir) {
+                    self.folder_changed = true;
+                }
             }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
