@@ -10,6 +10,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
+use iced_exwlshell::to_layer_message;
 use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::evidence as more;
@@ -258,6 +259,9 @@ impl std::hash::Hash for MenubarStart {
     }
 }
 
+/// On Wayland, the messages also carry the surface requests of `iced_exwlshell` (ADR 0029):
+/// the window, and later the menus as popups.
+#[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The menus in the bar: served, or an entry clicked there (lot D-36c).
@@ -367,6 +371,8 @@ enum Clip {
 
 /// The Evidence application.
 pub struct App {
+    /// The `xdg_toplevel` opened by the Wayland daemon (`shell`); none under winit.
+    main: Option<window::Id>,
     /// The menus exported to the bar, once served (lot D-36c).
     menubar: Option<crate::menubar::MenuBar>,
     pub(crate) config: Config,
@@ -461,6 +467,7 @@ impl App {
         let start = Location::Folder(config.start.clone());
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
+            main: None,
             menubar: None,
             config,
             location: start,
@@ -555,6 +562,8 @@ impl App {
             }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
+            // The compositor closed the window (Wayland daemon): the program ends with it.
+            Event::Window(window::Event::Closed) => Some(Message::Window(WindowAction::Close)),
             _ => None,
         });
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
@@ -576,6 +585,32 @@ impl App {
             Subscription::none()
         };
         Subscription::batch([events, frames, devices, appearance, menubar])
+    }
+
+    /// Asks the Wayland daemon for the window (`shell`), and keeps its id.
+    pub fn open_window(
+        &mut self,
+        settings: iced_exwlshell::actions::IcedXdgWindowSettings,
+    ) -> Task<Message> {
+        let (id, open) = Message::base_window_open(settings);
+        self.main = Some(id);
+        open
+    }
+
+    /// `act` on the main window: the one opened on Wayland (`shell`), else iced's only window.
+    fn on_window(
+        &self,
+        act: impl Fn(window::Id) -> Task<Message> + Send + 'static,
+    ) -> Task<Message> {
+        match self.main {
+            Some(id) => act(id),
+            None => window::latest().and_then(act),
+        }
+    }
+
+    /// The view of a window of the Wayland daemon: Evidence has only its main window.
+    pub fn view_window(&self, _window: window::Id) -> iced::Element<'_, Message> {
+        self.view()
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -992,14 +1027,19 @@ impl App {
                     self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
                 }
             }
+            // Closing the window ends the program, whichever runtime holds it: the Wayland
+            // daemon would otherwise go on with no window.
+            Message::Window(WindowAction::Close) => return iced::exit(),
             Message::Window(action) => {
-                return window::latest().and_then(move |id| match action {
+                return self.on_window(move |id| match action {
                     WindowAction::Drag => window::drag(id),
                     WindowAction::Minimize => window::minimize(id, true),
                     WindowAction::Maximize => window::toggle_maximize(id),
                     WindowAction::Close => window::close(id),
                 });
             }
+            // The surface requests of `iced_exwlshell`, which its runtime takes before `update`.
+            _ => {}
         }
         Task::none()
     }
@@ -1049,7 +1089,7 @@ impl App {
         match probe.frame(now, loaded) {
             Step::Open if self.config.maximized => Task::batch([
                 self.go(target),
-                window::latest().and_then(|id| window::maximize(id, true)),
+                self.on_window(|id| window::maximize(id, true)),
             ]),
             Step::Open => self.go(target),
             Step::Scroll => operation::scroll_by(
