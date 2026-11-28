@@ -85,6 +85,8 @@ pub struct Overview {
     /// App Expose: only the windows of these ids, without the strip of the workspaces. Kept
     /// while the view closes, so that they go back the way they came.
     only: Option<Vec<u32>>,
+    /// The view was closed by a key while fingers held it: the rest of that swipe does nothing.
+    swipe_closed: bool,
     /// The gesture key is down and nothing else happened since: its release toggles the view.
     tap: bool,
     toggle: bool,
@@ -179,6 +181,27 @@ fn lerp(a: RectF, b: RectF, t: f64) -> RectF {
     )
 }
 
+fn center(r: RectF) -> (f64, f64) {
+    (r.loc.x + r.size.w / 2.0, r.loc.y + r.size.h / 2.0)
+}
+
+/// The choice nearest `from` in `direction` (a unit step on one axis): ahead of it, the
+/// distance along the way counting less than the distance across it.
+fn nearest(choices: &[(Target, RectF)], from: (f64, f64), direction: (f64, f64)) -> Option<Target> {
+    let score = |r: &RectF| {
+        let (x, y) = center(*r);
+        let (dx, dy) = (x - from.0, y - from.1);
+        let along = dx * direction.0 + dy * direction.1;
+        let across = (dx * direction.1 - dy * direction.0).abs();
+        (along > 1.0).then_some(along + 2.0 * across)
+    };
+    choices
+        .iter()
+        .filter_map(|(t, r)| Some((t, score(r)?)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(t, _)| t.clone())
+}
+
 /// Height the strip takes at the top of the work area: thumbnails, their names and margins.
 fn strip_height() -> f64 {
     f64::from(2.0 * mc::STRIP_MARGIN + mc::STRIP_HEIGHT + mc::LABEL_GAP + mc::LABEL_HEIGHT)
@@ -255,6 +278,11 @@ impl State {
         }
     }
 
+    /// What the pointer is over in the open view, or the keyboard selected.
+    pub fn overview_selected(&self) -> Option<&Target> {
+        self.overview.hovered.as_ref()
+    }
+
     /// The window ids App Expose shows, if the view is App Expose.
     pub fn overview_only(&self) -> Option<&[u32]> {
         self.overview.only.as_deref()
@@ -282,6 +310,7 @@ impl State {
         self.overview.open = true;
         self.dismiss_popups();
         self.hover_decoration(None);
+        self.forget_decoration_press();
         self.set_keyboard_focus(None);
         self.refresh_overview_pointer();
         true
@@ -296,6 +325,8 @@ impl State {
         overview.open = false;
         overview.hovered = None;
         overview.press = None;
+        // Closed by a key while the fingers held it: they no longer move it.
+        overview.swipe_closed |= overview.swipe.is_some() && overview.held.is_some();
         overview.animate(now, 0.0);
         match chosen {
             Some(window) => self.activate(&window),
@@ -425,6 +456,86 @@ impl State {
         })
     }
 
+    /// Ctrl + Down (lot D-33c): App Expose for the application in front, its windows of the
+    /// active workspace; closes the view when it is open.
+    pub fn toggle_app_expose(&mut self) {
+        if self.overview.open {
+            self.close_overview();
+            return;
+        }
+        let Some(front) = self.focused_window() else {
+            return;
+        };
+        let app = crate::shell::app_id(&front);
+        let ids = self
+            .space
+            .elements()
+            .filter(|w| crate::shell::app_id(w) == app)
+            .map(crate::shell::window_id)
+            .collect();
+        self.show_windows(ids);
+    }
+
+    /// Everything the keyboard can select in the open view, on every screen: the thumbnails
+    /// of the strip, then the windows.
+    fn overview_choices(&self) -> Vec<(Target, RectF)> {
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let strip = outputs.iter().flat_map(|o| {
+            let thumbs = self.overview_strip(o).into_iter().enumerate();
+            thumbs.map(|(i, r)| (Target::Workspace(i), r))
+        });
+        let tiles = outputs.iter().flat_map(|o| {
+            let tiles = self.overview_tiles(o, None).into_iter();
+            tiles.map(|t| (Target::Window(t.window), t.slot))
+        });
+        strip.chain(tiles).collect()
+    }
+
+    /// An arrow, Enter or Return in the open view (lot D-33c). An arrow moves the selection
+    /// (drawn as under the pointer) to the nearest choice that way; the first arrow selects
+    /// the window in front. Enter chooses it, as a click would.
+    pub(crate) fn overview_key(&mut self, sym: Keysym) {
+        self.queue_redraw();
+        let choices = self.overview_choices();
+        let current = self.overview.hovered.clone();
+        let at = current
+            .as_ref()
+            .and_then(|c| choices.iter().find(|(t, _)| t == c))
+            .map(|(_, r)| center(*r));
+        let direction = match sym {
+            Keysym::Left => (-1.0, 0.0),
+            Keysym::Right => (1.0, 0.0),
+            Keysym::Up => (0.0, -1.0),
+            Keysym::Down => (0.0, 1.0),
+            _ => {
+                match current {
+                    Some(Target::Window(window)) => self.leave_overview(Some(window)),
+                    Some(Target::Workspace(index)) => {
+                        if let Some(id) = self.workspaces().id_at(index).map(str::to_owned) {
+                            self.activate_workspace(&id);
+                            self.stop_workspace_slide();
+                        }
+                        self.leave_overview(None);
+                    }
+                    None => {}
+                }
+                return;
+            }
+        };
+        let Some(at) = at else {
+            // Nothing selected yet: the window in front, or the first choice.
+            let front = self.top_window().map(Target::Window);
+            let first = choices.iter().find(|(t, _)| matches!(t, Target::Window(_)));
+            self.overview.hovered = front
+                .filter(|f| choices.iter().any(|(t, _)| t == f))
+                .or_else(|| first.or(choices.first()).map(|(t, _)| t.clone()));
+            return;
+        };
+        if let Some(next) = nearest(&choices, at, direction) {
+            self.overview.hovered = Some(next);
+        }
+    }
+
     /// The pointer moved to `at` in the open view: what it is over, and the window it drags.
     pub(crate) fn overview_motion(&mut self, at: Point<f64, Logical>) {
         self.hover_decoration(None);
@@ -486,6 +597,9 @@ impl State {
     /// view follows them, from where it was, a whole opening per `OVERVIEW_DISTANCE`. Down on
     /// the desktop opens nothing.
     pub(crate) fn follow_overview(&mut self, travel: f64) {
+        if self.overview.swipe_closed {
+            return;
+        }
         let start = if self.overview.open { 1.0 } else { 0.0 };
         let base = *self.overview.swipe.get_or_insert(start);
         let progress = (base - travel / crate::gestures::OVERVIEW_DISTANCE).clamp(0.0, 1.0);
@@ -503,6 +617,9 @@ impl State {
     /// swipe did not move the view.
     pub(crate) fn release_overview(&mut self, up: bool, done: bool) -> bool {
         let base = self.overview.swipe.take();
+        if std::mem::take(&mut self.overview.swipe_closed) {
+            return true;
+        }
         let (Some(base), Some(_)) = (base, self.overview.held) else {
             return false;
         };
@@ -809,6 +926,9 @@ fn push_miniature(
         let loc = (r.loc - screen.loc).to_f64().upscale(k);
         Rectangle::new(thumb.loc + loc, r.size.to_f64().upscale(k))
     };
+    if content.size.is_empty() || window.geometry().size.is_empty() {
+        return;
+    }
     let frame = in_thumb(decorations::frame(window, content));
     let Some(clip) = frame.intersection(thumb) else {
         return;
