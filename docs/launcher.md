@@ -254,6 +254,10 @@ grows to its height (560 at most, less on a short screen), the query is the firs
   « Libre », « Avec ton accord », « … · fait », « Refusée », « Erreur »), then the answer, or why
   there is none. « Sherlock réfléchit… » while it runs. Each part fades in and rises by 8 as
   it comes, over 220 ms (lot A-19c, `sherlock::shown`): frames are asked for only that long.
+- **The plan announced first** (lot A-19e): when sherlockd hands the plan Sherlock announced
+  before acting (its `plan` event), « Le plan de Sherlock » lists its steps as on the board:
+  number, title, description and tool, then the state of the call that took the step
+  (« Prévue » before one does). The calls outside the plan come after it, as before.
 - **The field** « Ta demande » at the bottom: Enter asks the next request, once the one running
   has ended. Escape comes back to the search, the conversation kept for the next opening.
 
