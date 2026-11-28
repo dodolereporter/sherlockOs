@@ -375,6 +375,8 @@ mod tests {
         // standard error.
         let started = Rc::new(Cell::new(None));
         let done = started.clone();
+        // Never a display number of the user's sessions (0 to 9).
+        state.set_first_x_display(compositor::TEST_X_DISPLAY);
         state
             .start_xwayland(&event_loop, move |_, display| done.set(Some(display)))
             .unwrap();
@@ -388,6 +390,7 @@ mod tests {
         });
         let display = started.get().flatten().expect("XWayland did not start");
         assert_eq!(h.state.x_display, Some(display));
+        assert!(display >= compositor::TEST_X_DISPLAY, "display :{display}");
         let socket = format!("/tmp/.X11-unix/X{display}");
         assert!(Path::new(&socket).exists());
 

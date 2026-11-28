@@ -360,10 +360,19 @@ pub fn push_item(items: &mut Vec<Item>, state: &State, (output, view): (&Output,
     else {
         return false;
     };
+    let (rect, look) = (view.rect(frame.rect), frame.look(view.scale));
+    // The blur behind its glass, over the pill as `draw` rounds it (lot D-37b).
+    let radius = (ui::RADIUS * look.scale).min(rect.size.h as f32 / 2.0);
+    let rects = crate::render::rounded_rects(rect, radius);
     items.push(Item::Osd {
         key: Key::of(None, Part::Osd),
-        rect: view.rect(frame.rect),
-        look: frame.look(view.scale),
+        rect,
+        look,
+        alpha: frame.alpha,
+    });
+    items.push(Item::Blur {
+        key: Key::of(None, Part::Blur),
+        rects,
         alpha: frame.alpha,
     });
     frame.moving

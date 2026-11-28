@@ -287,6 +287,21 @@ pub(crate) fn element(
     )
 }
 
+/// The whole rectangle of a window in the space, the scale of its screen, its size in pixels.
+pub(crate) type SnapshotPlace = (Rectangle<i32, Logical>, f64, Size<i32, Physical>);
+
+/// Where `snapshot` draws `window`: its whole rectangle in the space, title bar included, the
+/// scale of its screen, and the size of the texture in pixels. A window capture (lot D-28c)
+/// learns its buffer size and places the cursor from it.
+pub(crate) fn snapshot_place(state: &State, window: &Window) -> Option<SnapshotPlace> {
+    let whole = whole_geometry(state, window)?;
+    let scale = state
+        .window_output(window)
+        .map_or(1.0, |o| o.current_scale().fractional_scale());
+    let size = whole.size.to_f64().to_physical(scale).to_i32_round();
+    Some((whole, scale, size))
+}
+
 /// `window` drawn as at rest, title bar, border and corners included, into a texture of its
 /// size in pixels at the scale of its screen, as the genie does. The backends call it from
 /// their `Snapshotter`.
@@ -297,11 +312,7 @@ pub fn snapshot(
     window: &Window,
 ) -> Option<GlesTexture> {
     let content = state.space.element_geometry(window)?;
-    let whole = whole_geometry(state, window)?;
-    let scale = state
-        .window_output(window)
-        .map_or(1.0, |o| o.current_scale().fractional_scale());
-    let size = whole.size.to_f64().to_physical(scale).to_i32_round();
+    let (whole, scale, size) = snapshot_place(state, window)?;
     let view = genie::offscreen(whole, size, scale);
     let arrangement = Arrangement::of(window);
     let bare = arrangement.maximized || arrangement.fullscreen;

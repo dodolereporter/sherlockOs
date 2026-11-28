@@ -796,6 +796,23 @@ already (`apps/src/icons.rs`), now with `rasterize_file`.
 - **Icons**: `Bluetooth` (Reglages board), `Grid` (« Dock et barre » of the board), `Touchpad`
   and `Sidebar`, drawn on the same grid and stroke.
 
+## Blur behind glass (D-37)
+
+- **Tokens** (`blur`): `PASSES` and `OFFSET` set how much the compositor blurs, `SATURATION`
+  how much livelier the blurred colors are, `VEIL_OPACITY` the veil of the desktop color laid
+  behind glass where there is no blur. `rounded_region` cuts a rounded rectangle into the
+  rectangles of a Wayland region: one band per row in the corners.
+- **Component** (`glass`, feature `layer-shell`): `glass(content, radius)` draws its content as
+  is and gives its rounded bounds to iced_exwlshell as the blur region of the surface
+  (`ext_background_effect_v1`). The dock and its menu, the top bar, the notification bubbles and
+  the launcher's panel are wrapped in it. The tint and the border stay the content's style.
+- **Automatic** (lot D-37b): with `layer-shell`, `surface::shadowed` with the `Menu` or
+  `Panel` elevation asks for the blur over its rounded bounds by itself: every menu, submenu,
+  floating menu and panel of the shell. `Flat` does not: it only learns the renderer.
+- **Too slow** (lot D-37b): `LATE_AFTER` and `LATE_IN_A_ROW` say when the compositor gives up
+  the blur for the veil. See "Blur behind glass" in
+  `docs/compositor.md` and ADR 0027.
+
 ## Scroll areas (UI-11)
 
 The author: « je n'aime pas les barres de défilement, elles ne font pas macOS ». iced's default
