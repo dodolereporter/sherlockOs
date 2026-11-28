@@ -5,7 +5,10 @@ default:
     @just --list
 
 # Format, language, clippy and tests: what the CI requires
-verify: fmt-check check-language lint test
+verify: checks test
+
+# Format, language and clippy: the CI's first job
+checks: fmt-check check-language lint
 
 # Checks the format without changing anything
 fmt-check:
@@ -22,6 +25,11 @@ lint:
 # Runs every test of the workspace
 test:
     cargo test --workspace --all-features
+
+# The tests as the CI runs them: cargo-nextest, a process per test, the binaries side by side, then the doc tests (docs/ci.md)
+test-ci:
+    cargo nextest run --workspace --all-features --profile ci
+    cargo test --workspace --all-features --doc
 
 # Builds the whole workspace
 build:

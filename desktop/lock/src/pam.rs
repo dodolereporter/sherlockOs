@@ -3,10 +3,16 @@
 //! service `sherlockos-lock` (`/etc/pam.d/sherlockos-lock`), for the user of the session only.
 //! The check blocks (PAM waits on purpose after a wrong password): it runs on a thread of its
 //! own. The password goes to PAM through the conversation function, in a copy PAM frees; ours
-//! is overwritten with zeros as soon as it is handed over, and never logged.
+//! is overwritten with zeros as soon as it is handed over, and never logged. A check that takes
+//! longer than `TIMEOUT` counts as PAM unavailable (lot D-25f): the field comes back, and the
+//! interface never waits for PAM.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use iced::futures::channel::oneshot;
 
 use system_services::secret::Secret;
 use zeroize::Zeroize;
@@ -68,6 +74,52 @@ pub enum AuthError {
 /// What checks a password: PAM, or a fake one in the tests.
 pub trait Authenticator: Send + Sync + 'static {
     fn check(&self, user: &str, password: Secret) -> Result<(), AuthError>;
+}
+
+/// The longest a check may take. PAM waits 3 s after a wrong password (pam_faildelay); a module
+/// that hangs (winbind waiting for its daemon, a network module) must not keep the lock screen
+/// in its spinner forever, with no way to try again (lot D-25f).
+pub const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Checks `password` for `user` on a thread of its own: the answer, or `Unavailable` once
+/// `limit` has passed. Returns at once; a check that hangs is left to its thread.
+pub fn check_in_background(
+    authenticator: Arc<dyn Authenticator>,
+    user: String,
+    password: Secret,
+    limit: Duration,
+) -> oneshot::Receiver<Result<(), AuthError>> {
+    let (sender, receiver) = oneshot::channel();
+    // The first answer wins: PAM's, or the end of the limit.
+    let sender = Arc::new(Mutex::new(Some(sender)));
+    let answer = |sender: &Mutex<Option<oneshot::Sender<_>>>, result| {
+        if let Some(sender) = sender.lock().ok().and_then(|mut s| s.take()) {
+            let _ = sender.send(result);
+        }
+    };
+    let pam = Arc::clone(&sender);
+    let spawned = std::thread::Builder::new()
+        .name("pam".into())
+        .spawn(move || answer(&pam, authenticator.check(&user, password)));
+    if let Err(err) = spawned {
+        answer(&sender, Err(AuthError::Unavailable(err.to_string())));
+        return receiver;
+    }
+    let _ = std::thread::Builder::new()
+        .name("pam-limit".into())
+        .spawn(move || {
+            std::thread::sleep(limit);
+            if sender.lock().is_ok_and(|s| s.is_some()) {
+                tracing::warn!(?limit, "PAM did not answer: the field comes back");
+            }
+            answer(
+                &sender,
+                Err(AuthError::Unavailable(format!(
+                    "no answer within {limit:?}"
+                ))),
+            );
+        });
+    receiver
 }
 
 /// The system's PAM, with the service `SERVICE`.
@@ -292,6 +344,53 @@ pub fn session_user() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A PAM that answers after `0`.
+    struct Slow(Duration);
+
+    impl Authenticator for Slow {
+        fn check(&self, _: &str, _: Secret) -> Result<(), AuthError> {
+            std::thread::sleep(self.0);
+            Ok(())
+        }
+    }
+
+    fn wait(mut receiver: oneshot::Receiver<Result<(), AuthError>>) -> Result<(), AuthError> {
+        for _ in 0..500 {
+            if let Ok(Some(result)) = receiver.try_recv() {
+                return result;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("no answer at all");
+    }
+
+    #[test]
+    fn a_pam_that_hangs_gives_the_field_back_after_the_limit() {
+        let start = std::time::Instant::now();
+        let slow = Arc::new(Slow(Duration::from_secs(30)));
+        let receiver = check_in_background(
+            slow,
+            "dodo".into(),
+            Secret::new("x".into()),
+            Duration::from_millis(200),
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "returns at once"
+        );
+        assert!(matches!(wait(receiver), Err(AuthError::Unavailable(_))));
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // A PAM in time answers as it does.
+        let quick = Arc::new(Slow(Duration::from_millis(10)));
+        let receiver = check_in_background(
+            quick,
+            "dodo".into(),
+            Secret::new("x".into()),
+            Duration::from_secs(5),
+        );
+        assert!(wait(receiver).is_ok());
+    }
 
     /// A conversation as PAM leads it: `messages`, then the answers read back and freed.
     fn converse_with(
