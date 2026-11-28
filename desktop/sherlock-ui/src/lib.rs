@@ -35,6 +35,7 @@ pub mod motion;
 pub mod notifications;
 pub mod osd;
 pub mod panels;
+pub mod projection;
 pub mod screen_off;
 pub mod screen_share;
 pub mod screenshot;

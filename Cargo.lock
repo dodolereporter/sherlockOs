@@ -640,6 +640,7 @@ dependencies = [
  "desktop-config",
  "image",
  "mime-apps",
+ "notifications-config",
  "resvg",
  "rustix 1.1.6",
  "serde",

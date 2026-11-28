@@ -168,6 +168,11 @@ impl State {
             position,
         });
         self.place_screens();
+        // A second screen is projected on as it was last time (lot D-39).
+        if let Some(screen) = self.screens.last() {
+            let output = screen.output.clone();
+            self.projection_plugged(&output);
+        }
     }
 
     /// Removes a screen that was unplugged. Its anchored surfaces are closed (their program
@@ -183,6 +188,8 @@ impl State {
         };
         let screen = self.screens.remove(i);
         self.unplug(screen);
+        // Never black: the laptop's screen, switched off, comes back (lot D-39).
+        self.relight();
     }
 
     /// Takes `screen` out of the space and of the clients' view: switched off, or unplugged.
