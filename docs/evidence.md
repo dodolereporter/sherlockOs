@@ -19,8 +19,18 @@ renderer is several times slower (see Performance). Evidence logs the renderer i
 On Wayland (`WAYLAND_DISPLAY` set), Evidence runs on `iced_exwlshell`, like the shell programs.
 Its window is an `xdg_toplevel` made with `NewBaseWindow` (app id `evidence`, client-side
 decorations, title « Evidence »), and its daemon starts in `StartMode::Background`, without any
-layer surface. This is what lets its menus become real `xdg_popup`s (E-02b, E-02c); for now they
-are still drawn inside the window. Under X11, it keeps iced's own runtime on winit. The title
+layer surface. This is what lets its menus be real `xdg_popup`s.
+
+The right-click menu and its submenu are popups of their own (lot E-02b), so they leave the
+window, as on macOS. The menu's popup is larger than the menu by the room of its shadow, its input
+region the menu only. Its anchor rectangle is chosen so that the menu's corner lands on the
+clicked point both ways: below right, or above left when the compositor flips it at the
+screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child popup anchored
+beside its entry, which the compositor flips to the left the same way. The popups grab the
+pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
+outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
+once it has faded out. Under winit, both are still drawn inside the window. The completion list,
+the drop-down lists and the tooltips follow in E-02c. Under X11, it keeps iced's own runtime on winit. The title
 bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
 closing the window, from its button or from the compositor, ends the program.
 
