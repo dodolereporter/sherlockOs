@@ -254,8 +254,22 @@ grows to its height (560 at most, less on a short screen), the query is the firs
   « Libre », « Avec ton accord », « … · fait », « Refusée », « Erreur »), then the answer, or why
   there is none. « Sherlock réfléchit… » while it runs. Each part fades in and rises by 8 as
   it comes, over 220 ms (lot A-19c, `sherlock::shown`): frames are asked for only that long.
+- **The plan announced first** (lot A-19e): when sherlockd hands the plan Sherlock announced
+  before acting (its `plan` event), « Le plan de Sherlock » lists its steps as on the board:
+  number, title, description and tool, then the state of the call that took the step
+  (« Prévue » before one does). The calls outside the plan come after it, as before.
 - **The field** « Ta demande » at the bottom: Enter asks the next request, once the one running
   has ended. Escape comes back to the search, the conversation kept for the next opening.
+
+- **The journal** (lot A-19d, `journal.rs`), from the header's « Journal » button, as on the
+  board: « Tout ce que Sherlock fait est noté ». The consent broker's journal
+  (`$XDG_STATE_HOME/sherlock/journal.jsonl`) is read on the pool, its last 256 KiB at most (the
+  line cut by the start of the reading left out), 60 entries at most, newest first, again when a
+  request ends: the time, then « A lu : tool », « tool, avec ton accord », « tool : refusé »
+  (« pas de réponse », « personne pour donner l'accord »), « (erreur) » after a failed outcome.
+  Each outcome goes to the last decision of its call (the numbers start again with each
+  session). « Cette conversation » shows those since its first request, « Tout » all of them;
+  « Conversation » comes back.
 
 Each request runs `sherlockd --ask` (beside the session's programs, `$SHERLOCKOS_BIN`, or in
 the `PATH`), without a shell: the request and the exchanges answered so far (20 at most) go on

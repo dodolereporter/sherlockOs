@@ -95,7 +95,7 @@ impl CompositorWindow {
             "id": request.id,
             "tool": request.tool,
             "level": level,
-            "arguments": request.summary,
+            "arguments": request.shown,
         });
         write.write_all(format!("{line}\n").as_bytes()).await.ok()?;
         let mut reader = BufReader::new(read).take(MAX_ANSWER as u64);

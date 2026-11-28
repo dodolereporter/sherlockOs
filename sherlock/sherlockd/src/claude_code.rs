@@ -423,7 +423,16 @@ fn size(message: &Message) -> usize {
 /// Reads the stream up to the final answer or the end, within the size bounds. A stream that
 /// ends without an `init` event is refused.
 pub async fn read_events<R: AsyncBufRead + Unpin>(
+    output: R,
+) -> Result<Transcript, ClaudeCodeError> {
+    read_events_with(output, &mut |_| {}).await
+}
+
+/// The same, each message handed to `each` as soon as it is read (lot A-19: the shell shows
+/// the answer as it is written).
+pub async fn read_events_with<R: AsyncBufRead + Unpin>(
     mut output: R,
+    each: &mut (dyn FnMut(&Message) + Send),
 ) -> Result<Transcript, ClaudeCodeError> {
     let mut transcript = Transcript::default();
     let mut total = 0;
@@ -444,7 +453,10 @@ pub async fn read_events<R: AsyncBufRead + Unpin>(
             }
             return Ok(transcript);
         }
-        if transcript.push(&line)? {
+        let before = transcript.messages.len();
+        let done = transcript.push(&line)?;
+        transcript.messages[before..].iter().for_each(&mut *each);
+        if done {
             return Ok(transcript);
         }
     }
@@ -550,13 +562,33 @@ impl ClaudeCode {
 
     /// Carries a request through to Claude Code's final answer.
     pub async fn ask(&mut self, request: &str) -> Result<String, ClaudeCodeError> {
+        self.ask_with(request, &mut |_| {}).await
+    }
+
+    /// An exchange of an earlier session, for the recap of the next request (lot A-19: the
+    /// shell keeps the conversation, each request runs a new sherlockd).
+    pub fn remember(&mut self, request: &str, answer: &str) {
+        self.exchanges.push((bounded(request), bounded(answer)));
+        let mut total: usize = self.exchanges.iter().map(|(q, a)| q.len() + a.len()).sum();
+        while total > MAX_HISTORY_BYTES && !self.exchanges.is_empty() {
+            let (q, a) = self.exchanges.remove(0);
+            total -= q.len() + a.len();
+        }
+    }
+
+    /// The same, each message of the conversation handed to `each` as soon as it is read.
+    pub async fn ask_with(
+        &mut self,
+        request: &str,
+        each: &mut (dyn FnMut(&Message) + Send),
+    ) -> Result<String, ClaudeCodeError> {
         if !self.login_checked {
             self.check_login().await?;
             self.login_checked = true;
         }
         let prompt = self.prompt(request);
         self.history.push(Message::User(bounded(request)));
-        let transcript = self.run(&prompt).await?;
+        let transcript = self.run(&prompt, each).await?;
         self.history.extend(transcript.messages);
         let mut total: usize = self.history.iter().map(size).sum();
         while total > MAX_HISTORY_BYTES && !self.history.is_empty() {
@@ -565,12 +597,7 @@ impl ClaudeCode {
         let answer = transcript.answer;
         let answer =
             answer.ok_or_else(|| ClaudeCodeError::Failed("arrêt sans réponse finale".into()))?;
-        self.exchanges.push((bounded(request), bounded(&answer)));
-        let mut total: usize = self.exchanges.iter().map(|(q, a)| q.len() + a.len()).sum();
-        while total > MAX_HISTORY_BYTES && !self.exchanges.is_empty() {
-            let (q, a) = self.exchanges.remove(0);
-            total -= q.len() + a.len();
-        }
+        self.remember(request, &answer);
         Ok(answer)
     }
 
@@ -592,7 +619,11 @@ impl ClaudeCode {
         )
     }
 
-    async fn run(&mut self, prompt: &str) -> Result<Transcript, ClaudeCodeError> {
+    async fn run(
+        &mut self,
+        prompt: &str,
+        each: &mut (dyn FnMut(&Message) + Send),
+    ) -> Result<Transcript, ClaudeCodeError> {
         let workdir = self.workdir().map_err(ClaudeCodeError::Spawn)?;
         let mut child = self
             .config
@@ -608,7 +639,7 @@ impl ClaudeCode {
         let mut stdin = child.stdin.take().ok_or_else(missing)?;
         let stdout = child.stdout.take().ok_or_else(missing)?;
         let mut stderr = tokio::spawn(drain(child.stderr.take().ok_or_else(missing)?));
-        let read = read_events(BufReader::new(stdout));
+        let read = read_events_with(BufReader::new(stdout), each);
         tokio::pin!(read);
         // Writing the request and reading move forward together: a long request does not block a
         // Claude Code that is already writing.
