@@ -54,6 +54,7 @@ pub mod screencast;
 mod screensaver;
 pub mod screenshot_tool;
 mod shell;
+pub mod sherlock_api;
 pub mod stats;
 pub mod theme;
 pub mod touchpad;
@@ -301,6 +302,8 @@ pub struct State {
     triggers: triggers::Triggers,
     /// Sherlock's consent window, its socket and the requests waiting (lot A-11b).
     consent: consent::Consents,
+    /// The windows socket of Sherlock's windows server (lot A-12).
+    sherlock_api: sherlock_api::SherlockApi,
     /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
     inhibitors: inhibit::Inhibitors,
     /// The screens off, like an old television (lot D-38).
@@ -478,6 +481,7 @@ impl State {
             curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
             consent: consent::Consents::default(),
+            sherlock_api: sherlock_api::SherlockApi::default(),
             inhibitors: inhibit::Inhibitors::new(&dh),
             power: power::Power::new(),
             clipboard: clipboard_history::ClipboardHistory::default(),
@@ -524,6 +528,10 @@ impl State {
                 // Without it Sherlock has nobody to ask: it refuses every action.
                 tracing::warn!("no consent socket: {err}");
             }
+            if let Err(err) = self.listen_sherlock_next_to(&path, peers, event_loop) {
+                // Without it Sherlock's windows server lists nothing and moves nothing.
+                tracing::warn!("no windows socket for Sherlock: {err}");
+            }
         }
         Ok(())
     }
@@ -556,6 +564,7 @@ impl State {
         self.stop_xwayland();
         self.stop_shell_socket();
         self.stop_consent_socket();
+        self.stop_sherlock_socket();
         if let Some(token) = self.listener.take() {
             self.loop_handle.remove(token);
         }
