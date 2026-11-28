@@ -165,8 +165,9 @@ mod styles {
 pub mod text {
     /// Label of the chevron, for the screen readers to come.
     pub const CHEVRON: &str = "Icônes de la zone de notification";
-    /// The popup without an icon.
-    pub const EMPTY: &str = "Aucune icône pour l'instant";
+    /// The popup without an icon: every icon kept in the bar, or none yet. It takes one back
+    /// (Q-49).
+    pub const EMPTY: &str = "Glisse une icône ici\npour la ranger";
 }
 
 #[cfg(test)]

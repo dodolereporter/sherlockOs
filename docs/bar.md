@@ -467,11 +467,21 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   (lot D-45c); never shorter than a row and that line.
 - **Chevron.** A ghost button like the indicators', veiled with its green mark while the popup is
   open. It points down, and turns half a turn up on the panels' spring as the popup opens, back as
-  it closes (turned inside the SVG, in steps of 10°, as the spinner). Without an icon to show, no
-  chevron. Tab reaches it before the indicators; Enter opens the popup.
+  it closes (turned inside the SVG, in steps of 10°, as the spinner). It stays as long as the bar
+  has an icon of the notification area, in the popup or kept in the bar, and during the whole drag
+  of one, so that an icon can always go back into the popup (Q-49). It grows from 60 % and fades
+  in on the same spring when the first icon comes, and shrinks and fades out when the last one
+  goes. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
-  the item's menu (D-45a, below).
+  the item's menu (D-45a, below). `tests/tray_click.rs` clicks through the bar's real widgets, in
+  the order `iced_exwlshell` delivers the events (the button's click before the subscription
+  hears the release), against items made the way Chromium and Electron (registered by their
+  unique name), libayatana-appindicator (by an object path alone, `Activate` refused: its menu
+  opens) and `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48). What the
+  application then does with its window is up to the compositor: bringing a minimized window
+  back or raising one behind others needs the application to activate it, which the compositor
+  does not offer yet (`xdg-activation-v1`, X11's `_NET_ACTIVE_WINDOW`).
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
@@ -505,9 +515,16 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   chevron, in the order it was dropped; the bar shows where it would land, the icon faded in its
   slot, while the pointer is over it, and the icon left in the popup fades meanwhile. Dragged
   along the bar, a kept icon changes place; dragged below the bar, it fades and goes back into
-  the popup when let go. A press that does not move 6 pixels is a click. A kept icon answers the
+  the popup when let go. A press that does not move 6 pixels is a click. The drag ends with the
+  release: a click right after it is a click, even when it reaches the bar before the
+  subscription tells its press (Q-48: the first click after a drag used to be lost). A kept icon answers the
   clicks and the wheel as in the popup, and breathes when it needs attention; the chevron's dot
-  only counts the icons of the popup. Without an icon left in the popup, no chevron.
+  only counts the icons of the popup. With every icon kept in the bar, the chevron stays, and the
+  popup it opens says « Glisse une icône ici pour la ranger »: an icon of the bar let go below
+  the bar, on the popup or not, goes back into it (Q-49).
+
+  ![Every icon kept in the bar, the popup open, 1920 × 1080](../desktop/bar/screenshots/tray-empty-1920.png)
+  ![The same in the light theme on a 1366 × 768 screen](../desktop/bar/screenshots/tray-empty-1366-light.png)
 - **Saved.** The icons kept are remembered by their `Id`, the same from one start of the
   application to the next, in `$XDG_CONFIG_HOME/bar/bar.conf`:
 
