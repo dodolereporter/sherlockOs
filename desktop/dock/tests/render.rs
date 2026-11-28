@@ -76,7 +76,7 @@ fn the_docks_own_menu_renders_and_toggles_sherlock() {
         let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
         assert!(dock.menu_open(), "a right click between two icons");
         unfolded(&mut dock);
-        let (width, height) = dock::menu::surface_size(&dock::menu::dock_entries(true));
+        let (width, height) = dock::menu::surface_size(&dock::menu::dock_entries(true, true));
         let size = (width as f32, height as f32);
         let mut ui = Simulator::with_size(dock::settings(), size, dock.view_menu());
         assert!(ui.find("Dock").is_ok(), "its header");
@@ -683,7 +683,18 @@ fn the_downloads_stack_opens_its_grid() {
     assert!(capture(ui, "dock-stack").expect("screenshot") > 2_000);
 
     let index = dock.items.len() - 2;
-    assert_eq!(dock.menu_lines(index)[0].label, "Ouvrir dans Evidence");
+    // Its menu, as macOS's (D-21k2): its order, its icon, how it opens, its folder.
+    let labels: Vec<String> = dock
+        .menu_lines(index)
+        .iter()
+        .map(|l| l.label.clone())
+        .collect();
+    assert_eq!(labels[0], "Trier par");
+    assert!(labels.contains(&String::from("Ouvrir « Downloads »")));
+    assert!(
+        dock.menu_lines(index)[2].checked,
+        "« Date d'ajout » by default"
+    );
     for (count, name) in [(6, "dock-stack-grid"), (16, "dock-stack-grid-full")] {
         let _ = dock.update(Message::Stack(Some(downloads(count))));
         let _ = dock.press_icon(index);
@@ -793,4 +804,56 @@ fn an_application_dragged_from_the_view_opens_a_hole_and_is_pinned() {
             .iter()
             .all(|p| p != HOLE && p != "not.installed")
     );
+}
+
+/// Lot D-21k2: the stack's menu, as macOS's: « Trier par », « Afficher comme », « Présenter le
+/// contenu comme », its folder, « Retirer du Dock »; a choice is kept and checked, « Retirer du
+/// Dock » takes it out, the dock's own menu brings it back. `dock-stack-menu`.
+#[test]
+fn the_stack_menu_sorts_shows_and_removes_it() {
+    use dock::menu::Entry;
+    use dock_config::stack::{Sort, View};
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Stack(Some(downloads(6))));
+    let _ = dock.tick(Duration::from_secs(5));
+    let index = dock.items.len() - 1;
+    let point = icon_center(&dock, index);
+    let _ = dock.update(Message::Pointer(Pointer::Moved(point)));
+    let _ = dock.update(Message::Pointer(Pointer::Pressed(mouse::Button::Right)));
+    unfolded(&mut dock);
+    let entries = dock.menu_lines(index);
+    let (width, height) = dock::menu::surface_size(&entries);
+    {
+        let ui = Simulator::with_size(
+            dock::settings(),
+            (width as f32, height as f32),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(capture(ui, "dock-stack-menu").expect("screenshot") > 2_000);
+    }
+    let _ = dock.update(Message::MenuPick(Entry::StackSort(Sort::Name)));
+    assert_eq!(dock.stack_settings().sort, Sort::Name);
+    let _ = dock.set_stack(dock_config::stack::Stack {
+        view: View::Fan,
+        ..dock.stack_settings()
+    });
+    assert!(
+        dock.menu_lines(index)
+            .iter()
+            .any(|l| l.label == "Éventail" && l.checked)
+    );
+    let mut settings = dock.stack_settings();
+    settings.shown = false;
+    let _ = dock.set_stack(settings);
+    assert!(
+        dock.items.iter().all(|i| i.name != "Downloads"),
+        "out of the dock"
+    );
+    let own = dock::menu::dock_entries(true, dock.stack_settings().shown);
+    assert!(!own[1].checked);
+    settings.shown = true;
+    let _ = dock.set_stack(settings);
+    assert!(dock.items.iter().any(|i| i.name == "Downloads"), "back");
 }

@@ -28,6 +28,8 @@ use sherlock_ui::{dock, metrics};
 
 pub use keyfile::KeyFile;
 
+pub mod stack;
+
 const GROUP: &str = "Dock";
 const PINNED: &str = "Pinned";
 const ICON_THEME: &str = "IconTheme";
@@ -37,6 +39,10 @@ const FACTOR: &str = "MagnificationFactor";
 const AUTO_HIDE: &str = "AutoHide";
 const POSITION: &str = "Position";
 const SHOW_SHERLOCK: &str = "ShowSherlock";
+const STACK: &str = "Stack";
+const STACK_SORT: &str = "StackSort";
+const STACK_DISPLAY: &str = "StackDisplay";
+const STACK_VIEW: &str = "StackView";
 
 /// The place of Sherlock in the pinned list. Without it, Sherlock is in the middle of the
 /// pinned applications, as before it could be moved.
@@ -130,6 +136,8 @@ pub struct DockConfig {
     pub position: Position,
     /// Sherlock is in the dock: at its place in `pinned`, or in their middle without it.
     pub sherlock: bool,
+    /// The downloads stack: in the dock or not, its order, its icon, how it opens (D-21k2).
+    pub stack: stack::Stack,
     /// The file as read, so that writing it back keeps the keys this version does not know.
     file: KeyFile,
 }
@@ -145,6 +153,7 @@ impl Default for DockConfig {
             auto_hide: AutoHide::Smart,
             position: Position::Bottom,
             sherlock: true,
+            stack: stack::Stack::default(),
             file: KeyFile::default(),
         }
     }
@@ -204,7 +213,38 @@ impl DockConfig {
             defaults.sherlock,
             &mut problems,
         );
+        let stack = stack::Stack {
+            shown: word(
+                &file,
+                STACK,
+                &[(true, "true"), (false, "false")],
+                defaults.stack.shown,
+                &mut problems,
+            ),
+            sort: word(
+                &file,
+                STACK_SORT,
+                &stack::Sort::ALL.map(|s| (s, s.key())),
+                defaults.stack.sort,
+                &mut problems,
+            ),
+            display: word(
+                &file,
+                STACK_DISPLAY,
+                &stack::Display::ALL.map(|d| (d, d.key())),
+                defaults.stack.display,
+                &mut problems,
+            ),
+            view: word(
+                &file,
+                STACK_VIEW,
+                &stack::View::ALL.map(|v| (v, v.key())),
+                defaults.stack.view,
+                &mut problems,
+            ),
+        };
         let config = Self {
+            stack,
             pinned,
             icon_theme: file.get(GROUP, ICON_THEME).filter(|t| !t.is_empty()),
             icon_size,
@@ -283,6 +323,19 @@ impl DockConfig {
             self.sherlock.to_string(),
             read.sherlock.to_string(),
         );
+        put(
+            STACK,
+            self.stack.shown.to_string(),
+            read.stack.shown.to_string(),
+        );
+        let (now, then) = (self.stack, read.stack);
+        put(STACK_SORT, now.sort.key().into(), then.sort.key().into());
+        put(
+            STACK_DISPLAY,
+            now.display.key().into(),
+            then.display.key().into(),
+        );
+        put(STACK_VIEW, now.view.key().into(), then.view.key().into());
         file.to_text()
     }
 
@@ -393,6 +446,31 @@ pub fn path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stack_settings_are_read_and_written_back() {
+        let (config, problems) = DockConfig::parse(
+            "[Dock]\nStack=false\nStackSort=kind\nStackDisplay=folder\nStackView=nope\n",
+        );
+        assert!(!config.stack.shown);
+        assert_eq!(config.stack.sort, stack::Sort::Kind);
+        assert_eq!(config.stack.display, stack::Display::Folder);
+        assert_eq!(
+            config.stack.view,
+            stack::View::Automatic,
+            "a wrong word: the default"
+        );
+        assert_eq!(problems.len(), 1);
+        let mut changed = config.clone();
+        changed.stack.view = stack::View::Fan;
+        changed.stack.shown = true;
+        let (back, _) = DockConfig::parse(&changed.to_text());
+        assert_eq!(back.stack.view, stack::View::Fan);
+        assert!(back.stack.shown);
+        assert_eq!(back.stack.sort, stack::Sort::Kind);
+        // Untouched, the defaults are not written.
+        assert!(!DockConfig::default().to_text().contains("Stack"));
+    }
 
     #[test]
     fn a_pinned_application_moves_before_another() {
