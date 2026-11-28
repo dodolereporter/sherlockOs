@@ -255,7 +255,8 @@ impl Config {
             Err(err) => return Err(fail(err)),
             Ok(_) => {}
         }
-        let text = fs::read_to_string(path).map_err(fail)?;
+        // Bounded again: a link to a device has no length to check first.
+        let text = mime_apps::read_bounded(path, MAX_BYTES).map_err(fail)?;
         Ok(Self::parse_lenient(&text))
     }
 

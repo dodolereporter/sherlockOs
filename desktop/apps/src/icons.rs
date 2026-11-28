@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use iced::widget::image;
-use resvg::{tiny_skia, usvg};
 
 use crate::catalog::Catalog;
 
@@ -79,45 +78,15 @@ pub fn draw(catalog: &Catalog, side: u32, done: &Rasters) -> Rasters {
 /// What `draw` gives, for a message.
 pub type Shared = Arc<Rasters>;
 
-/// The icon in `path`, an SVG file or a picture the SVG renderer reads (PNG), drawn in a square
-/// of `side` pixels, kept in its proportions and centred.
+/// The icon in `path`, an SVG or PNG file, drawn in a square of `side` pixels, kept in its
+/// proportions and centred: by `sherlock_ui::raster`, with its bounds (file sizes, no file read
+/// from inside an SVG).
 pub fn rasterize(path: &Path, side: u32) -> Option<image::Handle> {
-    let data = if path.extension().is_some_and(|e| e == "svg") {
-        std::fs::read(path).ok()?
-    } else {
-        launcher::app::picture_document(path).into_bytes()
-    };
-    let options = usvg::Options {
-        resources_dir: path.parent().map(Path::to_path_buf),
-        ..usvg::Options::default()
-    };
-    let tree = usvg::Tree::from_data(&data, &options).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(side, side)?;
-    let size = tree.size();
-    let fit = (side as f32 / size.width()).min(side as f32 / size.height());
-    let (x, y) = (
-        (side as f32 - size.width() * fit) / 2.0,
-        (side as f32 - size.height() * fit) / 2.0,
-    );
-    let transform = tiny_skia::Transform::from_scale(fit, fit).post_translate(x, y);
-    // resvg can panic on a malformed file: that icon is left out, the others go on.
-    let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
-    }));
-    if drawn.is_err() {
+    let pixels = sherlock_ui::raster::rasterize_file(path, side);
+    if pixels.is_none() {
         tracing::warn!(path = %path.display(), "the icon could not be drawn");
-        return None;
     }
-    // iced takes straight alpha; tiny-skia gives it premultiplied.
-    let pixels: Vec<u8> = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|p| {
-            let c = p.demultiply();
-            [c.red(), c.green(), c.blue(), c.alpha()]
-        })
-        .collect();
-    Some(image::Handle::from_rgba(side, side, pixels))
+    Some(image::Handle::from_rgba(side, side, pixels?))
 }
 
 #[cfg(test)]

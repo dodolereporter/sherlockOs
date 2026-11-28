@@ -29,7 +29,6 @@ use crate::items::{self, Builder, Glyph, Item, Kind, Target};
 use crate::launch::{self, What};
 use crate::layout::{self, Flow, Geometry, Layout};
 use crate::menu::{self, Abilities, Entry, Key, Line, Listed, Unfold};
-use crate::pins;
 use crate::windows::{self, Click, Control, Place, Request, Window, Windows};
 
 /// The menu of an icon, or the dock's own, while it is open.
@@ -68,15 +67,21 @@ pub enum Message {
     Gesture(Gesture),
     /// The configuration file changed.
     Config(Box<DockConfig>),
+    /// The icons looked up again, off the interface thread, for the icon theme of the file.
+    Icons(Option<String>, Box<IconLookup>),
     Key(Key),
     /// The modifiers held: Ctrl with a click asks for a new window.
     Modifiers(keyboard::Modifiers),
+    /// A scroll over the dock: a swipe down over an icon opens App Expose.
+    Scroll(mouse::ScrollDelta),
     Focus(Direction),
     MenuHover(usize),
     MenuPick(Entry),
     Closed(Id),
     /// The theme of the appearance file, at start then at each change.
     Theme(Theme),
+    /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
+    IconDrawn,
 }
 
 /// A screen, as the dock needs it.
@@ -161,6 +166,9 @@ pub struct Dock {
     pub(crate) menu: Option<OpenMenu>,
     /// The modifiers held, as the keyboard last told the dock.
     modifiers: keyboard::Modifiers,
+    /// The swipe down in progress: its icon, how far down it went (`NEG_INFINITY` once it
+    /// opened App Expose), when its last scroll came.
+    swipe: Option<(Target, f32, Duration)>,
     /// Frames drawn since `frames_since`, for the frame rate in the debug log.
     frames: u32,
     frames_since: Duration,
@@ -174,6 +182,8 @@ pub struct Dock {
     sent: Sent,
     /// The icons last placed on their screen (`Control::place`).
     placed: Vec<IconPlace>,
+    /// Writes the pinned list on a thread of its own.
+    saver: crate::save::Saver,
 }
 
 impl Dock {
@@ -207,6 +217,7 @@ impl Dock {
             focus: None,
             menu: None,
             modifiers: keyboard::Modifiers::empty(),
+            swipe: None,
             frames: 0,
             frames_since: Duration::ZERO,
             theme: ThemeFade::default(),
@@ -215,6 +226,7 @@ impl Dock {
             screens: None,
             sent: Sent::default(),
             placed: Vec::new(),
+            saver: crate::save::Saver::default(),
         };
         dock.rebuild(false);
         dock
@@ -564,6 +576,7 @@ impl Dock {
             keyboard::listen().filter_map(on_key),
             config,
             frames,
+            sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
     }
 
@@ -652,6 +665,7 @@ impl Dock {
                 return self.tick(instant.saturating_duration_since(self.origin));
             }
             Message::Theme(theme) => self.theme.set(theme, Instant::now()),
+            Message::IconDrawn => {}
             Message::Windows(windows) => {
                 self.clock();
                 // The first list is the dock at startup: in place at once.
@@ -663,8 +677,20 @@ impl Dock {
             }
             Message::Gesture(gesture) => return self.gesture(gesture),
             Message::Config(config) => return self.configure(*config),
+            Message::Icons(theme, lookup) => {
+                // A lookup for a theme the file no longer names came late: the newer one comes.
+                if theme == self.sources.config.icon_theme {
+                    self.sources.lookup = *lookup;
+                    self.glyphs.clear();
+                    return self.refresh(self.geometry);
+                }
+            }
             Message::Key(key) => return self.key(key),
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
+            Message::Scroll(delta) => {
+                let now = self.clock();
+                self.scroll(delta, now);
+            }
             Message::Focus(direction) if self.menu_open() => {
                 let key = match direction {
                     Direction::Next => Key::Next,
@@ -699,17 +725,11 @@ impl Dock {
     /// Applies a configuration read from the file: settings, icon theme, pinned list.
     pub fn configure(&mut self, config: DockConfig) -> Task<Message> {
         let previous = self.geometry;
+        let mut icons = Task::none();
         if config.icon_theme != self.sources.config.icon_theme {
-            let theme = config
-                .icon_theme
-                .clone()
-                .or_else(|| self.sources.gtk_theme.clone());
-            self.sources.lookup = IconLookup::new(
-                &self.sources.data_dirs,
-                self.sources.home.as_deref(),
-                theme.as_deref(),
-            );
-            self.glyphs.clear();
+            // Reading the themes' folders takes as long as the disk wants: on a thread of its
+            // own, the icons of the old theme shown meanwhile.
+            icons = self.look_up_icons(config.icon_theme.clone());
         }
         if let Some(pinned) = &config.pinned {
             self.pinned.clone_from(pinned);
@@ -720,7 +740,31 @@ impl Dock {
         self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
         let refreshed = self.refresh(previous);
-        Task::batch([refreshed, self.follow_windows()])
+        Task::batch([refreshed, self.follow_windows(), icons])
+    }
+
+    /// Looks the icons up for the icon theme `named` by the file (the GTK one without), on a
+    /// thread of its own; `Message::Icons` brings them back.
+    fn look_up_icons(&self, named: Option<String>) -> Task<Message> {
+        let theme = named.clone().or_else(|| self.sources.gtk_theme.clone());
+        let dirs = self.sources.data_dirs.clone();
+        let home = self.sources.home.clone();
+        let (sender, receiver) = iced::futures::channel::oneshot::channel();
+        let spawned = std::thread::Builder::new()
+            .name(String::from("dock-icons"))
+            .spawn(move || {
+                let lookup = IconLookup::new(&dirs, home.as_deref(), theme.as_deref());
+                let _ = sender.send(lookup);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "cannot start the thread that looks the icons up");
+            return Task::none();
+        }
+        Task::future(async move {
+            let lookup = receiver.await.ok()?;
+            Some(Message::Icons(named, Box::new(lookup)))
+        })
+        .and_then(Task::done)
     }
 
     /// Rebuilds the icons and, when the surface changed, tells the compositor: its size, and
@@ -1290,6 +1334,56 @@ impl Dock {
             unpin: pinned && item.and_then(Item::pin_id).is_some(),
             act: item.is_some_and(|i| i.entry().is_some() || matches!(i.kind, Kind::Window(_)))
                 && self.controllable(),
+            expose: self.windows.as_ref().is_some_and(|w| w.expose)
+                && self.windows_of(index).iter().any(|w| !w.minimized),
+        }
+    }
+
+    /// App Expose on the windows of icon `index` that are not minimized.
+    pub fn expose(&mut self, index: usize) {
+        let ids: Vec<u64> = self
+            .windows_of(index)
+            .iter()
+            .filter(|w| !w.minimized)
+            .map(|w| w.id)
+            .collect();
+        if !ids.is_empty() && self.windows.as_ref().is_some_and(|w| w.expose) {
+            self.sources.control.show_windows(&ids);
+        }
+    }
+
+    /// A scroll over the dock at `now`. Down over an icon with windows, past
+    /// `dock::EXPOSE_SWIPE`, opens App Expose once; the swipe starts again after a pause of
+    /// `dock::EXPOSE_SWIPE_GAP` or over another icon. Down is the fingers going down on a
+    /// touchpad with natural scrolling (the default of the desktop settings), or a mouse wheel
+    /// turned towards the user.
+    fn scroll(&mut self, delta: mouse::ScrollDelta, now: Duration) {
+        let down = match delta {
+            mouse::ScrollDelta::Pixels { y, .. } => y,
+            mouse::ScrollDelta::Lines { y, .. } => -y * dock::EXPOSE_SWIPE,
+        };
+        let Some(index) = self.pointer.and_then(|p| self.layout(now).icon_at(p)) else {
+            self.swipe = None;
+            return;
+        };
+        let target = self.items[index].target();
+        let gone = match &self.swipe {
+            Some((t, _, last)) => {
+                *t != target || now.saturating_sub(*last) > dock::EXPOSE_SWIPE_GAP
+            }
+            None => true,
+        };
+        let far = if gone {
+            0.0
+        } else {
+            self.swipe.as_ref().map_or(0.0, |s| s.1)
+        };
+        let far = (far + down).max(0.0);
+        if far >= dock::EXPOSE_SWIPE {
+            self.expose(index);
+            self.swipe = Some((target, f32::NEG_INFINITY, now));
+        } else {
+            self.swipe = Some((target, far, now));
         }
     }
 
@@ -1628,6 +1722,10 @@ impl Dock {
                 self.activate(index, What::Action(action));
                 Task::none()
             }
+            Entry::ShowAll => {
+                self.expose(index);
+                Task::none()
+            }
             Entry::Keep => self.keep(index),
             Entry::Unpin => self.unpin(index),
             Entry::Quit => {
@@ -1697,15 +1795,16 @@ impl Dock {
         self.save_pinned()
     }
 
-    /// Writes the pinned list to the configuration, read again just before (`pins::write`),
-    /// and rebuilds the dock.
+    /// Writes the pinned list to the configuration and rebuilds the dock. The writing is done
+    /// off the interface thread (`save::Saver`); the file is read again first and only its list
+    /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
+    /// so a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
-        if let Some(path) = &self.sources.config_path
-            && let Err(error) = pins::write(path, &self.pinned, self.sherlock)
-        {
-            tracing::warn!(%error, path = %path.display(), "cannot save the pinned applications");
+        if let Some(path) = &self.sources.config_path {
+            self.saver
+                .save(path.clone(), self.pinned.clone(), self.sherlock);
         }
         self.refresh(self.geometry)
     }
