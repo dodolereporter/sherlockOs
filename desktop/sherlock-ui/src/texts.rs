@@ -162,6 +162,8 @@ pub mod evidence {
     // Toolbar.
     pub const BACK: &str = "Précédent";
     pub const FORWARD: &str = "Suivant";
+    /// The close button of a tab (lot D-27b).
+    pub const CLOSE_TAB: &str = "Fermer l'onglet";
     /// The path bar in text mode, and the « Aller au dossier » sheet (lot E-04).
     pub const PATH_PLACEHOLDER: &str = "Chemin, par exemple ~/Documents";
     pub const GO_TO_FOLDER: &str = "Aller au dossier";
@@ -395,6 +397,12 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Undo and redo (lot E-10).
+    pub const UNDO: &str = "Annuler";
+    pub const REDO: &str = "Rétablir";
+    pub const UNDONE: &str = "C'est annulé.";
+    pub const REDONE: &str = "C'est rétabli.";
+    pub const NOTHING_TO_UNDO: &str = "Il n'y a rien à annuler.";
     /// Copies and moves: stopped, and the question on taken names (lot E-11).
     pub const STOPPED: &str = "Arrêté. Ce qui était en cours d'écriture a été retiré.";
     pub const STOP: &str = "Arrêter";
