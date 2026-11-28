@@ -94,6 +94,11 @@ pub enum Message {
     Submit,
     /// Sherlock's model, read on the pool.
     Mascot(Mascot),
+    /// The journal shown, or the conversation again (lot A-19d); all its entries or the
+    /// conversation's; its entries, read on the pool.
+    ShowJournal,
+    JournalAll(bool),
+    Journal(Vec<crate::journal::Entry>),
 }
 
 /// Sources and what tells when their files are walked, as `crate::sources` gives them.
@@ -218,6 +223,10 @@ pub struct Launcher {
     pub request: String,
     sherlockd: std::path::PathBuf,
     mascot: Option<Mascot>,
+    /// The journal's entries while it shows, newest first, and whether all show.
+    pub journal: Option<Vec<crate::journal::Entry>>,
+    pub journal_all: bool,
+    journal_path: Option<std::path::PathBuf>,
 }
 
 impl Launcher {
@@ -258,7 +267,24 @@ impl Launcher {
             request: String::new(),
             sherlockd: crate::sherlock::program(),
             mascot: None,
+            journal: None,
+            journal_all: false,
+            journal_path: crate::journal::path(),
         }
+    }
+
+    /// Reads the journal at `path` instead of the user's (the tests).
+    pub fn with_journal(mut self, path: std::path::PathBuf) -> Self {
+        self.journal_path = Some(path);
+        self
+    }
+
+    /// Reads the journal on the pool.
+    fn read_journal(&self) -> Task<Message> {
+        let Some(path) = self.journal_path.clone() else {
+            return Task::done(Message::Journal(Vec::new()));
+        };
+        Task::perform(async move { crate::journal::read(&path) }, Message::Journal)
     }
 
     /// Asks `program` instead of the session's `sherlockd` (the tests: never the real one).
@@ -517,6 +543,27 @@ impl Launcher {
             Message::SherlockEnded => {
                 let now = self.clock();
                 self.conversation.closed(now);
+                // What it did is in the journal now.
+                if self.journal.is_some() {
+                    return self.read_journal();
+                }
+                return Task::none();
+            }
+            Message::ShowJournal => {
+                if self.journal.take().is_none() {
+                    self.journal = Some(Vec::new());
+                    return self.read_journal();
+                }
+                return operation::focus(REQUEST);
+            }
+            Message::JournalAll(all) => {
+                self.journal_all = all;
+                return Task::none();
+            }
+            Message::Journal(entries) => {
+                if self.journal.is_some() {
+                    self.journal = Some(entries);
+                }
                 return Task::none();
             }
             Message::Mascot(mascot) => {
@@ -1017,12 +1064,20 @@ impl Launcher {
         if self.sherlock {
             let content = crate::sherlock::view(
                 &self.conversation,
-                &self.request,
                 self.mascot.as_ref().and_then(|m| m.0.clone()),
                 self.now,
-                Message::Request,
-                Message::Submit,
-                iced::widget::Id::new(REQUEST),
+                crate::sherlock::Field {
+                    text: &self.request,
+                    on_input: Box::new(Message::Request),
+                    on_submit: Message::Submit,
+                    id: iced::widget::Id::new(REQUEST),
+                },
+                crate::sherlock::Journal {
+                    entries: self.journal.as_deref(),
+                    all: self.journal_all,
+                    toggle: Message::ShowJournal,
+                    filter: Box::new(Message::JournalAll),
+                },
             );
             let panel = container(content)
                 .width(self.fit().width)

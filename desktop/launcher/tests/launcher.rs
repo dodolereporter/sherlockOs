@@ -641,3 +641,56 @@ fn tab_opens_sherlocks_panel_with_the_plan_and_its_states() {
         assert_eq!(launcher.conversation.exchanges[0].steps[1].state, "granted");
     }
 }
+
+/// Lot A-19d: the journal in the panel, read from a journal of the test: the newest first, those
+/// of the conversation, or all of them. `launcher-journal`.
+#[test]
+fn the_journal_shows_what_sherlock_did_by_conversation_or_all() {
+    let dir = std::env::temp_dir().join(format!("launcher-journal-view-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("journal.jsonl");
+    let (launcher, _) = recorded();
+    let mut launcher = launcher
+        .with_screen((1920.0, 1080.0))
+        .with_sherlockd("/nonexistent/sherlockd".into())
+        .with_journal(path.clone());
+    let _ = launcher.update(Message::Query("Relance front-next".into()));
+    let _ = launcher.update(Message::Key(app::Key::Tab));
+    let now = launcher.conversation.started.unwrap();
+    let lines = [
+        String::from(
+            r#"{"time":10,"id":1,"tool":"create_sandbox","level":"action","arguments":"{}","decision":"granted"}"#,
+        ),
+        format!(
+            r#"{{"time":{now},"id":1,"tool":"list_packages","level":"lecture","arguments":"{{}}","decision":"granted"}}"#
+        ),
+        format!(
+            r#"{{"time":{now},"id":2,"tool":"restart","level":"action","arguments":"{{}}","decision":"granted"}}"#
+        ),
+        format!(r#"{{"time":{now},"id":2,"tool":"restart","outcome":"ok"}}"#),
+    ];
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let _ = launcher.update(Message::ShowJournal);
+    let _ = launcher.update(Message::Journal(launcher::journal::read(&path)));
+    settled(&mut launcher);
+    let size = (look::WIDTH, launcher.height());
+    {
+        let mut ui = Simulator::with_size(launcher::settings(), size, launcher.view_panel());
+        assert!(ui.find("restart, avec ton accord").is_ok());
+        assert!(ui.find("A lu : list_packages").is_ok());
+        assert!(
+            ui.find("create_sandbox, avec ton accord").is_err(),
+            "before the conversation"
+        );
+    }
+    assert!(capture(&launcher, "launcher-journal").expect("screenshot written") > 2_000);
+    let _ = launcher.update(Message::JournalAll(true));
+    {
+        let mut ui = Simulator::with_size(launcher::settings(), size, launcher.view_panel());
+        assert!(ui.find("create_sandbox, avec ton accord").is_ok());
+    }
+    // Back to the conversation.
+    let _ = launcher.update(Message::ShowJournal);
+    assert!(launcher.journal.is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
