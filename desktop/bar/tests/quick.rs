@@ -886,7 +886,10 @@ mod tests {
              get-sink-volume) grep '^Volume' '{f}/pactl-55.txt' ;;\n\
              get-sink-mute) grep '^Mute' '{f}/pactl-55.txt' ;;\n\
              get-default-sink) echo alsa_output.pci-0000_05_00.6.analog-stereo ;;\n\
-             list) cat '{f}/pactl-sinks.txt' ;;\n\
+             get-default-source) echo alsa_input.pci-0000_05_00.6.analog-stereo ;;\n\
+             get-source-volume) grep '^Volume' '{f}/pactl-55.txt' ;;\n\
+             get-source-mute) grep '^Mute' '{f}/pactl-muted.txt' ;;\n\
+             list) [ \"$2\" = sources ] && cat '{f}/pactl-sources.txt' || cat '{f}/pactl-sinks.txt' ;;\n\
              set-sink-volume) [ \"$3\" = 99% ] && exit 1 ;;\nesac\nexit 0\n",
             log = log.display(),
             f = fixtures.display(),
@@ -947,6 +950,29 @@ mod tests {
             "{calls}"
         );
         assert!(calls.contains("set-sink-mute @DEFAULT_SINK@ 1"), "{calls}");
+        // The outputs and the inputs (D-20g): the monitor of the speakers is no input.
+        let devices = quick::read_devices(&pactl).unwrap();
+        let names: Vec<_> = devices
+            .inputs
+            .iter()
+            .map(|e| e.description.as_str())
+            .collect();
+        assert_eq!(names, ["Microphone intégré", "Casque"]);
+        assert_eq!(devices.outputs.len(), 2);
+        assert_eq!(devices.input, "alsa_input.pci-0000_05_00.6.analog-stereo");
+        let microphone = devices.microphone.unwrap();
+        assert_eq!((microphone.volume, microphone.muted), (55, true));
+        pactl
+            .set_default(
+                bar::system::audio::Device::Microphone,
+                "bluez_input.headset",
+            )
+            .unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            calls.contains("set-default-source bluez_input.headset"),
+            "{calls}"
+        );
         // A refusal of the sound server, and no `pactl` at all.
         assert!(matches!(pactl.set_volume(99), Err(Problem::Failed(_))));
         let missing = Pactl {
