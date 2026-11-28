@@ -168,10 +168,13 @@ pub enum Glyph {
     Keyboard,
     Phone,
     Computer,
+    /// The microphone, on and muted (D-20g).
+    Microphone,
+    MicrophoneMuted,
 }
 
 impl Glyph {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Wifi,
         Self::Bluetooth,
         Self::Moon,
@@ -190,6 +193,8 @@ impl Glyph {
         Self::Keyboard,
         Self::Phone,
         Self::Computer,
+        Self::Microphone,
+        Self::MicrophoneMuted,
     ];
 
     /// Path on the 24 grid.
@@ -225,6 +230,8 @@ impl Glyph {
                 "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2"
             }
             Self::Computer => "M4 5h16v10H4zM2 19h20",
+            Self::Microphone => Icon::Microphone.path(),
+            Self::MicrophoneMuted => Icon::MicrophoneMuted.path(),
         }
     }
 
@@ -382,6 +389,14 @@ pub mod text {
         format!("Oublier {name} ? Il faudra retaper son mot de passe.")
     }
     pub const MUTE: &str = "Couper le son";
+    // The outputs and the inputs of the sound (D-20g).
+    pub const SOUND: &str = "Son";
+    pub const SOUND_DEVICES: &str = "Sorties et entrées";
+    pub const OUTPUT: &str = "Sortie";
+    pub const INPUT: &str = "Entrée";
+    pub const NO_INPUT: &str = "Aucun micro";
+    pub const MUTE_MICROPHONE: &str = "Couper le micro";
+    pub const UNMUTE_MICROPHONE: &str = "Rétablir le micro";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
     pub const GPU: &str = "Carte graphique";
