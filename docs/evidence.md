@@ -337,7 +337,8 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   `the_gallery_renders_headless` and `the_unfolded_list_renders_headless`, at 1366 × 768 and
   720 × 460.
 - Search tokens (lot E-15a, `filter`, `app/search`), as the Finder's: while searching, a bar
-  under the toolbar offers « Type » (Images, Documents, Vidéos, Audio, Archives, Dossiers, by
+  under the toolbar offers « Type » (« Images », « Documents », « Vidéos », « Audio », « Archives »,
+  « Dossiers », by
   extension, several at once: its menu stays open while they are checked), « Date »
   (aujourd'hui from local midnight, 7 or 30 days, 12 months) and « Taille » (under 1 MB, 1 to
   100 MB, over 100 MB, files only), each a chip whose label says what it keeps and whose menu
