@@ -30,21 +30,29 @@ mod tests {
         let source = dir.join("my repo/desktop/greeter/src/main.rs");
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
         std::fs::write(&source, "fn main() {}\n").unwrap();
-        let old = Command::new("touch")
-            .args(["-d", "2020-01-01"])
-            .arg(&source)
-            .status()
-            .unwrap();
-        assert!(old.success());
+        touch(&source, "2020-01-01");
         let escaped = |path: &std::path::Path| path.display().to_string().replace(' ', "\\ ");
         for program in ["compositor", "sherlockos-greeter"] {
             let path = release.join(program);
             std::fs::write(&path, "#!/bin/sh\n").unwrap();
             let status = Command::new("chmod").arg("+x").arg(&path).status().unwrap();
             assert!(status.success());
+            // Dated explicitly, never by the clock of the file system: its granularity can give
+            // a file written a few milliseconds later the same time (Q-46).
+            touch(&path, "2021-01-01");
             let info = format!("{}: {}\n", escaped(&path), escaped(&source));
             std::fs::write(release.join(format!("{program}.d")), info).unwrap();
         }
+    }
+
+    /// Sets the modification time of `path` to `date`.
+    fn touch(path: &std::path::Path, date: &str) {
+        let status = Command::new("touch")
+            .args(["-d", date])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "touch {}", path.display());
     }
 
     fn run(dir: &std::path::Path) -> std::process::Output {
@@ -129,6 +137,8 @@ mod tests {
         let dir = fake_repo("stale", true);
         let source = dir.join("my repo/desktop/greeter/src/main.rs");
         std::fs::write(&source, "fn main() { changed() }\n").unwrap();
+        // Changed after the build, whatever the granularity of the file system's clock (Q-46).
+        touch(&source, "2022-01-01");
         let output = run(&dir);
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());

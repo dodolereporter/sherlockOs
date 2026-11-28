@@ -138,6 +138,11 @@ enum Shortcut {
     CloseOverview,
     /// A key while Sherlock's consent window is shown (lot A-11b).
     ConsentKey(Keysym),
+    /// Ctrl + Down: the windows of the application in front, App Expose (lot D-33c).
+    AppExpose,
+    /// An arrow, Enter or Return while Mission Control is open: the selection moves, or is
+    /// chosen (lot D-33c).
+    OverviewKey(Keysym),
     /// Ctrl + Alt + F1 to F12, in a real session: switches to that console.
     SwitchVt(i32),
     /// Ctrl + Alt + Backspace, in a real session and unlocked: stops the compositor, the way
@@ -196,6 +201,30 @@ impl Shortcut {
             (true, false, None, Keysym::Right) => Some(Self::NeighborWorkspace(1)),
             _ => None,
         }
+    }
+
+    /// Mission Control as on macOS (lot D-33c): Ctrl + Up, F3 alone or the Mission Control key
+    /// of a keyboard (`XF86LaunchA`); Ctrl + Down for the windows of the application in front.
+    fn for_mission_control(m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let ctrl_alone = m.ctrl && !m.alt && !m.shift && !m.logo;
+        let alone = !m.ctrl && !m.alt && !m.shift && !m.logo;
+        match sym {
+            Keysym::Up if ctrl_alone => Some(Self::ToggleOverview),
+            Keysym::Down if ctrl_alone => Some(Self::AppExpose),
+            Keysym::F3 if alone => Some(Self::ToggleOverview),
+            Keysym::XF86_LaunchA => Some(Self::ToggleOverview),
+            _ => None,
+        }
+    }
+
+    /// The keys of the open view: the arrows, Enter and Return, without modifier.
+    fn in_overview(m: &ModifiersState, sym: Keysym) -> Option<Self> {
+        let alone = !m.ctrl && !m.alt && !m.logo;
+        let navigation = matches!(
+            sym,
+            Keysym::Left | Keysym::Right | Keysym::Up | Keysym::Down | Keysym::Return
+        ) || sym == Keysym::KP_Enter;
+        (alone && navigation).then_some(Self::OverviewKey(sym))
     }
 
     /// F4 without any modifier: the applications view (lot D-41).
@@ -887,6 +916,12 @@ impl State {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(Shortcut::CloseOverview));
             }
+            if let Some(shortcut) =
+                Shortcut::in_overview(mods, sym).filter(|_| state.overview_open())
+            {
+                state.intercepted_keys.push(key);
+                return FilterResult::Intercept(Some(shortcut));
+            }
             let media = MediaKey::of(sym).filter(|_| state.takes_media_keys());
             // Nested, Print Screen stays with the host session.
             let screenshot =
@@ -903,7 +938,8 @@ impl State {
                 .or(media.map(|media| Shortcut::Media(media, key)))
                 .or(screenshot.map(Shortcut::Screenshot))
                 .or(tool)
-                .or_else(|| Shortcut::for_applications(mods, sym));
+                .or_else(|| Shortcut::for_applications(mods, sym))
+                .or_else(|| Shortcut::for_mission_control(mods, sym));
             if let Some(shortcut) = shortcut {
                 state.intercepted_keys.push(key);
                 return FilterResult::Intercept(Some(shortcut));
@@ -962,6 +998,14 @@ impl State {
             }
             Shortcut::ConsentKey(sym) => {
                 self.consent_key(sym);
+                return;
+            }
+            Shortcut::AppExpose => {
+                self.toggle_app_expose();
+                return;
+            }
+            Shortcut::OverviewKey(sym) => {
+                self.overview_key(sym);
                 return;
             }
             Shortcut::Launcher => {
@@ -1063,6 +1107,8 @@ impl State {
             }
             InputEvent::PointerAxis { event } => {
                 self.note_input();
+                // The gesture key held during a scroll is not alone (D-33 review).
+                self.overview.cancel_tap();
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };

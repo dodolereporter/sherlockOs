@@ -65,6 +65,13 @@ impl CompositorWindow {
         &self.path
     }
 
+    /// The compositor's windows socket, next to this one: `<Wayland socket>-sherlock`, for
+    /// the windows server (A-12).
+    pub fn windows_socket(&self) -> Option<PathBuf> {
+        let name = self.path.file_name()?.to_str()?.strip_suffix("-consent")?;
+        Some(self.path.with_file_name(format!("{name}-sherlock")))
+    }
+
     /// Any process of this user may answer: for the tests, whose fake compositor is the test.
     pub fn trusting_any_program(mut self) -> Self {
         self.peer = None;
@@ -118,8 +125,9 @@ impl Consent for CompositorWindow {
     }
 }
 
-/// Whether the peer of `stream` is a process of this user, running `program` when given.
-fn peer_is(stream: &UnixStream, program: Option<&str>) -> bool {
+/// Whether the peer of `stream` is a process of this user, running `program` when given: the
+/// consent socket here, the windows socket for the windows server (A-12).
+pub(crate) fn peer_is(stream: &impl AsRawFd, program: Option<&str>) -> bool {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
