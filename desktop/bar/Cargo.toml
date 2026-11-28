@@ -60,6 +60,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# Runs the tasks the bar returns, as the runtime does, for the tray click test (the version
+# iced pulls already).
+iced_runtime = "=0.14.0"
 # The real notification daemon on a private bus, for the notification centre test (workspace
 # crate).
 notifications = { path = "../notifications" }

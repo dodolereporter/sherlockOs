@@ -1800,3 +1800,79 @@ fn path_bar_captures() {
         bench.send(Message::PathCancel);
     }
 }
+
+/// The window at the widths of a small laptop, half a 1080p screen, a 1366 laptop and a 1080p
+/// screen (lot E-05, audit B-1): the names stay readable, the columns, the preview and the
+/// sidebar fold around them. Captures in `target/tmp/evidence-width-*.png`.
+#[test]
+fn the_names_stay_at_every_width() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = bench_with_files("widths", 3);
+    fs::write(
+        bench.path("projet/compte-rendu-de-la-reunion-du-conseil-d-administration.txt"),
+        "x",
+    )
+    .expect("write");
+    bench.press(Named::F5);
+    bench.select("a.txt");
+    for (width, height) in [
+        (720.0, 460.0),
+        (944.0, 1048.0),
+        (1366.0, 768.0),
+        (1920.0, 1080.0),
+    ] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let panes = bench.app.panes();
+        assert!(
+            panes.name_width(width) >= sherlock_ui::evidence::NAME_MIN_WIDTH,
+            "{width}: {panes:?}"
+        );
+        assert_eq!(panes.preview, width >= 1366.0, "{width}");
+        capture_at(
+            &bench.app,
+            &format!("evidence-width-{width}"),
+            (width, height),
+        );
+    }
+    // Space brings back a preview the width had folded; again, it goes.
+    bench.send(Message::Resized(iced::Size::new(944.0, 1048.0)));
+    bench.press(Named::Space);
+    assert!(bench.app.panes().preview);
+    bench.press(Named::Space);
+    assert!(!bench.app.panes().preview);
+}
+
+/// On Wayland the menu and its submenu are popups of their own (lot E-02b): they open with
+/// the menu, follow its submenu, and go once it has folded back; a click outside, which the
+/// compositor reports by closing the popup, closes the menu.
+#[test]
+fn the_menu_and_its_submenu_are_popups_on_wayland() {
+    use crate::app::Sub;
+    let mut bench = bench_with_files("popups", 2);
+    let main = bench.app.pretend_wayland();
+    bench.send(Message::Cursor(iced::Point::new(1250.0, 650.0)));
+    bench.send(Message::RightClick(None));
+    let menu = bench.app.menu.clone().expect("menu open");
+    // A popup is not kept inside the window: it opens where the pointer is.
+    assert_eq!(menu.at, iced::Point::new(1250.0, 650.0));
+    let (popup, _) = bench.app.popups.menu.expect("menu popup");
+    assert!(bench.app.popups.submenu.is_none());
+    bench.send(Message::Submenu(Some(Sub::SortBy)));
+    let (sub, which) = bench.app.popups.submenu.expect("submenu popup");
+    assert_eq!(which, Sub::SortBy);
+    // Each popup draws its own menu; the window no longer does.
+    assert_ne!(popup, sub);
+    assert!(bench.app.popup_view(popup).is_some() && bench.app.popup_view(main).is_none());
+    // A click outside: the compositor closes the popup, the menu closes with it.
+    bench.send(Message::WindowClosed(popup));
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_none());
+    // Escape: the popups stay while the menu folds back, then go.
+    bench.send(Message::RightClick(None));
+    assert!(bench.app.popups.menu.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_some());
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(bench.app.popups.menu.is_none(), "gone once folded back");
+}
