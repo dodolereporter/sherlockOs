@@ -375,6 +375,47 @@ pub fn reduced() -> bool {
     REDUCED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The « Effets visuels » setting of Control Room's Accessibility page (lot D-26p): the light
+/// mode of old machines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub enum Effects {
+    /// Every effect: the genie, the 3D Sherlock, the live thumbnails of Mission Control.
+    #[default]
+    Full,
+    /// The light mode: a fade instead of the genie, Sherlock as a still image, Mission
+    /// Control's thumbnails without the live windows.
+    Reduced,
+    /// No effect: windows and views appear and go at once.
+    None,
+}
+
+impl Effects {
+    pub const ALL: [Self; 3] = [Self::Full, Self::Reduced, Self::None];
+
+    /// The word of the settings file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Reduced => "reduced",
+            Self::None => "none",
+        }
+    }
+}
+
+static EFFECTS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Sets the visual effects for the whole process (lot D-26p).
+pub fn set_effects(effects: Effects) {
+    let value = Effects::ALL.iter().position(|e| *e == effects).unwrap_or(0) as u8;
+    EFFECTS.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The visual effects of the process.
+pub fn effects() -> Effects {
+    let value = EFFECTS.load(std::sync::atomic::Ordering::Relaxed);
+    Effects::ALL[usize::from(value).min(Effects::ALL.len() - 1)]
+}
+
 /// `duration`, or nothing while "Reduce motion" is on.
 pub fn unless_reduced(duration: Duration) -> Duration {
     if reduced() { Duration::ZERO } else { duration }

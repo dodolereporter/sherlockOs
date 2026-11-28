@@ -2,6 +2,7 @@
 //! applications that ask `xdg-desktop-portal` (Discord, Chrome, Firefox). See `docs/portal.md`.
 
 pub mod capture;
+pub mod chooser;
 pub mod picker;
 pub mod pipewire;
 pub mod pod;

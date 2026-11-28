@@ -111,9 +111,27 @@ impl Drop for Place {
 /// Reads `selection` of the X server `:display` as `mime_type`, into `fd`, in a thread.
 /// Beyond `MAX_PASTES` transfers under way, `fd` is closed at once: the client reads nothing.
 pub(crate) fn paste(display: u32, selection: SelectionTarget, mime_type: String, fd: OwnedFd) {
+    let name = match selection {
+        SelectionTarget::Clipboard => "CLIPBOARD",
+        SelectionTarget::Primary => "PRIMARY",
+    };
+    read_in_thread(display, name, mime_type, fd);
+}
+
+/// Reads the drag of an X11 application (`XdndSelection`) as `mime_type`, into `fd`, in a
+/// thread (lot D-29c). Text is asked as `UTF8_STRING`.
+pub(crate) fn paste_drag(display: u32, mime_type: String, fd: OwnedFd) {
+    let mime_type = match mime_type.as_str() {
+        "text/plain;charset=utf-8" => String::from("UTF8_STRING"),
+        _ => mime_type,
+    };
+    read_in_thread(display, "XdndSelection", mime_type, fd);
+}
+
+fn read_in_thread(display: u32, selection: &'static str, mime_type: String, fd: OwnedFd) {
     let Some(place) = Place::take() else {
         tracing::debug!(
-            ?selection,
+            selection,
             mime_type,
             "X11 selection not pasted: too many at once"
         );
@@ -124,7 +142,7 @@ pub(crate) fn paste(display: u32, selection: SelectionTarget, mime_type: String,
         .spawn(move || {
             let _place = place;
             if let Err(err) = transfer(display, selection, &mime_type, fd) {
-                tracing::debug!(?selection, mime_type, "X11 selection not pasted: {err}");
+                tracing::debug!(selection, mime_type, "X11 selection not pasted: {err}");
             }
         });
     if let Err(err) = spawned {
@@ -132,12 +150,7 @@ pub(crate) fn paste(display: u32, selection: SelectionTarget, mime_type: String,
     }
 }
 
-fn transfer(
-    display: u32,
-    selection: SelectionTarget,
-    mime_type: &str,
-    fd: OwnedFd,
-) -> Result<(), Error> {
+fn transfer(display: u32, selection: &str, mime_type: &str, fd: OwnedFd) -> Result<(), Error> {
     // Written without blocking, with a delay (`Pipe::write_all`).
     rustix::fs::fcntl_getfl(&fd)
         .and_then(|flags| rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK))
@@ -167,10 +180,7 @@ fn transfer(
         COPY_FROM_PARENT,
         &aux,
     )?;
-    let name = match selection {
-        SelectionTarget::Clipboard => "CLIPBOARD",
-        SelectionTarget::Primary => "PRIMARY",
-    };
+    let name = selection;
     let atom = |name: &str| -> Result<Atom, Error> {
         Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
     };

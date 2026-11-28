@@ -21,6 +21,15 @@ AutoDarkFrom=19:00
 | `Theme` | `dark`, `light`, `auto` | `dark` |
 | `AutoLightFrom` | Local time `HH:MM`, from which `auto` is light | `07:00` |
 | `AutoDarkFrom` | Local time `HH:MM`, from which `auto` is dark | `19:00` |
+| `ReduceMotion` | `true`, `false`: what only decorates a change jumps to its end (lot D-26p) | `false` |
+| `ReduceTransparency` | `true`, `false`: every glass opaque | `false` |
+| `IncreaseContrast` | `true`, `false`: opaque glass, firmer borders, darker secondary texts | `false` |
+| `Effects` | `full`, `reduced` (the light mode), `none` | `full` |
+
+The last four are Control Room's Accessibility page. `follow` applies them to the process
+(`Accessibility::apply`: sherlock-ui's `motion` and `color` read them) each time the file
+changes them, sends `Event::Accessibility`, then the theme again, so that the program redraws;
+`follow_themes` does the same for the programs that only want the themes.
 
 Every key is optional; an absent file gives the defaults. A value that cannot be read gives
 its default and a `Problem` for the caller to log. Two equal hours are refused: both go back to

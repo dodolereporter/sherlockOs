@@ -21,6 +21,7 @@ pub mod decorations;
 pub mod displays;
 pub mod dmabuf;
 mod dnd;
+mod dnd_x11;
 pub mod edid;
 pub mod focus;
 pub mod fullscreen;

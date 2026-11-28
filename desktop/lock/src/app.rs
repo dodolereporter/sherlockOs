@@ -916,7 +916,12 @@ impl Lock {
     fn bubble(&self, height: f32, colors: &Colors) -> Element<'_, Message> {
         let diameter = ui::bubble(height);
         let avatar = Avatar {
-            mascot: self.mascot.as_ref(),
+            // In the light mode (« Effets visuels » other than full, lot D-26p), the still
+            // picture of the boards.
+            mascot: self
+                .mascot
+                .as_ref()
+                .filter(|_| sherlock_ui::motion::effects() == sherlock_ui::motion::Effects::Full),
             mood: self.mood(),
             gaze: self
                 .looks_at_field()

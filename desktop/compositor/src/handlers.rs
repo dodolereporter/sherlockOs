@@ -30,9 +30,7 @@ use smithay::{
         seat::WaylandFocus,
         selection::{
             SelectionHandler, SelectionTarget,
-            data_device::{
-                DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus,
-            },
+            data_device::{DataDeviceHandler, DataDeviceState, set_data_device_focus},
             primary_selection::{
                 PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
             },
@@ -790,13 +788,8 @@ impl DataDeviceHandler for State {
     }
 }
 
-// The drags of Wayland clients: `dnd.rs`. The compositor starts one itself: the thumbnail of a
-// screenshot carried into an application (lot D-35e).
-impl ServerDndGrabHandler for State {
-    fn send(&mut self, mime_type: String, fd: std::os::fd::OwnedFd, _seat: Seat<Self>) {
-        self.send_dragged(&mime_type, fd);
-    }
-}
+// The drags of Wayland clients: `dnd.rs`; those of X11 applications carried to Wayland, and the
+// thumbnail of a screenshot the compositor drags itself (lot D-35e): `dnd_x11.rs`.
 
 impl PrimarySelectionHandler for State {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
