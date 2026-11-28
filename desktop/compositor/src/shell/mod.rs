@@ -17,6 +17,9 @@ mod clipboard;
 mod toplevels;
 mod workspaces;
 
+/// At most as many workspaces as there are shortcuts to reach them: Super + 1 to 9.
+pub const MAX_WORKSPACES: usize = workspaces::MAX_COUNT;
+
 use std::{
     cell::RefCell,
     os::unix::net::UnixStream,
@@ -264,6 +267,57 @@ impl State {
         }
         // Windows of a removed workspace may now be under the pointer.
         self.refresh_pointer_focus();
+    }
+
+    /// Adds a workspace after the last one, up to 9 (the « + » of Mission Control, lot D-33c).
+    /// `false` when there are already 9.
+    pub fn add_workspace(&mut self) -> bool {
+        let count = self.shell.workspace_model.list().len();
+        if count >= workspaces::MAX_COUNT {
+            return false;
+        }
+        self.set_workspace_count(count + 1);
+        true
+    }
+
+    /// Removes the workspace at `index` (lot D-33c): its windows go to the workspace before it
+    /// (after it for the first one), the next ones take its place and number, and the active
+    /// one stays, or becomes the one its windows went to. The last workspace stays.
+    pub fn remove_workspace(&mut self, index: usize) -> bool {
+        let count = self.shell.workspace_model.list().len();
+        if count <= 1 || index >= count {
+            return false;
+        }
+        self.queue_redraw();
+        let model = &self.shell.workspace_model;
+        // Where each index goes once `index` is gone.
+        let moved = |i: usize| {
+            if i > index || (i == index && i > 0) {
+                i - 1
+            } else {
+                i
+            }
+        };
+        let active = moved(model.active_index());
+        let windows: Vec<_> = self.space.elements().cloned().collect();
+        let places: Vec<_> = windows
+            .iter()
+            .map(|w| model.index(&self.workspace_of(w)).map(moved))
+            .collect();
+        self.shell.workspace_model.set_count(count - 1);
+        for (window, place) in windows.iter().zip(places) {
+            let id = place.and_then(|i| self.shell.workspace_model.id_at(i));
+            if let Some(id) = id.map(str::to_owned) {
+                *self.window_workspace(window).0.borrow_mut() = id;
+            }
+        }
+        if let Some(id) = self.shell.workspace_model.id_at(active).map(str::to_owned) {
+            self.shell.workspace_model.activate(&id);
+        }
+        self.shell.slide.stop();
+        self.focus(self.top_window());
+        self.refresh_pointer_focus();
+        true
     }
 
     /// Id of the workspace `window` belongs to.
