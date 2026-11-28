@@ -474,14 +474,17 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   goes. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
-  the item's menu (D-45a, below). `tests/tray_click.rs` clicks through the bar's real widgets, in
-  the order `iced_exwlshell` delivers the events (the button's click before the subscription
-  hears the release), against items made the way Chromium and Electron (registered by their
-  unique name), libayatana-appindicator (by an object path alone, `Activate` refused: its menu
-  opens) and `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48). What the
-  application then does with its window is up to the compositor: bringing a minimized window
-  back or raising one behind others needs the application to activate it, which the compositor
-  does not offer yet (`xdg-activation-v1`, X11's `_NET_ACTIVE_WINDOW`).
+  the item's menu (D-45a, below). With a left or middle click, the bar asks the compositor for
+  an `xdg-activation-v1` token on the surface clicked (the popup or the bar) and hands it to the
+  item with `ProvideXdgActivationToken` just before `Activate`, as Plasma does: the application
+  may bring its window forward with it, even minimized or on another workspace (lot Q-52, see
+  "Activation" in `docs/compositor.md`). An X11 application cannot hand it back; the token
+  granted lets its `_NET_ACTIVE_WINDOW` through. An item without the method activates as before.
+  `tests/tray_click.rs` clicks through the bar's real widgets, in the order `iced_exwlshell`
+  delivers the events (the button's click before the subscription hears the release), against
+  items made the way Chromium and Electron (registered by their unique name),
+  libayatana-appindicator (by an object path alone, `Activate` refused: its menu opens) and
+  `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48).
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
