@@ -7,11 +7,14 @@ pub mod anim;
 pub mod capture;
 pub mod card;
 pub mod clicks;
+// The clipboard history of Super + V (lot D-42).
+pub mod clipboard_history;
 pub mod cursor;
 pub mod damage;
 pub mod decorations;
 pub mod displays;
 pub mod dmabuf;
+mod dnd;
 pub mod edid;
 pub mod focus;
 pub mod fullscreen;
@@ -27,6 +30,7 @@ pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod lock;
+pub mod log_sync;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -49,6 +53,7 @@ pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
 mod x11_paste;
+mod xdnd;
 mod xwayland;
 
 use std::{
@@ -192,6 +197,8 @@ pub struct State {
     touchpad: touchpad::Touchpad,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
+    /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
+    dnd: dnd::Dnd,
     /// Cursor requested by the client that has the pointer.
     cursor_status: CursorImageStatus,
     /// Keys of a shortcut: their release does not go to the client, which did not see the press.
@@ -200,6 +207,8 @@ pub struct State {
     nested: bool,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
+    /// Writes the session's log to disk, while locked (lot D-25f).
+    log_sync: log_sync::LogSync,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -252,6 +261,8 @@ pub struct State {
     lock: lock::SessionLock,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// What was copied, for Super + V (lot D-42).
+    clipboard: clipboard_history::ClipboardHistory,
 }
 
 /// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
@@ -370,10 +381,14 @@ impl State {
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
             clicks: clicks::Clicks::default(),
+            dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
             switch_vt: None,
+            log_sync: log_sync::LogSync::new(
+                std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
+            ),
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
@@ -400,6 +415,7 @@ impl State {
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
             triggers: triggers::Triggers::default(),
+            clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
             start_time: Instant::now(),
@@ -697,6 +713,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());
         if self.popup_grab.as_ref().is_some_and(|g| !g.popup.alive()) {

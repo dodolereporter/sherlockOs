@@ -344,6 +344,13 @@ menus are Kate 25.04's, as it exports them.
   (`dbusmenu::TIMEOUT`, on the connection of the menus) and runs in an iced task: an application
   that does not answer leaves the name alone, or the menu as it was read, and the bar goes on.
   A late answer for an application no longer active is dropped.
+- **Bounds** (Q-38). Any application on the session bus can send a layout, which the bar lays
+  out on its interface thread: one `GetLayout` keeps 200 entries at most (`dbusmenu::MAX_ENTRIES`,
+  all levels together), 8 levels of submenus, 256 characters of a label, and 4 key combinations
+  of 4 keys of 32 characters in a shortcut; the rest is left out. The notification centre keeps
+  of `List` the daemon's own bounds (`history::MAX_ENTRIES`, 100 notifications; the application
+  name, title, body and labels cut to the daemon's lengths; 32 actions with keys of 256 bytes),
+  since a program that takes the daemon's name after it could send more.
 - **A menu.** An `xdg_popup` of the bar under its button, 6 below the bar, like the Sherlock
   menu: the menu glass, entries of 30, separators, the shortcut on the right in tertiary text
   (« Ctrl+Maj+N », the names of a French keyboard, « Ctrl+T, O » for keys pressed in turn), a
@@ -575,7 +582,7 @@ then « À propos de cet ordinateur », « Réglages », « Mises à jour », «
 
 | Entry | What it does |
 | --- | --- |
-| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
+| « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`, beside the session's programs in `$SHERLOCKOS_BIN` when it is there, else in the `PATH`: lot Q-39), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
 | « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
 | « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
 | « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |

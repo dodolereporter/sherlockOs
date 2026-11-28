@@ -550,6 +550,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "clipboard-panel"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "launcher",
+ "shell-protocol",
+ "sherlock-ui",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -921,6 +936,7 @@ dependencies = [
  "iced_test",
  "icon-theme",
  "libc",
+ "mime-apps",
  "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
@@ -1125,6 +1141,7 @@ dependencies = [
  "sherlock-ui",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
  "wayland-client",
  "zbus",
 ]
@@ -1920,6 +1937,9 @@ dependencies = [
 [[package]]
 name = "icon-theme"
 version = "0.0.0"
+dependencies = [
+ "mime-apps",
+]
 
 [[package]]
 name = "ident_case"
