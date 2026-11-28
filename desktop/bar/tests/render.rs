@@ -20,7 +20,7 @@ use bar::system::audio::Output;
 use bar::system::backlight::Backlight;
 use bar::system::bluetooth::Bluetooth;
 use bar::system::keyboard::{KeyboardLight, Through};
-use bar::system::network::{Network as WifiNetwork, Security, Wifi};
+use bar::system::network::{Network as WifiNetwork, Outcome, Security, Wifi};
 use bar::system::power::{Power, Profile};
 use iced_test::simulator::Simulator;
 use sherlock_ui::color::{self, Theme};
@@ -292,6 +292,7 @@ fn board_quick(state: &mut Bar) {
         strength: 90,
         security: Security::Psk,
         active: true,
+        saved: true,
         path: String::from("/ap/1"),
     };
     let cafe = WifiNetwork {
@@ -299,6 +300,7 @@ fn board_quick(state: &mut Bar) {
         strength: 60,
         security: Security::Open,
         active: false,
+        saved: false,
         path: String::from("/ap/2"),
     };
     let messages = [
@@ -406,6 +408,22 @@ fn the_panels_render_in_both_themes() {
             let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
             assert_written(capture(ui, &format!("wifi-networks{suffix}")));
 
+            // Its password refused (D-20e): asked again, said under the field.
+            state.quick.password = quick::Secret::default();
+            state.quick.refused = Some((String::from("Voisin"), Outcome::WrongPassword));
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-wrong-password{suffix}")));
+            // « Autre réseau… » open, its password shown.
+            state.quick.refused = None;
+            state.quick.joining = None;
+            state.quick.other = Some((String::from("Cachette"), Security::Psk));
+            state.quick.password = quick::Secret::new(String::from("visible"));
+            state.quick.reveal = true;
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("wifi-other-network{suffix}")));
+            state.quick.other = None;
+            state.quick.reveal = false;
+
             // A network name too long for its tile and its line ends with « … » (UI-01).
             let long = "Livebox-Résidence-des-Lilas-étage-3-5GHz";
             if let Load::Ready(wifi) = &mut state.quick.wifi {
@@ -422,6 +440,46 @@ fn the_panels_render_in_both_themes() {
             assert!(ui.find(long).is_ok());
             assert_written(capture(ui, &format!("control-centre-long-name{suffix}")));
         });
+    }
+}
+
+/// The panels on short screens (UI-08), the logical heights of 1280 × 800 at 1.5 (`-533`),
+/// 1366 × 768 at 1.25 (`-614`) and 1920 × 1080 at 1.5 (`-720`): `calendar-<height>`, the
+/// centre shorter, or both scrolling together on the shortest; `control-centre-<height>`, the
+/// settings scrolling in a panel that ends above the bottom of the screen.
+#[test]
+fn the_panels_fit_short_screens() {
+    for (screen, tag) in [(533.3, "533"), (614.4, "614"), (720.0, "720")] {
+        let mut state = sample();
+        state.panel_margins = panel::margins(false);
+        state.month = Some(Month {
+            year: 2026,
+            month: 11,
+        });
+        state.history = board_history();
+        board_quick(&mut state);
+        let light = KeyboardLight {
+            brightness: 1,
+            max: 3,
+            through: Through::UPower,
+        };
+        let _ = state
+            .quick
+            .update(quick::Message::Keyboard(Load::Ready(light)));
+        panel::reserve_keyboard(true);
+        panel::reserve_screen(Some(screen));
+        for (which, name) in [
+            (Panel::Calendar, "calendar"),
+            (Panel::Control, "control-centre"),
+        ] {
+            let size = panel_size(&state, which);
+            let top = 54.0;
+            assert!(top + size.1 <= screen, "{name} on {screen}: {size:?}");
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(which));
+            assert_written(capture(ui, &format!("{name}-{tag}")));
+        }
+        panel::reserve_screen(None);
+        panel::reserve_keyboard(false);
     }
 }
 

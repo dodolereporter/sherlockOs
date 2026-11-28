@@ -80,6 +80,35 @@ pub const APP_MENU_WIDTH: f32 = CONTROL_WIDTH;
 /// Step of the hours of the automatic theme, in minutes.
 pub const HOUR_STEP: u32 = 30;
 
+/// Width of the value written on the right of a repeat slider (« 1000 ms », « 50 par seconde »).
+pub const VALUE_WIDTH: f32 = 104.0;
+/// Width of the menu of the keyboard layouts.
+pub const LAYOUT_WIDTH: f32 = CONTROL_WIDTH;
+/// Steps of the repeat sliders: 10 ms for the delay, one repeat per second for the rate.
+pub const REPEAT_DELAY_STEP: u32 = 10;
+/// Most characters kept in the field where the keyboard is tried.
+pub const TRIAL_MAX: usize = 200;
+
+/// The keyboard layouts the menu offers: xkb layout, xkb variant, name shown. Any other layout
+/// written in `keyboard.conf` still works, and shows as « Autre disposition ».
+pub const KEYBOARD_LAYOUTS: [(&str, &str, &str); 15] = [
+    ("fr", "", "Français (AZERTY)"),
+    ("fr", "afnor", "Français (AZERTY AFNOR)"),
+    ("fr", "bepo", "Français (BÉPO)"),
+    ("fr", "mac", "Français (Mac)"),
+    ("be", "", "Belge"),
+    ("ch", "fr", "Suisse romand"),
+    ("ca", "", "Français (Canada)"),
+    ("us", "", "Anglais (États-Unis)"),
+    ("us", "intl", "Anglais (international, touches mortes)"),
+    ("gb", "", "Anglais (Royaume-Uni)"),
+    ("de", "", "Allemand"),
+    ("es", "", "Espagnol"),
+    ("it", "", "Italien"),
+    ("pt", "", "Portugais"),
+    ("nl", "", "Néerlandais"),
+];
+
 /// The interface texts of Control Room, in French.
 pub mod texts {
     pub use crate::texts::evidence::{CLOSE, MAXIMIZE, MINIMIZE};
@@ -100,10 +129,53 @@ pub mod texts {
     pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
     pub const LOCK: &str = "Verrouillage";
     pub const LOCK_ABOUT: &str = "Quand ta session se verrouille toute seule.";
+    pub const KEYBOARD: &str = "Clavier";
+    pub const KEYBOARD_ABOUT: &str =
+        "La disposition des touches, leur répétition et les raccourcis.";
     pub const CLIPBOARD: &str = "Presse-papiers";
     pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
+
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_ABOUT: &str = "Le Wi-Fi, les réseaux autour de toi et ceux que tu gardes.";
+
+    // « Réseau ».
+    pub const WIFI: &str = "Wi-Fi";
+    pub const WIFI_HELP: &str = "Coupé, l'ordinateur ne cherche plus de réseau.";
+    pub const WIFI_HARDWARE_OFF: &str =
+        "Coupé par l'interrupteur ou le mode avion de l'ordinateur.";
+    pub const NETWORKS: &str = "Réseaux";
+    pub const NETWORK_LOADING: &str = "Lecture du Wi-Fi…";
+    pub const NETWORK_UNAVAILABLE: &str = "Le gestionnaire de réseau ne répond pas.";
+    pub const NO_WIFI: &str = "Aucune carte Wi-Fi trouvée.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const OPEN_NETWORK: &str = "Ouvert";
+    pub const PROTECTED_NETWORK: &str = "Protégé par un mot de passe";
+    pub const ENTERPRISE_NETWORK: &str = "Entreprise ou WEP";
+    pub const FORGET: &str = "Oublier";
+    pub const SCAN: &str = "Rechercher";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const OTHER_NETWORK_SEARCH: &str = "Rejoindre un réseau caché";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY_NONE: &str = "Aucune";
+    pub const SECURITY_PASSWORD: &str = "Mot de passe";
+    pub const SECURITY_WEP: &str = "WEP";
+    pub const SECURITY_ENTERPRISE: &str = "Entreprise";
+    pub const PEAP: &str = "PEAP";
+    pub const TTLS: &str = "TTLS";
+    pub const IDENTITY: &str = "Identifiant";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const WEP_KEY: &str = "Clé WEP";
+    pub const DOMAIN: &str = "Domaine du serveur (facultatif)";
+    pub const DOMAIN_HELP: &str =
+        "Ton établissement le donne : il prouve que c'est bien son serveur qui répond.";
+    pub const CANCEL: &str = "Annuler";
+    pub const JOIN: &str = "Rejoindre";
+    pub const NETWORK_REFUSED: &str = "Refusé : tu n'as pas le droit de changer ce réglage.";
+    pub const NETWORK_FAILED: &str = "Échec : le réseau n'a pas pu être rejoint.";
+    pub const NETWORK_WRONG_PASSWORD: &str = "Mot de passe incorrect : le réseau l'a refusé.";
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -158,6 +230,70 @@ pub mod texts {
     pub const POINTER: &str = "Pointeur";
     pub const SHOW_CLICKS: &str = "Montrer les clics";
     pub const SHOW_CLICKS_HELP: &str = "Un anneau vert marque chaque clic.";
+    pub const GESTURES: &str = "Gestes";
+    pub const TAP_AND_DRAG: &str = "Toucher puis glisser";
+    pub const TAP_AND_DRAG_HELP: &str = "Touche deux fois et glisse pour déplacer un objet.";
+    pub const DRAG_LOCK: &str = "Glissement prolongé";
+    pub const DRAG_LOCK_HELP: &str = "Le glissement continue un instant après avoir levé le doigt.";
+    pub const SWIPE_DOWN: &str = "Trois doigts vers le bas";
+    pub const SWIPE_DOWN_HELP: &str = "Sur le bureau, hors de Mission Control.";
+    pub const SWIPE_NOTHING: &str = "Rien";
+    pub const SWIPE_MINIMIZE: &str = "Réduire la fenêtre";
+    /// The gestures that do not change: the fingers, what they do.
+    pub const FIXED_GESTURES: [(&str, &str); 3] = [
+        ("Trois doigts vers le haut", "Ouvrir Mission Control"),
+        ("Trois doigts à gauche ou à droite", "Changer de bureau"),
+        ("Deux doigts écartés ou pincés", "Zoomer dans l'application"),
+    ];
+
+    // « Clavier ».
+    pub const TYPING_CARD: &str = "Saisie";
+    pub const LAYOUT: &str = "Disposition";
+    pub const LAYOUT_HELP: &str = "Ce que tape chaque touche.";
+    pub const SYSTEM_LAYOUT: &str = "Celle du système";
+    pub const OTHER_LAYOUT: &str = "Autre disposition";
+    pub const REPEAT_DELAY: &str = "Délai avant répétition";
+    pub const REPEAT_DELAY_HELP: &str =
+        "Combien de temps tenir une touche avant qu'elle se répète.";
+    pub const REPEAT_RATE: &str = "Vitesse de répétition";
+    pub const REPEAT_RATE_HELP: &str = "À quel rythme elle se répète ensuite.";
+    pub const TRY_KEYS: &str = "Essai";
+    pub const TRY_KEYS_HELP: &str = "Tape ici pour essayer la disposition et la répétition.";
+    pub const TRY_KEYS_PLACEHOLDER: &str = "Tape quelques lettres…";
+    pub const SHORTCUTS: &str = "Raccourcis du bureau";
+    pub const SHORTCUTS_HELP: &str = "Dans une fenêtre d'essai, Alt remplace Super.";
+
+    /// The shortcuts of the desktop, as the compositor takes them: the keys, what they do.
+    pub const SHORTCUT_LIST: [(&str, &str); 16] = [
+        ("Super + Espace", "Ouvrir le lanceur"),
+        ("F4", "Afficher les applications"),
+        ("Super + Tab", "Ouvrir Mission Control"),
+        ("Super + L", "Verrouiller la session"),
+        ("Super + ↑", "Agrandir ou rétablir la fenêtre"),
+        (
+            "Super + ← ou →",
+            "Placer la fenêtre sur une moitié de l'écran",
+        ),
+        ("Super + ↓", "Remettre la fenêtre à sa place"),
+        ("Super + glisser", "Déplacer une fenêtre"),
+        ("Super + clic droit glissé", "Redimensionner une fenêtre"),
+        ("Super + 1 à 9", "Aller à ce bureau"),
+        ("Super + Maj + 1 à 9", "Envoyer la fenêtre sur ce bureau"),
+        ("Super + Ctrl + ← ou →", "Aller au bureau voisin"),
+        ("Impr. écran", "Capturer l'écran"),
+        ("Maj + Impr. écran", "Capturer une zone"),
+        ("Alt + Impr. écran", "Capturer la fenêtre"),
+        ("Ctrl + Alt + F1 à F12", "Passer à une console"),
+    ];
+
+    /// A delay in milliseconds, a rate in repeats per second, as the sliders say them.
+    pub fn milliseconds(count: u32) -> String {
+        format!("{count} ms")
+    }
+
+    pub fn per_second(count: u32) -> String {
+        format!("{count} par seconde")
+    }
 
     // « Son ».
     pub const OUTPUT: &str = "Sortie";
@@ -225,6 +361,7 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const NETWORK_WORDS: &str = "wifi internet réseau sans fil eduroam mot de passe";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";
@@ -236,6 +373,10 @@ pub mod texts {
     pub const SOUND_WORDS: &str = "son audio haut-parleurs casque enceinte hdmi";
     pub const MICROPHONE_WORDS: &str = "son audio micro microphone entrée casque";
     pub const LOCK_WORDS: &str = "verrouillage écran veille inactivité délai sécurité";
+    pub const KEYBOARD_WORDS: &str = "clavier azerty qwerty bépo langue touches";
+    pub const REPEAT_WORDS: &str = "clavier touches répétition maintenir tenir";
+    pub const SHORTCUT_WORDS: &str = "clavier raccourcis touches super combinaisons";
+    pub const GESTURE_WORDS: &str = "gestes doigts trackpad glisser balayer";
     pub const CLIPBOARD_WORDS: &str = "presse-papiers copier coller historique super v vie privée";
     pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 

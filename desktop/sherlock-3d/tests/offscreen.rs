@@ -10,6 +10,9 @@ use sherlock_3d::{Camera, Cut, Frame, Pose, Renderer, headless};
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn main() -> Result {
+    if support::listed("offscreen") {
+        return Ok(());
+    }
     // SAFETY: no harness, so no other thread exists yet.
     let Some(driver) = (unsafe { support::pick_driver() }) else {
         support::skip("no Vulkan driver for the AMD chip, and no lavapipe");

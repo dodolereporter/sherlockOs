@@ -32,7 +32,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/card.rs` | Choice of the card the real session drives, from `/sys` |
 | `src/mesa.rs` | What keeps the NVIDIA card asleep: EGL restricted to Mesa, Xwayland's environment (GBM backends without NVIDIA's) |
 | `src/cursor.rs` | Cursor of the real session: the house theme or the user's, size and scale, the turn of the waiting cursors, the fade of a new shape, shake to find (lot D-07, see `docs/cursor.md`) |
-| `src/keyboard.rs` | Keyboard layout: `XKB_DEFAULT_*`, the system setting, or French AZERTY |
+| `src/keyboard.rs` | Keyboard layout and repeat: `keyboard.conf`, `XKB_DEFAULT_*`, the system setting, or French AZERTY |
 | `session/` | Session entry of the login screen (`sherlockos.desktop`), start script, `install.sh` |
 | `src/lib.rs` | `State`: Wayland display, protocols, seat, `Space` of the windows. Socket, screen, focus |
 | `src/handlers.rs` | Protocol handlers: `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, xdg-shell, cursor shapes, clipboard and primary selection. Placing a window according to its state (`rearrange`), Wayland or X11 |
@@ -55,6 +55,8 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
+| `src/background_effect.rs` | `ext_background_effect_v1` (lot D-37, ADR 0027): the blur region of each surface, applied at its commit |
+| `src/blur.rs` | The blur behind glass (lot D-37): its element, the dual Kawase passes and their cache, the veil without blur |
 | `src/decorations/` | Server-side decorations (lot D-08): who gets one (`protocol.rs`), the frame and its bar, the pointer on the bar and its buttons, the bar drawn into a texture (`raster.rs`) |
 | `src/wallpaper.rs` | Wallpaper: setting read again when it changes, images decoded on a thread, one texture per variant in use, placement on each screen |
 | `../desktop-config` | Settings shared with Control Room: `wallpaper.conf`, choice of the variant, cover / contain / center geometry; the variant generator `wallpaper-variants`; `touchpad.conf` (lot D-31) |
@@ -90,10 +92,10 @@ Behavior:
   That is niri's convention. The rule lives in `gesture_modifier_held` (`src/input.rs`).
 - Windows that ask for it get their title bar from the compositor (lot D-08, see
   "Server-side decorations"); the others draw their own.
-- The keyboard is French AZERTY, unless `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the
-  `XKB_DEFAULT_*` variables), or the system sets a layout: `XKBLAYOUT`, `XKBVARIANT`,
-  `XKBOPTIONS` and `XKBMODEL` in `/etc/vconsole.conf` (written by `localectl`) or else in
-  `/etc/default/keyboard` (Debian).
+- The keyboard is French AZERTY, unless the keyboard setting names a layout (see "Keyboard"),
+  `XKB_DEFAULT_LAYOUT` is set (xkbcommon then reads the `XKB_DEFAULT_*` variables), or the
+  system sets a layout: `XKBLAYOUT`, `XKBVARIANT`, `XKBOPTIONS` and `XKBMODEL` in
+  `/etc/vconsole.conf` (written by `localectl`) or else in `/etc/default/keyboard` (Debian).
 
 Moving and resizing:
 
@@ -164,6 +166,10 @@ Snapping:
 - F4 alone opens the applications view, and closes it when pressed again (lot D-41, see
   `docs/apps.md`): `$SHERLOCKOS_BIN/sherlockos-apps`, or `sherlockos-apps` in the `PATH`. F4 with
   a modifier (Alt + F4) still goes to the client.
+- Super + comma (Alt + comma nested) opens Control Room, as Cmd + , opens the settings on macOS
+  (lot Q-31): `$SHERLOCKOS_BIN/control-room`, or `control-room` in the `PATH`, the program
+  « Réglages » of the bar's Sherlock menu starts too. The menu shows the shortcut beside the
+  entry, and Super+L beside « Verrouiller ».
 - Gesture key + Up arrow maximizes the window that has the keyboard, or gives it back its
   previous size if it already is. Left or Right arrow: half of the screen. Down arrow: previous
   size. Only the gesture key may be held: with Shift as well, the arrow goes to the client;
@@ -370,7 +376,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 
 | Object | Requests | Events |
 | --- | --- | --- |
-| `sherlock_shell_manager_v1` | `destroy`, `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
+| `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose), `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
 | `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
@@ -391,11 +397,12 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 3. Version 2 (lot D-18d) adds `snapped` to
+- **Versions.** The global is offered at version 4. Version 2 (lot D-18d) adds `snapped` to
   the states of a screen; a client that binds version 1 never receives it: a screen with only a
   snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
-  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. A toplevel
-  has the version of its manager.
+  (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. Version 4
+  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). A toplevel has the
+  version of its manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
@@ -1369,6 +1376,57 @@ and `xterm`; each grows and fades in. Close them (Super + Q, or their close butt
 shrinks and fades out. A fullscreen game, a menu, a tooltip appear at once. With
 `--window-animations off`, nothing is animated.
 
+### Blur behind glass (lot D-37, ADR 0027)
+
+A client asks for the blur behind its surface with `ext_background_effect_v1`, or with KDE's
+`org_kde_kwin_blur` (Qt applications, lot D-37b): a region in the surface's coordinates,
+applied at its commit, cut to its size. KDE's null region is the whole surface; its `unset`
+takes the blur away at the next commit, its `release` keeps it, as with KWin. Our shell asks
+by itself: the `glass` of sherlock-ui (feature `layer-shell`) and every menu or panel over its
+shadow (`surface::shadowed`) give their rounded shape to iced_exwlshell, which sends it. The
+dock and its menu, the top bar, its panels and menus, the notifications, the launcher and the
+menus of the applications view use it.
+
+- **Where.** `push_surface` puts an `Item::Blur` just behind every surface it draws that has a
+  region: anchored surfaces, their menus, the menus of windows. `push_window` puts one behind a
+  window that asks, cut to its rounded corners (lot D-37b). The on-screen display of the media
+  keys, drawn by the compositor, has one behind its pill, at its opacity. Not while the session
+  is locked: the lock draws its own scene.
+- **How.** The element is never opaque, so what is behind is drawn first. When it must compute,
+  it copies its area of the frame at half size (`glBlitFramebuffer`), halves it
+  `sherlock_ui::blur::PASSES` times then doubles it back with the dual Kawase programs
+  (`shaders/blur_*.frag`, `OFFSET` between samples), into textures of its own; then it draws the
+  result over its region with `SATURATION` (`shaders/blur.frag`, a Smithay texture program that
+  reads at `gl_FragCoord`, whatever the frame transform).
+- **Only when needed.** After the elements of a screen are built, `blur::track` looks at those
+  behind each blur: one that appears, goes, moves, fades, or whose damage since the last frame
+  reaches the area, makes it compute again, and its element is then damaged whole so that the
+  damage tracker redraws what is behind. Otherwise it draws its textures again where the frame
+  is redrawn (the clock of the bar), and at rest nothing is drawn at all.
+- **Without blur.** On the software renderer, without GLES 3 or after a GL error, a veil of the
+  desktop color at `VEIL_OPACITY` takes its place: the glass reads denser. Also when the chip is
+  too slow (lot D-37b): after each blur computed, a GL fence; once it is `LATE_AFTER` old (16
+  ms), the next blur asks whether the chip is done. `LATE_IN_A_ROW` (8) late blurs in a row,
+  and the veil takes over for the session, with a warning in the journal. Smithay's GL bindings
+  have no timer queries: the fence only says "not done after a frame".
+- **Trials.** `SHERLOCKOS_BLUR=blur`, `veil` or `off` chooses what glass gets behind it,
+  whatever the renderer: to see the blur in a nested session on the software renderer.
+- **Limits.** The blur samples inside its area only: a little lighter near its edges. A region
+  is made of rectangles: the corners are steps of one logical pixel, smoothed by the glass drawn
+  over them.
+
+Tests: `cargo test -p compositor --test headless -- blur osd`. On Mesa's software
+renderer, stripes behind a glass rounded by 22 are blurred behind it and sharp around it, its
+corners show them as they are, a frame at rest draws nothing, a change behind computes the blur
+again, the veil has its color, and a frame that computes the blur costs less than 25 ms more
+than one with the veil (2.7 against 1.7 ms at 800 × 600 on the author's machine). A window
+that asks with KDE's protocol gets the blur behind it, inside its rounded corners, until it
+unsets it; the on-screen display gets it behind its pill. The boards, with text drawn by the
+test, the real bar with its calendar, the real dock and the on-screen display, without then with
+the blur: `cargo build -p bar -p dock && cargo test -p compositor --test headless -- --ignored
+blur_board` writes `screenshots/blur-board.png` (dark then light, 1440 × 900),
+`blur-board-1920x1080.png` and `blur-board-2560x1600.png` (scale 1.5).
+
 ### Raise (lot D-19d)
 
 A window that comes to the front from behind another one, whatever brings it there (the dock,
@@ -1396,10 +1454,10 @@ to the front without animation.
 
 ### What rendering does not do yet
 
-- **Blur** behind glass surfaces (dual Kawase, radii of 24, 28 and 30 px): postponed, the lot
-  was already over its size. Its place for anchored surfaces is ready (`Scene::push_backdrop`,
-  lot D-12). It needs an offscreen render of what is behind the surface, at reduced
-  resolution, then blur passes; the snap preview would be its first client.
+- **Blur**: the "Reduce transparency" setting of Control Room; the glass windows of our
+  applications (Evidence and Control Room draw opaque windows with winit, which cannot send a
+  region yet: the compositor is ready for them); a panel that unfolds asks for its blur at its
+  size at rest, not at its scale of the moment.
 - **Hovers**: the compositor has nothing to hover yet. The `motion::FADE` token is already at
   the duration of a hover.
 
@@ -1637,8 +1695,8 @@ mode = cover
   pixel, centered.
 - The file is checked every 2 seconds (one `stat`, modification time and length): when it
   changes, it is read again and the wallpaper changes, without restarting.
-- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number, and the
-  default setting applies. A missing image, a wallpaper that is not installed, a folder without
+- A wrong line (unknown key, mode or `follow-theme` value) is logged with its number and left
+  out; the other lines still count (Q-40). A missing image, a wallpaper that is not installed, a folder without
   variants or an image that does not decode is logged, and the background of the board shows:
   color and discs. Never a crash.
 
@@ -2012,7 +2070,8 @@ running them:
 - the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where
   SDDM lists the Wayland sessions;
 - Evidence's desktop entry goes to `/usr/local/share/applications/`, where the dock and the
-  launcher find it; it runs `evidence`, which the session finds in its `PATH`;
+  launcher find it; it runs `evidence`, which the session finds in its `PATH` through the link
+  `/usr/local/bin/evidence` (lot Q-39);
 - the application icons, a hicolor theme, go to `/usr/local/share/sherlockos/icons/` (D-03);
 - the portal setting `sherlockos-portals.conf` goes to `/usr/local/share/sherlockos/xdg-desktop-portal/`
   (D-35b, see "Everyday services");
@@ -2021,8 +2080,11 @@ running them:
 
 At the next login, SDDM offers « SherlockOS » next to Plasma in its session menu. The start script
 sets `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` (both `SherlockOS`) and `XDG_SESSION_TYPE=wayland`,
-adds the folder of the programs at the end of `PATH` (the launcher and `evidence` are found
-there) and `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
+exports the folder of the programs as `SHERLOCKOS_BIN` (the compositor, the dock and the bar
+start the launcher, the applications view, the lock screen and Control Room from it, by their
+full path), without adding it to `PATH`: `bar`, `dock`, `launcher`, `compositor` or
+`notifications` typed in a terminal of the session run nothing of the shell, and no other
+program of that name is taken for one of them (lot Q-39). It adds `/usr/local/share/sherlockos` at the start of `XDG_DATA_DIRS` (the icons), then
 launches the compositor, which launches the bar, the dock and the notification daemon once it
 is ready. They start again when they stop (ADR 0005), as long as the compositor
 is there, after 1, 2, 4, 8 then 16 seconds; one that stopped 5 times within 60 seconds is given
@@ -2210,6 +2272,29 @@ times a second on the reference laptop's screen. Now:
 - **Frame callbacks.** Clients get theirs when their frame goes to the screen, or at the
   estimated blank when nothing was shown; hidden windows once a second, by a timer of their own.
 
+## Keyboard
+
+Lot D-26c: the layout and the repeat of held keys, set in Control Room's Keyboard page.
+`$XDG_CONFIG_HOME/sherlockos/keyboard.conf`, read by `desktop_config::keyboard`, in the same
+`key = value` form as `touchpad.conf`. Every key is optional.
+
+| Key | Default | Values | Effect |
+| --- | --- | --- | --- |
+| `layout` | none | an xkb layout (`fr`, `us`, `us,fr`…); empty: none | The layout; without one, the environment or the system's, as above |
+| `variant` | empty | an xkb variant (`bepo`, `intl`…) | The variant of that layout |
+| `repeat-delay` | `200` | `150` to `1000` | Milliseconds before a held key repeats |
+| `repeat-rate` | `25` | `2` to `50` | Repeats per second |
+
+A layout or variant name holds only letters, digits, `_`, `-` and the `,` of a list, 64
+characters at most: nothing xkbcommon could take as a path. The model and the options stay the
+system's. The file is read at startup, in nested mode and in the real session, and again within
+2 seconds of a change (modification time and length, as `touchpad.conf`). It is read leniently:
+a wrong line goes to the log and the others count; a file over 64 KiB is left aside. A new
+layout is compiled by xkb (`KeyboardHandle::set_xkb_config`) only when it changes; a layout xkb
+refuses keeps the one in use, with a warning, so the keyboard never stops answering. The repeat
+goes to the clients (`change_repeat_info`), and the media keys repeat at the same pace
+(`State::key_repeat`). `State::set_keyboard` applies a setting directly, for the tests.
+
 ## Touchpad
 
 Lot D-31 makes the touchpad behave like a Mac's: its setting in a file that Control Room's
@@ -2236,7 +2321,8 @@ optional; without the file, the defaults below apply.
 Two finger scrolling is always on. The setting applies to touchpads only (the devices that tap),
 when they are plugged in, and again within 2 seconds of a change of the file (modification time
 and length looked at every 2 seconds, as `wallpaper.conf`). A wrong line, an unknown key or a
-speed out of range gives the defaults, with a warning naming the line in the log. What a
+speed out of range is left out, with a warning naming the line in the log, and the other lines
+still count (Q-40): one typo never turns the whole file back to the defaults. What a
 touchpad does not support is skipped (`debug` level): a touchpad without a physical button has
 no button areas. `State::set_touchpad` applies a setting directly, for the tests and for
 Control Room later.
@@ -2470,6 +2556,34 @@ surface keeps the keyboard (a lock screen).
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
 
+### App Expose
+
+Lot D-21c2: Mission Control on the windows of one application, as the macOS dock opens it.
+The dock asks for it with `show_windows` of `sherlock_shell_v1` (version 4), giving the ids of
+the windows (the `id` events): the « Afficher toutes les fenêtres » entry of its menu, and a
+swipe down over its icon. Ids rather than
+an `app_id`: one application may have Wayland windows under its desktop file id and X11 ones
+under its class, which only the dock groups (by its desktop entries, see `docs/dock.md`).
+
+- `State::show_windows` keeps the ids (`Overview::only`) and opens the view; `overview_tiles`
+  then keeps only those windows, among the ones the view shows anyway (active workspace, not
+  minimized, X11 menus aside). Unknown ids are left out; with no window to show, nothing
+  opens.
+- **No strip**: the windows take its room, under a margin of 32 like the sides
+  (`overview_strip` is empty, so no thumbnail is drawn nor hit).
+- Everything else is Mission Control: the same grid, animation, titles and highlight; a click
+  on a window chooses it, a click elsewhere, Escape or the gesture key close the view. Asked
+  while the view is open, it shows the new windows at once. Opened by its keys or the fingers
+  afterwards, the view shows every window again.
+- **Not done**: the minimized windows, which macOS shows in a row at the bottom, and windows of
+  the application on other workspaces; a window the application opens while App Expose is
+  shown does not join it.
+
+`tests/shell.rs` (`the_shell_opens_mission_control_on_the_windows_of_one_application`): unknown
+ids open nothing; two of three windows, without the strip; asked again while open, other
+windows; Escape closes it, and Mission Control opened afterwards shows the three, strip
+included.
+
 ### Dragging to another workspace
 
 A window pressed and moved past the drag threshold (4 px) follows the pointer, in front of
@@ -2582,7 +2696,8 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
 - **Triggers (lot D-25a3, `src/triggers.rs`).** The session also locks:
   - after a delay without input (keyboard, pointer, touchpad), set in
     `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
-    within a second when it changes; `desktop_config::lock`, which Control Room will write);
+    within a second when it changes; `desktop_config::lock`, which Control Room writes); a wrong
+    line is logged and left out, the others still count, so « Jamais » stays never (Q-40);
     no application can hold it off yet (no `idle-inhibit` protocol);
   - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
     the launcher and the bar);
@@ -2622,6 +2737,19 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
   then the compositor's own screen, which cannot unlock: « Verrouillé » and « Appuie sur Entrée
   pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
+- **When the lock program hangs** (lot D-25f). A key or a click while locked pings the program
+  that holds the lock (`xdg_wm_base.ping`, at most once a second): its event loop answers. Without
+  an answer within 5 s (`PING_TIMEOUT`), it is killed: its lock goes without an unlock, so the
+  session stays locked and the next program starts, as when it dies; after 3 such failures, the
+  rescue mode. The compositor knows the program's shell client from the binding of
+  `xdg_wm_base` on the connection it opened. A program that never binds it (`swaylock`) is not
+  pinged.
+- **The console switch** (Ctrl + Alt + F1 to F12) works while locked, as on the other
+  compositors: the session stays locked, and another console can start things again.
+- **The log on disk.** `sherlockos-session` names its log in `SHERLOCKOS_LOG`; at each lock and
+  unlock, every 5 s while locked (`LOG_SYNC`) and when a hung program is killed, a thread of the
+  compositor has it written to disk (`fsync`, `log_sync.rs`), 300 ms later so that the pipe's
+  reader has appended the last lines: a forced restart no longer loses the end of a lock.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
@@ -2638,7 +2766,9 @@ another session's does not, and `PrepareForSleep` locks, keeps the inhibitor unt
 frame is shown, then a new one is taken at wake-up; on four screens side by side (1366 × 768,
 1920 × 1080, 2560 × 1600 at 1.5, 3840 × 2160 at 2), each gets a lock surface of its own logical
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
-scale.
+scale; a lock program that answers its pings stays, one that hangs (a client that reads
+nothing any more) is killed after the time limit and another starts, the session staying locked
+and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 
@@ -2853,6 +2983,11 @@ The tests in `tests/headless.rs`:
   receives a configure of 776 × 36, draws, and the work area becomes (0, 46, 800, 554): the
   maximized window is configured at 800 × 554 in (0, 46). Snapped left, it takes 400 × 554 in
   (0, 46). A click on the bar gives it the keyboard (on demand).
+- **The keyboard in a panel** (Q-51). A click in a menu or a panel of an anchored surface (an
+  `xdg_popup` of the bar) gives the keyboard to that popup, not to the bar under it: the bar's
+  toolkit sends the keys to the window whose surface has the focus, and the Wi-Fi password
+  field is in the panel. Before, the focus went to the bar's surface and the field never got a
+  key. A click on the bar gives it back to the bar.
 - **Exclusive zones stacked.** Two bars at the top and a dock of 76 at the bottom: work area
   (0, 92, 800, 432), and the maximized window follows. A surface with a zone of -1 changes
   nothing. Closing the second bar gives (0, 46, 800, 478), closing them all the whole screen.
@@ -2966,6 +3101,17 @@ saved in `target/tmp/genie-half.png`. The whole way, in eight steps, is saved in
 as the compositor orders them (lot Q-14): at every step, the glass and what is under it are
 pixel for pixel as without the window. Without Mesa's EGL (`libegl-mesa0`) the test says it
 has nothing to draw with, and fails on the CI, which installs it.
+
+**Board with the real dock** (lot D-19b, ignored: it needs `cargo build -p dock`, Mesa's EGL and
+lavapipe). `cargo test -p compositor --test headless -- --ignored genie_board` runs the real
+dock against the test compositor, on its own folders, with a decorated window whose
+application has an icon in it, minimizes it and draws eight steps of the way with Mesa's
+software renderer. The dock draws with wgpu on lavapipe (Mesa's software Vulkan), so that its
+glass is translucent as on the machine: the test hands lavapipe's manifest under the name the
+dock keeps on a machine with an AMD chip (ADR 0018) and through `VK_DRIVER_FILES` elsewhere.
+In `target/tmp`: `genie-board.png` (bottom of 1920 × 1080, dark then light), `genie-left.png`
+and `genie-right.png` (1280 × 800), `genie-small.png` (800 × 600) and `genie-hover.png` (the
+pointer on the icon, magnified).
 
 The tests in `tests/dmabuf.rs` run like those of `tests/headless.rs`, with a fake renderer that
 accepts or refuses each import and records it (the CI has no GPU):
