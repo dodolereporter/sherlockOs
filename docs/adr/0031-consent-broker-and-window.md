@@ -55,6 +55,20 @@ for 1.5 s, with a ring that fills meanwhile; released earlier, nothing happens. 
 grant it; Escape refuses it. The window states what cannot be undone. An action-level consent is
 a click, or Enter.
 
+**The same user: what the broker protects against, and what it does not** (from the A-20
+review). The broker protects the user against the model: against an instruction hidden in a
+file, a page, a window title or a tool result, which the model may obey. It does not protect
+the session against a malicious program already running as the same user. The check of each
+private socket is the peer's uid (`SO_PEERCRED`) and the *name* of its executable
+(`/proc/<pid>/exe`, `sherlockd` or `compositor`): any binary of the user renamed so passes it,
+as the end-to-end test of A-11d does on purpose. Such a program can also start `sherlockd
+--files-server` or `--windows-server` itself and call `tools/call` without any broker, preload a
+library into `sherlockd` (`LD_PRELOAD`), trace it (`ptrace`), or rewrite the journal, which
+belongs to the user. Neither `SO_PEERCRED` nor `/proc/<pid>/exe` can do better without separating
+the users: that would take a service under another user, which this ADR does not decide. Later
+hardening, short of it: compare `/proc/<pid>/exe` with the installed path (`/usr/bin/…`) rather
+than its name, or hand `sherlockd` a socket inherited from the compositor instead of a path.
+
 ## Consequences
 
 - No call of an action-level tool, from the agent loop or from Claude Code through the proxy,
@@ -65,9 +79,13 @@ a click, or Enter.
   for the interface lot (A-19).
 - The setting through which the user grants another level to a tool of a third-party server stays
   for later (ADR 0015).
+- A program of the session that wants to act without the user's consent can: the consent
+  window is a guard against the model, not against the user's own programs.
 
 ## What would make us reconsider
 
 - An action appears in the journal without a granted decision before it.
 - The compositor cannot keep the window above every surface, or a client reaches its input.
 - The answer delay or the hold of the reinforced consent prove too short or too long in use.
+- Sherlock must resist a malicious program of the session: a service under a user of its own,
+  with its own ADR.
