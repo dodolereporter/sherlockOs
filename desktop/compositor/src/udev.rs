@@ -2,8 +2,11 @@
 //!
 //! - **Session**: libseat (seatd or logind) opens the devices without root and tells when the
 //!   console is left or entered again (Ctrl + Alt + Fn).
-//! - **Card**: the one `card::choose` picks from `/sys`, and only that one: an NVIDIA card is
-//!   never opened. udev reports screens plugged in and out.
+//! - **Card**: the one `card::choose` picks from `/sys` renders, and drives its screens. Another
+//!   card (the NVIDIA card a hybrid laptop wires its HDMI port to) is opened only while a screen
+//!   is plugged into it: its screens are drawn by the same renderer, into buffers it imports
+//!   (PRIME), and it is closed when the last one goes, to sleep again (lot D-16, ADR 0037).
+//!   udev reports screens plugged in and out.
 //! - **Screens**: every connector with a screen, each driven by a `DrmCompositor` at its
 //!   preferred mode, drawn by the same GLES scene as the windowed backend (`render::Scene`).
 //! - **Input**: libinput (keyboard, mouse, touchpad with its setting and gestures, lot D-31).
@@ -14,7 +17,8 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
     rc::{Rc, Weak},
     time::{Duration, Instant},
 };
@@ -24,11 +28,12 @@ use sherlock_ui::color;
 use smithay::{
     backend::{
         allocator::{
-            Fourcc,
+            Fourcc, Modifier,
+            format::FormatSet,
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent,
+            DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmEvent,
             compositor::{DrmCompositor, FrameFlags},
             exporter::gbm::GbmFramebufferExporter,
         },
@@ -123,9 +128,28 @@ render_elements! {
 type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
 
+/// A screen's CRTC, on its card: CRTC numbers start again on each card.
+type Key = (Dev, crtc::Handle);
+
+/// A card besides the one that renders, opened while a screen is plugged into it (lot D-16):
+/// its screens show buffers the renderer drew on the other card, imported into it.
+struct Secondary {
+    device: DrmDevice,
+    gbm: GbmDevice<DrmDeviceFd>,
+    /// The descriptor the seat gave, kept to give it back when the card closes: until then, the
+    /// seat's own descriptor keeps the card awake.
+    fd: DeviceFd,
+    /// `card1`, for `/sys`.
+    name: String,
+    /// Its vertical blanks, in the loop.
+    events: RegistrationToken,
+}
+
 /// A connector with a screen, driven by a CRTC.
 struct Head {
     output: Output,
+    /// The card it is plugged into.
+    card: Dev,
     connector: connector::Handle,
     compositor: Compositor,
     /// When the next frame is due.
@@ -143,12 +167,40 @@ struct Head {
     off: bool,
     /// The screen is off (DPMS), the screens being dark (lot D-38).
     dark: bool,
+    /// Frames that failed before the first one was shown: on another card, a few of them and
+    /// the card is given up, so that it does not stay awake for a black screen (lot D-16).
+    misses: u32,
+    shown: bool,
 }
+
+/// What a change of another card calls for (lot D-16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// Closed and nothing plugged in, or given up: it stays closed, asleep.
+    Leave,
+    /// Closed, a screen plugged in: open it.
+    Open,
+    /// Open: its screens are read again, and it closes if none is left.
+    Rescan,
+}
+
+fn decide(open: bool, plugged: bool, refused: bool) -> Decision {
+    match (open, plugged, refused) {
+        (true, ..) => Decision::Rescan,
+        (false, true, false) => Decision::Open,
+        _ => Decision::Leave,
+    }
+}
+
+/// Failed frames, before any was shown, after which another card is given up.
+const SECONDARY_MISSES: u32 = 3;
 
 /// Fields are dropped in this order: the screens and the card (which gives the console its
 /// display state back) before the seat.
 struct Backend {
-    heads: HashMap<crtc::Handle, Head>,
+    heads: HashMap<Key, Head>,
+    /// The other cards opened, while a screen is plugged into them (lot D-16).
+    others: HashMap<Dev, Secondary>,
     scene: Scene,
     textures: Textures,
     cursors: Cursors,
@@ -159,6 +211,12 @@ struct Backend {
     session: LibSeatSession,
     /// Device number of the card, as udev names it.
     device_id: Dev,
+    /// The other cards of the seat and their node, opened or not.
+    known: HashMap<Dev, PathBuf>,
+    /// Cards whose screen could not be driven: not opened again until it is unplugged.
+    refused: HashSet<Dev>,
+    /// Other cards may be opened (`card::secondary_allowed`).
+    secondary: bool,
     preview: PreviewMotion,
     options: Options,
     /// Frames that failed in a row: only some of them are logged.
@@ -219,6 +277,12 @@ pub fn init(
             ))
         })?;
     tracing::info!(card = %path.display(), seat = session.seat(), "real session");
+    // The other cards of the seat: opened only once a screen is plugged into them (lot D-16).
+    let known: HashMap<Dev, PathBuf> = udev
+        .device_list()
+        .filter(|(id, _)| *id != device_id)
+        .map(|(id, path)| (id, path.to_owned()))
+        .collect();
 
     let flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
     let mut opener = session.clone();
@@ -291,6 +355,7 @@ pub fn init(
 
     let backend = Rc::new(RefCell::new(Backend {
         heads: HashMap::new(),
+        others: HashMap::new(),
         scene,
         textures: Textures::default(),
         cursors: Cursors::load(state.theme()),
@@ -300,6 +365,9 @@ pub fn init(
         libinput: libinput.clone(),
         session,
         device_id,
+        known,
+        refused: HashSet::new(),
+        secondary: card::secondary_allowed(var),
         preview: PreviewMotion::default(),
         options: options.clone(),
         failures: 0,
@@ -381,6 +449,11 @@ pub fn init(
     }
     let handle = event_loop.handle();
     let mut sources = insert_sources(&handle, &backend, notifier, drm_events, udev)?;
+    // A screen already plugged into another card at start (lot D-16).
+    let others: Vec<Dev> = backend.borrow().known.keys().copied().collect();
+    for card in others {
+        backend.borrow_mut().consider(state, card);
+    }
     let input = LibinputInputBackend::new(libinput);
     // When libinput's events were last read (lot D-25g).
     let read = Rc::new(Cell::new(Instant::now()));
@@ -453,24 +526,31 @@ fn insert_sources(
         }
         state.perf.stop(perf::Phase::Screens, since);
     });
+    let card = backend.borrow().device_id;
+    let drm = vblanks(handle, Rc::downgrade(backend), card, drm_events);
     let b = backend.clone();
-    let drm = handle.insert_source(drm_events, move |event, _, state| match event {
-        DrmEvent::VBlank(crtc) => b.borrow_mut().frame_done(state, crtc),
-        DrmEvent::Error(err) => tracing::warn!("DRM: {err}"),
-    });
-    let b = backend.clone();
-    let udev = handle.insert_source(udev, move |event, _, state| match event {
-        UdevEvent::Changed { device_id } if device_id == b.borrow().device_id => {
-            let since = state.perf.start();
-            b.borrow_mut().scan(state);
-            state.perf.stop(perf::Phase::Screens, since);
+    let udev = handle.insert_source(udev, move |event, _, state| {
+        let primary = b.borrow().device_id;
+        let since = state.perf.start();
+        match event {
+            UdevEvent::Changed { device_id } if device_id == primary => b.borrow_mut().scan(state),
+            UdevEvent::Removed { device_id } if device_id == primary => {
+                tracing::error!("the card is gone");
+                state.loop_signal.stop();
+            }
+            // Another card: opened while a screen is plugged into it (lot D-16).
+            UdevEvent::Added { device_id, path } => {
+                b.borrow_mut().known.insert(device_id, path);
+                b.borrow_mut().consider(state, device_id);
+            }
+            UdevEvent::Changed { device_id } => b.borrow_mut().consider(state, device_id),
+            UdevEvent::Removed { device_id } => {
+                let mut backend = b.borrow_mut();
+                backend.known.remove(&device_id);
+                backend.close_secondary(state, device_id);
+            }
         }
-        UdevEvent::Removed { device_id } if device_id == b.borrow().device_id => {
-            tracing::error!("the card is gone");
-            state.loop_signal.stop();
-        }
-        // Other cards are never opened.
-        other => tracing::debug!(?other, "udev"),
+        state.perf.stop(perf::Phase::Screens, since);
     });
     // Windows out of view get their frame callbacks even when no screen draws.
     let interval = HIDDEN_FRAME_INTERVAL;
@@ -480,10 +560,29 @@ fn insert_sources(
     });
     Ok(vec![
         session.map_err(|e| e.error)?,
-        drm.map_err(|e| e.error)?,
+        drm?,
         udev.map_err(|e| e.error)?,
         timer.map_err(|e| e.error)?,
     ])
+}
+
+/// The vertical blanks of the card `card`, in the loop: each one ends the frame of its screen.
+fn vblanks(
+    handle: &LoopHandle<'static, State>,
+    backend: Weak<RefCell<Backend>>,
+    card: Dev,
+    events: DrmDeviceNotifier,
+) -> Result<RegistrationToken, Error> {
+    handle
+        .insert_source(events, move |event, _, state| match event {
+            DrmEvent::VBlank(crtc) => {
+                if let Some(backend) = backend.upgrade() {
+                    backend.borrow_mut().frame_done(state, (card, crtc));
+                }
+            }
+            DrmEvent::Error(err) => tracing::warn!("DRM: {err}"),
+        })
+        .map_err(|e| Error::Session(format!("DRM events: {}", e.error)))
 }
 
 /// How often the input is checked on (lot D-25g).
@@ -563,60 +662,255 @@ fn input_event(event: InputEvent<LibinputInputBackend>, state: &mut State) {
 }
 
 impl Backend {
-    /// Adds the screens plugged in, removes those unplugged.
+    /// Adds the screens plugged in, removes those unplugged, on every card open.
     fn scan(&mut self, state: &mut State) {
         if !self.session.is_active() {
             return;
         }
-        let Ok(resources) = self.device.resource_handles() else {
-            tracing::warn!("cannot read the card's connectors");
-            return;
-        };
-        let connected: Vec<connector::Info> = resources
-            .connectors()
-            .iter()
-            .filter_map(|c| self.device.get_connector(*c, true).ok())
-            .filter(|i| i.state() == connector::State::Connected && !i.modes().is_empty())
+        let cards: Vec<Dev> = std::iter::once(self.device_id)
+            .chain(self.others.keys().copied())
             .collect();
-        let gone: Vec<crtc::Handle> = self
-            .heads
-            .iter()
-            .filter(|(_, h)| !connected.iter().any(|i| i.handle() == h.connector))
-            .map(|(crtc, _)| *crtc)
-            .collect();
-        for crtc in gone {
-            if let Some(head) = self.heads.remove(&crtc) {
-                tracing::info!(screen = head.output.name(), "screen unplugged");
-                state.remove_screen(&head.output);
-            }
+        for card in cards {
+            self.scan_card(state, card);
         }
-        for info in connected {
-            if self.heads.values().any(|h| h.connector == info.handle()) {
-                continue;
-            }
-            // A CRTC that one of its encoders can use, and that no screen drives yet.
-            let crtc = info
-                .encoders()
-                .iter()
-                .filter_map(|e| self.device.get_encoder(*e).ok())
-                .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
-                .find(|crtc| !self.heads.contains_key(crtc));
-            let Some(crtc) = crtc else {
-                tracing::warn!(connector = ?info.handle(), "no CRTC left for this screen");
-                continue;
-            };
-            if let Err(err) = self.add_head(state, &info, crtc) {
-                tracing::warn!(connector = ?info.handle(), "screen not driven: {err}");
-            }
+        // A card whose last screen went is closed, to sleep again (lot D-16).
+        let idle: Vec<Dev> = self
+            .others
+            .keys()
+            .filter(|card| !self.heads.values().any(|h| h.card == **card))
+            .copied()
+            .collect();
+        for card in idle {
+            self.close_secondary(state, card);
         }
         // The curtain, read once before the first frame (lot D-24e).
         state.ensure_curtain();
         self.render_all(state);
     }
 
+    /// The DRM device of `card`, the one that renders or another one open.
+    fn device(&self, card: Dev) -> Option<&DrmDevice> {
+        if card == self.device_id {
+            Some(&self.device)
+        } else {
+            self.others.get(&card).map(|o| &o.device)
+        }
+    }
+
+    fn device_mut(&mut self, card: Dev) -> Option<&mut DrmDevice> {
+        if card == self.device_id {
+            Some(&mut self.device)
+        } else {
+            self.others.get_mut(&card).map(|o| &mut o.device)
+        }
+    }
+
+    /// Adds the screens plugged into `card`, removes those unplugged.
+    fn scan_card(&mut self, state: &mut State, card: Dev) {
+        let Some(device) = self.device(card) else {
+            return;
+        };
+        let Ok(resources) = device.resource_handles() else {
+            tracing::warn!("cannot read the card's connectors");
+            return;
+        };
+        let connected: Vec<connector::Info> = resources
+            .connectors()
+            .iter()
+            .filter_map(|c| device.get_connector(*c, true).ok())
+            .filter(|i| i.state() == connector::State::Connected && !i.modes().is_empty())
+            .collect();
+        let gone: Vec<Key> = self
+            .heads
+            .iter()
+            .filter(|(_, h)| h.card == card)
+            .filter(|(_, h)| !connected.iter().any(|i| i.handle() == h.connector))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in gone {
+            if let Some(head) = self.heads.remove(&key) {
+                tracing::info!(screen = head.output.name(), "screen unplugged");
+                state.remove_screen(&head.output);
+            }
+        }
+        for info in connected {
+            if self
+                .heads
+                .values()
+                .any(|h| h.card == card && h.connector == info.handle())
+            {
+                continue;
+            }
+            let Some(device) = self.device(card) else {
+                return;
+            };
+            // A CRTC that one of its encoders can use, and that no screen drives yet.
+            let crtc = info
+                .encoders()
+                .iter()
+                .filter_map(|e| device.get_encoder(*e).ok())
+                .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
+                .find(|crtc| !self.heads.contains_key(&(card, *crtc)));
+            let Some(crtc) = crtc else {
+                tracing::warn!(connector = ?info.handle(), "no CRTC left for this screen");
+                continue;
+            };
+            if let Err(err) = self.add_head(state, card, &info, crtc) {
+                tracing::warn!(connector = ?info.handle(), "screen not driven: {err}");
+            }
+        }
+    }
+
+    /// Another card changed, appeared, or is there at start (lot D-16): opened when a screen
+    /// is plugged into it, scanned when open, closed when its last screen goes. Whether a
+    /// screen is plugged in is read from `/sys`, which never wakes it.
+    fn consider(&mut self, state: &mut State, card: Dev) {
+        if !self.secondary || !self.session.is_active() {
+            return;
+        }
+        let Some(path) = self.known.get(&card).cloned() else {
+            return;
+        };
+        let Some(name) = card::name_of(&path) else {
+            return;
+        };
+        let drm = Path::new("/sys/class/drm");
+        let plugged = card::has_screen(drm, &name);
+        if !plugged {
+            self.refused.remove(&card);
+        }
+        match decide(
+            self.others.contains_key(&card),
+            plugged,
+            self.refused.contains(&card),
+        ) {
+            Decision::Leave => return,
+            Decision::Rescan => {
+                self.scan_card(state, card);
+                if !self.heads.values().any(|h| h.card == card) {
+                    self.close_secondary(state, card);
+                }
+                self.render_all(state);
+                return;
+            }
+            Decision::Open => {}
+        }
+        tracing::info!(
+            card = name,
+            power = card::runtime_status(drm, &name).as_deref().unwrap_or("?"),
+            "a screen is plugged into another card: opening it"
+        );
+        if let Err(err) = self.open_secondary(card, &path, &name) {
+            tracing::warn!(card = name, "the other card is not opened: {err}");
+            self.refused.insert(card);
+            return;
+        }
+        self.scan_card(state, card);
+        if !self.heads.values().any(|h| h.card == card) {
+            tracing::warn!(card = name, "no screen of the other card could be driven");
+            self.refused.insert(card);
+            self.close_secondary(state, card);
+        }
+        state.ensure_curtain();
+        self.render_all(state);
+    }
+
+    fn open_secondary(&mut self, card: Dev, path: &Path, name: &str) -> Result<(), String> {
+        let flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+        let fd = self.session.open(path, flags).map_err(|e| e.to_string())?;
+        let fd = DeviceFd::from(fd);
+        let opened = (|| {
+            let drm_fd = DrmDeviceFd::new(fd.clone());
+            let (device, events) =
+                DrmDevice::new(drm_fd.clone(), true).map_err(|e| e.to_string())?;
+            let gbm = GbmDevice::new(drm_fd).map_err(|e| e.to_string())?;
+            let events =
+                vblanks(&self.handle, self.me.clone(), card, events).map_err(|e| e.to_string())?;
+            Ok::<_, String>((device, gbm, events))
+        })();
+        match opened {
+            Ok((device, gbm, events)) => {
+                self.others.insert(
+                    card,
+                    Secondary {
+                        device,
+                        gbm,
+                        fd,
+                        name: name.to_owned(),
+                        events,
+                    },
+                );
+                Ok(())
+            }
+            Err(err) => {
+                self.give_back(fd, name);
+                Err(err)
+            }
+        }
+    }
+
+    /// Closes the other card `card`: its screens go, its descriptor goes back to the seat, and
+    /// the card may sleep. Its power state is logged a little later, once the kernel had the
+    /// time to put it to sleep.
+    fn close_secondary(&mut self, state: &mut State, card: Dev) {
+        let keys: Vec<Key> = self.heads.keys().filter(|k| k.0 == card).copied().collect();
+        for key in keys {
+            if let Some(head) = self.heads.remove(&key) {
+                tracing::info!(screen = head.output.name(), "screen of the other card gone");
+                state.remove_screen(&head.output);
+            }
+        }
+        let Some(secondary) = self.others.remove(&card) else {
+            return;
+        };
+        let Secondary {
+            device,
+            gbm,
+            fd,
+            name,
+            events,
+        } = secondary;
+        self.handle.remove(events);
+        drop(gbm);
+        drop(device);
+        self.give_back(fd, &name);
+        let timer = Timer::from_duration(Duration::from_secs(15));
+        let inserted = self.handle.insert_source(timer, move |_, _, _| {
+            let power = card::runtime_status(Path::new("/sys/class/drm"), &name);
+            tracing::info!(
+                card = name,
+                power = power.as_deref().unwrap_or("?"),
+                "the other card, after closing"
+            );
+            TimeoutAction::Drop
+        });
+        if let Err(err) = inserted {
+            tracing::debug!("power timer: {}", err.error);
+        }
+    }
+
+    /// Gives a card's descriptor back to the seat. Held by anything else still, it is not: the
+    /// card would stay awake, which the log says.
+    fn give_back(&mut self, fd: DeviceFd, name: &str) {
+        match TryInto::<std::os::fd::OwnedFd>::try_into(fd) {
+            Ok(owned) => {
+                if let Err(err) = self.session.close(owned) {
+                    tracing::warn!(card = name, "giving the card back to the seat: {err}");
+                } else {
+                    tracing::info!(card = name, "the other card is closed");
+                }
+            }
+            Err(_) => tracing::error!(
+                card = name,
+                "the other card is still held: it may stay awake until the session ends"
+            ),
+        }
+    }
+
     fn add_head(
         &mut self,
         state: &mut State,
+        card: Dev,
         info: &connector::Info,
         crtc: crtc::Handle,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -632,7 +926,7 @@ impl Backend {
         };
         let name = format!("{}-{}", info.interface().as_str(), info.interface_id());
         let identity = self
-            .edid(info.handle())
+            .edid(card, info.handle())
             .and_then(|edid| crate::edid::identity(&edid))
             .unwrap_or_else(|| Identity::new("Unknown", &name, ""));
         // The mode and rotation saved for this screen (ADR 0025).
@@ -662,8 +956,29 @@ impl Backend {
         output.change_current_state(Some(wl_mode), None, None, None);
         output.set_preferred(Mode::from(modes[0]));
 
-        let surface = self.device.create_surface(crtc, mode, &[info.handle()])?;
         let flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
+        // On another card (lot D-16): the buffers are still allocated and drawn on the card
+        // that renders, linear so that the other card can import them (PRIME) and show them;
+        // no cursor plane there.
+        let (exporter, formats, cursor) = match self.others.get(&card) {
+            Some(other) => {
+                let linear: FormatSet = self
+                    .renderer
+                    .dmabuf_formats()
+                    .into_iter()
+                    .filter(|f| f.modifier == Modifier::Linear)
+                    .collect();
+                (other.gbm.clone(), linear, None)
+            }
+            None => (
+                self.gbm.clone(),
+                self.renderer.dmabuf_formats(),
+                Some(self.gbm.clone()),
+            ),
+        };
+        let device = self.device_mut(card).ok_or("the card is closed")?;
+        let surface = device.create_surface(crtc, mode, &[info.handle()])?;
+        let cursor_size = device.cursor_size();
         // The scene is built in frame pixels, at scale 1, turned (see "Rendering").
         let source = OutputModeSource::Static {
             size: wl_mode.size,
@@ -675,13 +990,13 @@ impl Backend {
             surface,
             None,
             GbmAllocator::new(self.gbm.clone(), flags),
-            GbmFramebufferExporter::new(self.gbm.clone(), None),
+            GbmFramebufferExporter::new(exporter, None),
             [Fourcc::Xrgb8888, Fourcc::Argb8888],
-            self.renderer.dmabuf_formats(),
-            self.device.cursor_size(),
+            formats,
+            cursor_size,
             // The cursor goes on the screen's cursor plane when it fits (lot P-01): moving the
             // pointer then draws nothing.
-            Some(self.gbm.clone()),
+            cursor,
         )?;
         let scale = self.options.scale(state.outputs().len());
         tracing::info!(screen = name, ?mode, scale, ?identity, "screen plugged in");
@@ -693,6 +1008,7 @@ impl Backend {
         state.plug_screen(output.clone(), wl_mode.size, scale, details);
         let head = Head {
             output,
+            card,
             connector: info.handle(),
             compositor,
             pacing: Pacing::default(),
@@ -702,21 +1018,24 @@ impl Backend {
             modes,
             off: false,
             dark: false,
+            misses: 0,
+            shown: false,
         };
-        self.heads.insert(crtc, head);
+        self.heads.insert((card, crtc), head);
         Ok(())
     }
 
-    /// The EDID of a connector's screen, as the card gives it.
-    fn edid(&self, connector: connector::Handle) -> Option<Vec<u8>> {
-        let properties = self.device.get_properties(connector).ok()?;
+    /// The EDID of a connector's screen, as its card gives it.
+    fn edid(&self, card: Dev, connector: connector::Handle) -> Option<Vec<u8>> {
+        let device = self.device(card)?;
+        let properties = device.get_properties(connector).ok()?;
         for (handle, value) in properties.iter() {
-            let info = self.device.get_property(*handle).ok()?;
+            let info = device.get_property(*handle).ok()?;
             if info.name().to_bytes() != b"EDID" {
                 continue;
             }
             if let property::Value::Blob(blob) = info.value_type().convert_value(*value) {
-                return self.device.get_property_blob(blob).ok();
+                return device.get_property_blob(blob).ok();
             }
         }
         None
@@ -774,6 +1093,9 @@ impl Backend {
         state.cancel_gestures();
         state.set_lock_console_away(true);
         self.device.pause();
+        for other in self.others.values_mut() {
+            other.device.pause();
+        }
     }
 
     fn activate(&mut self, state: &mut State) {
@@ -784,6 +1106,11 @@ impl Backend {
         }
         if let Err(err) = self.device.activate(false) {
             tracing::warn!("DRM: {err}");
+        }
+        for other in self.others.values_mut() {
+            if let Err(err) = other.device.activate(false) {
+                tracing::warn!(card = other.name, "DRM: {err}");
+            }
         }
         for head in self.heads.values_mut() {
             if let Err(err) = head.compositor.reset_state() {
@@ -798,11 +1125,15 @@ impl Backend {
                 tracing::warn!("DRM: {err}");
             }
         }
-        // Screens may have changed while away.
+        // Screens may have changed while away, on the other cards too.
         self.scan(state);
+        let others: Vec<Dev> = self.known.keys().copied().collect();
+        for card in others {
+            self.consider(state, card);
+        }
     }
 
-    fn frame_done(&mut self, state: &mut State, crtc: crtc::Handle) {
+    fn frame_done(&mut self, state: &mut State, crtc: Key) {
         if let Some(head) = self.heads.get_mut(&crtc) {
             if let Err(err) = head.compositor.frame_submitted() {
                 tracing::warn!("DRM: {err}");
@@ -817,7 +1148,7 @@ impl Backend {
 
     /// The estimated vertical blank after a frame that was not shown: the clients waiting for a
     /// frame callback get it, as if the frame had been shown, then the next frame if one is due.
-    fn estimated(&mut self, state: &mut State, crtc: crtc::Handle) {
+    fn estimated(&mut self, state: &mut State, crtc: Key) {
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
         };
@@ -832,7 +1163,7 @@ impl Backend {
     }
 
     /// Calls `estimated` for `crtc` after `period`, without blocking the loop.
-    fn estimate(&self, crtc: crtc::Handle, period: Duration) {
+    fn estimate(&self, crtc: Key, period: Duration) {
         let backend = self.me.clone();
         let timer = Timer::from_duration(period);
         let inserted = self.handle.insert_source(timer, move |_, _, state| {
@@ -858,7 +1189,7 @@ impl Backend {
     /// waiting for the vertical blank. Only the damage is redrawn. A frame with damage goes to
     /// the screen, its vertical blank calls `frame_done`; a frame without, or a failure, waits
     /// for the estimated blank (`estimated`). Nothing here waits for the screen.
-    fn render(&mut self, state: &mut State, crtc: crtc::Handle) {
+    fn render(&mut self, state: &mut State, crtc: Key) {
         let epoch = state.redraw_epoch();
         let Some(head) = self.heads.get_mut(&crtc) else {
             return;
@@ -954,6 +1285,7 @@ impl Backend {
                 Ok(()) => {
                     head.pacing.drawn(epoch, true, animating);
                     head.lock_queued = locked;
+                    head.shown = true;
                     // A new picture: the screen captures waiting for one are due (lot D-28b).
                     state.screen_changed(&head.output);
                     None
@@ -968,6 +1300,20 @@ impl Backend {
         };
         state.perf.stop(perf::Phase::Draw, since);
         let period = head.period;
+        let given_up = failure.is_some() && head.card != self.device_id && !head.shown && {
+            head.misses += 1;
+            head.misses >= SECONDARY_MISSES
+        };
+        if given_up {
+            let card = head.card;
+            tracing::warn!(
+                failure = failure.as_deref().unwrap_or(""),
+                "the screen of the other card shows nothing: the card is given up"
+            );
+            self.refused.insert(card);
+            self.close_secondary(state, card);
+            return;
+        }
         match failure {
             // A failure that repeats on every frame is logged at the 1st, 2nd, 4th, 8th… time,
             // not 60 times a second.
@@ -1016,6 +1362,27 @@ fn send_hidden_frames(state: &State) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn another_card_opens_only_for_a_screen_and_never_again_once_given_up() {
+        assert_eq!(
+            decide(false, false, false),
+            Decision::Leave,
+            "asleep, nothing plugged"
+        );
+        assert_eq!(decide(false, true, false), Decision::Open);
+        assert_eq!(
+            decide(false, true, true),
+            Decision::Leave,
+            "given up until unplugged"
+        );
+        assert_eq!(
+            decide(true, false, false),
+            Decision::Rescan,
+            "unplugged: closes after"
+        );
+        assert_eq!(decide(true, true, false), Decision::Rescan);
+    }
 
     #[test]
     fn the_input_is_stalled_only_when_events_wait_unread() {
