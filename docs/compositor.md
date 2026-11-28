@@ -923,10 +923,11 @@ consent is asked before, by `sherlockd`'s broker; this side only checks who asks
   `{"id", "ok": true}`, with `windows` for `list`, or `{"id", "ok": false, "error"}`, a French
   sentence the model reads (« aucun bureau 9 »).
 - **Bounded**: a line past 4 KiB, a malformed one or one with an unknown field closes the
-  connection. A title and an application id are given on one line, without control
-  characters, cut to 200 characters (« … » after): a title is the application's text, never an
-  instruction. Sixty-four windows are listed at most. A peer that does not read its answers is
-  closed. An unknown window, workspace, screen or side is refused, never guessed.
+  connection. A title and an application id are given on one line, without control characters, line
+  separators nor zero-width or bidirectional marks, cut to 200 characters (« … » after): a title is
+  the application's text, never an instruction. Sixty-four windows are listed at most. A peer that
+  does not read its answers is closed. An unknown window, workspace, screen or side is refused,
+  never guessed.
 - **What a window is**: a shown window of the space (no X11 menu nor tooltip), with its id (the
   one of `sherlock_shell_v1`), its title, its application id, its workspace from 1, its screen,
   and its states (`active`, `maximized`, `fullscreen`, `snapped`, `minimized`).
