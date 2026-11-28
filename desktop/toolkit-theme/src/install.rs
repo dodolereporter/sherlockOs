@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use sherlock_ui::color::Theme;
@@ -370,20 +369,14 @@ fn look(path: &Path) -> Result<Found, Error> {
     }
 }
 
-/// Writes through a temporary file renamed over the target: a reader never sees half a file,
-/// and qt5ct and qt6ct, which watch their folder, see the change.
+/// Writes with `mime_apps::write_bytes_atomically`, as every settings file of the desktop: a
+/// temporary file of its own beside the target, flushed, renamed over it, so a reader never
+/// sees half a file and a crash leaves the old one or the new one; qt5ct and qt6ct, which
+/// watch their folder, see the change. A file that is there keeps its permissions and its
+/// link; a new one is 0755 when `executable`, 0644 otherwise.
 pub(crate) fn write_atomic(path: &Path, content: &[u8], executable: bool) -> Result<(), Error> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(io_error(dir))?;
-    }
-    let mut name = path.file_name().unwrap_or_default().to_owned();
-    name.push(".toolkit-theme-new");
-    let temporary = path.with_file_name(name);
-    fs::write(&temporary, content).map_err(io_error(&temporary))?;
     let mode = if executable { 0o755 } else { 0o644 };
-    fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))
-        .map_err(io_error(&temporary))?;
-    fs::rename(&temporary, path).map_err(io_error(path))
+    mime_apps::write_bytes_atomically(path, content, Some(mode)).map_err(io_error(path))
 }
 
 /// Renames `path` to `<path>.bak-<stamp>`, with `-2`, `-3`… if that name is taken.
