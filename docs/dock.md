@@ -290,6 +290,13 @@ A scalable icon is then drawn at the size and scale of the screen. An absolute `
 as it is. Without an icon, the initial of the name on a blue tile. Our applications' icons are
 in the hicolor theme of sherlock-ui (`docs/sherlock-ui.md`, Application icons).
 
+The initial is at least a pixel high (lot Q-32). An icon that arrives grows from a side of 0,
+and text of size 0 has a line height of 0, on which cosmic-text panics (`buffer.rs`: « line
+height cannot be 0 »): the dock died at the start of a session without screen, where no icon
+theme is found and every application shows its initial. sherlock-ui's text sizes taken from a
+caller (`ellipsis`, `glyph_fade`, the applications view's initial) go through
+`ellipsis::at_least_a_pixel` for the same reason.
+
 SVG and PNG both go through tiny-skia's SVG renderer: a PNG is drawn through a small SVG that
 embeds it by path. iced's `image` feature would add the `image` crate and its decoders; resvg
 already reads PNG. The handles are built once at startup; the renderer keeps the parsed trees

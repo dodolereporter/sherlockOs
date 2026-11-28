@@ -750,7 +750,7 @@ mod tests {
             | Item::Squashed {
                 key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
-            Item::Thumbnail { .. } => Vec::new(),
+            Item::Thumbnail { .. } | Item::Blur { .. } => Vec::new(),
         }
     }
 

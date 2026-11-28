@@ -97,14 +97,21 @@ The rules come from the model's repository (`docs/contexte.md`, Sherlock, the ma
   half-open time for the ajar one, backward too) and holds it; it reopens by a fade from
   there. The arcs of closed eyes (`eye_happy_*`) only rise late in the clip, so the ajar eye
   of `Peek` shows no arc. Blinks only come while both eyes are open.
-- `look_at(Some(point))` turns `eye_L` and `eye_R` toward a point of the model's space, by
-  `GAZE_LIMIT` (0.12 rad, as the model's own player) at most, smoothed; `None` looks ahead
-  again. Further, the eyes slide down onto the mouth when they look at the field below. A shut
-  eye does not follow the gaze: its arc stays where the eye rests, above the mouth. The head
-  follows the gaze part of the way (lot D-24d): it turns from where the face looks (+Z of the
-  model) toward the point, by `HEAD_GAZE_LIMIT` (0.2 rad) at most, smoothed like the eyes, on
-  top of the body's action and of the tilt of `Peek`. So with his eyes closed, Sherlock still
-  bends toward the password field while it is typed; `facing()` gives where the face looks.
+- `look_at(Some(point))` turns `eye_L` and `eye_R` toward a point of the model's space, both
+  by one rotation in the space of the head (they stay parallel and follow the head as it
+  turns or leans), smoothed; `None` looks ahead again. The bones of the eyes pivot at the
+  center of the head and point at the eyes along Y, 27 degrees off the face's direction:
+  turning a bone slides its eye on the face by 0.85 times the angle. So the rotation is
+  measured from the face's direction (+Z of `head`), never from the bone's Y axis (which made
+  the eyes cross and slide onto the mouth, lot Q-50), and bounded: `GAZE_LIMIT` (0.07 rad)
+  to the side, `GAZE_UP` (0.07) up, `GAZE_DOWN` (0.05) down, on an ellipse between them.
+  Further, the eyes reach the mouth. A shut eye does not follow the gaze: its arc stays where
+  the eye rests, above the mouth.
+  The head follows the gaze part of the way (lot D-24d): it turns from where the face looks
+  (+Z of the model) toward the point, by `HEAD_GAZE_LIMIT` (0.2 rad) at most, smoothed like the
+  eyes, on top of the body's action and of the tilt of `Peek` (`turn_head`), and the eyes turn
+  in the space of the head so turned. So with his eyes closed, Sherlock still bends toward the
+  password field while it is typed; `facing()` gives where the face looks.
 
 ## The widget
 
@@ -193,8 +200,8 @@ cargo test -p sherlock-3d
 | --- | --- |
 | `tests/model.rs` | Counts of bones, clips, primitives, materials, textures; no clip drives the eyes; sampling on and between keys; `yeux_fermes` ends closed; the bone mask closes one eye; cross-fade; skinning |
 | `tests/offscreen.rs` | Renders off screen and checks pixels: transparent corners, opaque face, antialiased edges, nothing outside the bubble, its background inside |
-| `tests/animator.rs` | `repos` at start with the accessories hidden; `Peek` closes `eyelid_R` only, `eyelid_L` ajar, head tilted; `Peek` holds the left eye at 65 % of its height, as wide as an open eye; on every frame of `EyesClosed` and `Peek`, with or without a gaze, an eye whose arc is out is hidden; the ajar eye shows no arc; from `EyesClosed` to `Peek` the left eye opens half way; closed eyes hold, then reopen by a fade; a reaction fades in without a jump and `repos` comes back; `Sleep` enters, loops and leaves by its exit; the gaze turns within its limit; the head bends toward the field below, eyes closed, within its limit, and comes back ahead |
-| `tests/captures.rs` | Captures rest, wave (mid-gesture), eyes closed, peek and sorry in the bubble, dark and light, at 170 and 340 pixels, and checks that the eyes differ; then 8 frames of `EyesClosed`, of `EyesClosed` while the head bends toward the field below (`seq-frappe-*.png`), and of `Peek` looking at it (`seq-*.png`), with no reflection left once the eyes are shut |
+| `tests/animator.rs` | `repos` at start with the accessories hidden; `Peek` closes `eyelid_R` only, `eyelid_L` ajar, head tilted; `Peek` holds the left eye at 65 % of its height, as wide as an open eye; on every frame of `EyesClosed` and `Peek`, with or without a gaze, an eye whose arc is out is hidden; the ajar eye shows no arc; from `EyesClosed` to `Peek` the left eye opens half way; closed eyes hold, then reopen by a fade; a reaction fades in without a jump and `repos` comes back; `Sleep` enters, loops and leaves by its exit; the gaze turns within its limit; in every mood and for every gaze, each eye stays within 0.07 of its socket on the head, no eye nor arc covers the mouth, the two open eyes turn by the same rotation, and a far point ahead leaves them where they rest; the head bends toward the field below, eyes closed, within its limit, and comes back ahead |
+| `tests/captures.rs` | Captures rest, wave (mid-gesture), eyes closed, peek and sorry in the bubble, then rest and peek looking at the field below (`*-champ-*.png`), dark and light, at 170 and 340 pixels, and checks that the eyes differ; then 8 frames of `EyesClosed`, of `EyesClosed` while the head bends toward the field below (`seq-frappe-*.png`), and of `Peek` looking at the field below (`seq-*.png`), with no reflection left once the eyes are shut |
 
 Without the model, or without a Vulkan driver, the tests say why and pass.
 `SHERLOCK_3D_REQUIRE=1` turns that into a failure: the CI sets it, downloads the model with

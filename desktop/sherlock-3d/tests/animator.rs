@@ -4,8 +4,10 @@ mod support;
 
 use std::sync::Arc;
 
-use sherlock_3d::animator::{FADE, GAZE_LIMIT, HEAD_GAZE_LIMIT, PEEK_OPENING, PEEK_TILT};
-use sherlock_3d::{Animator, Model, Mood, Pose};
+use sherlock_3d::animator::{
+    FADE, GAZE_DOWN, GAZE_LIMIT, GAZE_UP, HEAD_GAZE_LIMIT, PEEK_OPENING, PEEK_TILT,
+};
+use sherlock_3d::{Animator, Camera, Model, Mood, Pose};
 
 fn animator() -> Option<Animator> {
     support::model().map(|model| Animator::new(Arc::new(model)))
@@ -146,13 +148,13 @@ fn the_eyes_turn_toward_a_point_within_a_limit() {
     let model = animator.model().clone();
     let eye = node(&model, "eye_L");
     let ahead = animator.pose().transforms[eye].rotation;
-    // Far down and to the side: the limit holds.
+    // Far down and to the side: the limit holds, between the one down and the one aside.
     animator.look_at(Some(glam::Vec3::new(-8.0, -6.0, 4.0)));
     play(&mut animator, 1.0);
     let turned = animator.pose().transforms[eye].rotation;
     let angle = turned.angle_between(ahead);
     assert!(
-        angle > GAZE_LIMIT * 0.9 && angle < GAZE_LIMIT * 1.01,
+        angle > GAZE_DOWN * 0.9 && angle < GAZE_LIMIT * 1.01,
         "{angle}"
     );
     animator.look_at(None);
@@ -272,7 +274,7 @@ fn a_shut_eye_does_not_follow_the_gaze() {
         turned(right)
     );
     assert!(
-        turned(left) > GAZE_LIMIT * 0.9,
+        turned(left) > GAZE_DOWN * 0.9,
         "the ajar eye looks down: {}",
         turned(left)
     );
@@ -301,4 +303,139 @@ fn the_head_bends_toward_the_field_even_with_closed_eyes() {
     play(&mut animator, 1.0);
     let back = animator.facing().unwrap();
     assert!(back.angle_between(ahead) < 0.02, "{back}");
+}
+
+/// How far the center of an eye may move from its rest place on the head, in the units of the
+/// model: a third of the radius of the eye (about 0.21).
+const ORBIT: f32 = 0.07;
+
+/// The vertices that a bone named in `names` carries the most, by index.
+fn carried(model: &Model, names: &[&str]) -> Vec<usize> {
+    let joints: Vec<u16> = names
+        .iter()
+        .map(|name| {
+            let bone = node(model, name);
+            let Some(joint) = model.joints.iter().position(|&j| j == bone) else {
+                panic!("{name} carries no vertex");
+            };
+            joint as u16
+        })
+        .collect();
+    (0..model.vertices.len())
+        .filter(|&i| {
+            let v = &model.vertices[i];
+            let main = (0..4)
+                .max_by(|&a, &b| v.weights[a].total_cmp(&v.weights[b]))
+                .unwrap_or(0);
+            joints.contains(&v.joints[main])
+        })
+        .collect()
+}
+
+/// Where `vertex` lies in this frame, in the space of the model.
+fn skinned(model: &Model, matrices: &[glam::Mat4], vertex: usize) -> glam::Vec3 {
+    let v = &model.vertices[vertex];
+    let p = glam::Vec3::from(v.position);
+    (0..4)
+        .map(|k| matrices[usize::from(v.joints[k])].transform_point3(p) * v.weights[k])
+        .sum()
+}
+
+/// In every mood, wherever the eyes look and however the head turns or leans, each eye stays
+/// in its socket on the head, no eye nor arc of a closed eye covers the mouth, the two open
+/// eyes turn by the same rotation (no squint), and by a few degrees at most.
+#[test]
+fn the_eyes_stay_in_their_sockets_and_look_the_same_way() {
+    let Some(probe) = animator() else { return };
+    let model = probe.model().clone();
+    let head = node(&model, "head");
+    let lids = [node(&model, "eyelid_L"), node(&model, "eyelid_R")];
+    let eyes = [node(&model, "eye_L"), node(&model, "eye_R")];
+    let rest = Pose::rest(&model).globals(&model);
+    let socket = lids.map(|lid| {
+        rest[head]
+            .inverse()
+            .transform_point3(rest[lid].w_axis.truncate())
+    });
+    let faces = carried(
+        &model,
+        &["eyelid_L", "eyelid_R", "eye_happy_L", "eye_happy_R"],
+    );
+    let mouths = carried(&model, &["mouth"]);
+    let field = Camera::UPPER_BODY.unproject(glam::Vec2::new(0.0, -2.6), 1.0, 4.0);
+    let targets = [
+        None,
+        Some(field),
+        Some(glam::Vec3::new(0.0, -6.0, 4.0)),
+        Some(glam::Vec3::new(-8.0, -6.0, 4.0)),
+        Some(glam::Vec3::new(8.0, 3.0, 4.0)),
+        // Straight ahead, far.
+        Some(glam::Vec3::new(0.0, 1.95, 100.0)),
+        // Close in front of the nose.
+        Some(glam::Vec3::new(0.0, 1.9, 1.3)),
+    ];
+    let most = GAZE_LIMIT.max(GAZE_UP).max(GAZE_DOWN);
+    for mood in [
+        Mood::Idle,
+        Mood::Wave,
+        Mood::EyesClosed,
+        Mood::Peek,
+        Mood::Sorry,
+        Mood::Success,
+        Mood::Sleep,
+        Mood::Think,
+    ] {
+        for target in targets {
+            let mut animator = Animator::new(model.clone());
+            animator.look_at(target);
+            animator.set_mood(mood);
+            for frame in 0..90 {
+                animator.advance(1.0 / 30.0);
+                let what = format!("{mood:?}, looking at {target:?}, frame {frame}");
+                let pose = animator.pose();
+                let globals = pose.globals(&model);
+                let into_head = globals[head].inverse();
+                for (side, lid) in lids.into_iter().enumerate() {
+                    let at = into_head.transform_point3(globals[lid].w_axis.truncate());
+                    let off = at.distance(socket[side]);
+                    assert!(off < ORBIT, "{what}: eye {side} {off} out of its socket");
+                }
+                // Seen from the front of the head, no eye covers the mouth.
+                let matrices = pose.joint_matrices(&model);
+                let in_head = |v| into_head.transform_point3(skinned(&model, &matrices, v));
+                let (low, high) = mouths
+                    .iter()
+                    .map(|&v| in_head(v))
+                    .fold((glam::Vec3::MAX, glam::Vec3::MIN), |(low, high), p| {
+                        (low.min(p), high.max(p))
+                    });
+                for &v in &faces {
+                    let p = in_head(v);
+                    let inside = p.x > low.x && p.x < high.x && p.y > low.y && p.y < high.y;
+                    assert!(!inside, "{what}: an eye covers the mouth at {p}");
+                }
+                // The gaze each eye adds to its rest, in the space of the head.
+                let gaze = eyes.map(|eye| {
+                    pose.transforms[eye].rotation * model.nodes[eye].rest.rotation.inverse()
+                });
+                for turn in gaze {
+                    let angle = turn.angle_between(glam::Quat::IDENTITY);
+                    assert!(angle <= most + 1e-3, "{what}: the eyes turn by {angle}");
+                }
+                let [left, right] = animator.openness();
+                if left > 0.99 && right > 0.99 {
+                    let apart = gaze[0].angle_between(gaze[1]);
+                    assert!(apart < 1e-3, "{what}: the eyes squint by {apart}");
+                }
+                // At rest, the head only sways: a point far ahead leaves the eyes where they rest.
+                if mood == Mood::Idle && target == targets[5] {
+                    let ahead = gaze[0].angle_between(glam::Quat::IDENTITY);
+                    assert!(
+                        ahead < 0.04,
+                        "{what}: looking ahead turns the eyes by {ahead}"
+                    );
+                }
+            }
+        }
+    }
 }

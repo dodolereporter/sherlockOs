@@ -9,8 +9,10 @@
 //!   open. Each eye plays it at its own time: one eye closes alone, the other stops half way
 //!   (`Mood::Peek`). An eye shut by the clip is hidden: the clip shrinks it to 2 % of its size,
 //!   which still shows as a dot next to the arc of the closed eye.
-//! - The eyes (`eye_L`, `eye_R`, which no clip drives) turn toward a point given by code, and
-//!   the head follows them part of the way (lot D-24d): with his eyes closed, Sherlock still
+//! - The eyes (`eye_L`, `eye_R`, which no clip drives) turn toward a point given by code, both
+//!   by the same small rotation in the space of the head: they stay parallel, in their place on
+//!   the face, and follow the head wherever it turns or leans.
+//!   The head follows them part of the way (lot D-24d): with his eyes closed, Sherlock still
 //!   bends his head toward the password field.
 
 use std::sync::Arc;
@@ -29,10 +31,16 @@ pub const PEEK_OPENING: f32 = 0.65;
 pub const HIDDEN_EYELID: f32 = 0.1;
 /// Head roll of `Mood::Peek`, in radians (about 8 degrees).
 pub const PEEK_TILT: f32 = 0.14;
-/// How far an eye turns toward what it looks at, in radians (about 7 degrees, as the model's
-/// own player does): further, the eyes slide down onto the mouth when they look at the
-/// password field below.
-pub const GAZE_LIMIT: f32 = 0.12;
+/// How far the eyes turn to the side, in radians (about 4 degrees). Each eye is a disc on the
+/// face, carried by a bone that pivots at the center of the head 0.85 away: turning it slides
+/// the disc on the face by 0.85 times the angle. Further, the inner eye reaches the corner of
+/// the mouth.
+pub const GAZE_LIMIT: f32 = 0.07;
+/// How far the eyes turn up, in radians (about 4 degrees).
+pub const GAZE_UP: f32 = 0.07;
+/// How far the eyes turn down, in radians (about 3 degrees): the mouth is just below them, and
+/// the password field the lock screen looks at is far below.
+pub const GAZE_DOWN: f32 = 0.05;
 /// How far the head turns toward what the eyes look at, in radians (about 11 degrees): enough
 /// to read as looking down at the field, little enough that the cap stays in the bubble.
 pub const HEAD_GAZE_LIMIT: f32 = 0.2;
@@ -153,9 +161,9 @@ pub struct Animator {
     seed: u32,
     tilt: f32,
     gaze_target: Option<Vec3>,
-    /// Rotation of each eye toward its target, in the space of its rest pose.
-    gaze: [Quat; 2],
-    /// Rotation of the head toward the target, in its own space.
+    /// Rotation of both eyes toward the target, in the space of the head.
+    gaze: Quat,
+    /// Rotation of the head toward the target, in its own space (lot D-24d).
     head_gaze: Quat,
 }
 
@@ -190,7 +198,7 @@ impl Animator {
             seed: 0x5EED,
             tilt: 0.0,
             gaze_target: None,
-            gaze: [Quat::IDENTITY; 2],
+            gaze: Quat::IDENTITY,
             head_gaze: Quat::IDENTITY,
         };
         animator.queue = animator.clips(Mood::Idle.plan());
@@ -320,10 +328,7 @@ impl Animator {
             0.0
         };
         self.tilt += (tilt - self.tilt) * smoothing;
-        let wanted = self.gaze_wanted();
-        for (gaze, wanted) in self.gaze.iter_mut().zip(wanted) {
-            *gaze = gaze.slerp(wanted, smoothing).normalize();
-        }
+        self.gaze = self.gaze.slerp(self.gaze_wanted(), smoothing).normalize();
         let head = self.head_wanted();
         self.head_gaze = self.head_gaze.slerp(head, smoothing).normalize();
     }
@@ -350,18 +355,18 @@ impl Animator {
                 *scale = Vec3::ZERO;
             }
         }
-        let head = &mut pose.transforms[face.head];
-        head.rotation =
-            (head.rotation * self.head_gaze * Quat::from_rotation_z(self.tilt)).normalize();
+        self.turn_head(&mut pose, face);
         // A shut eye no longer looks anywhere: its arc stays where the eye rests. Turned toward
         // the field below, it would slide down onto the mouth.
         let end = closing.duration;
         let span = (end - face.ajar_time).max(1e-3);
-        for ((eye, gaze), eyelid) in face.eyes.iter().zip(self.gaze).zip(self.eyelids) {
+        for (eye, eyelid) in face.eyes.iter().zip(self.eyelids) {
             let shut = eyelid.weight * ((eyelid.time - face.ajar_time) / span).clamp(0.0, 1.0);
             let eye = &mut pose.transforms[*eye];
-            let gaze = Quat::IDENTITY.slerp(gaze, 1.0 - shut);
-            eye.rotation = (eye.rotation * gaze).normalize();
+            let gaze = Quat::IDENTITY.slerp(self.gaze, 1.0 - shut);
+            // The eyes are children of the head: the gaze, in the space of the head, comes
+            // before the eye's own rotation, the same for both.
+            eye.rotation = (gaze * eye.rotation).normalize();
         }
         pose
     }
@@ -428,26 +433,42 @@ impl Animator {
             .collect()
     }
 
-    /// The rotation that turns each eye toward the target, limited to `GAZE_LIMIT`.
-    fn gaze_wanted(&self) -> [Quat; 2] {
+    /// What the code adds to the head of the body action: the turn toward the gaze (lot D-24d)
+    /// and the roll of `Mood::Peek`.
+    fn turn_head(&self, pose: &mut Pose, face: Face) {
+        let head = &mut pose.transforms[face.head];
+        head.rotation =
+            (head.rotation * self.head_gaze * Quat::from_rotation_z(self.tilt)).normalize();
+    }
+
+    /// The rotation that turns both eyes toward the target, in the space of the head, where the
+    /// face looks along +Z: a turn to the side within `GAZE_LIMIT`, up within `GAZE_UP`, down
+    /// within `GAZE_DOWN` (an ellipse between them).
+    ///
+    /// The bones of the eyes point at the eyes along their Y axis, 27 degrees off the face's
+    /// direction, from the center of the head. Aiming that axis at the target would turn each
+    /// eye toward the middle of the face, even for a point straight ahead: they would cross,
+    /// and slide down onto the mouth for the field below.
+    fn gaze_wanted(&self) -> Quat {
         let (Some(face), Some(target)) = (self.face, self.gaze_target) else {
-            return [Quat::IDENTITY; 2];
+            return Quat::IDENTITY;
         };
-        let pose = self.body();
+        let mut pose = self.body();
+        self.turn_head(&mut pose, face);
         let globals = pose.globals(&self.model);
-        face.eyes.map(|eye| {
-            let global = globals[eye];
-            let (_, rotation, position) = global.to_scale_rotation_translation();
-            // The bone points at the eye along its Y axis: the eye slides on the face as the
-            // bone turns. Both directions in the space of the bone at rest.
-            let toward = rotation.inverse() * (target - position);
-            if toward.length_squared() < 1e-6 {
-                return Quat::IDENTITY;
-            }
-            let full = Quat::from_rotation_arc(Vec3::Y, toward.normalize());
-            let (axis, angle) = full.to_axis_angle();
-            Quat::from_axis_angle(axis, angle.min(GAZE_LIMIT))
-        })
+        let (_, rotation, _) = globals[face.head].to_scale_rotation_translation();
+        // From between the pivots of the eyes: one direction for both.
+        let [left, right] = face.eyes.map(|eye| globals[eye].w_axis.truncate());
+        let toward = rotation.inverse() * (target - (left + right) / 2.0);
+        if !toward.is_finite() || toward.length_squared() < 1e-6 {
+            return Quat::IDENTITY;
+        }
+        let yaw = toward.x.atan2(toward.z);
+        let pitch = toward.y.atan2(toward.x.hypot(toward.z));
+        let vertical = if pitch < 0.0 { GAZE_DOWN } else { GAZE_UP };
+        let over = (yaw / GAZE_LIMIT).hypot(pitch / vertical).max(1.0);
+        let (yaw, pitch) = (yaw / over, pitch / over);
+        Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-pitch)
     }
 
     /// The rotation that turns the face toward the target, limited to `HEAD_GAZE_LIMIT`: from

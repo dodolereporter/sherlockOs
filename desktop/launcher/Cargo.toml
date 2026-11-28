@@ -34,7 +34,8 @@ dock-config = { path = "../dock-config" }
 icon-theme = { path = "../icon-theme" }
 # The installed applications, and the default application of a file (workspace crate).
 mime-apps = { path = "../mime-apps" }
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37b).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [

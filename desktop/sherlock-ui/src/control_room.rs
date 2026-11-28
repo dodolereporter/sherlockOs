@@ -137,6 +137,46 @@ pub mod texts {
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
 
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_ABOUT: &str = "Le Wi-Fi, les réseaux autour de toi et ceux que tu gardes.";
+
+    // « Réseau ».
+    pub const WIFI: &str = "Wi-Fi";
+    pub const WIFI_HELP: &str = "Coupé, l'ordinateur ne cherche plus de réseau.";
+    pub const WIFI_HARDWARE_OFF: &str =
+        "Coupé par l'interrupteur ou le mode avion de l'ordinateur.";
+    pub const NETWORKS: &str = "Réseaux";
+    pub const NETWORK_LOADING: &str = "Lecture du Wi-Fi…";
+    pub const NETWORK_UNAVAILABLE: &str = "Le gestionnaire de réseau ne répond pas.";
+    pub const NO_WIFI: &str = "Aucune carte Wi-Fi trouvée.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const OPEN_NETWORK: &str = "Ouvert";
+    pub const PROTECTED_NETWORK: &str = "Protégé par un mot de passe";
+    pub const ENTERPRISE_NETWORK: &str = "Entreprise ou WEP";
+    pub const FORGET: &str = "Oublier";
+    pub const SCAN: &str = "Rechercher";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const OTHER_NETWORK_SEARCH: &str = "Rejoindre un réseau caché";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY_NONE: &str = "Aucune";
+    pub const SECURITY_PASSWORD: &str = "Mot de passe";
+    pub const SECURITY_WEP: &str = "WEP";
+    pub const SECURITY_ENTERPRISE: &str = "Entreprise";
+    pub const PEAP: &str = "PEAP";
+    pub const TTLS: &str = "TTLS";
+    pub const IDENTITY: &str = "Identifiant";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const WEP_KEY: &str = "Clé WEP";
+    pub const DOMAIN: &str = "Domaine du serveur (facultatif)";
+    pub const DOMAIN_HELP: &str =
+        "Ton établissement le donne : il prouve que c'est bien son serveur qui répond.";
+    pub const CANCEL: &str = "Annuler";
+    pub const JOIN: &str = "Rejoindre";
+    pub const NETWORK_REFUSED: &str = "Refusé : tu n'as pas le droit de changer ce réglage.";
+    pub const NETWORK_FAILED: &str = "Échec : le réseau n'a pas pu être rejoint.";
+    pub const NETWORK_WRONG_PASSWORD: &str = "Mot de passe incorrect : le réseau l'a refusé.";
+
     // « Apparence ».
     pub const THEME: &str = "Thème";
     pub const THEME_HELP: &str = "Sombre, clair, ou selon l'heure.";
@@ -321,6 +361,7 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const NETWORK_WORDS: &str = "wifi internet réseau sans fil eduroam mot de passe";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";

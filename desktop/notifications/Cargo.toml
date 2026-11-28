@@ -31,7 +31,8 @@ iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["m
 libc = "=0.2.191"
 # Do not disturb (workspace crate).
 notifications-config = { path = "../notifications-config" }
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37b).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [

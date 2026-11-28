@@ -127,6 +127,8 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// Comma: opens Control Room, as Cmd + , opens the settings on macOS (lot Q-31).
+    Settings,
     /// Super + V: the clipboard history (lot D-42).
     ClipboardHistory,
     /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
@@ -207,6 +209,7 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::comma => Some(Self::Settings),
             Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
             _ => None,
@@ -942,6 +945,10 @@ impl State {
             }
             Shortcut::Applications => {
                 self.start_applications();
+                return;
+            }
+            Shortcut::Settings => {
+                self.start_settings();
                 return;
             }
             Shortcut::ClipboardHistory => {
