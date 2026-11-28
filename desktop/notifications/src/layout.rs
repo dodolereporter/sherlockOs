@@ -1,11 +1,14 @@
 //! Pure geometry of the stack of bubbles, in the coordinates of the surface, which the
 //! compositor places below the area the top bar reserves (see `crate::surface`).
 
-use sherlock_ui::notifications::{GAP, PILE_DEPTH, PILE_STEP, SCREEN_EDGE, WIDTH};
+use sherlock_ui::notifications::{
+    CLOSE_ON_CURVE, CLOSE_OUTSET, CLOSE_SIZE, GAP, PILE_DEPTH, PILE_STEP, SCREEN_EDGE, WIDTH,
+};
 
-/// Width of the surface: a bubble and the room to the screen edge, so that a bubble sliding
-/// out leaves the screen at its edge.
-pub const SURFACE_WIDTH: f32 = WIDTH + SCREEN_EDGE;
+/// Width of the surface: the room of « × » on the left (lot D-23f), a bubble and the room to
+/// the screen edge, so that a bubble sliding out leaves the screen at its edge. The bubbles are
+/// drawn `CLOSE_OUTSET` from the left and from the top of the surface.
+pub const SURFACE_WIDTH: f32 = CLOSE_OUTSET + WIDTH + SCREEN_EDGE;
 /// Offset of a bubble out of sight, to the right: where it slides in from and out to.
 pub const OUT: f32 = SURFACE_WIDTH;
 
@@ -88,20 +91,30 @@ pub fn stack_piled(heights: &[f32], places: &[Place]) -> Vec<f32> {
 pub fn surface_height(bubbles: impl IntoIterator<Item = (f32, f32)>) -> u32 {
     let bottom = bubbles
         .into_iter()
-        .map(|(top, height)| top + height)
+        .map(|(top, height)| CLOSE_OUTSET + top + height)
         .fold(0.0_f32, f32::max);
     (bottom.ceil() as u32).max(1)
 }
 
-/// Where the surface takes the pointer: the rectangle of each bubble at `(top, height)`, in
-/// whole pixels rounded out. Between and beside the bubbles, clicks go to the window below.
+/// Where the surface takes the pointer: the rectangle of each bubble at `(top, height)`, and the
+/// square of its « × » on its top left corner (lot D-23f), in whole pixels rounded out. Between
+/// and beside the bubbles, clicks go to the window below.
 pub fn region(bubbles: impl IntoIterator<Item = (f32, f32)>) -> Vec<(i32, i32, i32, i32)> {
+    // The badge's square, rounded out: from the curve of the corner, less half the badge.
+    let (inset, side) = (
+        CLOSE_ON_CURVE.floor() as i32,
+        (CLOSE_SIZE + 1.0).ceil() as i32,
+    );
+    let outset = CLOSE_OUTSET as i32;
     bubbles
         .into_iter()
-        .map(|(top, height)| {
-            let y = top.floor() as i32;
-            let bottom = (top + height).ceil() as i32;
-            (0, y, WIDTH.ceil() as i32, bottom - y)
+        .flat_map(|(top, height)| {
+            let y = (CLOSE_OUTSET + top).floor() as i32;
+            let bottom = (CLOSE_OUTSET + top + height).ceil() as i32;
+            [
+                (outset, y, WIDTH.ceil() as i32, bottom - y),
+                (inset, y - outset + inset, side, side),
+            ]
         })
         .collect()
 }
@@ -116,7 +129,7 @@ mod tests {
         assert_eq!(stack(&[80.0, 120.5, 60.0]), [0.0, 88.0, 216.5]);
         let tops = stack(&[80.0, 120.5, 60.0]);
         let spans = tops.iter().copied().zip([80.0, 120.5, 60.0]);
-        assert_eq!(surface_height(spans), 277);
+        assert_eq!(surface_height(spans), 277 + CLOSE_OUTSET as u32);
         assert_eq!(surface_height([]), 1);
     }
 
@@ -154,7 +167,16 @@ mod tests {
     #[test]
     fn the_pointer_goes_through_the_gaps() {
         let region = region([(0.0, 80.0), (88.0, 120.5)]);
-        assert_eq!(region, [(0, 0, 320, 80), (0, 88, 320, 121)]);
+        // Each bubble, then the square of its « × », half outside its top left corner.
+        assert_eq!(
+            region,
+            [
+                (8, 8, 320, 80),
+                (4, 4, 17, 17),
+                (8, 96, 320, 121),
+                (4, 92, 17, 17)
+            ]
+        );
         // The room on the right, towards the screen edge, takes no click either.
         assert!(
             region
