@@ -1,9 +1,10 @@
 //! Choice of the graphics card the real session drives, read from `/sys` only.
 //!
 //! Like the shell's choice of renderer (`sherlock_ui::gpu`, ADR 0018), it reads attributes the
-//! kernel keeps (vendor, driver, `boot_vga`, connector status), which never wakes a card. The
-//! chosen card is the only one the compositor opens: an NVIDIA card is never opened, so that
-//! it stays asleep outside games.
+//! kernel keeps (vendor, driver, `boot_vga`, connector status, runtime power state), which never
+//! wakes a card. The chosen card renders and drives its screens; another card (the NVIDIA card
+//! whose HDMI port a hybrid laptop wires to it) is opened only while a screen is plugged into
+//! it, and closed as soon as there is none, so that it sleeps again (lot D-16, ADR 0037).
 
 use std::path::{Path, PathBuf};
 
@@ -39,13 +40,7 @@ pub fn cards(drm: &Path) -> Vec<Card> {
         })
         .filter_map(|name| {
             let chip = gpu::chip(&drm.join(name).join("device"))?;
-            // Connectors are named `card0-eDP-1`, `card0-HDMI-A-1`…
-            let prefix = format!("{name}-");
-            let screen = names.iter().any(|c| {
-                c.starts_with(&prefix)
-                    && std::fs::read_to_string(drm.join(c).join("status"))
-                        .is_ok_and(|s| s.trim() == "connected")
-            });
+            let screen = has_screen(drm, name);
             Some(Card {
                 name: name.clone(),
                 chip,
@@ -68,13 +63,51 @@ pub fn choose(cards: &[Card]) -> Option<&Card> {
         .or_else(|| allowed().find(|c| c.screen))
 }
 
+/// Whether a screen is plugged into the card `name` (`card1`) under `drm`: the status of its
+/// connectors (`card1-HDMI-A-1/status`). The kernel gives the status it keeps, updated by the
+/// card's hotplug interrupt: reading it never probes the connector, nor wakes the card.
+pub fn has_screen(drm: &Path, name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(drm) else {
+        return false;
+    };
+    // Connectors are named `card0-eDP-1`, `card0-HDMI-A-1`…
+    let prefix = format!("{name}-");
+    entries.flatten().any(|entry| {
+        entry.file_name().to_string_lossy().starts_with(&prefix)
+            && std::fs::read_to_string(entry.path().join("status"))
+                .is_ok_and(|s| s.trim() == "connected")
+    })
+}
+
+/// The runtime power state of the card `name` under `drm` (`active`, `suspended`…), as the
+/// kernel keeps it: for the log, to see the NVIDIA card sleep again (lot D-16).
+pub fn runtime_status(drm: &Path, name: &str) -> Option<String> {
+    let path = drm.join(name).join("device/power/runtime_status");
+    Some(std::fs::read_to_string(path).ok()?.trim().to_owned())
+}
+
+/// The name of the card at `node` (`/dev/dri/card1`): `card1`.
+pub fn name_of(node: &Path) -> Option<String> {
+    let name = node.file_name()?.to_str()?;
+    name.starts_with("card").then(|| name.to_owned())
+}
+
+/// Whether the cards besides the one driven may be opened when a screen is plugged into them:
+/// not with `SHERLOCKOS_SECONDARY_CARDS=0`, nor when the file `no-secondary-cards` is in the
+/// settings folder (`~/.config/sherlockos`), the way back if one misbehaves (lot D-16).
+pub fn secondary_allowed(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let off = var("SHERLOCKOS_SECONDARY_CARDS").is_some_and(|v| v == "0");
+    let file = desktop_config::config_dir(&var).map(|dir| dir.join("no-secondary-cards"));
+    !off && !file.is_some_and(|f| f.exists())
+}
+
 /// Device node of the card chosen on this machine, with the reason when there is none.
 pub fn primary() -> Result<PathBuf, String> {
     let cards = cards(Path::new("/sys/class/drm"));
     tracing::info!(?cards, "graphics cards");
     choose(&cards)
         .map(|card| Path::new("/dev/dri").join(&card.name))
-        .ok_or_else(|| format!("no card to drive among {cards:?} (NVIDIA cards are never opened)"))
+        .ok_or_else(|| format!("no card to drive among {cards:?} (an NVIDIA card never renders)"))
 }
 
 #[cfg(test)]
@@ -162,6 +195,29 @@ mod tests {
             ],
         );
         assert_eq!(sys.chosen().as_deref(), Some("card1"));
+        // Its HDMI screen is seen from `/sys`, without opening it (lot D-16).
+        assert!(has_screen(&sys.0, "card0"));
+        assert!(!has_screen(&sys.0, "card9"));
+        assert_eq!(
+            name_of(Path::new("/dev/dri/card0")).as_deref(),
+            Some("card0")
+        );
+        assert_eq!(name_of(Path::new("/dev/dri/renderD128")), None);
+        let power = sys.0.join("card0/device/power");
+        std::fs::create_dir_all(&power).unwrap();
+        std::fs::write(power.join("runtime_status"), "suspended\n").unwrap();
+        assert_eq!(
+            runtime_status(&sys.0, "card0").as_deref(),
+            Some("suspended")
+        );
+        let off = |key: &str| (key == "SHERLOCKOS_SECONDARY_CARDS").then(|| "0".into());
+        assert!(!secondary_allowed(off));
+        let config = sys.0.join("config");
+        let home = |key: &str| (key == "XDG_CONFIG_HOME").then(|| config.clone().into());
+        assert!(secondary_allowed(home));
+        std::fs::create_dir_all(config.join("sherlockos")).unwrap();
+        std::fs::write(config.join("sherlockos/no-secondary-cards"), "").unwrap();
+        assert!(!secondary_allowed(home), "the file is the way back");
         // Even if the NVIDIA card were the only one with a screen, or `boot_vga`.
         let only_nvidia = FakeSys::new(
             "nvidia-only",
