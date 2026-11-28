@@ -741,6 +741,9 @@ mod tests {
             | Item::Osd {
                 key, rect, alpha, ..
             }
+            | Item::Picture {
+                key, rect, alpha, ..
+            }
             | Item::Snapshot {
                 key, rect, alpha, ..
             }
