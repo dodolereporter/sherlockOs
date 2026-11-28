@@ -57,6 +57,8 @@ pub enum Pointer {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// The applications that open with the session, read (lot D-21i).
+    Autostart(std::collections::BTreeSet<String>),
     Surface(Id),
     Pointer(Pointer),
     Frame(Instant),
@@ -136,6 +138,9 @@ pub struct Dock {
     pub(crate) sources: Sources,
     glyphs: HashMap<String, Glyph>,
     pub geometry: Geometry,
+    /// The applications that open with the session, read off the interface thread (lot
+    /// D-21i): « Ouvrir à l'ouverture de session » is checked for them.
+    pub autostart: std::collections::BTreeSet<String>,
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
@@ -198,6 +203,7 @@ impl Dock {
             sources,
             glyphs: HashMap::new(),
             geometry,
+            autostart: std::collections::BTreeSet::new(),
             surface_size: Size::ZERO,
             surface: None,
             tracks: Vec::new(),
@@ -649,8 +655,13 @@ impl Dock {
                     zone: Some(self.zone()),
                     hidden: Some(self.hide.hidden()),
                 };
-                return Task::batch([self.input_region(), self.follow_windows()]);
+                return Task::batch([
+                    self.input_region(),
+                    self.follow_windows(),
+                    self.read_autostart(),
+                ]);
             }
+            Message::Autostart(ids) => self.autostart = ids,
             Message::Screen(id, screen) => {
                 self.outputs.insert(id, screen);
                 self.clock();
@@ -1336,6 +1347,9 @@ impl Dock {
                 && self.controllable(),
             expose: self.windows.as_ref().is_some_and(|w| w.expose)
                 && self.windows_of(index).iter().any(|w| !w.minimized),
+            autostart: entry.map(|e| self.autostart.contains(&e.id)),
+            evidence: entry.is_some(),
+            force: self.windows.as_ref().is_some_and(|w| w.force),
         }
     }
 
@@ -1732,9 +1746,66 @@ impl Dock {
                 self.request(index, Request::Close);
                 Task::none()
             }
-            Entry::ShowSherlock => Task::none(),
+            Entry::Hide => {
+                self.request(index, Request::Minimize);
+                Task::none()
+            }
+            Entry::ForceQuit => {
+                self.request(index, Request::Kill);
+                Task::none()
+            }
+            Entry::OpenAtLogin => self.toggle_autostart(index),
+            Entry::ShowInEvidence => {
+                let folder = self
+                    .items
+                    .get(index)
+                    .and_then(Item::entry)
+                    .and_then(|e| e.file.parent().map(PathBuf::from));
+                if let Some(folder) = folder
+                    && let Err(error) = crate::launch::show_in_evidence(&folder)
+                {
+                    tracing::warn!(%error, "cannot start Evidence");
+                }
+                Task::none()
+            }
+            Entry::Options | Entry::ShowSherlock => Task::none(),
         };
         Task::batch([close, task])
+    }
+
+    /// Reads which applications open with the session, on a thread of its own.
+    pub fn read_autostart(&self) -> Task<Message> {
+        let Some(folder) = crate::autostart::folder() else {
+            return Task::none();
+        };
+        off_thread(move || crate::autostart::read(&folder), Message::Autostart)
+    }
+
+    /// « Ouvrir à l'ouverture de session » of icon `index`: its desktop file goes in the
+    /// autostart folder, or out of it, on a thread of its own; the list is read again then.
+    fn toggle_autostart(&mut self, index: usize) -> Task<Message> {
+        let (Some(folder), Some(entry)) = (
+            crate::autostart::folder(),
+            self.items.get(index).and_then(Item::entry).cloned(),
+        ) else {
+            return Task::none();
+        };
+        let on = !self.autostart.contains(&entry.id);
+        // Shown at once; the folder read again corrects it if the write failed.
+        if on {
+            self.autostart.insert(entry.id.clone());
+        } else {
+            self.autostart.remove(&entry.id);
+        }
+        off_thread(
+            move || {
+                if let Err(error) = crate::autostart::set(&folder, &entry.id, &entry.file, on) {
+                    tracing::warn!(%error, id = entry.id, "cannot change the autostart folder");
+                }
+                crate::autostart::read(&folder)
+            },
+            Message::Autostart,
+        )
     }
 
     /// Adds the open application of icon `index` to the pinned list, at its end.
@@ -1844,4 +1915,22 @@ fn on_screen(event: ShellEvent) -> Option<Message> {
         )),
         _ => None,
     }
+}
+
+/// Runs blocking `work` (a folder, a file) on a thread of its own, never on the interface's.
+fn off_thread<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(T) -> Message + Send + 'static,
+) -> Task<Message> {
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(String::from("dock-files"))
+        .spawn(move || {
+            let _ = sender.send(work());
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cannot start a thread for the dock's files");
+        return Task::none();
+    }
+    Task::future(async move { receiver.await.ok().map(done) }).and_then(Task::done)
 }

@@ -807,6 +807,25 @@ mod tests {
         manager.destroy();
     }
 
+    /// Lot D-21i: `kill` never sends a signal to the compositor's own process. The test's
+    /// client is the test process itself: the window stays, open and answering.
+    #[test]
+    fn a_kill_never_reaches_the_compositor_itself() {
+        let mut h = Harness::start();
+        h.bind_manager();
+        let (_toplevel, _surface) = h.open_window("Frozen");
+        h.run_until("the window listed", |h| {
+            h.shell.client.toplevels.iter().any(|t| t.1.id.is_some())
+        });
+        let id = h.shell.client.toplevels[0].1.id.expect("its id");
+        h.shell.client.handle(id).kill();
+        // A request after it, handled after it, whose change gives a done.
+        h.shell.client.handle(id).minimize();
+        h.next_done("minimized after the kill");
+        assert!(!h.shell.client.window(id).closed);
+        assert_eq!(h.state.space.elements().count(), 1);
+    }
+
     #[test]
     fn the_active_window_stays_active_while_the_dock_has_the_keyboard() {
         let mut h = Harness::start();
@@ -1671,7 +1690,7 @@ mod tests {
         let mut h = Harness::start();
         let name = h.shell.client.globals.iter().find(|g| g.1 == MANAGER);
         let (id, _, version) = name.unwrap().clone();
-        assert_eq!(version, 4, "version 4: App Expose");
+        assert_eq!(version, 5, "version 5: kill");
         let _manager: SherlockShellManagerV1 =
             h.shell.registry.bind(id, 2, &h.shell.queue.handle(), ());
         let done = h.shell.client.done;

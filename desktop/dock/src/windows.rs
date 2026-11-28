@@ -77,6 +77,8 @@ pub struct Windows {
     /// The source can open App Expose on some windows (`show_windows`, version 4 of the shell
     /// protocol).
     pub expose: bool,
+    /// The source can force an application to quit (`kill`, version 5 of the shell protocol).
+    pub force: bool,
 }
 
 impl Windows {
@@ -244,6 +246,8 @@ pub enum Request {
     Activate,
     Minimize,
     Close,
+    /// « Forcer à quitter »: the compositor kills the windows' process (shell protocol 5).
+    Kill,
 }
 
 /// What a left click on an icon does.
@@ -527,6 +531,8 @@ fn act_where(
             (Request::Activate, None) => continue,
             (Request::Minimize, _) => toplevel.handle.set_minimized(),
             (Request::Close, _) => toplevel.handle.close(),
+            // wlroots' protocol cannot force an application to quit.
+            (Request::Kill, _) => continue,
         }
         count += 1;
     }
@@ -637,6 +643,7 @@ impl Toplevels {
             controllable: true,
             covered: BTreeSet::new(),
             expose: false,
+            force: false,
         }
     }
 }

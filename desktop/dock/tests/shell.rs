@@ -157,6 +157,7 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Compositor {
             toplevel::Request::Activate => String::from("activate"),
             toplevel::Request::Minimize => String::from("minimize"),
             toplevel::Request::Close => String::from("close"),
+            toplevel::Request::Kill => String::from("kill"),
             toplevel::Request::SetRectangle {
                 output,
                 x,
@@ -198,7 +199,7 @@ impl Fake {
         let mut display = Display::<Compositor>::new()?;
         let mut handle = display.handle();
         if with_protocol {
-            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(4, ());
+            handle.create_global::<Compositor, SherlockShellManagerV1, ()>(5, ());
         }
         let (ours, theirs) = UnixStream::pair()?;
         handle.insert_client(theirs, Arc::new(NoData))?;
@@ -449,4 +450,21 @@ fn app_expose_is_asked_on_the_manager() {
     assert_eq!(ids, [1, 2]);
     shell.control().show_windows(&ids);
     assert_eq!(fake.asked(1), [("manager", String::from("show 1 2"))]);
+}
+
+/// « Forcer à quitter » (lot D-21i): the kill of version 5, on each window of the application.
+#[test]
+fn an_application_is_forced_to_quit_through_version_5() {
+    let mut fake = Fake::start(&[("org.example.frozen", true)], true).expect("fake compositor");
+    let connection = fake.connection.take().expect("connection");
+    let mut shell = Shell::with_connection(connection).expect("manager bound");
+    let windows = shell.read().expect("read");
+    assert!(windows.force, "version 5 offers it");
+    shell
+        .control()
+        .send(Request::Kill, Box::new(|a| a == "org.example.frozen"));
+    assert_eq!(
+        fake.asked(1),
+        [("org.example.frozen", String::from("kill"))]
+    );
 }

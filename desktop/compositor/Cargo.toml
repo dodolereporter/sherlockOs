@@ -70,6 +70,8 @@ resvg = { version = "=0.45.1", default-features = false }
 # itself (lot D-29, `x11_paste.rs`), and the XWayland tests use it as their X11 client. The
 # version smithay already pulls for its X11 window manager: nothing new is built.
 x11rb = "=0.13.2"
+# kill(2) to force an application to quit (lot D-21i): the version the workspace already pins.
+libc = "=0.2.191"
 thiserror = "=2.0.21"
 tracing = "=0.1.44"
 # Prints the logs on standard error, level set by RUST_LOG.

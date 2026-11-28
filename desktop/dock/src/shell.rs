@@ -52,7 +52,7 @@ impl Shell {
     pub fn with_connection(connection: Connection) -> Result<Self, SourceError> {
         let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
         let manager: SherlockShellManagerV1 = globals
-            .bind(&queue.handle(), 1..=4, ())
+            .bind(&queue.handle(), 1..=5, ())
             .map_err(SourceError::NoShellProtocol)?;
         // App Expose came with version 4.
         let expose = (manager.version() >= 4).then(|| manager.clone());
@@ -126,6 +126,11 @@ impl Source for Shell {
             controllable: true,
             covered,
             expose: self.control.manager.is_some(),
+            force: self
+                .control
+                .manager
+                .as_ref()
+                .is_some_and(|m| m.version() >= 5),
         })
     }
 
@@ -198,6 +203,15 @@ impl Shared {
     }
 }
 
+/// « Forcer à quitter », when the compositor knows it (version 5).
+fn kill(toplevel: &SherlockShellToplevelV1) {
+    if toplevel.version() >= 5 {
+        toplevel.kill();
+    } else {
+        tracing::info!("the compositor cannot force an application to quit");
+    }
+}
+
 impl ShellControl {
     fn flush(&self) {
         if let Err(error) = self.connection.flush() {
@@ -215,6 +229,7 @@ impl Control for ShellControl {
                 Request::Activate => window.toplevel.activate(),
                 Request::Minimize => window.toplevel.minimize(),
                 Request::Close => window.toplevel.close(),
+                Request::Kill => kill(&window.toplevel),
             }
             count += 1;
         }
@@ -233,6 +248,7 @@ impl Control for ShellControl {
             Request::Activate => handle.toplevel.activate(),
             Request::Minimize => handle.toplevel.minimize(),
             Request::Close => handle.toplevel.close(),
+            Request::Kill => kill(&handle.toplevel),
         }
         drop(shared);
         self.flush();

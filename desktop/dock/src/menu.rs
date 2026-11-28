@@ -28,6 +28,16 @@ pub enum Entry {
     ShowAll,
     /// Closes its windows. Needs a source of windows that can close them.
     Quit,
+    /// The title of the options' group: not an action (lot D-21i).
+    Options,
+    /// Starts it, or no longer, when the session opens: its file in the XDG autostart folder.
+    OpenAtLogin,
+    /// Opens Evidence on the folder of its desktop file.
+    ShowInEvidence,
+    /// Minimizes its windows, as macOS hides an application.
+    Hide,
+    /// Kills the process of its windows: the compositor sends SIGKILL to their client.
+    ForceQuit,
     /// The dock's own menu: puts Sherlock back in the dock, or takes it out.
     ShowSherlock,
 }
@@ -74,6 +84,13 @@ pub struct Abilities {
     pub act: bool,
     /// App Expose can show its windows: the source offers it, and a window is shown.
     pub expose: bool,
+    /// Its desktop entry, and whether it opens with the session (`Some(true)`); `None`
+    /// without an entry.
+    pub autostart: Option<bool>,
+    /// Evidence is installed and the desktop file is known: « Afficher dans Evidence ».
+    pub evidence: bool,
+    /// The source can force its windows' process to quit (`sherlock_shell_v1` version 5).
+    pub force: bool,
 }
 
 /// A window listed at the top of the menu.
@@ -108,16 +125,37 @@ pub fn entries(can: Abilities, windows: &[Listed], actions: &[(usize, String)]) 
             .iter()
             .map(|(index, name)| Line::new(Entry::Action(*index), name.clone(), can.launch)),
     );
+    // « Options », as the submenu of macOS: what is kept, checked (lot D-21i).
+    lines.push(Line::new(Entry::Options, text::OPTIONS, false).group());
     lines.push(if can.keep {
-        Line::new(Entry::Keep, text::KEEP, true).group()
+        Line::new(Entry::Keep, text::KEEP, true)
     } else {
-        Line::new(Entry::Unpin, text::UNPIN, can.unpin).group()
+        Line {
+            checked: can.unpin,
+            ..Line::new(Entry::Unpin, text::KEEP, can.unpin)
+        }
     });
-    lines.push(Line::new(Entry::ShowAll, text::SHOW_ALL, can.act && can.expose).group());
+    lines.push(Line {
+        checked: can.autostart == Some(true),
+        ..Line::new(
+            Entry::OpenAtLogin,
+            text::OPEN_AT_LOGIN,
+            can.autostart.is_some(),
+        )
+    });
     lines.push(Line::new(
-        Entry::Quit,
-        text::QUIT,
-        can.act && !windows.is_empty(),
+        Entry::ShowInEvidence,
+        text::SHOW_IN_EVIDENCE,
+        can.evidence,
+    ));
+    let open = can.act && !windows.is_empty();
+    lines.push(Line::new(Entry::ShowAll, text::SHOW_ALL, can.act && can.expose).group());
+    lines.push(Line::new(Entry::Hide, text::HIDE, open));
+    lines.push(Line::new(Entry::Quit, text::QUIT, open));
+    lines.push(Line::new(
+        Entry::ForceQuit,
+        text::FORCE_QUIT,
+        open && can.force,
     ));
     lines
 }
@@ -268,6 +306,9 @@ mod tests {
         unpin: true,
         act: false,
         expose: false,
+        autostart: Some(false),
+        evidence: true,
+        force: false,
     };
 
     fn labels(lines: &[Line]) -> Vec<(&str, bool)> {
@@ -278,35 +319,41 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_application_opens_and_has_its_actions() {
+    fn a_closed_application_opens_and_has_its_actions_and_options() {
         let actions = [(1, String::from("Nouvel onglet"))];
+        let lines = entries(APP, &[], &actions);
         assert_eq!(
-            labels(&entries(APP, &[], &actions)),
+            labels(&lines),
             [
                 ("Ouvrir", true),
                 ("Nouvel onglet", true),
-                ("Retirer du Dock", true),
+                ("Options", false),
+                ("Garder dans le Dock", true),
+                ("Ouvrir à l’ouverture de session", true),
+                ("Afficher dans Evidence", true),
                 ("Afficher toutes les fenêtres", false),
+                ("Masquer", false),
                 ("Quitter", false),
+                ("Forcer à quitter", false),
             ]
         );
-        // Sherlock: everything there, only « Retirer du Dock » enabled.
+        // Pinned: « Garder dans le Dock » checked, a click unpins it.
+        assert_eq!((lines[3].entry, lines[3].checked), (Entry::Unpin, true));
+        assert!(!lines[4].checked);
+        // Sherlock: no desktop entry, nothing to open with the session nor to show.
         let sherlock = Abilities {
             launch: false,
-            keep: false,
-            unpin: true,
-            act: false,
-            expose: false,
+            autostart: None,
+            evidence: false,
+            ..APP
         };
-        assert_eq!(
-            labels(&entries(sherlock, &[], &[])),
-            [
-                ("Ouvrir", false),
-                ("Retirer du Dock", true),
-                ("Afficher toutes les fenêtres", false),
-                ("Quitter", false)
-            ]
-        );
+        let lines = entries(sherlock, &[], &[]);
+        let enabled: Vec<&str> = lines
+            .iter()
+            .filter(|l| l.enabled)
+            .map(|l| l.label.as_str())
+            .collect();
+        assert_eq!(enabled, ["Garder dans le Dock"]);
     }
 
     #[test]
@@ -318,11 +365,14 @@ mod tests {
     }
 
     #[test]
-    fn an_open_application_lists_its_windows_first() {
+    fn an_open_application_lists_its_windows_first_and_can_be_forced_to_quit() {
         let can = Abilities {
             act: true,
             keep: true,
+            unpin: false,
             expose: true,
+            autostart: Some(true),
+            force: true,
             ..APP
         };
         let windows = [
@@ -344,43 +394,62 @@ mod tests {
                 ("notes.txt", true),
                 ("plan.md", true),
                 ("Nouvelle fenêtre", true),
+                ("Options", false),
                 ("Garder dans le Dock", true),
+                ("Ouvrir à l’ouverture de session", true),
+                ("Afficher dans Evidence", true),
                 ("Afficher toutes les fenêtres", true),
+                ("Masquer", true),
                 ("Quitter", true),
+                ("Forcer à quitter", true),
             ]
         );
         assert_eq!(lines[0].entry, Entry::Window(4));
         assert!(!lines[0].checked && lines[1].checked, "the active window");
-        let groups: Vec<bool> = lines.iter().map(|l| l.starts_group).collect();
-        assert_eq!(groups, [false, false, true, true, true, false]);
-        // Windows a source cannot act on are listed, disabled, and « Quitter » too.
+        assert_eq!((lines[4].entry, lines[4].checked), (Entry::Keep, false));
+        assert!(lines[5].checked, "opens with the session");
+        let groups: Vec<usize> = (0..lines.len())
+            .filter(|&i| lines[i].starts_group)
+            .collect();
+        assert_eq!(groups, [2, 3, 7]);
+        // Windows a source cannot act on are listed, disabled, and their actions too; without
+        // version 5 of the shell protocol, « Forcer à quitter » is off.
         let lines = entries(APP, &windows, &[]);
-        assert!(!lines[0].enabled && !lines[4].enabled && !lines[5].enabled);
+        assert!(!lines[0].enabled && !lines[8].enabled && !lines[9].enabled);
+        let lines = entries(
+            Abilities {
+                force: false,
+                ..can
+            },
+            &windows,
+            &[],
+        );
+        assert!(lines[9].enabled && !lines[10].enabled);
     }
 
     #[test]
     fn the_keyboard_skips_disabled_entries() {
         let list = entries(APP, &[], &[]);
+        // Ouvrir, then the options' title is skipped.
         assert_eq!(move_cursor(&list, None, Key::Next), Some(0));
+        assert_eq!(move_cursor(&list, Some(0), Key::Next), Some(2));
         assert_eq!(
             move_cursor(&list, None, Key::Previous),
-            Some(1),
-            "App Expose and Quitter are off"
+            Some(4),
+            "App Expose, Masquer and the Quit entries are off"
         );
         assert_eq!(
-            move_cursor(&list, Some(1), Key::Next),
+            move_cursor(&list, Some(4), Key::Next),
             Some(0),
             "wraps around"
         );
-        assert_eq!(move_cursor(&list, Some(0), Key::Previous), Some(1));
-        assert_eq!(move_cursor(&list, Some(0), Key::Last), Some(1));
         let none = entries(
             Abilities {
                 launch: false,
-                keep: false,
                 unpin: false,
-                act: false,
-                expose: false,
+                autostart: None,
+                evidence: false,
+                ..APP
             },
             &[],
             &[],
@@ -409,10 +478,10 @@ mod tests {
     #[test]
     fn the_menu_surface_follows_the_design_board() {
         // Menus board: 240 wide; padding of 6, header of 28, entries of 30, a separator of 9
-        // before « Retirer du Dock » and before « Afficher toutes les fenêtres ».
+        // before « Options » and before « Afficher toutes les fenêtres ».
         assert_eq!(
             surface_size(&entries(APP, &[], &[])),
-            (240, 12 + 28 + 120 + 18)
+            (240, 12 + 28 + 9 * 30 + 18)
         );
     }
 }

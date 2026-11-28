@@ -637,6 +637,7 @@ dependencies = [
  "cursor-theme",
  "desktop-config",
  "image",
+ "libc",
  "mime-apps",
  "resvg",
  "shell-protocol",

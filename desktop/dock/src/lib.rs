@@ -4,6 +4,7 @@
 
 pub mod anim;
 pub mod app;
+pub mod autostart;
 pub mod config;
 pub mod drag;
 pub mod entry;

@@ -430,6 +430,39 @@ impl State {
         }
     }
 
+    /// « Forcer à quitter » (lot D-21i): SIGKILL to the process of the client of a Wayland
+    /// window, as its connection gives it (SO_PEERCRED). An X11 window says its own process
+    /// (`_NET_WM_PID`), which could name any other: it is only asked to close. The compositor
+    /// and process 1 are never killed.
+    pub(crate) fn force_quit(&self, window: &Window) {
+        if window.x11_surface().is_some() {
+            tracing::warn!("an X11 window is not killed, only asked to close");
+            Self::close(window);
+            return;
+        }
+        let pid = window
+            .wl_surface()
+            .and_then(|surface| {
+                smithay::reexports::wayland_server::Resource::client(surface.as_ref())
+            })
+            .and_then(|client| client.get_credentials(&self.display_handle).ok())
+            .map(|credentials| credentials.pid);
+        let Some(pid) =
+            pid.filter(|pid| *pid > 1 && u32::try_from(*pid).ok() != Some(std::process::id()))
+        else {
+            tracing::warn!(?pid, "no process to force to quit");
+            return;
+        };
+        // SAFETY: kill(2) takes two integers and touches no memory of this process; the pid
+        // comes from the kernel, for a client other than the compositor and init.
+        let done = unsafe { libc::kill(pid, libc::SIGKILL) };
+        if done == 0 {
+            tracing::info!(pid, "application forced to quit");
+        } else {
+            tracing::warn!(pid, error = %std::io::Error::last_os_error(), "cannot force to quit");
+        }
+    }
+
     /// The window of id `id`, shown or hidden.
     pub(crate) fn window_by_id(&self, id: u32) -> Option<Window> {
         self.space.elements().find(|w| window_id(w) == id).cloned()

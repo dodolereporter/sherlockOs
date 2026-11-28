@@ -375,7 +375,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 | Object | Requests | Events |
 | --- | --- | --- |
 | `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose), `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
-| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
+| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `kill` (version 5), `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`, sent even without window nor screen. A roundtrip after the
@@ -395,12 +395,16 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 4. Version 2 (lot D-18d) adds `snapped` to
+- **Versions.** The global is offered at version 5. Version 2 (lot D-18d) adds `snapped` to
   the states of a screen; a client that binds version 1 never receives it: a screen with only a
   snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
   (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. Version 4
-  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). A toplevel has the
-  version of its manager.
+  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). Version 5 (lot
+  D-21i) adds `kill` on a window, the dock's « Forcer à quitter »: SIGKILL to the process of its
+  client, as the connection gives it (SO_PEERCRED), never to the compositor nor to process 1;
+  an X11 window, whose `_NET_WM_PID` the compositor cannot vouch for, is only asked to close.
+  Only the clients of the shell socket see the global. A toplevel has the version of its
+  manager.
 - **Workspace of a window.** `workspace` gives the id of its workspace, the one
   `ext_workspace_handle_v1.id` gives; `move_to_workspace` moves it (see "Workspaces"), an
   unknown id is ignored.
