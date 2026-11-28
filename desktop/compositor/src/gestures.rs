@@ -145,13 +145,16 @@ impl Swipe {
                 Direction::Down
             });
             // The movement so far counts for the velocity: the fingers were already moving.
-            self.samples.push_back((time, x));
-            return (self.direction == Some(Direction::Horizontal)).then(|| self.view());
+            let horizontal = self.direction == Some(Direction::Horizontal);
+            self.samples
+                .push_back((time, if horizontal { x } else { y }));
+            return horizontal.then(|| self.view());
         }
-        if self.direction != Some(Direction::Horizontal) {
-            return None;
-        }
-        self.samples.push_back((time, delta.x));
+        // Along the direction picked: sideways for the workspaces, up and down for Mission
+        // Control (lot D-33c).
+        let horizontal = self.direction == Some(Direction::Horizontal);
+        self.samples
+            .push_back((time, if horizontal { delta.x } else { delta.y }));
         while self
             .samples
             .front()
@@ -159,7 +162,28 @@ impl Swipe {
         {
             self.samples.pop_front();
         }
-        Some(self.view())
+        horizontal.then(|| self.view())
+    }
+
+    /// Vertical velocity of the fingers when they lift at `time`, in units per second, down
+    /// being positive, from the movements of the last `VELOCITY_WINDOW` (lot D-33c).
+    pub fn vertical_velocity(&self, time: u32) -> f64 {
+        if !matches!(self.direction, Some(Direction::Up | Direction::Down)) {
+            return 0.0;
+        }
+        let recent: Vec<_> = self
+            .samples
+            .iter()
+            .filter(|s| s.0.saturating_add(VELOCITY_WINDOW) >= time)
+            .collect();
+        let (Some(first), Some(last)) = (recent.first(), recent.last()) else {
+            return 0.0;
+        };
+        let span = f64::from(last.0.saturating_sub(first.0)) / 1000.0;
+        if span <= 0.0 {
+            return 0.0;
+        }
+        recent.iter().skip(1).map(|s| s.1).sum::<f64>() / span
     }
 
     /// Where the fingers put the view: the row follows them (natural direction), with a rubber
@@ -384,8 +408,8 @@ impl State {
             Some(Direction::Horizontal) => {
                 self.release_workspaces(swipe.landing(time), swipe.velocity(time));
             }
-            Some(direction @ (Direction::Up | Direction::Down))
-                if self.release_overview(direction == Direction::Up, done) => {}
+            Some(Direction::Up | Direction::Down)
+                if self.release_overview(cancelled, swipe.vertical_velocity(time)) => {}
             Some(Direction::Down)
                 if done && self.touchpad.config().swipe_down == SwipeDown::Minimize =>
             {
