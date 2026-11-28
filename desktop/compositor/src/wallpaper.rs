@@ -310,6 +310,13 @@ pub struct Texture {
     size: (u32, u32),
 }
 
+impl Texture {
+    /// A picture uploaded elsewhere (the curtain, `curtain.rs`), drawn like a wallpaper.
+    pub(crate) fn new(buffer: TextureBuffer<GlesTexture>, size: (u32, u32)) -> Self {
+        Self { buffer, size }
+    }
+}
+
 /// The wallpaper textures, one per variant in use, shared by the screens that show it.
 #[derive(Default)]
 pub struct Textures {
@@ -469,7 +476,26 @@ pub fn element(
     mode: Mode,
     view: &View,
 ) -> TextureRenderElement<GlesTexture> {
-    let (dst, src) = placement(mode, texture.size, view);
+    zoomed(texture, alpha, mode, view, 1.0)
+}
+
+/// The wallpaper grown by `zoom` around the center of the screen (lot D-24g): past its edges,
+/// which cut it.
+pub fn zoomed(
+    texture: &Texture,
+    alpha: f32,
+    mode: Mode,
+    view: &View,
+    zoom: f64,
+) -> TextureRenderElement<GlesTexture> {
+    let (mut dst, src) = placement(mode, texture.size, view);
+    if zoom > 1.0 {
+        let grown = |side: i32| (f64::from(side) * zoom).round() as i32;
+        let size: Size<i32, Physical> = (grown(dst.size.w), grown(dst.size.h)).into();
+        dst.loc.x -= (size.w - dst.size.w) / 2;
+        dst.loc.y -= (size.h - dst.size.h) / 2;
+        dst.size = size;
+    }
     TextureRenderElement::from_texture_buffer(
         dst.loc.to_f64(),
         &texture.buffer,

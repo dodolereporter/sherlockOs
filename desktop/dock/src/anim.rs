@@ -219,6 +219,14 @@ impl Bounce {
         Self { start, end: None }
     }
 
+    /// A bounce of `hops` hops from `start`, then it lands: a window asks for attention.
+    pub fn hops(start: Duration, hops: u32) -> Self {
+        Self {
+            start,
+            end: Some(start + dock::BOUNCE_PERIOD * hops),
+        }
+    }
+
     /// Height above its place at `now`, for an icon of `side`.
     pub fn lift(&self, now: Duration, side: f32) -> f32 {
         if self.end.is_some_and(|end| now >= end) {

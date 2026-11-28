@@ -280,6 +280,14 @@ impl State {
     }
 
     /// The pointer is now on `hovered`, `None` off every decoration.
+    /// Forgets the button held down: Mission Control opened over it, and its release must not
+    /// act once the view is gone (D-33 review).
+    pub(crate) fn forget_decoration_press(&mut self) {
+        if self.decorations.pointer.pressed.take().is_some() {
+            self.aim_buttons();
+        }
+    }
+
     pub(crate) fn hover_decoration(&mut self, hovered: Option<(Window, Control)>) {
         if self.decorations.pointer.hovered != hovered {
             self.decorations.pointer.hovered = hovered;
