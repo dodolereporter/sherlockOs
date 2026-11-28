@@ -27,12 +27,14 @@ pub mod selection;
 pub mod shell;
 pub mod smb;
 pub mod startup;
+pub mod thumbs;
 pub mod transfer;
 pub mod transfer_job;
 pub mod trash;
 pub mod udisks;
 pub mod undo;
 mod view;
+pub mod views;
 pub mod watch;
 
 #[cfg(test)]
